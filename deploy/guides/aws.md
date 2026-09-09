@@ -15,7 +15,7 @@ Read [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) first — it is the runbook 
 | # | What | AWS | Notes |
 |---|---|---|---|
 | 1 | the API and its workers | **ECS Fargate**, one service, **desired count 1** | the only always-on process |
-| 2 | the database | **RDS Postgres 16** | run the roles file before the first deploy |
+| 2 | the database | **RDS Postgres 16** | the migration runner creates the two roles it needs |
 | 3 | Redis | **ElastiCache for Redis** | no AUTH, no in-transit encryption — read below |
 | 4 | object storage | **S3**, native | no `AWS_S3_ENDPOINT` |
 | 5 | the front door | **ALB** | WebSocket support is native; the health check needs 201 |
@@ -25,15 +25,15 @@ Read [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) first — it is the runbook 
 
 Postgres 16, and it is the one datastore whose setup order matters: the roles file goes in before the first migration. The migration set creates six extensions — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent` and `btree_gin` — and it is monolithic, creating all five schemas whatever `LISTEN_FIRE_PRODUCTS` says, so every shape needs all six even for schemas it will never read. RDS ships `pgvector` on modern Postgres versions; confirm it is available for the exact engine version you pick before you build anything on top.
 
-**Run `deploy/postgres-init/00-roles.sql` by hand, before the first deploy:**
+Two roles, `agent` and `readonly`, must exist before the first migration: the migration set carries 51 `GRANT … TO agent` / `TO readonly` statements, the first of them early enough that a database without the roles dies having built almost nothing.
+
+**The migration runner creates them for you**, from `deploy/postgres-init/00-roles.sql`, before it applies anything — as long as the user in `DATABASE_URL` can create roles. Point the migration step at the instance's **master user** and it can; a least-privilege application user cannot, and the runner then stops having applied nothing and tells you to run this as the master user:
 
 ```bash
 psql "$DATABASE_URL" -f deploy/postgres-init/00-roles.sql
 ```
 
-The migration set carries more than a hundred `GRANT … TO agent` / `TO readonly` statements, the first of them early enough that a database without those roles dies having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it on an empty data directory; **RDS has no init hook.** The file's header says so, and this is the single most common way a first deploy fails.
-
-Run it as the instance's **master user**. It creates roles, which the master user can do; a least-privilege application user cannot. `agent` is created deliberately powerless — no `BYPASSRLS`, because managed databases often refuse to grant it and the design does not want it.
+`agent` is created deliberately powerless — no `BYPASSRLS`, because managed databases often refuse to grant it and the design does not want it.
 
 `DATABASE_URL_READONLY` must be set. With no read replica, set it equal to `DATABASE_URL`; it is not optional and boot fails without it. If you do run a replica, that is what the variable is for.
 

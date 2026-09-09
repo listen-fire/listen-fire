@@ -27,10 +27,12 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
 -- # ROLES
 
--- Role creation is handled by deploy/postgres-init/00-roles.sql, which both the
--- dev Postgres image and the self-host compose file run on an empty data
--- directory, plus apps/api/scripts/restore_db_snapshot.sh for a restored snapshot.
--- Roles are cluster-global, not database-specific, so they don't belong in schema migrations
+-- Role creation is handled by deploy/postgres-init/00-roles.sql, which the dev
+-- Postgres image and the self-host compose file run on an empty data directory,
+-- apps/api/scripts/restore_db_snapshot.sh runs for a restored snapshot, and
+-- apps/api/src/db/migrate.sh runs itself against a managed database that has no
+-- init hook. Roles are cluster-global, not database-specific, so they don't
+-- belong in schema migrations
 
 
 -- # TYPES

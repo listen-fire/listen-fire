@@ -2,7 +2,7 @@
 
 [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) is the runbook: what each unit is, what it needs, what it still carries honestly, and every variable with what it does when unset. **Start there.**
 
-These guides are the second step. They translate that runbook onto a specific platform, and they cover only the parts that change when you leave `docker compose` behind — where the migration step goes when there is no one-shot service, how to run the roles file against a managed database, which health-check default is wrong, and which platform behaviour quietly breaks an in-process worker model.
+These guides are the second step. They translate that runbook onto a specific platform, and they cover only the parts that change when you leave `docker compose` behind — where the migration step goes when there is no one-shot service, what the migration runner needs from a managed database, which health-check default is wrong, and which platform behaviour quietly breaks an in-process worker model.
 
 | guide | when |
 |---|---|
@@ -16,7 +16,7 @@ Three things are true on every platform, and each of them has cost somebody a da
 
 - **The API is one long-running process** with its background workers inside it. There is no worker deployment to add, no serverless shape, and no scale-to-zero — a process that stops between requests stops the schedulers and the resume loops with it.
 - **`GET /.well-known/health-check` answers `201`.** That is its contract. Platform health checks that default to expecting exactly `200` will drain a perfectly healthy target.
-- **Two Postgres roles must exist before the first migration.** The compose file creates them from `postgres-init/00-roles.sql` on an empty data directory; a managed database has no such hook, so run that file by hand before you start anything.
+- **Two Postgres roles must exist before the first migration**, and you do not normally create them yourself. The compose file creates them from `postgres-init/00-roles.sql` on an empty data directory; on a managed database the migration runner runs that same file, which works as long as the user in `DATABASE_URL` holds `CREATEROLE`. When it does not, the runner stops before applying anything and tells you to run the file as a superuser.
 - **A datastore is a variable, not a deployment shape.** Postgres, Redis and the object store each move to a managed service on their own, by naming yours; on compose that also takes the bundled service out of the composition. What each one needs is in [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Bringing your own datastores", and these guides carry only the part that is specific to the platform.
 
 One more thing changes off compose: the compose stack generates its own secrets into a Docker volume on first boot, and nothing does that for you elsewhere. Mint them once, keep them where you keep secrets, and never rotate the two encryption keys — see [`SELF_HOSTING.md`](../SELF_HOSTING.md), "What the installation generates for itself".

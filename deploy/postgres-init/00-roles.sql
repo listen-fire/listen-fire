@@ -1,15 +1,23 @@
--- Roles the migration set grants to. Run this ONCE against a new database,
--- BEFORE the first migration — more than a hundred `GRANT … TO agent` /
--- `TO readonly` statements across the migration history fail on a database
--- without them, and the first one is early enough that you get almost no
--- schema at all.
+-- Roles the migration set grants to. They must exist before the first
+-- migration — more than a hundred `GRANT … TO agent` / `TO readonly`
+-- statements across the migration set fail on a database without them, and
+-- the first one is early enough that you get almost no schema at all.
 --
--- The compose file mounts this directory into the bundled Postgres, which runs
--- it automatically on an empty data directory. **A managed database (Neon,
--- RDS, Supabase) has no such hook: run this file by hand, as a superuser,
--- before you start the API.**
+-- Two paths run this one file, and neither needs you to:
+--   * the bundled Postgres mounts this directory as docker-entrypoint-initdb.d
+--     and runs it on an empty data directory;
+--   * the migration runner (apps/api/src/db/migrate.sh) runs it before the
+--     first migration when the roles are missing and the connecting user has
+--     CREATEROLE, which a managed provider's database owner does.
 --
--- Postgres has no CREATE ROLE IF NOT EXISTS, hence the block.
+-- Run it by hand only when the runner tells you to -- that is, when the user in
+-- DATABASE_URL has neither SUPERUSER nor CREATEROLE:
+--
+--   psql "$DATABASE_URL" -f deploy/postgres-init/00-roles.sql
+--
+-- Every statement below is idempotent, because both paths may run it against a
+-- database that already has the roles. Postgres has no CREATE ROLE IF NOT
+-- EXISTS, hence the block.
 
 DO $$
 BEGIN

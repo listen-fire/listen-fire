@@ -15,7 +15,7 @@ Render's own dashboard, plan names and settings move around. Where this guide de
 | # | What | Render resource | Notes |
 |---|---|---|---|
 | 1 | the API and its workers | a **web service**, image runtime, `ghcr.io/listen-fire/api:<tag>` | the only always-on process; one instance |
-| 2 | the database | **Render Postgres 16** | run the roles file by hand before the first deploy |
+| 2 | the database | **Render Postgres 16** | the migration runner creates the two roles it needs |
 | 3 | Redis | **Render Key Value** (Render's managed Redis) | host and port only — read the caveat below |
 | 4 | object storage | not a native Render resource | the Blueprint runs MinIO as a Render web service on a disk; any S3-compatible bucket works, needed only for file features |
 | 5 | the web app | a second **web service**, image runtime, `ghcr.io/listen-fire/web:<tag>` | the sign-in surface and the authoring UI |
@@ -28,15 +28,17 @@ The background workers run inside the API process. There is no worker service to
 
 Create a managed Postgres. Version 16. The migration set creates six extensions — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent` and `btree_gin` — and it is monolithic, creating all five schemas whatever you mount, so every shape needs all six.
 
-Then run `deploy/postgres-init/00-roles.sql` against it, by hand, **before the first deploy**:
+Two roles, `agent` and `readonly`, must exist before the first migration: the migration set carries 51 `GRANT … TO agent` / `TO readonly` statements, the first of them early, and a database without the roles dies partway through the first migration having built almost nothing.
+
+**The migration runner creates them for you.** Before it applies anything it checks for the two roles and, when they are missing, runs `deploy/postgres-init/00-roles.sql` itself — which works because Render hands you a database owner holding `CREATEROLE`. There is nothing to do here.
+
+The one case where there is: a user with neither `CREATEROLE` nor superuser. The runner then stops, having applied nothing, and names the command:
 
 ```bash
 psql "$DATABASE_URL" -f deploy/postgres-init/00-roles.sql
 ```
 
-This is not optional and it is not a nicety. The migration set carries more than a hundred `GRANT … TO agent` / `TO readonly` statements, the first of them early, and a database without those two roles dies partway through the first migration having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it automatically on an empty data directory; **a managed database has no such hook.** The file's own header says the same thing.
-
-It creates roles, so the user you run it as needs the privilege to do that. If your managed database's default user cannot `CREATE ROLE`, that is the first thing to check rather than the last — check Render's documentation for what their default database user is granted.
+Run that as a superuser and deploy again.
 
 Extensions are created by the migration set itself, but a managed provider may require you to allow-list them first. The six above are the union; check Render's supported-extensions list as of this writing before you assume.
 
@@ -157,7 +159,6 @@ Nothing else moves the deployment. An image-backed service does not redeploy whe
 
 A Blueprint does not do everything, and does not do it for you automatically on every push. Before or immediately after the first deploy:
 
-- **Database roles.** Run `deploy/postgres-init/00-roles.sql` against `listen-fire-postgres` by hand, as a superuser, before the first deploy — see "1. The database, before anything else" above. A Blueprint has no hook for this.
 - **Extensions.** Allow-list all six — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent`, `btree_gin` — on the Postgres instance if Render requires that step for your plan; the migration set creates the extensions themselves but some managed providers gate which ones a database may request.
 - **Custom domains.** Put a stable custom domain on both `listen-fire-api` and `listen-fire-web` *before* you register anything or send anything — `API_BASE_URL` is stable forever once webhooks and links are built from it, and the hostname Render hands a new service is not what you want permanently.
 - **Slack app.** Register your own Slack app and set the five `SLACK_MOVEMENTS_*` variables together (`deploy/render.yaml` declares all five as operator-set; the state secret is minted by Render). Three URLs, the same as `SELF_HOSTING.md` lists: Event Subscriptions → `<API_BASE_URL>/api/public/slack/events`; Interactivity → `<API_BASE_URL>/api/public/slack-actions`; OAuth Redirect URL → `<WEB_BASE_URL>/slack/callback`, which is also exactly the value of `SLACK_MOVEMENTS_REDIRECT_URI` (it is passed through verbatim).
