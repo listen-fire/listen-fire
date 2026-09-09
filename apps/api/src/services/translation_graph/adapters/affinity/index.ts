@@ -14,12 +14,14 @@ import { decryptToken } from '../../../../lib/credentials';
 import { getAutomationsQb } from '../../../../lib/kysely';
 import { isTestHarnessTeam, injectFakeBaseUrl } from '../../../../lib/recording';
 import { logger } from '../../../logger';
+import { isAdapterCallCeilingExceeded } from '../../../movement_engine/call_ledger';
 import {
   AffinityAPIClient,
   getAffinityClient,
   INTERACTION_TYPE,
 } from '../../../../adapters/affinity/apiClient';
 import { AffinityOperations } from '../../../../adapters/affinity/operations';
+import { AFFINITY_HANDBOOK_SECTION } from './handbook_section';
 import { AFFINITY_SUBSCRIBABLE_EVENTS, parseAffinityEvents } from './inbound';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { ExternalServiceCredentialsId } from '../../../../generated/kysely/automations/ExternalServiceCredentials';
@@ -32,16 +34,21 @@ import type {
   EdgesFromResult,
   GetFieldValueInput,
   GetRelatedInput,
+  LinkRecordsInput,
+  LinkRecordsResult,
   ParentLink,
   RelatedResult,
   ReadInput,
   ResolveEntityInput,
   ResolveEntityResult,
+  UnlinkRecordsInput,
+  UnlinkRecordsResult,
   UpdateInput,
   UpdateResult,
   WriteInput,
   WriteResult,
 } from '../../adapter';
+import { singleParentLink } from '../../adapter';
 import type { TriggerType } from '../../triggers/types';
 import type {
   SchemaEntryPoint,
@@ -66,8 +73,12 @@ import {
   affinityAdapterCredsParser,
   decodedFixedType,
   ENTITY_DISPLAY_NAMES,
+  listCatalogType,
   listEntityKind,
+  listNameFromPerListType,
+  perListTypeName,
   LIST_ENTRY_COLLECTION_DISPLAY_NAMES,
+  type AffinityFieldMeta,
   type DecodedTypeId,
   type ListEntityKind,
 } from './types';
@@ -76,10 +87,13 @@ import {
   describe as catalogDescribe,
   cachedFields,
   loadPerListTypes,
+  AFFINITY_LIST_ENTRIES_EDGE,
   AFFINITY_LIST_NAME_FIELD,
 } from './schema_catalog';
 import { resolveEntity as doResolveEntity } from './resolve';
+import { UPDATE_NOT_FOUND } from '../not_found';
 import {
+  assertCustomReference,
   canonicalFileData,
   canonicalInteractionData,
   canonicalNoteData,
@@ -90,7 +104,11 @@ import {
   canonicalReminderData,
   makeWebBaseUrlResolver,
   readCustomFieldValues,
+  referenceFieldOn,
+  severCustomReference,
   type AffinityCustomFieldScope,
+  type AffinityReferenceHolder,
+  type ReferenceHolderResolver,
   type AffinityCustomFieldValue,
   type WebUrlSource,
 } from './shared';
@@ -100,7 +118,7 @@ import {
   readOrganization,
 } from './organization';
 import { createPerson, updatePerson, readPerson } from './person';
-import { createListEntry } from './list_entry';
+import { createListEntry, updateListEntry, type ListEntryLocation } from './list_entry';
 import { createNote, createFile } from './note_file';
 
 export { AFFINITY_ADAPTER_TYPE } from './types';
@@ -125,8 +143,10 @@ export const AFFINITY_MANIFEST: AdapterManifest = {
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'resolveEntity', 'getRelated',
     'createRecord', 'updateRecord', 'deleteRecord', 'readRecord',
+    'linkRecords', 'unlinkRecords',
     'preprocessInbound', 'ensureEventSubscription', 'removeEventSubscription',
   ],
+  handbookSection: AFFINITY_HANDBOOK_SECTION,
   requiredCredentialType: ExternalServiceType.AFFINITY,
   triggerKinds: ['AFFINITY'],
   introspectedSchema: true,
@@ -559,7 +579,7 @@ export class AffinityAdapter extends BaseAdapter {
     for (const [name, decoded] of await this.perListTypes()) {
       const kind = listEntityKind(decoded.listType);
       if (!kind || decoded.listId === undefined) continue;
-      const bare = name.replace(/^List Entry — /, '');
+      const bare = listNameFromPerListType(name);
       grouped.set(kind, [...(grouped.get(kind) ?? []), { id: decoded.listId, name: bare }]);
     }
     return grouped;
@@ -588,6 +608,11 @@ export class AffinityAdapter extends BaseAdapter {
     const record: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input.record)) record[renameKey(k)] = v;
 
+    // A membership write names its list in the body, not on the type, so the
+    // collection type cannot say WHICH membership to look for. Narrow it to the
+    // list's own identity first — the same re-homing the create does.
+    const forResolve = await this.narrowedListEntryType(decoded, record);
+
     const constraints = {
       any: input.constraints.any.map((branch) => ({
         all: branch.all.map((entry) => ({ ...entry, field: renameKey(entry.field) })),
@@ -597,9 +622,21 @@ export class AffinityAdapter extends BaseAdapter {
     const operations = await this.getOperations();
     return doResolveEntity({
       operations,
-      decoded,
+      decoded: forResolve,
       resolve: { ...input, record, constraints },
     });
+  }
+
+  /** The list-pinned identity behind a membership write: the collection type
+   *  plus the `listName` its body names. Anything else passes through. */
+  private async narrowedListEntryType(
+    decoded: DecodedTypeId | undefined,
+    record: Record<string, unknown>,
+  ): Promise<DecodedTypeId | undefined> {
+    if (decoded?.entity !== 'list-entry' || decoded.listId != null) return decoded;
+    const listName = record[AFFINITY_LIST_NAME_FIELD];
+    if (typeof listName !== 'string' || listName.trim() === '') return decoded;
+    return (await this.perListTypes()).get(perListTypeName(listName.trim())) ?? decoded;
   }
 
   // ── 3. Field-level access ──────────────────────────────────────────────
@@ -806,6 +843,7 @@ export class AffinityAdapter extends BaseAdapter {
             try {
               results.push(this.noteLanding(await client.getNoteById(id)));
             } catch (err) {
+              if (isAdapterCallCeilingExceeded(err)) throw err;
               logger.warn('[AffinityAdapter.getRelated] failed to fetch interaction note', { id, err });
             }
           }
@@ -877,6 +915,7 @@ export class AffinityAdapter extends BaseAdapter {
       try {
         results.push({ position: await this.personLanding(id, client) });
       } catch (err) {
+        if (isAdapterCallCeilingExceeded(err)) throw err;
         logger.warn('[AffinityAdapter.getRelated] failed to fetch person', { id, err });
       }
     }
@@ -889,6 +928,7 @@ export class AffinityAdapter extends BaseAdapter {
       try {
         results.push({ position: await this.orgLanding(id, client) });
       } catch (err) {
+        if (isAdapterCallCeilingExceeded(err)) throw err;
         logger.warn('[AffinityAdapter.getRelated] failed to fetch organization', { id, err });
       }
     }
@@ -901,6 +941,7 @@ export class AffinityAdapter extends BaseAdapter {
       try {
         results.push({ position: await this.opportunityLanding(id, client) });
       } catch (err) {
+        if (isAdapterCallCeilingExceeded(err)) throw err;
         logger.warn('[AffinityAdapter.getRelated] failed to fetch opportunity', { id, err });
       }
     }
@@ -1016,7 +1057,7 @@ export class AffinityAdapter extends BaseAdapter {
               entity_type: entityType,
               entity_id: parentId,
               ...(perListName
-                ? { [AFFINITY_LIST_NAME_FIELD]: perListName.replace(/^List Entry — /, '') }
+                ? { [AFFINITY_LIST_NAME_FIELD]: listNameFromPerListType(perListName) }
                 : {}),
             },
           }),
@@ -1239,6 +1280,7 @@ export class AffinityAdapter extends BaseAdapter {
       if (edge === 'person') return [{ position: await this.personLanding(id, client) }];
       return [{ position: await this.opportunityLanding(id, client) }];
     } catch (err) {
+      if (isAdapterCallCeilingExceeded(err)) throw err;
       logger.warn('[AffinityAdapter.getRelated] failed to fetch list-entry parent', { edge, id, err });
       return [];
     }
@@ -1305,9 +1347,9 @@ export class AffinityAdapter extends BaseAdapter {
 
     switch (decoded.entity) {
       case 'organization':
-        return createOrganization({ operations, web, write: input });
+        return createOrganization({ operations, web, write: input, holderFor: this.holderFor });
       case 'person':
-        return createPerson({ operations, web, write: input });
+        return createPerson({ operations, web, write: input, holderFor: this.holderFor });
       case 'list-entry':
         // A write along `<org/person>-[:List Entries]->` names its list in the
         // body; resolve it to the pinned per-list create. A per-list type is
@@ -1355,7 +1397,7 @@ export class AffinityAdapter extends BaseAdapter {
       );
     }
     const listName = rawListName.trim();
-    const perListName = `List Entry — ${listName}`;
+    const perListName = perListTypeName(listName);
     const decoded = (await this.perListTypes()).get(perListName);
     if (decoded?.listId == null) {
       throw new Error(
@@ -1382,13 +1424,19 @@ export class AffinityAdapter extends BaseAdapter {
 
     switch (decoded.entity) {
       case 'organization':
-        return updateOrganization({ operations, web, update: input });
+        return updateOrganization({ operations, web, update: input, holderFor: this.holderFor });
       case 'person':
-        return updatePerson({ operations, web, update: input });
-      // list-entry / note / file have no in-place update — re-asserting them
-      // is a create (dedup handles list-entry; note/file append).
-      case 'list-entry':
-        return createListEntry({ operations, write: input, decoded });
+        return updatePerson({ operations, web, update: input, holderFor: this.holderFor });
+      // An entry the engine resolved by (record, list) is UPDATED in place —
+      // the values it hands us have already been merged against what the entry
+      // carries. Re-running the membership create would only re-derive the id
+      // we were given.
+      case 'list-entry': {
+        const entry = await this.locateListEntry(decoded, input);
+        if (!entry) return UPDATE_NOT_FOUND;
+        return updateListEntry({ operations, update: input, entry });
+      }
+      // note / file have no in-place update — re-asserting one appends.
       case 'note':
         return createNote({ operations, write: input });
       case 'file':
@@ -1451,7 +1499,106 @@ export class AffinityAdapter extends BaseAdapter {
     }
   }
 
-  // ── 5b. Expression reads ────────────────────────────────────────────────
+  // ── 5b. Link / unlink two existing records ──────────────────────────────
+
+  /**
+   * `link entry -[:Owners]-> person` — point one of the FROM record's reference
+   * fields at a person or organization that already exists. Affinity models
+   * these as fields rather than as a relationship table, so a link is a field
+   * value: the same act a linked write performs on the child it just created,
+   * with both records already in hand.
+   *
+   * WHO HOLDS the field is the whole question. A company or a person holds its
+   * own unscoped fields; a list entry holds its list's, and a value on an entry
+   * is addressed by the entry AND the company the entry stands for. That is one
+   * question, asked here exactly where a linked write asks it (`holderFor`), so
+   * the two spellings cannot drift.
+   *
+   * Idempotent: a field already naming the target reports `created: false` and
+   * sends nothing.
+   */
+  async linkRecords(input: LinkRecordsInput): Promise<LinkRecordsResult> {
+    const { operations, holder, fieldDef, targetId } = await this.resolveReferenceLink(
+      input,
+      'linkRecords',
+    );
+    const created = await assertCustomReference(operations, { holder, fieldDef, targetId });
+    return { created };
+  }
+
+  /**
+   * `unlink entry -[:Owners]-> person` — the inverse. Affinity has no "clear
+   * this field" verb, so the value rows naming the target are deleted: one
+   * target leaves a multi-valued reference, a single-valued one is emptied. A
+   * field that never pointed there reports `removed: false` and sends nothing,
+   * which is the quiet no-op `unlink` promises.
+   */
+  async unlinkRecords(input: UnlinkRecordsInput): Promise<UnlinkRecordsResult> {
+    const { operations, holder, fieldDef, targetId } = await this.resolveReferenceLink(
+      input,
+      'unlinkRecords',
+    );
+    const removed = await severCustomReference(operations, { holder, fieldDef, targetId });
+    return { removed };
+  }
+
+  /**
+   * The three facts a link needs: the record that HOLDS the reference, the
+   * field the edge names on it, and the Affinity id being pointed at.
+   *
+   * Every failure here is loud. A standalone link has nowhere else to go —
+   * unlike a linked write, whose non-reference edges are the built-in
+   * associations another writer handles — so an edge that names no writable
+   * reference on the from side is the author's mistake, not a case to skip.
+   */
+  private async resolveReferenceLink(
+    input: LinkRecordsInput,
+    method: 'linkRecords' | 'unlinkRecords',
+  ): Promise<{
+    operations: AffinityOperations;
+    holder: AffinityReferenceHolder;
+    fieldDef: AffinityFieldMeta;
+    targetId: number;
+  }> {
+    const targetId = Number(input.to.externalId);
+    if (!Number.isInteger(targetId)) {
+      throw new Error(
+        `AffinityAdapter.${method}: "${input.to.externalId}" is not a numeric Affinity id.`,
+      );
+    }
+    const toDecoded = await this.structuredIdFor(input.to.recordType);
+    if (toDecoded?.entity !== 'organization' && toDecoded?.entity !== 'person') {
+      throw new Error(
+        `AffinityAdapter.${method}: an Affinity reference field points at a person or an ` +
+          `organization — "${input.to.recordType}" is neither.`,
+      );
+    }
+    const edgeName = naturalName(input.edgeName);
+    const holder = await this.holderFor({
+      recordType: input.from.recordType,
+      externalId: input.from.externalId,
+      edgeName,
+    });
+    if (!holder) {
+      throw new Error(
+        `AffinityAdapter.${method}: "${input.from.recordType}" ${input.from.externalId} holds no ` +
+          `reference fields — a link is a field value on a company, a person, or a list entry ` +
+          `(an entry through its own list's type).`,
+      );
+    }
+    const operations = await this.getOperations();
+    const fieldDef = await referenceFieldOn(operations, holder, edgeName);
+    if (!fieldDef) {
+      throw new Error(
+        `AffinityAdapter.${method}: "${input.edgeName}" is not a writable ${toDecoded.entity} ` +
+          `reference field on "${input.from.recordType}" — a link points one of the from-side's ` +
+          `own reference fields at an existing record.`,
+      );
+    }
+    return { operations, holder, fieldDef, targetId };
+  }
+
+  // ── 5c. Expression reads ────────────────────────────────────────────────
 
   /**
    * Read one field at a position. Affinity records are SPLIT across two
@@ -1549,11 +1696,15 @@ export class AffinityAdapter extends BaseAdapter {
       // from; a generic `List Entry` cannot commit to one. Mirrors the same
       // mapping in schema_catalog's per-list describe, so the fields we read
       // are exactly the fields we published.
-      const parent = listEntityKind(decoded.listType);
-      const catalogType =
-        parent === 'organization' ? 'ORGANIZATION' : parent === 'person' ? 'PERSON' : null;
+      const catalogType = listCatalogType(decoded);
       if (!catalogType) return null;
-      return { kind: 'list-entry', listEntryId: recordId, catalogType };
+      return {
+        kind: 'list-entry',
+        listEntryId: recordId,
+        catalogType,
+        listId: decoded.listId,
+        listName: decoded.listName,
+      };
     }
     return null;
   }
@@ -1572,7 +1723,191 @@ export class AffinityAdapter extends BaseAdapter {
     if (decoded.entity === 'person') {
       return readPerson({ operations, externalId: input.externalId });
     }
+    if (decoded.entity === 'list-entry') {
+      return this.readListEntry(decoded, input.externalId);
+    }
     return null;
+  }
+
+  /**
+   * A list entry's own values, keyed by the name the entry's list publishes
+   * (bare, the list's redundant prefix off). This is what hands the engine its
+   * write semantics on a re-asserted membership: `?:` fills only what is empty
+   * and an unchanged value writes nothing, both of which need to know what is
+   * on the entry NOW. Without it every re-run read as "written from empty".
+   *
+   * The list is either pinned by the type (`List Entry — <list>`) or, on the
+   * per-record membership collection, read off the entry's own value rows —
+   * each row's field belongs to exactly one list. An entry with no values names
+   * no list, and it does not need to: an entry with nothing on it has nothing
+   * to compare against, which is exactly what an empty read says.
+   */
+  private async readListEntry(
+    decoded: DecodedTypeId,
+    externalId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const listEntryId = Number(externalId);
+    // A REHEARSED entry carries a synthetic handle, not an Affinity id. Nothing
+    // to read, and nothing written yet to read against.
+    if (!Number.isInteger(listEntryId)) return null;
+    const catalogType = listCatalogType(decoded);
+    if (!catalogType) return null;
+
+    const client = await this.getApiClient();
+    const [values, catalog] = await Promise.all([
+      client.getFieldValues({ list_entry_id: listEntryId }),
+      cachedFields({ client, teamId: this.teamId, type: catalogType }),
+    ]);
+    const list = await this.listOfEntry(decoded, values, catalog);
+    const grouped = await readCustomFieldValues(
+      await this.getOperations(),
+      { kind: 'list-entry', listEntryId, catalogType, ...(list ?? {}) },
+      { catalog, values },
+    );
+
+    const record: Record<string, unknown> = {};
+    for (const [name, entry] of grouped) {
+      // `allows_multiple` publishes as `cardinality: 'many'`, so it reads as
+      // the whole list — which is what an append (`+:`) merges against.
+      record[name] = entry.field.allows_multiple
+        ? entry.values
+        : (entry.values[entry.values.length - 1] ?? null);
+    }
+    if (list) record[AFFINITY_LIST_NAME_FIELD] = list.listName;
+    return record;
+  }
+
+  /**
+   * Where an entry actually lives: the LIST it sits on and the RECORD it stands
+   * for. A list-scoped field value is posted against both, and neither is
+   * recoverable from the entry's id alone — Affinity addresses an entry only
+   * under its list.
+   *
+   * A list's own type pins the list; the membership collection does not, so the
+   * list comes off the parent record's membership rows, which is also what
+   * proves the entry is still that record's. An entry that has left the record
+   * reads as gone (the not-found contract), so a bound write re-mints rather
+   * than writing into a stranger's row.
+   */
+  private async locateListEntry(
+    decoded: DecodedTypeId,
+    update: UpdateInput,
+  ): Promise<ListEntryLocation | null> {
+    const listEntryId = Number(update.externalId);
+    if (!Number.isInteger(listEntryId)) {
+      throw new Error(
+        `AffinityAdapter.updateRecord: externalId "${update.externalId}" is not a numeric list-entry id.`,
+      );
+    }
+    const client = await this.getApiClient();
+    const parent = this.parentEntityOf(update);
+
+    if (decoded.listId != null) {
+      const listName = decoded.listName;
+      // No parent link (an entry written by id): the entry itself names the
+      // record it stands for.
+      const entity =
+        parent ??
+        (await (async () => {
+          const row = await client.getListEntry({ listId: decoded.listId!, listEntryId });
+          const kind = listEntityKind(decoded.listType);
+          if (kind !== 'organization' && kind !== 'person') return null;
+          return { entityId: row.entity_id, entityType: kind };
+        })());
+      if (!entity) return null;
+      return { listEntryId, listId: decoded.listId, listName, ...entity };
+    }
+
+    if (!parent) {
+      throw new Error(
+        'AffinityAdapter.updateRecord: an entry on the membership collection is identified by the ' +
+          'record it belongs to — write it through that record\'s `List Entries` edge.',
+      );
+    }
+    const membership = (await client.getEntityListEntries(parent)).find(
+      (row) => row.id === listEntryId,
+    );
+    if (!membership) return null;
+    const list = await this.listById(membership.list_id);
+    return { listEntryId, listId: membership.list_id, listName: list?.listName, ...parent };
+  }
+
+  /**
+   * Which record a parent link stands for, when that record HOLDS a custom
+   * reference pointed at the write's child (`write org-[:Champion]-> person`,
+   * `write entry-[:Owners]-> person`). Only the adapter can answer: a per-list
+   * entry type's name resolves through the live list cache, and a list-scoped
+   * value is addressed by the entry AND the record the entry stands for.
+   */
+  private readonly holderFor: ReferenceHolderResolver = async (parent) => {
+    const id = Number(parent.externalId);
+    // A REHEARSED parent carries a synthetic handle, not an Affinity id.
+    if (!Number.isInteger(id)) return null;
+    const decoded = await this.structuredIdFor(parent.recordType);
+    if (!decoded) return null;
+    if (decoded.entity === 'organization' || decoded.entity === 'person') {
+      return { kind: 'entity', entityType: decoded.entity, entityId: id };
+    }
+    if (decoded.entity !== 'list-entry') return null;
+    const catalogType = listCatalogType(decoded);
+    // Only a LIST's own type says which list's fields the entry holds; the
+    // membership collection is reached by naming a list in a write body, and a
+    // reference lands on a position, which always carries the narrowed type.
+    if (!catalogType || decoded.listId == null) return null;
+    const row = await (await this.getApiClient()).getListEntry({
+      listId: decoded.listId,
+      listEntryId: id,
+    });
+    return {
+      kind: 'list-entry',
+      listEntryId: id,
+      listId: decoded.listId,
+      listName: decoded.listName,
+      catalogType,
+      entityId: row.entity_id,
+    };
+  };
+
+  /** The organization or person a write's lone parent link names. */
+  private parentEntityOf(
+    write: Pick<WriteInput, 'parentLinks'>,
+  ): { entityId: number; entityType: 'organization' | 'person' } | undefined {
+    const parent = singleParentLink(write);
+    if (!parent) return undefined;
+    const entity = decodedFixedType(parent.recordType)?.entity;
+    if (entity !== 'organization' && entity !== 'person') return undefined;
+    const entityId = Number(parent.externalId);
+    return Number.isInteger(entityId) ? { entityId, entityType: entity } : undefined;
+  }
+
+  /** The list an entry sits on: pinned by a per-list type, else named by the
+   *  entry's own field values (every list-scoped field belongs to one list). */
+  private async listOfEntry(
+    decoded: DecodedTypeId,
+    values: { field_id: number }[],
+    catalog: { id: number; list_id: number | null }[],
+  ): Promise<{ listId: number; listName: string } | undefined> {
+    if (decoded.listId != null && decoded.listName !== undefined) {
+      return { listId: decoded.listId, listName: decoded.listName };
+    }
+    const byId = new Map(catalog.map((f) => [f.id, f]));
+    const listId = values
+      .map((v) => byId.get(v.field_id)?.list_id)
+      .find((id): id is number => id != null);
+    if (listId == null) return undefined;
+    return this.listById(listId);
+  }
+
+  /** A list's id and name off the per-list type cache — the same catalog row
+   *  the type names itself from, so a field named here and a field named by
+   *  `describe` can't disagree. */
+  private async listById(listId: number): Promise<{ listId: number; listName: string } | undefined> {
+    for (const decoded of (await this.perListTypes()).values()) {
+      if (decoded.listId === listId && decoded.listName !== undefined) {
+        return { listId, listName: decoded.listName };
+      }
+    }
+    return undefined;
   }
 
   // ── Internal: lazy client + operations + web-url construction ────────────

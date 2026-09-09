@@ -178,11 +178,22 @@ export async function updateKgRecord(input: {
   // deleted (e.g. externally, between events), report it so the engine's bind
   // self-heal can re-mint rather than failing on an FK violation. The 404 the
   // node endpoint returns is that same contract, transported.
-  const updated = await kgFetchOrNull<{ nodeId: string }>(creds, {
-    method: 'PATCH',
-    path: `/nodes/${nodeId}`,
-    body: { properties: nodeAnchored, ...writeProvenance(input.mutationContext) },
-  });
+  //
+  // With no node-anchored property to set — a matched node reached with
+  // nothing of its own to change (a parent-only attach, or a resources-only
+  // write) — the PATCH would carry an empty property list and append nothing.
+  // The GET stands in: same 404, no write.
+  const updated =
+    nodeAnchored.length > 0
+      ? await kgFetchOrNull<{ nodeId: string }>(creds, {
+          method: 'PATCH',
+          path: `/nodes/${nodeId}`,
+          body: { properties: nodeAnchored, ...writeProvenance(input.mutationContext) },
+        })
+      : await kgFetchOrNull<{ nodeId: string }>(creds, {
+          method: 'GET',
+          path: `/nodes/${nodeId}`,
+        });
   if (updated === null) return { notFound: true };
 
   if (edgeAnchored.length > 0) {

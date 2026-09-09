@@ -1,7 +1,7 @@
 {
   "name": "movement-lang",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "UNLICENSED",
   "version": "0.0.1",
   "description": "The data-movement language: parser, checker, and lowering for movements",
   "engines": {

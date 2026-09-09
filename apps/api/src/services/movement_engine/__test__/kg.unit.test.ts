@@ -744,6 +744,30 @@ describe('dry-run — KG writes are captured by the sink, never committed', () =
       ['create', KG, 'round_participation', { name: 'Alice Capital' }],
       ['create', KG, 'round_participation', { name: 'Bob Ventures' }],
     ]);
+    // A rehearsal shows the whole write, and a record is not just its fields:
+    // the participations hang off the round through `participants`, and that
+    // round is one this same rehearsal invented a moment ago — so the trace
+    // says `rehearsed` rather than handing over an id that reads real.
+    const roundId = result.writes[0].externalId;
+    expect(captured[0].parents).toBeUndefined();
+    expect(captured.slice(1).map((w) => w.parents)).toEqual([
+      [
+        {
+          recordType: 'funding_round',
+          externalId: roundId,
+          edgeName: 'participants',
+          rehearsed: true,
+        },
+      ],
+      [
+        {
+          recordType: 'funding_round',
+          externalId: roundId,
+          edgeName: 'participants',
+          rehearsed: true,
+        },
+      ],
+    ]);
     // Nothing reached the adapter's write methods.
     expect(kg.creates).toEqual([]);
     expect(kg.updates).toEqual([]);

@@ -24,6 +24,7 @@ import {
   readCustomFieldCurrentValues,
   readPersonBuiltins,
   writeCustomFieldValues,
+  type ReferenceHolderResolver,
   type WebUrlSource,
 } from './shared';
 
@@ -54,6 +55,9 @@ export async function createPerson(input: {
   operations: AffinityOperations;
   web: WebUrlSource;
   write: WriteInput;
+  /** Which record a parent link stands for — only the adapter can say, since a
+   *  per-list entry type resolves through its live list cache. */
+  holderFor: ReferenceHolderResolver;
   /** Pre-resolved Affinity person id from the engine's resolveEntity, if any.
    *  When set the operations layer writes this person by id instead of
    *  re-searching by name (mirrors the organization path's `affinityId`). */
@@ -100,12 +104,12 @@ export async function createPerson(input: {
       entityId: result.id,
       entityType: 'person',
       fieldValues: custom,
-      forceOverwrite: true,
     });
 
     // A Person/Organization-valued custom field on the PARENT pointing at this
     // person is set here (e.g. `write org -[:Champion]-> person`).
     await applyCustomReferenceParentLinks(operations, {
+      holderFor: input.holderFor,
       childExternalId: String(result.id),
       write,
     });
@@ -131,6 +135,7 @@ export async function updatePerson(input: {
   operations: AffinityOperations;
   web: WebUrlSource;
   update: UpdateInput;
+  holderFor: ReferenceHolderResolver;
 }): Promise<UpdateResult> {
   const affinityId = Number(input.update.externalId);
   if (!Number.isInteger(affinityId)) {
@@ -150,6 +155,7 @@ export async function updatePerson(input: {
       operations: input.operations,
       web: input.web,
       write: input.update,
+      holderFor: input.holderFor,
       affinityId,
     });
   } catch (err) {

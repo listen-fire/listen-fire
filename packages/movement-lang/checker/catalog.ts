@@ -919,6 +919,20 @@ export interface WritableRootSchema {
   /** What a handle from `x = write instance-[:root]-> { … }` carries (`externalId`, `url`, the written fields). */
   resultShape: Record<string, FieldType>;
   /**
+   * The POSITION a handle from a write of this shape stands on, when that is
+   * more specific than the root the write was addressed through. Set on a
+   * DISCRIMINATED VARIANT: `write org-[:List Entries]-> { listName: "Master
+   * Deals List", … }` is addressed at the membership collection, but the record
+   * it hands back is a row of that one list — the type that genuinely carries
+   * `Owners`. So the handle stands on the variant's own position, and a chained
+   * write or `link` off it resolves against that type's edges.
+   *
+   * Absent ⇒ the handle keeps the type the write's own edge named (the common
+   * case, and the case of a variant whose type mints no position at all — its
+   * `fields`/`edges` still ride the handle).
+   */
+  position?: string;
+  /**
    * The target system's OWN identity rules for this root, declaratively:
    * an OR-of-AND of surface field names (each inner array is one
    * AND-group; any group matching means "the same record"). Projected
@@ -1051,6 +1065,20 @@ export interface InstanceSchema {
    * like Slack or Drive). Reads/creates are unaffected.
    */
   supportsInPlaceUpdate?: boolean;
+  /**
+   * Whether this instance's edges can carry INLINE properties — facts that
+   * belong to the relationship rather than to either end (a knowledge-graph
+   * edge's `role`, a Slack file's `pinned`), which the adapter attaches per
+   * traversed record at run time and no describe enumerates.
+   *
+   * A POSITIVE claim, and the third surface a bare name in a bracket WHERE can
+   * address: the walked edge's own property, an outer binding, or a field of
+   * the landed type. Two of those the checker can see; this one it cannot, so
+   * where it is declared an otherwise-unknown WHERE name stays silent — the
+   * same honesty valve `openProperties` is for a read. Absent ⇒ the edge
+   * carries nothing but its ends, and such a name is a mistake.
+   */
+  edgesCarryProperties?: boolean;
   /**
    * Position-aware narrowing (2026-07-05): refined position types, keyed by
    * `refinementKey`. When a hop lands on a type through a WHERE that is a

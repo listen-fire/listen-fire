@@ -23,6 +23,7 @@ import {
   readCustomFieldCurrentValues,
   readOrgBuiltins,
   writeCustomFieldValues,
+  type ReferenceHolderResolver,
   type WebUrlSource,
 } from './shared';
 import { AFFINITY_ADAPTER_TYPE, decodedFixedType } from './types';
@@ -59,6 +60,9 @@ export async function createOrganization(input: {
   operations: AffinityOperations;
   web: WebUrlSource;
   write: WriteInput;
+  /** Which record a parent link stands for — only the adapter can say, since a
+   *  per-list entry type resolves through its live list cache. */
+  holderFor: ReferenceHolderResolver;
   /** Pre-resolved Affinity org id from the engine's resolveEntity, if any. */
   affinityId?: number;
 }): Promise<WriteResult> {
@@ -90,7 +94,6 @@ export async function createOrganization(input: {
       entityId: result.id,
       entityType: 'organization',
       fieldValues: custom,
-      forceOverwrite: true,
     });
 
     // The built-in employer association written from the person side.
@@ -99,6 +102,7 @@ export async function createOrganization(input: {
     // A Person/Organization-valued custom field on the PARENT pointing at this
     // org is set here (e.g. `write person -[:Portfolio]-> org`).
     await applyCustomReferenceParentLinks(operations, {
+      holderFor: input.holderFor,
       childExternalId: String(result.id),
       write,
     });
@@ -124,6 +128,7 @@ export async function updateOrganization(input: {
   operations: AffinityOperations;
   web: WebUrlSource;
   update: UpdateInput;
+  holderFor: ReferenceHolderResolver;
 }): Promise<UpdateResult> {
   const affinityId = Number(input.update.externalId);
   if (!Number.isInteger(affinityId)) {
@@ -142,6 +147,7 @@ export async function updateOrganization(input: {
       operations: input.operations,
       web: input.web,
       write: input.update,
+      holderFor: input.holderFor,
       affinityId,
     });
   } catch (err) {

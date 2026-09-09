@@ -86,8 +86,14 @@ jest.mock('../../../../knowledge_pipeline/uniqueness_constraints', () => {
 });
 
 import { Readable } from 'node:stream';
-import { AffinityAdapter } from '../index';
-import { decodedFixedType } from '../types';
+import {
+  checkProgram,
+  fromCatalogSnapshot,
+  parseProgram,
+  type CatalogSnapshot,
+} from 'movement-lang';
+import { AffinityAdapter, AFFINITY_MANIFEST } from '../index';
+import { decodedFixedType, listScopedFieldDisplayNames } from '../types';
 import { instanceSchemaFromDescriptors } from '../../../movement/schema_projection';
 import type { TeamId } from '../../../../../generated/kysely/core/Team';
 import type { ResolveEntityInput } from '../../../adapter';
@@ -119,8 +125,9 @@ interface FakeCalls {
   findMatchingPerson: Array<{ name: string; email?: string | null }>;
   createOrUpdateOrganisation: Array<{ searchQuery: { name: string; domain?: string | null }; affinityId?: number }>;
   createOrUpdatePerson: Array<{ searchQuery: PersonSearchQuery; affinityId?: number; orgId?: number }>;
-  createFieldValue: Array<{ field_id: number; entity_id?: number; value: unknown }>;
+  createFieldValue: Array<{ field_id: number; entity_id?: number; list_entry_id?: number; value: unknown }>;
   updateFieldValue: Array<{ id: number; value: unknown }>;
+  deleteFieldValue: Array<{ id: number }>;
   getFieldValues: Array<{ organization_id?: number; person_id?: number; list_entry_id?: number }>;
   uploadEntityFile: Array<{ entityId: number; entityType?: string; fileName: string }>;
   createNote: Array<Record<string, unknown>>;
@@ -242,20 +249,45 @@ const INTERACTIONS = [
 
 const RELATIONSHIP_STRENGTHS = [{ external_id: 7201, internal_id: 42, strength: 0.7 }];
 
+// A hand-maintained field carries Affinity's "no provider" sentinel, NOT null:
+// the v1 catalog fills `enrichment_source` in for every field. The fixture said
+// null for years, which is why nothing ever exercised the read-only branch and
+// why the rule that read any non-null value as an enrichment provider could
+// quietly make every custom field unwritable.
 const ORG_FIELDS = [
-  { id: 100, name: 'Stage', list_id: null, enrichment_source: null, value_type: 7, allows_multiple: false, dropdown_options: [{ id: 1, text: 'Seed', rank: 0, color: 0 }, { id: 2, text: 'Series A', rank: 1, color: 0 }] },
-  { id: 101, name: 'Employees', list_id: null, enrichment_source: null, value_type: 3, allows_multiple: false, dropdown_options: null },
+  { id: 100, name: 'Stage', list_id: null, enrichment_source: 'none', value_type: 7, allows_multiple: false, dropdown_options: [{ id: 1, text: 'Seed', rank: 0, color: 0 }, { id: 2, text: 'Series A', rank: 1, color: 0 }] },
+  { id: 101, name: 'Employees', list_id: null, enrichment_source: 'none', value_type: 3, allows_multiple: false, dropdown_options: null },
   { id: 102, name: 'Crunchbase Rank', list_id: null, enrichment_source: 'crunchbase', value_type: 3, allows_multiple: false, dropdown_options: null },
-  { id: 103, name: 'List Score', list_id: 555, enrichment_source: null, value_type: 3, allows_multiple: false, dropdown_options: null },
+  // List-scoped fields arrive PREFIXED — the catalog is fetched with modified
+  // names, so Affinity puts the list in front of every field scoped to it. The
+  // per-list type takes its own list's prefix back off; everything else here
+  // keeps the name Affinity gave it.
+  { id: 103, name: '[Hot Leads] List Score', list_id: 555, enrichment_source: 'none', value_type: 3, allows_multiple: false, dropdown_options: null },
   // A Person-valued custom field — an EDGE (surfaces in references[], not fields[]).
-  { id: 104, name: 'Primary Contact', list_id: null, enrichment_source: null, value_type: 0 /* PERSON */, allows_multiple: false, dropdown_options: null },
+  { id: 104, name: 'Primary Contact', list_id: null, enrichment_source: 'none', value_type: 0 /* PERSON */, allows_multiple: false, dropdown_options: null },
   // A plain DROPDOWN (2). Unlike a RANKED_DROPDOWN (7), whose value arrives as
   // the whole option object, this one arrives as a bare option id.
-  { id: 105, name: 'Segment', list_id: null, enrichment_source: null, value_type: 2, allows_multiple: false, dropdown_options: [{ id: 8, text: 'Enterprise', rank: 0, color: 0 }] },
+  { id: 105, name: 'Segment', list_id: null, enrichment_source: 'none', value_type: 2, allows_multiple: false, dropdown_options: [{ id: 8, text: 'Enterprise', rank: 0, color: 0 }] },
+  // Enrichment-sourced AND list-scoped, so the per-list write variant has to
+  // drop a field as well as carry one.
+  { id: 106, name: '[Hot Leads] Affinity Score', list_id: 555, enrichment_source: 'affinity-data', value_type: 3, allows_multiple: false, dropdown_options: null },
+  // An enrichment-sourced REFERENCE field: an edge the link writer refuses, so
+  // the edge's own promise has to say so.
+  { id: 107, name: 'Enriched Contact', list_id: null, enrichment_source: 'dealroom', value_type: 0 /* PERSON */, allows_multiple: false, dropdown_options: null },
+  // A list-scoped REFERENCE field: an EDGE on the per-list type, so the prefix
+  // has to come off the edge's name the same way it comes off a field's.
+  { id: 108, name: '[Hot Leads] Owners', list_id: 555, enrichment_source: 'none', value_type: 0 /* PERSON */, allows_multiple: true, dropdown_options: null },
+  // A list-scoped field whose bare name is ALREADY taken, verbatim, by the
+  // entity-level `Segment` (105). One name has to mean one field, so this one
+  // keeps its prefix.
+  { id: 109, name: '[Hot Leads] Segment', list_id: 555, enrichment_source: 'none', value_type: 6, allows_multiple: false, dropdown_options: null },
+  // A list-scoped MULTI-value field: it reads back as the whole list, which is
+  // what an append (`+:`) has to merge against.
+  { id: 110, name: '[Hot Leads] Tags', list_id: 555, enrichment_source: 'none', value_type: 6, allows_multiple: true, dropdown_options: null },
 ];
 
 const PERSON_FIELDS = [
-  { id: 200, name: 'Title', list_id: null, enrichment_source: null, value_type: 6, allows_multiple: false, dropdown_options: null },
+  { id: 200, name: 'Title', list_id: null, enrichment_source: 'none', value_type: 6, allows_multiple: false, dropdown_options: null },
 ];
 
 function makeAdapter(input?: {
@@ -269,6 +301,11 @@ function makeAdapter(input?: {
   personUpdate404?: boolean;
   /** Employers already on the fetched person (person-side association tests). */
   personOrgIds?: number[];
+  /** A membership the record already has — what makes a re-asserted write an
+   *  update rather than a second entry. */
+  existingListEntry?: { id: number; listId: number; entityId: number };
+  /** Affinity refuses every field-value write (a 422, say). */
+  failFieldValueWrites?: boolean;
 }): { adapter: AffinityAdapter; calls: FakeCalls } {
   const adapter = new AffinityAdapter({ teamId: 'team-aff' as TeamId, credentialsId: 'creds-1' });
   const calls: FakeCalls = {
@@ -278,6 +315,7 @@ function makeAdapter(input?: {
     createOrUpdatePerson: [],
     createFieldValue: [],
     updateFieldValue: [],
+    deleteFieldValue: [],
     getFieldValues: [],
     uploadEntityFile: [],
     createNote: [],
@@ -318,6 +356,22 @@ function makeAdapter(input?: {
       listId === 555
         ? [{ id: 9301, list_id: 555, entity_id: 7101, entity_type: 1, created_at: '2026-07-17T00:00:00.000Z' }]
         : [],
+    getExistingListEntryId: async ({ list, entityId }: { list: { id: number }; entityId: number }) => {
+      const e = input?.existingListEntry;
+      return e && e.listId === list.id && e.entityId === entityId ? e.id : null;
+    },
+    getEntityListEntries: async ({ entityId }: { entityId: number }) => {
+      const e = input?.existingListEntry;
+      return e && e.entityId === entityId
+        ? [{ id: e.id, list_id: e.listId, entity_id: e.entityId, created_at: '2026-09-01T00:00:00.000Z' }]
+        : [];
+    },
+    getListEntry: async ({ listId, listEntryId }: { listId: number; listEntryId: number }) => ({
+      id: listEntryId,
+      list_id: listId,
+      entity_id: input?.existingListEntry?.entityId ?? 42,
+      created_at: '2026-09-01T00:00:00.000Z',
+    }),
     getOrganisationById: async (id: number) => ({ id, name: 'Acme', domain: 'acme.com', domains: ['acme.com'], person_ids: [] }),
     getPersonById: async (id: number) => ({ id, first_name: 'Jane', last_name: 'Doe', primary_email: 'jane@acme.com', emails: ['jane@acme.com'], organization_ids: input?.personOrgIds ?? [] }),
     updatePerson: async (id: number, payload: { organization_ids?: number[] }) => {
@@ -334,8 +388,20 @@ function makeAdapter(input?: {
       if (args.list_entry_id != null) return rows.filter((r) => r.list_entry_id === args.list_entry_id);
       return rows;
     },
-    createFieldValue: async (args: { field_id: number; entity_id?: number; value: unknown }) => { calls.createFieldValue.push(args); return {}; },
-    updateFieldValue: async (args: { id: number; value: unknown }) => { calls.updateFieldValue.push(args); return {}; },
+    createFieldValue: async (args: { field_id: number; entity_id?: number; list_entry_id?: number; value: unknown }) => {
+      calls.createFieldValue.push(args);
+      if (input?.failFieldValueWrites) throw new Error('Affinity Error: 422 (Unprocessable Entity)');
+      return {};
+    },
+    updateFieldValue: async (args: { id: number; value: unknown }) => {
+      calls.updateFieldValue.push(args);
+      if (input?.failFieldValueWrites) throw new Error('Affinity Error: 422 (Unprocessable Entity)');
+      return {};
+    },
+    deleteFieldValue: async (args: { id: number }) => {
+      calls.deleteFieldValue.push(args);
+      return {};
+    },
     uploadEntityFile: async (args: { entity: { id: number }; entityType?: string; file: File }) => { calls.uploadEntityFile.push({ entityId: args.entity.id, entityType: args.entityType, fileName: args.file.name }); },
     // Read surfaces (scoped enumerations + fetch-by-id).
     listNotes: async (filter: { personId?: number; organizationId?: number; opportunityId?: number } = {}) =>
@@ -417,7 +483,10 @@ function makeAdapter(input?: {
     },
     createListEntry: async (args: { listId: number; entityId: number; entityType: string }) => {
       calls.createListEntry.push(args);
-      return { id: 9999, isNew: true };
+      const e = input?.existingListEntry;
+      return e && e.listId === args.listId && e.entityId === args.entityId
+        ? { id: e.id, isNew: false }
+        : { id: 9999, isNew: true };
     },
   };
 
@@ -482,6 +551,10 @@ describe('AffinityAdapter.describe', () => {
     expect(byId.get('100')!.enumValues).toEqual(['Seed', 'Series A']);
     // custom: number
     expect(byId.get('101')!.kind).toBe('number');
+    // A hand-maintained field (the "no provider" sentinel) IS writable — the
+    // whole point of the rule; only a real provider closes a field.
+    expect(byId.get('100')!.writable).toBe(true);
+    expect(byId.get('101')!.writable).toBe(true);
     // enrichment field → writable:false
     expect(byId.get('102')!.writable).toBe(false);
     // list-scoped field is excluded from the entity-level describe
@@ -497,6 +570,10 @@ describe('AffinityAdapter.describe', () => {
     expect(refsById.get('104')!.targetTypeId).toBe('Person');
     expect(refsById.get('104')!.name).toBe('Primary Contact');
     expect(refsById.get('104')!.cardinality).toBe('one');
+    expect(refsById.get('104')!.writable).toBe(true);
+    // An enrichment-sourced reference is still an edge (it reads), but the link
+    // writer refuses it, so the edge does not promise a write it cannot do.
+    expect(refsById.get('107')!.writable).toBe(false);
 
     // identity is the TG layer's concern — no invented native constraints …
     expect(descriptor!.uniquenessConstraints).toBeUndefined();
@@ -587,6 +664,45 @@ describe('AffinityAdapter.describe', () => {
     expect(result.externalId).toBe('9999');
   });
 
+  it('a list-entry write names its fields the way the LIST shows them', async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.createRecord({
+      recordType: 'Organization List Entry',
+      fields: { listName: 'Hot Leads', 'List Score': 42 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    // Resolved through the per-list type's display-name map to field 103 —
+    // the field Affinity spells `[Hot Leads] List Score`.
+    expect(calls.createFieldValue).toEqual([
+      expect.objectContaining({ field_id: 103, value: 42, list_entry_id: 9999 }),
+    ]);
+  });
+
+  it("Affinity's own spelling of the same field still writes it", async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.createRecord({
+      recordType: 'Organization List Entry',
+      fields: { listName: 'Hot Leads', '[Hot Leads] List Score': 42 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    expect(calls.createFieldValue).toEqual([
+      expect.objectContaining({ field_id: 103, value: 42 }),
+    ]);
+  });
+
+  it('an enrichment-sourced list field is dropped from the write, not written', async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.createRecord({
+      recordType: 'Organization List Entry',
+      fields: { listName: 'Hot Leads', 'Affinity Score': 9 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    expect(calls.createFieldValue).toEqual([]);
+  });
+
   it('a membership write with no listName errors, naming the field', async () => {
     const { adapter } = makeAdapter();
     await expect(
@@ -611,7 +727,37 @@ describe('AffinityAdapter.describe', () => {
   it('a per-list List Entry publishes its ONE parent up-hop, from the list type (org list → Organization)', async () => {
     const { adapter } = makeAdapter();
     const descriptor = await adapter.describe('List Entry — Hot Leads');
-    expect(descriptor!.references.map((r) => r.name)).toEqual(['Organization']);
+    expect(descriptor!.references.map((r) => r.name)).toEqual(
+      expect.arrayContaining(['Organization']),
+    );
+  });
+
+  it('the per-list type drops its OWN list prefix from field and edge names alike', async () => {
+    const { adapter } = makeAdapter();
+    const descriptor = await adapter.describe('List Entry — Hot Leads');
+    const fieldNames = descriptor!.fields.map((f) => f.displayName);
+    // The name the list shows, not the name the catalog spells.
+    expect(fieldNames).toContain('List Score');
+    expect(fieldNames).not.toContain('[Hot Leads] List Score');
+    // An edge is named by the same rule — one list, one spelling.
+    const owners = descriptor!.references.find((r) => r.fieldId === '108');
+    expect(owners).toMatchObject({ name: 'Owners', targetTypeId: 'Person', writable: true });
+
+    // A bare name another field already carries verbatim keeps its prefix:
+    // `Segment` is an organization field, so the list's own field cannot claim
+    // that name without two fields answering to it.
+    expect(fieldNames).toContain('[Hot Leads] Segment');
+    expect(fieldNames).not.toContain('Segment');
+  });
+
+  it('Organization keeps the names it publishes today — nothing is stripped there', async () => {
+    const { adapter } = makeAdapter();
+    const org = await adapter.describe('Organization');
+    expect(org!.fields.map((f) => f.displayName)).toEqual(
+      expect.arrayContaining(['Stage', 'Employees', 'Segment']),
+    );
+    // Its list-scoped fields were never on it in the first place.
+    expect(org!.fields.map((f) => f.displayName)).not.toContain('List Score');
   });
 
   it('scopes the attached surfaces to organizations as edges (Notes/Files/List Entries/Interactions/Reminders)', async () => {
@@ -1622,6 +1768,396 @@ describe('AffinityAdapter write semantics', () => {
   });
 });
 
+describe('AffinityAdapter list-entry upsert on (record, list)', () => {
+  it('publishes (record, list) as the membership\'s identity', async () => {
+    const { adapter } = makeAdapter();
+    const collection = await adapter.describe('Organization List Entry');
+    expect(collection!.uniquenessConstraints).toEqual({
+      any: [{ all: [{ field: 'List Entries' }, { field: 'listName' }] }],
+    });
+    // A collection nothing can be added to claims no identity to add against.
+    const opportunities = await adapter.describe('Opportunity List Entry');
+    expect(opportunities!.uniquenessConstraints).toBeUndefined();
+  });
+
+  it('resolves a record already on the list to the entry it already has', async () => {
+    const { adapter } = makeAdapter({ existingListEntry: { id: 8801, listId: 555, entityId: 42 } });
+    const resolved = await adapter.resolveEntity({
+      recordType: 'Organization List Entry',
+      // The engine folds the write's parent in under the edge it came through.
+      record: { listName: 'Hot Leads', 'List Entries': { id: '42' } },
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'List Entries' }, { field: 'listName' }] }] },
+    });
+    expect(resolved.candidates).toEqual([
+      expect.objectContaining({ externalId: '8801' }),
+    ]);
+  });
+
+  it('resolves nothing for a record that is not on the list — the write creates', async () => {
+    const { adapter } = makeAdapter({ existingListEntry: { id: 8801, listId: 556, entityId: 42 } });
+    const resolved = await adapter.resolveEntity({
+      recordType: 'Organization List Entry',
+      record: { listName: 'Hot Leads', 'List Entries': { id: '42' } },
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'List Entries' }, { field: 'listName' }] }] },
+    });
+    expect(resolved.candidates).toEqual([]);
+  });
+
+  it('updates the entry in place, without re-asserting the membership', async () => {
+    const { adapter, calls } = makeAdapter({
+      existingListEntry: { id: 8801, listId: 555, entityId: 42 },
+      fieldValues: [{ id: 21, field_id: 103, list_entry_id: 8801, value: 7 }],
+    });
+    const result = await adapter.updateRecord({
+      recordType: 'Organization List Entry',
+      externalId: '8801',
+      // `listName` never reaches the update: the engine suppressed it as
+      // unchanged. The entry's list comes off the record's membership rows.
+      fields: { 'List Score': 42 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    expect(result).toMatchObject({ externalId: '8801' });
+    expect(calls.updateFieldValue).toContainEqual({ id: 21, value: 42 });
+    expect(calls.createListEntry).toEqual([]);
+  });
+
+  it('an update carrying the list name writes the fields and not the name', async () => {
+    // `listName` names the list the write is addressed to, not a value on the
+    // entry — and it survives to the adapter whenever the entry carries no
+    // values yet, because an entry with nothing on it names no list for the
+    // engine to compare against.
+    const { adapter, calls } = makeAdapter({
+      existingListEntry: { id: 8801, listId: 555, entityId: 42 },
+    });
+    await adapter.updateRecord({
+      recordType: 'Organization List Entry',
+      externalId: '8801',
+      fields: { listName: 'Hot Leads', 'List Score': 42 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    expect(calls.createFieldValue).toEqual([
+      { field_id: 103, entity_id: 42, list_entry_id: 8801, value: 42 },
+    ]);
+  });
+
+  it('reads an entry the record no longer has as gone, so a bound write re-mints', async () => {
+    const { adapter } = makeAdapter({ existingListEntry: { id: 8801, listId: 555, entityId: 42 } });
+    expect(
+      await adapter.updateRecord({
+        recordType: 'Organization List Entry',
+        externalId: '9999',
+        fields: { 'List Score': 42 },
+        parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+        mutationContext: {} as never,
+      }),
+    ).toEqual({ notFound: true });
+  });
+
+  it('writes the authored value onto an entry that already existed (a plain `:` is not inverted)', async () => {
+    const { adapter, calls } = makeAdapter({
+      existingListEntry: { id: 8801, listId: 555, entityId: 42 },
+      fieldValues: [{ id: 21, field_id: 103, list_entry_id: 8801, value: 7 }],
+    });
+    // Even reached as a CREATE (the membership deduped inside the adapter), the
+    // value the engine handed us lands: the old `forceOverwrite: isNew` gate
+    // silently turned a `:` into "only if the entry is brand new".
+    await adapter.createRecord({
+      recordType: 'Organization List Entry',
+      fields: { listName: 'Hot Leads', 'List Score': 42 },
+      parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+      mutationContext: {} as never,
+    });
+    expect(calls.updateFieldValue).toContainEqual({ id: 21, value: 42 });
+  });
+});
+
+describe('AffinityAdapter field writes fail loudly', () => {
+  it('a field name that resolves to nothing is a bug, and says so', async () => {
+    const { adapter } = makeAdapter();
+    // The checker guarantees every authored field is on the variant, so a name
+    // with no field behind it means the published schema and the workspace
+    // disagree — not a value to walk past.
+    await expect(
+      adapter.createRecord({
+        recordType: 'Organization List Entry',
+        fields: { listName: 'Hot Leads', 'Utter Nonsense': 'x' },
+        parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+        mutationContext: {} as never,
+      }),
+    ).rejects.toThrow(/Utter Nonsense/);
+  });
+
+  it('a field Affinity refuses fails the write, naming the entry and every field that missed', async () => {
+    const { adapter, calls } = makeAdapter({ failFieldValueWrites: true });
+    await expect(
+      adapter.createRecord({
+        recordType: 'Organization List Entry',
+        fields: { listName: 'Hot Leads', 'List Score': 42, Tags: 'Robotics' },
+        parentLinks: [{ recordType: 'Organization', externalId: '42', edgeName: 'List Entries' }],
+        mutationContext: {} as never,
+      }),
+    ).rejects.toThrow(/list entry 9999.*/);
+    // Both fields were attempted — one refusal does not decide the others.
+    expect(calls.createFieldValue).toHaveLength(2);
+  });
+});
+
+describe('AffinityAdapter reference edges on a list entry', () => {
+  it('lands `Owners` on the ENTRY, against the record the entry stands for', async () => {
+    const { adapter, calls } = makeAdapter({
+      existingListEntry: { id: 8801, listId: 555, entityId: 42 },
+    });
+    // `write entry-[:Owners]-> person` — the entry holds the reference. The
+    // edge is named the way the list names it (prefix off), and the value hangs
+    // off the entry while still being addressed against the organization.
+    await adapter.createRecord({
+      recordType: 'Person',
+      fields: { 'Full name': 'Jane Doe' },
+      parentLinks: [
+        { recordType: 'List Entry — Hot Leads', externalId: '8801', edgeName: 'Owners' },
+      ],
+      mutationContext: {} as never,
+    });
+    expect(calls.createFieldValue).toContainEqual({
+      field_id: 108,
+      entity_id: 42,
+      list_entry_id: 8801,
+      value: 888,
+    });
+  });
+
+  it('reads the linked owner back off the entry, under the same name', async () => {
+    const { adapter } = makeAdapter({
+      fieldValues: [{ id: 31, field_id: 108, list_entry_id: 8801, value: 888 }],
+    });
+    expect(
+      await adapter.readRecord({ recordType: 'List Entry — Hot Leads', externalId: '8801' }),
+    ).toMatchObject({ Owners: [888] });
+  });
+
+  it('a rehearsed entry holds nothing — its handle carries no Affinity id', async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.createRecord({
+      recordType: 'Person',
+      fields: { 'Full name': 'Jane Doe' },
+      parentLinks: [
+        {
+          recordType: 'List Entry — Hot Leads',
+          externalId: 'c0ffee00-0000-4000-8000-000000000000',
+          edgeName: 'Owners',
+        },
+      ],
+      mutationContext: {} as never,
+    });
+    expect(calls.createFieldValue).toEqual([]);
+  });
+});
+
+describe('AffinityAdapter link / unlink an existing record', () => {
+  const MUTATION = {} as never;
+
+  it('links a person onto an entry\'s multi-valued `Owners`, addressed by entry AND record', async () => {
+    const { adapter, calls } = makeAdapter();
+    expect(
+      await adapter.linkRecords({
+        from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+        edgeName: 'Owners',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).toEqual({ created: true });
+    expect(calls.createFieldValue).toEqual([
+      { field_id: 108, entity_id: 42, list_entry_id: 8801, value: 888 },
+    ]);
+  });
+
+  it('a person already on the field is a no-op', async () => {
+    const { adapter, calls } = makeAdapter({
+      fieldValues: [{ id: 31, field_id: 108, list_entry_id: 8801, value: 888 }],
+    });
+    expect(
+      await adapter.linkRecords({
+        from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+        edgeName: 'Owners',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).toEqual({ created: false });
+    expect(calls.createFieldValue).toEqual([]);
+    expect(calls.updateFieldValue).toEqual([]);
+  });
+
+  it('a multi-valued field APPENDS — an owner already there keeps its row', async () => {
+    const { adapter, calls } = makeAdapter({
+      fieldValues: [{ id: 31, field_id: 108, list_entry_id: 8801, value: 777 }],
+    });
+    await adapter.linkRecords({
+      from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+      edgeName: 'Owners',
+      to: { recordType: 'Person', externalId: '888' },
+      mutationContext: MUTATION,
+    });
+    expect(calls.createFieldValue).toHaveLength(1);
+    expect(calls.updateFieldValue).toEqual([]);
+    expect(calls.deleteFieldValue).toEqual([]);
+  });
+
+  it('a SINGLE-valued field on an organization replaces in place', async () => {
+    // `Primary Contact` (104) is single-valued and unscoped, so the org holds
+    // it: an existing row is PUT to the new person rather than deleted first.
+    const { adapter, calls } = makeAdapter({
+      fieldValues: [{ id: 41, field_id: 104, list_entry_id: null, value: 777 }],
+    });
+    expect(
+      await adapter.linkRecords({
+        from: { recordType: 'Organization', externalId: '42' },
+        edgeName: 'Primary Contact',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).toEqual({ created: true });
+    expect(calls.updateFieldValue).toEqual([{ id: 41, value: 888 }]);
+    expect(calls.createFieldValue).toEqual([]);
+    expect(calls.deleteFieldValue).toEqual([]);
+  });
+
+  it('a single-valued field with nothing on it is created', async () => {
+    const { adapter, calls } = makeAdapter();
+    await adapter.linkRecords({
+      from: { recordType: 'Organization', externalId: '42' },
+      edgeName: 'Primary Contact',
+      to: { recordType: 'Person', externalId: '888' },
+      mutationContext: MUTATION,
+    });
+    expect(calls.createFieldValue).toEqual([{ field_id: 104, entity_id: 42, value: 888 }]);
+  });
+
+  it('unlink deletes the row naming that record, and only that one', async () => {
+    const { adapter, calls } = makeAdapter({
+      fieldValues: [
+        { id: 31, field_id: 108, list_entry_id: 8801, value: 777 },
+        { id: 32, field_id: 108, list_entry_id: 8801, value: 888 },
+      ],
+    });
+    expect(
+      await adapter.unlinkRecords({
+        from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+        edgeName: 'Owners',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).toEqual({ removed: true });
+    expect(calls.deleteFieldValue).toEqual([{ id: 32 }]);
+  });
+
+  it('unlinking what was never linked is a quiet no-op', async () => {
+    const { adapter, calls } = makeAdapter({
+      fieldValues: [{ id: 31, field_id: 108, list_entry_id: 8801, value: 777 }],
+    });
+    expect(
+      await adapter.unlinkRecords({
+        from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+        edgeName: 'Owners',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).toEqual({ removed: false });
+    expect(calls.deleteFieldValue).toEqual([]);
+  });
+
+  it('an edge that is not a writable reference on the from side is an error', async () => {
+    const { adapter } = makeAdapter();
+    await expect(
+      adapter.linkRecords({
+        from: { recordType: 'List Entry — Hot Leads', externalId: '8801' },
+        edgeName: 'Utter Nonsense',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).rejects.toThrow(/Utter Nonsense/);
+    // An ENRICHMENT-sourced reference is refused on the same predicate the
+    // linked write refuses it on — the promise and the code agree.
+    await expect(
+      adapter.linkRecords({
+        from: { recordType: 'Organization', externalId: '42' },
+        edgeName: 'Enriched Contact',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).rejects.toThrow(/Enriched Contact/);
+  });
+
+  it('an entry reached through the membership COLLECTION cannot say which list it is on', async () => {
+    // The collection is reached by naming a list in a body; only a list's own
+    // type pins one. Nothing to hold the reference, so it is refused by name.
+    const { adapter } = makeAdapter();
+    await expect(
+      adapter.linkRecords({
+        from: { recordType: 'Organization List Entry', externalId: '8801' },
+        edgeName: 'Owners',
+        to: { recordType: 'Person', externalId: '888' },
+        mutationContext: MUTATION,
+      }),
+    ).rejects.toThrow(/Organization List Entry/);
+  });
+});
+
+describe('AffinityAdapter list-entry read-back', () => {
+  it('reads an entry\'s values under the bare names its list publishes', async () => {
+    const { adapter } = makeAdapter({
+      fieldValues: [
+        { id: 11, field_id: 103, list_entry_id: 9999, value: 42 },
+        { id: 12, field_id: 110, list_entry_id: 9999, value: 'Robotics' },
+        { id: 13, field_id: 110, list_entry_id: 9999, value: 'Supply Chain' },
+      ],
+    });
+    const current = await adapter.readRecord({
+      recordType: 'List Entry — Hot Leads',
+      externalId: '9999',
+    });
+    expect(current).toEqual({
+      'List Score': 42,
+      // `allows_multiple` reads as the whole list — what `+:` merges against.
+      Tags: ['Robotics', 'Supply Chain'],
+      listName: 'Hot Leads',
+    });
+  });
+
+  it('names the list from the entry\'s own values when the type pins none', async () => {
+    const { adapter } = makeAdapter({
+      fieldValues: [{ id: 11, field_id: 103, list_entry_id: 9999, value: 42 }],
+    });
+    // The membership collection is reached through the record's edge, so it
+    // never pins a list — but field 103 belongs to exactly one.
+    const current = await adapter.readRecord({
+      recordType: 'Organization List Entry',
+      externalId: '9999',
+    });
+    expect(current).toEqual({ 'List Score': 42, listName: 'Hot Leads' });
+  });
+
+  it('reads an entry with nothing on it as empty, not as unreadable', async () => {
+    const { adapter } = makeAdapter({ fieldValues: [] });
+    expect(
+      await adapter.readRecord({ recordType: 'Organization List Entry', externalId: '9999' }),
+    ).toEqual({});
+  });
+
+  it('reads a REHEARSED entry as nothing — its handle carries no Affinity id', async () => {
+    const { adapter } = makeAdapter();
+    expect(
+      await adapter.readRecord({
+        recordType: 'List Entry — Hot Leads',
+        externalId: 'c0ffee00-0000-4000-8000-000000000000',
+      }),
+    ).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 6. Custom record-reference writes — a Person/Org-valued field is an EDGE,
 //    written via parentLinks (the parent's reference set to the new child).
@@ -1924,5 +2460,182 @@ describe('AffinityAdapter.createRecord(person) — the authored name split', () 
     expect(calls.createOrUpdatePerson[0].searchQuery).toEqual(
       expect.objectContaining({ name: 'Jane Doe', firstName: null, lastName: null }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8b. The display-name rule on its own (the collision branches)
+// ---------------------------------------------------------------------------
+
+describe('listScopedFieldDisplayNames', () => {
+  const field = (id: number, name: string, list_id: number | null) => ({
+    id,
+    name,
+    list_id,
+    enrichment_source: null,
+    value_type: 6,
+    allows_multiple: false,
+    dropdown_options: null,
+  });
+
+  it("takes the list's own prefix off its own fields, and answers for nothing else", () => {
+    const names = listScopedFieldDisplayNames({
+      catalog: [
+        field(1, '[Pipeline] Deal Stage', 7),
+        field(2, 'Industry', null),
+        field(3, '[Portfolio] Ownership %', 8),
+      ],
+      listId: 7,
+      listName: 'Pipeline',
+    });
+    expect([...names]).toEqual([[1, 'Deal Stage']]);
+  });
+
+  it('leaves a field Affinity did not prefix alone', () => {
+    const names = listScopedFieldDisplayNames({
+      catalog: [field(1, 'Deal Stage', 7)],
+      listId: 7,
+      listName: 'Pipeline',
+    });
+    expect(names.get(1)).toBe('Deal Stage');
+  });
+
+  it('keeps the prefix on BOTH fields whose bare names would collide', () => {
+    const names = listScopedFieldDisplayNames({
+      catalog: [field(1, '[Pipeline] Owner', 7), field(2, '[Pipeline] Owner', 7)],
+      listId: 7,
+      listName: 'Pipeline',
+    });
+    expect(names.get(1)).toBe('[Pipeline] Owner');
+    expect(names.get(2)).toBe('[Pipeline] Owner');
+  });
+
+  it('keeps the prefix when some other field already carries that name verbatim', () => {
+    const names = listScopedFieldDisplayNames({
+      catalog: [field(1, '[Pipeline] Industry', 7), field(2, 'Industry', null)],
+      listId: 7,
+      listName: 'Pipeline',
+    });
+    expect(names.get(1)).toBe('[Pipeline] Industry');
+  });
+
+  it("strips only THIS list's prefix — another list's bracket is part of the name", () => {
+    const names = listScopedFieldDisplayNames({
+      catalog: [field(1, '[Portfolio] Ownership %', 7)],
+      listId: 7,
+      listName: 'Pipeline',
+    });
+    expect(names.get(1)).toBe('[Portfolio] Ownership %');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. The list-entry write, through the REAL projection and the REAL checker
+// ---------------------------------------------------------------------------
+//
+// `describe` publishing a writable field is only half the promise: what an
+// author meets is the checker, over the catalog a save builds. So this runs the
+// REAL adapter (listEntryPoints + describe) through the REAL projection and
+// then through `checkProgram` — the same three layers a save walks.
+//
+// movement-lang's own jest is broken locally, so the language layer is
+// exercised through apps/api's ts-jest (per repo convention).
+
+describe('write org-[:List Entries]-> reaches the checker', () => {
+  async function affinitySnapshot(): Promise<CatalogSnapshot> {
+    const { adapter } = makeAdapter();
+    const entries = await adapter.listEntryPoints();
+    const descriptors = new Map(
+      (
+        await Promise.all(
+          entries.map(async (e) => [e.typeId, await adapter.describe(e.typeId)] as const),
+        )
+      ).flatMap(([typeId, d]) => (d ? [[typeId, d] as const] : [])),
+    );
+    const { schema } = instanceSchemaFromDescriptors({
+      adapterType: 'affinity',
+      entries,
+      descriptors,
+      supportsInPlaceUpdate: true,
+    });
+    return {
+      adapters: {
+        affinity: {
+          constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
+          canFire: true,
+          triggerConfig: ['events'],
+          triggerConfigOptions: { events: [...(AFFINITY_MANIFEST.subscribableEvents ?? [])] },
+          schemas: { affinity_creds: schema },
+        },
+      },
+      credentials: { affinity_creds: { adapters: ['affinity'] } },
+      plugins: {},
+    };
+  }
+
+  const PRELUDE = `import { affinity } from adapters
+import { affinity_creds } from credentials
+
+crm = affinity(credentials: affinity_creds)
+`;
+
+  async function errorsFor(body: string): Promise<Array<{ code: string; message: string }>> {
+    const source = `${PRELUDE}
+movement sync() {
+  crm-[org:\`Organization\` WHERE \`Domain\` == "acme.com"]-> {
+${body}
+  }
+}`;
+    return checkProgram(parseProgram(source), fromCatalogSnapshot(await affinitySnapshot()))
+      .filter((d) => (d.severity ?? 'error') === 'error')
+      .map((d) => ({ code: d.code, message: d.message }));
+  }
+
+  it("carries the LIST's own fields into the write variant, so the acceptance write validates clean", async () => {
+    expect(
+      await errorsFor(
+        '    write org-[:`List Entries`]-> { listName: "Hot Leads", `List Score`: 42 }',
+      ),
+    ).toEqual([]);
+  });
+
+  it('the membership-only write still validates (a list field is optional)', async () => {
+    expect(
+      await errorsFor('    write org-[:`List Entries`]-> { listName: "Hot Leads" }'),
+    ).toEqual([]);
+  });
+
+  it('a made-up field is still MOV_WRITE_UNKNOWN_FIELD', async () => {
+    const found = await errorsFor(
+      '    write org-[:`List Entries`]-> { listName: "Hot Leads", `Utter Nonsense`: "x" }',
+    );
+    expect(found.map((d) => d.code)).toContain('MOV_WRITE_UNKNOWN_FIELD');
+  });
+
+  it("an ENRICHED list field is not writable — it is not in the variant either", async () => {
+    const found = await errorsFor(
+      '    write org-[:`List Entries`]-> { listName: "Hot Leads", `Affinity Score`: 9 }',
+    );
+    expect(found.map((d) => d.code)).toContain('MOV_WRITE_UNKNOWN_FIELD');
+  });
+
+  it("the OTHER list's field is still rejected on this list (the variant is per-list)", async () => {
+    const found = await errorsFor(
+      '    write org-[:`List Entries`]-> { listName: "Hot Leads", `Ownership %`: 5 }',
+    );
+    expect(found.map((d) => d.code)).toContain('MOV_WRITE_UNKNOWN_FIELD');
+  });
+
+  it('hand-maintained ORGANIZATION custom fields are writable too', async () => {
+    expect(
+      await errorsFor('    write crm-[:`Organization`]-> { Name: "Acme", Stage: "Seed" }'),
+    ).toEqual([]);
+  });
+
+  it('an enrichment-sourced organization field is refused', async () => {
+    const found = await errorsFor(
+      '    write crm-[:`Organization`]-> { Name: "Acme", `Crunchbase Rank`: 5 }',
+    );
+    expect(found.map((d) => d.code)).toContain('MOV_WRITE_UNKNOWN_FIELD');
   });
 });

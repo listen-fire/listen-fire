@@ -11,6 +11,7 @@ import {
 import { anthropicChat, anthropicChatStructured } from '../../lib/anthropic';
 import { parseJson } from '../../lib/utils/parse_json';
 import { logger } from '../../services/logger';
+import { sendSlackNotification } from '../../lib/slack';
 import { notNull } from '../../lib/utils/nullability';
 import { Tracer } from '../../services/tracer';
 import { fieldConfigurationSchema, AffinityFieldConfiguration } from './nodes/shared';
@@ -639,16 +640,29 @@ Expect the user to provide a name. If for any reason the name cannot be split in
         const resolvedValue = await this.resolveFieldApiValue({ fieldDef, value });
         if (resolvedValue === null) continue;
 
-        const existingValueId = overwriteFieldValueIds.get(fieldDef.id);
-        if (existingValueId) {
-          await this.client.updateFieldValue({ id: existingValueId, value: resolvedValue });
-          overwriteFieldValueIds.delete(fieldDef.id);
-        } else {
-          await this.client.createFieldValue({
-            field_id: fieldDef.id,
-            value: resolvedValue,
-            list_entry_id: fieldDef.list_id && listEntryId ? listEntryId : undefined,
-            entity_id: entityId,
+        // Dealflow's extraction write is fire-and-forget: one field Affinity
+        // refuses must not lose the rest of an extraction. The client itself
+        // reports the failure now, so the decision to walk past it is made
+        // HERE, where it belongs, and is not imposed on every other caller.
+        try {
+          const existingValueId = overwriteFieldValueIds.get(fieldDef.id);
+          if (existingValueId) {
+            await this.client.updateFieldValue({ id: existingValueId, value: resolvedValue });
+            overwriteFieldValueIds.delete(fieldDef.id);
+          } else {
+            await this.client.createFieldValue({
+              field_id: fieldDef.id,
+              value: resolvedValue,
+              list_entry_id: fieldDef.list_id && listEntryId ? listEntryId : undefined,
+              entity_id: entityId,
+            });
+          }
+        } catch (err) {
+          logger.error(err);
+          await sendSlackNotification({
+            type: 'DEALFLOW',
+            text: `:warning: Affinity error adding field value (field: ${fieldDef.id}, entity: ${entityId}, list_entry: ${listEntryId ?? '—'}, value: ${String(resolvedValue)})`,
+            opsTitle: 'Affinity error adding a field value',
           });
         }
       }

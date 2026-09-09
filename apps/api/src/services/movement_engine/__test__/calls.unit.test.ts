@@ -304,6 +304,7 @@ describe('§G — _resources block → call with a synthesised node arg → drop
         committed: true,
         externalId: 'ext-dropbox-1',
         writtenValues: { name: 'pitch.pdf', data: 'BYTES-1' },
+        outcome: 'create',
         provenance: {
           name: [{ kind: 'resource', externalId: 'att-1', name: 'pitch.pdf', field: 'filename' }],
           data: [{ kind: 'resource', externalId: 'att-1', name: 'pitch.pdf', field: 'data' }],
@@ -318,6 +319,7 @@ describe('§G — _resources block → call with a synthesised node arg → drop
         committed: true,
         externalId: 'ext-dropbox-2',
         writtenValues: { name: 'model.xlsx', data: 'BYTES-2' },
+        outcome: 'create',
         provenance: {
           name: [{ kind: 'resource', externalId: 'att-2', name: 'model.xlsx', field: 'filename' }],
           data: [{ kind: 'resource', externalId: 'att-2', name: 'model.xlsx', field: 'data' }],
@@ -385,6 +387,7 @@ describe('pass-through arguments and nested calls', () => {
         committed: true,
         externalId: 'ext-attio-1',
         writtenValues: { name: 'Acme Corp' },
+        outcome: 'create',
         provenance: {
           name: [
             { kind: 'source_field', instance: 'inbox', adapterType: 'email', field: 'subject' },

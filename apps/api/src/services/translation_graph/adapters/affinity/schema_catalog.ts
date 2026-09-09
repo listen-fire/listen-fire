@@ -11,6 +11,7 @@
 
 import { LRUCache } from 'lru-cache';
 import type { AffinityAPIClient } from '../../../../adapters/affinity/apiClient';
+import { logger } from '../../../logger';
 import type {
   SchemaEntryPoint,
   SchemaFieldDescriptor,
@@ -26,6 +27,8 @@ import {
   isReadOnlyField,
   isReferenceValueType,
   listEntityKind,
+  perListTypeName,
+  listScopedFieldDisplayNames,
   LIST_ENTRY_COLLECTION_DISPLAY_NAMES,
   WRITABLE_LIST_ENTITY_KINDS,
   type AffinityEntity,
@@ -65,15 +68,59 @@ export async function cachedFields(input: {
   // List-scoped queries skip the cache — the list filter narrows the result
   // and is cheap relative to the dedup window it serves.
   if (input.listId != null) {
-    const fields = await input.client.getFields({ type: input.type, limitToListId: input.listId });
-    return fields as AffinityFieldMeta[];
+    const fields = (await input.client.getFields({
+      type: input.type,
+      limitToListId: input.listId,
+    })) as AffinityFieldMeta[];
+    logEnrichmentSources(fields, input.teamId, `${input.type} on list ${input.listId}`);
+    return fields;
   }
   const key = fieldCacheKey(input.teamId, input.type);
   const hit = fieldCatalogCache.get(key);
   if (hit) return hit;
-  const fields = await input.client.getFields({ type: input.type });
-  fieldCatalogCache.set(key, fields as AffinityFieldMeta[]);
-  return fields as AffinityFieldMeta[];
+  const fields = (await input.client.getFields({ type: input.type })) as AffinityFieldMeta[];
+  logEnrichmentSources(fields, input.teamId, input.type);
+  fieldCatalogCache.set(key, fields);
+  return fields;
+}
+
+/** Every `enrichment_source` value this process has already announced, per
+ *  team. Not a cache with a TTL — it is the record of what has been SAID, and
+ *  saying it twice adds nothing. */
+const announcedEnrichmentSources = new Map<string, Set<string>>();
+
+/**
+ * The distinct `enrichment_source` values this workspace uses, said ONCE each.
+ *
+ * `isReadOnlyField` reads any value but the "no provider" sentinel as a real
+ * enrichment provider, and the sentinel could not be read off a production
+ * workspace before shipping the rule. So the rule prints its own evidence: the
+ * first describe against a live Affinity says in the log which values exist,
+ * and either confirms the sentinel or names the one to add.
+ *
+ * A describe fetches the catalog once per list, and every list in a workspace
+ * uses the same handful of values — so the same line was arriving thirty times
+ * with nothing new in it. A line is worth printing when it carries a value
+ * nobody has seen yet, which is exactly when the rule might be wrong; the rest
+ * is repetition. The line still names the whole set, so one line remains the
+ * whole answer.
+ */
+function logEnrichmentSources(
+  fields: AffinityFieldMeta[],
+  teamId: string,
+  scope: string,
+): void {
+  const seen = new Set(
+    fields.map((f) => (f.enrichment_source == null ? 'null' : JSON.stringify(f.enrichment_source))),
+  );
+  const announced = announcedEnrichmentSources.get(teamId) ?? new Set<string>();
+  const fresh = [...seen].filter((value) => !announced.has(value));
+  if (fresh.length === 0) return;
+  for (const value of fresh) announced.add(value);
+  announcedEnrichmentSources.set(teamId, announced);
+  logger.warn(
+    `[AffinityAdapter] field catalog (${scope}): enrichment_source values seen — ${[...announced].sort().join(', ')}`,
+  );
 }
 
 async function cachedLists(input: {
@@ -263,7 +310,7 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
     // what the read already lands at runtime (per-list, not the generic).
     {
       fieldId: 'list_entries',
-      name: 'List Entries',
+      name: AFFINITY_LIST_ENTRIES_EDGE,
       targetTypeId: LIST_ENTRY_COLLECTION_DISPLAY_NAMES[parent],
       cardinality: 'many',
       direction: 'outgoing',
@@ -616,12 +663,15 @@ function affinityValueTypeToKind(valueType: number): { kind: SchemaFieldKind; ca
  * movement schema projection silently drops) makes them author-able as linked
  * writes and keeps the editor edge picker honest.
  */
-function customFieldReference(field: AffinityFieldMeta): SchemaReferenceDescriptor {
+function customFieldReference(
+  field: AffinityFieldMeta,
+  displayName: string,
+): SchemaReferenceDescriptor {
   const targetEntity: AffinityEntity =
     field.value_type === AFFINITY_VALUE_TYPE.PERSON ? 'person' : 'organization';
   return {
     fieldId: String(field.id),
-    name: field.name,
+    name: displayName,
     targetTypeId: ENTITY_DISPLAY_NAMES[targetEntity],
     cardinality: field.allows_multiple ? 'many' : 'one',
     direction: 'outgoing',
@@ -629,13 +679,18 @@ function customFieldReference(field: AffinityFieldMeta): SchemaReferenceDescript
     // `applyCustomReferenceParentLinks` (shared.ts) matches the write's
     // edgeName back to this field and creates/updates the field value pointing
     // at the freshly written child — append for `allows_multiple`, replace for
-    // single. Both createOrganization and createPerson call it.
-    writable: true,
-    description: `${field.name} — a ${targetEntity} reference field on this record. A linked write sets it to the ${targetEntity} written along the edge.`,
+    // single. Both createOrganization and createPerson call it. An
+    // enrichment-sourced field is the one exception, and the link writer
+    // refuses it on the same predicate, so the promise matches the code.
+    writable: !isReadOnlyField(field),
+    description: `${displayName} — a ${targetEntity} reference field on this record. A linked write sets it to the ${targetEntity} written along the edge.`,
   };
 }
 
-function customFieldDescriptor(field: AffinityFieldMeta): SchemaFieldDescriptor {
+function customFieldDescriptor(
+  field: AffinityFieldMeta,
+  displayName: string,
+): SchemaFieldDescriptor {
   const shape = affinityValueTypeToKind(field.value_type);
   const enumValues =
     (field.value_type === AFFINITY_VALUE_TYPE.DROPDOWN ||
@@ -645,7 +700,7 @@ function customFieldDescriptor(field: AffinityFieldMeta): SchemaFieldDescriptor 
       : undefined;
   return {
     fieldId: String(field.id),
-    displayName: field.name,
+    displayName,
     kind: shape.kind,
     cardinality: field.allows_multiple ? 'many' : shape.cardinality,
     enumValues,
@@ -806,8 +861,8 @@ export async function listEntryPoints(input: {
     entries.push({
       // Same: the per-list type's display name is its framework identity; the
       // list id rides `externalId` (and the per-list name cache).
-      typeId: `List Entry — ${list.name}`,
-      displayName: `List Entry — ${list.name}`,
+      typeId: perListTypeName(list.name),
+      displayName: perListTypeName(list.name),
       externalId: String(list.id),
       // READ-ONLY root (layer 12): a per-list root enumerates that list's
       // entries (`GET /lists/{id}/list-entries`), a real root read. But the
@@ -820,7 +875,7 @@ export async function listEntryPoints(input: {
       writable: false,
       readable: true,
       scope: 'inherits-parent-config',
-      labelTemplate: `List Entry — ${list.name}`,
+      labelTemplate: perListTypeName(list.name),
     });
   }
 
@@ -863,9 +918,10 @@ export async function loadPerListTypes(input: {
     lists = [];
   }
   for (const list of lists) {
-    map.set(`List Entry — ${list.name}`, {
+    map.set(perListTypeName(list.name), {
       entity: 'list-entry',
       listId: list.id,
+      listName: list.name,
       listType: list.type ?? undefined,
     });
   }
@@ -876,6 +932,12 @@ export async function loadPerListTypes(input: {
  *  write (`write <record>-[:Lists]-> { listName: … }`). Shared authoring
  *  currency with Attio's `listName` — one word for "which list to add to". */
 export const AFFINITY_LIST_NAME_FIELD = 'listName';
+
+/** The edge a record's list memberships hang off. It is also the name the
+ *  membership's identity is keyed by: an entry is unique per (record, list),
+ *  and the record reaches the write through THIS edge, so the engine folds it
+ *  into the resolve record under this exact name. */
+export const AFFINITY_LIST_ENTRIES_EDGE = 'List Entries';
 
 /**
  * The list-membership write target for one entity kind. Its single writable
@@ -937,13 +999,30 @@ async function describeListEntryCollection(input: {
           discriminatedWrite: {
             discriminant: AFFINITY_LIST_NAME_FIELD,
             variantTypes: Object.fromEntries(
-              ownLists.map((l) => [l.name, `List Entry — ${l.name}`]),
+              ownLists.map((l) => [l.name, perListTypeName(l.name)]),
             ),
           },
         }
       : {}),
     scope: 'inherits-parent-config',
-    uniquenessConstraints: undefined,
+    // A record sits on a list once. Re-asserting the membership must find the
+    // entry it already has rather than mint a second one, so identity is the
+    // pair (the record, the list) — the record folded in under the edge that
+    // reached this write, the list named by the same discriminant the variant
+    // is selected by. Without this the engine has no way to ask for the entry
+    // and every re-run is a create.
+    uniquenessConstraints: writable
+      ? {
+          any: [
+            {
+              all: [
+                { field: AFFINITY_LIST_ENTRIES_EDGE },
+                { field: AFFINITY_LIST_NAME_FIELD },
+              ],
+            },
+          ],
+        }
+      : undefined,
     supportsFuzzyResolution: false,
   };
 }
@@ -959,7 +1038,7 @@ export async function describe(input: {
   /** The pretty type name — the descriptor's framework identity. */
   displayName: string;
 }): Promise<SchemaTypeDescriptor | null> {
-  const { entity, listId, listType, listsFor } = input.decoded;
+  const { entity, listId, listName, listType, listsFor } = input.decoded;
 
   // A per-entity list-entry collection (`<record>-[:List Entries]->`): the
   // polymorphic union of that kind's per-list entry types — narrowed by
@@ -989,9 +1068,6 @@ export async function describe(input: {
   // Single-valued, because on THIS type the list is fixed — that is the
   // narrowing having actually happened.
   if (entity === 'list-entry' && listId != null) {
-    const listName = (
-      await cachedLists({ client: input.client, teamId: input.teamId }).catch(() => [])
-    ).find((l) => l.id === listId)?.name;
     if (listName !== undefined) {
       fields.push({
         fieldId: AFFINITY_LIST_NAME_FIELD,
@@ -1010,10 +1086,13 @@ export async function describe(input: {
 
   // A custom field is routed by its value type: record-valued (Person /
   // Organization) fields are edges → references[]; everything else is a scalar
-  // property → fields[]. `addCustom` makes that split once for every code path.
-  const addCustom = (cf: AffinityFieldMeta): void => {
-    if (isReferenceValueType(cf.value_type)) references.push(customFieldReference(cf));
-    else fields.push(customFieldDescriptor(cf));
+  // property → fields[]. `addCustom` makes that split once for every code path,
+  // and names each one through the same display-name rule, so a field and an
+  // edge on the same list can never be spelled differently.
+  const addCustom = (cf: AffinityFieldMeta, displayNames?: Map<number, string>): void => {
+    const displayName = displayNames?.get(cf.id) ?? cf.name;
+    if (isReferenceValueType(cf.value_type)) references.push(customFieldReference(cf, displayName));
+    else fields.push(customFieldDescriptor(cf, displayName));
   };
 
   // Custom fields for org / person (and the org/person custom fields scoped to
@@ -1045,8 +1124,15 @@ export async function describe(input: {
         type: listCustomType,
         listId,
       });
+      // On the type that IS the list, a field's `[<list>] ` prefix says only
+      // what the type name already says, so it comes off (`listScopedField
+      // DisplayNames`). Names that would collide keep it.
+      const displayNames =
+        listName === undefined
+          ? undefined
+          : listScopedFieldDisplayNames({ catalog: custom, listId, listName });
       for (const cf of custom) {
-        if (cf.list_id === listId) addCustom(cf);
+        if (cf.list_id === listId) addCustom(cf, displayNames);
       }
     }
   }

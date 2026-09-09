@@ -1,7 +1,7 @@
 {
   "name": "listen-fire",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "UNLICENSED",
   "description": "This is only for dependabot, see issue: https://github.com/dependabot/dependabot-core/issues/7501",
   "version": "0.1.0",
   "dependencies": {

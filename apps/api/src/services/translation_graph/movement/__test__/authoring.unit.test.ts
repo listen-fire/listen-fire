@@ -218,6 +218,38 @@ describe('validateMovementForTeam catalog-assembly guard', () => {
     expect(mock.mock.calls[1][1]).toEqual({ types: [] });
   });
 
+  it('never answers a clean ok off the empty catalog — the fallback is UNVERIFIED', async () => {
+    mock
+      .mockRejectedValueOnce(new BridgeError('credential scan blew up', 0))
+      .mockResolvedValueOnce(teamCatalogStub);
+
+    const result = await validateMovementForTeam({ teamId: 'team-1', source: CLEAN_SOURCE });
+
+    // The source itself is clean, so nothing error-severity fires — which is
+    // exactly the case that used to come back a confident `ok` meaning only
+    // "nothing was checked".
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].detail).toContain('nothing was checked against live schemas');
+    expect(result.gaps[0].detail).toContain('credential scan blew up');
+    // …and the note says the same thing, for the surfaces that render notes.
+    expect(result.catalogNotes.join(' ')).toContain('nothing was checked against live schemas');
+    expect(
+      assessMovementValidity({ diagnostics: result.diagnostics, gaps: result.gaps }).status,
+    ).toBe('unverified');
+  });
+
+  it('a scan that SUCCEEDS records no gap of its own', async () => {
+    mock.mockResolvedValueOnce(teamCatalogStub);
+
+    const result = await validateMovementForTeam({ teamId: 'team-1', source: CLEAN_SOURCE });
+
+    expect(result.gaps).toEqual([]);
+    expect(
+      assessMovementValidity({ diagnostics: result.diagnostics, gaps: result.gaps }).status,
+    ).toBe('valid');
+  });
+
   it('rethrows a non-source (infra) error without falling back', async () => {
     mock.mockRejectedValueOnce(new Error('DB unreachable'));
 

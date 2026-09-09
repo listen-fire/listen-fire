@@ -189,7 +189,7 @@ describe('refineInstanceSchema', () => {
   it('does not narrow on a leaf no member publishes', async () => {
     const { schema } = await refineInstanceSchema({
       instance: instanceWith(),
-      chains: scanInstanceChains(sourceWith('`Title` == "Pipeline Sheet" AND `Missing` == "x"')),
+      chains: scanInstanceChains(sourceWith('`Missing` == "x"')),
     });
     expect(schema).toBe(unionSchema);
   });
@@ -198,6 +198,32 @@ describe('refineInstanceSchema', () => {
     const { schema } = await refineInstanceSchema({
       instance: instanceWith(),
       chains: scanInstanceChains(sourceWith('`Title` == AI("which sheet?")')),
+    });
+    expect(schema).toBe(unionSchema);
+  });
+
+  // A WHERE is answered in two places — the member picks the node, the rest
+  // runs over its rows — and an AND is the one shape where splitting it that
+  // way still answers the question asked. So a condition the members cannot
+  // decide rides alongside the one that names the member, and the hop still
+  // narrows: a runtime cutoff could never have chosen a different sheet.
+  it('narrows on the decidable half of a conjunction, whatever rides alongside', async () => {
+    for (const rest of ['`Missing` == "x"', '`Title` == AI("which sheet?")', '`Rows` >= 5']) {
+      const { schema } = await refineInstanceSchema({
+        instance: instanceWith(),
+        chains: scanInstanceChains(sourceWith(`\`Title\` == "Pipeline Sheet" AND ${rest}`)),
+      });
+      expect(Object.values(schema.refinements ?? {})).toEqual(['Spreadsheet "Pipeline Sheet"']);
+      expect(Object.keys(schema.positions)).toContain('Spreadsheet "Pipeline Sheet"');
+    }
+  });
+
+  // Only AND splits. An OR's arm constrains nothing on its own, so a member
+  // that satisfies one arm is not the member the whole predicate selects.
+  it('does not split a disjunction', async () => {
+    const { schema } = await refineInstanceSchema({
+      instance: instanceWith(),
+      chains: scanInstanceChains(sourceWith('`Title` == "Pipeline Sheet" OR `Missing` == "x"')),
     });
     expect(schema).toBe(unionSchema);
   });

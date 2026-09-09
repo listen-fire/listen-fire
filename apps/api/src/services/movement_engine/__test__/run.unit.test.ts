@@ -214,6 +214,11 @@ function makeFakeAdapter(
   opts: {
     resolveCandidates?: (record: Record<string, unknown>) => ExternalRecordRef[];
     createResult?: (n: number) => { externalId: string; url?: string };
+    /** Native identity + fields the engine reads off `describe` (the constraint
+     *  set it folds resolved parents into, and the required-field gate). */
+    describeType?: (recordType: string) => SchemaTypeDescriptor | null;
+    /** Current values the write-semantics gate merges against. */
+    readRecord?: (externalId: string) => Record<string, unknown> | null;
   } = {},
 ): { adapter: Adapter; creates: RecordedWrite[]; updates: RecordedWrite[] } {
   const creates: RecordedWrite[] = [];
@@ -225,12 +230,19 @@ function makeFakeAdapter(
     async listEntryPoints() {
       return [];
     },
-    async describe() {
-      return null;
+    async describe(recordType: string) {
+      return opts.describeType?.(recordType) ?? null;
     },
     async resolveEntity({ record }) {
       return { candidates: opts.resolveCandidates?.(record) ?? [] };
     },
+    ...(opts.readRecord
+      ? {
+          async readRecord({ externalId }: { externalId: string }) {
+            return opts.readRecord!(externalId);
+          },
+        }
+      : {}),
     async getFieldValue({ position, fieldId }) {
       const data = positionData(position) as Record<string, unknown> | undefined;
       return data?.[fieldId];
@@ -1130,6 +1142,7 @@ describe('unique by — entity resolution through the shared arbitration split',
         committed: true,
         externalId: 'ext-attio-1',
         writtenValues: { name: 'U123', summary: 'first message' },
+        outcome: 'create',
         provenance: expectedProvenance,
         // The firing entry IS the bound handle (one unified record): it
         // carries the handle-read surface — the adapter's result-data bag
@@ -1150,6 +1163,7 @@ describe('unique by — entity resolution through the shared arbitration split',
         committed: true,
         externalId: 'ext-attio-1',
         writtenValues: { name: 'U123', summary: 'second message' },
+        outcome: 'update',
         provenance: expectedProvenance,
         resultData: {},
         origin: { kind: 'write', writeIndex: 0, externalId: 'ext-attio-1' },
@@ -2174,6 +2188,108 @@ describe('adapter-target linked writes — parent link forwarded to the adapter'
   });
 });
 
+// ── 6a2. Identity that names the parent edge — the seam an attached record's
+//        upsert rides (Affinity's list membership: one entry per record+list).
+
+describe('a native constraint naming a parent edge routes the second write to update', () => {
+  const LINKED_UPSERT = [
+    PRELUDE,
+    '',
+    'movement m(msg: <inbox-[:message]->>) {',
+    '  p = write crm-[:people]-> {',
+    '    unique by (`email`)',
+    '    name:  msg.`user`',
+    '    email: msg.`user`',
+    '  }',
+    '  write p-[:company]-> {',
+    '    name ?: msg.`user`',
+    '  }',
+    '}',
+  ].join('\n');
+
+  // The attached record has no identity of its own: it is unique per (parent,
+  // …), and the parent reaches it through the edge. So the descriptor names
+  // the EDGE as an identity field, and the engine folds the resolved parent in
+  // under that name before asking the adapter to search.
+  const describeType = (recordType: string): SchemaTypeDescriptor | null =>
+    recordType === 'company'
+      ? {
+          typeId: 'company',
+          displayName: 'company',
+          fields: [],
+          references: [],
+          uniquenessConstraints: { any: [{ all: [{ field: 'company' }] }] },
+        }
+      : null;
+
+  it('folds the parent under the edge name, then updates the record it found', async () => {
+    const asked: Record<string, unknown>[] = [];
+    const attio = makeFakeAdapter('attio', {
+      describeType,
+      resolveCandidates: (record) => {
+        asked.push(record);
+        const parent = record.company as { id?: string } | undefined;
+        return parent?.id === 'ext-attio-1'
+          ? [{ adapterType: 'attio', externalId: 'entry-9', data: {} }]
+          : [];
+      },
+      readRecord: () => ({}),
+    });
+
+    const result = await runMovement({
+      source: LINKED_UPSERT,
+      event: webhookEvent('slack', { user: 'U123' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveCredentialId: (name) => CREDENTIAL_IDS[name],
+      resolveAdapter: makeResolver({
+        attio: attio.adapter,
+        slack: makeFakeAdapter('slack').adapter,
+      }),
+    });
+
+    expect(asked[1]).toMatchObject({ company: { id: 'ext-attio-1' } });
+    expect(result.writes.map((w) => [w.recordType, w.created])).toEqual([
+      ['person', true],
+      ['company', false],
+    ]);
+    expect(attio.updates).toEqual([
+      { recordType: 'company', externalId: 'entry-9', fields: { name: 'U123' } },
+    ]);
+  });
+
+  it('`?:` leaves a value the found record already carries', async () => {
+    const attio = makeFakeAdapter('attio', {
+      describeType,
+      resolveCandidates: (record) =>
+        (record.company as { id?: string } | undefined)?.id === 'ext-attio-1'
+          ? [{ adapterType: 'attio', externalId: 'entry-9', data: {} }]
+          : [],
+      // The found record already has a name — a fill has nothing to fill.
+      readRecord: () => ({ name: 'already set' }),
+    });
+
+    await runMovement({
+      source: LINKED_UPSERT,
+      event: webhookEvent('slack', { user: 'U123' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveCredentialId: (name) => CREDENTIAL_IDS[name],
+      resolveAdapter: makeResolver({
+        attio: attio.adapter,
+        slack: makeFakeAdapter('slack').adapter,
+      }),
+    });
+
+    // Nothing of the record's OWN left to write — but the write names a
+    // parent, so the adapter is still called, with an EMPTY field set, to
+    // make the association. Matching is not associating.
+    expect(attio.updates).toEqual([
+      { recordType: 'company', externalId: 'entry-9', fields: {} },
+    ]);
+  });
+});
+
 // ── 6b. Standalone edge statements (E7 — the Adapter.linkRecords seam) ───────
 
 describe('standalone edge statements — adapter linkRecords', () => {
@@ -2525,6 +2641,121 @@ describe("'+:' / '+?:' append operators — merge the new value into the current
     await run('+:', attio);
     expect(attio.creates).toHaveLength(1);
     expect(attio.updates).toHaveLength(0);
+  });
+});
+
+// ── 6c-iii. Matching is not associating — the parent-only attach ────────────
+
+describe('a matched child with nothing of its own to change still attaches to its parent', () => {
+  // `write org-[:People]-> { … }` against a person who already exists with
+  // exactly those names: every field is suppressed, but the write still names
+  // a parent, and only the adapter can make that association. Early-returning
+  // on the empty field set dropped every person↔organization edge in
+  // production (run 3285f127) — the record matched, and nothing attached.
+  const LINKED = [
+    PRELUDE,
+    '',
+    'movement m(msg: <inbox-[:message]->>) {',
+    '  p = write crm-[:people]-> {',
+    '    unique by (`email`)',
+    '    name:  msg.`user`',
+    '    email: msg.`user`',
+    '  }',
+    '  write p-[:company]-> {',
+    '    unique by (`name`)',
+    '    name: msg.`user`',
+    '  }',
+    '}',
+  ].join('\n');
+
+  const ROOT = [
+    PRELUDE,
+    '',
+    'movement m(msg: <inbox-[:message]->>) {',
+    '  write crm-[:companies]-> {',
+    '    unique by (`name`)',
+    '    name: msg.`user`',
+    '  }',
+    '}',
+  ].join('\n');
+
+  /** The attio fake, plus every `updateRecord` call with its parent links —
+   *  the shared fake records fields only. `current` is what the matched child
+   *  already carries, so the caller decides whether anything changed. */
+  function matchingAttio(current: Record<string, unknown>) {
+    const fake = makeFakeAdapter('attio', {
+      // The person write carries `email`; the child company write does not —
+      // so only the child resolves to an existing record.
+      resolveCandidates: (record) =>
+        'email' in record ? [] : [{ adapterType: 'attio', externalId: 'existing-co', data: {} }],
+      readRecord: () => current,
+    });
+    const updates: Array<{ externalId?: string; fields: Record<string, unknown>; parentLinks: unknown }> = [];
+    const base = fake.adapter.updateRecord.bind(fake.adapter);
+    fake.adapter.updateRecord = async (input) => {
+      updates.push({
+        externalId: input.externalId,
+        fields: input.fields,
+        parentLinks: input.parentLinks ?? null,
+      });
+      return base(input);
+    };
+    return { fake, updates };
+  }
+
+  const run = (source: string, attio: Adapter) =>
+    runMovement({
+      source,
+      event: webhookEvent('slack', { user: 'U123' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveCredentialId: (name) => CREDENTIAL_IDS[name],
+      resolveAdapter: makeResolver({ attio, slack: makeFakeAdapter('slack').adapter }),
+    });
+
+  it('calls the adapter with an empty field set and the parent link, and reads `attach`', async () => {
+    const { fake, updates } = matchingAttio({ name: 'U123' });
+
+    const result = await run(LINKED, fake.adapter);
+
+    expect(updates).toEqual([
+      {
+        externalId: 'existing-co',
+        fields: {},
+        parentLinks: [
+          { recordType: 'person', externalId: 'ext-attio-1', edgeName: 'company', data: {} },
+        ],
+      },
+    ]);
+    expect(result.writes.map((w) => [w.recordType, w.created, w.outcome])).toEqual([
+      ['person', true, 'create'],
+      ['company', false, 'attach'],
+    ]);
+    expect(result.writes[1].writtenValues).toEqual({});
+    expect(result.writes[1].parents).toEqual([
+      { recordType: 'person', externalId: 'ext-attio-1', edgeName: 'company' },
+    ]);
+  });
+
+  it('a genuinely changed field is an `update`, parent link and all', async () => {
+    const { fake, updates } = matchingAttio({ name: 'stale' });
+
+    const result = await run(LINKED, fake.adapter);
+
+    expect(updates[0].fields).toEqual({ name: 'U123' });
+    expect(result.writes.map((w) => w.outcome)).toEqual(['create', 'update']);
+  });
+
+  it('no parent and nothing changed sends nothing at all — `noop`', async () => {
+    const attio = makeFakeAdapter('attio', {
+      resolveCandidates: () => [{ adapterType: 'attio', externalId: 'existing-1', data: {} }],
+      readRecord: () => ({ name: 'U123' }),
+    });
+
+    const result = await run(ROOT, attio.adapter);
+
+    expect(attio.updates).toEqual([]);
+    expect(result.writes.map((w) => [w.created, w.outcome])).toEqual([[false, 'noop']]);
   });
 });
 
@@ -3272,6 +3503,133 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
     ]);
     expect(fake.creates.map((c) => c.fields.name)).toEqual(['deck.pdf', 'notes.txt', 'memo.doc']);
     expect(result.writes.filter((w) => w.kind === 'link')).toHaveLength(2);
+  });
+});
+
+// ── 6f-ii. A discriminated write's handle stands on the variant ─────────────
+
+// Adding a company to a list is addressed at the membership COLLECTION and
+// creates a row of the one list the body named. The list's own type is the one
+// that carries that list's fields and its reference edges, so that is what the
+// handle stands on — which is what the checker typed it as, and what a chained
+// link off it has to resolve against at run time.
+describe('a discriminated write hands back a handle of the variant it named', () => {
+  const listEntrySchema: InstanceSchema = {
+    positions: {
+      organization: {
+        properties: { name: 'text' },
+        edges: { 'List Entries': { target: 'entry', writable: true } },
+      },
+      entry: { properties: { listName: 'text' }, edges: {} },
+      'List Entry — Deals': {
+        properties: { listName: 'text' },
+        edges: { Owners: { target: 'person', writable: true } },
+      },
+      person: { properties: { name: 'text' }, edges: {} },
+    },
+    collections: { organizations: { target: 'organization' }, people: { target: 'person' } },
+    writableRoots: {
+      organization: { fields: { name: 'text' }, resultShape: { externalId: 'text' } },
+      person: { fields: { name: 'text' }, resultShape: { externalId: 'text' } },
+    },
+    createShapes: {
+      entry: {
+        fields: { listName: { kind: 'enum', options: ['Deals'] } },
+        requiredFields: ['listName'],
+        resultShape: { externalId: 'text' },
+        discriminated: {
+          discriminant: 'listName',
+          variants: {
+            Deals: {
+              fields: { listName: 'text' },
+              requiredFields: ['listName'],
+              resultShape: { externalId: 'text' },
+              edges: { Owners: { target: 'person', writable: true } },
+              position: 'List Entry — Deals',
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const listCatalog = staticCatalogFromManifests({
+    credentials: {
+      dev_slack: { adapters: ['slack'] },
+      acme_main: { adapters: ['attio'] },
+    },
+    instanceSchemas: { attio: listEntrySchema },
+  });
+
+  const ADD_AND_OWN = [
+    PRELUDE,
+    '',
+    'movement m(msg: <inbox-[:message]->>) {',
+    '  o = write crm-[:organizations]-> { name: msg.`user` }',
+    '  e = write o-[:`List Entries`]-> { listName: "Deals" }',
+    '  link e -[:Owners]-> { name: "Daria Gneusheva" }',
+    '}',
+  ].join('\n');
+
+  function listAttio(): {
+    adapter: Adapter;
+    creates: RecordedWrite[];
+    linkCalls: Parameters<NonNullable<Adapter['linkRecords']>>[0][];
+  } {
+    const fake = makeFakeAdapter('attio', {
+      resolveCandidates: (record) =>
+        record.name === 'Daria Gneusheva'
+          ? [{ adapterType: 'attio', externalId: 'person-3', data: {} }]
+          : [],
+    });
+    const linkCalls: Parameters<NonNullable<Adapter['linkRecords']>>[0][] = [];
+    fake.adapter.linkRecords = async (input) => {
+      linkCalls.push(input);
+      return { created: true };
+    };
+    return { adapter: fake.adapter, creates: fake.creates, linkCalls };
+  }
+
+  const runAdd = async (adapters: { attio: Adapter; slack: Adapter }, dryRun?: true) =>
+    runMovement({
+      source: ADD_AND_OWN,
+      event: webhookEvent('slack', { user: 'Acme' }),
+      teamId: TEAM_ID,
+      catalog: listCatalog,
+      resolveCredentialId: (name) => CREDENTIAL_IDS[name],
+      resolveAdapter: makeResolver(adapters),
+      ...(dryRun ? { dryRun: true } : {}),
+    });
+
+  it('links off the entry as the LIST\'s type, while the create is still addressed to the collection', async () => {
+    const attio = listAttio();
+    await runAdd({ attio: attio.adapter, slack: makeFakeAdapter('slack').adapter });
+
+    // Asked by the name the write named; landed on the type the body chose.
+    expect(attio.creates.map((c) => c.recordType)).toEqual(['organization', 'entry']);
+    expect(attio.linkCalls).toEqual([
+      {
+        from: { recordType: 'List Entry — Deals', externalId: 'ext-attio-2' },
+        edgeName: 'Owners',
+        to: { recordType: 'person', externalId: 'person-3' },
+        mutationContext: expect.objectContaining({
+          source: expect.objectContaining({ adapterType: 'slack' }),
+        }),
+      },
+    ]);
+  });
+
+  it('rehearses the link instead of sending it, still naming the variant', async () => {
+    const attio = listAttio();
+    const result = await runAdd({ attio: attio.adapter, slack: makeFakeAdapter('slack').adapter }, true);
+
+    expect(attio.linkCalls).toEqual([]);
+    expect(attio.creates).toEqual([]);
+    expect(result.writes.map((w) => [w.kind ?? 'write', w.recordType, w.committed])).toEqual([
+      ['write', 'organization', false],
+      ['write', 'entry', false],
+      ['link', 'List Entry — Deals', false],
+    ]);
   });
 });
 

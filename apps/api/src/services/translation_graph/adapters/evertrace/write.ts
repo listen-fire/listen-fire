@@ -173,12 +173,34 @@ export async function createEvertraceRecord(input: {
   }
 }
 
+/** A writable type's natural name — the currency `UpdateResult.recordType`
+ *  speaks, needed before the switch picks a branch. */
+const EVERTRACE_DISPLAY_NAME_BY_TYPE: Record<EvertraceWritableTypeId, string> = {
+  [EVERTRACE_SIGNAL_TYPE_ID]: EVERTRACE_SIGNAL_DISPLAY_NAME,
+  [EVERTRACE_SEARCH_TYPE_ID]: EVERTRACE_SEARCH_DISPLAY_NAME,
+  [EVERTRACE_LIST_TYPE_ID]: EVERTRACE_LIST_DISPLAY_NAME,
+  [EVERTRACE_LIST_ENTRY_TYPE_ID]: EVERTRACE_LIST_ENTRY_DISPLAY_NAME,
+};
+
 export async function updateEvertraceRecord(input: {
   client: EvertraceApiClient;
   typeId: EvertraceWritableTypeId;
   update: UpdateInput;
 }): Promise<UpdateResult> {
   const { client, update } = input;
+  // Nothing of the record's own to change. Evertrace has no parent to attach a
+  // matched record to — a list entry IS its (list, signal) pair, so a match
+  // already means membership — so there is nothing left to send. Answering
+  // without a call keeps a parent-only write from re-sending an unchanged
+  // search or list, and from tripping the list-entry refusal below.
+  if (Object.keys(update.fields).length === 0) {
+    return {
+      adapterType: EVERTRACE_ADAPTER_TYPE,
+      externalId: update.externalId,
+      recordType: EVERTRACE_DISPLAY_NAME_BY_TYPE[input.typeId],
+      data: {},
+    };
+  }
   switch (input.typeId) {
     case EVERTRACE_SIGNAL_TYPE_ID:
       return updateSignal({ client, update });

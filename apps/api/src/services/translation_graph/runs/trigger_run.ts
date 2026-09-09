@@ -805,6 +805,10 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
     // 'delete'; absent = a record write) and — for the link pair —
     // the edge itself.
     ...(write.kind !== undefined ? { kind: write.kind } : {}),
+    // What the record write actually did — create / update / attach (parent
+    // association only) / noop (nothing sent). `created` cannot tell the last
+    // three apart, and a reader needs to.
+    ...(write.outcome !== undefined ? { outcome: write.outcome } : {}),
     ...(write.link !== undefined ? { link: write.link } : {}),
     // Parent → child linkage (the edge a linked/tuple write hangs off) —
     // the inspection surface's "does this record attach to anything".

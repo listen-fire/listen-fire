@@ -2388,13 +2388,19 @@ class NativeValuationsAdapter extends BaseAdapter {
     const creds = await this.requireCreds();
     // NOT-FOUND contract (3b): a PATCH to a record the service no longer
     // has 404s — surface the typed signal so bind self-heal re-mints.
+    //
+    // Valuations has no parent to attach a matched record to, so an empty
+    // field set leaves nothing to send: read the record for the same 404 and
+    // the same data bag, without a write that changes nothing.
+    const path = `/api/v1/valuations/${entity.slug}/${input.externalId}`;
     let response: ValuationsRecordResponse<Record<string, unknown>>;
     try {
-      response = await valuationsFetch<ValuationsRecordResponse<Record<string, unknown>>>(creds, {
-        method: 'PATCH',
-        path: `/api/v1/valuations/${entity.slug}/${input.externalId}`,
-        body: fields,
-      });
+      response = await valuationsFetch<ValuationsRecordResponse<Record<string, unknown>>>(
+        creds,
+        Object.keys(fields).length === 0
+          ? { method: 'GET', path }
+          : { method: 'PATCH', path, body: fields },
+      );
     } catch (e) {
       if (isHttp404(e)) return UPDATE_NOT_FOUND;
       throw e;

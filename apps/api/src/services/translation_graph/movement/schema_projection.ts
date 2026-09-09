@@ -52,6 +52,13 @@ import type { UniquenessConstraints } from '../uniqueness';
  * through when the field is known; reference entries map to the surface
  * edge name. Branches carrying anything unmappable are dropped — the
  * projection only declares what it can honestly name — with a note.
+ *
+ * An entry may also name the EDGE THE RECORD HANGS OFF rather than anything the
+ * record itself carries: a company sits on a list once, so a list entry is
+ * identified by the pair (the company, the list). That edge belongs to the
+ * parent's type, so it is in neither of this type's own maps — `parentEdges`
+ * carries it, and it maps to itself, which is both the word the author walks in
+ * the write's path and the word the engine folds the resolved parent in under.
  */
 function projectNativeUniqueness(input: {
   constraints: UniquenessConstraints | undefined;
@@ -59,6 +66,9 @@ function projectNativeUniqueness(input: {
   surfaceFieldByInternalId: ReadonlyMap<string, string>;
   /** Reference fieldId → surface edge name (for KG-style edge entries). */
   edgeSurfaceByFieldId: ReadonlyMap<string, string>;
+  /** Surface names of the edges that LAND on this type — declared by the
+   *  parents that reach it, so absent from its own reference map. */
+  parentEdges: ReadonlySet<string>;
   /** Prose label for notes, e.g. `Companies`. */
   label: string;
   notes: string[];
@@ -76,6 +86,8 @@ function projectNativeUniqueness(input: {
         const edgeSurface = input.edgeSurfaceByFieldId.get(entry.field);
         if (edgeSurface !== undefined) {
           group.push(edgeSurface);
+        } else if (input.parentEdges.has(entry.field)) {
+          group.push(entry.field);
         } else {
           mappable = false;
           break;
@@ -262,6 +274,13 @@ export function instanceSchemaFromDescriptors(input: {
   /** Whether the adapter implements `updateRecord` (its manifest
    *  `methods[]`) — gates the position write `write a { … }`. */
   supportsInPlaceUpdate: boolean;
+  /** Whether the adapter's traversals can carry INLINE edge properties
+   *  (`runtimeCapabilities().traversal.edgeProperties`) — facts belonging to
+   *  the relationship, attached per traversed record and enumerated by no
+   *  describe. It rides the schema because it is the third surface a bare name
+   *  in a bracket WHERE can address, and the checker has to know the surface
+   *  exists before it can call such a name a mistake. */
+  edgesCarryProperties?: boolean;
   /**
    * The FULL entry list when `entries` is a scoped subset (types-scoped
    * describe). Scope-INVARIANT facts derive from here so the efficient path
@@ -316,6 +335,15 @@ export function instanceSchemaFromDescriptors(input: {
   ];
 
   const edgeTargetNames = new Set<string>();
+  /**
+   * The edges that LAND on a type, by the name the author walks them under —
+   * declared by the PARENT, so a type never carries them in its own reference
+   * list. Identity can name one: a record sits on a list once, so a list entry
+   * is identified by the pair (the company it hangs off, the list), and the
+   * company reaches the write through its `List Entries` edge. That is a fact
+   * about a type the type itself cannot state.
+   */
+  const incomingEdgeNames = new Map<string, Set<string>>();
   for (const descriptor of input.descriptors.values()) {
     for (const reference of descriptor.references) {
       // `_resources` targets the engine's synthetic resource type by design —
@@ -325,7 +353,12 @@ export function instanceSchemaFromDescriptors(input: {
       // EVERY member of a polymorphic reference is reachable — a union whose
       // variants aren't positions is a type nobody can read through, and the
       // engine's landed-record restamp is gated on the variant being one.
-      for (const name of targetNamesOf(reference)) edgeTargetNames.add(name);
+      for (const name of targetNamesOf(reference)) {
+        edgeTargetNames.add(name);
+        const named = incomingEdgeNames.get(name) ?? new Set<string>();
+        named.add(reference.name ?? reference.fieldId);
+        incomingEdgeNames.set(name, named);
+      }
     }
   }
 
@@ -633,6 +666,7 @@ export function instanceSchemaFromDescriptors(input: {
         constraints: descriptor.uniquenessConstraints,
         surfaceFieldByInternalId,
         edgeSurfaceByFieldId,
+        parentEdges: incomingEdgeNames.get(name) ?? new Set<string>(),
         label: name,
         notes,
       });
@@ -777,7 +811,16 @@ export function instanceSchemaFromDescriptors(input: {
         );
         continue;
       }
-      variants[literal] = mergeVariantShape(base, shapeByName[variantTypeName]);
+      variants[literal] = {
+        ...mergeVariantShape(base, shapeByName[variantTypeName]),
+        // The variant is a TYPE, not just a body shape: the record this write
+        // creates is a row of that one list, so the handle it hands back stands
+        // on the list's own position and a chained write or `link` off it walks
+        // that type's edges. Only when the variant type mints a position —
+        // otherwise the handle keeps the collection's, which is the strict
+        // answer rather than an invented one.
+        ...(positions[variantTypeName] !== undefined ? { position: variantTypeName } : {}),
+      };
     }
     const discriminated: DiscriminatedWriteShape = {
       discriminant: declaration.discriminant,
@@ -836,6 +879,7 @@ export function instanceSchemaFromDescriptors(input: {
       writableRoots,
       ...(Object.keys(createShapes).length > 0 ? { createShapes } : {}),
       ...(input.supportsInPlaceUpdate ? { supportsInPlaceUpdate: true } : {}),
+      ...(input.edgesCarryProperties ? { edgesCarryProperties: true } : {}),
       ...(eventPosition !== undefined ? { eventPosition } : {}),
       ...(eventPositions.length > 0 ? { eventPositions } : {}),
     },

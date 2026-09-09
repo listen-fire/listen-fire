@@ -11,23 +11,23 @@ export function seedDefaults(store: EntityStore) {
     // Built-in properties (name, domain, first_name, last_name, email) are now
     // handled via adapterConfig, not field mappings — only custom fields here.
     const fields = [
-      { id: 3, name: 'Description', entity_type: 1, value_type: 6, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 4, name: 'Industry', entity_type: 1, value_type: 6, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 5, name: 'Location', entity_type: 1, value_type: 5, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 6, name: 'Stage', entity_type: 1, value_type: 2, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: [
+      { id: 3, name: 'Description', entity_type: 1, value_type: 6, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 4, name: 'Industry', entity_type: 1, value_type: 6, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 5, name: 'Location', entity_type: 1, value_type: 5, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 6, name: 'Stage', entity_type: 1, value_type: 2, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: [
         { id: 1, text: 'Pre-Seed', rank: 0, color: 0 },
         { id: 2, text: 'Seed', rank: 1, color: 1 },
         { id: 3, text: 'Series A', rank: 2, color: 2 },
         { id: 4, text: 'Series B', rank: 3, color: 3 },
       ]},
-      { id: 7, name: 'Status', entity_type: 1, value_type: 7, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: true, dropdown_options: [
+      { id: 7, name: 'Status', entity_type: 1, value_type: 7, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: true, dropdown_options: [
         { id: 10, text: 'New', rank: 0, color: 0 },
         { id: 11, text: 'In Review', rank: 1, color: 1 },
         { id: 12, text: 'Passed', rank: 2, color: 2 },
         { id: 13, text: 'Active', rank: 3, color: 3 },
       ]},
-      { id: 11, name: 'Amount Raised', entity_type: 1, value_type: 3, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 12, name: 'Founded Date', entity_type: 1, value_type: 4, list_id: null, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 11, name: 'Amount Raised', entity_type: 1, value_type: 3, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 12, name: 'Founded Date', entity_type: 1, value_type: 4, list_id: null, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
     ];
     for (const f of fields) {
       store.create('affinity', 'field', f, String(f.id));
@@ -42,6 +42,16 @@ export function seedDefaults(store: EntityStore) {
     console.log('  Seeded affinity: 7 fields, 1 list');
   }
 
+  // An ENRICHMENT-SOURCED field. Affinity populates it and the field-value API
+  // refuses it, so `describe` says `writable: false` and every write path drops
+  // it. Every other field carries the "no provider" sentinel, so the fake now
+  // exercises BOTH sides of the read-only rule rather than only the writable
+  // one. Own idempotency gate — additive, so an already-seeded store gains it.
+  if (!store.get('affinity', 'field', '13')) {
+    store.create('affinity', 'field', { id: 13, name: 'Employee Count', entity_type: 1, value_type: 3, list_id: null, enrichment_source: 'affinity-data', allows_multiple: false, track_changes: false, dropdown_options: null }, '13');
+    console.log('  Seeded affinity: enrichment-sourced field 13 (Employee Count)');
+  }
+
   // List-scoped custom fields for the Pipeline list (list_id 1). Affinity
   // field values are per-list, so the pinned `List Entry — Pipeline` type
   // describes exactly these — without them it honestly (but uselessly) shows
@@ -49,19 +59,28 @@ export function seedDefaults(store: EntityStore) {
   // before this fixture existed gain them on boot.
   if (!store.list('affinity', 'field').some((f) => f.data.list_id === 1)) {
     const pipelineListFields = [
-      { id: 21, name: 'Deal Stage', entity_type: 1, value_type: 7, list_id: 1, enrichment_source: null, allows_multiple: false, track_changes: true, dropdown_options: [
+      { id: 21, name: 'Deal Stage', entity_type: 1, value_type: 7, list_id: 1, enrichment_source: 'none', allows_multiple: false, track_changes: true, dropdown_options: [
         { id: 30, text: 'Sourced', rank: 0, color: 0 },
         { id: 31, text: 'Screening', rank: 1, color: 1 },
         { id: 32, text: 'Partner Review', rank: 2, color: 2 },
         { id: 33, text: 'Term Sheet', rank: 3, color: 3 },
       ]},
-      { id: 22, name: 'Deal Size', entity_type: 1, value_type: 3, list_id: 1, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 23, name: 'Next Step', entity_type: 1, value_type: 6, list_id: 1, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 22, name: 'Deal Size', entity_type: 1, value_type: 3, list_id: 1, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 23, name: 'Next Step', entity_type: 1, value_type: 6, list_id: 1, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
     ];
     for (const f of pipelineListFields) {
       store.create('affinity', 'field', f, String(f.id));
     }
     console.log('  Seeded affinity: 3 list-scoped fields for list 1 (Pipeline)');
+  }
+
+  // A list-scoped PERSON-valued field on Pipeline (list 1): a reference field
+  // on an ENTRY, which is an edge off the entry rather than a value on it. Its
+  // value hangs off the entry while still being addressed against the
+  // organization, so nothing else in the fixture exercises that pairing.
+  if (!store.get('affinity', 'field', '24')) {
+    store.create('affinity', 'field', { id: 24, name: 'Owners', entity_type: 1, value_type: 0, list_id: 1, enrichment_source: 'none', allows_multiple: true, track_changes: false, dropdown_options: null }, '24');
+    console.log('  Seeded affinity: list-scoped reference field 24 (Owners) on list 1');
   }
 
   // A SECOND organization list, with its OWN list-scoped fields. Affinity lists
@@ -73,9 +92,9 @@ export function seedDefaults(store: EntityStore) {
   if (!store.get('affinity', 'list', '3')) {
     store.create('affinity', 'list', { name: 'Portfolio', type: 1, creator_id: 1 }, '3');
     const portfolioListFields = [
-      { id: 41, name: 'Ownership %', entity_type: 1, value_type: 3, list_id: 3, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 42, name: 'Board Seat', entity_type: 1, value_type: 6, list_id: 3, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 43, name: 'Investment Date', entity_type: 1, value_type: 4, list_id: 3, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 41, name: 'Ownership %', entity_type: 1, value_type: 3, list_id: 3, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 42, name: 'Board Seat', entity_type: 1, value_type: 6, list_id: 3, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 43, name: 'Investment Date', entity_type: 1, value_type: 4, list_id: 3, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
     ];
     for (const f of portfolioListFields) {
       store.create('affinity', 'field', f, String(f.id));
@@ -89,8 +108,8 @@ export function seedDefaults(store: EntityStore) {
   if (!store.get('affinity', 'list', '4')) {
     store.create('affinity', 'list', { name: 'Advisors', type: 0, creator_id: 1 }, '4');
     const advisorListFields = [
-      { id: 51, name: 'Advisory Focus', entity_type: 0, value_type: 6, list_id: 4, enrichment_source: null, allows_multiple: false, track_changes: false, dropdown_options: null },
-      { id: 52, name: 'Engagement', entity_type: 0, value_type: 7, list_id: 4, enrichment_source: null, allows_multiple: false, track_changes: true, dropdown_options: [
+      { id: 51, name: 'Advisory Focus', entity_type: 0, value_type: 6, list_id: 4, enrichment_source: 'none', allows_multiple: false, track_changes: false, dropdown_options: null },
+      { id: 52, name: 'Engagement', entity_type: 0, value_type: 7, list_id: 4, enrichment_source: 'none', allows_multiple: false, track_changes: true, dropdown_options: [
         { id: 60, text: 'Prospective', rank: 0, color: 0 },
         { id: 61, text: 'Active', rank: 1, color: 1 },
         { id: 62, text: 'Lapsed', rank: 2, color: 2 },
@@ -133,9 +152,6 @@ export function seedDefaults(store: EntityStore) {
       domains: ['graphredesign.co'],
       person_ids: [9701],
       global: false,
-      list_entries: [
-        { id: 9801, list_id: 1, entity_id: 9601, entity_type: 1, created_at: now },
-      ],
     }, '9601');
     store.create('affinity', 'person', {
       first_name: 'Grace',
@@ -143,7 +159,6 @@ export function seedDefaults(store: EntityStore) {
       primary_email: 'grace@graphredesign.co',
       emails: ['grace@graphredesign.co'],
       organization_ids: [9601],
-      list_entries: [],
     }, '9701');
     store.create('affinity', 'person', {
       first_name: 'Jonas',
@@ -151,7 +166,6 @@ export function seedDefaults(store: EntityStore) {
       primary_email: 'jonas@example.com',
       emails: ['jonas@example.com'],
       organization_ids: [],
-      list_entries: [],
     }, '9702');
     store.create('affinity', `list_entry:1`, {
       list_id: 1,

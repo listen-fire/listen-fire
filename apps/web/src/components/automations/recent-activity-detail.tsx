@@ -16,7 +16,14 @@ interface AppliedPlan {
   adapterType: string;
   recordType: string;
   created: boolean;
+  /** False when the run REHEARSED this write — the effect was captured, never
+   *  sent. A rehearsal that read like a completed write was the whole problem. */
+  committed?: boolean;
   externalId?: string;
+  /** What this record hangs off, and by which edge. A record with no parent
+   *  shown reads as standing alone, which for an entry on a list is a
+   *  different claim than the one the run made. */
+  parents?: Array<{ recordType: string; externalId: string; edgeName: string }>;
   writtenValues?: Record<string, unknown>;
 }
 
@@ -370,7 +377,24 @@ export function RecentActivityDetail({ runId }: { runId: string }) {
                 <span className="text-[12px] font-medium text-gray-800">
                   {prettyRecordType(plan.recordType)}
                 </span>
+                {plan.committed === false && (
+                  <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                    Rehearsed
+                  </span>
+                )}
               </div>
+              {/* An entry added to a list is not the same claim as an entry:
+                  say what it attached to, and by which edge. */}
+              {(plan.parents ?? []).length > 0 && (
+                <div className="mb-1 text-[11px] text-gray-500">
+                  {(plan.parents ?? [])
+                    .map(
+                      (parent) =>
+                        `on ${prettyRecordType(parent.recordType)} via ${parent.edgeName}`,
+                    )
+                    .join(" · ")}
+                </div>
+              )}
               {fields.length === 0 ? (
                 <div className="text-[11px] text-gray-400">No fields written.</div>
               ) : (

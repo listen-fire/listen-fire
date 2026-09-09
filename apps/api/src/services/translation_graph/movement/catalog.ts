@@ -412,7 +412,14 @@ export function staticCatalogFromManifests(
     instantiate(adapterName): InstanceSchema | undefined {
       // STUB — construction arguments are ignored; see module header for
       // the real per-credential seam.
-      return options.instanceSchemas?.[adapterName] ?? THIN_INSTANCE_SCHEMAS[adapterName];
+      const schema = options.instanceSchemas?.[adapterName] ?? THIN_INSTANCE_SCHEMAS[adapterName];
+      // These fixtures stand opposite FAKE adapters, and a fake declares the
+      // permissive runtime capabilities — inline edge properties included. So
+      // the fixture says so too, or the checker calls a name a mistake that
+      // the adapter under test answers at run time. The real per-credential
+      // projection reads the capability off the adapter itself
+      // (`instance_cache`), where it is a fact rather than a fixture.
+      return schema !== undefined ? { ...schema, edgesCarryProperties: true } : undefined;
     },
   };
 }

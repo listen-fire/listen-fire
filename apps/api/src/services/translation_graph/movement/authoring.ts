@@ -219,12 +219,16 @@ async function runValidate(
   timer: StepTimer,
 ): Promise<TeamMovementValidation> {
   let teamCatalog;
+  /** Why the scoped scan failed, when it did — the fallback catalog describes
+   *  nothing, so this is the only account of what went unchecked. */
+  let scanFailure: string | undefined;
   try {
     teamCatalog = await timer.step('catalog', () =>
       movementCatalogForTeam(input.teamId as TeamId, { source: input.source }),
     );
   } catch (e) {
     if (!(e instanceof BridgeError || e instanceof MovementParseError)) throw e;
+    scanFailure = e.message;
     // `types: []` — describe NOTHING. Source that will not parse never reaches
     // type-checking, so no schema can inform the diagnostic; fetching every
     // type of every connected system to report a missing bracket is a
@@ -241,5 +245,19 @@ async function runValidate(
       resolveFile: teamCatalog.resolveFile,
     }),
   );
-  return { ...validation, catalogNotes: teamCatalog.notes, gaps: teamCatalog.gaps };
+  const notes = [...teamCatalog.notes];
+  const gaps = [...teamCatalog.gaps];
+  if (scanFailure !== undefined) {
+    // The fallback catalog describes NOTHING, so every schema-typed check ran
+    // against an empty world and stayed silent. Usually the source also failed
+    // to parse and the parse error carries the verdict — but not always, and a
+    // source that parses would otherwise come back a clean `ok` that means only
+    // "nothing was checked". A gap makes that `unverified`, which is what it is.
+    const detail =
+      `the source could not be scanned for the systems it uses, so nothing was ` +
+      `checked against live schemas — ${scanFailure}`;
+    gaps.push({ adapter: 'every system', detail });
+    notes.push(detail);
+  }
+  return { ...validation, catalogNotes: notes, gaps };
 }

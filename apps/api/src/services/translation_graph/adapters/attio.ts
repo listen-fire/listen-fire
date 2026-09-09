@@ -4078,13 +4078,23 @@ export class AttioAdapter extends BaseAdapter {
     await this.coerceActorReferenceFields(input.recordType, recordFields);
     // NOT-FOUND contract (3b): a PATCH to a record Attio no longer has 404s.
     // Surface the typed signal so the engine's bind self-heal re-mints.
+    //
+    // A parent-only attach reaches here with NOTHING of the record's own to
+    // change — a matched child whose fields all already hold the written
+    // values, hung off its parent. Patching an empty value bag would be a
+    // write that changes nothing; read the record instead, so the handle
+    // still carries the target's computed values and a deleted record still
+    // 404s into the self-heal.
     let record: Awaited<ReturnType<typeof client.updateRecord>>;
     try {
-      record = await client.updateRecord({
-        objectId,
-        recordId: input.externalId,
-        fields: recordFields,
-      });
+      record =
+        Object.keys(recordFields).length === 0
+          ? await client.getRecord({ objectId, recordId: input.externalId })
+          : await client.updateRecord({
+              objectId,
+              recordId: input.externalId,
+              fields: recordFields,
+            });
     } catch (e) {
       if (isHttp404(e)) return UPDATE_NOT_FOUND;
       throw e;

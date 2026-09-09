@@ -607,8 +607,10 @@ describe('a maybe-absent binding inside a bracket WHERE', () => {
     expect(codesFor('  board-[l:Lanes WHERE `Title` > `Colour`]-> { }')).toEqual([]);
   });
 
-  it('a name that is neither a field nor a binding still says nothing', () => {
-    expect(codesFor('  board-[l:Lanes WHERE `Bogus` > "a"]-> { }')).toEqual([]);
+  it('a name that is neither a field nor a binding is an unknown field, not an absence', () => {
+    expect(codesFor('  board-[l:Lanes WHERE `Bogus` > "a"]-> { }')).toEqual([
+      'MOV_UNKNOWN_PROPERTY',
+    ]);
   });
 
   // The discharges, each in the WHERE.

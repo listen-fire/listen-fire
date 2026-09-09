@@ -54,6 +54,12 @@ export interface DecodedTypeId {
   entity: AffinityEntity;
   /** Present only for a per-list entry type. */
   listId?: number;
+  /** The list's own name, present only for a per-list entry type. It comes off
+   *  the same catalog row as `listId`, and it is what tells a list-scoped
+   *  field's name from the redundant `[<list>] ` prefix Affinity puts in front
+   *  of it — so every path that names a field on this type answers from the
+   *  structured id rather than re-fetching the list catalog. */
+  listName?: string;
   /** The list's entity kind (Affinity `list.type`: 0 person, 1 organization,
    *  8 opportunity), present only for a per-list entry type. It pins the entry's
    *  single parent up-hop and its list-scoped custom-field entity type — the
@@ -71,6 +77,18 @@ export interface DecodedTypeId {
    *  Here the wrong lists are not representable. Carries no `listId`: a member is
    *  selected by narrowing (read) or NAMED in the write body (write). */
   listsFor?: ListEntityKind;
+}
+
+/** The name a list's own entry type carries. One spelling, so a name minted by
+ *  the catalog and a name looked up by a write cannot drift apart. */
+export function perListTypeName(listName: string): string {
+  return `List Entry — ${listName}`;
+}
+
+/** The list a per-list entry type is named for — the inverse of
+ *  `perListTypeName`, for the paths that hold the type name and want the list. */
+export function listNameFromPerListType(typeName: string): string {
+  return typeName.replace(/^List Entry — /, '');
 }
 
 /** The entity kinds an Affinity list can be typed to (`list.type`). A list entry
@@ -108,6 +126,18 @@ export function listEntityKind(listType: number | null | undefined): ListEntityK
     default:
       return null;
   }
+}
+
+/**
+ * The `/fields` catalog a list entry's fields are named from: the entity kind
+ * the LIST is typed to (an org list's fields are ORGANIZATION fields carrying
+ * that list's id). A per-list type carries the kind on `listType`; a record's
+ * membership collection is already scoped to it (`listsFor`). Opportunity lists
+ * publish no org/person custom fields on this surface, so they name no catalog.
+ */
+export function listCatalogType(decoded: DecodedTypeId): 'ORGANIZATION' | 'PERSON' | null {
+  const kind = decoded.listsFor ?? listEntityKind(decoded.listType);
+  return kind === 'organization' ? 'ORGANIZATION' : kind === 'person' ? 'PERSON' : null;
 }
 
 /** The pretty display name each fixed entity carries as its framework identity
@@ -207,12 +237,75 @@ export const AFFINITY_VALUE_TYPE = {
 } as const;
 
 /**
+ * Affinity's documented "this field has no enrichment provider" sentinel. The
+ * v1 `/fields` catalog types `enrichment_source` as a string and fills it in
+ * for EVERY field, so a hand-maintained field says `none` rather than saying
+ * nothing.
+ */
+export const AFFINITY_NO_ENRICHMENT_SOURCE = 'none';
+
+/**
  * Affinity custom fields backed by an enrichment source are system-populated
  * and not writable through the public field-value API. Surfaced in `describe`
  * with `writable: false` and dropped from writes.
+ *
+ * Read-only means a REAL provider — `affinity-data`, `dealroom`, `crunchbase`,
+ * `pitchbook`. "No provider" arrives as the `none` sentinel, and (across API
+ * versions and the fake) also as null, undefined or empty; all four are the
+ * absence of a provider, so all four are writable. Treating the sentinel as a
+ * provider is what made every custom field read-only and left the list-entry
+ * write variant carrying nothing but its discriminant.
  */
 export function isReadOnlyField(field: { enrichment_source?: string | null }): boolean {
-  return field.enrichment_source != null;
+  const source = field.enrichment_source?.trim();
+  if (source === undefined || source === '') return false;
+  return source.toLowerCase() !== AFFINITY_NO_ENRICHMENT_SOURCE;
+}
+
+/**
+ * THE display name every list-scoped field carries on its own list's type,
+ * keyed by field id.
+ *
+ * The catalog is fetched with modified names, so Affinity prefixes a
+ * list-scoped field with `[<list>] `. On the type that IS that list the prefix
+ * repeats the type's own name and nothing else, so it comes off and the author
+ * writes the field the way the list shows it. Organization and Person keep what
+ * they show today — they carry no list-scoped fields at all.
+ *
+ * Two fields whose bare names would collide — with each other, or with some
+ * other field already carrying that name verbatim — BOTH keep their prefix: one
+ * name has to mean one field, and nothing else in the pair says which.
+ *
+ * `catalog` is the whole fetched field set, list-scoped and entity-level alike,
+ * so the collision test sees every name in play; only fields on `listId` come
+ * back.
+ */
+export function listScopedFieldDisplayNames(input: {
+  catalog: readonly AffinityFieldMeta[];
+  listId: number;
+  listName: string;
+}): Map<number, string> {
+  const prefix = `[${input.listName}] `;
+  const verbatim = new Set(input.catalog.map((f) => f.name));
+  const scoped = input.catalog.filter((f) => f.list_id === input.listId);
+
+  const bareByFieldId = new Map<number, string>();
+  const claims = new Map<string, number>();
+  for (const field of scoped) {
+    if (!field.name.startsWith(prefix)) continue;
+    const bare = field.name.slice(prefix.length);
+    if (bare === '') continue;
+    bareByFieldId.set(field.id, bare);
+    claims.set(bare, (claims.get(bare) ?? 0) + 1);
+  }
+
+  const names = new Map<number, string>();
+  for (const field of scoped) {
+    const bare = bareByFieldId.get(field.id);
+    const contested = bare === undefined || claims.get(bare)! > 1 || verbatim.has(bare);
+    names.set(field.id, contested ? field.name : bare);
+  }
+  return names;
 }
 
 /**

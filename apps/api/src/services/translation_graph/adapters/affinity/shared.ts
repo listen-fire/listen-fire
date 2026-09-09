@@ -10,11 +10,14 @@ import { valueType, locationFieldValue } from '../../../../adapters/affinity/api
 import type { AffinityOperations } from '../../../../adapters/affinity/operations';
 import { anthropicChat } from '../../../../lib/anthropic';
 import { logger } from '../../../logger';
-import type { WriteInput } from '../../adapter';
+import { isAdapterCallCeilingExceeded } from '../../../movement_engine/call_ledger';
+import type { ParentLink, WriteInput } from '../../adapter';
 import { writeParentLinks } from '../../adapter';
 import {
   decodedFixedType,
+  isReadOnlyField,
   isReferenceValueType,
+  listScopedFieldDisplayNames,
   INTERACTION_TYPE_LABELS,
   INTERACTION_DIRECTION_LABELS,
   REMINDER_TYPE_LABELS,
@@ -38,6 +41,7 @@ export function makeWebBaseUrlResolver(client: AffinityAPIClient): WebUrlSource 
         const whoami = await client.getWhoami();
         cached = `https://${whoami.tenant.subdomain}.affinity.co`;
       } catch (err) {
+        if (isAdapterCallCeilingExceeded(err)) throw err;
         logger.warn('[AffinityAdapter] failed to fetch whoami for web URL — using default', { err });
         cached = 'https://app.affinity.co';
       }
@@ -309,10 +313,13 @@ export async function writeCustomFieldValues(
     fieldValues: Record<string, unknown>;
     listEntryId?: number;
     listId?: number;
-    forceOverwrite: boolean;
+    /** The target list's own name, when this write lands on a list entry. It is
+     *  what strips a list-scoped field's redundant `[<list>] ` prefix, so a
+     *  value keyed by the name the per-list type publishes finds its field. */
+    listName?: string;
   },
 ): Promise<void> {
-  const { entityId, entityType, fieldValues, listEntryId, listId, forceOverwrite } = options;
+  const { entityId, entityType, fieldValues, listEntryId, listId, listName } = options;
 
   const writable = Object.entries(fieldValues).filter(
     ([, v]) => v != null && v !== '',
@@ -324,11 +331,26 @@ export async function writeCustomFieldValues(
     type: entityType === 'organization' ? 'ORGANIZATION' : 'PERSON',
     limitToListId: listId,
   });
+  // The write arrives keyed by field id where the engine resolved a name, and
+  // by a name where it could not. Both spellings of a list-scoped field's name
+  // are accepted: the one the per-list type publishes (the list's prefix
+  // stripped) and the one Affinity itself carries. They name the same field,
+  // and refusing the source system's own name would fail as a warning in a log.
+  const displayNames =
+    listId != null && listName !== undefined
+      ? listScopedFieldDisplayNames({ catalog: fields as AffinityFieldMeta[], listId, listName })
+      : undefined;
   const fieldById = new Map<string, AffinityFieldMeta>();
   for (const f of fields) {
-    fieldById.set(String(f.id), f as AffinityFieldMeta);
-    fieldById.set(f.name, f as AffinityFieldMeta);
-    fieldById.set(f.name.toLowerCase(), f as AffinityFieldMeta);
+    const meta = f as AffinityFieldMeta;
+    const published = displayNames?.get(f.id);
+    fieldById.set(String(f.id), meta);
+    fieldById.set(f.name, meta);
+    fieldById.set(f.name.toLowerCase(), meta);
+    if (published !== undefined) {
+      fieldById.set(published, meta);
+      fieldById.set(published.toLowerCase(), meta);
+    }
   }
 
   const entityFieldValues = await client.getFieldValues(
@@ -342,23 +364,36 @@ export async function writeCustomFieldValues(
   );
   const listEntryByFieldId = new Map(listEntryFieldValues.map((v) => [v.field_id, v]));
 
+  const target = listEntryId ? `list entry ${listEntryId}` : `${entityType} ${entityId}`;
+  const failed: string[] = [];
+
   for (const [key, value] of writable) {
     const fieldDef = fieldById.get(key) ?? fieldById.get(key.toLowerCase());
     if (!fieldDef) {
-      logger.warn(`[AffinityAdapter] writeCustomFieldValues: field "${key}" not found`);
-      continue;
+      // The checker guarantees every authored field exists on the variant, so
+      // a name that resolves to nothing here is drift between what `describe`
+      // published and what the workspace has — a bug, not a value to skip.
+      throw new Error(
+        `AffinityAdapter: no Affinity field named "${key}" on ${target} — ` +
+          `the published schema and the workspace disagree.`,
+      );
     }
-    if (fieldDef.enrichment_source != null) continue; // read-only
+    if (isReadOnlyField(fieldDef)) continue; // enrichment-sourced: not writable
     if (fieldDef.list_id && !listEntryId) continue; // list field with no entry to hang it on
 
+    // An existing value is UPDATED, never skipped: the engine decided what to
+    // write (an unchanged value never got this far, and a `?:` on a filled
+    // field was dropped upstream), so refusing here would only invert it.
     const existing = fieldDef.list_id
       ? listEntryByFieldId.get(fieldDef.id)
       : entityByFieldId.get(fieldDef.id);
-    if (existing && !forceOverwrite) continue;
 
     const resolved = await resolveFieldValue(operations, fieldDef, value);
     if (resolved === null) continue;
 
+    // Every field is attempted before anything is raised: one field Affinity
+    // refuses should not decide the fate of the others, and the author wants to
+    // hear about all of them at once, not one per re-run.
     try {
       if (existing) {
         await client.updateFieldValue({ id: existing.id, value: resolved });
@@ -371,8 +406,20 @@ export async function writeCustomFieldValues(
         });
       }
     } catch (err) {
+      if (isAdapterCallCeilingExceeded(err)) throw err;
       logger.warn(`[AffinityAdapter] writeCustomFieldValues: failed to write field "${key}"`, { err });
+      failed.push(`"${key}" (${err instanceof Error ? err.message : String(err)})`);
     }
+  }
+
+  // A field that did not land is a failed write, not a log line. There is no
+  // per-field channel back to the run, so the run fails naming the record and
+  // every field that did not make it.
+  if (failed.length > 0) {
+    throw new Error(
+      `AffinityAdapter: could not write ${failed.length === 1 ? 'field' : 'fields'} ` +
+        `${failed.join(', ')} on ${target}.`,
+    );
   }
 }
 
@@ -546,8 +593,15 @@ export type AffinityCustomFieldScope =
   | { kind: 'entity'; entityType: 'organization' | 'person'; entityId: number }
   /** A list entry's LIST-SCOPED values. The catalog its fields are named from
    *  is the list's own entity kind (an org list's fields are ORGANIZATION
-   *  fields carrying a `list_id`). */
-  | { kind: 'list-entry'; listEntryId: number; catalogType: 'ORGANIZATION' | 'PERSON' };
+   *  fields carrying a `list_id`), and the list's id and name are what name
+   *  those fields the way the entry's own type publishes them. */
+  | {
+      kind: 'list-entry';
+      listEntryId: number;
+      catalogType: 'ORGANIZATION' | 'PERSON';
+      listId?: number;
+      listName?: string;
+    };
 
 /** A field's current value rows, decoded, with the field meta they came from.
  *  `values` holds every row in API order — a single-value field has one, an
@@ -557,6 +611,13 @@ export type AffinityCustomFieldScope =
 export interface AffinityCustomFieldValue {
   field: AffinityFieldMeta;
   values: unknown[];
+}
+
+/** One `/field-values` row, in the subset every reader here consumes. */
+export interface AffinityFieldValueRow {
+  field_id: number;
+  list_entry_id?: number | null;
+  value?: unknown;
 }
 
 /**
@@ -572,7 +633,11 @@ export interface AffinityCustomFieldValue {
 export async function readCustomFieldValues(
   operations: AffinityOperations,
   scope: AffinityCustomFieldScope,
-  options?: { catalog?: AffinityFieldMeta[] },
+  /** Rows and catalog the caller already holds. A list entry's own rows are
+   *  what NAME its list when the position's type did not pin one, so the
+   *  caller that discovered the list has already paid for them; re-fetching
+   *  here would ask Affinity the same question twice per read. */
+  options?: { catalog?: AffinityFieldMeta[]; values?: AffinityFieldValueRow[] },
 ): Promise<Map<string, AffinityCustomFieldValue>> {
   const client = operations.getClient();
   const catalogType =
@@ -583,15 +648,27 @@ export async function readCustomFieldValues(
       : scope.catalogType;
   const [fields, values] = await Promise.all([
     options?.catalog ?? client.getFields({ type: catalogType }),
-    client.getFieldValues(
-      scope.kind === 'list-entry'
-        ? { list_entry_id: scope.listEntryId }
-        : scope.entityType === 'organization'
-          ? { organization_id: scope.entityId }
-          : { person_id: scope.entityId },
-    ),
+    options?.values ??
+      client.getFieldValues(
+        scope.kind === 'list-entry'
+          ? { list_entry_id: scope.listEntryId }
+          : scope.entityType === 'organization'
+            ? { organization_id: scope.entityId }
+            : { person_id: scope.entityId },
+      ),
   ]);
   const fieldById = new Map((fields as AffinityFieldMeta[]).map((f) => [f.id, f]));
+  // Keyed by the name the position's OWN type publishes: on a per-list entry
+  // that is the field without its list's prefix, which is what the author wrote
+  // and so what a `?:` fill and a no-change comparison have to key on.
+  const displayNames =
+    scope.kind === 'list-entry' && scope.listId != null && scope.listName !== undefined
+      ? listScopedFieldDisplayNames({
+          catalog: fields as AffinityFieldMeta[],
+          listId: scope.listId,
+          listName: scope.listName,
+        })
+      : undefined;
 
   const grouped = new Map<string, AffinityCustomFieldValue>();
   for (const v of values) {
@@ -601,9 +678,10 @@ export async function readCustomFieldValues(
     if (scope.kind === 'entity' && v.list_entry_id != null) continue;
     const field = fieldById.get(v.field_id);
     if (!field) continue;
-    const entry = grouped.get(field.name) ?? { field, values: [] };
+    const name = displayNames?.get(field.id) ?? field.name;
+    const entry = grouped.get(name) ?? { field, values: [] };
     entry.values.push(decodeFieldValue(field, (v as { value?: unknown }).value ?? null));
-    grouped.set(field.name, entry);
+    grouped.set(name, entry);
   }
   return grouped;
 }
@@ -645,79 +723,194 @@ function referenceValueIncludes(value: unknown, id: number): boolean {
 }
 
 /**
- * Resolve a parentLink's edge to the custom REFERENCE field it names on the
- * parent entity, or null when the edge isn't a custom reference (a built-in
- * person↔org association edge, an unknown name, or a non-reference field). The
- * edge arrives in the adapter's write currency (`ref.name ?? ref.fieldId` from
- * the name resolver), so we match a custom field by either its display name or
- * its numeric id. Read-only (enrichment) fields are never link targets. The
- * single classifier shared by the link writer and the employer-association
- * detector so they can't disagree on what counts as a custom reference.
+ * The record that HOLDS a custom reference pointing at the child. An entity
+ * holds its own fields. A LIST ENTRY holds its list's fields — and a value on
+ * an entry is addressed by BOTH the entry and the record the entry stands for,
+ * which is why the entry's own entity travels with it.
  */
+export type AffinityReferenceHolder =
+  | { kind: 'entity'; entityType: 'organization' | 'person'; entityId: number }
+  | {
+      kind: 'list-entry';
+      listEntryId: number;
+      listId: number;
+      listName: string | undefined;
+      catalogType: 'ORGANIZATION' | 'PERSON';
+      entityId: number;
+    };
+
+/** Which record a parent link's position stands for. Only the adapter knows —
+ *  a per-list type's name resolves through its live list cache. */
+export type ReferenceHolderResolver = (
+  parent: ParentLink,
+) => Promise<AffinityReferenceHolder | null>;
+
+/**
+ * Resolve a parentLink's edge to the custom REFERENCE field it names on the
+ * holder, or null when the edge isn't a custom reference (a built-in person↔org
+ * association edge, an unknown name, or a non-reference field). The edge
+ * arrives in the adapter's write currency (`ref.name ?? ref.fieldId` from the
+ * name resolver), so a field matches by its numeric id, by Affinity's own name,
+ * or by the name its holder's type publishes — on a list entry that is the name
+ * with the list's prefix off, the same rule `describe` named the edge by.
+ * Read-only (enrichment) fields are never link targets.
+ *
+ * A holder only ever offers its OWN fields: an entity's are the unscoped ones,
+ * an entry's are its list's. Nothing else can hold them.
+ */
+export async function referenceFieldOn(
+  operations: AffinityOperations,
+  holder: AffinityReferenceHolder,
+  edgeName: string,
+): Promise<AffinityFieldMeta | null> {
+  const fields = (await operations.getClient().getFields(
+    holder.kind === 'list-entry'
+      ? { type: holder.catalogType, limitToListId: holder.listId }
+      : { type: holder.entityType === 'organization' ? 'ORGANIZATION' : 'PERSON' },
+  )) as AffinityFieldMeta[];
+  const published =
+    holder.kind === 'list-entry' && holder.listName !== undefined
+      ? listScopedFieldDisplayNames({
+          catalog: fields,
+          listId: holder.listId,
+          listName: holder.listName,
+        })
+      : undefined;
+  const onHolder = (f: AffinityFieldMeta): boolean =>
+    holder.kind === 'list-entry' ? f.list_id === holder.listId : f.list_id == null;
+
+  const fieldDef = fields.find(
+    (f) =>
+      onHolder(f) &&
+      (String(f.id) === edgeName || f.name === edgeName || published?.get(f.id) === edgeName),
+  );
+  if (!fieldDef) return null;
+  if (!isReferenceValueType(fieldDef.value_type)) return null;
+  if (isReadOnlyField(fieldDef)) return null; // enrichment-sourced: not writable
+  return fieldDef;
+}
+
+/** The entity-shaped question: does this edge name a custom reference on an
+ *  org/person? Asked by the employer-association detector, which has to tell a
+ *  parent org that EMPLOYS the person from one that merely points at them. */
 export async function customReferenceFieldFor(
   operations: AffinityOperations,
   entityType: 'organization' | 'person',
   edgeName: string,
 ): Promise<AffinityFieldMeta | null> {
-  const fields = (await operations
-    .getClient()
-    .getFields({ type: entityType === 'organization' ? 'ORGANIZATION' : 'PERSON' })) as AffinityFieldMeta[];
-  const fieldDef = fields.find(
-    (f) => String(f.id) === edgeName || f.name === edgeName,
+  return referenceFieldOn(operations, { kind: 'entity', entityType, entityId: 0 }, edgeName);
+}
+
+/** The value rows a holder itself owns for one reference field. An entity's own
+ *  rows only — the rows on its list entries belong to those entries. */
+async function referenceRowsOn(
+  operations: AffinityOperations,
+  holder: AffinityReferenceHolder,
+  fieldDef: AffinityFieldMeta,
+) {
+  const rows = await operations.getClient().getFieldValues(
+    holder.kind === 'list-entry'
+      ? { list_entry_id: holder.listEntryId }
+      : holder.entityType === 'organization'
+        ? { organization_id: holder.entityId }
+        : { person_id: holder.entityId },
   );
-  if (!fieldDef) return null;
-  if (!isReferenceValueType(fieldDef.value_type)) return null;
-  if (fieldDef.enrichment_source != null) return null; // read-only enrichment field
-  return fieldDef;
+  return rows.filter(
+    (v) => v.field_id === fieldDef.id && (holder.kind === 'list-entry' || v.list_entry_id == null),
+  );
+}
+
+/**
+ * Point one of the holder's reference fields at a record — the single act
+ * behind both a linked write (the child was just created) and a standalone
+ * `link` (both records already existed). Idempotent: a row already naming the
+ * target is left alone and nothing is sent.
+ *
+ * A MULTI-valued reference is one row per linked record, so a new target is
+ * appended and the existing links survive. A SINGLE-valued one holds one row,
+ * so a new target REPLACES what is there — an in-place `PUT` of the row's
+ * value, not a delete and a re-create: the row is the field, and severing it
+ * first would leave the field empty if the write that follows failed.
+ *
+ * Returns whether anything changed, which is what `linkRecords` reports.
+ */
+export async function assertCustomReference(
+  operations: AffinityOperations,
+  options: {
+    holder: AffinityReferenceHolder;
+    fieldDef: AffinityFieldMeta;
+    targetId: number;
+  },
+): Promise<boolean> {
+  const { holder, fieldDef, targetId } = options;
+  const client = operations.getClient();
+  const existing = await referenceRowsOn(operations, holder, fieldDef);
+  if (existing.some((v) => referenceValueIncludes((v as { value?: unknown }).value, targetId))) {
+    return false;
+  }
+
+  // A list-scoped value hangs off the ENTRY; `entity_id` still names the
+  // record the entry stands for, which is how Affinity addresses it.
+  const onEntry = holder.kind === 'list-entry' ? { list_entry_id: holder.listEntryId } : {};
+  // A link that did not land fails the write, like any other field: the
+  // record it was supposed to point at exists, and nothing downstream can
+  // tell that it points at nothing.
+  if (!fieldDef.allows_multiple && existing[0]) {
+    await client.updateFieldValue({ id: existing[0].id, value: targetId });
+  } else {
+    await client.createFieldValue({
+      field_id: fieldDef.id,
+      entity_id: holder.entityId,
+      value: targetId,
+      ...onEntry,
+    });
+  }
+  return true;
+}
+
+/**
+ * Stop one of the holder's reference fields pointing at a record — the inverse
+ * assert. Affinity has no "clear this field": a value row IS the value, so the
+ * rows naming the target are deleted, which drops one target from a
+ * multi-valued reference and empties a single-valued one. A field that never
+ * pointed there is a quiet no-op, as `unlink` promises.
+ */
+export async function severCustomReference(
+  operations: AffinityOperations,
+  options: {
+    holder: AffinityReferenceHolder;
+    fieldDef: AffinityFieldMeta;
+    targetId: number;
+  },
+): Promise<boolean> {
+  const { holder, fieldDef, targetId } = options;
+  const client = operations.getClient();
+  const pointing = (await referenceRowsOn(operations, holder, fieldDef)).filter((v) =>
+    referenceValueIncludes((v as { value?: unknown }).value, targetId),
+  );
+  if (pointing.length === 0) return false;
+  for (const row of pointing) await client.deleteFieldValue({ id: row.id });
+  return true;
 }
 
 export async function applyCustomReferenceParentLinks(
   operations: AffinityOperations,
-  options: { childExternalId: string; write: Pick<WriteInput, 'parentLinks'> },
+  options: {
+    childExternalId: string;
+    write: Pick<WriteInput, 'parentLinks'>;
+    holderFor: ReferenceHolderResolver;
+  },
 ): Promise<void> {
   const childId = Number(options.childExternalId);
   if (!Number.isInteger(childId)) return;
-  const client = operations.getClient();
 
   for (const parent of writeParentLinks(options.write)) {
-    const parentEntity = decodedFixedType(parent.recordType)?.entity;
-    if (parentEntity !== 'organization' && parentEntity !== 'person') continue;
-    const parentId = Number(parent.externalId);
-    if (!Number.isInteger(parentId)) continue;
+    const holder = await options.holderFor(parent);
+    if (!holder) continue;
 
-    const fieldDef = await customReferenceFieldFor(operations, parentEntity, parent.edgeName);
+    const fieldDef = await referenceFieldOn(operations, holder, parent.edgeName);
     if (!fieldDef) continue; // not a custom reference — handled elsewhere
 
-    const existing = (
-      await client.getFieldValues(
-        parentEntity === 'organization'
-          ? { organization_id: parentId }
-          : { person_id: parentId },
-      )
-    ).filter((v) => v.field_id === fieldDef.id && v.list_entry_id == null);
-
-    // Idempotent: a row already pointing at this child needs no write.
-    if (
-      existing.some((v) => referenceValueIncludes((v as { value?: unknown }).value, childId))
-    ) {
-      continue;
-    }
-
-    try {
-      if (fieldDef.allows_multiple) {
-        // Multi-reference: one field-value row per linked record (Affinity v1
-        // semantics) — append, never clobber existing links.
-        await client.createFieldValue({ field_id: fieldDef.id, entity_id: parentId, value: childId });
-      } else if (existing[0]) {
-        await client.updateFieldValue({ id: existing[0].id, value: childId });
-      } else {
-        await client.createFieldValue({ field_id: fieldDef.id, entity_id: parentId, value: childId });
-      }
-    } catch (err) {
-      logger.warn(
-        '[AffinityAdapter] applyCustomReferenceParentLinks: failed to set reference field',
-        { fieldId: fieldDef.id, parentId, childId, err },
-      );
-    }
+    await assertCustomReference(operations, { holder, fieldDef, targetId: childId });
   }
 }

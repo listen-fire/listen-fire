@@ -226,7 +226,7 @@ async function main() {
 
   // -------------------------------------------------------- 3. bad api key
   {
-    const r = await wire('/api/v1/me', { headers: { Authorization: 'Bearer az_totally_invalid' } });
+    const r = await wire('/api/v1/me', { headers: { Authorization: 'Bearer lf_totally_invalid' } });
     record(
       '3',
       'invalid api key → 401 Invalid API key',

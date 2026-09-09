@@ -12,10 +12,11 @@
 // re-added.
 
 import type { AffinityOperations } from '../../../../adapters/affinity/operations';
-import type { WriteInput, WriteResult } from '../../adapter';
+import type { UpdateInput, UpdateResult, WriteInput, WriteResult } from '../../adapter';
 import { singleParentLink } from '../../adapter';
 import { decodedFixedType, AFFINITY_ADAPTER_TYPE, type DecodedTypeId } from './types';
 import { createNoopTracer, writeCustomFieldValues } from './shared';
+import { AFFINITY_LIST_NAME_FIELD } from './schema_catalog';
 
 export async function createListEntry(input: {
   operations: AffinityOperations;
@@ -56,8 +57,11 @@ export async function createListEntry(input: {
     tracer: createNoopTracer(),
   });
 
-  // List-scoped custom fields hang off the list entry; only force-overwrite on
-  // a freshly-created entry (a deduped existing entry keeps its values).
+  // List-scoped custom fields hang off the entry. Write every one we are
+  // handed: the engine has already applied write semantics (`?:` set-if-empty,
+  // no-change suppression) against the entry's current values, so a local
+  // "only on a fresh entry" gate would drop authored values — and would invert
+  // a plain `:`, which is what it did. Same rule as person/organization.
   const custom = Object.fromEntries(
     Object.entries(write.fields).filter(([, v]) => v != null && v !== ''),
   );
@@ -68,13 +72,65 @@ export async function createListEntry(input: {
       fieldValues: custom,
       listEntryId: entryResult.id,
       listId,
-      forceOverwrite: entryResult.isNew,
+      listName: input.decoded.listName,
     });
   }
 
   return {
     adapterType: AFFINITY_ADAPTER_TYPE,
     externalId: entryResult ? String(entryResult.id) : '',
+    data: {},
+  };
+}
+
+/**
+ * Where a list entry lives — the two facts a value on it is posted against.
+ * `listName` is what strips a list-scoped field's redundant prefix, so a value
+ * keyed by the name the entry's type publishes finds its field.
+ */
+export interface ListEntryLocation {
+  listEntryId: number;
+  listId: number;
+  listName: string | undefined;
+  entityId: number;
+  entityType: 'organization' | 'person';
+}
+
+/**
+ * Re-assert a membership the engine already resolved: set the entry's fields
+ * and nothing else. The membership itself is not touched — the entry is the
+ * record we were handed, and re-running the create would only re-derive its id.
+ */
+export async function updateListEntry(input: {
+  operations: AffinityOperations;
+  update: UpdateInput;
+  entry: ListEntryLocation;
+}): Promise<UpdateResult> {
+  const { operations, entry } = input;
+  // `listName` NAMES the list this write is addressed to; it is not a value on
+  // the entry. The create path drops it as it re-homes onto the list it named;
+  // an update has no re-homing step, so it drops it here. Leaving it in reaches
+  // the field writer as a field the workspace has never heard of — and the
+  // engine cannot always suppress it upstream, because an entry carrying no
+  // values yet names no list to compare against.
+  const custom = Object.fromEntries(
+    Object.entries(input.update.fields).filter(
+      ([k, v]) => k !== AFFINITY_LIST_NAME_FIELD && v != null && v !== '',
+    ),
+  );
+  if (Object.keys(custom).length > 0) {
+    await writeCustomFieldValues(operations, {
+      entityId: entry.entityId,
+      entityType: entry.entityType,
+      fieldValues: custom,
+      listEntryId: entry.listEntryId,
+      listId: entry.listId,
+      listName: entry.listName,
+    });
+  }
+  return {
+    adapterType: AFFINITY_ADAPTER_TYPE,
+    externalId: String(entry.listEntryId),
     data: {},
   };
 }

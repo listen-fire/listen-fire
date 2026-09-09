@@ -7,6 +7,10 @@ import { Queue } from '../../lib/utils/queue';
 import { logger } from '../../services/logger';
 import { SECOND } from '../../constants';
 import { currentContext } from '../../services/context';
+import {
+  bindAdapterCallCounter,
+  isAdapterCallCeilingExceeded,
+} from '../../services/movement_engine/call_ledger';
 import { sendSlackNotification } from '../../lib/slack';
 
 const RETRY_LIMIT = 5;
@@ -362,9 +366,19 @@ class AffinityAPIClient {
 
     logger.info(url.toString());
 
+    // Bound HERE, not inside the job: this client is a process-wide singleton,
+    // so the queue below dequeues a job in whichever other job's async context
+    // happened to free a slot. Capturing the run at the point the call was
+    // ISSUED charges the run that asked for it (call_ledger.ts).
+    const countCall = bindAdapterCallCounter('affinity');
+
     return this.rateLimitQueue.enqueue(async () => {
       return backOff(
         async (): Promise<T> => {
+          // Per ATTEMPT, not per request: a retry is another call Affinity
+          // sees, and a run that retries its way through the quota is exactly
+          // what the ceiling is for.
+          countCall();
           const response = await fetch(url, {
             method,
             headers,
@@ -407,7 +421,11 @@ class AffinityAPIClient {
           startingDelay: INITIAL_DELAY,
           timeMultiple: TIME_MULTIPLE, // 0s, 1s, 4s, 16s, 64s
           retry: async (e, attempt) => {
-            if (e instanceof AffinityMergedEntityError) {
+            if (isAdapterCallCeilingExceeded(e)) {
+              // Retrying the ceiling would spend the very attempts it exists
+              // to stop.
+              return false;
+            } else if (e instanceof AffinityMergedEntityError) {
               return false;
             } else if (e instanceof Error && e.message.includes('429')) {
               // rate limit
@@ -735,25 +753,39 @@ class AffinityAPIClient {
       responseValidator: listEntryValidator,
     });
 
-    const fetchedListEntry = await this.fetch({
-      route: `/lists/${list.id}/list-entries/${listEntry.id}`,
-      method: 'GET',
-      responseValidator: listEntryValidator,
+    const fetchedListEntry = await this.getListEntry({
+      listId: list.id,
+      listEntryId: listEntry.id,
     });
 
     return fetchedListEntry.id;
   }
 
-  async getExistingListEntryId({
-    list,
+  /**
+   * One entry by id. Its `entity_id` is the organization or person the entry
+   * stands for, which is what a list-scoped field value has to be posted
+   * against — the entry alone is not an addressable owner of a value.
+   */
+  async getListEntry({ listId, listEntryId }: { listId: number; listEntryId: number }) {
+    return this.fetch({
+      route: `/lists/${listId}/list-entries/${listEntryId}`,
+      method: 'GET',
+      responseValidator: listEntryValidator,
+    });
+  }
+
+  /**
+   * Every list an entity currently sits on, as the membership rows Affinity
+   * returns inline on the entity itself. This is the only route from an entity
+   * (or from an entry id) to the LIST an entry belongs to — a list entry is
+   * addressable only under its own list.
+   */
+  async getEntityListEntries({
     entityId,
     entityType,
-    startDate,
   }: {
-    list: { id: number };
     entityId: number;
     entityType: 'organization' | 'person';
-    startDate?: Date;
   }) {
     const entity =
       entityType === 'person'
@@ -767,15 +799,30 @@ class AffinityAPIClient {
             method: 'GET',
             responseValidator: organisationValidator,
           });
+    return entity.list_entries ?? [];
+  }
 
-    const entriesInThisList = entity.list_entries
-      ?.filter((entry) => entry.list_id === list.id)
+  async getExistingListEntryId({
+    list,
+    entityId,
+    entityType,
+    startDate,
+  }: {
+    list: { id: number };
+    entityId: number;
+    entityType: 'organization' | 'person';
+    startDate?: Date;
+  }) {
+    const entries = await this.getEntityListEntries({ entityId, entityType });
+
+    const entriesInThisList = entries
+      .filter((entry) => entry.list_id === list.id)
       .filter((entry) => {
         if (!startDate) return true;
         return new Date(entry.created_at) >= startDate;
       });
-    logger.info(`[AffinityV3] getExistingListEntryId: entityType=${entityType}, entityId=${entityId}, listId=${list.id}, startDate=${startDate?.toISOString() ?? 'none'}, allEntries=${JSON.stringify(entity.list_entries?.map((e) => ({ id: e.id, list_id: e.list_id, created_at: e.created_at })) ?? [])}, matched=${entriesInThisList?.length ?? 0}`);
-    if (entriesInThisList?.length) {
+    logger.info(`[AffinityV3] getExistingListEntryId: entityType=${entityType}, entityId=${entityId}, listId=${list.id}, startDate=${startDate?.toISOString() ?? 'none'}, allEntries=${JSON.stringify(entries.map((e) => ({ id: e.id, list_id: e.list_id, created_at: e.created_at })))}, matched=${entriesInThisList.length}`);
+    if (entriesInThisList.length) {
       return entriesInThisList[0].id;
     }
 
@@ -917,17 +964,26 @@ class AffinityAPIClient {
     return values;
   }
 
+  /** A failed write PROPAGATES. Whether a field that did not land is fatal is
+   *  the caller's policy, and a caller that never hears about it has no policy
+   *  at all — which is what a swallow here silently imposed on everyone. */
   async updateFieldValue({ id, value }: { id: number; value: unknown }) {
-    try {
-      return await this.fetch({
-        route: `/field-values/${id}`,
-        method: 'PUT',
-        body: { value },
-      });
-    } catch (e) {
-      logger.error(e);
-      return null;
-    }
+    return this.fetch({
+      route: `/field-values/${id}`,
+      method: 'PUT',
+      body: { value },
+    });
+  }
+
+  /** Remove a field value outright. Affinity has no "clear this field" verb —
+   *  a value row IS the value, so deleting the row is how a single-valued
+   *  reference is emptied and how one target leaves a multi-valued one. */
+  async deleteFieldValue({ id }: { id: number }) {
+    return this.fetch({
+      route: `/field-values/${id}`,
+      method: 'DELETE',
+      responseValidator: z.unknown(),
+    });
   }
 
   async createFieldValue({
@@ -941,34 +997,22 @@ class AffinityAPIClient {
     list_entry_id?: number;
     value: unknown;
   }) {
-    try {
-      return await this.fetch({
-        route: '/field-values',
-        method: 'POST',
-        body: {
-          field_id,
-          entity_id,
-          list_entry_id,
-          value,
-        },
-        payloadValidator: z.object({
-          field_id: z.number(),
-          entity_id: z.number(),
-          list_entry_id: z.number().optional(),
-          value: z.any(),
-        }),
-      });
-    } catch (e) {
-      logger.error(e);
-
-      const ctx = currentContext();
-      await sendSlackNotification({
-        type: 'DEALFLOW',
-        text: `:warning: Affinity error for user ${ctx.user.id} adding field value (field: ${field_id}, entity: ${entity_id}, list_entry: ${list_entry_id}, value: ${value})`,
-        opsTitle: `Affinity error adding a field value`,
-      });
-      return null;
-    }
+    return this.fetch({
+      route: '/field-values',
+      method: 'POST',
+      body: {
+        field_id,
+        entity_id,
+        list_entry_id,
+        value,
+      },
+      payloadValidator: z.object({
+        field_id: z.number(),
+        entity_id: z.number(),
+        list_entry_id: z.number().optional(),
+        value: z.any(),
+      }),
+    });
   }
 
   async createNote({

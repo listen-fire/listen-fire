@@ -18,7 +18,13 @@
 //     That is what lets an EVENT's edge narrow to a table: the event never
 //     enumerates the tables, the meta walk does.
 
-import { evaluatePredicate, isPurePredicate, leafReadKey, pureLeafReads } from '#shared/expression/filter';
+import {
+  evaluatePredicate,
+  flattenAndConjuncts,
+  isPurePredicate,
+  leafReadKey,
+  pureLeafReads,
+} from '#shared/expression/filter';
 import type { Expression } from '#shared/expression/types';
 
 /** A candidate the predicate runs against: the labelled facts the adapter
@@ -36,20 +42,51 @@ function readableData(data: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * The member this predicate selects, or `undefined` for "doesn't narrow".
+ * The parts of `filter` THIS member can decide — a pushdown, and the same one
+ * every filtering source performs.
  *
- * Two gates, and they are why this can never over-claim:
+ * A WHERE is answered in two places: the member picks which node you are
+ * standing on, and the rest runs over that node's rows. An AND is the one shape
+ * where splitting it that way still answers the question asked
+ * (`flattenAndConjuncts`), so the conjuncts are taken one at a time and an
+ * OR / NOT stays whole.
+ *
+ * Two gates decide a conjunct, and they are why this can never over-claim:
  *
  *   - `isPurePredicate` — an `AI()`, a traversal or a function call can't be
- *     decided without the adapter/LLM/graph, so it doesn't narrow;
- *   - every leaf the predicate reads must be present in the MEMBER'S OWN data.
- *     This is TIGHTER than purity, deliberately: `alias_ref` and `@current_date`
- *     are pure but are RUNTIME values, unknowable while typing.
+ *     decided without the adapter/LLM/graph;
+ *   - every leaf it reads must be present in the MEMBER'S OWN data. This is
+ *     TIGHTER than purity, deliberately: `alias_ref` and `@current_date` are
+ *     pure but are RUNTIME values, unknowable while typing.
  *
- * A predicate that decides nothing, matches nothing, or matches a member the
- * adapter minted without data all land in the same place — no refinement, the
- * unnarrowed surface stands, and the runtime guards stay the safety mechanism.
- * That is the pre-existing contract, not a new failure mode.
+ * Dropping the undecidable rest is SOUND rather than a best effort: a
+ * conjunction only ever selects a subset of what one of its conjuncts selects,
+ * so the rows the hop yields are still that member's rows. This is what lets
+ * `` `listName` == "Master Deals List" AND `Stage Order` >= cutoff `` narrow —
+ * the list is named right there, and the cutoff is a runtime value that could
+ * never have chosen a different list.
+ */
+export function decidableConjuncts(
+  filter: Expression,
+  data: Record<string, unknown>,
+): Expression[] {
+  return flattenAndConjuncts(filter).filter(
+    (conjunct) =>
+      isPurePredicate(conjunct) &&
+      pureLeafReads(conjunct)
+        .map(leafReadKey)
+        .every((name) => name in data),
+  );
+}
+
+/**
+ * The member this predicate selects, or `undefined` for "doesn't narrow".
+ *
+ * A predicate none of whose conjuncts a member can decide, one that matches
+ * nothing, and a member the adapter minted without data all land in the same
+ * place — no refinement, the unnarrowed surface stands, and the runtime guards
+ * stay the safety mechanism. That is the pre-existing contract, not a new
+ * failure mode.
  *
  * First match wins: members of one type are distinct positions, so a predicate
  * selecting two of them is an author error the type layer can't adjudicate —
@@ -59,14 +96,16 @@ export function selectMember<T>(input: {
   members: ReadonlyArray<NarrowableMember<T>>;
   filter: Expression;
 }): T | undefined {
-  const { filter } = input;
-  if (!isPurePredicate(filter)) return undefined;
-  const reads = pureLeafReads(filter).map(leafReadKey);
-
   for (const member of input.members) {
     const data = readableData(member.data);
-    if (!data || !reads.every((name) => name in data)) continue;
-    if (evaluatePredicate(filter, { read: (name) => data[name] }) === true) return member.value;
+    if (!data) continue;
+    const decidable = decidableConjuncts(input.filter, data);
+    // Nothing this member can answer is not a match — otherwise every member
+    // would satisfy an empty conjunction and the first one would win.
+    if (decidable.length === 0) continue;
+    if (decidable.every((c) => evaluatePredicate(c, { read: (name) => data[name] }) === true)) {
+      return member.value;
+    }
   }
   return undefined;
 }

@@ -159,7 +159,9 @@ import {
   type BindingEndpoint,
 } from './record_binding';
 import {
+  newDryRunRehearsal,
   wrapAdapterForDryRun,
+  type DryRunRehearsal,
   type DryRunWriteSink,
 } from '../translation_graph/engine/dry_run_adapter';
 import { arbitrateEntityCandidates } from '../translation_graph/engine/entity_match';
@@ -254,6 +256,7 @@ import {
 import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
+import { withRunCallLedger } from './call_ledger';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -575,7 +578,11 @@ export async function runMovement(input: RunMovementInput): Promise<MovementRunR
   // the engine's import structure — validation and execution consume one
   // resolution.
   const { program, link } = parseAndCheck(input);
-  return new Interpreter(input, link).run(program);
+  // Every way into the interpreter opens the same door: one segment, one
+  // third-party call ceiling (call_ledger.ts). A fifth entry point that
+  // forgets `withRunCallLedger` loses the safeguard silently, so they all
+  // wrap here rather than deeper.
+  return withRunCallLedger(() => new Interpreter(input, link).run(program));
 }
 
 /**
@@ -672,15 +679,17 @@ export async function resumeMovement(input: ResumeMovementInput): Promise<Moveme
   // edited fields off the synthetic emission (chunk 6c). Under `reenter` there is
   // no answer to bind (cost / error resume re-enters AT the un-run statement).
   const answer: Binding | undefined = input.reenter ? undefined : rematerialiseAnswer(input.answer);
-  return new Interpreter(input, link).resume({
-    program,
-    state: input.state,
-    ...(answer !== undefined ? { answer } : {}),
-    ...(input.reenter !== undefined ? { reenter: input.reenter } : {}),
-    ...(input.deferRaceSettlement !== undefined
-      ? { deferRaceSettlement: input.deferRaceSettlement }
-      : {}),
-  });
+  return withRunCallLedger(() =>
+    new Interpreter(input, link).resume({
+      program,
+      state: input.state,
+      ...(answer !== undefined ? { answer } : {}),
+      ...(input.reenter !== undefined ? { reenter: input.reenter } : {}),
+      ...(input.deferRaceSettlement !== undefined
+        ? { deferRaceSettlement: input.deferRaceSettlement }
+        : {}),
+    }),
+  );
 }
 
 /**
@@ -696,11 +705,13 @@ export async function settleRaceFrame(
   input: ResumeMovementInput & { frameAddress: string },
 ): Promise<MovementRunResult> {
   const { program, link } = parseAndCheck(input);
-  return new Interpreter(input, link).settleRaceFrame({
-    program,
-    state: input.state,
-    frameAddress: input.frameAddress,
-  });
+  return withRunCallLedger(() =>
+    new Interpreter(input, link).settleRaceFrame({
+      program,
+      state: input.state,
+      frameAddress: input.frameAddress,
+    }),
+  );
 }
 
 /**
@@ -714,12 +725,14 @@ export async function fireCallbackBody(
   input: ResumeMovementInput & { values: Record<string, unknown>; callIndex: number },
 ): Promise<MovementRunResult> {
   const { program, link } = parseAndCheck(input);
-  return new Interpreter(input, link).fireCallback({
-    program,
-    state: input.state,
-    values: input.values,
-    callIndex: input.callIndex,
-  });
+  return withRunCallLedger(() =>
+    new Interpreter(input, link).fireCallback({
+      program,
+      state: input.state,
+      values: input.values,
+      callIndex: input.callIndex,
+    }),
+  );
 }
 
 /** The shape `validateAnswer` produces for a `Correct` answer — the curated +
@@ -1129,6 +1142,23 @@ interface ResolvedWriteTarget {
    *  to its own id internally). Also the env/schema currency (handle
    *  bindings, edge inference against the instance/kg schema). */
   recordType: string;
+  /**
+   * The type the resulting HANDLE stands on, when it is more specific than the
+   * type the write is addressed to. A discriminated write is addressed at a
+   * collection — `write org-[:List Entries]-> { listName: "Master Deals List" }`
+   * — and creates a row of the one list the body named: the type that genuinely
+   * carries that list's own fields and reference edges. So a chained write or
+   * `link` off the handle resolves against the list's type, which is what the
+   * checker typed the handle as.
+   *
+   * The type the ADAPTER is called with stays `recordType`: the write is
+   * addressed to the collection, and the discriminant in the body is how the
+   * adapter is told which list. Asking by one name and landing on another is
+   * the same split the read side already makes (`kg.ts`'s `landedType`).
+   *
+   * Absent ⇒ the handle stands on `recordType`, the ordinary case.
+   */
+  handleType?: string;
   /** The graph the resulting handle lives in (threads onto the handle
    *  binding so later linked writes can chain off it). */
   graph: HandleGraph;
@@ -5576,10 +5606,16 @@ class Interpreter {
     if (write.target.kind === 'position') {
       return this.executePositionWrite(write, write.target, bindingName, env);
     }
-    const target = await this.resolveWriteTarget(write, env);
-    const adapter = target.adapter;
+    const resolved = await this.resolveWriteTarget(write, env);
+    const adapter = resolved.adapter;
     const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources, descriptor } =
-      await this.evaluateWriteFields({ write, target, env });
+      await this.evaluateWriteFields({ write, target: resolved, env });
+    // The discriminant is a VALUE, so this waits for the body: what the write
+    // creates is a row of the list the body named, and that is the type the
+    // handle stands on from here on.
+    const handleType = this.discriminatedHandleType(resolved, fields);
+    const target: ResolvedWriteTarget =
+      handleType !== undefined ? { ...resolved, handleType } : resolved;
 
     // Identity: `unique by (…)` ∪ the target's native constraints. The
     // adapter searches by the equality backbone; the engine post-filters by any
@@ -6943,8 +6979,10 @@ class Interpreter {
       handle: record,
       // NATURAL currency — linked writes infer their type from the
       // (natural-named) graph schema via this handle; `target.recordType` is
-      // that natural name.
-      targetType: input.target.recordType,
+      // that natural name, narrowed by `handleType` where the write's own
+      // discriminant named a more specific type than the one it was addressed
+      // to (a list entry is a row of ITS list).
+      targetType: input.target.handleType ?? input.target.recordType,
       graph: input.target.graph,
     };
     if (input.bindingName !== undefined) {
@@ -7243,6 +7281,34 @@ class Interpreter {
     };
   }
 
+  /**
+   * The type a DISCRIMINATED write's handle stands on — the variant its own
+   * body named. Reads the discriminant's written value and looks the variant up
+   * in the SAME projected write shape the checker typed the handle against, so
+   * the two cannot disagree about which type this record is.
+   *
+   * Undefined for every ordinary write, for a discriminant that did not resolve
+   * to one of the declared literals, and for a variant whose type mints no
+   * position — in each case the handle keeps the type the write was addressed
+   * to, which is what it has always been.
+   */
+  private discriminatedHandleType(
+    target: ResolvedWriteTarget,
+    fields: Record<string, unknown>,
+  ): string | undefined {
+    const schema = target.graph.instance.schema;
+    if (schema === undefined) return undefined;
+    const shape =
+      schema.writableRoots[target.recordType] ?? schema.createShapes?.[target.recordType];
+    const discriminated = shape?.discriminated;
+    if (discriminated === undefined) return undefined;
+    const value = fields[discriminated.discriminant];
+    if (typeof value !== 'string') return undefined;
+    const position = discriminated.variants[value]?.position;
+    if (position === undefined || schema.positions[position] === undefined) return undefined;
+    return position;
+  }
+
   /** The target type one declared edge points at, in surface currency —
    *  shared by linked writes, tuple paths, and criteria links. */
   private inferLinkedSurfaceType(input: {
@@ -7463,13 +7529,22 @@ class Interpreter {
       if (currentValues && deepEqual(value, current)) continue;
       fieldsToWrite[fieldId] = value;
     }
-    // Pure no-op only when there is ALSO no resource provenance to persist:
-    // an extract-fed write whose fields all match the live record still needs
-    // its source resources recorded against the node (Layer 5). When resources
-    // are present the update runs with empty fields so `WriteInput.resources`
-    // reaches the adapter.
+    // Pure no-op only when there is NOTHING to send: no changed fields, no
+    // resource provenance, AND no parent to attach to.
+    //
+    // Resources: an extract-fed write whose fields all match the live record
+    // still needs its source resources recorded against the node (Layer 5).
+    //
+    // Parents: matching is not associating. A matched child whose own fields
+    // are unchanged still carries an instruction to hang off its parent —
+    // `write org-[:People]-> { … }` on an existing person means "this person
+    // belongs to this org", and only the adapter can make that association.
+    // Skipping the adapter here silently dropped every such edge (prod, run
+    // 3285f127). When fields are empty the adapter receives the empty set and
+    // the parent links, and attaches without touching the record's own fields.
     const hasResources = (input.resources?.length ?? 0) > 0;
-    if (Object.keys(fieldsToWrite).length === 0 && !hasResources) {
+    const hasParents = input.parentLinks.length > 0;
+    if (Object.keys(fieldsToWrite).length === 0 && !hasResources && !hasParents) {
       return {
         adapterType: input.adapter.adapterType,
         recordType: input.recordType,
@@ -7477,6 +7552,7 @@ class Interpreter {
         committed: this.committedThrough(input.adapter),
         externalId: input.externalId,
         writtenValues: {},
+        outcome: 'noop',
         provenance: {},
         ...this.parentSummaries(input.parentLinks),
       };
@@ -7511,6 +7587,10 @@ class Interpreter {
       externalId: input.externalId,
       writtenValues: fieldsToWrite,
       resultData: writeResultData(updated),
+      // 'attach' is the parent-only send: no field of the record's own
+      // changed, the adapter was called purely to make the association.
+      outcome:
+        Object.keys(fieldsToWrite).length > 0 || hasResources ? 'update' : 'attach',
       provenance: {},
       ...this.parentSummaries(input.parentLinks),
     };
@@ -7588,6 +7668,7 @@ class Interpreter {
       externalId: created.externalId,
       writtenValues: input.fields,
       resultData: writeResultData(created),
+      outcome: 'create',
       provenance: {},
       ...this.parentSummaries(input.parentLinks),
     };
@@ -7635,7 +7716,7 @@ class Interpreter {
       ...(constructionArgs && Object.keys(constructionArgs).length ? { constructionArgs } : {}),
       role: 'target',
     });
-    const wrapped = dryRun ? wrapAdapterForDryRun(real, this.input.writeSink) : real;
+    const wrapped = dryRun ? wrapAdapterForDryRun(real, this.rehearsal) : real;
     if (dryRun) this.dryAdapters.add(wrapped);
     this.targetAdapterCache.set(cacheKey, wrapped);
     return wrapped;
@@ -7646,6 +7727,16 @@ class Interpreter {
    *  committed (`resolveTargetAdapter` wraps + registers iff the target is
    *  rehearsed). */
   private readonly dryAdapters = new WeakSet<Adapter>();
+
+  /** THIS run's rehearsal, shared by every target it wraps: one sink, and one
+   *  memory of the ids it invented. A write chained off a rehearsed parent
+   *  routinely crosses systems (the company in the CRM, the entry on its
+   *  list), so the memory of what is real belongs to the run rather than to
+   *  either adapter. */
+  private rehearsalState?: DryRunRehearsal;
+  private get rehearsal(): DryRunRehearsal {
+    return (this.rehearsalState ??= newDryRunRehearsal(this.input.writeSink));
+  }
 
   /** Whether a write through this resolved adapter actually committed —
    *  false when the adapter is a dry-run wrapper. */

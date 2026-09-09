@@ -284,6 +284,88 @@ describe('instanceSchemaFromDescriptors — the unpublished-edge-target note', (
   });
 });
 
+// A record can be identified by WHAT IT HANGS OFF as much as by what it
+// carries: a company sits on a list once, so a list entry is identified by the
+// pair (the company, the list). The company reaches the write through the
+// parent's `List Entries` edge — a name the entry's own type never declares —
+// so the projection has to recognise the edges that LAND on a type, or the
+// whole rule is dropped and the checker is told the write has no native
+// identity at all.
+describe('instanceSchemaFromDescriptors — identity naming the edge a record hangs off', () => {
+  const projected = () =>
+    instanceSchemaFromDescriptors({
+      supportsInPlaceUpdate: true,
+      adapterType: 'affinity',
+      entries: [
+        { typeId: 'Organization', displayName: 'Organization', writable: true, readable: true },
+        {
+          typeId: 'Organization List Entry',
+          displayName: 'Organization List Entry',
+          writable: false,
+          readable: false,
+        },
+      ],
+      descriptors: new Map<string, SchemaTypeDescriptor>([
+        [
+          'Organization',
+          {
+            typeId: 'Organization',
+            displayName: 'Organization',
+            fields: [
+              {
+                fieldId: 'name',
+                displayName: 'Name',
+                kind: 'string' as const,
+                writable: true,
+                required: false,
+              },
+            ],
+            references: [
+              {
+                fieldId: 'List Entries',
+                name: 'List Entries',
+                targetTypeId: 'Organization List Entry',
+                cardinality: 'many' as const,
+                writable: true,
+              },
+            ],
+          },
+        ],
+        [
+          'Organization List Entry',
+          {
+            typeId: 'Organization List Entry',
+            displayName: 'Organization List Entry',
+            fields: [
+              {
+                fieldId: 'listName',
+                displayName: 'listName',
+                kind: 'enum' as const,
+                enumValues: ['Master Deals List'],
+                writable: true,
+                required: true,
+              },
+            ],
+            references: [],
+            uniquenessConstraints: {
+              any: [{ all: [{ field: 'List Entries' }, { field: 'listName' }] }],
+            },
+          },
+        ],
+      ]),
+    });
+
+  it('declares the pair — the parent edge and the discriminant — as native identity', () => {
+    expect(
+      projected().schema.createShapes?.['Organization List Entry']?.nativeUniqueness,
+    ).toEqual([['List Entries', 'listName']]);
+  });
+
+  it('says nothing about it — the rule maps, so there is no note to read', () => {
+    expect(projected().notes).toEqual([]);
+  });
+});
+
 // A reference that can land on SEVERAL types is one edge with a union target —
 // `EdgeSchema.polymorphic` plus a `unions` entry keyed by a DERIVED structural
 // address, never a fabricated name. The variants are the target types' natural
@@ -708,6 +790,15 @@ describe('instanceSchemaFromDescriptors', () => {
     const pipeline = listShape?.discriminated?.variants['Pipeline'];
     expect(Object.keys(vc?.fields ?? {}).sort()).toEqual(['Stage', 'listName']);
     expect(Object.keys(pipeline?.fields ?? {})).toEqual(['listName']);
+    // A variant is a TYPE, so it says which position a handle from that write
+    // stands on — the per-list type, which is what carries `Stage` and any
+    // reference edges the list has. Attio spells the variant type as the bare
+    // list name; the rule reads the declaration, not the spelling.
+    expect(vc?.position).toBe('VC Deal Flow');
+    expect(pipeline?.position).toBe('Pipeline');
+    // The base shape is the fallback, and a write that named no list stands
+    // where it always did.
+    expect(listShape?.position).toBeUndefined();
     // A variant is never itself discriminated (no nesting), and the fallback
     // (the base shape) still carries the discriminant as its only field.
     expect(vc?.discriminated).toBeUndefined();

@@ -112,7 +112,7 @@ describe('a declared section reaches the reader', () => {
 });
 
 describe('the shipped sections', () => {
-  // Four systems, four namespaced chapters, one assembly — which is what
+  // Five systems, five namespaced chapters, one assembly — which is what
   // makes this a mechanism rather than a Slack feature. The knowledge graph
   // earns its place here twice over: it is the one section whose system is
   // intrinsic, so nothing about it is connected, credentialed, or optional.
@@ -121,6 +121,7 @@ describe('the shipped sections', () => {
     ['system:telegram', 'inline_keyboard'],
     ['system:whatsapp', 'interactive.body.text'],
     ['system:kg', 'import { kg } from adapters'],
+    ['system:affinity', 'List Entries'],
   ])('%s is on the shelf and reads back', (chapter, marker) => {
     const read = readBook({ bookId: 'automations', chapter });
     if (!('content' in read)) throw new Error('expected a chapter body');

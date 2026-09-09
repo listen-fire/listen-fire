@@ -39,10 +39,9 @@
 
 import { refinementKey } from 'movement-lang';
 import type { InstanceChain, InstanceSchema, PositionSchema } from 'movement-lang';
-import { isPurePredicate } from '#shared/expression/filter';
 import type { Expression } from '#shared/expression/types';
 import type { SchemaTypeDescriptor } from '../types';
-import { selectMember } from './narrowing';
+import { decidableConjuncts, selectMember } from './narrowing';
 import { instanceSchemaFromDescriptors } from './schema_projection';
 
 export interface RefinableInstance {
@@ -105,10 +104,19 @@ async function selectMemberFor(input: {
   }
   if (members.length === 0) return { ok: false, failure: { kind: 'not-polymorphic' } };
 
-  // Purity is checked here rather than left to `selectMember`'s undefined so an
-  // inspecting agent is told WHY — "that predicate can't be decided while
-  // typing" and "no member matches" are different problems with different fixes.
-  if (!isPurePredicate(filter)) return { ok: false, failure: { kind: 'undecidable' } };
+  // Decidability is checked here rather than left to `selectMember`'s undefined
+  // so an inspecting agent is told WHY — "that predicate can't be decided while
+  // typing" and "no member matches" are different problems with different
+  // fixes. A predicate is decidable when SOME member can answer some part of it
+  // (`decidableConjuncts` — the same split `selectMember` narrows by), so a
+  // WHERE whose list name is right there still narrows however much runtime
+  // condition rides alongside it.
+  const decides = members.some((member) => {
+    const data = member.data;
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) return false;
+    return decidableConjuncts(filter, data as Record<string, unknown>).length > 0;
+  });
+  if (!decides) return { ok: false, failure: { kind: 'undecidable' } };
 
   const selected = selectMember({
     members: members.map((member) => ({ data: member.data, value: member.name })),

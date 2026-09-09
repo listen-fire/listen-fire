@@ -629,6 +629,13 @@ export async function cachedAdapterInstance(input: {
   // A slug with no static manifest may be a per-team REMOTE install — read
   // the capability off its stored manifest instead.
   const supportsInPlaceUpdate = await supportsInPlaceUpdateFor(input);
+  // Whether a traversal can carry inline edge properties — the adapter says so
+  // itself, statically. The checker needs it because a bare name in a bracket
+  // WHERE addresses three surfaces (the edge's own property, an outer binding,
+  // a field of the landing) and only this one is unenumerable. An adapter that
+  // states nothing has the base capabilities (`BASE_RUNTIME_CAPABILITIES`) —
+  // which is also what the partial adapters behind this mocked seam state.
+  const edgesCarryProperties = adapter.runtimeCapabilities?.().traversal.edgeProperties ?? false;
 
   const scopedEntries = wanted ? targets : entries;
   // The name resolver maps surface names back to internal ids at the adapter
@@ -647,6 +654,7 @@ export async function cachedAdapterInstance(input: {
       descriptors,
       ...(metaDescriptor !== null ? { metaDescriptor } : {}),
       supportsInPlaceUpdate,
+      ...(edgesCarryProperties ? { edgesCarryProperties: true } : {}),
       // A CONTAINER-shaped adapter's surface is walked, not published whole,
       // so an edge to an un-walked type is expected rather than drift. A
       // uniform adapter publishes every type it has, walk or no walk — there

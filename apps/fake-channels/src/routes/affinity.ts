@@ -70,6 +70,17 @@ function emailConflict(res: express.Response) {
 export function affinityRoutes(store: EntityStore): Router {
   const r = Router();
 
+  /** An entity's memberships, as Affinity returns them INLINE on the entity.
+   *  Derived from the entries themselves rather than stored on the record: a
+   *  stored copy went stale the moment an entry was created, which made every
+   *  membership look new and hid the dedup path entirely. */
+  const listEntriesOf = (entityId: string) =>
+    store
+      .list(SVC, 'list')
+      .flatMap((l) => store.list(SVC, `list_entry:${l.id}`))
+      .filter((e) => String(e.data.entity_id) === entityId)
+      .map((e) => ({ id: Number(e.id), ...e.data }));
+
   // Organizations
   r.get('/organizations', (req, res) => {
     const term = (req.query.term as string)?.toLowerCase();
@@ -91,7 +102,7 @@ export function affinityRoutes(store: EntityStore): Router {
   r.get('/organizations/:id', (req, res) => {
     const org = store.get(SVC, 'organization', req.params.id);
     if (!org) return res.status(404).json({ error: 'Not found' });
-    res.json({ id: Number(org.id), ...org.data });
+    res.json({ id: Number(org.id), ...org.data, list_entries: listEntriesOf(req.params.id) });
   });
 
   r.post('/organizations', (req, res) => {
@@ -105,7 +116,6 @@ export function affinityRoutes(store: EntityStore): Router {
         domains: req.body.domain ? [req.body.domain] : [],
         person_ids: [],
         global: false,
-        list_entries: [],
       },
       id,
     );
@@ -148,7 +158,7 @@ export function affinityRoutes(store: EntityStore): Router {
   r.get('/persons/:id', (req, res) => {
     const person = store.get(SVC, 'person', req.params.id);
     if (!person) return res.status(404).json({ error: 'Not found' });
-    res.json({ id: Number(person.id), ...person.data });
+    res.json({ id: Number(person.id), ...person.data, list_entries: listEntriesOf(req.params.id) });
   });
 
   r.post('/persons', (req, res) => {
@@ -241,17 +251,34 @@ export function affinityRoutes(store: EntityStore): Router {
   });
 
   // Fields
+  //
+  // `with_modified_names=true` (which the adapter always asks for) is what makes
+  // Affinity put `[<list>] ` in front of a list-scoped field's name. The fake
+  // stored the bare name and ignored the flag, so nothing here ever saw the
+  // prefix the real API returns — and the per-list type's names were tested
+  // against a shape production does not have.
   r.get('/fields', (req, res) => {
     let fields = store.list(SVC, 'field');
     const entityType = req.query.entity_type as string | undefined;
     const listId = req.query.list_id as string | undefined;
+    const modifiedNames = req.query.with_modified_names === 'true';
     if (entityType !== undefined) {
       fields = fields.filter((f) => String(f.data.entity_type) === entityType);
     }
     if (listId) {
       fields = fields.filter((f) => f.data.list_id === null || String(f.data.list_id) === listId);
     }
-    res.json(fields.map((f) => ({ id: Number(f.id), ...f.data })));
+    const listNameById = new Map(
+      store.list(SVC, 'list').map((l) => [Number(l.id), String(l.data.name ?? '')]),
+    );
+    res.json(
+      fields.map((f) => {
+        const list = f.data.list_id == null ? undefined : listNameById.get(Number(f.data.list_id));
+        const name =
+          modifiedNames && list ? `[${list}] ${String(f.data.name)}` : String(f.data.name);
+        return { id: Number(f.id), ...f.data, name };
+      }),
+    );
   });
 
   // Field Values
@@ -315,6 +342,13 @@ export function affinityRoutes(store: EntityStore): Router {
     const fv = store.update(SVC, 'field_value', req.params.id, req.body);
     if (!fv) return res.status(404).json({ error: 'Not found' });
     res.json({ id: Number(fv.id), ...fv.data });
+  });
+
+  // A value row IS the value, so removing the row is how a field is emptied —
+  // what `unlink` does to a reference.
+  r.delete('/field-values/:id', (req, res) => {
+    store.delete(SVC, 'field_value', req.params.id);
+    res.json({ success: true });
   });
 
   // Notes — GET /notes is workspace-wide with optional person/organization/

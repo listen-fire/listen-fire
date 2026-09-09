@@ -4,13 +4,15 @@
 // write-side dual of read narrowing (there a WHERE's literal selects a variant;
 // here a required field NAMES the target).
 //
-// TWO adapters exercise it so a hardcode can't pass (movement-lang/CLAUDE.md's
+// THREE adapters exercise it so a hardcode can't pass (movement-lang/CLAUDE.md's
 // second-shape rule): `attio` mirrors the proving Attio case (a `Lists`
 // create-edge, discriminant `listName`, one variant with an extra `Stage`, one
 // without) and `helpdesk` is a DELIBERATELY DIFFERENT shape (a `ticket` ROOT
 // write, discriminant `queue`, extra field `refundAmount` REQUIRED on one
 // variant only). Different edge kind (create-edge vs root), different field
 // names, different required-per-variant — the mechanism must be general.
+// `affinity` is the third: its variants are TYPES of their own, which is what
+// the write's HANDLE stands on.
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
@@ -105,6 +107,58 @@ const helpdeskSchema: InstanceSchema = {
   },
 };
 
+// The THIRD shape, and the one the handle rule is about: a variant that is a
+// TYPE of its own. Affinity's membership collection publishes only the
+// discriminant (it is the intersection of every list); each list's own type
+// carries that list's fields AND its reference edges. So a write naming a list
+// hands back a handle standing on that list's type — `Owners` is reachable off
+// it — while a write that names no list keeps the collection.
+const crmSchema: InstanceSchema = {
+  positions: {
+    organization: {
+      properties: { Name: 'text' },
+      edges: { 'List Entries': { target: 'entry', writable: true } },
+    },
+    // The collection: closed, and publishing nothing but the discriminant.
+    entry: { properties: { listName: 'text' }, edges: {} },
+    'List Entry — Deals': {
+      properties: { listName: 'text', 'Deal Stage': 'text' },
+      edges: { Owners: { target: 'person', writable: true } },
+    },
+    'List Entry — Intros': { properties: { listName: 'text' }, edges: {} },
+    person: { properties: { Name: 'text' }, edges: {} },
+  },
+  collections: { organizations: { target: 'organization' }, people: { target: 'person' } },
+  writableRoots: {
+    person: { fields: { Name: 'text' }, resultShape: { externalId: 'text' } },
+  },
+  createShapes: {
+    entry: {
+      fields: { listName: { kind: 'enum', options: ['Deals', 'Intros'] } },
+      requiredFields: ['listName'],
+      resultShape: { externalId: 'text' },
+      discriminated: {
+        discriminant: 'listName',
+        variants: {
+          Deals: {
+            fields: { listName: 'text', 'Deal Stage': 'text' },
+            requiredFields: ['listName'],
+            resultShape: { externalId: 'text', 'Deal Stage': 'text' },
+            edges: { Owners: { target: 'person', writable: true } },
+            position: 'List Entry — Deals',
+          },
+          Intros: {
+            fields: { listName: 'text' },
+            requiredFields: ['listName'],
+            resultShape: { externalId: 'text' },
+            position: 'List Entry — Intros',
+          },
+        },
+      },
+    },
+  },
+};
+
 const catalog = mockCatalog({
   adapters: {
     email: {
@@ -119,21 +173,27 @@ const catalog = mockCatalog({
       constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
       schema: helpdeskSchema,
     },
+    affinity: {
+      constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
+      schema: crmSchema,
+    },
   },
   credentials: {
     dealflow_inbox: { adapter: 'email' },
     acme_main: { adapter: 'attio' },
     acme_desk: { adapter: 'helpdesk' },
+    acme_crm: { adapter: 'affinity' },
   },
 });
 
 const PRELUDE = [
-  'import { email, attio, helpdesk } from adapters',
-  'import { dealflow_inbox, acme_main, acme_desk } from credentials',
+  'import { email, attio, helpdesk, affinity } from adapters',
+  'import { dealflow_inbox, acme_main, acme_desk, acme_crm } from credentials',
   '',
   'inbox = email(credentials: dealflow_inbox)',
   'crm   = attio(credentials: acme_main)',
   'hd    = helpdesk(credentials: acme_desk)',
+  'aff   = affinity(credentials: acme_crm)',
 ].join('\n');
 
 const inMovement = (body: string): string =>
@@ -222,5 +282,73 @@ describe('discriminated root write (helpdesk `ticket` — the second shape)', ()
 
   it('a typo\'d discriminant is still the enum-unknown-value error', () => {
     expect(codes('  write hd-[:tickets]-> { queue: "Biling" }')).toContain(C.ENUM_UNKNOWN_VALUE);
+  });
+});
+
+// ── The handle a discriminated write hands back ──
+
+describe('the handle a discriminated write hands back', () => {
+  const withOrg = (body: string): string =>
+    `  aff-[o:organizations]-> {\n    ${body}\n  }`;
+
+  it('stands on the variant the literal named, so its edges are reachable', () => {
+    expectClean(
+      withOrg(
+        'entry = write o-[:`List Entries`]-> { listName: "Deals", `Deal Stage`: "Sourced" }\n' +
+          '    write entry-[:Owners]-> { Name: "Daria Gneusheva" }',
+      ),
+    );
+  });
+
+  it('a link off the handle walks the variant\'s edge too', () => {
+    expectClean(
+      withOrg(
+        'entry = write o-[:`List Entries`]-> { listName: "Deals" }\n' +
+          '    link entry -[:Owners]-> { Name: "Daria Gneusheva" }',
+      ),
+    );
+  });
+
+  it('carries the variant\'s own fields, and only those', () => {
+    expectClean(
+      withOrg(
+        'entry = write o-[:`List Entries`]-> { listName: "Deals", `Deal Stage`: "Sourced" }\n' +
+          '    write aff-[:people]-> { Name: entry.`Deal Stage` }',
+      ),
+    );
+    expect(
+      codes(
+        withOrg(
+          'entry = write o-[:`List Entries`]-> { listName: "Deals" }\n' +
+            '    write aff-[:people]-> { Name: entry.`Made Up` }',
+        ),
+      ),
+    ).toContain(C.UNKNOWN_PROPERTY);
+  });
+
+  it('a SIBLING variant\'s edge is not on it — the narrowing is per-list', () => {
+    const diagnostics = check(
+      withOrg(
+        'entry = write o-[:`List Entries`]-> { listName: "Intros" }\n' +
+          '    write entry-[:Owners]-> { Name: "Daria Gneusheva" }',
+      ),
+    );
+    expect(diagnostics.map((d) => d.code)).toContain(C.LINKED_UNKNOWN_EDGE);
+    expect(diagnostics.find((d) => d.code === C.LINKED_UNKNOWN_EDGE)?.message).toContain(
+      'List Entry — Intros',
+    );
+  });
+
+  it('without a selectable variant the handle keeps the collection', () => {
+    // No `listName`: nothing selects a variant, so the handle stands on the
+    // membership collection — which declares no edges at all.
+    const diagnostics = check(
+      withOrg(
+        'entry = write o-[:`List Entries`]-> { }\n' +
+          '    write entry-[:Owners]-> { Name: "Daria Gneusheva" }',
+      ),
+    );
+    expect(diagnostics.map((d) => d.code)).toContain(C.WRITE_MISSING_REQUIRED_FIELD);
+    expect(diagnostics.map((d) => d.code)).toContain(C.LINKED_UNKNOWN_EDGE);
   });
 });

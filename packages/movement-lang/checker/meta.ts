@@ -103,6 +103,13 @@ export function closestMovementMetaKey(key: string): string | undefined {
   return closestByEditDistance(key, MOVEMENT_META_KEYS);
 }
 
+/** ` — did you mean 'x'?` when a close candidate exists, else nothing. The one
+ *  shape every closed-vocabulary diagnostic appends. */
+export function didYouMean(value: string, candidates: readonly string[]): string {
+  const closest = closestByEditDistance(value, candidates);
+  return closest !== undefined ? ` — did you mean '${closest}'?` : '';
+}
+
 /**
  * The candidate in `candidates` closest to `value` by edit distance, when one
  * is "close enough" to suggest — within a third of the longer string's length

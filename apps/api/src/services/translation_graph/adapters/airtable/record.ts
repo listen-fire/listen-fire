@@ -899,14 +899,23 @@ export async function updateRecord(input: {
   // returns 404. The client surfaces it as `Error("Airtable Error: 404 ...")`,
   // so the shared message-token detector maps it to the typed signal — letting
   // the engine's bind self-heal re-mint instead of failing opaquely.
+  //
+  // An empty payload means there is nothing to change: a matched record whose
+  // fields already hold the written values, and whose parent links (if any)
+  // resolved to no link field on this table. Patching an empty bag would be a
+  // write that changes nothing; read the record instead, so the handle keeps
+  // the target's computed values and a deleted record still 404s.
   let result: Awaited<ReturnType<typeof input.client.updateRecord>>;
   try {
-    result = await input.client.updateRecord({
-      baseId,
-      tableId,
-      recordId: input.update.externalId,
-      fields,
-    });
+    result =
+      Object.keys(fields).length === 0
+        ? await input.client.getRecord({ baseId, tableId, recordId: input.update.externalId })
+        : await input.client.updateRecord({
+            baseId,
+            tableId,
+            recordId: input.update.externalId,
+            fields,
+          });
   } catch (e) {
     if (isHttp404(e)) return UPDATE_NOT_FOUND;
     throw e;

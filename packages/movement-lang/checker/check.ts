@@ -151,7 +151,7 @@ import {
   type EffectRow,
 } from './effects';
 import { terminates } from './flow';
-import { closestByEditDistance } from './meta';
+import { didYouMean } from './meta';
 import { genericLandingKey, literalStringValuesOf } from './generics';
 import { parseTraversalPath } from '../service/selectors';
 import { Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
@@ -906,13 +906,6 @@ function recordedTargetOf(handle: PositionTypeRef | undefined): RecordedTarget |
     default:
       return undefined;
   }
-}
-
-/** ` — did you mean 'x'?` when a close candidate exists, else nothing. The one
- *  shape every closed-vocabulary diagnostic in this file appends. */
-function didYouMean(value: string, candidates: readonly string[]): string {
-  const closest = closestByEditDistance(value, candidates);
-  return closest !== undefined ? ` — did you mean '${closest}'?` : '';
 }
 
 /** The primitive type names an annotation may spell — the fixed half of the
@@ -2129,6 +2122,7 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      nameInScope: name => scope.resolve(name).kind === 'found',
       report: () => {},
       span,
     });
@@ -2153,6 +2147,7 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
           ? this.reportInfo(code, message, at)
@@ -2171,6 +2166,7 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
           ? this.reportInfo(code, message, at)
@@ -4627,7 +4623,7 @@ class Checker {
     root: WritableRootSchema | undefined,
     write: WriteExpression,
     rootDescription: string,
-  ): { root: WritableRootSchema | undefined; description: string } {
+  ): { root: WritableRootSchema | undefined; description: string; variant?: WritableRootSchema } {
     const discriminated = root?.discriminated;
     if (root === undefined || discriminated === undefined) {
       return { root, description: rootDescription };
@@ -4645,7 +4641,41 @@ class Checker {
     }
     const variant = discriminated.variants[literal];
     if (variant === undefined) return { root, description: rootDescription };
-    return { root: variant, description: `${rootDescription} (${discriminated.discriminant}: "${literal}")` };
+    return {
+      root: variant,
+      variant,
+      description: `${rootDescription} (${discriminated.discriminant}: "${literal}")`,
+    };
+  }
+
+  /**
+   * The handle a DISCRIMINATED write hands back stands on the VARIANT, not on
+   * the collection the write was addressed through. `entry = write org-[:List
+   * Entries]-> { listName: "Master Deals List", … }` is addressed at the
+   * membership collection — which publishes nothing but the discriminant,
+   * because it is the intersection of every list — while the record it created
+   * is a row of one named list, and that type is the one carrying `Owners`. So
+   * a chained write or a `link` off `entry` resolves its edge against the list's
+   * own type, exactly as a READ narrowed by the same literal already does
+   * (layer 1b). One literal, one type, both directions.
+   *
+   * The variant's `position` is the type name; when the variant mints no
+   * position at all its fields and edges still ride the handle, which is what a
+   * writable-only landing already does.
+   */
+  private handleOfVariant(
+    handle: PositionTypeRef | undefined,
+    variant: WritableRootSchema,
+  ): PositionTypeRef | undefined {
+    if (handle === undefined || handle.kind !== 'handle') return handle;
+    const position = variant.position;
+    const minted = position !== undefined && handle.instance.schema.positions[position] !== undefined;
+    return {
+      ...handle,
+      ...(minted ? { position: position! } : {}),
+      resultShape: variant.resultShape,
+      ...(variant.edges !== undefined ? { edges: variant.edges } : {}),
+    };
   }
 
   /**
@@ -4844,6 +4874,25 @@ class Checker {
       rootDescription = position.description;
     }
 
+    // A DISCRIMINATED write shape (the write-side dual of read narrowing): the
+    // body's shape varies by the LITERAL of a required discriminant field. Read
+    // the literal, select the variant, and validate everything below —
+    // required fields/edges, `unique by`, the body — against THAT variant, on a
+    // handle that stands on the variant's own type. When no variant is
+    // selectable (discriminant missing/typo'd/non-literal), `root` stays the
+    // fallback shape: a missing discriminant surfaces as the required-field
+    // error, a typo'd one as MOV_ENUM_UNKNOWN_VALUE (both off the fallback's own
+    // `requiredFields`/enum field), and a non-literal one is the caught-not-
+    // silent error inside `selectWriteVariant`.
+    //
+    // FIRST, before anything reads the handle: the effect row, the bind clause
+    // and the generic landings all ask what type this write lands on, and the
+    // variant is the answer to that question.
+    const selected = this.selectWriteVariant(root, write, rootDescription);
+    root = selected.root;
+    rootDescription = selected.description;
+    if (selected.variant !== undefined) handle = this.handleOfVariant(handle, selected.variant);
+
     // This write's own literals decide what its generic edges LAND on (an ask's
     // `Options` fixing its `Response`'s enum). Done here, where the body and the
     // handle are both in hand, and carried on the handle so `await a-[:Response]->`
@@ -4855,19 +4904,6 @@ class Checker {
     this.noteTypedEffect('write', handle);
 
     if (write.bind !== undefined) this.checkBindClause(write, scope, handle);
-
-    // A DISCRIMINATED write shape (the write-side dual of read narrowing): the
-    // body's shape varies by the LITERAL of a required discriminant field. Read
-    // the literal, select the variant, and validate everything below —
-    // required fields/edges, `unique by`, the body — against THAT variant. When
-    // no variant is selectable (discriminant missing/typo'd/non-literal), `root`
-    // stays the fallback shape: a missing discriminant surfaces as the
-    // required-field error, a typo'd one as MOV_ENUM_UNKNOWN_VALUE (both off the
-    // fallback's own `requiredFields`/enum field), and a non-literal one is the
-    // caught-not-silent error below.
-    const selected = this.selectWriteVariant(root, write, rootDescription);
-    root = selected.root;
-    rootDescription = selected.description;
 
     // The OTHER write-side union — untagged, so assignability decides rather
     // than a literal. Independent of everything below: it constrains WHICH

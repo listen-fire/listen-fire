@@ -222,6 +222,17 @@ export interface WriteRecord {
    * removal (`delete <handle>`).
    */
   kind?: 'link' | 'unlink' | 'delete';
+  /**
+   * What a record write ACTUALLY did, which `created` alone cannot say:
+   * 'create' (the record was minted), 'update' (at least one field — or
+   * resource provenance — was sent), 'attach' (nothing but the parent
+   * association was sent: a matched record whose own fields were all
+   * unchanged, hung off its parent) or 'noop' (nothing was sent at all —
+   * the engine's own no-change suppression). Absent on links / unlinks /
+   * deletes, whose `kind` already names the effect, and on runs recorded
+   * before the field existed.
+   */
+  outcome?: 'create' | 'update' | 'attach' | 'noop';
   /** What the engine actually sent to the adapter (after no-op
    *  suppression). Empty for links / unlinks / deletes (the edge or the
    *  removal IS the write). */

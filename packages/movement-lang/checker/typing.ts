@@ -50,6 +50,7 @@ import { eventAddressKey, type EventAddress } from './event_address';
 import {
   closestByEditDistance,
   closestMovementMetaKey,
+  didYouMean,
   isClockMetaKey,
   isMovementMetaKey,
   movementMetaKeyType,
@@ -1463,6 +1464,22 @@ export function refineSelected(
   return positionRefIn(target.instance, refined) ?? target;
 }
 
+/** The instance a position ref belongs to — undefined for the refs that belong
+ *  to no graph (an extract node, a closure, a construct's local surface). */
+export function instanceOfRef(type: PositionTypeRef | undefined): InstanceRef | undefined {
+  switch (type?.kind) {
+    case 'meta':
+    case 'position':
+    case 'union':
+    case 'handle':
+      return type.instance;
+    case 'maybeEmpty':
+      return instanceOfRef(type.of);
+    default:
+      return undefined;
+  }
+}
+
 /** The underlying position schema of a position/handle ref (undefined for the rest). */
 export function positionSchemaOfRef(type: PositionTypeRef): PositionSchema | undefined {
   if (type.kind === 'position') return type.instance.schema.positions[type.position];
@@ -1926,6 +1943,14 @@ export class ExpressionTyping {
        *  type it carries (`domain = FIRST(co.Domains)` reads `text | absent`).
        *  Without it a binding's absence dies at the `=`. */
       resolveScalar?: (name: string) => FieldType | undefined;
+      /** Is this name BOUND in statement scope at all — whatever plane it sits
+       *  on, and whether or not a type came with it? `resolveScalar` and
+       *  `resolveRoot` both answer `undefined` for a name that IS declared but
+       *  carries no type, so neither can tell a binding from a typo. A bracket
+       *  WHERE is the one place that difference decides a diagnostic: every
+       *  bare name there is either a field of the hop target or an outer
+       *  binding, and anything that is neither is a mistake. */
+      nameInScope?: (name: string) => boolean;
       report: TypingReporter;
       /** The span diagnostics point at (the slot / head). */
       span: Span;
@@ -2282,7 +2307,7 @@ export class ExpressionTyping {
         this.checkMetaKey(expr.key);
         if (isClockMetaKey(expr.key)) this.options.onEffect?.({ kind: 'now' });
         return movementMetaKeyType(expr.key);
-      case 'edge_property':
+      case 'edge_property': {
         // Inside a bracket WHERE (`-[:companies WHERE `Count` == …]->`) EVERY
         // bare name parses as edge_property, and the engine resolves it against
         // two surfaces: a value binding in the surrounding scope, else a field
@@ -2294,13 +2319,29 @@ export class ExpressionTyping {
         // Field first, binding second, where the engine's order is the reverse.
         // It only differs when a binding SHADOWS a declared field of the target,
         // which no real movement does, and preferring the binding there would
-        // silently retype existing filters. Still a pure lookup — no
-        // UNKNOWN_PROPERTY reporting, since an unknown WHERE field isn't this
-        // layer's concern (the hop gate already handles them).
-        return (
-          lookupPropertyType(position, expr.propertyTypeId)
-          ?? this.scalarType(expr.propertyTypeId)
-        );
+        // silently retype existing filters.
+        //
+        // A name that is NEITHER is a mistake, and this is the only place that
+        // can say so: the name-resolution pass reads a step filter in `field`
+        // position and therefore never resolves it against scope, and the pure
+        // lookup below cannot report because a binding would look identical to
+        // a typo. Asking scope for mere PRESENCE separates them, so the
+        // ordinary unknown-field diagnostic can fire off the position the hop
+        // actually landed on — which, for a hop narrowed by a discriminant, is
+        // the variant rather than the union.
+        //
+        // Unless the walked edge can carry INLINE properties, which is the
+        // third surface and the one nothing enumerates: where an instance
+        // declares them (`edgesCarryProperties`), an unrecognised name may be
+        // the relationship's own fact and stays silent.
+        const declared = lookupPropertyType(position, expr.propertyTypeId);
+        if (declared !== undefined) return declared;
+        const bound = this.scalarType(expr.propertyTypeId);
+        if (bound !== undefined) return bound;
+        if (this.options.nameInScope?.(expr.propertyTypeId) === true) return undefined;
+        if (instanceOfRef(position)?.schema.edgesCarryProperties === true) return undefined;
+        return this.readProperty(position, expr.propertyTypeId);
+      }
       case 'alias_ref':
         // The bridge only emits this where its property resolver is partial;
         // either way a bare name is a scope lookup, same as the `property` case.
@@ -3445,7 +3486,7 @@ export class ExpressionTyping {
         ];
         this.report(
           TypedDiagnosticCodes.UNKNOWN_PROPERTY,
-          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it carries: ${available.join(', ')}` : ''}`,
+          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it carries: ${available.join(', ')}` : ''}${didYouMean(propertyId, available)}`,
         );
         return undefined;
       }
@@ -3463,7 +3504,7 @@ export class ExpressionTyping {
         const available = Object.keys(schema.properties);
         this.report(
           TypedDiagnosticCodes.UNKNOWN_PROPERTY,
-          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it has: ${available.join(', ')}` : ''}`,
+          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it has: ${available.join(', ')}` : ''}${didYouMean(propertyId, available)}`,
         );
         return undefined;
       }

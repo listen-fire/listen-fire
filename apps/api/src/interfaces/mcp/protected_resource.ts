@@ -13,7 +13,7 @@
 // This module supplies both, mounted BEFORE the auth gate (the challenge has to
 // fire for unauthenticated requests; the metadata has to be publicly readable).
 // A request that DOES carry a credential falls straight through to the normal
-// auth gate, which validates it — so the Claude Code `Authorization: Bearer az_…`
+// auth gate, which validates it — so the Claude Code `Authorization: Bearer lf_…`
 // path is untouched.
 
 import { Router, type RequestHandler } from 'express';

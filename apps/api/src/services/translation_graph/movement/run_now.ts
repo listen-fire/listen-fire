@@ -489,7 +489,12 @@ export interface MovementRunWrite {
   binding: string;
   /** `${adapter}:${recordType}` — where the record landed. */
   target: string;
-  /** create | update | link | unlink | delete. */
+  /**
+   * What this write did: `create` (record minted), `update` (at least one
+   * field sent), `attach` (nothing but the parent association sent — a
+   * matched record whose own fields were unchanged), `noop` (nothing sent
+   * at all), or `link` / `unlink` / `delete` for the standalone statements.
+   */
   action: string;
   /** Whether this write actually landed in the target system. False when it
    *  was REHEARSED — the target instance was constructed `dry_run: true`, or
@@ -566,10 +571,13 @@ function appliedPlanToWrite(
 ): MovementRunWrite {
   const created = plan.created === true;
   const kind = typeof plan.kind === 'string' ? plan.kind : undefined;
-  // `kind` (link | unlink | delete) IS the action; only a record write (no
-  // kind) is discriminated by `created`. A link carries `created: true` to mean
-  // "edge asserted", NOT a record create — so kind must win.
-  const action = kind ?? (created ? 'create' : 'update');
+  const outcome = typeof plan.outcome === 'string' ? plan.outcome : undefined;
+  // `kind` (link | unlink | delete) IS the action. For a record write the
+  // engine states its own outcome — create | update | attach | noop — because
+  // `created` alone cannot separate a field update from a parent-only attach
+  // from a write that sent nothing. Runs recorded before `outcome` existed
+  // fall back to the two-way `created` split.
+  const action = kind ?? outcome ?? (created ? 'create' : 'update');
   // The per-write commit truth. Runs recorded before the flag existed lack it;
   // they fall back to the run-level rehearsal flag (the only signal they have).
   const committed = typeof plan.committed === 'boolean' ? plan.committed : fallbackCommitted;

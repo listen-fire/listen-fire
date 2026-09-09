@@ -48,8 +48,8 @@ const API_KEY_NAME = 'Dev Loop Valuations Integration';
 const API_HOST_BASE_URL = process.env.API_BASE_URL ?? 'http://localhost:3000';
 
 // Minted through the service rather than by a second copy of its generator.
-// The copy that used to live here still produced the pre-rename `az_` prefix,
-// and `validateKey` refuses anything that does not start with the current one —
+// The copy that used to live here carried its own hard-coded key prefix, and
+// `validateKey` refuses anything that does not start with the current one —
 // so the demo's valuations leg authenticated with a key the door threw away.
 async function ensureApiKey(teamId: TeamId, userId: UserId): Promise<{
   id: string;

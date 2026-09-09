@@ -51,6 +51,25 @@ export interface CapturedWrite {
   recordType: string;
   fields?: Record<string, unknown>;
   externalId?: string;
+  /**
+   * What this record hangs off, with the edge it hangs off by — 1 for a
+   * linked write, N for a tuple path, absent for a root write.
+   *
+   * Records connect through edges, so a rehearsal that showed only the fields
+   * showed half the write: an entry added to a list is not the same claim as
+   * an entry, and the organization it was added to is the other half of it.
+   *
+   * `rehearsed` marks a parent that does not exist — its id was minted by this
+   * rehearsal a moment ago rather than read off the target — so a reader can
+   * tell "added to the organization you have" from "added to the organization
+   * this run would have created".
+   */
+  parents?: Array<{
+    edgeName: string;
+    recordType: string;
+    externalId: string;
+    rehearsed?: true;
+  }>;
   /** `kind: 'link' | 'unlink'` only — the asserted (or severed) edge.
    *  `recordType` / `externalId` above are the from side; the to side
    *  rides here. */
@@ -59,8 +78,39 @@ export interface CapturedWrite {
 
 export type DryRunWriteSink = (write: CapturedWrite) => void;
 
-export function wrapAdapterForDryRun(adapter: Adapter, sink?: DryRunWriteSink): Adapter {
-  // Proxy with overrides on the three write methods. Everything else
+/**
+ * One rehearsal, shared by every adapter it wraps.
+ *
+ * The ids a rehearsal mints are the run's, not any one adapter's: a write
+ * chained off a rehearsed parent frequently crosses systems (the organization
+ * in the CRM, the entry on its list), and a per-adapter memory would report
+ * that parent as real. So the memory belongs to the run.
+ */
+export interface DryRunRehearsal {
+  sink?: DryRunWriteSink;
+  /** Every externalId this rehearsal invented, so a parent link naming one can
+   *  be reported as rehearsed rather than as a record that exists. */
+  minted: Set<string>;
+}
+
+export function newDryRunRehearsal(sink?: DryRunWriteSink): DryRunRehearsal {
+  return { ...(sink !== undefined ? { sink } : {}), minted: new Set<string>() };
+}
+
+export function wrapAdapterForDryRun(adapter: Adapter, rehearsal: DryRunRehearsal): Adapter {
+  const { sink } = rehearsal;
+  const capturedParents = (input: WriteInput): CapturedWrite['parents'] => {
+    const links = input.parentLinks ?? [];
+    if (links.length === 0) return undefined;
+    return links.map((link) => ({
+      edgeName: link.edgeName,
+      recordType: link.recordType,
+      externalId: link.externalId,
+      ...(rehearsal.minted.has(link.externalId) ? { rehearsed: true as const } : {}),
+    }));
+  };
+
+  // Proxy with overrides on the write methods. Everything else
   // (describe, resolveEntity, getFieldValue, readRecord, capabilities,
   // adapterType, …) passes straight through to the real adapter.
   return new Proxy(adapter, {
@@ -73,23 +123,33 @@ export function wrapAdapterForDryRun(adapter: Adapter, sink?: DryRunWriteSink): 
           // edge reference to a uuid, and a non-uuid id ("dry-run-…") fails
           // that cast. A random uuid is also a valid id for string-id targets
           // (Attio, etc.), so this is safe across adapters.
+          const externalId = randomUUID();
+          const parents = capturedParents(input);
+          rehearsal.minted.add(externalId);
           sink?.({
             kind: 'create',
             adapterType: target.adapterType,
             recordType: input.recordType,
             fields: input.fields,
+            ...(parents !== undefined ? { parents } : {}),
           });
-          return { adapterType: target.adapterType, externalId: randomUUID(), data: {} };
+          return { adapterType: target.adapterType, externalId, data: {} };
         };
       }
       if (prop === 'updateRecord') {
         return async (input: UpdateInput): Promise<UpdateResult> => {
+          // An update's `externalId` is the REAL one: matching still runs
+          // against the live target under a rehearsal, so a write that found
+          // its record hands the record's own id back and reads off the handle
+          // work. Only a create has no id to hand back.
+          const parents = capturedParents(input);
           sink?.({
             kind: 'update',
             adapterType: target.adapterType,
             recordType: input.recordType,
             fields: input.fields,
             externalId: input.externalId,
+            ...(parents !== undefined ? { parents } : {}),
           });
           return { adapterType: target.adapterType, externalId: input.externalId, data: {} };
         };
