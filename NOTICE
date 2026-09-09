@@ -1,0 +1,184 @@
+Listen-Fire
+Copyright 2026 Azava Limited
+
+This product includes software developed by the Listen-Fire contributors,
+licensed under the Apache License, Version 2.0. See LICENSE.
+
+--------------------------------------------------------------------------------
+Third-party software
+--------------------------------------------------------------------------------
+
+The lists below were produced from `pnpm licenses list --json` at the repository
+root, over the full workspace install (runtime and development dependencies,
+resolved on macOS/arm64, so the platform-specific native packages named are the
+arm64 ones). 1807 distinct packages were reported.
+
+Permissive bulk, summarised by count. Each of these carries a licence that
+requires only that its notice be preserved; the notice text ships inside each
+package under `node_modules`, and inside the container images that bundle it.
+
+    1376  MIT
+     200  Apache-2.0
+      91  ISC
+      74  BSD-3-Clause
+      25  BSD-2-Clause
+       8  BlueOak-1.0.0
+       2  CC0-1.0
+       1  0BSD
+    ----
+    1777  packages
+
+The remaining 30 packages are listed individually below, grouped by the licence
+`pnpm licenses list` reported for them.
+
+LGPL-3.0-or-later
+    @img/sharp-libvips-darwin-arm64
+
+MPL-2.0
+    @resvg/resvg-js
+    @resvg/resvg-js-darwin-arm64
+    eslint-config-turbo
+    eslint-plugin-turbo
+    web-push
+
+(MPL-2.0 OR Apache-2.0)
+    dompurify
+
+(MIT OR GPL-3.0-or-later)
+    jszip
+
+ODbL-1.0
+    world-countries
+
+Apache-2.0 AND MIT
+    @swc/core-darwin-arm64
+
+Python-2.0
+    argparse
+
+CC-BY-4.0
+    caniuse-lite
+
+CC-BY-3.0
+    spdx-exceptions
+
+(MIT OR Apache-2.0)
+    atob
+    btoa
+
+(MIT OR WTFPL)
+    expand-template
+
+(MIT OR CC0-1.0)
+    type-fest
+
+(MIT AND Zlib)
+    pako
+
+(AFL-2.1 OR BSD-3-Clause)
+    json-schema
+
+(BSD-2-Clause OR MIT OR Apache-2.0)
+    rc
+
+MIT/X11
+    chainsaw
+    traverse
+
+BSD
+    url-template
+
+Unlicense
+    big-integer
+    robust-predicates
+
+public domain
+    deep-freeze
+    identity-function
+
+PD
+    svg-country-flags
+
+Unknown (the package publishes no SPDX identifier in its manifest)
+    buffers
+    filter-iterator
+
+--------------------------------------------------------------------------------
+Copyleft and reciprocal licences, stated explicitly
+--------------------------------------------------------------------------------
+
+@resvg/resvg-js (MPL-2.0), and its platform binary @resvg/resvg-js-*
+    Used unmodified, as a published npm dependency of apps/api. No file covered
+    by the MPL has been changed. Source: https://github.com/yisibl/resvg-js
+
+web-push (MPL-2.0)
+    Used unmodified, as a published npm dependency of apps/api. No file covered
+    by the MPL has been changed.
+    Source: https://github.com/web-push-libs/web-push
+
+eslint-config-turbo, eslint-plugin-turbo (MPL-2.0)
+    Development-only lint packages, used unmodified. Not present in any shipped
+    image. Source: https://github.com/vercel/turbo
+
+dompurify (dual MPL-2.0 or Apache-2.0)
+    Apache-2.0 is elected. Used unmodified, as a dependency of apps/web.
+    Source: https://github.com/cure53/DOMPurify
+
+jszip (dual MIT or GPL-3.0-or-later)
+    MIT is elected. Used unmodified, as a transitive dependency.
+    Source: https://github.com/Stuk/jszip
+
+libvips (LGPL-3.0-or-later)
+    Not a source dependency of this repository. It is loaded dynamically by the
+    `sharp` image library (Apache-2.0), which ships it as the prebuilt
+    `@img/sharp-libvips-*` package, and it is therefore present in the Docker
+    images built from `deploy/Dockerfile`. It is used unmodified and is linked
+    dynamically, so it may be replaced with another build of libvips.
+    Source: https://github.com/libvips/libvips
+
+world-countries (ODbL-1.0)
+    Reference data (country names, codes, currencies), used unmodified as data.
+    Source: https://github.com/mledoze/countries
+
+--------------------------------------------------------------------------------
+Vendored source
+--------------------------------------------------------------------------------
+
+apps/api/src/lib/ner/
+    Named-entity normalisation code and a company-term list, vendored into this
+    repository. MIT licensed:
+
+        Copyright (c) 2015 Paul Solin <paul@paulsolin.com>
+
+    `company_terms.json` is a derivative work of a separately MIT-licensed data
+    set:
+
+        Copyright (c) 2023 Oleg Komarov <oleg.komarov11@gmail.com>
+
+    The full text of both notices is in `apps/api/src/lib/ner/license.mit`.
+
+--------------------------------------------------------------------------------
+Fonts
+--------------------------------------------------------------------------------
+
+All four font families below are licensed under the SIL Open Font License,
+Version 1.1. The full licence text ships beside each family.
+
+DM Mono
+    Copyright 2020 The DM Mono Project Authors
+    (https://www.github.com/googlefonts/dm-mono)
+    Licence: apps/api/public/fonts/DM_Mono/OFL.txt
+
+Doto
+    Copyright 2024 The Doto Project Authors (https://github.com/oliverlalan/Doto)
+    Licence: apps/api/public/fonts/Doto/OFL.txt
+
+Workbench
+    Copyright 2021 The Workbench Project Authors
+    (https://github.com/jenskutilek/homecomputer-fonts)
+    Licence: apps/api/public/fonts/Workbench/OFL.txt
+
+JetBrains Mono
+    Copyright 2020 The JetBrains Mono Project Authors
+    (https://github.com/JetBrains/JetBrainsMono)
+    Licence: apps/web/public/fonts/OFL.txt

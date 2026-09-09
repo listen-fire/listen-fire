@@ -105,4 +105,4 @@ Also: [`deploy/`](deploy) for the container images, compose file and self-hostin
 
 ## Licence
 
-To be announced. Until then all rights are reserved.
+Apache License 2.0. See [`LICENSE`](LICENSE), and [`NOTICE`](NOTICE) for third-party attributions.
