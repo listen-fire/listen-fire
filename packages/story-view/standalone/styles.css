@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The board sizes itself against the viewport: it scrolls INSIDE itself on
+   both axes, so the document must not scroll too. */
+html,
+body,
+#story-root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+}

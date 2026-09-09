@@ -1,0 +1,159 @@
+/* Square service-picker box with the cursor-tracking effect ported from the
+ * old /cards route: 3D tilt, a faint brand-tinted background, a proximity
+ * reveal of the tiled service icon, and a moving foil sheen. Per-instance
+ * cursor position + brand colour arrive as CSS custom properties set inline.
+ * Light-theme only, to match the lobby. */
+
+.box {
+  --bg: var(--brand);
+  position: relative;
+  cursor: pointer;
+  font: inherit;
+  flex: 1 1 88px;
+  min-width: 84px;
+  max-width: 116px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  padding: 16px 10px 13px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 6%, #ffffff);
+  transform: perspective(600px);
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: transform 0.18s ease, border-color 0.14s, background 0.14s, box-shadow 0.14s;
+}
+
+/* Past the pick limit, the unpicked tiles recede rather than disappear — the
+ * roster stays readable, only the invitation goes away. */
+.box:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+@media (hover: hover) {
+  .box:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--bg) 55%, #d8d6e2);
+    box-shadow: 0 12px 24px -14px color-mix(in srgb, var(--bg) 60%, transparent),
+      0 1px 2px rgba(20, 19, 26, 0.05);
+    transform: perspective(600px) translateZ(8px)
+      rotateY(calc((var(--w, 100) / 2 - var(--x, 50)) / var(--w, 100) * 18deg))
+      rotateX(calc((var(--y, 50) - var(--h, 100) / 2) / var(--h, 100) * 18deg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .box:not(:disabled):hover {
+    transform: perspective(600px);
+  }
+}
+
+.box:focus-visible {
+  outline: 2px solid #8778f7;
+  outline-offset: 2px;
+}
+
+.box.selected {
+  border-color: #8778f7;
+  background: color-mix(in srgb, #8778f7 12%, #ffffff);
+}
+
+/* proximity reveal: the service's own icon, tiled + spaced, shown only around
+ * the cursor (radial mask intersected with the icon-tile mask). */
+.holo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 16px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s;
+  background: color-mix(in srgb, var(--brand) 78%, transparent);
+  -webkit-mask: var(--icon-tile) center / 34px repeat,
+    radial-gradient(circle at calc(var(--x, 50) * 1px) calc(var(--y, 50) * 1px),
+      #000 0, rgba(0, 0, 0, 0.4) 42px, transparent 82px) 0 0 / 100% 100% no-repeat;
+  -webkit-mask-composite: source-in;
+  mask: var(--icon-tile) center / 34px repeat,
+    radial-gradient(circle at calc(var(--x, 50) * 1px) calc(var(--y, 50) * 1px),
+      #000 0, rgba(0, 0, 0, 0.4) 42px, transparent 82px) 0 0 / 100% 100% no-repeat;
+  mask-composite: intersect;
+  mix-blend-mode: multiply;
+}
+
+.box:not(:disabled):hover .holo {
+  opacity: 0.32;
+}
+
+/* moving foil sheen: thin diagonal white lines that glide with the cursor. */
+.sheen {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border-radius: 16px;
+  pointer-events: none;
+  transform: translateZ(20px);
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: linear-gradient(122deg,
+    transparent 45%,
+    rgba(255, 255, 255, 0.5) 47.5%,
+    transparent 49.5%,
+    transparent 53%,
+    rgba(255, 255, 255, 0.3) 55%,
+    transparent 57.5%);
+  background-size: 250% 250%;
+  background-position: calc(var(--x, 50) / var(--w, 100) * 100%) calc(var(--y, 50) / var(--h, 100) * 100%);
+  mix-blend-mode: overlay;
+}
+
+.box:not(:disabled):hover .sheen {
+  opacity: 1;
+}
+
+.logo {
+  grid-row: 1;
+  align-self: center;
+  position: relative;
+  z-index: 1;
+  height: 42px;
+  width: 42px;
+  color: var(--brand);
+  transform: translateZ(14px);
+  pointer-events: none;
+}
+
+.name {
+  grid-row: 2;
+  align-self: end;
+  position: relative;
+  z-index: 1;
+  transform: translateZ(6px);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9c99a8;
+  text-align: center;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.tick {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 2;
+  height: 15px;
+  width: 15px;
+  color: #8778f7;
+  opacity: 0;
+  transform: translateZ(18px);
+  transition: opacity 0.14s;
+  pointer-events: none;
+}
+
+.box.selected .tick {
+  opacity: 1;
+}

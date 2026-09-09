@@ -1,0 +1,20 @@
+node_modules
+**/node_modules
+.git
+# Same trap as `.env*` below: a bare `.next` matches only the context ROOT, so a
+# developer's `apps/web/.next` — build output AND a webpack cache keyed to host
+# paths — was riding into the image and poisoning the build inside it.
+.next
+**/.next
+dist
+*.log
+# `.env*` alone matches only the context ROOT, so `apps/api/.env` was being
+# copied into the image — a developer's local secrets baked into a layer.
+.env*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+.obsidian
+.claude
+/tmp

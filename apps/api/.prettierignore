@@ -1,0 +1,9 @@
+package.json
+node_modules
+
+// Ignore all generated but the tests folder in CASL
+!src/generated
+src/generated/*
+!src/generated/casl
+src/generated/casl/*
+!src/generated/casl/__tests__

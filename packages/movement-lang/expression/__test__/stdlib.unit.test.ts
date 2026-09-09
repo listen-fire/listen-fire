@@ -1,0 +1,543 @@
+// The namespaced stdlib (../stdlib.ts) and its bridge surface:
+//
+//   1. Folding — `NS.FN(args)` (which the formula grammar parses as an
+//      alias-rooted traverse with a function-call terminal) becomes a
+//      plain `function` node carrying the dotted id, everywhere an
+//      expression can appear (slots, interpolation, conditions, hop
+//      WHERE filters).
+//   2. Precise errors — unknown family member lists the family's
+//      functions; unknown ALL-CAPS namespace in call position lists the
+//      families; arity mistakes name the signature.
+//   3. FILE(content, "pdf" | "text") — static shape validation.
+//   4. The implementations — pure, deterministic, null-safe.
+
+import {
+  BridgeError,
+  parseMovementCondition,
+  parseMovementExpression,
+} from '../bridge';
+import {
+  applyStdlib,
+  checkDateFormatPattern,
+  coerceToDate,
+  coerceToDatetime,
+  coerceToNumber,
+  FILE_FUNCTION_ID,
+  STDLIB_FAMILIES,
+  stdlibFamily,
+  stdlibFunctionById,
+} from '../stdlib';
+
+/** A pure member never looks at the instant; a clock-reading one is handed
+ *  this unless the case supplies its own. */
+const SOME_INSTANT = new Date('2026-06-15T09:00:00.000Z');
+
+function apply(id: string, ...args: unknown[]): unknown {
+  return applyAt(SOME_INSTANT, id, ...args);
+}
+
+function applyAt(now: Date, id: string, ...args: unknown[]): unknown {
+  const spec = stdlibFunctionById(id);
+  if (!spec) throw new Error(`no stdlib function '${id}'`);
+  return applyStdlib(spec, args, now);
+}
+
+// ── 1. Folding ───────────────────────────────────────────────────────────────
+
+describe('namespaced stdlib calls fold to dotted function nodes', () => {
+  it('CURRENCY.GET_NUMBER_FROM_FIGURE("£1.2m") folds to a plain function node', () => {
+    expect(parseMovementExpression('CURRENCY.GET_NUMBER_FROM_FIGURE("£1.2m")')).toEqual({
+      type: 'function',
+      fn: 'currency.get_number_from_figure',
+      args: [{ type: 'static', value: '£1.2m' }],
+    });
+  });
+
+  it('namespace and function names are case-insensitive (function-name convention)', () => {
+    expect(parseMovementExpression('currency.get_code_from_figure(msg.`amount`)')).toEqual({
+      type: 'function',
+      fn: 'currency.get_code_from_figure',
+      args: [
+        {
+          type: 'traverse',
+          aliasRoot: 'msg',
+          steps: [],
+          expression: { type: 'property', propertyTypeId: 'amount' },
+        },
+      ],
+    });
+  });
+
+  it('folds inside larger expressions, interpolation, and conditions', () => {
+    const compared = parseMovementExpression(
+      'CURRENCY.GET_NUMBER_FROM_FIGURE(msg.`amount`) > 1000000',
+    );
+    expect(compared.type).toBe('compare');
+    if (compared.type === 'compare') {
+      expect(compared.left).toMatchObject({ type: 'function', fn: 'currency.get_number_from_figure' });
+    }
+
+    const interpolated = parseMovementExpression('"due ${DATE.ADD_DAYS(due_date, 7)}"');
+    expect(interpolated.type).toBe('concat');
+    if (interpolated.type === 'concat') {
+      expect(interpolated.parts[1]).toMatchObject({ type: 'function', fn: 'date.add_days' });
+    }
+
+    const condition = parseMovementCondition('TEXT.SLUG(msg.`name`) == "acme"');
+    expect(condition.kind).toBe('expr');
+    if (condition.kind === 'expr') {
+      expect(condition.expr).toMatchObject({
+        type: 'compare',
+        left: { type: 'function', fn: 'text.slug' },
+      });
+    }
+  });
+
+  it('folds inside hop WHERE filters', () => {
+    const expr = parseMovementExpression(
+      'msg-[f:files WHERE TEXT.SLUG(name) == "deck"]->.`name`',
+    );
+    expect(expr.type).toBe('traverse');
+    if (expr.type === 'traverse' && expr.steps[0].type === 'edge') {
+      expect(expr.steps[0].expressionFilter).toMatchObject({
+        type: 'compare',
+        left: { type: 'function', fn: 'text.slug' },
+      });
+    }
+  });
+
+  it('a lowercase non-namespace alias root with a dotted property read is untouched', () => {
+    expect(parseMovementExpression('company.`url`')).toEqual({
+      type: 'traverse',
+      aliasRoot: 'company',
+      steps: [],
+      expression: { type: 'property', propertyTypeId: 'url' },
+    });
+  });
+});
+
+// ── 2. Precise errors ────────────────────────────────────────────────────────
+
+describe('namespaced-call errors carry the family inventory', () => {
+  it('unknown member of a known family lists the family functions', () => {
+    expect(() => parseMovementExpression('CURRENCY.PARSE("£1m")')).toThrow(BridgeError);
+    expect(() => parseMovementExpression('CURRENCY.PARSE("£1m")')).toThrow(
+      /CURRENCY has no function PARSE\(\).*GET_NUMBER_FROM_FIGURE\(figure\).*GET_CODE_FROM_FIGURE\(figure\)/,
+    );
+  });
+
+  it('aggregate-named members error as unknown family functions too', () => {
+    expect(() => parseMovementExpression('DATE.COUNT(x)')).toThrow(
+      /DATE has no function COUNT\(\).*PARSE\(text\)/,
+    );
+  });
+
+  it('unknown ALL-CAPS namespace in call position lists the families', () => {
+    expect(() => parseMovementExpression('MONEY.PARSE("£1m")')).toThrow(
+      /Unknown function namespace 'MONEY' — the namespaced families are: CURRENCY, DATE, DATETIME, TEXT/,
+    );
+  });
+
+  it('a family member read like a property is rejected with the inventory', () => {
+    expect(() => parseMovementExpression('CURRENCY.GET_CODE_FROM_FIGURE')).toThrow(
+      /CURRENCY is a function family, not a position/,
+    );
+  });
+
+  it('arity mistakes name the signature', () => {
+    expect(() => parseMovementExpression('DATE.ADD_DAYS("2026-03-12")')).toThrow(
+      /DATE\.ADD_DAYS\(date, days\) takes 2 arguments, got 1/,
+    );
+    expect(() =>
+      parseMovementExpression('TEXT.REGEX_EXTRACT(a, b, c, d)'),
+    ).toThrow(/TEXT\.REGEX_EXTRACT\(text, pattern, group\?\) takes 2–3 arguments, got 4/);
+  });
+});
+
+// ── 3. FILE() static shape ───────────────────────────────────────────────────
+
+describe('FILE(content, "pdf" | "text") validates at the bridge', () => {
+  it('parses to a plain function node with the validated literal type', () => {
+    expect(parseMovementExpression('FILE(digest, "pdf")')).toEqual({
+      type: 'function',
+      fn: FILE_FUNCTION_ID,
+      args: [
+        { type: 'property', propertyTypeId: 'digest' },
+        { type: 'static', value: 'pdf' },
+      ],
+    });
+  });
+
+  it('rejects wrong arity', () => {
+    expect(() => parseMovementExpression('FILE(digest)')).toThrow(
+      /FILE\(content, "pdf" \| "text"\) takes exactly 2 arguments, got 1/,
+    );
+  });
+
+  it('rejects a non-literal or unknown artifact type', () => {
+    expect(() => parseMovementExpression('FILE(digest, kind)')).toThrow(
+      /second argument is the artifact type — a literal "pdf" or "text"/,
+    );
+    expect(() => parseMovementExpression('FILE(digest, "docx")')).toThrow(
+      /a literal "pdf" or "text"/,
+    );
+  });
+
+  it('validates inside larger expressions', () => {
+    expect(() => parseMovementExpression('COALESCE(FILE(digest, "docx"), x)')).toThrow(
+      /a literal "pdf" or "text"/,
+    );
+  });
+});
+
+// ── 4. The implementations ───────────────────────────────────────────────────
+
+describe('CURRENCY', () => {
+  it('GET_NUMBER_FROM_FIGURE parses figures with symbols, separators, magnitudes', () => {
+    expect(apply('currency.get_number_from_figure', '£1.2m')).toBe(1_200_000);
+    expect(apply('currency.get_number_from_figure', '$4,500')).toBe(4500);
+    expect(apply('currency.get_number_from_figure', 'USD 3.5k')).toBe(3500);
+    expect(apply('currency.get_number_from_figure', 'raised €2bn last year')).toBe(2_000_000_000);
+    expect(apply('currency.get_number_from_figure', '2 billion')).toBe(2_000_000_000);
+    expect(apply('currency.get_number_from_figure', 1500)).toBe(1500);
+  });
+
+  it('GET_NUMBER_FROM_FIGURE is null-safe and null on no figure', () => {
+    expect(apply('currency.get_number_from_figure', null)).toBeNull();
+    expect(apply('currency.get_number_from_figure', 'no numbers here')).toBeNull();
+  });
+
+  it('GET_CODE_FROM_FIGURE reads symbols and ISO codes', () => {
+    expect(apply('currency.get_code_from_figure', '£1.2m')).toBe('GBP');
+    expect(apply('currency.get_code_from_figure', '$5k')).toBe('USD');
+    expect(apply('currency.get_code_from_figure', '3.5m EUR')).toBe('EUR');
+    expect(apply('currency.get_code_from_figure', 'usd 12')).toBe('USD');
+    expect(apply('currency.get_code_from_figure', '5m')).toBeNull();
+    expect(apply('currency.get_code_from_figure', null)).toBeNull();
+  });
+});
+
+describe('DATE', () => {
+  it('PARSE reads ISO and written English dates to an ISO date', () => {
+    expect(apply('date.parse', '2026-03-12')).toBe('2026-03-12');
+    expect(apply('date.parse', '2026-3-5')).toBe('2026-03-05');
+    expect(apply('date.parse', '2026/03/12')).toBe('2026-03-12');
+    expect(apply('date.parse', '12 March 2026')).toBe('2026-03-12');
+    expect(apply('date.parse', 'March 12, 2026')).toBe('2026-03-12');
+    expect(apply('date.parse', '3rd Sept 2026')).toBe('2026-09-03');
+  });
+
+  it('PARSE is null on ambiguous or unreadable input (deterministic, no guessing)', () => {
+    expect(apply('date.parse', '12/03/2026')).toBeNull(); // D/M vs M/D — ambiguous
+    expect(apply('date.parse', '31 February 2026')).toBeNull();
+    expect(apply('date.parse', 'next tuesday')).toBeNull();
+    expect(apply('date.parse', null)).toBeNull();
+  });
+
+  it('ADD_DAYS shifts by whole days across month boundaries', () => {
+    expect(apply('date.add_days', '2026-03-12', 7)).toBe('2026-03-19');
+    expect(apply('date.add_days', '2026-03-30', 5)).toBe('2026-04-04');
+    expect(apply('date.add_days', '12 March 2026', -12)).toBe('2026-02-28');
+    expect(apply('date.add_days', '2026-03-12', 'soon')).toBeNull();
+    expect(apply('date.add_days', null, 7)).toBeNull();
+  });
+
+  it('FORMAT_ISO normalises dates, timestamps, and epoch millis to ISO 8601 UTC', () => {
+    expect(apply('date.format_iso', '2026-03-12')).toBe('2026-03-12T00:00:00.000Z');
+    expect(apply('date.format_iso', '2026-03-12T09:30:00.000Z')).toBe('2026-03-12T09:30:00.000Z');
+    expect(apply('date.format_iso', Date.UTC(2026, 2, 12, 9, 30))).toBe('2026-03-12T09:30:00.000Z');
+    expect(apply('date.format_iso', 'garbage')).toBeNull();
+    expect(apply('date.format_iso', null)).toBeNull();
+  });
+});
+
+describe('TEXT', () => {
+  it('REGEX_EXTRACT returns the first match, preferring the first capture group', () => {
+    expect(apply('text.regex_extract', 'Deal ABC-123 closed', '[A-Z]+-\\d+')).toBe('ABC-123');
+    expect(apply('text.regex_extract', 'from: a@b.dev', 'from: (\\S+)')).toBe('a@b.dev');
+    expect(apply('text.regex_extract', 'a 1 b 2', '(\\d) b (\\d)', 2)).toBe('2');
+    expect(apply('text.regex_extract', 'nothing', '\\d+')).toBeNull();
+    expect(apply('text.regex_extract', 'x', '(unclosed')).toBeNull(); // invalid pattern
+    expect(apply('text.regex_extract', null, '\\d+')).toBeNull();
+  });
+
+  it('SLUG lowercases, strips diacritics, hyphenates', () => {
+    expect(apply('text.slug', 'Acme Corp Ltd.')).toBe('acme-corp-ltd');
+    expect(apply('text.slug', '  Café — Zürich  ')).toBe('cafe-zurich');
+    expect(apply('text.slug', null)).toBeNull();
+  });
+});
+
+// The coercers DATE / DATETIME / NUMBER are BARE built-in functions (like
+// COALESCE / TRIM): the formula grammar parses them straight to a flat
+// `{ fn: 'date' | 'datetime' | 'number' }` node — NOT a namespaced family
+// (those `DATE.OF` / `NUMBER.OF` families are retired). The pure
+// implementations are exported (`coerceToDate` etc.) so the engine runtime
+// shares one source of truth; the checker types the bare `fn`.
+describe('coercers (bare DATE / DATETIME / NUMBER built-ins)', () => {
+  it('DATE(x) parses to a flat function node', () => {
+    expect(parseMovementExpression('DATE(x)')).toEqual({
+      type: 'function',
+      fn: 'date',
+      args: [{ type: 'property', propertyTypeId: 'x' }],
+    });
+  });
+
+  it('DATETIME(x) parses to a flat function node', () => {
+    expect(parseMovementExpression('DATETIME(x)')).toEqual({
+      type: 'function',
+      fn: 'datetime',
+      args: [{ type: 'property', propertyTypeId: 'x' }],
+    });
+  });
+
+  it('NUMBER(x) parses to a flat function node', () => {
+    expect(parseMovementExpression('NUMBER(x)')).toEqual({
+      type: 'function',
+      fn: 'number',
+      args: [{ type: 'property', propertyTypeId: 'x' }],
+    });
+  });
+
+  it('the retired DATE.OF / DATETIME.OF / NUMBER.OF namespaces no longer resolve', () => {
+    expect(stdlibFunctionById('date.of')).toBeUndefined();
+    expect(stdlibFunctionById('datetime.of')).toBeUndefined();
+    expect(stdlibFunctionById('number.of')).toBeUndefined();
+    expect(() => parseMovementExpression('DATE.OF(x)')).toThrow(BridgeError);
+  });
+
+  it('coerceToDate normalises any readable date/timestamp to midnight-UTC ISO date', () => {
+    expect(coerceToDate('2026-03-12')).toBe('2026-03-12');
+    expect(coerceToDate('2026-03-12T09:30:00.000Z')).toBe('2026-03-12');
+    expect(coerceToDate('12 March 2026')).toBe('2026-03-12');
+    expect(coerceToDate('garbage')).toBeNull();
+    expect(coerceToDate(null)).toBeNull();
+  });
+
+  it('coerceToDatetime normalises to a full ISO 8601 UTC instant (midnight for a bare date)', () => {
+    expect(coerceToDatetime('2026-03-12')).toBe('2026-03-12T00:00:00.000Z');
+    expect(coerceToDatetime('2026-03-12T09:30:00.000Z')).toBe('2026-03-12T09:30:00.000Z');
+    expect(coerceToDatetime(Date.UTC(2026, 2, 12, 9, 30))).toBe('2026-03-12T09:30:00.000Z');
+    expect(coerceToDatetime('garbage')).toBeNull();
+    expect(coerceToDatetime(null)).toBeNull();
+  });
+
+  it('coerceToNumber parses numbers and is null on unparseable', () => {
+    expect(coerceToNumber('42')).toBe(42);
+    expect(coerceToNumber('3.5')).toBe(3.5);
+    expect(coerceToNumber(7)).toBe(7);
+    expect(coerceToNumber('not a number')).toBeNull();
+    expect(coerceToNumber(null)).toBeNull();
+  });
+});
+
+// ── Registry coherence ───────────────────────────────────────────────────────
+
+describe('the registry', () => {
+  it('every spec id is its lowercased dotted name, unique, and resolvable', () => {
+    const ids = STDLIB_FAMILIES.flatMap((f) => f.functions.map((fn) => fn.id));
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const family of STDLIB_FAMILIES) {
+      expect(stdlibFamily(family.namespace.toLowerCase())).toBe(family);
+      for (const fn of family.functions) {
+        expect(fn.id).toBe(`${family.namespace.toLowerCase()}.${fn.name.toLowerCase()}`);
+        expect(stdlibFunctionById(fn.id)).toBe(fn);
+      }
+    }
+  });
+});
+
+// ── DATE.FORMAT — the closed pattern language ────────────────────────────────
+
+describe('DATE.FORMAT writes a date out from a pattern', () => {
+  it('the worked example', () => {
+    expect(apply('date.format', '2026-08-31', 'MMMM D, YYYY')).toBe('August 31, 2026');
+  });
+
+  it('every token, and non-letters printed as written', () => {
+    const at = '2026-08-31T09:05:07.000Z';
+    expect(apply('date.format', at, 'YYYY-MM-DD')).toBe('2026-08-31');
+    expect(apply('date.format', at, 'YYYYMMDD')).toBe('20260831');
+    expect(apply('date.format', at, 'YY/M/D')).toBe('26/8/31');
+    expect(apply('date.format', at, 'MMM D')).toBe('Aug 31');
+    expect(apply('date.format', at, 'dddd, D MMMM YYYY')).toBe('Monday, 31 August 2026');
+    expect(apply('date.format', at, 'ddd')).toBe('Mon');
+    expect(apply('date.format', at, 'HH:mm:ss')).toBe('09:05:07');
+    expect(apply('date.format', at, 'H:m:s')).toBe('9:5:7');
+  });
+
+  it('a bare date reads as midnight, and an unreadable value is empty', () => {
+    expect(apply('date.format', '2026-08-31', 'HH:mm')).toBe('00:00');
+    expect(apply('date.format', 'garbage', 'YYYY')).toBeNull();
+    expect(apply('date.format', null, 'YYYY')).toBeNull();
+  });
+
+  it('a month is not a minute — case tells them apart', () => {
+    expect(apply('date.format', '2026-08-31T09:05:00Z', 'MM')).toBe('08');
+    expect(apply('date.format', '2026-08-31T09:05:00Z', 'mm')).toBe('05');
+  });
+});
+
+// ── Zones — DATE.TODAY / DATETIME.AT ─────────────────────────────────────────
+
+describe('DATE.TODAY answers with the day it is in a place', () => {
+  /** 23:30 UTC on the 11th is already the 12th in Berlin — the whole reason
+   *  a calendar day needs a zone. */
+  const LATE_UTC = new Date('2026-03-11T23:30:00.000Z');
+
+  it('the zone decides the day, not UTC', () => {
+    expect(applyAt(LATE_UTC, 'date.today', 'Europe/Berlin')).toBe('2026-03-12');
+    expect(applyAt(LATE_UTC, 'date.today', 'UTC')).toBe('2026-03-11');
+    expect(applyAt(LATE_UTC, 'date.today', 'America/New_York')).toBe('2026-03-11');
+    expect(applyAt(LATE_UTC, 'date.today', 'Australia/Sydney')).toBe('2026-03-12');
+  });
+
+  it('the answer comes from the instant it is given, never a live clock', () => {
+    const a = applyAt(new Date('2020-01-01T00:00:00.000Z'), 'date.today', 'UTC');
+    const b = applyAt(new Date('2020-01-01T00:00:00.000Z'), 'date.today', 'UTC');
+    expect(a).toBe('2020-01-01');
+    expect(b).toBe(a);
+  });
+
+  it('is declared as a clock reader with a checked literal zone', () => {
+    const spec = stdlibFunctionById('date.today');
+    expect(spec?.readsClock).toBe(true);
+    expect(spec?.arity).toEqual({ min: 1, max: 1 });
+    expect(spec?.returns).toBe('date');
+    expect(spec?.literalArgs?.map((a) => [a.index, a.what])).toEqual([[0, 'the time zone']]);
+    expect(spec?.literalArgs?.[0].check('Europe/Berlin')).toBeUndefined();
+    expect(spec?.literalArgs?.[0].check('Mars/Olympus')).toContain('not a recognised IANA time zone');
+  });
+
+  it('an unreadable zone fails the run naming the function', () => {
+    expect(() => applyAt(LATE_UTC, 'date.today', 'Mars/Olympus')).toThrow(/DATE\.TODAY\(zone\)/);
+  });
+});
+
+describe('DATETIME.AT anchors a wall time on a date in a zone', () => {
+  it('an ordinary day, summer and winter', () => {
+    expect(apply('datetime.at', '2026-06-15', '07:00', 'Europe/Berlin')).toBe(
+      '2026-06-15T05:00:00.000Z',
+    );
+    expect(apply('datetime.at', '2026-01-15', '07:00', 'Europe/Berlin')).toBe(
+      '2026-01-15T06:00:00.000Z',
+    );
+    expect(apply('datetime.at', '2026-06-15', '07:00', 'UTC')).toBe('2026-06-15T07:00:00.000Z');
+  });
+
+  it('a wall time that never happens resolves forward to the first valid instant', () => {
+    // Berlin springs forward 02:00 → 03:00 on 2026-03-29, so 02:30 is not a time.
+    expect(apply('datetime.at', '2026-03-29', '02:30', 'Europe/Berlin')).toBe(
+      '2026-03-29T01:00:00.000Z',
+    );
+    // Sydney springs forward 02:00 → 03:00 on 2026-10-04 (local), i.e. 16:00Z the day before.
+    expect(apply('datetime.at', '2026-10-04', '02:30', 'Australia/Sydney')).toBe(
+      '2026-10-03T16:00:00.000Z',
+    );
+  });
+
+  it('a wall time that happens twice takes the earlier offset', () => {
+    // Berlin falls back 03:00 → 02:00 on 2026-10-25: 02:30 happens at +02:00 and again at +01:00.
+    expect(apply('datetime.at', '2026-10-25', '02:30', 'Europe/Berlin')).toBe(
+      '2026-10-25T00:30:00.000Z',
+    );
+    // Sydney falls back 03:00 → 02:00 on 2026-04-05: 02:30 at +11:00 then +10:00.
+    expect(apply('datetime.at', '2026-04-05', '02:30', 'Australia/Sydney')).toBe(
+      '2026-04-04T15:30:00.000Z',
+    );
+  });
+
+  it('arithmetic in calendar space then anchoring gives a 23h and a 25h window', () => {
+    const dayBefore = (day: string) => apply('date.add_days', day, -1);
+    const at = (day: unknown) => apply('datetime.at', day, '07:00', 'Europe/Berlin') as string;
+    const hours = (from: string, to: string) =>
+      (Date.parse(to) - Date.parse(from)) / 3_600_000;
+
+    expect(hours(at(dayBefore('2026-03-29')), at('2026-03-29'))).toBe(23);
+    expect(hours(at(dayBefore('2026-10-25')), at('2026-10-25'))).toBe(25);
+    expect(hours(at(dayBefore('2026-06-15')), at('2026-06-15'))).toBe(24);
+  });
+
+  it('DATE.TODAY feeds it directly', () => {
+    const today = applyAt(new Date('2026-03-11T23:30:00.000Z'), 'date.today', 'Europe/Berlin');
+    expect(apply('datetime.at', today, '07:00', 'Europe/Berlin')).toBe(
+      '2026-03-12T06:00:00.000Z',
+    );
+  });
+
+  it('no value in, no value out — but garbage in fails the run naming the function', () => {
+    expect(apply('datetime.at', null, '07:00', 'UTC')).toBeNull();
+    expect(apply('datetime.at', '2026-06-15', null, 'UTC')).toBeNull();
+    expect(() => apply('datetime.at', 'last Tuesday', '07:00', 'UTC')).toThrow(
+      /DATETIME\.AT\(date, time, zone\).*is not a calendar date/s,
+    );
+    expect(() => apply('datetime.at', '2026-06-15', '7am', 'UTC')).toThrow(/24-hour HH:mm/);
+    expect(() => apply('datetime.at', '2026-06-15', '07:00', 'Mars/Olympus')).toThrow(
+      /not a recognised IANA time zone/,
+    );
+  });
+
+  it('is a pure member with two checked literal arguments', () => {
+    const spec = stdlibFunctionById('datetime.at');
+    expect(spec?.readsClock).toBeUndefined();
+    expect(spec?.arity).toEqual({ min: 3, max: 3 });
+    expect(spec?.returns).toBe('datetime');
+    expect(spec?.literalArgs?.map((a) => [a.index, a.what])).toEqual([
+      [1, 'the time of day'],
+      [2, 'the time zone'],
+    ]);
+  });
+
+  it('folds through the bridge like any other family call', () => {
+    expect(parseMovementExpression('DATETIME.AT(d, "07:00", "Europe/Berlin")')).toEqual({
+      type: 'function',
+      fn: 'datetime.at',
+      args: [
+        { type: 'property', propertyTypeId: 'd' },
+        { type: 'static', value: '07:00' },
+        { type: 'static', value: 'Europe/Berlin' },
+      ],
+    });
+  });
+
+  it('DATETIME is both a coercer and a namespace, like DATE', () => {
+    expect(parseMovementExpression('DATETIME(x)')).toEqual({
+      type: 'function',
+      fn: 'datetime',
+      args: [{ type: 'property', propertyTypeId: 'x' }],
+    });
+    expect(stdlibFamily('DATETIME')?.functions.map((f) => f.name)).toEqual(['AT']);
+  });
+});
+
+describe('a DATE.FORMAT pattern is checked where it is written', () => {
+  it('every documented pattern passes', () => {
+    for (const pattern of ['MMMM D, YYYY', 'YYYY-MM-DD', 'ddd HH:mm', 'D/M/YY', '']) {
+      expect(checkDateFormatPattern(pattern)).toBeUndefined();
+    }
+  });
+
+  it('a run of letters that is no token is refused, with the closest one named', () => {
+    const problem = checkDateFormatPattern('Day');
+    expect(problem).toContain("'Day' isn't a date format token");
+    expect(problem).toContain("Did you mean 'DD'?");
+    expect(problem).toContain('YYYY');
+  });
+
+  it('a too-long token is refused rather than printed wrong', () => {
+    expect(checkDateFormatPattern('MMMMM')).toContain("Did you mean 'MMMM'?");
+  });
+
+  it('a letter belonging to no token has no did-you-mean, just the vocabulary', () => {
+    const problem = checkDateFormatPattern('QQ');
+    expect(problem).toContain("'QQ' isn't a date format token");
+    expect(problem).not.toContain('Did you mean');
+  });
+
+  it('the spec declares the pattern as a checked literal argument', () => {
+    const spec = stdlibFunctionById('date.format');
+    expect(spec?.literalArgs).toEqual([
+      { index: 1, what: 'the format pattern', check: checkDateFormatPattern },
+    ]);
+  });
+});

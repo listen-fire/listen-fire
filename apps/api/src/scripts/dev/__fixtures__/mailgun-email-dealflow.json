@@ -1,0 +1,12 @@
+{
+  "subject": "Fwd: Acme AI — Series A intro",
+  "sender": "dev-loop@listen-fire.local",
+  "From": "Dev Loop <dev-loop@listen-fire.local>",
+  "recipient": "inbox+pi-PLACEHOLDER@example.com",
+  "To": "inbox+pi-PLACEHOLDER@example.com",
+  "body-plain": "Hey team,\n\nForwarding the intro below — Acme AI is raising a $5M Series A led by Sequoia, with Greylock participating. Founders are Alice (CEO, ex-OpenAI) and Bob (CTO, ex-Anthropic). Deck is in the thread.\n\nWorth a closer look.\n\n— A\n\n---------- Forwarded message ----------\nFrom: Founder <founder@acme.ai>\nSubject: Acme AI Series A — quick intro\n\nHi,\n\nWe're closing a $5M Series A next month. Sequoia is leading; Greylock is in. Looking for one more investor at $500K–1M check.\n\nDeck: https://acme.ai/deck\n\nHappy to chat if interesting.\n\nBest,\nAlice & Bob\n",
+  "body-html": "<html><body><p>Hey team,</p><p>Forwarding the intro below — Acme AI is raising a $5M Series A led by <b>Sequoia</b>, with Greylock participating. Founders are Alice (CEO, ex-OpenAI) and Bob (CTO, ex-Anthropic). Deck is in the thread.</p><p>Worth a closer look.</p><p>— A</p><hr><p><b>From:</b> Founder &lt;founder@acme.ai&gt;<br><b>Subject:</b> Acme AI Series A — quick intro</p><p>Hi,</p><p>We're closing a $5M Series A next month. Sequoia is leading; Greylock is in. Looking for one more investor at $500K–1M check.</p><p>Deck: <a href=\"https://acme.ai/deck\">https://acme.ai/deck</a></p><p>Happy to chat if interesting.</p><p>Best,<br>Alice &amp; Bob</p></body></html>",
+  "attachments": "[]",
+  "Message-Id": "<dev-loop-mailgun-fixture-001@listen-fire.local>",
+  "message-headers": "[[\"Received\",\"by mx.example.com with SMTP id abc123 for <inbox+pi-PLACEHOLDER@example.com>; Fri, 23 May 2026 21:30:00 +0000\"],[\"From\",\"Dev Loop <dev-loop@listen-fire.local>\"],[\"Subject\",\"Fwd: Acme AI — Series A intro\"],[\"Message-Id\",\"<dev-loop-mailgun-fixture-001@listen-fire.local>\"]]"
+}

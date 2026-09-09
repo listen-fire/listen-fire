@@ -1,0 +1,214 @@
+/* The onboarding's motion, all of it. Three primitives:
+ *
+ *  • the caret + ellipsis — the page thinking before it speaks, and the same
+ *    mark reused (small, inline) while ideas are being drafted;
+ *  • the wipe — a left→right reveal that erases what was there and paints the
+ *    next card in its place;
+ *  • the intro's three-beat draw — blink, grow, sweep — the caret at full
+ *    height sweeping the very first card into existence (below).
+ *
+ * Pure CSS: no animation library, no JS ticking beyond phase timers. The
+ * stage's height is the one value JS supplies (measured content height), and
+ * it eases here.
+ * Reduced motion strips every animation to nothing — the end state is always
+ * the resting state, so removing the animation leaves the page correct. */
+
+.stage {
+  position: relative;
+  overflow: hidden;
+  transition: height 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.wipeIn {
+  animation: wipe-in 520ms cubic-bezier(0.33, 0.1, 0.24, 1) both;
+}
+
+/* Same outset discipline as the intro sweep: vertical outsets keep the strong
+ * bottom shadow inside the reveal while the right edge travels, and the final
+ * frame outsets ALL sides — `both` persists that last frame on the card for
+ * the rest of its life, so a 0-inset end state would clip the shadow at the
+ * border box permanently (every post-advance card lost its shadow). */
+@keyframes wipe-in {
+  from {
+    clip-path: inset(-80px 100% -80px 0);
+  }
+  99% {
+    clip-path: inset(-80px 0 -80px 0);
+  }
+  to {
+    clip-path: inset(-80px -80px -80px -80px);
+  }
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  border-radius: 1px;
+  background: #111827;
+  animation: caret-blink 1.1s steps(1, end) infinite;
+}
+
+.dot {
+  display: inline-block;
+  border-radius: 50%;
+  background: #9ca3af;
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+
+.dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.fadeIn {
+  animation: fade-in 400ms ease both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── Intro: the caret draws the first card into existence ──────────────
+ *
+ * Three beats, driven by React state (`introPhase`), each a plain CSS
+ * transition rather than a shared keyframe — a phase change retargets the
+ * transition instead of restarting an animation from frame zero:
+ *
+ *  1. blink — a small caret + the page's usual pulsing dots sit at the box's
+ *     left edge, like a cursor waiting to type, on the bare page.
+ *  2. grow  — the caret grows to the box's full height.
+ *  3. sweep — now full height, the caret sweeps rightward and the card's
+ *     clip edge travels with it: border, shadow, and content are all drawn
+ *     in together behind the caret.
+ *
+ * The real card is mounted (clip-hidden) for all three beats — the box is at
+ * its true final size from the first frame, so there is nothing left to
+ * "grow into" once the sweep finishes. */
+
+/* The card itself — border, shadow, and content together — is clip-hidden
+ * for blink/grow and drawn in by the sweep: the right inset travels from
+ * 100% to beyond the box. Negative outsets on the other three sides keep the
+ * shadow visible wherever the card has been revealed; nothing pre-exists
+ * around the caret. */
+.introHidden {
+  /* The left outset (-20px) admits the card's left-hand shadow, and the right
+   * inset starts exactly on that same boundary so nothing shows while hidden.
+   * The first pixels of the sweep then reveal the lhs shadow together with
+   * the card edge — no pop-in when the clip lifts. Vertical outsets keep the
+   * strong bottom shadow inside the reveal. */
+  clip-path: inset(-80px calc(100% + 20px) -80px -20px);
+}
+
+.introRevealing {
+  /* The reveal boundary travels from -20px (where the caret starts) to 20px
+   * past the right edge — both side shadows are inside the reveal, so neither
+   * pops in at unmount. Finishes 100ms before the sweep phase ends
+   * (INTRO_SWEEP_MS = 1100): the card rests fully drawn while the caret
+   * dissolves just past its edge. */
+  clip-path: inset(-80px -20px -80px -20px);
+  transition: clip-path 1000ms ease-in-out;
+}
+
+.introCaret {
+  position: absolute;
+  /* Starts 20px left of the box — mirroring where the sweep ends on the
+   * right — so the draw begins and ends clear of the card and its shadow. */
+  left: -20px;
+  top: calc(50% - 0.875rem);
+  width: 2px;
+  height: 1.75rem;
+  border-radius: 1px;
+  background: #111827;
+  animation: caret-blink 1.1s steps(1, end) infinite;
+}
+
+.introCaretFull {
+  top: 0;
+  height: 100%;
+  animation: none;
+  transition:
+    height 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    top 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* The caret rides the same curve as the card's clip edge, so it reads as the
+ * thing doing the drawing — from 20px left of the box to 20px past its right
+ * edge, clear of the border and shadow at both ends. The travel lands at
+ * 1000ms; the dissolve rides the final approach (starting ~925ms, as the
+ * caret decelerates through the right edge) and finishes at 1100ms — exactly
+ * when the sweep phase ends, so it's parked outside the box and already gone
+ * at unmount, never a blink-out. */
+.introCaretSweep {
+  left: calc(100% + 20px);
+  opacity: 0;
+  transition:
+    left 1000ms ease-in-out,
+    opacity 175ms ease 925ms,
+    height 350ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    top 350ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.introDots {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 150ms ease;
+}
+
+.introDotsHidden {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage {
+    transition: none;
+  }
+
+  .wipeIn,
+  .caret,
+  .dot,
+  .fadeIn {
+    animation: none;
+  }
+
+  .introRevealing,
+  .introCaretSweep,
+  .introCaretFull {
+    transition: none;
+  }
+}

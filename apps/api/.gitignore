@@ -1,0 +1,15 @@
+*.png
+*.pdf
+*.csv
+# TypeScript incremental build cache
+.tsbuildinfo
+
+# Test-harness LLM response cache (regenerated on demand; not source)
+test-harness-data/cache/
+
+# Schema codegen scratch dump (generate.sh writes current_schema.sql here)
+src/db/tmp/
+
+# Brand assets served by express.static are real source, not dev artifacts
+!public/*.png
+!public/*.ico

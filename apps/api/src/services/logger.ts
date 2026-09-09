@@ -1,0 +1,74 @@
+import winston from 'winston';
+import stringify from 'safe-stable-stringify';
+
+import { unsafeCurrentContext } from './context';
+
+const isDev = process.env.NODE_ENV === 'development';
+const level = isDev ? 'debug' : 'info';
+
+const replacer = (_: string, value: unknown) => {
+  if (value instanceof Error) {
+    return {
+      ...value,
+      message: value.message,
+      stack: value.stack,
+      // @ts-ignore
+      trace: value.trace,
+    };
+  }
+  return value;
+};
+
+// Drop-in replacement for winston.format.simple() (see logform's simple.js) that
+// stringifies the rest-metadata with `replacer` so Error values in metadata
+// (e.g. `logger.warn('msg', { error: e })`) keep their message/stack instead of
+// serializing to `{}` (Error's own properties are non-enumerable).
+const simple = () =>
+  winston.format.printf((info) => {
+    const stringifiedRest = stringify({ ...info, level: undefined, message: undefined, splat: undefined }, replacer);
+    const padding = (info.padding && info.padding[info.level]) || '';
+    return stringifiedRest !== '{}'
+      ? `${info.level}:${padding} ${info.message} ${stringifiedRest}`
+      : `${info.level}:${padding} ${info.message}`;
+  });
+
+const format = isDev
+  ? winston.format.combine(
+      winston.format.colorize(),
+      winston.format((info) => {
+        const ctx = unsafeCurrentContext();
+        if (ctx) {
+          const ctxIdString = process.env.NODE_ENV === 'development' ? ctx.id.slice(0, 8) : ctx.id;
+          info.message = `[${ctxIdString}] ${
+            info.message.toString() === '[object Object]'
+              ? stringify(info.message, replacer, 2)
+              : info.message.toString()
+          }`;
+        }
+        return info;
+      })(),
+      simple(),
+    )
+  : winston.format.combine(
+      winston.format((info) => {
+        const ctx = unsafeCurrentContext();
+        if (ctx) {
+          info.message = `[${ctx.id}] ${
+            info.message.toString() === '[object Object]'
+              ? stringify(info.message, replacer, 2)
+              : info.message.toString()
+          }`;
+        }
+        return info;
+      })(),
+      simple(),
+    );
+
+/** Winston Logger */
+const logger = winston.createLogger({
+  transports: [new winston.transports.Console({ handleExceptions: true })],
+  level,
+  format,
+});
+
+export { logger };

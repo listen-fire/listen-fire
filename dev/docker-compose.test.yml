@@ -1,0 +1,36 @@
+services:
+  postgres:
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile
+    environment:
+      POSTGRES_USER: listenfire
+      POSTGRES_PASSWORD: localdevpassword
+      POSTGRES_DB: listenfire
+    tmpfs: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U listenfire"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile.test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://listenfire:localdevpassword@postgres:5432/listenfire
+      DATABASE_URL_READONLY: postgresql://listenfire:localdevpassword@postgres:5432/listenfire
+      MOCK_OUTPUT_ADAPTERS: "true"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      UI_TEST_BASE_URL: http://localhost:3003
+      NODE_ENV: development
+      TOKEN_SECRET: ui-test-secret
+      SESSION_JWT_AUDIENCE: "UI Test"
+      ENCRYPTION_MASTER_KEY: "V0lfJvWZlbNFP7ZEsnGAdPGai9XF8UNhUMe0F3FNgn0="
+      ENCRYPTION_SALT_BASE64: "U69z6B8hh0Va0nayjWGeFg=="
+    entrypoint: ["bash", "/app/dev/entrypoint-test.sh"]

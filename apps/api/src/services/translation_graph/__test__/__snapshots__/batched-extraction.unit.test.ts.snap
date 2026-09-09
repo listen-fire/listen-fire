@@ -1,0 +1,53 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Prompt-shape snapshots snapshot — entity guide for the representative bundle 1`] = `
+"**x:msg#1**: Extract the main message entity (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    - \`the_subject_line_of_the_message\` (string): the subject line of the message
+    - \`the_overall_sentiment\` (enum: positive | neutral | negative): the overall sentiment
+
+**x:org#2**: Extract any organisations mentioned (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    (no scalar fields — structural only)"
+`;
+
+exports[`Prompt-shape snapshots snapshot — full extraction system prompt 1`] = `
+"You are an information-extraction system.
+
+## Entity Guide
+**x:msg#1**: Extract the main message entity (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    - \`the_subject_line_of_the_message\` (string): the subject line of the message
+    - \`the_overall_sentiment\` (enum: positive | neutral | negative): the overall sentiment
+
+**x:org#2**: Extract any organisations mentioned (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    (no scalar fields — structural only)
+
+## Task
+Extract structured data from the input message. For each field, return \`{ evidence, value }\` — the verbatim quote that supports the value, plus the typed value itself. Use null for missing values.
+
+## Rules
+- Every field must include \`evidence\` quoting the source passage.
+- Do not fabricate.
+- Entities of the same type must have unique names."
+`;
+
+exports[`Prompt-shape snapshots snapshot — skeleton system prompt 1`] = `
+"You are an information-extraction system.
+
+## Entity Guide
+**x:msg#1**: Extract the main message entity (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    - \`the_subject_line_of_the_message\` (string): the subject line of the message
+    - \`the_overall_sentiment\` (enum: positive | neutral | negative): the overall sentiment
+
+**x:org#2**: Extract any organisations mentioned (emit each matching entity as an array element — zero, one, or many objects depending on the description)
+    (no scalar fields — structural only)
+
+## Task
+Identify each entity above in the input text. Return identity values + line ranges only; do NOT extract detailed properties.
+
+Output a JSON object keyed by entity id. Each entity is either an object with its identity fields, or null when not present.
+
+## Rules
+- Extract every entity mentioned by name, even in passing.
+- Entities of the same type must have unique names; disambiguate when needed.
+- Quote evidence verbatim; use [bracketed paraphrasing] only to clarify implied context.
+- Do not fabricate."
+`;

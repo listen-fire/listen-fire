@@ -1,0 +1,140 @@
+// The installable manifest file for a remote Translation Graph adapter.
+//
+// A remote adapter is installed by importing a single manifest file that
+// fully declares it. The manifest is BOTH the install artifact and the
+// editable record — import writes the row, the UI form edits it, export reads
+// it back. There is no live RPC required to install; the `manifest` protocol
+// method stays an optional "refresh from server" action.
+//
+// `authStrategy` here mirrors `AuthStrategy` in `../../protocol/client` so the
+// stored strategy feeds directly into `authHeader` at resolution time.
+//
+// Registration
+
+import { z } from 'zod';
+import type { AdapterManifest } from '../../adapter';
+import type { TriggerType } from '../../triggers/types';
+
+export const RemoteAdapterManifestFile = z.object({
+  /** Slug the engine routes on. One install per slug per team. */
+  adapterType: z.string().min(1),
+  /** Human-friendly name for the picker. Falls back to `adapterType`. */
+  displayName: z.string().optional(),
+  /** Human-friendly description for the picker. Optional. */
+  description: z.string().optional(),
+  /** Conceptual authoring documentation for this system — assembled into the
+   *  automation handbook as a chapter, exactly like a built-in's. Optional;
+   *  the same tier a built-in declares via `AdapterManifest.handbookSection`. */
+  handbookSection: z
+    .object({
+      title: z.string().min(1),
+      content: z.string().min(1),
+      engineClaims: z
+        .array(
+          z.union([
+            z.object({
+              construct: z.string(),
+              status: z.literal('runs'),
+              probe: z.string(),
+            }),
+            z.object({
+              construct: z.string(),
+              status: z.literal('pending'),
+              probe: z.string(),
+              flag: z.string(),
+            }),
+          ]),
+        )
+        .optional(),
+    })
+    .optional(),
+  /** Display vocabulary — icon + event phrasing — exactly like a built-in's
+   *  `AdapterManifest.vocabulary`. Optional; omitted ⇒ the renderer core's
+   *  generic composed fallback. */
+  vocabulary: z
+    .object({
+      icon: z
+        .object({
+          d: z.string().min(1),
+          fill: z.boolean().optional(),
+          viewBox: z.string().optional(),
+        })
+        .optional(),
+      eventPhrase: z
+        .record(z.string(), z.array(z.object({ template: z.string().min(1) })))
+        .optional(),
+    })
+    .optional(),
+  baseUrl: z.string().url(),
+  authStrategy: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('bearer') }),
+    z.object({ kind: z.literal('shared_secret'), header: z.string().optional() }),
+  ]),
+  /** Listen-Fire-held credential → auth to the server. Never stored inline; only the
+   *  FK. OPTIONAL: the shareable manifest artifact carries no secret and no
+   *  pre-minted credential — the server fills this when the secret is supplied
+   *  (one-step install, or a connect-link submit). A row with a null FK resolves
+   *  to "needs connecting"; `resolveAdapter` errors until it is set. */
+  credentialsId: z.string().uuid().optional(),
+  supportedTriggers: z.array(z.string()),
+  /** Whole-adapter capability (mirrors `Adapter.runtimeCapabilities()`):
+   *  incoming-edge traversal, edge properties, resources. Per-edge / per-field
+   *  capability rides `describe()`, not here. */
+  runtimeCapabilities: z.object({
+    traversal: z.object({
+      incoming: z.boolean(),
+      edgeProperties: z.boolean(),
+    }),
+    resources: z.boolean(),
+  }),
+  /** Protocol methods the server implements. */
+  methods: z.array(z.string()),
+  /** Static config for the engine's generic `resolvePositionTypeId` — the
+   *  adapter's webhook/synthetic event type. Pure config; carried in the
+   *  manifest so a remote adapter resolves position types with no RPC. */
+  webhookEventTypeId: z.string().optional(),
+});
+
+export type RemoteAdapterManifestFile = z.infer<typeof RemoteAdapterManifestFile>;
+
+/**
+ * Decrypted payload of the remote adapter's credential row. The
+ * `external_service_credentials` row stores `{ "secret": "<token>" }`
+ * (JSON, encrypted at rest); resolution decrypts it, parses with this
+ * schema, and feeds `secret` into `authHeader` to authenticate to the
+ * remote server. Keeping the payload an object (rather than a bare string)
+ * leaves room to carry auth metadata alongside the secret later without a
+ * format migration.
+ */
+export const RemoteAdapterCredentialPayload = z.object({
+  secret: z.string().min(1),
+});
+
+export type RemoteAdapterCredentialPayload = z.infer<typeof RemoteAdapterCredentialPayload>;
+
+/**
+ * Project an installed remote manifest into the SAME `AdapterManifest` shape
+ * the static registry serves, so the per-team catalog machinery — capability
+ * truth (`methods[]`), the agent catalog view, schemaShape, connect
+ * advertising — sees remote installs exactly like built-ins:
+ *
+ *   - no `requiredCredentialType`: the install carries its own credential FK,
+ *     so constructions are credential-free (`my_adapter()`) and the catalog
+ *     advertises `requiresCredential: false` — installed IS connected;
+ *   - `introspectedSchema: true`: a remote schema is by definition fetched
+ *     over the wire, never static.
+ */
+export function remoteAdapterManifest(file: RemoteAdapterManifestFile): AdapterManifest {
+  return {
+    adapterType: file.adapterType,
+    displayName: file.displayName ?? file.adapterType,
+    ...(file.description !== undefined ? { description: file.description } : {}),
+    ...(file.handbookSection !== undefined
+      ? { handbookSection: file.handbookSection }
+      : {}),
+    ...(file.vocabulary !== undefined ? { vocabulary: file.vocabulary } : {}),
+    supportedTriggers: file.supportedTriggers as readonly TriggerType[],
+    methods: file.methods,
+    introspectedSchema: true,
+  };
+}

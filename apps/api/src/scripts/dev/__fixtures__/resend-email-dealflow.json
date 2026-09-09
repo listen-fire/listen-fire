@@ -1,0 +1,21 @@
+{
+  "id": "re_dev_loop_fixture_001",
+  "from": "Dev Loop <dev-loop@listen-fire.local>",
+  "subject": "Fwd: Acme AI — Series A intro",
+  "message_id": "<dev-loop-resend-fixture-001@listen-fire.local>",
+  "text": "Hey team,\n\nForwarding the intro below — Acme AI is raising a $5M Series A led by Sequoia, with Greylock participating. Founders are Alice (CEO, ex-OpenAI) and Bob (CTO, ex-Anthropic). Deck is attached.\n\nWorth a closer look.\n\n— A\n",
+  "html": "<html><body><p>Hey team,</p><p>Forwarding the intro below — Acme AI is raising a $5M Series A led by <b>Sequoia</b>, with Greylock participating. Founders are Alice (CEO, ex-OpenAI) and Bob (CTO, ex-Anthropic). Deck is attached.</p><p>Worth a closer look.</p><p>— A</p></body></html>",
+  "headers": {
+    "From": "Dev Loop <dev-loop@listen-fire.local>",
+    "Subject": "Fwd: Acme AI — Series A intro",
+    "Message-Id": "<dev-loop-resend-fixture-001@listen-fire.local>"
+  },
+  "attachments": [
+    {
+      "id": "att_dev_loop_fixture_001",
+      "filename": "acme-ai-deck.txt",
+      "content_type": "text/plain",
+      "content": "QWNtZSBBSSAtLSBTZXJpZXMgQSBkZWNrLgpSYWlzaW5nICQ1TSBsZWQgYnkgU2VxdW9pYS4K"
+    }
+  ]
+}

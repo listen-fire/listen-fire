@@ -1,0 +1,302 @@
+// The event-subscription diff-sync keys channels on the RESOLVED ADDRESS.
+//
+// REAL: `syncListenSubscriptions` — desired channels off trigger rows, the
+// webhook_subscription rows it mints, the external ensure/remove calls.
+// Mocked: the DB (in-memory tables), the adapter registry (one
+// container-shaped adapter with two address hops), adapter resolution (a
+// recording fake).
+//
+// The two pins this file exists to hold (both DRIVEN live before the fix,
+// 2026-07-17 — plans/2026-07-10-adapter-entry-positions/8_event_edges.md):
+//
+//   1. TRANSITION: an old config-shaped row and a new resolved-address row
+//      naming the SAME container reconcile to ONE channel — no
+//      double-register, no churn.
+//   2. NEVER HALF-SCOPED: a trigger whose address didn't resolve provisions
+//      NO channel and says so in a note. It used to mint a row with
+//      status 'active', a null external id and ZERO notes — a silently-dead
+//      listen every later sync short-circuited past.
+
+jest.mock('../../../../lib/kysely', () => {
+  type Row = Record<string, unknown>;
+  const tables: Record<string, Row[]> = {
+    trigger: [],
+    webhook_subscription: [],
+  };
+  const matches = (row: Row, wheres: Array<[string, string, unknown]>) =>
+    wheres.every(([col, op, val]) => {
+      if (op === '=') return row[col] === val;
+      if (op === 'in') return Array.isArray(val) && (val as unknown[]).includes(row[col]);
+      if (op === 'is') return (row[col] ?? null) === val;
+      if (op === 'is not') return (row[col] ?? null) !== val;
+      return false;
+    });
+  function builder(table: string, mode: 'select' | 'insert' | 'update' | 'delete') {
+    const wheres: Array<[string, string, unknown]> = [];
+    let patch: Row = {};
+    let values: Row = {};
+    const rows = () => tables[table].filter((r) => matches(r, wheres));
+    const execute = async (): Promise<Row[]> => {
+      if (mode === 'insert') {
+        tables[table].push({ created_at: new Date(), updated_at: new Date(), ...values });
+        return [];
+      }
+      if (mode === 'update') {
+        for (const row of rows()) Object.assign(row, patch);
+        return [];
+      }
+      if (mode === 'delete') {
+        tables[table] = tables[table].filter((r) => !matches(r, wheres));
+        return [];
+      }
+      return rows().slice();
+    };
+    const api = {
+      where: (col: string, op: string, val: unknown) => {
+        wheres.push([col, op, val]);
+        return api;
+      },
+      select: () => api,
+      selectAll: () => api,
+      orderBy: () => api,
+      set: (p: Row) => {
+        patch = p;
+        return api;
+      },
+      values: (v: Row) => {
+        values = v;
+        return api;
+      },
+      execute,
+      executeTakeFirst: async () => (await execute())[0],
+    };
+    return api;
+  }
+  const qb = () => ({
+    selectFrom: (t: string) => builder(t, 'select'),
+    insertInto: (t: string) => builder(t, 'insert'),
+    updateTable: (t: string) => builder(t, 'update'),
+    deleteFrom: (t: string) => builder(t, 'delete'),
+  });
+  return {
+    getQb: qb,
+    getCoreQb: qb,
+    getKnowledgeQb: qb,
+    getAutomationsQb: qb,
+    __tables: tables,
+    __reset: () => {
+      for (const key of Object.keys(tables)) tables[key] = [];
+    },
+  };
+});
+
+jest.mock('../../../logger', () => ({
+  logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+}));
+
+// One container-shaped adapter: two address hops (shelf, crate) — NOT
+// Airtable's names, so nothing here can pass by matching a hardcoded shape.
+jest.mock('../../adapters/registry', () => {
+  const manifests = [
+    {
+      adapterType: 'pantry',
+      displayName: 'Pantry',
+      supportedTriggers: ['webhook'],
+      methods: ['createRecord', 'ensureEventSubscription', 'removeEventSubscription'],
+      requiredCredentialType: 'PANTRY',
+      triggerKinds: ['PANTRY'],
+      subscribableEvents: ['thing.created', 'thing.deleted'],
+      subscriptionScopeKeys: ['shelf', 'crate'],
+      listenConfig: [
+        { key: 'shelf', required: true, narrows: { collection: 'Shelf', matchField: 'Id' } },
+        { key: 'crate', required: true, narrows: { collection: 'Crate', matchField: 'Id' } },
+      ],
+    },
+  ];
+  return {
+    listAdapterManifests: () => manifests,
+    getAdapterManifest: (slug: string) => manifests.find((m) => m.adapterType === slug) ?? null,
+    resolveAdapterSlug: (kind: string) => (kind === 'PANTRY' ? 'pantry' : kind),
+    adapterInboundRoutingKey: () => null,
+    inboundAddressFor: () => null,
+  };
+});
+
+const ensureCalls: Array<{
+  events: string[];
+  callbackUrl: string;
+  scope?: Record<string, string>;
+  current?: { externalId?: string; events: string[] };
+}> = [];
+const removeCalls: Array<{ callbackUrl: string; externalId?: string; scope?: Record<string, string> }> = [];
+
+jest.mock('../../adapters/resolve', () => ({
+  resolveAdapter: jest.fn(async () => ({
+    ensureEventSubscription: async (input: {
+      events: string[];
+      callbackUrl: string;
+      scope?: Record<string, string>;
+      current?: { externalId?: string; events: string[] };
+    }) => {
+      ensureCalls.push(input);
+      return { externalId: `wh-${ensureCalls.length}`, secret: `secret-${ensureCalls.length}` };
+    },
+    removeEventSubscription: async (input: {
+      callbackUrl: string;
+      externalId?: string;
+      scope?: Record<string, string>;
+    }) => {
+      removeCalls.push(input);
+    },
+  })),
+}));
+
+import { syncListenSubscriptions } from '../listen_subscriptions';
+import type { TeamId } from '../../../../generated/kysely/core/Team';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const kyselyMock = require('../../../../lib/kysely') as {
+  __tables: Record<string, Array<Record<string, unknown>>>;
+  __reset: () => void;
+};
+
+const TEAM = 'team-1' as TeamId;
+
+function triggerRow(input: {
+  name: string;
+  config: Record<string, unknown>;
+  resolvedAddress?: Record<string, string>;
+}): Record<string, unknown> {
+  return {
+    id: `trg-${input.name}`,
+    team_id: TEAM,
+    name: input.name,
+    kind: 'pantry',
+    credentials_id: 'cred-1',
+    movement_id: 'mov-1',
+    config: input.config,
+    resolved_address: input.resolvedAddress ?? null,
+    run_mode: 'live',
+  };
+}
+
+beforeEach(() => {
+  kyselyMock.__reset();
+  ensureCalls.length = 0;
+  removeCalls.length = 0;
+});
+
+describe('syncListenSubscriptions — channel identity is the resolved address', () => {
+  it('TRANSITION: an old config-shaped row and a new resolved-address row naming the same container are ONE channel', async () => {
+    kyselyMock.__tables.trigger.push(
+      // Old shape: the authored config carries the ids (pre-resolution row).
+      triggerRow({
+        name: 'legacy',
+        config: { shelf: 'shf_north', crate: 'crt_apples', events: ['thing.created'] },
+      }),
+      // New shape: positioned instance — config names only the crate; the
+      // resolved address carries the position's shelf.
+      triggerRow({
+        name: 'positioned',
+        config: { crate: 'crt_apples', events: ['thing.deleted'] },
+        resolvedAddress: { shelf: 'shf_north', crate: 'crt_apples' },
+      }),
+    );
+
+    const { notes } = await syncListenSubscriptions({ teamId: TEAM });
+
+    expect(notes).toEqual([]);
+    const subs = kyselyMock.__tables.webhook_subscription;
+    expect(subs).toHaveLength(1);
+    expect(subs[0].scope && JSON.parse(subs[0].scope as string)).toEqual({
+      shelf: 'shf_north',
+      crate: 'crt_apples',
+    });
+    // One registration, carrying the UNION of both listens' events.
+    expect(ensureCalls).toHaveLength(1);
+    expect([...ensureCalls[0].events].sort()).toEqual(['thing.created', 'thing.deleted']);
+    expect(subs[0].status).toBe('active');
+    expect(subs[0].external_webhook_id).toBe('wh-1');
+  });
+
+  it('NEVER HALF-SCOPED: an unresolved address provisions NO channel, and says so', async () => {
+    kyselyMock.__tables.trigger.push(
+      triggerRow({
+        name: 'unresolved',
+        config: { crate: 'crt_apples', events: ['thing.created'] }, // no shelf anywhere
+      }),
+    );
+
+    const { notes } = await syncListenSubscriptions({ teamId: TEAM });
+
+    // No row minted at all — nothing can ever sit 'active' with a null
+    // external id (the driven silently-dead state).
+    expect(kyselyMock.__tables.webhook_subscription).toHaveLength(0);
+    expect(ensureCalls).toHaveLength(0);
+    expect(notes.some((n) => n.includes('unresolved') && n.includes('shelf'))).toBe(true);
+  });
+
+  it('the resolved address WINS over a disagreeing config value (the derived field is the identity)', async () => {
+    kyselyMock.__tables.trigger.push(
+      triggerRow({
+        name: 'drifted',
+        config: { shelf: 'shf_stale', crate: 'crt_apples', events: ['thing.created'] },
+        resolvedAddress: { shelf: 'shf_north', crate: 'crt_apples' },
+      }),
+    );
+
+    await syncListenSubscriptions({ teamId: TEAM });
+
+    const subs = kyselyMock.__tables.webhook_subscription;
+    expect(subs).toHaveLength(1);
+    expect(JSON.parse(subs[0].scope as string)).toEqual({
+      shelf: 'shf_north',
+      crate: 'crt_apples',
+    });
+  });
+
+  it('two resolved addresses differing only in the POSITION hop are TWO channels (the leak gate)', async () => {
+    kyselyMock.__tables.trigger.push(
+      triggerRow({
+        name: 'north',
+        config: { crate: 'crt_apples', events: ['thing.created'] },
+        resolvedAddress: { shelf: 'shf_north', crate: 'crt_apples' },
+      }),
+      triggerRow({
+        name: 'south',
+        config: { crate: 'crt_apples', events: ['thing.created'] },
+        resolvedAddress: { shelf: 'shf_south', crate: 'crt_apples' },
+      }),
+    );
+
+    await syncListenSubscriptions({ teamId: TEAM });
+
+    const subs = kyselyMock.__tables.webhook_subscription;
+    expect(subs).toHaveLength(2);
+    const scopes = subs.map((s) => JSON.parse(s.scope as string) as Record<string, string>);
+    expect(new Set(scopes.map((s) => s.shelf))).toEqual(new Set(['shf_north', 'shf_south']));
+    expect(ensureCalls).toHaveLength(2);
+  });
+
+  it('a retired listen tears its channel down by the same address identity', async () => {
+    kyselyMock.__tables.trigger.push(
+      triggerRow({
+        name: 'kept',
+        config: { crate: 'crt_apples', events: ['thing.created'] },
+        resolvedAddress: { shelf: 'shf_north', crate: 'crt_apples' },
+      }),
+    );
+    await syncListenSubscriptions({ teamId: TEAM });
+    expect(kyselyMock.__tables.webhook_subscription).toHaveLength(1);
+
+    // The listen disappears; the next sync retires the channel.
+    kyselyMock.__tables.trigger.length = 0;
+    await syncListenSubscriptions({ teamId: TEAM });
+
+    const subs = kyselyMock.__tables.webhook_subscription;
+    expect(subs).toHaveLength(1);
+    expect(subs[0].deleted_at).not.toBeNull();
+    expect(removeCalls).toHaveLength(1);
+    expect(removeCalls[0].scope).toEqual({ shelf: 'shf_north', crate: 'crt_apples' });
+  });
+});

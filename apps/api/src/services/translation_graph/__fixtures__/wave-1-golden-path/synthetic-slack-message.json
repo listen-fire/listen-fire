@@ -1,0 +1,25 @@
+{
+  "type": "event_callback",
+  "event_id": "Ev_GOLDEN_PATH_01",
+  "event_time": 1747836000,
+  "team_id": "T_DEV_LOOP",
+  "event": {
+    "type": "message",
+    "user": "U_ALICE",
+    "channel": "C_DEALFLOW",
+    "ts": "1747836000.000100",
+    "event_ts": "1747836000.000100",
+    "text": "Hey team — Acme AI just closed a $5M Series A led by Sequoia, with Greylock participating. Deck attached for the deep dive.",
+    "files": [
+      {
+        "id": "F_ACME_DECK_01",
+        "name": "acme-series-a-deck.pdf",
+        "title": "Acme AI — Series A Deck",
+        "mimetype": "application/pdf",
+        "url_private": "https://files.slack.com/private/T_DEV_LOOP/F_ACME_DECK_01/acme-series-a-deck.pdf",
+        "url_private_download": "https://files.slack.com/private-download/T_DEV_LOOP/F_ACME_DECK_01/acme-series-a-deck.pdf",
+        "size": 524288
+      }
+    ]
+  }
+}

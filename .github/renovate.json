@@ -1,0 +1,111 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:base",
+    ":disableRateLimiting",
+    ":semanticCommitTypeAll(chore)",
+    "group:typescript-eslintMonorepo"
+  ],
+  "updateInternalDeps": true,
+  "rangeStrategy": "pin",
+  "updateLockFiles": true,
+  "schedule": ["at any time"],
+  "rebaseWhen": "conflicted",
+  "automergeType": "pr",
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "groupName": "postgres",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "enabled": false
+    },
+    {
+      "groupName": "devDependencies (non-major)",
+      "matchDepTypes": ["devDependencies"],
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"],
+      "schedule": ["before 8am on Wednesday"]
+    },
+    {
+      "groupName": "dependencies (non-major)",
+      "matchDepTypes": ["dependencies"],
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"],
+      "schedule": ["before 8am on Wednesday"]
+    },
+    {
+      "groupName": "Jest",
+      "automerge": true,
+      "matchPackagePatterns": [".*jest.*"]
+    },
+    {
+      "groupName": "React",
+      "matchPackageNames": [
+        "@types/react",
+        "@types/react-dom",
+        "react",
+        "react-dom"
+      ]
+    },
+    {
+      "groupName": "React (non-major)",
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackageNames": [
+        "@types/react",
+        "@types/react-dom",
+        "react",
+        "react-dom"
+      ]
+    },
+    {
+      "groupName": "Prisma",
+      "matchPackageNames": [
+        "@prisma/client",
+        "@prisma/generator-helper",
+        "@prisma/internals",
+        "prisma"
+      ]
+    },
+    {
+      "groupName": "Prisma (non-major)",
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackageNames": [
+        "@prisma/client",
+        "@prisma/generator-helper",
+        "@prisma/internals",
+        "prisma"
+      ]
+    },
+    {
+      "groupName": "Sentry",
+      "matchPackagePatterns": ["@sentry/*"]
+    },
+    {
+      "groupName": "Sentry (non-major)",
+      "automerge": true,
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackagePatterns": ["@sentry/*"]
+    },
+    {
+      "groupName": "Typescript",
+      "packageNames": ["typescript"]
+    },
+    {
+      "groupName": "Node",
+      "packageNames": ["node"]
+    },
+    {
+      "groupName": "PDFjs",
+      "packageNames": ["pdfjs-dist"],
+      "enabled": false
+    },
+    {
+      "groupName": "mime",
+      "packageNames": ["mime"],
+      "enabled": false
+    }
+  ]
+}

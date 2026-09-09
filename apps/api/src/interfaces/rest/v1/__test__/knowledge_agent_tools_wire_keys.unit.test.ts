@@ -1,0 +1,342 @@
+// Pins the wire-key → service-arg mapping introduced in a1b4d6588, which
+// renamed six REST body keys (handbook/system/connection/automation) while
+// leaving the underlying service arg names (bookId/adapter/credentialName/
+// movementId) unchanged. Each handler here does the translation by hand — a
+// typo in that translation is invisible to the route-registration/mounting
+// tests in knowledge_agent_tools.unit.test.ts, so these invoke the REAL
+// handlers with a body keyed on the NEW wire name and assert the mocked
+// service function received the value under its ORIGINAL argument name.
+//
+// Sibling file (not an extension of knowledge_agent_tools.unit.test.ts)
+// because that file imports `readBook` directly, unmocked, to exercise real
+// handbook content — jest.mock is hoisted file-wide, so mocking the service
+// modules here would silently break those real-content assertions.
+
+const readBookMock = jest.fn(async () => ({ shelf: [] }));
+jest.mock('../../../../lib/knowledge/library', () => ({
+  readBook: (...args: unknown[]) => readBookMock(...(args as [])),
+}));
+
+const describeMovementInstanceMock = jest.fn(async () => ({ schema: null, notes: [] }));
+jest.mock('../../../../services/translation_graph/movement/catalog', () => ({
+  describeMovementInstance: (...args: unknown[]) => describeMovementInstanceMock(...(args as [])),
+  movementCatalogSnapshotForTeam: jest.fn(),
+  toAgentCatalogView: jest.fn(),
+}));
+
+const mintConnectLinkMock = jest.fn(async () => ({
+  url: 'https://example.com/connect/tok',
+  adapter: 'attio',
+  displayName: 'Attio',
+  serviceType: 'attio',
+  connectKind: 'oauth' as const,
+  credentialName: 'attio-default',
+  expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+}));
+jest.mock('../../../../services/credentials/connect_link', () => ({
+  mintConnectLink: (...args: unknown[]) => mintConnectLinkMock(...(args as [])),
+  mintItemPickerLink: jest.fn(),
+}));
+
+const runMovementAsyncMock = jest.fn(async () => ({
+  ok: true as const,
+  runId: 'run-1',
+  status: 'running' as const,
+  movementName: 'My Movement',
+}));
+jest.mock('../../../../services/translation_graph/movement/run_now', () => ({
+  runMovementAsync: (...args: unknown[]) => runMovementAsyncMock(...(args as [])),
+  getMovementRunStatus: jest.fn(),
+  listMovementRuns: jest.fn(),
+  inspectMovementRun: jest.fn(),
+}));
+
+const deleteMovementMock = jest.fn(async () => true);
+jest.mock('../../../../services/translation_graph/movement/provision', () => ({
+  deleteMovement: (...args: unknown[]) => deleteMovementMock(...(args as [])),
+  saveMovement: jest.fn(),
+  getMovement: jest.fn(),
+  listMovements: jest.fn(),
+}));
+
+const getByIdMock = jest.fn(async (): Promise<{ email: string; username: string | null }> => ({
+  email: 'user@example.com',
+  username: null,
+}));
+jest.mock('../../../../services/user', () => ({
+  UserService: { getById: (...args: unknown[]) => getByIdMock(...(args as [])) },
+}));
+
+const resolveToolTeamMock = jest.fn(async (team?: string) => team ?? 'home');
+const teamSetForReadsMock = jest.fn(async () => ['home']);
+jest.mock('../team_scope', () => {
+  class ToolTeamError extends Error {}
+  return {
+    ToolTeamError,
+    resolveToolTeam: (team?: string) => resolveToolTeamMock(team),
+    // unused by the handlers under test but imported at module load
+    listAccessibleTeams: jest.fn(),
+    teamSetForReads: () => teamSetForReadsMock(),
+    teamNames: jest.fn(),
+  };
+});
+
+const abortRunMock = jest.fn();
+jest.mock('../../../../services/interaction/operator', () => ({
+  abortRun: (...args: unknown[]) => abortRunMock(...(args as [])),
+}));
+
+import type { RequestHandler } from 'express';
+import { runWithPrincipal, type Principal } from 'principal';
+
+import { MovementEngineError } from '../../../../services/movement_engine/errors';
+import {
+  readBookHandler,
+  describeInstanceHandler,
+  connectCredentialHandler,
+  runMovementHandler,
+  deleteMovementHandler,
+  cancelRunHandler,
+} from '../knowledge_agent_tools';
+
+function fakeRes() {
+  const res: {
+    statusCode?: number;
+    body?: unknown;
+    status: (n: number) => typeof res;
+    json: (b: unknown) => typeof res;
+  } = {
+    status(n: number) {
+      res.statusCode = n;
+      return res;
+    },
+    json(b: unknown) {
+      res.body = b;
+      return res;
+    },
+  };
+  return res;
+}
+
+function fakeReq(body: unknown) {
+  return { body } as never;
+}
+
+/** The user-anchored connection these handlers assume: a person acting in a
+ *  team. Machine principals (no `userId`) are pinned separately in
+ *  machine_principal.unit.test.ts. */
+const ACTING: Principal = {
+  teamId: 'home',
+  userId: 'u1',
+  access: 'write',
+  scopes: ['*'],
+  pinnedTeamId: null,
+};
+
+/**
+ * Invoke a handler the way a request does: inside an ambient Principal. The
+ * handlers read identity from the store `principalMiddleware` installs — they
+ * used to read a `Context` this file mocked, which is exactly the coupling the
+ * carve removed.
+ */
+function call(handler: RequestHandler, body: unknown, res: ReturnType<typeof fakeRes>) {
+  return runWithPrincipal(ACTING, async () => {
+    await handler(fakeReq(body), res as never, (() => {}) as never);
+  });
+}
+
+beforeEach(() => {
+  readBookMock.mockClear();
+  describeMovementInstanceMock.mockClear();
+  mintConnectLinkMock.mockClear();
+  runMovementAsyncMock.mockClear();
+  deleteMovementMock.mockClear();
+  getByIdMock.mockClear();
+  resolveToolTeamMock.mockClear();
+  teamSetForReadsMock.mockReset().mockResolvedValue(['home']);
+  abortRunMock.mockReset();
+});
+
+describe('POST /handbook — wire key `handbook` reaches readBook as `bookId`', () => {
+  it('passes the body\'s `handbook` value as `bookId`, unmapped fields alongside', async () => {
+    const res = fakeRes();
+    await call(readBookHandler, { handbook: 'automations', chapter: 'foundations' }, res);
+
+    expect(readBookMock).toHaveBeenCalledWith({
+      bookId: 'automations',
+      chapter: 'foundations',
+      chapters: undefined,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /connections/describe — wire keys `system`/`connection`', () => {
+  it('passes `system` as `adapter`', async () => {
+    const res = fakeRes();
+    await call(describeInstanceHandler, { system: 'attio', team: 'T1' }, res);
+
+    expect(resolveToolTeamMock).toHaveBeenCalledWith('T1');
+    expect(describeMovementInstanceMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      adapter: 'attio',
+      forceRefresh: true,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('passes `connection` as `credentialName`', async () => {
+    const res = fakeRes();
+    await describeInstanceHandler(
+      fakeReq({ system: 'attio', connection: 'my-attio', team: 'T1' }),
+      res as never,
+      (() => {}) as never,
+    );
+
+    expect(describeMovementInstanceMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      adapter: 'attio',
+      forceRefresh: true,
+      credentialName: 'my-attio',
+    });
+  });
+
+  it('batches an array of systems into one call, describing each and labelling by system', async () => {
+    const res = fakeRes();
+    await describeInstanceHandler(
+      fakeReq({ system: ['slack', 'attio'], team: 'T1' }),
+      res as never,
+      (() => {}) as never,
+    );
+
+    expect(describeMovementInstanceMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      adapter: 'slack',
+      forceRefresh: true,
+    });
+    expect(describeMovementInstanceMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      adapter: 'attio',
+      forceRefresh: true,
+    });
+    expect(res.body).toEqual({
+      connections: [
+        { system: 'slack', schema: null, notes: [] },
+        { system: 'attio', schema: null, notes: [] },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /connections/connect — wire keys `system`/`connection`', () => {
+  it('passes `system` as `adapterSlug`', async () => {
+    const res = fakeRes();
+    await call(connectCredentialHandler, { system: 'attio', team: 'T1' }, res);
+
+    expect(resolveToolTeamMock).toHaveBeenCalledWith('T1');
+    expect(mintConnectLinkMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      userId: 'u1',
+      adapterSlug: 'attio',
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('passes `connection` as `credentialName`', async () => {
+    const res = fakeRes();
+    await call(connectCredentialHandler, { system: 'attio', connection: 'my-attio', team: 'T1' }, res);
+
+    expect(mintConnectLinkMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      userId: 'u1',
+      adapterSlug: 'attio',
+      credentialName: 'my-attio',
+    });
+  });
+});
+
+describe('POST /automations/run — wire key `automation` reaches runMovementAsync as `movementId`', () => {
+  it('passes the body\'s `automation` value as `movementId`', async () => {
+    const res = fakeRes();
+    await call(runMovementHandler, { automation: 'mv-1', team: 'T1' }, res);
+
+    expect(resolveToolTeamMock).toHaveBeenCalledWith('T1');
+    expect(runMovementAsyncMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      movementId: 'mv-1',
+      actor: { email: 'user@example.com' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /automations/delete — wire key `automation` reaches deleteMovement as `id`', () => {
+  it('passes the body\'s `automation` value as `id`, scoped to the resolved team', async () => {
+    const res = fakeRes();
+    await call(deleteMovementHandler, { automation: 'mv-9', team: 'T2' }, res);
+
+    expect(resolveToolTeamMock).toHaveBeenCalledWith('T2');
+    expect(deleteMovementMock).toHaveBeenCalledWith({ teamId: 'T2', id: 'mv-9' });
+    expect(res.body).toEqual({ deleted: true, automation: 'mv-9' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('reports { deleted: false } when the service finds nothing to delete', async () => {
+    deleteMovementMock.mockResolvedValueOnce(false);
+    const res = fakeRes();
+    await call(deleteMovementHandler, { automation: 'missing', team: 'T2' }, res);
+
+    expect(res.body).toEqual({ deleted: false, automation: 'missing' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /automations/cancel-run — searches the accessible teams like run-status/inspectRun', () => {
+  it('skips a team that owns nothing, calls abortRun for the team that does', async () => {
+    teamSetForReadsMock.mockResolvedValue(['team-a', 'team-b']);
+    abortRunMock
+      .mockRejectedValueOnce(new MovementEngineError('MOVENG_RUNTIME', 'run r1 not found'))
+      .mockResolvedValueOnce({ runId: 'r1' });
+
+    const res = fakeRes();
+    await call(cancelRunHandler, { runId: 'r1' }, res);
+
+    expect(abortRunMock).toHaveBeenCalledTimes(2);
+    expect(abortRunMock).toHaveBeenNthCalledWith(1, {
+      runId: 'r1',
+      teamId: 'team-a',
+      abortedBy: 'user@example.com',
+    });
+    expect(abortRunMock).toHaveBeenNthCalledWith(2, {
+      runId: 'r1',
+      teamId: 'team-b',
+      abortedBy: 'user@example.com',
+    });
+    expect(res.body).toEqual({ runId: 'r1' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('passes the caller\'s username/email as abortedBy', async () => {
+    teamSetForReadsMock.mockResolvedValue(['home']);
+    getByIdMock.mockResolvedValueOnce({ email: 'op@example.com', username: 'op' });
+    abortRunMock.mockResolvedValueOnce({ runId: 'r1' });
+
+    const res = fakeRes();
+    await call(cancelRunHandler, { runId: 'r1' }, res);
+
+    expect(abortRunMock).toHaveBeenCalledWith({ runId: 'r1', teamId: 'home', abortedBy: 'op' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('a run not found in any accessible team is a clean 404', async () => {
+    teamSetForReadsMock.mockResolvedValue(['team-a']);
+    abortRunMock.mockRejectedValueOnce(new MovementEngineError('MOVENG_RUNTIME', 'run r1 not found'));
+
+    const res = fakeRes();
+    await call(cancelRunHandler, { runId: 'r1' }, res);
+
+    expect(res.body).toEqual({ error: 'run r1 not found' });
+    expect(res.statusCode).toBe(404);
+  });
+});

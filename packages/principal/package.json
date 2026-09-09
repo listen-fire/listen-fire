@@ -1,0 +1,22 @@
+{
+  "name": "principal",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "0.0.1",
+  "description": "The identity contract every product imports: Principal + Directory types, the ambient principal store, the static single-tenant provider, and an express adapter",
+  "engines": {
+    "node": "22.20.0"
+  },
+  "scripts": {
+    "code:type-check": "tsc --pretty --noEmit",
+    "test": "node ../../apps/api/node_modules/jest/bin/jest.js --config jest.config.borrowed.cjs"
+  },
+  "main": "index.ts",
+  "types": "index.ts",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/node": "20.16.5",
+    "typescript": "5.5.4"
+  }
+}

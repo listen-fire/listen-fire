@@ -1,0 +1,17 @@
+[
+    {
+        "id": "ed4b0638-1922-4115-8324-d32c6c03ca72",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "closeDate": "2017-10-12"
+    },
+    {
+        "id": "b89be610-1922-4115-8324-d32c6c03ca72",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "closeDate": "2017-10-12"
+    },
+    {
+        "id": "706dc1a1-f17a-4439-b385-76e9fc9cecf8",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "closeDate": "2017-10-12"
+    }
+]

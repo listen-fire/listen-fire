@@ -1,0 +1,131 @@
+// Real-DB proof that `commitTimerPark` writes the durable timer-park row
+// correctly. Standing gate for §3 of plans/2026-07-01-movement-sleep/3_model.md:
+// a `parked_run` row with `park_reason='timer'` and `wake_at` set, and idempotent
+// UPSERT on `(run_id, address)`.
+
+import { randomUUID } from 'node:crypto';
+import { getAutomationsQb, getCoreQb } from '../../../lib/kysely';
+import type { TeamId } from '../../../generated/kysely/core/Team';
+import type { TriggerRunId } from '../../../generated/kysely/automations/TriggerRun';
+import type { TriggerRunRecorder } from '../../translation_graph/runs/trigger_run';
+import { makeRecorderParkSink } from '../park_sink';
+
+let teamId: TeamId;
+let runId: TriggerRunId;
+
+/** Minimal recorder stub: the run row is pre-inserted so ensureStarted is a
+ *  no-op; markParked updates the row. Only the four properties/methods used by
+ *  makeRecorderParkSink are needed. */
+function makeStubRecorder(opts: {
+  teamId: TeamId;
+  runId: TriggerRunId;
+}): TriggerRunRecorder {
+  return {
+    get triggerRunId() {
+      return opts.runId;
+    },
+    get teamId() {
+      return opts.teamId;
+    },
+    async ensureStarted() {
+      // Pre-inserted in beforeAll — no-op.
+    },
+    async markParked() {
+      await getAutomationsQb(['trigger_run'])
+        .updateTable('trigger_run')
+        .set({ status: 'parked' })
+        .where('id', '=', opts.runId)
+        .execute();
+    },
+  } as unknown as TriggerRunRecorder;
+}
+
+beforeAll(async () => {
+  teamId = randomUUID() as TeamId;
+  runId = randomUUID() as TriggerRunId;
+  await getCoreQb(['team'])
+    .insertInto('team')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .values({ id: teamId, name: `park-sink-${teamId.slice(0, 8)}` } as any)
+    .execute();
+  await getAutomationsQb(['trigger_run'])
+    .insertInto('trigger_run')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .values({
+      id: runId,
+      team_id: teamId,
+      trigger_id: 'park-sink-trigger',
+      trigger_type: 'webhook',
+      status: 'running',
+      started_at: new Date(),
+    } as any)
+    .execute();
+});
+
+afterAll(async () => {
+  await getAutomationsQb(['parked_run']).deleteFrom('parked_run').where('run_id', '=', runId).execute();
+  await getAutomationsQb(['trigger_run']).deleteFrom('trigger_run').where('id', '=', runId).execute();
+  await getCoreQb(['team']).deleteFrom('team').where('id', '=', teamId).execute();
+});
+
+afterEach(async () => {
+  // Reset after each test so tests are independent.
+  await getAutomationsQb(['parked_run']).deleteFrom('parked_run').where('run_id', '=', runId).execute();
+  // Reset run status to running so ensureStarted / markParked can flip it again.
+  await getAutomationsQb(['trigger_run'])
+    .updateTable('trigger_run')
+    .set({ status: 'running' })
+    .where('id', '=', runId)
+    .execute();
+});
+
+describe('commitTimerPark', () => {
+  it('writes a parked_run row with park_reason=timer, the given wake_at, and status=parked', async () => {
+    const sink = makeRecorderParkSink(makeStubRecorder({ teamId, runId }));
+    const wakeAt = new Date(Date.now() + 60_000);
+
+    await sink.commitTimerPark({ address: 's1', state: { x: 1 }, wakeAt });
+
+    const row = await getAutomationsQb(['parked_run'])
+      .selectFrom('parked_run')
+      .selectAll()
+      .where('run_id', '=', runId)
+      .where('address', '=', 's1')
+      .executeTakeFirstOrThrow();
+
+    expect(row.park_reason).toBe('timer');
+    expect(row.status).toBe('parked');
+    // wake_at round-trips within 1s (DB truncates to microseconds).
+    expect(Math.abs(new Date(row.wake_at!).getTime() - wakeAt.getTime())).toBeLessThan(1000);
+
+    // The run row itself is flipped to parked by markParked().
+    const run = await getAutomationsQb(['trigger_run'])
+      .selectFrom('trigger_run')
+      .select('status')
+      .where('id', '=', runId)
+      .executeTakeFirstOrThrow();
+    expect(run.status).toBe('parked');
+  });
+
+  it('is idempotent: a second call for the same (run_id, address) upserts — one row, updated state and wake_at', async () => {
+    const sink = makeRecorderParkSink(makeStubRecorder({ teamId, runId }));
+    const wakeAt1 = new Date(Date.now() + 60_000);
+    const wakeAt2 = new Date(Date.now() + 120_000);
+
+    await sink.commitTimerPark({ address: 's2', state: { original: true }, wakeAt: wakeAt1 });
+    await sink.commitTimerPark({ address: 's2', state: { updated: true }, wakeAt: wakeAt2 });
+
+    const rows = await getAutomationsQb(['parked_run'])
+      .selectFrom('parked_run')
+      .selectAll()
+      .where('run_id', '=', runId)
+      .where('address', '=', 's2')
+      .execute();
+
+    // Exactly one row (the UPSERT never duplicates).
+    expect(rows).toHaveLength(1);
+    expect(rows[0].park_reason).toBe('timer');
+    // The second call's wake_at is the durable value.
+    expect(Math.abs(new Date(rows[0].wake_at!).getTime() - wakeAt2.getTime())).toBeLessThan(1000);
+  });
+});

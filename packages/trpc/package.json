@@ -1,0 +1,29 @@
+{
+  "name": "@listen-fire/trpc",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "0.0.1",
+  "description": "Shared library for Listen-Fire code to be used across client and server",
+  "engines": {
+    "node": "22.20.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "main": "index.ts",
+  "type": "commonjs",
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "kysely": "0.27.4",
+    "@listen-fire/shared": "workspace:*",
+    "movement-lang": "workspace:*",
+    "story-view": "workspace:*",
+    "typescript": "5.5.4",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@trpc/server": "10.45.2",
+    "@types/ws": "8.5.12"
+  }
+}

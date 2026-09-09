@@ -1,0 +1,2470 @@
+// Movement engine — the extraction planner + materialiser (E2).
+//
+// `extract from [data…] { tree }` is a MATERIALISATION: it plans LLM
+// phases over the authored tree, runs them, and yields an ephemeral
+// result graph (`ExtractEmission`) that the interpreter binds as an
+// `extractRoot` and traverses like any other graph.
+//
+// Planning model (knowledge-pipeline skeleton, author-fenced):
+//   - The author's `through` fences are THE ONLY phase boundary. A
+//     through-free (sub)tree is ONE LLM call regardless of nesting
+//     depth — children nest as arrays inside their parent's emitted
+//     entities, so parent↔child association costs nothing.
+//   - A `through` pipeline runs PER ENTITY between its node's stages
+//     (progressive per-entity branching): the fenced stage re-extracts
+//     against the original data plus the entity's accumulated fields
+//     plus the plugins' outputs, so deeper nodes see enriched context.
+//   - A stage INHERITS the fields of the stage before it and declares
+//     only what it transforms, so a node's shape is every field it
+//     declares anywhere; a re-declaration is the transformation, and
+//     the later stage's value is the one exported.
+//
+// Runtime conventions are the TG batched-extraction module's
+// (`engine/batched_extraction/`): the same pluggable `LlmClient`, the
+// same `{ evidence, value }` field wrapping, the same entity-guide
+// line shapes, the same validate-then-retry-once loop, the same
+// entity-density model selection. What is NEW here is the phase
+// planner and the nested (tree-shaped) response schema — the TG
+// engine runs one call per `#extract` site; this planner batches a
+// whole through-free region into one.
+//
+// `through` plugins are the TG transform registry's implementations,
+// invoked exactly like the TG engine's entity-enrichment cycle invokes
+// them (`kind: 'context-dependent'`, outputs projected from
+// `result.properties`) — injectable for tests.
+//
+// Field types (incl. enum options) come from EXPLICIT annotations only —
+// a primitive name (`amount: number "…"`) or a BORROWED dotted path
+// (`stage: crm.companies.funding_stage "…"`) resolved against the live
+// instance schema at every firing (the checker's borrow resolution,
+// mirrored runtime-side). Backward adoption from typed write targets is
+// DEMOTED (explicit over implicit, 3_syntax_sketch.md "Borrowed types
+// and enums"): the checker suggests the annotation; only the annotation
+// constrains what reaches the LLM.
+
+import { z } from 'zod';
+import { borrowedTypeSegments, parseFieldTypeName } from 'movement-lang';
+import type {
+  ExprSlot,
+  ExtractExpression,
+  ExtractField,
+  ExtractStage,
+  FieldType,
+  PluginCall,
+} from 'movement-lang';
+import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS } from '../../lib/anthropic';
+import { currentLlmUsageContext, runFields } from '../../lib/llm_usage';
+import { RunCancelledSignal } from './cancel_gate';
+import { parseJsonReply } from '../../lib/prompts/execute';
+import { matchOption } from '../../lib/utils/string';
+import type {
+  LlmCallInput,
+  LlmCallResult,
+  LlmClient,
+} from '../translation_graph/engine/batched_extraction';
+import { selectModel } from '../translation_graph/engine/batched_extraction/schema_synthesis';
+import { extractionSettings, type TierCallSettings } from './ai_tiers';
+import { getTransform } from '../translation_graph/engine/transforms/registry';
+import type {
+  TransformInput,
+  TransformOutput,
+} from '../translation_graph/engine/transforms/registry';
+import { logger } from '../logger';
+import { makeEphemeralPosition } from '../translation_graph/types';
+import type { FileRef, Resource } from '../translation_graph/adapter';
+import { isFileRef } from '../translation_graph/engine/files/retrieve';
+import { stampResourceId } from '../translation_graph/engine/files/resources';
+import { MovementEngineError, type MovementTraceEntry } from './expression';
+import type { ExtractSiteRef, Provenance, ProvenanceOrigin } from './provenance';
+
+// ── The result graph ────────────────────────────────────────────────────────
+
+/**
+ * One materialised entity of the extract result graph. The root binding
+ * is a single emission (the synthetic "extract result" entity); child
+ * edges yield the per-entity emissions, exactly as the language's
+ * traversal model expects (`deals-[c:company]->` runs once per child).
+ */
+export interface ExtractEmission {
+  /** The node's name in the tree (the root reads as 'extract result'). */
+  nodeName: string;
+  /** The node's exported field values — every field it declares, across
+   *  all its stages. */
+  fields: Record<string, unknown>;
+  /**
+   * Per-field extraction origins (E4): the interned call-site ref, the
+   * field's authored description, and the LLM's verbatim quote — the
+   * `{ evidence, value }` wrapping the response already carried, kept
+   * instead of dropped at materialisation. Keys ⊆ `fields` keys.
+   */
+  provenance: Record<string, ProvenanceOrigin>;
+  /** The entity's own origin (site-level, no field) — what aggregating
+   *  the positions themselves carries. */
+  origin?: ProvenanceOrigin;
+  /**
+   * The SOURCE CONTENT that fed this node's extraction (provenance) — the
+   * `from [...]` data materialised as resources: one FILE resource per source
+   * `FileRef` (the byte channel preserved so a downstream write can carry the
+   * file forward) and one TEXT resource per text segment. Every emission of one
+   * `extract` shares the same `from` data, so the same list rides the root and
+   * every descendant. This is what `extractedNode-[:_resources]->` walks and
+   * what the engine attaches to `WriteInput.resources` when the node is written
+   * (`4d_resources.md` / Layer 5 provenance). */
+  resources: Resource[];
+  /** Child node name → emissions. */
+  children: Map<string, ExtractEmission[]>;
+}
+
+// ── The static tree spec (AST projection + annotation resolution) ──────────
+
+export interface ExtractFieldSpec {
+  name: string;
+  description: string;
+  /** The explicit annotation's resolved type — primitive, or borrowed
+   *  from a live instance schema (`crm.companies.funding_stage`). */
+  type?: FieldType;
+}
+
+export interface ExtractStageSpec {
+  /** The pipeline that runs BEFORE this stage (per entity). Empty on an
+   *  unfenced first stage; the ROOT's first-stage pipeline is the
+   *  `from [...] through [...]` data pipeline (bundle-level). */
+  through: PluginCall[];
+  fields: ExtractFieldSpec[];
+  children: ExtractNodeSpec[];
+}
+
+export interface ExtractNodeSpec {
+  name: string;
+  description: string;
+  stages: ExtractStageSpec[];
+  /** The exported shape: every stage's field names, in declaration order,
+   *  each named once (a later stage re-declaring a field transforms it). */
+  exported: string[];
+}
+
+/**
+ * The synthesized description for the tree root (it carries the
+ * top-level fields; exactly one entity). Mirrors the retired TG-lowering compiler's
+ * `ROOT_EXTRACT_DESCRIPTION` so both engines prompt the same intent.
+ */
+export const ROOT_EXTRACT_DESCRIPTION =
+  'the relevant information in the provided source content (exactly one entity carrying the requested fields)';
+
+export interface ExtractSpecOptions {
+  /**
+   * Resolve a borrowed `<instance>.<root>.<field>` annotation against the
+   * LIVE schemas in scope. Called while building the spec — i.e. per
+   * firing, so an option added to the borrowed field (an Attio select, a
+   * KG enum) is followed without re-saving; no option list is ever
+   * copied out of its system. Absent (or unresolvable) → the field
+   * extracts untyped, exactly like any other unknown.
+   */
+  resolveBorrowed?: (
+    segments: [instance: string, root: string, field: string],
+  ) => FieldType | undefined;
+  /**
+   * Resolve an annotation naming an author-declared refinement
+   * (`type Thesis = <"A" | "B">`). Unlike a borrow this needs no live schema —
+   * the program says the whole of it — but it reaches the prompt by the same
+   * road, so the extractor is told to pick from a written set exactly as it is
+   * told to pick from a fetched one.
+   */
+  resolveDeclaredType?: (name: string) => FieldType | undefined;
+}
+
+export function buildExtractSpec(
+  extract: ExtractExpression,
+  options?: ExtractSpecOptions,
+): ExtractNodeSpec {
+  return buildNodeSpec('extract result', ROOT_EXTRACT_DESCRIPTION, extract.stages, options);
+}
+
+/** EXPLICIT annotations only (adoption is demoted): a primitive type name, a
+ *  declared refinement, or a borrowed path resolved through
+ *  `options.resolveBorrowed`. */
+function resolveFieldType(
+  field: ExtractField,
+  options: ExtractSpecOptions | undefined,
+): FieldType | undefined {
+  const segments = borrowedTypeSegments(field.type);
+  if (segments === undefined) {
+    return (
+      parseFieldTypeName(field.type)
+      ?? (field.type !== undefined ? options?.resolveDeclaredType?.(field.type) : undefined)
+    );
+  }
+  if (segments.length !== 3) return undefined; // checker reports MOV_BORROW_MALFORMED
+  return options?.resolveBorrowed?.([segments[0], segments[1], segments[2]]);
+}
+
+function buildNodeSpec(
+  name: string,
+  description: string,
+  stages: ExtractStage[],
+  options: ExtractSpecOptions | undefined,
+): ExtractNodeSpec {
+  return {
+    name,
+    description,
+    exported: [...new Set(stages.flatMap((stage) => stage.fields.map((f) => f.name)))],
+    stages: stages.map((stage) => ({
+      through: stage.through ?? [],
+      fields: stage.fields.map((f) => {
+        const type = resolveFieldType(f, options);
+        return {
+          name: f.name,
+          description: f.description,
+          ...(type !== undefined ? { type } : {}),
+        };
+      }),
+      children: stage.children.map((c) => buildNodeSpec(c.name, c.description, c.stages, options)),
+    })),
+  };
+}
+
+// ── Runtime dependencies ────────────────────────────────────────────────────
+
+/** One `through` plugin invocation's contribution back to the context. */
+export interface TransformInvocationResult {
+  text?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface MovementTransformInvoker {
+  invoke(input: {
+    plugin: string;
+    /** The author's named arguments, resolved per entity. */
+    config: Record<string, unknown>;
+    /** The entity's extracted fields so far (working fields included). */
+    extractedContext: Record<string, unknown>;
+  }): Promise<TransformInvocationResult>;
+}
+
+/**
+ * Default invoker — the TG transform registry, dispatched the same way
+ * the TG engine's enrichment cycle dispatches transforms
+ * (`kind: 'context-dependent'`, structural `properties` projected into
+ * the context data block). Movement identifiers can't carry dashes, so
+ * the underscore spelling resolves too (`vc_url_retrieval`).
+ */
+export const registryTransformInvoker: MovementTransformInvoker = {
+  async invoke({ plugin, config, extractedContext }): Promise<TransformInvocationResult> {
+    const impl = getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-'));
+    if (!impl) {
+      logger.warn('[movement:transform] no such plugin — skipping', { plugin, ...runFields() });
+      return {};
+    }
+
+    const sourceNode = makeEphemeralPosition({
+      data: {},
+      originRef: {
+        kind: 'transform',
+        transformName: plugin,
+        emissionIndex: 0,
+        nodeId: 'movement-through-synthetic',
+      },
+    });
+
+    // Dispatch the timing variant the plugin declares. A pre-extraction
+    // plugin (dataDependency 'none', e.g. vc_url_retrieval) enriches the
+    // source and rejects a context-dependent input; an extracted-context
+    // plugin (e.g. linkedin_enrichment) reads the entity's fields so far.
+    const input: TransformInput =
+      impl.signature.dataDependency === 'none'
+        ? { kind: 'pre-extraction', sourceNode, config }
+        : { kind: 'context-dependent', sourceNode, config, extractedContext };
+
+    let result: TransformOutput;
+    try {
+      result = await impl.run(input);
+    } catch (error) {
+      logger.warn('[movement:transform] plugin threw — no enrichment', {
+        plugin,
+        error,
+        ...runFields(),
+      });
+      return {};
+    }
+
+    // Two ways a plugin's output reaches the following extraction: a
+    // pre-extraction plugin carries the content it fetched on its edge
+    // emissions' `text` (feeds the extractor as fresh source), and an
+    // extracted-context plugin adds `properties` the next stage can read.
+    const data: Record<string, unknown> = { ...(result.properties ?? {}) };
+    const fetchedText = collectEmissionText(result.edges);
+
+    const out: TransformInvocationResult = {};
+    if (fetchedText) out.text = fetchedText;
+    if (Object.keys(data).length > 0) out.data = data;
+
+    logger.info('[movement:transform] ran', {
+      plugin,
+      addedFields: Object.keys(data),
+      fetchedChars: fetchedText?.length ?? 0,
+      ...runFields(),
+    });
+
+    return out;
+  },
+};
+
+/** Ancestor fields handed to a nested node's plugin, nested under the
+ *  ancestor node's name so a consumer can tell them apart from the node's
+ *  own fields *structurally* — a company's fields arrive under `company`,
+ *  distinct from the person's own top-level `name`, without relying on the
+ *  ancestor node's name being known. An ancestor with no fields contributes
+ *  nothing. Deeper ancestors accumulate as sibling keys. */
+function namespaceContext(
+  nodeName: string,
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  if (Object.keys(context).length === 0) return {};
+  return { [nodeName.replace(/\W+/g, '_')]: { ...context } };
+}
+
+/** Pull the fetched text off a pre-extraction plugin's edge emissions
+ *  (vc_url_retrieval's `vcUrl` records carry each fetched page's content
+ *  on `text`) so it can feed the extraction that follows. */
+function collectEmissionText(edges: TransformOutput['edges']): string | undefined {
+  if (!edges) return undefined;
+  const chunks: string[] = [];
+  for (const emissions of Object.values(edges)) {
+    for (const emission of Array.isArray(emissions) ? emissions : [emissions]) {
+      const text = (emission.data as { text?: unknown } | null)?.text;
+      if (typeof text === 'string' && text.trim()) chunks.push(text);
+    }
+  }
+  return chunks.length > 0 ? chunks.join('\n\n') : undefined;
+}
+
+// ── The output ceiling ──────────────────────────────────────────────────────
+//
+// This is a LOOP GUARD, for a model that loops. It is off by default: Sonnet 5
+// is not expected to loop, so by default an extraction gets a flat ceiling
+// (streaming in the wrapper is what makes a ceiling this high safe against
+// HTTP timeouts) and the chat wrapper's own continuation default — the same
+// trust any other caller gets.
+//
+// It exists because a model CAN loop: a 2.6k-token input once generated 53.7k
+// output tokens over 7½ minutes, because nothing in the request tied the size
+// of the answer to the size of the question — a flat 64k ceiling paired with
+// the chat wrapper's five continuations put the real ceiling at 384k output
+// tokens for any extraction, however small. `EXTRACTION_OUTPUT_BUDGET=1` (or
+// `true`) switches a model that DOES loop onto the tighter leash below: a
+// reply is not free-form, it restates part of its OWN INPUT as records of
+// fields with evidence quotes that are literal substrings of that input, so
+// the budget below sizes the ceiling proportional to the input instead of a
+// flat number, and caps continuations at one past it.
+
+/** Output tokens allowed per token of input. A reply that restates its input as
+ *  fields plus short quotes lands well under 1×; 4× is room for a densely
+ *  nested tree, not room for a runaway. Only spent when the guard is on. */
+const EXTRACTION_OUTPUT_RATIO = 4;
+/** Floor — a tiny input can still ask for a real answer. Only spent when the
+ *  guard is on. */
+const EXTRACTION_MIN_TOKENS = 8000;
+/** Hard ceiling regardless of input size — and the DEFAULT flat ceiling when
+ *  the guard is off. Streaming in the wrapper is what makes a ceiling this
+ *  high safe against HTTP timeouts. */
+const EXTRACTION_MAX_TOKENS = 32000;
+/** Rough tokens-per-character for English prose. Only ever used to size a
+ *  budget or estimate one after the fact, so being off by a third costs
+ *  nothing. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * How much room THIS extraction's reply gets, from the size of what it was
+ * asked about. Only consulted when the guard ({@link extractionOutputBudgetEnabled})
+ * is on — do not delete this on the assumption the flat ceiling replaced it.
+ */
+function extractionMaxTokens(input: { system: string; userMessage: string }): number {
+  const inputTokens = (input.system.length + input.userMessage.length) / CHARS_PER_TOKEN;
+  const proportional = Math.ceil(inputTokens * EXTRACTION_OUTPUT_RATIO);
+  return Math.min(EXTRACTION_MAX_TOKENS, Math.max(EXTRACTION_MIN_TOKENS, proportional));
+}
+
+/**
+ * Continuations allowed after a `max_tokens` stop, once the guard is on. The
+ * wrapper's generic five exist for open-ended prose; for an extraction, a
+ * reply that has already spent its whole input-proportional budget and wants
+ * more is far likelier to be looping than to be mid-answer. One continuation
+ * covers a genuine near-miss; past that the truncation raises and
+ * `callWithRetry` gets its one clean retry.
+ */
+const EXTRACTION_MAX_CONTINUATIONS = 1;
+
+/**
+ * Opt-in switch for the loop guard above. Read directly off `process.env`
+ * (the `LOOP_GUARD_*` idiom, not the prod-required `getEnvVar`) because this
+ * is an ops calibration knob, not a required deployment setting — unset must
+ * fall back to trusting the model, in every environment including production.
+ */
+function extractionOutputBudgetEnabled(): boolean {
+  const raw = process.env.EXTRACTION_OUTPUT_BUDGET;
+  return raw === '1' || raw === 'true';
+}
+
+// ── Trace caps ──────────────────────────────────────────────────────────────
+//
+// Everything below rides `trigger_run.steps` (jsonb) with no cap on the column,
+// so each observation caps itself the way the emitted-entity sample does
+// (`TRACE_ENTITY_CAP` / `TRACE_VALUE_CHARS` in run.ts). A 41k-character input
+// must not turn into a 41k-character row.
+
+/** Prompt parts kept per call; the rest are counted, not listed. */
+const TRACE_INPUT_PARTS = 12;
+/** How much of a misbehaving reply is kept — enough to read the shape the
+ *  model chose and the first entity or two, not the whole body. */
+const TRACE_REPLY_CHARS = 1000;
+/** Reply digests kept per RUN. A fan-out extracts once per entity, so a
+ *  systematically-confused model would otherwise attach one digest per
+ *  entity; the first few say the same thing as the hundredth. */
+const TRACE_REPLY_DIGESTS = 5;
+/** Validation issues quoted when the retry fires. */
+const TRACE_ISSUE_LINES = 8;
+/** Matches `TRACE_VALUE_CHARS` — a traced URL is a traced value. */
+const TRACE_URL_CHARS = 200;
+
+/**
+ * What the model replied, capped, for a call that misbehaved. `keys` is the
+ * load-bearing half: a reply that answered under `nombre` instead of the site
+ * id reads downstream as "extracted nothing", and nothing short of the keys it
+ * DID answer under can tell those two apart.
+ *
+ * Attached only on an anomaly. A healthy reply is third-party content the run
+ * record has no business storing, and the emitted entities already describe it.
+ *
+ * The sample is the HEAD of the body — the shape the model chose and the first
+ * entity or two — except when the rejection named a place: a validation failure
+ * at `entry.45.sourced_by` is unreadable from the head of a fifty-entity reply,
+ * so the offending entity takes the sample's place (`focus`).
+ */
+function replyDigest(
+  reply: LlmCallResult | undefined,
+  why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>,
+  focus?: OffendingEntity,
+): { why: typeof why; keys: string[]; sample: string; path?: string } | undefined {
+  if (!reply || why.length === 0) return undefined;
+  const parsed = reply.parsedJson;
+  const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
+  const body = focus ? safeStringify(focus.entity) : (reply.rawText ?? safeStringify(parsed));
+  return {
+    why,
+    keys: keys.slice(0, TRACE_INPUT_PARTS),
+    sample: body.length > TRACE_REPLY_CHARS ? `${body.slice(0, TRACE_REPLY_CHARS)}…` : body,
+    ...(focus ? { path: focus.at } : {}),
+  };
+}
+
+/** The record a rejection pointed at, and where in the reply it sat. */
+interface OffendingEntity {
+  at: string;
+  entity: Record<string, unknown>;
+}
+
+/**
+ * The ENTITY a validation issue landed inside, found by walking the issue's own
+ * path into the reply.
+ *
+ * "Entity" is read off the path rather than off the schema: an extraction reply
+ * is lists of records, so the deepest object reached through an ARRAY INDEX is
+ * the record the complaint is about — `entry.45` for a complaint about
+ * `entry.45.sourced_by.evidence`. The walk stops early wherever the path leads
+ * nowhere (the missing-key case), keeping the last record it did reach.
+ */
+function offendingEntity(
+  reply: unknown,
+  path: ReadonlyArray<PropertyKey>,
+): OffendingEntity | undefined {
+  let node: unknown = reply;
+  let found: OffendingEntity | undefined;
+  const walked: PropertyKey[] = [];
+  for (const step of path) {
+    const next = Array.isArray(node)
+      ? node[Number(step)]
+      : isPlainRecord(node)
+        ? node[String(step)]
+        : undefined;
+    if (next === undefined) break;
+    node = next;
+    walked.push(step);
+    if (typeof step === 'number' && isPlainRecord(node)) {
+      found = { at: walked.map(String).join('.'), entity: node };
+    }
+  }
+  return found;
+}
+
+/**
+ * Where one branch of the walk records what it did.
+ *
+ * The planner runs independent branches at once, but the trace is READ as a
+ * story in walk order — the question it answers is "which of these two sibling
+ * calls read the short prompt", and that is unanswerable if their entries are
+ * shuffled together by whichever fetch happened to land first. So a branch
+ * writes into a slice of its own and its parent splices the slices back in
+ * DECLARATION order once the fan is done: the sequence a reader sees is the
+ * serial walk's, whatever overlapped. The cost is that a fan's entries appear
+ * all at once at the end of the fan rather than as they happen, which a live
+ * reader of an in-flight run's trace will notice.
+ *
+ * The reply-digest budget is the RUN's, so it rides a counter shared down the
+ * whole tree rather than being counted back off a slice that only ever holds
+ * part of the story.
+ */
+class TraceSink {
+  private constructor(
+    /** The run's trace, or absent when the run keeps none. */
+    private readonly entries: MovementTraceEntry[] | undefined,
+    private readonly digests: { kept: number },
+  ) {}
+
+  /** The sink the whole extract records into — the run's own trace, with the
+   *  digests EARLIER statements already kept counted against the budget. */
+  static root(trace: MovementTraceEntry[] | undefined): TraceSink {
+    let kept = 0;
+    for (const entry of trace ?? []) {
+      if (entry.kind === 'extraction' && entry.reply) kept++;
+    }
+    return new TraceSink(trace, { kept });
+  }
+
+  push(entry: MovementTraceEntry): void {
+    if (!this.entries) return;
+    if (entry.kind === 'extraction' && entry.reply) this.digests.kept++;
+    this.entries.push(entry);
+  }
+
+  /** A slice for one branch of a fan, spliced back by `absorb`. */
+  branch(): TraceSink {
+    return new TraceSink(this.entries && [], this.digests);
+  }
+
+  /** Splice finished branches in, in the order they were written. Called even
+   *  when the fan raised: a run that failed mid-fan is exactly when what the
+   *  branches got through is worth reading. */
+  absorb(branches: TraceSink[]): void {
+    if (!this.entries) return;
+    for (const branch of branches) this.entries.push(...(branch.entries ?? []));
+  }
+
+  /** Whether this run has already kept its share of reply digests. */
+  digestBudgetSpent(): boolean {
+    return this.entries === undefined || this.digests.kept >= TRACE_REPLY_DIGESTS;
+  }
+}
+
+/**
+ * How much of the walk runs at once, per fan. What the planner overlaps is
+ * independent by construction — a stage's plugins do not read each other, and
+ * sibling entities each read only their own fields — so the ceiling that
+ * matters is the one OUTSIDE: the scrape queue takes ten fetches in flight,
+ * the search API has a daily quota, and the model client holds its own
+ * eight-wide gate. Four is what keeps a message naming twenty people from
+ * turning one run into a burst against all three at once.
+ *
+ * The cap is per FAN, not per run: a fan of entities each running a fan of
+ * plugins can have more than four things in the air. That is deliberate — one
+ * global gate would have a parent queueing behind its own children — and the
+ * external limits above are what actually bound the total.
+ */
+export const STAGE_FAN_OUT = 4;
+
+/**
+ * Run `job` over `items`, at most `STAGE_FAN_OUT` at a time, answering in the
+ * order the items were WRITTEN. The ordering is the point: a stage's
+ * enrichment blocks render in declaration order and its trace reads in walk
+ * order however the fetches actually landed.
+ *
+ * The first rejection is what the caller sees, and nothing further is started
+ * after it — the serial loop's behaviour, less the items already in flight.
+ */
+async function mapConcurrent<T, R>(
+  items: readonly T[],
+  job: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed) {
+      const index = next++;
+      if (index >= items.length) return;
+      try {
+        results[index] = await job(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STAGE_FAN_OUT, items.length) }, worker));
+  return results;
+}
+
+/**
+ * The cancel check every boundary INSIDE a statement makes (runs-and-cancel
+ * spec §cancel). The interpreter's own check runs between statements, which is
+ * no use to an extraction: one `extract` is one statement, and all of its work
+ * — an LLM call per region, a plugin invocation per entity per stage, and a
+ * fetch inside that plugin that may take minutes — happens before the next
+ * statement boundary is ever reached. An extraction that is the movement's last
+ * (or only) statement has no next boundary at all, so without this a cancel is
+ * never honoured and the run settles `success` as if nothing had been asked.
+ *
+ * The read is a real one, not a cached last-known value. A cached value could
+ * only ever repeat what the statement boundary already knew, and the whole
+ * problem here is that the statement boundary ran before the operator pressed
+ * Stop. The gate debounces to one DB read every few seconds across every
+ * boundary of the run, so checking this often costs nothing, and it is fail-open
+ * like the gate itself.
+ *
+ * Refusing preemption is fine at a boundary this coarse: a fetch already in
+ * flight runs to its own timeout, and the cancel lands before the NEXT one.
+ */
+async function throwIfCancelled(): Promise<void> {
+  const cancelGate = currentLlmUsageContext()?.data.cancelGate;
+  if (cancelGate && (await cancelGate.cancelled())) throw new RunCancelledSignal();
+}
+
+/** How much of a truncated reply's tail is kept in the diagnostic log —
+ *  enough to see what the model was mid-writing when the ceiling landed. */
+const TRUNCATED_TAIL_CHARS = 400;
+
+/** Best-effort count of what a partial reply managed to answer, for reading
+ *  loop-vs-long apart after the fact: a reply near its floor with dozens of
+ *  entities already written is a long document; one with none, however large,
+ *  is a model that never got past the first field. Counts array entries per
+ *  site key (the extraction schema's shape), or the key itself when a site
+ *  answered with a single object rather than a list — never throws, since a
+ *  truncated body is exactly the case a strict count would fail on. */
+function countPartialEntities(parsed: unknown): number {
+  if (Array.isArray(parsed)) return parsed.length;
+  if (!parsed || typeof parsed !== 'object') return 0;
+  return Object.values(parsed).reduce<number>(
+    (total, value) =>
+      total + (Array.isArray(value) ? value.length : value && typeof value === 'object' ? 1 : 0),
+    0,
+  );
+}
+
+/** Diagnostics for a truncated extraction call, logged before the run fails on
+ *  it — the only record of the partial reply, since a failed call never
+ *  reaches `TraceSink` (this seam sits below it; `LlmClient.call` has no trace
+ *  to write into, unlike the schema-rejection path in `failedCall`, which logs
+ *  a slice of the reply onto the run's own trace instead). */
+function logTruncatedExtraction(input: { label: string; userMessage: string }, reply: { text: string }): void {
+  const partial = parseJsonReply(reply.text, { label: input.label, prompt: input.userMessage });
+  logger.warn('[extraction] truncated', {
+    label: input.label,
+    // ChatReply carries no usage figures (only text/stopReason/truncated), so
+    // this is the same chars/4 estimate `extractionMaxTokens` sizes a budget
+    // with — good enough to tell "a little over budget" from "wildly over".
+    estimatedOutputTokens: Math.round(reply.text.length / CHARS_PER_TOKEN),
+    entitiesParsed: countPartialEntities(partial),
+    tail: reply.text.slice(-TRUNCATED_TAIL_CHARS),
+  });
+}
+
+/** Anthropic-backed default client — the same wiring as the TG
+ *  production batcher's. */
+export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
+  return {
+    async call(input: LlmCallInput) {
+      // The in-batch CANCEL gate (runs-and-cancel spec §cancel): both extraction
+      // and AI() funnel through here, so a user-requested cancel stops a runaway
+      // WITHIN a single statement at the next call boundary. It reaches this
+      // seam off the LlmUsageContext.
+      await throwIfCancelled();
+      const model =
+        input.model === 'opus'
+          ? 'claude-opus-4-7'
+          : input.model === 'opus5'
+            ? 'claude-opus-5'
+            : input.model === 'haiku'
+              ? 'claude-haiku-4-5-20251001'
+              : 'claude-sonnet-5';
+      // The caller's own ceiling wins where it named one (the most expensive
+      // tier does). Otherwise: the guard on ⇒ one sized from what the call was
+      // asked about, capped at one continuation; guard off (the default) ⇒ the
+      // flat ceiling and the wrapper's own continuation default — trusting the
+      // model like any other caller.
+      const budgetOn = extractionOutputBudgetEnabled();
+      const maxTokens = input.maxTokens ?? (budgetOn ? extractionMaxTokens(input) : EXTRACTION_MAX_TOKENS);
+      const maxContinuations = budgetOn ? EXTRACTION_MAX_CONTINUATIONS : MAX_CHAT_CONTINUATIONS;
+      const reply = await anthropicChatDetailed({
+        system: input.system,
+        userMessage: input.userMessage,
+        model,
+        maxTokens,
+        ...(budgetOn ? { maxContinuations } : {}),
+        // The caller's depth, verbatim — including its silence. Defaulting one
+        // here would make every call an extraction: the output ceiling is what
+        // bounds a runaway, and it applies below whatever the caller asked for.
+        ...(input.effort ? { effort: input.effort } : {}),
+        label: input.label,
+        ...(opts?.apiKey ? { apiKey: opts.apiKey } : {}),
+      });
+      // A truncated body still parses: `parseJsonReply` repairs and trims to the
+      // last closing bracket, and the extraction schema is all-optional, so the
+      // damage lands as silently-nulled fields instead of a failure. Fail loudly
+      // — `callWithRetry` retries once, and a failed run beats invented nulls.
+      if (reply.truncated) {
+        logTruncatedExtraction(input, reply);
+        throw new Error(
+          `Extraction '${input.label}' produced no complete answer: the model hit the ${maxTokens}-token output ceiling and was still truncated after ${maxContinuations} continuation${maxContinuations === 1 ? '' : 's'} (EXTRACTION_OUTPUT_BUDGET ${budgetOn ? 'on' : 'off'}).`,
+        );
+      }
+      return {
+        parsedJson: parseJsonReply(reply.text, { label: input.label, prompt: input.userMessage }),
+        // Kept so an anomaly can be shown as the model actually wrote it,
+        // before `parseJsonReply` repaired anything. Held in memory for the
+        // life of one call; only a misbehaving call ever persists a (capped)
+        // slice of it.
+        rawText: reply.text,
+      };
+    },
+  };
+}
+
+/**
+ * The extracted text of a source `FileRef`, plus the link back to the
+ * stored copy. Mirrors the knowledge pipeline: bytes → OCR/text → RawText
+ * → a stable id the field evidence can reference.
+ */
+export interface FileTextResult {
+  text: string;
+  /** The `RawText` row the text was deduped/stored into (provenance link). */
+  rawTextId?: string;
+}
+
+export interface ExtractRuntime {
+  llm: LlmClient;
+  transformInvoker: MovementTransformInvoker;
+  /** Evaluates an expression slot in the interpreter's current scope —
+   *  `from` data and non-field plugin arguments resolve through this.
+   *  Returns the value WITH its trail (E4): the `from` slots' origins
+   *  become the extraction sites' data sources. */
+  evalSlot: (slot: ExprSlot) => Promise<{ value: unknown; provenance: Provenance }>;
+  /**
+   * Materialise a source `FileRef` (an attachment) to its extracted TEXT —
+   * the knowledge-pipeline parity path: resolve the owner adapter's bytes,
+   * run the OCR/text extractor (scanned PDFs included), and dedup-store via
+   * RawText. Returns `null` for an unsupported type or an empty extraction
+   * (the file is then skipped — no garbage FRAGMENT). Absent on the runtime
+   * → files fall through to the legacy stringifying behaviour (no engine in
+   * the path can resolve them). */
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResult | null>;
+  /** The run's observability trace — extraction calls record their
+   *  input size and per-alias yields (and the silent empty-source skip,
+   *  which otherwise looks identical to "extracted nothing"). */
+  trace?: MovementTraceEntry[];
+}
+
+// ── Materialisation ─────────────────────────────────────────────────────────
+
+interface Segment {
+  classification: string;
+  content: string;
+}
+
+/** A resolved source `FileRef`'s Layer-5 contribution: the FILE `Resource`
+ *  (always — carry-forward provenance) plus, when OCR yielded text, the
+ *  extraction `text` (the segment the AI extracts from + its evidence origin). */
+interface FileResolution {
+  resource: Resource;
+  text?: { segment: Segment; origin: ProvenanceOrigin };
+}
+
+/** One site of a planned LLM call: a (node, stage) plus the nested
+ *  sites batched into the same call (through-free descendants). */
+interface CallSite {
+  siteId: string;
+  spec: ExtractNodeSpec;
+  stageIndex: number;
+  /** Exactly-one-entity semantics (the root; per-entity continuations). */
+  single: boolean;
+  /** The interned provenance ref every origin of this call shares —
+   *  `dataSources` is stamped when the call is issued (the region is
+   *  built immediately before its one call). */
+  ref: ExtractSiteRef;
+  children: CallSite[];
+}
+
+/** What one region's LLM call turned out to be, filled in as it happens.
+ *  A pure observation channel: nothing here changes what the call does, and
+ *  it exists so a call that ended by THROWING can still be described — the
+ *  raise is the only moment the unanswered reply is still in hand. */
+interface CallTelemetry {
+  model: TierCallSettings['model'];
+  /** Wall clock across every attempt, so a retried call reads as the two
+   *  calls it actually was. */
+  durationMs?: number;
+  /** The most recent attempt's reply — the first, or the retry's if it ran. */
+  lastReply?: LlmCallResult;
+  /** The validation issues that triggered the retry; absent = no retry. */
+  retried?: string[];
+}
+
+/** Mutable per-entity state while phases run. `context` accumulates
+ *  every stage's fields (working included); export filters at the end. */
+interface WorkingEmission {
+  spec: ExtractNodeSpec;
+  stageIndex: number;
+  context: Record<string, unknown>;
+  /** Per-field extraction origins, accumulated alongside `context`. */
+  provenance: Record<string, ProvenanceOrigin>;
+  /** The entity's site-level origin (absent for the no-emission root
+   *  fallback). */
+  origin?: ProvenanceOrigin;
+  children: Map<string, WorkingEmission[]>;
+}
+
+/** What one branch of the fence walk carries. The source segments and the
+ *  bundle-level provenance belong to the extract and are the same for every
+ *  entity in it; the ancestor fields and the trace slice are this branch's
+ *  own. */
+interface FenceWalk {
+  segments: Segment[];
+  baseSources: ProvenanceOrigin[];
+  ancestorContext: Record<string, unknown>;
+  trace: TraceSink;
+}
+
+export async function materializeExtract(input: {
+  extract: ExtractExpression;
+  /** The resolved spec (`buildExtractSpec`, annotations resolved live). */
+  spec: ExtractNodeSpec;
+  runtime: ExtractRuntime;
+}): Promise<ExtractEmission> {
+  const m = new Materializer(input.runtime);
+  return m.run(input.extract, input.spec);
+}
+
+class Materializer {
+  private siteCounter = 0;
+  /** The extract's source text — what `from [...]` resolved to. Auto-fed to a
+   *  plugin's `auto` params (e.g. vc_url_retrieval's `content`), so the author
+   *  writes `through [vc_url_retrieval]` with no argument. */
+  private sourceText = '';
+  /** The extraction's tier, as its author wrote it. Statement-level: every
+   *  call this materialiser makes, at every stage, asks for the same thing. */
+  private tier: string | undefined;
+  /** Per-extract file-text memo, keyed by the file's owner handle (or name):
+   *  the same attachment listed twice is resolved once. A `null` entry records
+   *  an unsupported/empty file so it isn't retried. */
+  private readonly fileTextCache = new Map<string, FileResolution | null>();
+
+  constructor(private readonly runtime: ExtractRuntime) {}
+
+  async run(extract: ExtractExpression, spec: ExtractNodeSpec): Promise<ExtractEmission> {
+    this.tier = extract.tier;
+    const trace = TraceSink.root(this.runtime.trace);
+    const fromData = await this.resolveFromData(extract.from);
+    let segments = fromData.segments;
+    this.sourceText = fromData.segments.map((s) => s.content).join('\n\n');
+    // The data sources every call of this extract sees — the `from`
+    // slots' own origins, extended per stage with the `through`
+    // enrichments in context (provenance precision falls out of the
+    // staging semantics).
+    const baseSources = [...fromData.sources];
+
+    // The root's first-stage `through` is the `from [...] through [...]`
+    // DATA pipeline — it runs once, on the bundle, before any extraction
+    // (the knowledge pipeline's pre-extraction transforms).
+    // The plugins of one pipeline are independent of each other — none reads
+    // what another brought back — so they go off together and are READ in the
+    // order they were written, which is the order their content joins the
+    // source text and the order their origins join the provenance.
+    const fromPipeline = spec.stages[0]?.through ?? [];
+    const fromBranches = fromPipeline.map(() => trace.branch());
+    try {
+      const results = await mapConcurrent(fromPipeline, async (plugin, i) => {
+        // The same boundary the per-entity pipeline keeps (see `runPipeline`):
+        // a bundle-level fetch is as long as any other, and an operator's
+        // cancel must not wait for the whole fan before it means anything.
+        await throwIfCancelled();
+        return this.invokePlugin(plugin, {}, spec.name, fromBranches[i]);
+      });
+      fromPipeline.forEach((plugin, i) => {
+        const result = results[i];
+        // A root-stage plugin has no extracted fields to draw a required
+        // argument from, so an empty one skips here for the same reason it
+        // skips per entity: nothing to work on, so nothing runs.
+        if (result === SKIPPED) return;
+        segments = segments.concat(transformResultSegments(plugin.plugin, result));
+        baseSources.push({ kind: 'enrichment', plugin: plugin.plugin });
+      });
+    } finally {
+      trace.absorb(fromBranches);
+    }
+
+    const region = this.buildRegion(spec, 0, true, { skipOwnThrough: true });
+    const emissions = await this.extractRegion(region, segments, undefined, baseSources, trace);
+    const root: WorkingEmission =
+      emissions[0] ??
+      ({
+        spec,
+        stageIndex: 0,
+        context: {},
+        provenance: {},
+        children: new Map(),
+      } satisfies WorkingEmission);
+    await this.resolveFences(root, { segments, baseSources, ancestorContext: {}, trace });
+    return exportEmission(root, fromData.resources);
+  }
+
+  // ── `from` data → segments ──
+
+  private async resolveFromData(
+    slots: ExprSlot[],
+  ): Promise<{ segments: Segment[]; sources: ProvenanceOrigin[]; resources: Resource[] }> {
+    const segments: Segment[] = [];
+    const sources: ProvenanceOrigin[] = [];
+    // The source content as resources (Layer 5 provenance) — one FILE resource
+    // per source `FileRef` (byte channel preserved), one TEXT resource per text
+    // datum. This is what an extracted node attaches to `WriteInput.resources`
+    // and what `extractedNode-[:_resources]->` walks.
+    const resources: Resource[] = [];
+    const seen = new Set<ProvenanceOrigin>();
+    // FILE resources dedupe on their stable engine-stamped id (the file-text
+    // memo returns the same resource by identity for a repeated attachment).
+    const seenResourceIds = new Set<string>();
+    for (const slot of slots) {
+      const { value, provenance } = await this.runtime.evalSlot(slot);
+      for (const origin of provenance.origins) {
+        if (seen.has(origin)) continue;
+        seen.add(origin);
+        sources.push(origin);
+      }
+      const flat = value == null ? [] : Array.isArray(value) ? value : [value];
+      for (const datum of flat) {
+        if (datum == null) continue;
+        if (isFileRef(datum)) {
+          // No resolver in the path → legacy fall-through (stringify). With a
+          // resolver, a source file ALWAYS becomes a FILE resource (carry-forward
+          // provenance — a file qualifies by being a source, not by yielding
+          // text); its extraction TEXT segment + `file` evidence origin are added
+          // ONLY when OCR yields non-empty text.
+          if (this.runtime.resolveFileText) {
+            const file = await this.fileSegment(datum);
+            if (!file) continue; // unsupported (no FileRef bytes) — skip cleanly
+            // The FILE resource is the source artifact — deduped on its stable
+            // engine-stamped id (the memo returns the same resource by identity,
+            // so the same attachment listed twice contributes ONE resource).
+            if (file.resource.id !== undefined && !seenResourceIds.has(file.resource.id)) {
+              seenResourceIds.add(file.resource.id);
+              resources.push(file.resource);
+            }
+            // The extraction text is OCR-gated: only a non-empty result yields a
+            // segment + evidence origin (deduped by origin identity).
+            if (file.text && !seen.has(file.text.origin)) {
+              seen.add(file.text.origin);
+              segments.push(file.text.segment);
+              sources.push(file.text.origin);
+            }
+            continue;
+          }
+        }
+        segments.push(segmentForDatum(datum));
+        const textResource = textResourceForDatum(datum);
+        if (textResource) resources.push(textResource);
+      }
+    }
+    return { segments, sources, resources };
+  }
+
+  /**
+   * Resolve a source `FileRef` to its Layer-5 contribution. The FILE `Resource`
+   * (carrying the SAME `FileRef` — the `retrieve()` byte channel preserved so a
+   * downstream write carries the file forward) is built ALWAYS: a source file
+   * qualifies as provenance by being a source, not by yielding text. The
+   * extraction `text` (a `FILE` segment + a `file` evidence origin, the thing the
+   * AI extracts FROM) is built ONLY when OCR yields non-empty text — a scanned
+   * image with no extractable text contributes a carry-forward resource but no
+   * extraction segment/evidence. Memoised per owner handle: the same attachment
+   * listed twice resolves once. Returns `undefined` only when there is no
+   * resolver or the type carries no FileRef bytes — the caller then skips it.
+   */
+  private async fileSegment(ref: FileRef): Promise<FileResolution | undefined> {
+    if (!this.runtime.resolveFileText) return undefined;
+    const cacheKey = ref.source?.handle ?? ref.name;
+    if (cacheKey !== undefined) {
+      const cached = this.fileTextCache.get(cacheKey);
+      if (cached !== undefined) return cached ?? undefined;
+    }
+    const result = await this.runtime.resolveFileText(ref);
+    const text =
+      result && result.text.trim().length > 0
+        ? {
+            segment: { classification: 'FILE', content: result.text } satisfies Segment,
+            origin: {
+              kind: 'file',
+              ...(result.rawTextId !== undefined ? { rawTextId: result.rawTextId } : {}),
+              ...(ref.source?.handle !== undefined ? { handle: ref.source.handle } : {}),
+              ...(ref.name !== undefined ? { name: ref.name } : {}),
+              ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+            } satisfies ProvenanceOrigin,
+          }
+        : undefined;
+    const resolution: FileResolution = {
+      resource: stampResourceId(fileResourceForRef(ref, result ?? undefined)),
+      ...(text !== undefined ? { text } : {}),
+    };
+    if (cacheKey !== undefined) this.fileTextCache.set(cacheKey, resolution);
+    return resolution;
+  }
+
+  // ── Phase planning ──
+  //
+  // A region is the largest through-free subtree rooted at (spec,
+  // stage): the stage's own fields plus, recursively, every child whose
+  // first stage is unfenced. Fenced edges (a node's next stage; a child
+  // whose stage 0 declares a pipeline) become per-entity continuations.
+
+  private buildRegion(
+    spec: ExtractNodeSpec,
+    stageIndex: number,
+    single: boolean,
+    options?: { skipOwnThrough?: boolean },
+  ): CallSite {
+    const stage = spec.stages[stageIndex];
+    if (!options?.skipOwnThrough && stageIndex === 0 && stage.through.length > 0) {
+      // Handled by the caller (fenced child); defensive.
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `internal: region rooted at a fenced stage of '${spec.name}'`,
+      );
+    }
+    const siteId = `x:${sanitizeSiteName(spec.name)}#${++this.siteCounter}`;
+    return {
+      siteId,
+      spec,
+      stageIndex,
+      single,
+      // One interned ref per call site — every emission's field origins
+      // share it by reference. `dataSources` is filled when the call is
+      // issued (`extractRegion`), once the stage's enrichments are known.
+      ref: {
+        siteId,
+        node: spec.name,
+        description: spec.description,
+        stage: stageIndex,
+        dataSources: [],
+      },
+      children: stage.children
+        .filter((c) => (c.stages[0]?.through ?? []).length === 0)
+        .map((c) => this.buildRegion(c, 0, false)),
+    };
+  }
+
+  /** Stamp the call's data-source context onto every site ref the
+   *  region batches — through-free descendants extract in the same
+   *  call, so they share the same context. */
+  private stampDataSources(site: CallSite, sources: ProvenanceOrigin[]): void {
+    site.ref.dataSources = sources;
+    for (const child of site.children) this.stampDataSources(child, sources);
+  }
+
+  private fencedChildren(spec: ExtractNodeSpec, stageIndex: number): ExtractNodeSpec[] {
+    return spec.stages[stageIndex].children.filter((c) => (c.stages[0]?.through ?? []).length > 0);
+  }
+
+  // ── One LLM call per region ──
+
+  private async extractRegion(
+    region: CallSite,
+    segments: Segment[],
+    entity:
+      | {
+          spec: ExtractNodeSpec;
+          context: Record<string, unknown>;
+          enrichments: Array<{ plugin: string; result: TransformInvocationResult }>;
+        }
+      | undefined,
+    sources: ProvenanceOrigin[],
+    trace: TraceSink,
+  ): Promise<WorkingEmission[]> {
+    this.stampDataSources(region, sources);
+    const { text: userMessage, parts } = renderUserMessage(segments, entity);
+    // The input shape rides EVERY entry of this call, healthy or not: which
+    // of two sibling calls read the short prompt is only answerable if the
+    // healthy one recorded its shape too.
+    const shape = {
+      node: region.spec.name,
+      inputChars: userMessage.length,
+      ...(parts.length > 0 ? { inputs: parts.slice(0, TRACE_INPUT_PARTS) } : {}),
+      ...(parts.length > TRACE_INPUT_PARTS
+        ? { inputsTruncated: parts.length - TRACE_INPUT_PARTS }
+        : {}),
+    };
+    if (userMessage.trim().length === 0) {
+      // The silent skip that hides empty source fields — record it so
+      // the run can say "extraction saw no text" instead of nothing.
+      trace.push({
+        kind: 'extraction',
+        ...shape,
+        skipped: 'empty_source',
+        emissions: { [region.spec.name]: 0 },
+      });
+      return [];
+    }
+
+    const coercions = new CoercionTracker();
+    const schema = responseSchemaFor(region, coercions);
+    const system = buildSystemPrompt(region);
+    // The extraction's tier, resolved once per call: it is the whole
+    // extraction's, so every stage and every fence asks for the same thing.
+    // With no tier the density heuristic still picks the model, exactly as it
+    // did before tiers existed.
+    const settings = extractionSettings(this.tier, selectModel(countSites(region)));
+    const telemetry: CallTelemetry = { model: settings.model };
+    let raw: unknown;
+    try {
+      raw = await this.callWithRetry({
+        system,
+        userMessage,
+        label: 'movement_extraction',
+        settings,
+        schema,
+        region,
+        coercions,
+        telemetry,
+      });
+    } catch (error) {
+      // The reply never answered the question, twice — and what that costs
+      // depends on what the call was for.
+      //
+      // A PER-ENTITY call is an increment on an entity that already stands: a
+      // `through` refinement of it, or a fenced child of it. Losing the
+      // increment costs that entity some fields; failing the run costs every
+      // entity the extraction already got right, and a production run makes
+      // 40-85 of these, so a per-call drift of a percent makes losing the run
+      // the expected outcome. The entity is kept as its previous stage left it.
+      //
+      // Only a SHAPE rejection is absorbed. A cancel, a truncated body or a
+      // network failure means here exactly what it means anywhere else, and the
+      // ROOT call has no previous stage to stand on — both stay fatal. Either
+      // way the run has to say WHICH call failed and what came back instead, or
+      // the next reader is back to archaeology.
+      const kept = error instanceof z.ZodError ? entity?.enrichments : undefined;
+      const raised = this.failedCall(region, shape, telemetry, error, trace, kept);
+      if (kept) return [];
+      throw raised;
+    }
+
+    const rawRecord = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const entities = Array.isArray(rawRecord[region.siteId])
+      ? (rawRecord[region.siteId] as unknown[])
+      : [];
+    const projected = entities
+      .filter((e): e is Record<string, unknown> => e != null && typeof e === 'object')
+      .map((e) => projectEmission(e, region));
+    const empty: Record<string, number> = {};
+    countEmptyEmissions(projected, empty);
+    const dropped: Record<string, number> = {};
+    const kept = dropEmptyEmissions(projected, dropped);
+    const coerced = coercions.snapshot();
+    const evidenceCoerced = coercions.evidenceSnapshot();
+    const envelopeRepaired = coercions.envelopeSnapshot();
+    const why: Array<'no_entities' | 'dropped_records' | 'retried'> = [];
+    if (entities.length === 0) why.push('no_entities');
+    if (Object.keys(dropped).length > 0) why.push('dropped_records');
+    if (telemetry.retried) why.push('retried');
+    trace.push({
+      kind: 'extraction',
+      ...shape,
+      emissions: { [region.spec.name]: entities.length },
+      ...this.outcome(telemetry, why, trace),
+      ...(Object.keys(empty).length > 0 ? { empty } : {}),
+      ...(Object.keys(dropped).length > 0 ? { dropped } : {}),
+      ...(coerced ? { coerced } : {}),
+      ...(evidenceCoerced ? { evidenceCoerced } : {}),
+      ...(envelopeRepaired ? { envelopeRepaired } : {}),
+    });
+    return kept;
+  }
+
+  /** The half of an extraction trace entry that describes the CALL rather
+   *  than its yield — and, when the call misbehaved and the run's digest
+   *  budget still has room, what the model actually replied. */
+  private outcome(
+    telemetry: CallTelemetry,
+    why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>,
+    trace: TraceSink,
+    focus?: OffendingEntity,
+  ): Partial<Extract<MovementTraceEntry, { kind: 'extraction' }>> {
+    const digest = trace.digestBudgetSpent()
+      ? undefined
+      : replyDigest(telemetry.lastReply, why, focus);
+    return {
+      model: telemetry.model,
+      ...(telemetry.durationMs !== undefined ? { durationMs: telemetry.durationMs } : {}),
+      ...(telemetry.retried ? { retried: telemetry.retried } : {}),
+      ...(digest ? { reply: digest } : {}),
+    };
+  }
+
+  /**
+   * Record the failing call on the trace (the digest is the whole point — the
+   * entry is the only place the unanswered reply survives), then name it in
+   * the error the run fails with.
+   *
+   * ONLY the schema rejection is renamed. Everything else a call can die of —
+   * a cancel, a truncated body, the network — already describes itself, and
+   * relabelling one of those as "the model answered wrongly" would send the
+   * next reader after the wrong thing entirely.
+   *
+   * The error is returned rather than thrown because the caller decides
+   * whether it is raised: a per-entity call keeps its entity and drops the
+   * error on the floor (`kept`), and only the root call fails the run.
+   */
+  private failedCall(
+    region: CallSite,
+    shape: { node: string; inputChars: number },
+    telemetry: CallTelemetry,
+    cause: unknown,
+    trace: TraceSink,
+    /** Present when the caller is KEEPING the entity this call was refining
+     *  rather than failing the run: the stage's enrichments, which were folded
+     *  into the failed call's prompt and go over the side with it. */
+    kept?: Array<{ plugin: string; result: TransformInvocationResult }>,
+  ): unknown {
+    if (!(cause instanceof z.ZodError)) return cause;
+    // The head of a fifty-entity reply says nothing about a complaint against
+    // the forty-fifth, and the head is all the trace used to keep.
+    const focus = offendingEntity(telemetry.lastReply?.parsedJson, cause.issues[0]?.path ?? []);
+    trace.push({
+      kind: 'extraction',
+      ...shape,
+      emissions: { [region.spec.name]: 0 },
+      failed: 'invalid_reply',
+      ...(kept ? { fallback: 'kept_previous_stage' as const } : {}),
+      // What this stage fetched for the entity and never got to use: the
+      // enrichment is what the failed call was FOR, so a reader who sees a
+      // seven-minute plugin above this entry has to be told it bought nothing.
+      ...(kept && kept.length > 0
+        ? { plugins: kept.map((e) => ({ plugin: e.plugin, outcome: 'dropped' as const })) }
+        : {}),
+      ...this.outcome(telemetry, ['failed'], trace, focus),
+    });
+    if (kept) {
+      logger.warn(
+        '[movement:extract] a per-entity call was answered with something the guide does not describe — keeping the entity as its previous stage left it',
+        {
+          node: region.spec.name,
+          site: region.siteId,
+          stage: region.stageIndex,
+          droppedEnrichments: kept.map((e) => e.plugin),
+          ...runFields(),
+        },
+      );
+      return cause;
+    }
+    const answered = telemetry.lastReply?.parsedJson;
+    const keys = answered && typeof answered === 'object' ? Object.keys(answered) : [];
+    // Two different failures reach here, and naming the wrong one sends the
+    // next reader after the wrong thing: the reply never used the answer key at
+    // all, or it used the key and then wrote something inside it the guide does
+    // not describe (an entity answered under keys nothing declared, say).
+    const detail = keys.includes(region.siteId)
+      ? `The reply answered under \`${region.siteId}\`, but ${firstIssue(cause)}. `
+      : keys.length > 0
+        ? `The reply came back under ${quoteKeys(keys)}, not \`${region.siteId}\`. `
+        : 'The reply carried nothing the schema could read. ';
+    return new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `The extraction of \`${region.spec.name}\` (${region.siteId}) was answered with something the guide does not describe, twice. ` +
+        detail +
+        (focus
+          ? `The run's trace holds the entity at \`${focus.at}\`.`
+          : `The run's trace holds the first ${TRACE_REPLY_CHARS} characters of it.`),
+      cause,
+    );
+  }
+
+  private async callWithRetry(opts: {
+    system: string;
+    userMessage: string;
+    label: string;
+    /** What the extraction's tier asks the platform for — the same on the
+     *  retry, which is the same question asked again. */
+    settings: TierCallSettings;
+    schema: z.ZodTypeAny;
+    /** What the call is asking about — the retry needs its answer key and its
+     *  field names to be able to show the envelope it wants back. */
+    region: CallSite;
+    coercions: CoercionTracker;
+    /** Filled in as the call proceeds, so the caller can describe an attempt
+     *  that ended by throwing as readily as one that returned. */
+    telemetry: CallTelemetry;
+  }): Promise<unknown> {
+    // The extraction's OWN call boundary. The Anthropic client seam checks too
+    // — it has to, because `AI()` reaches an LLM without coming through here —
+    // but that seam belongs to whichever client is wired, and the recursion
+    // this method drives (one call per region, then one per entity per stage)
+    // is the extraction's to gate. Both share the one debounced read.
+    await throwIfCancelled();
+    const started = Date.now();
+    const first = await this.runtime.llm.call({
+      system: opts.system,
+      userMessage: opts.userMessage,
+      label: opts.label,
+      ...opts.settings,
+    });
+    opts.telemetry.lastReply = first;
+    opts.telemetry.durationMs = Date.now() - started;
+    // The schema tree (and its closures) is built once and reused across
+    // both attempts — reset so a successful retry doesn't inherit the first
+    // attempt's coercion diagnostics.
+    opts.coercions.reset();
+    const parsed = opts.schema.safeParse(first.parsedJson);
+    if (parsed.success) return parsed.data;
+
+    // Same validate-then-retry-once loop as the TG batcher's phases.
+    const lines = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`);
+    const issues = lines.join('\n');
+    // The issues are what the retry was ASKED to fix — the most direct
+    // statement there is of how the first reply missed.
+    opts.telemetry.retried = lines.slice(0, TRACE_ISSUE_LINES);
+    const retry = await this.runtime.llm.call({
+      system: opts.system,
+      userMessage: `${opts.userMessage}\n\n---\n\nYour previous response had validation errors:\n${issues}\n\n${retryInstruction(opts.region, parsed.error.issues)}`,
+      label: `${opts.label}_retry`,
+      ...opts.settings,
+    });
+    opts.telemetry.lastReply = retry;
+    opts.telemetry.durationMs = Date.now() - started;
+    opts.coercions.reset();
+    return opts.schema.parse(retry.parsedJson);
+  }
+
+  // ── Fences: per-entity pipelines + continuation calls ──
+
+  private async resolveFences(emission: WorkingEmission, walk: FenceWalk): Promise<void> {
+    const { spec } = emission;
+    const { segments, baseSources, ancestorContext, trace } = walk;
+
+    // The node's own next stage (fenced behind its `through`). The plugin
+    // sees the node's own fields bare, plus its ancestors' fields (a
+    // person nested in a company gets `company_name`, so an enrichment
+    // like linkedin can search by person + company).
+    while (emission.stageIndex + 1 < spec.stages.length) {
+      const nextIndex = emission.stageIndex + 1;
+      const nextStage = spec.stages[nextIndex];
+      const enrichments = await this.runPipeline(
+        nextStage.through,
+        { ...ancestorContext, ...emission.context },
+        spec.name,
+        trace,
+      );
+      // A stage fenced behind plugins that all came back with nothing has
+      // nothing new for this entity to be read from: the prompt would carry
+      // the same source text and the same fields the previous stage already
+      // extracted from, so the model correctly answers with nothing (50 of
+      // one production run's 53 continuation calls were exactly this). The
+      // stage's fields join the entity absent — which is what the call
+      // produced anyway — and the stages after it still run on their own
+      // merits. A stage that declares NO plugins is untouched: plugin-less
+      // field staging is a legitimate shape, and it must never read as
+      // "every plugin contributed nothing".
+      if (nextStage.through.length > 0 && !hasEnrichmentContent(enrichments)) {
+        this.notePointlessStage(nextStage.through, enrichments, spec.name, trace);
+        emission.stageIndex = nextIndex;
+        await this.resolveFencedChildren(emission, nextIndex, walk);
+        continue;
+      }
+      const region = this.buildRegion(spec, nextIndex, true, { skipOwnThrough: true });
+      const continued = await this.extractRegion(
+        region,
+        segments,
+        { spec, context: emission.context, enrichments },
+        stageSources(baseSources, enrichments),
+        trace,
+      );
+      const next = continued[0];
+      if (next) {
+        emission.context = { ...emission.context, ...next.context };
+        emission.provenance = { ...emission.provenance, ...next.provenance };
+        for (const [name, children] of next.children) emission.children.set(name, children);
+      }
+      emission.stageIndex = nextIndex;
+
+      // Fenced children declared in the just-extracted stage.
+      await this.resolveFencedChildren(emission, nextIndex, walk);
+    }
+
+    // Fenced children of the stages already extracted in-region.
+    for (let s = 0; s <= emission.stageIndex; s++) {
+      await this.resolveFencedChildren(emission, s, walk);
+    }
+
+    // Recurse into every child emission, extending the ancestor context
+    // with this node's own fields (namespaced by node name).
+    //
+    // Sibling entities share nothing but the source text — each one's stages
+    // read its OWN fields and its own enrichments — so the walk over them is a
+    // fan, not a queue. The chain inside each entity stays sequential: that is
+    // the ordering the staging semantics actually depend on.
+    const childAncestors = {
+      ...ancestorContext,
+      ...namespaceContext(spec.name, emission.context),
+    };
+    const children = [...emission.children.values()].flat();
+    const branches = children.map(() => trace.branch());
+    try {
+      await mapConcurrent(children, (child, i) =>
+        this.resolveFences(child, {
+          segments,
+          baseSources,
+          ancestorContext: childAncestors,
+          trace: branches[i],
+        }),
+      );
+    } finally {
+      trace.absorb(branches);
+    }
+  }
+
+  private async resolveFencedChildren(
+    emission: WorkingEmission,
+    stageIndex: number,
+    walk: FenceWalk,
+  ): Promise<void> {
+    // A fenced child's stage-0 plugin runs before the child has any fields
+    // of its own, so it sees the ancestor chain (this parent's fields
+    // namespaced, plus the parent's own ancestors).
+    const childAncestors = {
+      ...walk.ancestorContext,
+      ...namespaceContext(emission.spec.name, emission.context),
+    };
+    // Each fenced child is a different node of the tree, reading the same
+    // parent — nothing one of them extracts is visible to another — so they
+    // go off together. They are ATTACHED in declaration order once the fan is
+    // done, so the map's key order is the author's, not the fetches'.
+    const specs = this.fencedChildren(emission.spec, stageIndex).filter(
+      (child) => !emission.children.has(child.name),
+    );
+    const branches = specs.map(() => walk.trace.branch());
+    try {
+      const extracted = await mapConcurrent(specs, async (child, i) => {
+        const enrichments = await this.runPipeline(
+          child.stages[0].through,
+          childAncestors,
+          child.name,
+          branches[i],
+        );
+        const region = this.buildRegion(child, 0, false, { skipOwnThrough: true });
+        return this.extractRegion(
+          region,
+          walk.segments,
+          { spec: emission.spec, context: emission.context, enrichments },
+          stageSources(walk.baseSources, enrichments),
+          branches[i],
+        );
+      });
+      specs.forEach((child, i) => emission.children.set(child.name, extracted[i]));
+    } finally {
+      walk.trace.absorb(branches);
+    }
+  }
+
+  /** Record the call that wasn't made, with what each of the stage's plugins
+   *  did for this entity — a reader has to be able to tell a stage skipped as
+   *  pointless from one that never ran at all. `inputChars: 0` is the literal
+   *  truth: nothing was read. */
+  private notePointlessStage(
+    pipeline: PluginCall[],
+    enrichments: Array<{ plugin: string; result: TransformInvocationResult }>,
+    node: string,
+    trace: TraceSink,
+  ): void {
+    const ran = new Set(enrichments.map((e) => e.plugin));
+    logger.info('[movement:extract] stage has no enrichment for this entity — skipping the call', {
+      node,
+      plugins: pipeline.map((p) => p.plugin),
+      ...runFields(),
+    });
+    trace.push({
+      kind: 'extraction',
+      node,
+      inputChars: 0,
+      skipped: 'no_enrichment',
+      plugins: pipeline.map((p) => ({
+        plugin: p.plugin,
+        outcome: ran.has(p.plugin) ? ('empty' as const) : ('skipped' as const),
+      })),
+      emissions: { [node]: 0 },
+    });
+  }
+
+  /** One stage's plugins, run together and answered in the order they were
+   *  written: nothing in a pipeline reads what another of its plugins brought
+   *  back, so the only thing the order decides is how the enrichments render
+   *  and how they read on the trace — and that stays the author's. */
+  private async runPipeline(
+    pipeline: PluginCall[],
+    context: Record<string, unknown>,
+    node: string,
+    trace: TraceSink,
+  ): Promise<Array<{ plugin: string; result: TransformInvocationResult }>> {
+    const branches = pipeline.map(() => trace.branch());
+    try {
+      const results = await mapConcurrent(pipeline, async (plugin, i) => {
+        // A retrieval plugin is the longest thing a statement does — a per-URL
+        // fetch has a seven-minute backstop, and this pipeline runs once per
+        // entity per stage. Checking before each launch is what keeps a cancel
+        // from waiting on the whole fan of fetches: the ones already in flight
+        // run to their own backstop, and nothing new starts. The check sits
+        // OUTSIDE `invokePlugin`, whose invoker swallows everything the plugin
+        // throws as "no enrichment" — the signal must not be able to land in
+        // there.
+        await throwIfCancelled();
+        return this.invokePlugin(plugin, context, node, branches[i]);
+      });
+      return pipeline.flatMap((plugin, i) => {
+        const result = results[i];
+        return result === SKIPPED ? [] : [{ plugin: plugin.plugin, result }];
+      });
+    } finally {
+      trace.absorb(branches);
+    }
+  }
+
+  /** Plugin arguments: a bare name resolves against the entity's
+   *  extracted fields first (the checker's prior-stage rule); anything
+   *  else evaluates as an ordinary movement expression.
+   *
+   *  A required argument that resolves to nothing — this company's website
+   *  field came back empty — SKIPS the invocation for this entity. There is
+   *  nothing for the plugin to work on, so the honest outcome is no
+   *  enrichment rather than a run over a blank, and the entity's remaining
+   *  fields are extracted from what it already has. */
+  private async invokePlugin(
+    plugin: PluginCall,
+    context: Record<string, unknown>,
+    node: string,
+    trace: TraceSink,
+  ): Promise<TransformInvocationResult | typeof SKIPPED> {
+    const config: Record<string, unknown> = {};
+    for (const arg of plugin.args) {
+      const raw = arg.value.raw.trim();
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw) && raw in context) {
+        config[arg.name] = context[raw];
+      } else {
+        config[arg.name] = (await this.runtime.evalSlot(arg.value)).value;
+      }
+    }
+    // Engine-injected `auto` params (e.g. vc_url_retrieval's `content`): fed
+    // from the extract source text, not author-supplied. Done last so the
+    // author can't override them.
+    const impl = getTransform(plugin.plugin) ?? getTransform(plugin.plugin.replace(/_/g, '-'));
+    for (const param of impl?.signature.params ?? []) {
+      if (param.auto) config[param.name] = this.sourceText;
+    }
+
+    // The URL the invocation was pointed at — the one argument worth naming
+    // on the trace, because a fetch is what a slow run is usually waiting on
+    // and its per-URL backstop is seven minutes.
+    const url = typeof config.url === 'string' ? tracedUrl(config.url) : undefined;
+    const started = Date.now();
+
+    for (const param of impl?.signature.params ?? []) {
+      if (!param.required || param.auto) continue;
+      if (!isBlank(config[param.name])) continue;
+      logger.info('[movement:transform] required argument is empty — skipping this entity', {
+        plugin: plugin.plugin,
+        param: param.name,
+        written: plugin.args.some((a) => a.name === param.name),
+        ...runFields(),
+      });
+      trace.push({
+        kind: 'plugin',
+        plugin: plugin.plugin,
+        node,
+        durationMs: 0,
+        skippedParam: param.name,
+      });
+      return SKIPPED;
+    }
+
+    const result = await this.runtime.transformInvoker.invoke({
+      plugin: plugin.plugin,
+      config,
+      extractedContext: { ...context },
+    });
+    const fields = Object.keys(result.data ?? {});
+    trace.push({
+      kind: 'plugin',
+      plugin: plugin.plugin,
+      node,
+      ...(url !== undefined ? { url } : {}),
+      durationMs: Date.now() - started,
+      ...(result.text ? { chars: result.text.length } : {}),
+      ...(fields.length > 0 ? { fields } : {}),
+    });
+    return result;
+  }
+}
+
+/** The rejection's first complaint, in the failure message's voice: where in
+ *  the reply it was, and what was wrong there. */
+function firstIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return 'the schema could not read what was inside';
+  const at = issue.path.length > 0 ? `at \`${issue.path.join('.')}\`, ` : '';
+  return `${at}${issue.message}`;
+}
+
+/** A URL as the trace carries it — bounded like every other traced value. */
+function tracedUrl(url: string): string {
+  return url.length > TRACE_URL_CHARS ? `${url.slice(0, TRACE_URL_CHARS)}…` : url;
+}
+
+/** No invocation happened for this entity — distinct from an invocation that
+ *  ran and found nothing, which still gets an (empty) enrichment entry. */
+const SKIPPED = Symbol('plugin-skipped');
+
+function isBlank(value: unknown): boolean {
+  if (value == null) return true;
+  return typeof value === 'string' && value.trim() === '';
+}
+
+// ── Response parsing ────────────────────────────────────────────────────────
+
+/** Would the continuation prompt carry an ENRICHMENT block at all? Mirrors
+ *  `renderUserMessage`'s own test exactly — a plugin that skipped this entity
+ *  never reaches `enrichments`, and one that ran without text or data renders
+ *  nothing — so this answers the only question that matters: is there
+ *  anything here the previous stage's call didn't already see? */
+function hasEnrichmentContent(
+  enrichments: Array<{ plugin: string; result: TransformInvocationResult }>,
+): boolean {
+  return enrichments.some(
+    ({ result }) => Boolean(result.text) || Object.keys(result.data ?? {}).length > 0,
+  );
+}
+
+/** A fenced stage's data sources: the bundle-level base plus this
+ *  stage's `through` enrichments — what the continuation call saw. */
+function stageSources(
+  baseSources: ProvenanceOrigin[],
+  enrichments: Array<{ plugin: string; result: TransformInvocationResult }>,
+): ProvenanceOrigin[] {
+  if (enrichments.length === 0) return baseSources;
+  return [
+    ...baseSources,
+    ...enrichments.map((e): ProvenanceOrigin => ({ kind: 'enrichment', plugin: e.plugin })),
+  ];
+}
+
+/** Walks a batch's emission tree (a through-free region covers the root
+ *  plus every unfenced descendant in one call), tallying — per node name —
+ *  entities whose own declared fields are all null. Judged per-node: a
+ *  child's values never rescue (or count against) its parent's tally.
+ *  Counted BEFORE `dropEmptyEmissions` runs, so the trace still says how many
+ *  records the model answered with nothing in them. */
+function countEmptyEmissions(emissions: WorkingEmission[], into: Record<string, number>): void {
+  for (const emission of emissions) {
+    if (isEmptyRecord(emission)) {
+      into[emission.spec.name] = (into[emission.spec.name] ?? 0) + 1;
+    }
+    for (const children of emission.children.values()) {
+      countEmptyEmissions(children, into);
+    }
+  }
+}
+
+/** A record the model answered with nothing in it: every field it declares at
+ *  this stage came back absent. A node that declares NO scalar fields is
+ *  structural — it exists to carry its children, so it is never "empty". */
+function isEmptyRecord(emission: WorkingEmission): boolean {
+  const fields = emission.spec.stages[emission.stageIndex].fields;
+  return fields.length > 0 && fields.every((f) => emission.context[f.name] == null);
+}
+
+/**
+ * The handbook's promise, kept by the engine rather than asked of the model:
+ * "a record with no value in any of its fields is dropped rather than emitted
+ * all-null". The system prompt asks for the same thing, but a prompt is a
+ * request — a model that answers with one empty entity (or with keys nobody
+ * declared, which `.passthrough()` accepts and every field then projects to
+ * null) used to hand the program a real position built from no facts: a write
+ * with every field null, an iteration of a fan-out over nothing, and — behind
+ * a `through` fence — a plugin invocation and a whole second model call spent
+ * asking about an entity that carries none.
+ *
+ * A parent survives on its CHILDREN's evidence: dropping a fieldless-but-
+ * populated parent would take real records with it, so the emptiness has to be
+ * judged bottom-up.
+ */
+function dropEmptyEmissions(
+  emissions: WorkingEmission[],
+  /** Tallies what was actually dropped, per node name. Distinct from the
+   *  `empty` tally: a fieldless parent that survived on its children's
+   *  evidence is empty but not dropped, and a reader who cannot tell those
+   *  apart cannot tell a working extract from a broken one. */
+  dropped: Record<string, number>,
+): WorkingEmission[] {
+  const kept: WorkingEmission[] = [];
+  for (const emission of emissions) {
+    let carriesChildren = false;
+    for (const [name, children] of emission.children) {
+      const survivors = dropEmptyEmissions(children, dropped);
+      emission.children.set(name, survivors);
+      carriesChildren ||= survivors.length > 0;
+    }
+    if (carriesChildren || !isEmptyRecord(emission)) kept.push(emission);
+    else dropped[emission.spec.name] = (dropped[emission.spec.name] ?? 0) + 1;
+  }
+  return kept;
+}
+
+/**
+ * A field the extraction did not produce is ABSENT — never an empty-string
+ * sentinel. A model with nothing to say answers `""` (or whitespace) about as
+ * often as it answers `null`, and the two are the same fact; only one of them
+ * is visible to the null plane, so an author's `EXISTS` / `ISNULL` / `== null`
+ * guard silently fails on the other. Collapsed here, at the ONE place a
+ * response value becomes a field value, so no guard has to know the
+ * difference and no `COALESCE(x, "")` is needed to make them agree.
+ *
+ * A blank entry drops out of a list for the same reason, and a list left with
+ * nothing is itself absent — an unproduced list is not "a list of nothing".
+ */
+function absentIfBlank(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (typeof value === 'string') return value.trim() === '' ? null : value;
+  if (Array.isArray(value)) {
+    const kept = value.map(absentIfBlank).filter((v) => v !== null);
+    return kept.length > 0 ? kept : null;
+  }
+  return value;
+}
+
+function projectEmission(raw: Record<string, unknown>, site: CallSite): WorkingEmission {
+  const context: Record<string, unknown> = {};
+  const provenance: Record<string, ProvenanceOrigin> = {};
+  for (const field of site.spec.stages[site.stageIndex].fields) {
+    const wrapped = raw[field.name] as
+      | { evidence?: string | null; value?: unknown }
+      | null
+      | undefined;
+    // `json` is exempt: its shape is the author's own and nothing validates
+    // it, so the engine does not reach inside a structure it doesn't own.
+    context[field.name] =
+      field.type === 'json' ? (wrapped?.value ?? null) : absentIfBlank(wrapped?.value);
+    // The response's `{ evidence, value }` wrapping, kept (E4): the
+    // field's origin is the interned call site + the authored
+    // description + the LLM's verbatim quote.
+    provenance[field.name] = {
+      kind: 'extraction',
+      site: site.ref,
+      field: field.name,
+      description: field.description,
+      ...(wrapped?.evidence ? { quote: wrapped.evidence } : {}),
+    };
+  }
+  const children = new Map<string, WorkingEmission[]>();
+  for (const child of site.children) {
+    const rawChildren = raw[child.spec.name];
+    const arr = Array.isArray(rawChildren) ? rawChildren : rawChildren == null ? [] : [rawChildren];
+    children.set(
+      child.spec.name,
+      arr
+        .filter((e): e is Record<string, unknown> => e != null && typeof e === 'object')
+        .map((e) => projectEmission(e, child)),
+    );
+  }
+  return {
+    spec: site.spec,
+    stageIndex: site.stageIndex,
+    context,
+    provenance,
+    origin: { kind: 'extraction', site: site.ref },
+    children,
+  };
+}
+
+/** The source content (`from [...]` resources) is shared by every emission of
+ *  one `extract` — it rides the root and every descendant unchanged. */
+function exportEmission(working: WorkingEmission, resources: Resource[]): ExtractEmission {
+  const fields: Record<string, unknown> = {};
+  const provenance: Record<string, ProvenanceOrigin> = {};
+  for (const name of working.spec.exported) {
+    fields[name] = working.context[name] ?? null;
+    const origin = working.provenance[name];
+    if (origin) provenance[name] = origin;
+  }
+  const children = new Map<string, ExtractEmission[]>();
+  for (const [name, list] of working.children) {
+    children.set(
+      name,
+      list.map((c) => exportEmission(c, resources)),
+    );
+  }
+  return {
+    nodeName: working.spec.name,
+    fields,
+    provenance,
+    ...(working.origin !== undefined ? { origin: working.origin } : {}),
+    resources,
+    children,
+  };
+}
+
+// ── Schema synthesis (nested) ───────────────────────────────────────────────
+
+/**
+ * A node's records, read as the model may actually have written them.
+ *
+ * The guide asks for a BARE ARRAY under the node's key and reserves the
+ * `{ evidence, value }` pair for a leaf FIELD. A model that has just written
+ * that pair fifty times over applies it to the list as well (production, Project
+ * A 2026-09-01: an entire correctly-extracted list arrived under
+ * `{ evidence: "the whole list…", value: [ … ] }`), and `.passthrough()` then
+ * read the envelope as ONE record carrying two keys nothing declared — every
+ * declared field null, and a good extraction dropped. The records inside are
+ * right; only the packaging is wrong, so the packaging is what comes off.
+ *
+ * The node's own DECLARED keys break the tie, because the envelope is
+ * recognised by shape: a node that declares a field called `value` is answered
+ * with an object keyed `value`, and that object is its record, not an envelope.
+ *
+ * The envelope's own `evidence` is dropped. It describes the LIST, and the
+ * emission model has nowhere to put a quote that belongs to no field and no
+ * single record — inventing a per-record citation out of it would be a worse
+ * lie than losing it.
+ */
+function recordListReader(site: CallSite): (value: unknown) => unknown {
+  const declared = declaredKeys(site);
+  const ambiguous = declared.has('value') || declared.has('evidence');
+  return (value) => {
+    const records = !ambiguous && isEvidenceEnvelope(value) ? value.value : value;
+    return Array.isArray(records) || records == null ? records : [records];
+  };
+}
+
+/** Every key one of this node's records may carry — the stage's own fields
+ *  plus each child node's alias. It is what `entitySchemaFor` builds its shape
+ *  from, and so also what recognises a record by shape when the model wrote
+ *  the packaging around it wrongly. */
+function declaredKeys(site: CallSite): Set<string> {
+  return new Set([
+    ...site.spec.stages[site.stageIndex].fields.map((f) => f.name),
+    ...site.children.map((c) => c.spec.name),
+  ]);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** The per-field response wrapping, applied where it does not belong: an
+ *  object carrying `value` and nothing but an optional `evidence` beside it. */
+function isEvidenceEnvelope(value: unknown): value is { evidence?: unknown; value: unknown } {
+  if (!isPlainRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.includes('value') && keys.every((k) => k === 'value' || k === 'evidence');
+}
+
+/** Where a structured citation keeps its quote when a model writes one —
+ *  read in this order, first non-blank string wins. */
+const EVIDENCE_QUOTE_KEYS = ['quote', 'text', 'evidence'];
+
+/** How deep the lone-string search goes. A citation is a shallow thing; past
+ *  this the "exactly one string" reading stops being about a quote at all. */
+const EVIDENCE_SALVAGE_DEPTH = 4;
+
+/**
+ * The quote inside a citation the model did not write as a string.
+ *
+ * There is one only when it is unambiguous: an obvious key (`quote`, `text`,
+ * `evidence`), or a single string anywhere in the structure. Two strings, none,
+ * or a number leave the field without a citation — picking one of two, or
+ * rendering a number as a quote, would be a worse provenance record than none.
+ */
+function salvagedQuote(evidence: unknown): string | null {
+  if (typeof evidence === 'string') return evidence;
+  if (isPlainRecord(evidence)) {
+    for (const key of EVIDENCE_QUOTE_KEYS) {
+      const named = evidence[key];
+      if (typeof named === 'string' && named.trim() !== '') return named;
+    }
+  }
+  const found: string[] = [];
+  collectStringLeaves(evidence, EVIDENCE_SALVAGE_DEPTH, found);
+  return found.length === 1 ? found[0] : null;
+}
+
+function collectStringLeaves(value: unknown, depth: number, into: string[]): void {
+  if (into.length > 1) return;
+  if (typeof value === 'string') {
+    if (value.trim() !== '') into.push(value);
+    return;
+  }
+  if (depth === 0) return;
+  const children = Array.isArray(value) ? value : isPlainRecord(value) ? Object.values(value) : [];
+  for (const child of children) collectStringLeaves(child, depth - 1, into);
+}
+
+/**
+ * The evidence half of a field's answer, read as a model may actually write it.
+ *
+ * Evidence is PROVENANCE — a quote standing behind the value — so a reply that
+ * omits it, or writes it as a small structure, has still answered the question
+ * that was asked. Failing the call over the citation throws the answer away
+ * with it: in production a ~50-entity extraction died on
+ * `entry.49.flag_reason.evidence` being absent and then, on the retry, on
+ * `entry.45.sourced_by.evidence` being an object — twelve minutes of work lost
+ * to the packaging of two quotes out of some seven hundred.
+ *
+ * So the evidence half is normalised here and the VALUE half is left exactly as
+ * strict as it was: a value of the wrong type is a wrong answer, and that still
+ * earns the retry.
+ *
+ * Only an object that already carries `value` is touched, because that is the
+ * shape this wrapper is FOR. A `json` field answered with a bare structure of
+ * the author's own is not an envelope, and must keep failing as it did rather
+ * than being read as a citation-less empty.
+ */
+function normaliseFieldEvidence(raw: unknown, ctx?: FieldCoercions): unknown {
+  if (!isPlainRecord(raw) || !('value' in raw)) return raw;
+  const { evidence } = raw;
+  if (typeof evidence === 'string' || evidence === null) return raw;
+  // A citation the model never wrote is not a coercion: nothing was normalised
+  // away, so there is nothing for the run to explain.
+  if (evidence === undefined) return { ...raw, evidence: null };
+  ctx?.sink.recordEvidence(ctx.key, evidence);
+  return { ...raw, evidence: salvagedQuote(evidence) };
+}
+
+function wrapFieldEvidence(valueSchema: z.ZodTypeAny, ctx?: FieldCoercions): z.ZodTypeAny {
+  return z.preprocess(
+    (raw) => normaliseFieldEvidence(raw, ctx),
+    z.object({ evidence: z.string().nullable(), value: valueSchema }).nullable().optional(),
+  );
+}
+
+/** Where one field's coercions are recorded, and under what key. */
+interface FieldCoercions {
+  key: string;
+  sink: CoercionTracker;
+}
+
+/**
+ * Accumulates what a parse normalised away, so a run can explain it instead of
+ * the change happening in silence. Two things, kept apart because they are not
+ * the same loss:
+ *
+ * - a CLOSED-enum coercion that discarded a value — a non-member nulled (single
+ *   select) or dropped from a multiselect array (`open` enums never record
+ *   here: a novel value there is legal, not a loss);
+ * - a field's EVIDENCE rewritten to a quote or to nothing, which loses a
+ *   citation while the value itself comes through untouched;
+ * - the reply's ENVELOPE rebuilt around content that was right but sitting in
+ *   the wrong place — one per call, since a call has one envelope.
+ *
+ * The first two are keyed per `<node>.<field>`, since the same field name
+ * recurs across node types.
+ *
+ * Reset before every parse attempt (`callWithRetry`'s validate-then-retry
+ * loop): the schema tree — and its captured closures — is built ONCE per
+ * region call and reused for both the first and the retry parse, so without
+ * a reset a succeeding retry would inherit the failed attempt's diagnostics.
+ */
+class CoercionTracker {
+  private byField: Record<string, string[]> = {};
+  private evidenceByField: Record<string, string[]> = {};
+  private envelope: string | undefined;
+
+  record(fieldKey: string, rawValue: unknown): void {
+    pushCoercion(this.byField, fieldKey, String(rawValue));
+  }
+
+  /** The citation as WRITTEN — an object renders as its JSON, since
+   *  `[object Object]` would say nothing about what came back. */
+  recordEvidence(fieldKey: string, rawEvidence: unknown): void {
+    pushCoercion(this.evidenceByField, fieldKey, safeStringify(rawEvidence));
+  }
+
+  /** How the reply was packaged before the envelope was rebuilt around it —
+   *  what the run says instead of "the model answered correctly". */
+  recordEnvelope(shape: string): void {
+    this.envelope = shape;
+  }
+
+  reset(): void {
+    this.byField = {};
+    this.evidenceByField = {};
+    this.envelope = undefined;
+  }
+
+  snapshot(): Record<string, string[]> | undefined {
+    return Object.keys(this.byField).length > 0 ? this.byField : undefined;
+  }
+
+  evidenceSnapshot(): Record<string, string[]> | undefined {
+    return Object.keys(this.evidenceByField).length > 0 ? this.evidenceByField : undefined;
+  }
+
+  envelopeSnapshot(): string | undefined {
+    return this.envelope;
+  }
+}
+
+function pushCoercion(into: Record<string, string[]>, key: string, rendered: string): void {
+  const truncated = rendered.length > 80 ? `${rendered.slice(0, 80)}…` : rendered;
+  (into[key] ??= []).push(truncated);
+}
+
+function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.ZodTypeAny {
+  if (type === undefined) return z.unknown();
+  if (typeof type === 'string') {
+    switch (type) {
+      case 'text':
+      case 'date':
+      case 'datetime':
+      case 'file':
+        return z.string().nullable();
+      case 'number':
+        return z.number().nullable();
+      case 'boolean':
+        return z.boolean().nullable();
+      case 'json':
+        // A structured value — whatever shape the description asks for. Nothing
+        // describes it, so nothing validates it either; it rides through to the
+        // json field verbatim.
+        return z.unknown();
+      case 'absent':
+        // The `null` literal's type. Checker-only (no field is ever declared
+        // it), so this never reaches an extraction schema; listed to keep the
+        // switch total.
+        return z.null();
+    }
+  }
+  // `maybeAbsent` is a checker-only type (a race receipt read); it never reaches
+  // extraction, but keep the switch total against its present shape.
+  if (type.kind === 'maybeAbsent') return zodForFieldType(type.of, ctx);
+  if (type.kind === 'list') {
+    const element = type.of;
+    // A multiselect (list of enum) coerces each entry to its canonical option.
+    // Open (known-values) fields KEEP an unmatched string entry as-is — the
+    // adapter's live listing just hadn't seen it. Closed fields DROP it (one
+    // near-miss must not fail the whole extraction — mirrors the Attio
+    // select/status write path's `matchOption`) and record the loss.
+    if (typeof element === 'object' && element.kind === 'enum' && element.options.length > 0) {
+      const { options, open } = element;
+      return z
+        .array(z.unknown())
+        .nullable()
+        .transform((values) =>
+          values === null
+            ? null
+            : values.flatMap((v): string[] => {
+                // A blank entry is nothing extracted, not a discarded value —
+                // it drops out without being reported as a loss.
+                if (typeof v === 'string' && v.trim() === '') return [];
+                const matched = matchOption(v, options);
+                if (matched !== undefined) return [matched];
+                if (open) return typeof v === 'string' ? [v] : [];
+                if (v != null) ctx?.sink.record(ctx.key, v);
+                return [];
+              }),
+        );
+    }
+    return z.array(zodForFieldType(type.of, ctx)).nullable();
+  }
+  // A TUPLE never reaches an extraction: nothing declares one on an adapter
+  // surface and no annotation names one — it is the shape a combinator's
+  // receipt has, inside the program. Describe it as opaque rather than guess.
+  if (type.kind === 'tuple') return z.unknown().nullable();
+  // A DICT is the same story as a tuple: a value the PROGRAM builds
+  // (`GROUPBY`, a `{ k: v }` literal), never a shape an annotation asks a
+  // model for. Opaque rather than guessed at.
+  if (type.kind === 'dict') return z.unknown().nullable();
+  if (type.options.length === 0) return z.string().nullable();
+  // A single select coerces to its canonical option. Open (known-values)
+  // fields keep a genuine non-member as its raw string — other values remain
+  // legal, per `enum.open`. Closed fields drop to null (tolerant, not
+  // strict, so it never throws) and record the loss for (3).
+  const { options, open } = type;
+  return z.unknown().transform((value) => {
+    // A blank answer is nothing extracted, not a non-member: absent, and no
+    // coercion diagnostic (nothing was discarded).
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const matched = matchOption(value, options);
+    if (matched !== undefined) return matched;
+    if (open) return typeof value === 'string' ? value : null;
+    if (value != null) ctx?.sink.record(ctx.key, value);
+    return null;
+  });
+}
+
+/**
+ * One entity of a node's list. Unknown keys pass through (a model that adds a
+ * key nobody asked for has still answered the question), but a record made
+ * ENTIRELY of keys nothing declared has not: every declared field then projects
+ * to null, which reads downstream as the model finding nothing and lands as a
+ * silent drop. That is a SHAPE failure wearing an empty record's clothes, so it
+ * takes the road every other shape failure takes — retried once with the keys
+ * named, then raised with the reply on the trace.
+ *
+ * A record whose DECLARED keys are simply valueless is the other thing entirely:
+ * a genuine empty, dropped quietly, exactly as the handbook promises.
+ */
+function entitySchemaFor(site: CallSite, sink?: CoercionTracker): z.ZodTypeAny {
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const field of site.spec.stages[site.stageIndex].fields) {
+    const ctx = sink ? { key: `${site.spec.name}.${field.name}`, sink } : undefined;
+    shape[field.name] = wrapFieldEvidence(zodForFieldType(field.type, ctx), ctx);
+  }
+  for (const child of site.children) {
+    shape[child.spec.name] = z
+      .preprocess(recordListReader(child), z.array(entitySchemaFor(child, sink)))
+      .optional()
+      .nullable();
+  }
+  const declared = Object.keys(shape);
+  const object = z.object(shape).passthrough();
+  // A structural node declares nothing at this stage — every key is unknown to
+  // it by construction, so it has no shape to be wrong about.
+  if (declared.length === 0) return object;
+  return object.superRefine((record, ctx) => {
+    const keys = Object.keys(record);
+    if (keys.length === 0 || keys.some((k) => declared.includes(k))) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        `this entity was answered under ${quoteKeys(keys)} — none of which it declares. ` +
+        `Its fields are ${quoteKeys(declared)}; answer under those names.`,
+    });
+  });
+}
+
+/** How many of a record's keys an error message is willing to list. */
+const NAMED_KEYS = 6;
+
+function quoteKeys(keys: string[]): string {
+  const named = keys.slice(0, NAMED_KEYS).map((k) => `\`${k}\``);
+  return keys.length > NAMED_KEYS ? `${named.join(', ')}, …` : named.join(', ');
+}
+
+/**
+ * The answer key is REQUIRED. An optional one made "I did not answer the
+ * question" — `{}`, or a reply keyed on something the prompt never named —
+ * validate cleanly and read downstream as "extracted nothing", so a model that
+ * ignored the request produced a silent empty run instead of the schema
+ * failure it is. Required, it takes the ordinary road: retried once with the
+ * issue named, then raised. An extraction that genuinely found nothing still
+ * says so the way it always did, with an empty array under the key.
+ */
+function responseSchemaFor(region: CallSite, sink?: CoercionTracker): z.ZodTypeAny {
+  return z.preprocess(
+    envelopeReader(region, sink),
+    z
+      .object({
+        [region.siteId]: z.preprocess(
+          recordListReader(region),
+          z.array(entitySchemaFor(region, sink)),
+        ),
+      })
+      .passthrough(),
+  );
+}
+
+/**
+ * The region's records, found when the reply put them somewhere other than
+ * under the answer key.
+ *
+ * Seen in production: a per-entity refinement answered with
+ * the field map BARE at the top level — `{ name: { evidence, value }, … }`
+ * where the guide asked for `{ "x:entry#26": [ … ] }` — and, asked again,
+ * with an ARRAY of those maps. Both replies were content-correct; only the
+ * packaging was missing. A production run makes 40-85 per-entity calls, so a
+ * per-call drift of a percent makes losing the run the expected outcome.
+ *
+ * Recognition is STRUCTURAL, never by label: a value is one of this region's
+ * records when every key it carries is a key the region declares — the same
+ * reading `entitySchemaFor` applies to a record found in the right place. That
+ * makes the rule the same for the root call and for a per-entity refinement,
+ * and makes it safe in both: what the salvage moves is where the content sits,
+ * and the content still faces the full entity schema afterwards, so a wrong
+ * answer is still a wrong answer.
+ *
+ * An EMPTY object or list is deliberately not recognised. "Nothing at all" is
+ * exactly the reply that has to keep failing — wrapping it would turn a model
+ * that ignored the question into a silent empty extraction, which is the thing
+ * the required answer key exists to prevent.
+ */
+function envelopeReader(region: CallSite, sink?: CoercionTracker): (value: unknown) => unknown {
+  const declared = declaredKeys(region);
+  return (reply) => {
+    // A structural region declares nothing at this stage, so it has no shape
+    // to recognise a record by — and nothing to salvage from.
+    if (declared.size === 0) return reply;
+    if (isPlainRecord(reply) && Object.keys(reply).includes(region.siteId)) return reply;
+    const bare = regionRecords(reply, declared);
+    if (bare) {
+      sink?.recordEnvelope(Array.isArray(reply) ? 'a bare list of records' : 'a bare record');
+      return { [region.siteId]: bare };
+    }
+    if (isPlainRecord(reply)) {
+      const keys = Object.keys(reply);
+      // The model labelled the answer itself — `{ "entry": [ … ] }` for a call
+      // whose key is `x:entry#26`. Exactly one key: with two, which of them is
+      // the answer would be a guess.
+      const labelled = keys.length === 1 && !declared.has(keys[0]) ? keys[0] : undefined;
+      const records = labelled === undefined ? undefined : regionRecords(reply[labelled], declared);
+      if (labelled !== undefined && records) {
+        sink?.recordEnvelope(`keyed \`${labelled}\``);
+        return { [region.siteId]: records };
+      }
+    }
+    return reply;
+  };
+}
+
+/** A region's record, or a list of them, read by shape — `undefined` when the
+ *  value is neither. */
+function regionRecords(value: unknown, declared: Set<string>): unknown[] | undefined {
+  if (isDeclaredRecord(value, declared)) return [value];
+  if (Array.isArray(value) && value.length > 0 && value.every((e) => isDeclaredRecord(e, declared)))
+    return value;
+  return undefined;
+}
+
+function isDeclaredRecord(value: unknown, declared: Set<string>): boolean {
+  if (!isPlainRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((k) => declared.has(k));
+}
+
+/**
+ * What the retry asks for, which is not the same question in both cases.
+ *
+ * A complaint about a VALUE names a place in a reply the model can see, and
+ * fixing it there is the whole instruction. A complaint at the TOP of the reply
+ * — nothing under the answer key, or the answer key holding something that is
+ * not a list — is about the packaging, and a model that has just missed the
+ * envelope is not helped by being told again which values are invalid. So it is
+ * shown the envelope instead, written out with this region's own key and its
+ * own field names.
+ */
+function retryInstruction(region: CallSite, issues: z.ZodIssue[]): string {
+  const packaging = issues.some(
+    (i) => i.path.length === 0 || (i.path.length === 1 && i.path[0] === region.siteId),
+  );
+  return packaging
+    ? `The SHAPE of your response was wrong: the entire answer belongs under one key, \`${region.siteId}\`, whose value is a JSON array of records. Keep the values you already extracted and return them in exactly this envelope:\n${envelopeExample(region)}`
+    : 'Please fix ONLY the invalid values and return the complete corrected JSON.';
+}
+
+/** The envelope a region is asking for, written out — a field is the
+ *  `{ evidence, value }` pair, a child node a bare array of its own records. */
+function envelopeExample(region: CallSite): string {
+  const fields = region.spec.stages[region.stageIndex].fields.map(
+    (f) => `"${f.name}": {"evidence": string|null, "value": …}`,
+  );
+  const children = region.children.map((c) => `"${c.spec.name}": [ … ]`);
+  return `{"${region.siteId}": [ { ${[...fields, ...children].join(', ')} } ] }`;
+}
+
+function countSites(site: CallSite): number {
+  return 1 + site.children.reduce((acc, c) => acc + countSites(c), 0);
+}
+
+// ── Prompt assembly (the TG batcher's conventions, nested) ─────────────────
+
+function describeGuideType(type: FieldType | undefined): string {
+  if (type === undefined) return 'text';
+  if (typeof type === 'string') return type;
+  if (type.kind === 'list') return `list of ${describeGuideType(type.of)}`;
+  // `maybeAbsent` is a checker-only type (a race receipt read) and never reaches
+  // extraction guides; describe its present shape defensively rather than crash.
+  if (type.kind === 'maybeAbsent') return describeGuideType(type.of);
+  if (type.kind === 'tuple') return 'a list of values';
+  if (type.kind === 'dict') return 'a set of named values';
+  // `open` (known-values, not a closed enum): the model must learn other
+  // values are legal too, so this reads distinguishably from a closed enum.
+  if (type.open) return `text, known values: ${type.options.join(' | ')}`;
+  return `enum: ${type.options.join(' | ')}`;
+}
+
+function guideSection(site: CallSite, parent: CallSite | undefined): string[] {
+  const cardinality = site.single
+    ? ' (exactly one entity)'
+    : ' (emit each matching entity as an array element — zero, one, or many objects depending on the description)';
+  const head = parent
+    ? `**${site.siteId}** (an array under the key \`${site.spec.name}\` inside each **${parent.siteId}** entity): ${site.spec.description}${cardinality}`
+    : `**${site.siteId}**: ${site.spec.description}${cardinality}`;
+  const fieldLines = site.spec.stages[site.stageIndex].fields.map(
+    (f) => `    - \`${f.name}\` (${describeGuideType(f.type)}): ${f.description}`,
+  );
+  const sections = [
+    `${head}\n${fieldLines.length ? fieldLines.join('\n') : '    (no scalar fields — structural only)'}`,
+  ];
+  for (const child of site.children) sections.push(...guideSection(child, site));
+  return sections;
+}
+
+function buildSystemPrompt(region: CallSite): string {
+  return [
+    'You are an information-extraction system.',
+    '',
+    '## Entity Guide',
+    guideSection(region, undefined).join('\n\n'),
+    '',
+    '## Task',
+    'Extract structured data from the input message. For each field, return `{ evidence, value }` — the typed value, plus a quote of the source passage that supports it. Use null for missing values.',
+    '',
+    `The response is a JSON object with one key — \`${region.siteId}\` — whose value is a bare JSON array of entity objects. Nested entities are emitted as bare arrays under their declared keys inside their parent entity.`,
+    '',
+    '## Rules',
+    '- Give every field an `evidence` quote of the closest supporting source passage you can find.',
+    // The production failure the tolerant unwrap now catches: the model applied
+    // the per-field wrapping to a node's whole list. Belt and braces, both
+    // pointing the same way — the prompt stops asking for the wrong shape, the
+    // parser survives it anyway.
+    '- The `{ evidence, value }` wrapping belongs to a FIELD and to nothing else. A list of entities is a bare array and an entity is a bare object: never give either one an `evidence` of its own, and never wrap either one in a `{ evidence, value }` pair.',
+    '- Every key inside an entity is a field name the guide declares for that entity. Do not rename a field, translate it, or answer under a key of your own.',
+    "- The field's description is authoritative. When it asks you to compose, normalize, reformat, or prefix a value — joining a brand name with a product name shown elsewhere, say — produce that composed value and quote the passage(s) it was built from.",
+    '- Never return null merely because the finished value does not appear verbatim in the source.',
+    '- Use null only when the source genuinely lacks the information. Do not invent values that have no support in the source.',
+    '- A missing value is null. Never stand one in with an empty string, whitespace, or a placeholder like "none", "N/A" or "unknown".',
+    '- Entities of the same type must have unique names.',
+    '- Where the guide permits zero entities, omit an entity entirely rather than emitting it with every field null — unless its description explicitly allows empty or placeholder entities.',
+  ].join('\n');
+}
+
+/** The prompt a call sees, plus the SHAPE of it — one labelled part per
+ *  source segment / entity block / enrichment. The shape is what the trace
+ *  keeps: "this call read 6.2k, its sibling read 1.2k" is the first useful
+ *  fact about a call that came back with nothing, and the total alone can
+ *  never say it. */
+function renderUserMessage(
+  segments: Segment[],
+  entity:
+    | {
+        spec: ExtractNodeSpec;
+        context: Record<string, unknown>;
+        enrichments: Array<{ plugin: string; result: TransformInvocationResult }>;
+      }
+    | undefined,
+): { text: string; parts: Array<{ classification: string; chars: number }> } {
+  const rendered: string[] = [];
+  const parts: Array<{ classification: string; chars: number }> = [];
+  const push = (classification: string, body: string) => {
+    rendered.push(body);
+    parts.push({ classification, chars: body.length });
+  };
+  for (const seg of segments) push(seg.classification, `## ${seg.classification}\n${seg.content}`);
+  if (entity) {
+    push(
+      'CURRENT ENTITY',
+      [
+        '## CURRENT ENTITY',
+        `You are extracting the remaining fields of one already-identified entity: ${entity.spec.description}`,
+        '```json',
+        JSON.stringify(entity.context, null, 2),
+        '```',
+      ].join('\n'),
+    );
+    for (const { plugin, result } of entity.enrichments) {
+      const lines = [`## ENRICHMENT via \`${plugin}\``];
+      if (result.text) lines.push(result.text);
+      if (result.data && Object.keys(result.data).length > 0) {
+        lines.push('```json', JSON.stringify(result.data, null, 2), '```');
+      }
+      if (lines.length > 1) push(`ENRICHMENT via ${plugin}`, lines.join('\n'));
+    }
+  }
+  return { text: rendered.join('\n\n'), parts };
+}
+
+function transformResultSegments(plugin: string, result: TransformInvocationResult): Segment[] {
+  const segments: Segment[] = [];
+  if (result.text) segments.push({ classification: 'FRAGMENT', content: result.text });
+  if (result.data && Object.keys(result.data).length > 0) {
+    segments.push({ classification: 'FRAGMENT', content: safeStringify(result.data) });
+  }
+  return segments;
+}
+
+function segmentForDatum(datum: unknown): Segment {
+  if (typeof datum === 'string') return { classification: 'TEXT', content: datum };
+  if (typeof datum === 'object' && datum !== null) {
+    const r = datum as { content?: unknown; type?: unknown };
+    if (typeof r.content === 'string') {
+      return {
+        classification: typeof r.type === 'string' ? r.type : 'TEXT',
+        content: r.content,
+      };
+    }
+  }
+  return { classification: 'FRAGMENT', content: safeStringify(datum) };
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// ── Source content → resources (Layer 5 provenance) ──────────────────────────
+//
+// The `from [...]` data, captured as the source resources that fed extraction.
+// A FILE resource preserves the source `FileRef` (its `retrieve()` byte channel)
+// so the file can be carried forward to an output write; a TEXT resource carries
+// the text body inline. Mirrors the adapter resource currency
+// (`adapter.ts:Resource`) so `persistKgResources` / the file-write path consume
+// them unchanged.
+
+/** The source `FileRef` → a FILE `Resource` carrying the SAME `FileRef`.
+ *  `data.file` exposes the byte channel a write reads (`r.\`file\`` → the FileRef
+ *  → `streamFileRef` upload). Built for EVERY source file regardless of OCR; the
+ *  extracted `text`, when present, rides `content` (and `rawTextId` in metadata)
+ *  so the resource is self-describing — a file with no OCR text still carries
+ *  forward, just without inline text. */
+function fileResourceForRef(ref: FileRef, text: FileTextResult | undefined): Resource {
+  return {
+    ...(ref.source?.handle !== undefined ? { externalId: ref.source.handle } : {}),
+    type: 'FILE',
+    ...(ref.name !== undefined ? { name: ref.name } : {}),
+    url: null,
+    fileRef: ref,
+    ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+    ...(text && text.text.trim().length > 0 ? { content: text.text } : {}),
+    data: {
+      file: ref,
+      ...(ref.name !== undefined ? { name: ref.name } : {}),
+      type: 'FILE',
+      ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+    },
+    ...(text?.rawTextId !== undefined ? { metadata: { rawTextId: text.rawTextId } } : {}),
+  };
+}
+
+/** A non-file `from` datum → a TEXT `Resource` (the text the extraction read).
+ *  Returns `undefined` for non-string/structureless data — those still feed the
+ *  prompt as segments, but aren't a discrete provenance resource. */
+function textResourceForDatum(datum: unknown): Resource | undefined {
+  const segment = segmentForDatum(datum);
+  if (segment.content.trim().length === 0) return undefined;
+  return stampResourceId({
+    type: 'TEXT',
+    content: segment.content,
+    data: { content: segment.content, type: 'TEXT' },
+  });
+}
+
+function sanitizeSiteName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+}

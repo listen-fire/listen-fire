@@ -1,0 +1,36 @@
+name: typecheck
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  typecheck:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+          cache: "pnpm"
+      # Full workspace install — apps/api typechecks against workspace packages
+      # consumed as raw TS source via symlinks, so a filtered install omits
+      # those symlinks and every cross-package import fails with TS2307.
+      - run: pnpm install --frozen-lockfile
+      # Reads the schema only; no database needed. Everything that touches the
+      # DB imports the client this writes into node_modules, so the typecheck
+      # cannot run before it.
+      - run: pnpm --filter api exec prisma generate
+      - name: Typecheck
+        env:
+          # apps/api's typecheck OOMs (exit 134, which reads as a crash rather
+          # than an out-of-memory kill) below an 8GB heap. Standard runners
+          # have 16GB.
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm -r code:type-check

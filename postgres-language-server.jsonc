@@ -1,0 +1,12 @@
+{
+    "linter": {
+    // Enable/disable the linter entirely
+    "enabled": true,
+    "rules": {
+      // Configure rule groups
+      "safety": {
+        "addingForeignKeyConstraint": "off"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* NO @font-face here, and that is the whole difference from the link page's
+   stylesheet. An app is sandboxed with `default-src 'none'`: it may not fetch
+   a font file, and a font inlined as a data URI is blocked by the same rule
+   (the sandbox's defaults admit `data:` for images and media, nothing else).
+   So the board sets a system stack and stays sharp, rather than shipping
+   110kB of base64 for the browser to refuse. `--app-font-sans` lets a host
+   that offers its own typeface win — see `app.tailwind.config.cjs`. */
+
+/* The board scrolls INSIDE itself on both axes; the document must not scroll
+   too. Its height is set from the host's container at runtime. */
+html,
+body,
+#story-root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+}

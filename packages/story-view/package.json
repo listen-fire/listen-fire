@@ -1,0 +1,30 @@
+{
+  "name": "story-view",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "0.0.1",
+  "description": "The movement story renderer: one React rendering of a StoryView, mounted by the workbench panel and by the standalone HTML page",
+  "engines": {
+    "node": "22.20.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "bundle": "node standalone/build.mjs"
+  },
+  "main": "index.ts",
+  "type": "commonjs",
+  "dependencies": {
+    "@listen-fire/shared": "workspace:*",
+    "esbuild": "0.23.1",
+    "lucide-react": "^0.574.0",
+    "movement-lang": "workspace:*",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5"
+  }
+}

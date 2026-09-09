@@ -1,0 +1,36 @@
+Subject: Quarterly Update - Tidepool Analytics Q1 2026
+From: Kenji Nakamura <kenji@tidepool-analytics.example.com>
+To: investors@example.com
+
+Dear Investors,
+
+Hope this finds you well. Here's our Q1 2026 update for Tidepool Analytics.
+
+## Metrics
+- ARR: $4.8M (up from $3.6M last quarter)
+- Net Revenue Retention: 135%
+- Customers: 42 (added 11 new logos)
+- Burn: $380K/month
+- Runway: 18 months
+
+## Product
+We shipped our real-time anomaly detection module in February. Early adoption has been strong — 60% of existing customers activated it within the first month. Our NPS increased from 52 to 67.
+
+## Team
+- Hired VP Engineering: Diana Marchetti (ex-Metricly)
+- Hired Head of Sales: Rafael Torres (ex-Glacier Data)
+- Team is now 28 people
+
+## Challenges
+- Sales cycle lengthening in enterprise segment (avg 45 days → 62 days)
+- Lost one deal to Ravenhold Systems on pricing
+- Need to hire 2 more senior engineers for the platform team
+
+## Ask
+If you know strong senior backend engineers comfortable with Rust and distributed systems, please send them our way.
+
+Happy to chat about any of the above.
+
+Best,
+Kenji Nakamura
+CEO, Tidepool Analytics

@@ -1,0 +1,22 @@
+# Platform guides
+
+[`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) is the runbook: what each unit is, what it needs, what it still carries honestly, and every variable with what it does when unset. **Start there.**
+
+These guides are the second step. They translate that runbook onto a specific platform, and they cover only the parts that change when you leave `docker compose` behind — where the migration step goes when there is no one-shot service, how to run the roles file against a managed database, which health-check default is wrong, and which platform behaviour quietly breaks an in-process worker model.
+
+| guide | when |
+|---|---|
+| [`render.md`](render.md) | Render. The API as a web service on the shipped image, managed Postgres and Redis beside it. A ready-made Blueprint (`deploy/render.yaml`) encodes the whole shape, and you name the units it runs. |
+| [`vercel-plus-container.md`](vercel-plus-container.md) | You are on Vercel and want to stay there. The web app can; the API cannot, and this explains why and what to do instead. Fly.io is the worked example for the other half. |
+| [`aws.md`](aws.md) | ECS Fargate, RDS, ElastiCache, S3, ALB. Topology and gotchas, not console steps. |
+| [`byo-auth.md`](byo-auth.md) | You want Listen-Fire to use your identity system rather than its own. The Principal and Directory contracts, what a provider must guarantee, and the two routes with their honest effort. |
+
+Three things are true on every platform, and each of them has cost somebody a day:
+
+- **The API is one long-running process** with its background workers inside it. There is no worker deployment to add, no serverless shape, and no scale-to-zero — a process that stops between requests stops the schedulers and the resume loops with it.
+- **`GET /.well-known/health-check` answers `201`.** That is its contract. Platform health checks that default to expecting exactly `200` will drain a perfectly healthy target.
+- **Two Postgres roles must exist before the first migration.** The compose file creates them from `postgres-init/00-roles.sql` on an empty data directory; a managed database has no such hook, so run that file by hand before you start anything.
+
+One more thing changes off compose: the compose stack generates its own secrets into a Docker volume on first boot, and nothing does that for you elsewhere. Mint them once, keep them where you keep secrets, and never rotate the two encryption keys — see [`SELF_HOSTING.md`](../SELF_HOSTING.md), "What the installation generates for itself".
+
+Registering your own Slack app, Google OAuth client, WhatsApp number and the rest is platform-independent and is the longest-lead work in any real deployment. It lives in [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Registering your own third-party apps", and it belongs at the start of a project rather than the end.

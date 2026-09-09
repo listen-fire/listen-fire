@@ -1,0 +1,304 @@
+# Listen-Fire, self-hosted. One file, every shape.
+#
+# WHICH units run is `LISTEN_FIRE_PRODUCTS`, at run time — the same variable the
+# process itself reads (apps/api/src/products.ts). `deploy/up.sh` sets it,
+# derives the identity provider and the delivery modes from it, and waits for
+# health.
+#
+# Bare `docker compose up` is the whole of Listen-Fire — every unit, with core
+# identity. Add `--profile admin` for the platform-admin UI and `--profile demo`
+# for the fake third parties plus the sample dataset. Nothing a running unit
+# NEEDS is behind a profile: Redis is always up, because core's MCP OAuth flow
+# and automations' runaway-loop guard both keep state there and a bare `up`
+# mounts both.
+#
+# Secrets are NOT in this file and not in `.env`. The one-shot `init` service
+# mints them into the `listen-fire-config` volume on first boot and never again; every
+# service mounts that volume at /config and sources it through
+# `with-generated-env`. Postgres reads its password from /config/postgres_password
+# because a named volume is invisible to `env_file` (the docker CLI reads that on
+# the host).
+
+name: listen-fire
+
+x-node-app: &node-app
+  env_file:
+    - .env
+  volumes:
+    - listen-fire-config:/config
+  entrypoint: ['/usr/local/bin/with-generated-env']
+
+x-api-image: &api-image
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: listen-fire-api:local
+
+services:
+  # First boot only. Refuses when deploy/.env names no model key and LISTEN_FIRE_DEMO
+  # is not 1; rewrites nothing once generated.env exists.
+  init:
+    image: node:22.20.0-slim
+    env_file:
+      - .env
+    environment:
+      LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+      LISTEN_FIRE_TEAM_NAME: ${LISTEN_FIRE_TEAM_NAME:-Acme}
+      LISTEN_FIRE_ADMIN_EMAIL: ${LISTEN_FIRE_ADMIN_EMAIL:-admin@listen-fire.local}
+    volumes:
+      - listen-fire-config:/config
+      - ./init:/init:ro
+    command: ['sh', '/init/generate-env.sh']
+    restart: 'no'
+
+  # pgvector because the migration set is monolithic: `vector` + `pg_trgm` for
+  # knowledge and `citext` for core/automations all get created whatever runs.
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: listenfire
+      POSTGRES_DB: listenfire
+      POSTGRES_PASSWORD_FILE: /config/postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates the `agent` and `readonly` roles the migration set grants to, on
+      # an empty data directory. A MANAGED database has no such hook.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - listen-fire-config:/config:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U listenfire -d listenfire']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Core's MCP OAuth flow keeps in-flight state here; automations' runaway-loop
+  # guard keeps its counters here. NOT behind a profile: a bare `docker compose
+  # up` mounts every unit, so gating Redis on a flag would leave the shipped
+  # default composition without the store two of its units write to. A shape
+  # that needs none of it pays for one idle alpine container.
+  redis:
+    image: redis:7.2-alpine
+    command: ['redis-server', '--save', '60', '1', '--loglevel', 'warning']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot, to completion, before the API starts — so a restart never races
+  # the schema. The runner takes the database as an ARGUMENT.
+  migrate:
+    <<: [*node-app, *api-image]
+    command: ['sh', '-c', 'pnpm schema:migrate "$$DATABASE_URL"']
+    environment:
+      LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: [*node-app, *api-image]
+    command: ['node', 'build/server.js']
+    environment:
+      PORT: 3000
+      LISTEN_FIRE_PRODUCTS: ${LISTEN_FIRE_PRODUCTS:-all}
+      LISTEN_FIRE_PRINCIPAL: ${LISTEN_FIRE_PRINCIPAL:-core}
+      # Read by `with-generated-env`, which derives the dev-loop harness ids
+      # only when this is 1 — see that script. Every service that sources the
+      # generated secrets needs it, because the wrapper also UNSETS the ids an
+      # older generator baked into an existing config volume.
+      LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+      # Demo runs non-production on purpose: outbound email then goes to the
+      # fake outbox instead of a Mailgun that isn't configured.
+      NODE_ENV: ${LISTEN_FIRE_NODE_ENV:-production}
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8081}
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
+      # Where an OAuth consent screen returns the person. Those callback pages
+      # (`/attio`, `/airtable`, `/dropbox`, `/gmail`, `/google-integrations`)
+      # are served by the WEB app, so this defaults to the web origin.
+      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-${WEB_BASE_URL:-http://localhost:8080}}
+      # The origin a third party fetches an exposed file's bytes from. That
+      # route is served by the API, and the code's own fallback is
+      # OAUTH_REDIRECT_BASE_URL — the web origin — so pin it to the API here.
+      EXPOSED_FILE_PUBLIC_BASE_URL: ${EXPOSED_FILE_PUBLIC_BASE_URL:-${API_BASE_URL:-http://localhost:8081}}
+      MESSAGE_QUEUE_REDIS_HOSTNAME: redis
+      MESSAGE_QUEUE_REDIS_PORT: 6379
+      # Both default to the composed deployment's answer — an in-process
+      # consumer — because a bare `docker compose up` is the composed
+      # deployment. `up.sh` overrides them for a shape without automations.
+      KNOWLEDGE_MUTATION_DELIVERY: ${KNOWLEDGE_MUTATION_DELIVERY:-local}
+      ASKS_SETTLE_DELIVERY: ${ASKS_SETTLE_DELIVERY:-local}
+      FAKE_CHANNELS_URL: ${FAKE_CHANNELS_URL:-}
+      MOCK_OUTPUT_ADAPTERS: ${MOCK_OUTPUT_ADAPTERS:-}
+      # Email: the address automations receive mail on, and where the Resend
+      # receiving API lives (the demo points it at the stand-in). Passed through
+      # only when set — a bare key inherits from the shell and is omitted when
+      # unset, so the code never sees an empty string where it expects absence.
+      INBOUND_EMAIL_ADDRESS:
+      RESEND_API_BASE_URL:
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - '${API_PORT:-8081}:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:3000/.well-known/health-check || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    <<: *node-app
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      target: web
+    image: listen-fire-web:local
+    command: ['node', 'apps/web/server.js']
+    environment:
+      PORT: 3000
+      LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+      # The SERVER-side proxy target. The browser only ever calls same-origin.
+      API_INTERNAL_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${WEB_PORT:-8080}:3000'
+    healthcheck:
+      test:
+        - 'CMD'
+        - 'node'
+        - '-e'
+        - "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Core only: the admin app is platform-admin surface, and every one of its
+  # routers is owned by `residual` or `core`.
+  admin:
+    <<: *node-app
+    profiles: ['admin']
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      target: admin
+    image: listen-fire-admin:local
+    command: ['node', 'apps/admin/server.js']
+    environment:
+      PORT: 3000
+      LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+      API_INTERNAL_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${ADMIN_PORT:-8082}:3000'
+    healthcheck:
+      test:
+        - 'CMD'
+        - 'node'
+        - '-e'
+        - "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # The demo's stand-in third parties: Attio, Slack, Airtable, an email outbox.
+  fake-channels:
+    profiles: ['demo']
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      target: fake-channels
+    image: listen-fire-fake-channels:local
+    # Loopback only, deliberately: the outbox holds live magic links, and a
+    # single-use login link readable by anything on the LAN is a signed-in
+    # session for whoever fetches it first.
+    ports:
+      - '127.0.0.1:${FAKE_CHANNELS_PORT_HOST:-8083}:5556'
+    healthcheck:
+      test:
+        - 'CMD'
+        - 'node'
+        - '-e'
+        - "fetch('http://127.0.0.1:5556/email/outbox').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # The demo dataset: the team and its `vc-dealflow` ontology, a graph of
+  # sample organisations, one working automation, one valuation case. Runs after
+  # the API is healthy because the sample data goes through the real surfaces.
+  #
+  # Every piece is idempotent AND gated on its unit being mounted — seeding a
+  # valuation case on a knowledge-only stack is a skip, not a failure, so this
+  # one service is correct for every shape `up.sh` can start.
+  seed:
+    <<: [*node-app, *api-image]
+    profiles: ['demo']
+    working_dir: /srv/listen-fire/apps/api
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mounts() {
+          case ",$${LISTEN_FIRE_PRODUCTS:-all}," in
+            *,all,*|*,"$$1",*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        pnpm dev:seed --pretty
+        if mounts knowledge; then pnpm dev:demo-graph; fi
+        if mounts automations; then pnpm dev:movement provision; fi
+        if mounts valuations; then
+          pnpm dev:valuations setup
+          pnpm dev:valuations seed
+        fi
+    environment:
+      NODE_ENV: development
+      # Not ${LISTEN_FIRE_DEMO}: this service exists only in the `demo` profile, so it
+      # IS the demo. Hardcoding it keeps the seed from losing the harness ids it
+      # needs when somebody runs compose by hand without the variable set.
+      LISTEN_FIRE_DEMO: '1'
+      # The seed asks the same question the API does — which units are here —
+      # so the two must be given the same answer, principal included (they are
+      # checked against each other at boot).
+      LISTEN_FIRE_PRODUCTS: ${LISTEN_FIRE_PRODUCTS:-all}
+      LISTEN_FIRE_PRINCIPAL: ${LISTEN_FIRE_PRINCIPAL:-core}
+      API_BASE_URL: http://api:3000
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
+      FAKE_CHANNELS_URL: http://fake-channels:5556
+      MOCK_OUTPUT_ADAPTERS: 'true'
+      # The seed provisions a movement that imports `email`; without the
+      # address that import is a configuration gap and the seed refuses.
+      INBOUND_EMAIL_ADDRESS:
+      RESEND_API_BASE_URL: http://fake-channels:5556/resend
+    depends_on:
+      api:
+        condition: service_healthy
+      fake-channels:
+        condition: service_healthy
+    restart: 'no'
+
+volumes:
+  pgdata:
+  redisdata:
+  listen-fire-config:

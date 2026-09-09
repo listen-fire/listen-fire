@@ -1,0 +1,23 @@
+[
+    {
+        "id": "89692dfd-bebf-4641-b389-5cc5053dc9c3",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "issuedByLegalEntityId": "bbb36252-5852-400d-85ce-ae517f3f3d99",
+        "name": "Unknown amount of shares",
+        "type": "EQUITY_UNKNOWN_SHARES"
+    },
+    {
+        "id": "89692dfd-bebf-85ce-b389-5cc5053dc9c3",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "issuedByLegalEntityId": "bbb36252-5852-400d-85ce-ae517f3f3d99",
+        "name": "Unknown amount of shares",
+        "type": "EQUITY_UNKNOWN_SHARES"
+    },
+    {
+        "id": "bbb36252-bebf-85ce-b389-5cc5053dc9c3",
+        "teamId": "b89be610-dd28-4a5a-bee9-c627babaac3d",
+        "issuedByLegalEntityId": "de22753e-7631-4551-8a58-c1f6e59c5dfc",
+        "name": "Unknown amount of shares",
+        "type": "EQUITY_UNKNOWN_SHARES"
+    }
+]

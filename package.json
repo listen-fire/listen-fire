@@ -1,0 +1,55 @@
+{
+  "name": "listen-fire",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "This is only for dependabot, see issue: https://github.com/dependabot/dependabot-core/issues/7501",
+  "version": "0.1.0",
+  "dependencies": {
+    "api": "./apps/api",
+    "web": "./apps/web"
+  },
+  "engines": {
+    "pnpm": "^9.5.0"
+  },
+  "devDependencies": {
+    "typescript": "5.5.4"
+  },
+  "scripts": {
+    "all:codegen": "cd apps/api && pnpm run codegen",
+    "dev": "pnpm -r --parallel dev",
+    "dev:loop": "bash dev/loop.sh",
+    "dev:loop:agent": "DEV_LOOP_PROFILE=agent bash dev/loop.sh",
+    "dev:loop:agent2": "DEV_LOOP_PROFILE=agent2 bash dev/loop.sh",
+    "dev:loop:agent3": "DEV_LOOP_PROFILE=agent3 bash dev/loop.sh",
+    "dev:loop:status": "cd apps/api && pnpm run dev:loop:status",
+    "dev:seed": "cd apps/api && pnpm run dev:seed",
+    "dev:chat": "cd apps/api && pnpm run dev:chat",
+    "dev:inspect": "cd apps/api && pnpm run dev:inspect",
+    "dev:inject": "cd apps/api && pnpm run dev:inject",
+    "dev:whatsapp": "cd apps/api && pnpm run dev:whatsapp",
+    "dev:airtable": "cd apps/api && pnpm run dev:airtable",
+    "dev:granola": "cd apps/api && pnpm run dev:granola",
+    "dev:telegram": "cd apps/api && pnpm run dev:telegram",
+    "dev:evertrace": "cd apps/api && pnpm run dev:evertrace",
+    "health": "cd apps/api && pnpm run health",
+    "dev:describe": "cd apps/api && pnpm run dev:describe",
+    "dev:graph": "cd apps/api && pnpm run dev:graph",
+    "dev:ui": "cd apps/api && pnpm run dev:ui",
+    "dev:link": "cd apps/api && pnpm run dev:link",
+    "dev:movement": "cd apps/api && pnpm run dev:movement",
+    "dev:mvt-eval": "cd apps/api && pnpm run dev:mvt-eval",
+    "dev:extraction-bakeoff": "cd apps/api && pnpm run dev:extraction-bakeoff",
+    "dev:remote-verify": "cd apps/api && pnpm run dev:remote-verify",
+    "dev:measure-write": "cd apps/api && pnpm run dev:measure-write",
+    "carve:export-team": "cd apps/api && pnpm run carve:export-team",
+    "carve:import-team": "cd apps/api && pnpm run carve:import-team",
+    "carve:delete-team": "cd apps/api && pnpm run carve:delete-team",
+    "dev:editor-repro": "cd apps/api && pnpm run dev:editor-repro"
+  },
+  "pnpm": {
+    "overrides": {
+      "@pinecone-database/pinecone>@sinclair/typebox": "0.32.30"
+    }
+  },
+  "packageManager": "pnpm@9.5.0+sha512.140036830124618d624a2187b50d04289d5a087f326c9edfc0ccd733d76c4f52c3a313d4fc148794a2a9d81553016004e6742e8cf850670268a7387fc220c903"
+}

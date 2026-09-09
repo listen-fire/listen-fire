@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "allowJs": false,
+    "declaration": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "lib": [
+      "es2022",
+      "DOM",
+      "ESNext.Promise" // https://github.com/mozilla/pdf.js/issues/17932#issuecomment-2051120892 to avoid error TS2304: Cannot find name 'PromiseWithResolvers'.
+    ],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
+    "noErrorTruncation": true,
+    "noImplicitReturns": true,
+    "outDir": "build",
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "es2022",
+    "types": ["jest", "node"],
+    "jsx": "react"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.json"]
+}

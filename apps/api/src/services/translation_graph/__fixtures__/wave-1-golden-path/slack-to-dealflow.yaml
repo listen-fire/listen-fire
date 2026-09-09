@@ -1,0 +1,44 @@
+# Input TG mapping — `slack-to-dealflow`.
+#
+# Source: Slack adapter (`slack:message`)
+# Target: generic_reference → `dealflow-extraction` mapping's generic shape
+#
+# Translates an inbound Slack `event_callback.event` payload into the
+# generic source shape that `dealflow-extraction.yaml` consumes. The
+# composition runtime (R6) chains the two via referenced_tg_id.
+#
+# This file mirrors `dealflow-extraction.yaml` — it's the human-readable
+# design doc; the seeding script builds the AST in TypeScript.
+
+name: slack-to-dealflow
+
+source:
+  kind: adapter
+  adapterType: slack            # SLACK_ADAPTER_TYPE — the slack:message entry point
+
+target:
+  kind: generic_reference
+  tg_id: <dealflow-extraction mapping id, resolved at seed time>
+
+trigger: msg                    # bind the inbound Slack message as `msg`
+
+roots:
+  - source: msg                 # no traversal; the inbound message IS the root
+    target: __generic_root__
+    fields:
+      sent_at: msg.ts           # Slack ts (string) flows through as timestamp
+      sender_name: msg.user
+      content: msg.text
+    children:
+      # Files (attachments) — fan out via the Slack adapter's `files`
+      # reference. The Slack adapter publishes one position per attachment;
+      # for each, materialise the generic file record shape.
+      - source: msg-[:files]->
+        target: __generic_record__
+        edge:
+          name: files
+          relationship: embed
+        fields:
+          name: name            # the attachment record's `name` field
+          contentType: mimetype
+          data: url             # File handle (Slack's url_private_download)

@@ -1,0 +1,20 @@
+[
+  {
+      "id": "905b7267-cf1f-4926-a0c2-55a0a7e93080",
+      "createdBy": "3af77d6e-3697-4dc0-91d6-595debaa96ac",
+      "postId": "298c0ee0-8970-4da4-ba41-b02729c97ddf",
+      "type": "CURIOUS"
+  },
+  {
+      "id": "088834bd-af35-4b33-93dd-a3e7d6f75714",
+      "createdBy": "3af77d6e-3697-4dc0-91d6-595debaa96ac",
+      "postId": "d25b344e-69d0-4627-8224-e1a946bca2f3",
+      "type": "CURIOUS"
+  },
+  {
+      "id": "0d8c87bd-4156-4942-9637-65aeaeca40a5",
+      "createdBy": "3af77d6e-3697-4dc0-91d6-595debaa96ac",
+      "postId": "159b0b32-d7df-4e94-9c7f-020a6fcaba5e",
+      "type": "BOOKMARK"
+  }
+]

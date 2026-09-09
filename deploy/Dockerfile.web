@@ -1,0 +1,106 @@
+# The two Next frontends, one file, two targets.
+#
+#   docker build -f deploy/Dockerfile.web --target web   -t listen-fire-web:local   .
+#   docker build -f deploy/Dockerfile.web --target admin -t listen-fire-admin:local .
+#
+# Build context is the REPOSITORY ROOT, like deploy/Dockerfile. The install
+# strategy mirrors it: manifests first so editing source does not re-run the
+# install, then the workspace closure of the one app being built.
+#
+# Neither app bakes an API origin. `output: 'standalone'` plus a runtime
+# `API_INTERNAL_URL` makes the server-side proxy the only thing that knows
+# where the API is, so one image runs anywhere. Next compiles next.config
+# rewrites into the build's route manifest, so the runtime target is applied by
+# each app's middleware instead (src/lib/api-proxy.ts).
+
+# ── shared dependency layer ────────────────────────────────────────────────
+FROM node:22.20.0-slim AS deps
+
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN corepack enable && corepack prepare pnpm@9.5.0 --activate
+
+WORKDIR /srv/listen-fire
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+COPY packages/trpc/package.json packages/trpc/
+COPY packages/shared/package.json packages/shared/
+COPY packages/movement-lang/package.json packages/movement-lang/
+COPY packages/story-view/package.json packages/story-view/
+COPY packages/principal/package.json packages/principal/
+RUN pnpm install --frozen-lockfile --filter web... --filter admin...
+
+COPY . .
+
+# ── builders ───────────────────────────────────────────────────────────────
+FROM deps AS build-web
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN NODE_OPTIONS=--max-old-space-size=6144 pnpm --filter web build
+
+FROM deps AS build-admin
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN NODE_OPTIONS=--max-old-space-size=6144 pnpm --filter admin build
+
+# ── runners ────────────────────────────────────────────────────────────────
+# `standalone` traces exactly the files the server needs; `static` and `public`
+# are NOT traced and must be copied beside it or every asset 404s.
+FROM node:22.20.0-slim AS web
+WORKDIR /srv/listen-fire
+LABEL org.opencontainers.image.vendor="Listen-Fire" \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      org.opencontainers.image.source="https://github.com/listen-fire/listen-fire"
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV TZ=UTC
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+COPY deploy/init/with-generated-env.sh /usr/local/bin/with-generated-env
+RUN chmod +x /usr/local/bin/with-generated-env
+COPY --from=build-web /srv/listen-fire/apps/web/.next/standalone ./
+COPY --from=build-web /srv/listen-fire/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build-web /srv/listen-fire/apps/web/public ./apps/web/public
+EXPOSE 3000
+CMD ["node", "apps/web/server.js"]
+
+FROM node:22.20.0-slim AS admin
+WORKDIR /srv/listen-fire
+LABEL org.opencontainers.image.vendor="Listen-Fire" \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      org.opencontainers.image.source="https://github.com/listen-fire/listen-fire"
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV TZ=UTC
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+COPY deploy/init/with-generated-env.sh /usr/local/bin/with-generated-env
+RUN chmod +x /usr/local/bin/with-generated-env
+COPY --from=build-admin /srv/listen-fire/apps/admin/.next/standalone ./
+COPY --from=build-admin /srv/listen-fire/apps/admin/.next/static ./apps/admin/.next/static
+COPY --from=build-admin /srv/listen-fire/apps/admin/public ./apps/admin/public
+EXPOSE 3000
+CMD ["node", "apps/admin/server.js"]
+
+# ── the demo's fake third-party services ───────────────────────────────────
+# Only reached under the `demo` profile. `tsx` runs the TypeScript directly, as
+# `pnpm dev` does; better-sqlite3 needs a toolchain when no prebuild matches.
+FROM node:22.20.0-slim AS fake-channels
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9.5.0 --activate
+WORKDIR /srv/listen-fire
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/fake-channels/package.json apps/fake-channels/
+RUN pnpm install --frozen-lockfile --filter fake-channels...
+COPY apps/fake-channels apps/fake-channels
+ENV NODE_ENV=development
+ENV TZ=UTC
+ENV FAKE_CHANNELS_PORT=5556
+EXPOSE 5556
+WORKDIR /srv/listen-fire/apps/fake-channels
+CMD ["pnpm", "start"]

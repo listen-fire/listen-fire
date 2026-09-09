@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Smoother font rendering */
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Focus rings for interactive elements (buttons, links) */
+  *:focus-visible {
+    outline: 2px solid theme('colors.primary.400');
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Form elements: no global focus chrome — let components control their own */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+
+  /* Thin scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.gray.300') transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: theme('colors.gray.300');
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: theme('colors.gray.400');
+  }
+
+  /* Markdown tables in prose contexts */
+  .prose table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.8125rem;
+  }
+  .prose thead th {
+    border-bottom: 1.5px solid theme('colors.gray.300');
+    padding: 0.375rem 0.625rem;
+    text-align: left;
+    font-weight: 600;
+    color: theme('colors.gray.700');
+  }
+  .prose tbody td {
+    border-bottom: 1px solid theme('colors.gray.150', theme('colors.gray.100'));
+    padding: 0.375rem 0.625rem;
+    color: theme('colors.gray.600');
+  }
+  .prose tbody tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 400;
+  font-style: normal;
+  src: url(/fonts/JetBrainsMono-Regular.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 500;
+  font-style: normal;
+  src: url(/fonts/JetBrainsMono-Medium.woff2) format('woff2');
+}
+
+/* Pointer cursor on interactive elements. Tailwind v3 preflight already
+   covers `button, [role="button"]`; this extends it to anchors and keeps
+   the :not(:disabled) refinement. */
+button:not(:disabled),
+[role="button"]:not(:disabled),
+a {
+  cursor: pointer;
+}
+
+/* The pointer/arrow cursor flicker (Chrome/Arc) and missing pointer
+   (Safari) over icon-bearing buttons and links was never a cascade
+   problem — getComputedStyle reports `pointer` on every descendant in
+   both engines. It is a hit-testing problem: lucide icons are
+   multi-<path> stroke SVGs, and with the SVG default
+   `pointer-events: visiblePainted` the hit-test target flips every
+   couple of px while the mouse crosses an icon
+   (button → svg → path → svg → path → …). Each flip forces the browser
+   to re-resolve the displayed cursor: Chromium blips to the default
+   arrow between targets, and WebKit doesn't honour an inherited
+   `cursor: pointer` when the hit target is SVG content at all. Text-only
+   buttons are a single hit target, which is why they were immune.
+   Making decorative icons hit-test-transparent leaves the button/anchor
+   as the one stable target; clicks land on the control itself. */
+button svg,
+[role="button"] svg,
+a svg {
+  pointer-events: none;
+}

@@ -1,0 +1,77 @@
+*Listen-Fire Ingest API*
+
+Submit deals programmatically via the Listen-Fire API.
+
+*Authentication*
+
+All requests require an API key in the `Authorization` header:
+`Authorization: Bearer lf_xxxxxxxxxxxxxxxx`
+
+---
+
+*POST /api/v1/ingest*
+
+Submit a deal to the pipeline.
+
+Request body:
+```
+{
+  "title": "Acme Inc - Series A",
+  "content": "Optional text content or notes...",
+  "links": [{ "url": "https://acme.com" }],
+  "attachments": [{ "key": "doc_abc123", "filename": "pitch-deck.pdf", "documentId": "doc_abc123", "size": 1024000 }]
+}
+```
+
+• `title` (required) - Title for the submission
+• `content` - Text content or notes
+• `links` - URLs to scrape (company website, LinkedIn, etc.)
+• `attachments` - Documents uploaded via `/api/v1/documents`
+• `contentType` - One of: `DEALFLOW`, `INVESTOR_UPDATE`, `REQUEST`, `UNKNOWN`, `COMPANY_INFO`
+
+---
+
+*POST /api/v1/documents*
+
+Upload a document to attach to a deal.
+
+Headers:
+• `Content-Type` - MIME type (e.g., `application/pdf`)
+• `Content-Length` - File size in bytes
+• `X-Filename` - Filename
+
+Body: Raw file bytes
+
+Response can be directly added to the `attachments` array.
+
+---
+
+*Example: Submit with attachment*
+
+```
+# 1. Upload the pitch deck
+ATTACHMENT=$(curl -sL -X POST "https://api.example.com/api/v1/documents" \
+  -H "Authorization: Bearer lf_xxx" \
+  -H "Content-Type: application/pdf" \
+  -H "X-Filename: pitch-deck.pdf" \
+  --data-binary @pitch-deck.pdf)
+
+# 2. Submit the deal
+curl -L -X POST "https://api.example.com/api/v1/ingest" \
+  -H "Authorization: Bearer lf_xxx" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"title\": \"Acme Inc - Series A\",
+    \"links\": [{ \"url\": \"https://acme.com\" }],
+    \"attachments\": [$ATTACHMENT]
+  }"
+```
+
+*Example: Simple submission*
+
+```
+curl -X POST "https://api.example.com/api/v1/ingest" \
+  -H "Authorization: Bearer lf_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Acme Inc", "content": "Met founders at a conference. Worth following up."}'
+```

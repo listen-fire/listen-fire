@@ -1,0 +1,95 @@
+# Standalone TG mapping — `dealflow-extraction`.
+#
+# Source: generic shape `{ properties: { sent_at: timestamp,
+#         sender_name: string, content: string },
+#         edges: { files -> [{ name, contentType, data: File }] } }`
+# Target: KG (vc-dealflow ontology) — funding_round + round_participation
+#         (compound-scoped) + opportunity referencing the round.
+#
+# Exercised by the wave-1 golden-path scenario (G1). The body shape below
+# is the YAML projection of the action-tree AST stored in
+# `knowledge.translation_graph.body`. The actual seeding script
+# (`scripts/dev/seed-wave-1-golden-path.ts`) builds the same AST directly
+# in TypeScript so we don't have to ship a YAML→AST parser just for the
+# golden path — this file is the human-readable design reference.
+
+name: dealflow-extraction
+
+source:
+  kind: generic
+  shape:
+    properties:
+      sent_at: timestamp
+      sender_name: string
+      content: string
+    edges:
+      files:
+        target:
+          kind: list
+          element:
+            kind: record
+            fields:
+              name: string
+              contentType: string
+              data: file
+
+target:
+  kind: knowledge-graph
+
+trigger: msg                            # bind root to alias `msg`
+
+roots:
+  # ── Pre-extraction transform: URL retrieval ──────────────────────────────
+  # vc-url-retrieval (R7) augments the source graph with `vcUrl` edges
+  # carrying { name, url, file, text }. Runs before extraction because its
+  # dataDependency is 'none'.
+  - source: >
+      -[urls:#transform { plugin: "vc-url-retrieval" }]->
+      -[opp:#extract {
+        description: "investment opportunity in this dealflow message",
+        data: [msg.content, msg-[:files]->.data, urls.text]
+      }]->
+    target: kg.opportunity
+    fields:
+      company: EXTRACT_VALUE("company name")
+      summary: EXTRACT_VALUE("one-line summary of the opportunity")
+    uniqueness:
+      - property: company
+
+  # ── Funding round + compound-scoped Round Participation ──────────────────
+  # The funding round is identified by (round_name).
+  # Each Round Participation is compound-scoped to (round, investor_name) —
+  # the `edge_to: round` constraint expresses the compound-scoping arm
+  # added in R5.
+  - source: >
+      -[round:#extract {
+        description: "funding round mentioned in this message",
+        data: [msg.content]
+      }]->
+    target: kg.funding_round
+    fields:
+      name: EXTRACT_VALUE("funding round name")
+      stage: EXTRACT_VALUE("stage e.g. Seed, Series A")
+      amount: EXTRACT_VALUE("amount raised in USD (numeric)")
+    uniqueness:
+      - property: name
+    children:
+      # W3-F5 — `#extract` is a traversal step by nature: traversals
+      # yield N positions, the LLM emits N investor entities per the
+      # description, the engine yields one source position per
+      # emission, and the field mapping writes one `round_participation`
+      # row per ephemeral. The description ("each investor …") carries
+      # the cardinality intent — there is no separate fan-out step.
+      # See plans/2026-05-19-tg-extraction-parity/_wave-3-stubs/W3-F5-extract-as-traversal.md
+      - source: >
+          -[investor:#extract {
+            description: "each investor participating in this round (one object per investor)"
+          }]->
+        # Inherits parent's data:[msg.content] per the inheritance rule.
+        target: kg.round_participation
+        fields:
+          investor_name: EXTRACT_VALUE("investor name")
+          lead: EXTRACT_VALUE("is this the lead investor (boolean)")
+        uniqueness:
+          - edge_to: round                  # compound-scoping to the round ancestor
+          - property: investor_name

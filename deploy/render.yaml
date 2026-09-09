@@ -1,0 +1,346 @@
+# Render Blueprint for a Listen-Fire deployment: the API and its background
+# loops, the web app, managed Postgres, a managed Key Value (Redis) instance,
+# and a MinIO service for object storage.
+#
+# Read deploy/SELF_HOSTING.md first (the runbook every shape follows) and
+# deploy/guides/render.md (Render specifics, plus "What the Blueprint leaves to
+# you" for what this file cannot do).
+#
+# Two choices are yours before you deploy:
+#   - `region` is commented out on every service below. Pick one of oregon,
+#     ohio, virginia, frankfurt or singapore and set the SAME one everywhere,
+#     because the private network these services talk over does not span
+#     regions. Leaving them all commented out is also valid — Render then puts
+#     everything in its own default, oregon.
+#   - `LISTEN_FIRE_PRODUCTS` names the units this deployment runs. Change it and
+#     `LISTEN_FIRE_PRINCIPAL` together, since the process checks the two against
+#     each other at boot.
+#
+# Verified 2026-08-27 against render.com/docs/blueprint-spec, /docs/key-value,
+# /docs/databases, /docs/web-services, /docs/private-network. Facts locked in
+# here because they are load-bearing:
+#   - No Docker build-`target` field exists anywhere in the Blueprint spec, so
+#     the web app — which needs Dockerfile.web's `web` build target — runs on
+#     the Node runtime instead of Docker (see the `listen-fire-web` service
+#     below).
+#   - `runtime: docker` + `dockerfilePath` + `dockerContext` is the whole of
+#     Docker-runtime support; `dockerCommand` exists to override the image's
+#     CMD but isn't needed here.
+#   - `preDeployCommand` is a plain service-level field, run after build and
+#     before start.
+#   - `healthCheckPath` is a web-service-only field.
+#   - A Key Value (managed Redis) instance is a `services:` entry with
+#     `type: keyvalue`, not a separate top-level block like `databases:`.
+#     `ipAllowList` on it is REQUIRED but governs the PUBLIC internet only —
+#     internal/private-network connections between Render services in the same
+#     account are unauthenticated by default and need no entry there. That
+#     matches the code: MESSAGE_QUEUE_REDIS_HOSTNAME/_PORT is host+port only,
+#     no username, password or TLS (see SELF_HOSTING.md, "3. Redis").
+#   - Postgres 16 is available (Render supports major versions 13-18 as of
+#     this writing).
+#   - Every Render web service gets PORT=10000 unless it sets its own; the API
+#     image already reads `process.env.PORT` at runtime (apps/api/src/server.ts)
+#     so PORT is left unset here, and the web app's API_INTERNAL_URL is
+#     `http://<api service name>:10000` on the private network.
+#   - `fromService`/`fromDatabase` wire up connection details; there is no
+#     string-concatenation in Blueprint YAML, which is why API_INTERNAL_URL
+#     below is operator-set rather than assembled from `fromService` parts.
+#   - Plan sizes are starting points, not capacity guidance: API `standard` (the
+#     one always-on process, six background loops), web `starter`, Postgres
+#     `basic-1gb`, Key Value `starter`. Resize as your traffic and your database
+#     dictate.
+#
+# Off compose, nothing mints this installation's secrets for you (that's the
+# `init` one-shot container's job on compose, and it has no equivalent here —
+# see SELF_HOSTING.md, "What the installation generates for itself"). Below,
+# `generateValue: true` is used only for secrets that are safe to mint per
+# deployment (HMAC/signing material with no format requirement); the two
+# encryption keys are deliberately `sync: false` — Render's own generated
+# value would be exactly as unbackupable as one you never wrote down, and
+# losing either makes every stored third-party credential permanently
+# unreadable. `PUBLIC_USER_ID` must be a UUID (checked at boot), which
+# `generateValue` cannot produce, so it is a fixed literal below — like
+# `PUBLIC_TEAM_ID` in apps/api/src/startup/core.ts, it is machinery, not a
+# secret, and stays constant across redeploys of this file.
+#
+# `LISTEN_FIRE_TEAM_ID` is deliberately NOT set: it is optional in core's
+# bootstrap (apps/api/src/startup/core.ts) and, left unset, a team id is minted
+# normally by ProvisioningService on first boot.
+
+databases:
+  - name: listen-fire-postgres
+    plan: basic-1gb
+    # region: oregon   # pick one; it must match on every service (see the header)
+    postgresMajorVersion: '16'
+    # Public-internet access is not needed; every consumer is another Render
+    # service on the same private network.
+    ipAllowList: []
+
+services:
+  # Redis: core's in-flight MCP OAuth state, automations' runaway-loop guard
+  # counters. Required field, but empty because nothing needs PUBLIC access.
+  - type: keyvalue
+    name: listen-fire-redis
+    plan: starter
+    # region: oregon   # pick one; it must match on every service (see the header)
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  # MinIO: an S3-compatible object store, running as a single-node Render
+  # service on a persistent disk. It is the DEFAULT this file wires the API's
+  # S3 adapter to (see the object-storage envVars on listen-fire-api below) — S3 is
+  # a protocol here, not a vendor, so MinIO, an external S3-compatible bucket
+  # and GCS's own S3-interoperability HMAC keys all work through that one
+  # adapter. To use GCS or an external bucket instead: delete this service
+  # and the two `fromService` entries under listen-fire-api's object storage
+  # block, then set the AWS_* values there by hand. Exactly one object store
+  # may be configured.
+  #
+  # Single-instance by nature of the disk (Render disks don't support
+  # zero-downtime deploys or horizontal scaling for the service that owns
+  # them) — fine here, since this isn't the API's always-on process (see
+  # deploy/guides/render.md, "Object storage"). The bucket itself is not
+  # created automatically; that doc has the one-time `mc mb` step.
+  #
+  # Console-less variant of render-examples/minio/render.yaml (the console
+  # needs a second service built from a Dockerfile in that repo; `mc` is the
+  # documented admin alternative here). Verified against
+  # render.com/docs/blueprint-spec 2026-08-27: `disk` takes name/mountPath/
+  # sizeGB; `runtime: image` + `image.url` pulls a prebuilt image with no
+  # Dockerfile; `fromService` with `envVarKey` reads a specific NAMED env
+  # var off another service, not just its built-in host/port/
+  # connectionString properties (that's how listen-fire-api below picks up
+  # MINIO_ROOT_USER/_PASSWORD without them ever being typed twice).
+  - type: web
+    name: listen-fire-minio
+    runtime: image
+    image:
+      url: cgr.dev/chainguard/minio
+    # region: oregon   # pick one; it must match on every service (see the header)
+    plan: starter
+    healthCheckPath: /minio/health/live
+    # Render runs this through its own shell, so a quoted `/bin/sh -c "…"`
+    # arrives as one command NAME and exits 127 (first deploy, 2026-08-27).
+    # The disk is already mounted at /data, so nothing needs creating first.
+    dockerCommand: minio server --address $HOST:$PORT /data
+    autoDeploy: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: MINIO_ROOT_USER
+        generateValue: true
+      - key: MINIO_ROOT_PASSWORD
+        generateValue: true
+      - key: MINIO_BROWSER
+        value: 'off'
+      - key: HOST
+        value: '0.0.0.0'
+      - key: PORT
+        value: 9000
+
+  # The API and its six background loops — the only always-on process. Do NOT
+  # add a second service running this image as a "worker": the loops live
+  # inside this process and a copy would only contend for the same locks
+  # (deploy/guides/render.md, "One instance").
+  - type: web
+    name: listen-fire-api
+    runtime: docker
+    dockerfilePath: deploy/Dockerfile
+    dockerContext: .
+    # region: oregon   # pick one; it must match on every service (see the header)
+    plan: standard
+    numInstances: 1
+    healthCheckPath: /.well-known/health-check
+    # The migration runner takes the database as an ARGUMENT — it does not
+    # read the ambient environment (deploy/guides/render.md, "Migrations").
+    preDeployCommand: pnpm schema:migrate "$DATABASE_URL"
+    envVars:
+      # ---- composition: part of the service definition, not operator input.
+      # deploy/guides/render.md: "treat as part of the service definition
+      # rather than something an operator tunes."
+      - key: LISTEN_FIRE_PRODUCTS
+        value: automations,core
+      - key: LISTEN_FIRE_PRINCIPAL
+        value: core
+      - key: KNOWLEDGE_MUTATION_DELIVERY
+        value: webhook
+      - key: ASKS_SETTLE_DELIVERY
+        value: webhook
+      - key: NODE_ENV
+        value: production
+
+      # ---- database + redis: referenced, never typed by hand.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: listen-fire-postgres
+          property: connectionString
+      - key: DATABASE_URL_READONLY
+        # No read replica — SELF_HOSTING.md says set it equal to DATABASE_URL.
+        fromDatabase:
+          name: listen-fire-postgres
+          property: connectionString
+      - key: MESSAGE_QUEUE_REDIS_HOSTNAME
+        fromService:
+          type: keyvalue
+          name: listen-fire-redis
+          property: host
+      - key: MESSAGE_QUEUE_REDIS_PORT
+        fromService:
+          type: keyvalue
+          name: listen-fire-redis
+          property: port
+
+      # ---- URLs. Stable forever once set — every webhook registration and
+      # every link handed to a third party is absolute at these.
+      - key: API_BASE_URL
+        sync: false
+      - key: WEB_BASE_URL
+        sync: false
+
+      # ---- secrets compose's `init` container mints on first boot; nothing
+      # does that here, so they are minted or supplied at the service level.
+      # Never `generateValue` for the encryption pair — see header comment.
+      - key: TOKEN_SECRET
+        generateValue: true
+      - key: SESSION_JWT_AUDIENCE
+        value: listen-fire-self-host
+      - key: ENCRYPTION_MASTER_KEY
+        sync: false
+      - key: ENCRYPTION_SALT_BASE64
+        sync: false
+      - key: DOCUMENT_LINK_SECRET
+        generateValue: true
+      - key: ASKS_WEBHOOK_SIGNING_SECRET
+        generateValue: true
+      - key: PHONE_VERIFICATION_SECRET
+        generateValue: true
+
+      # ---- core's first-boot provisioning (apps/api/src/startup/core.ts):
+      # all three of these are required together or nothing is provisioned.
+      - key: LISTEN_FIRE_BOOTSTRAP_TEAM_NAME
+        sync: false
+      - key: LISTEN_FIRE_BOOTSTRAP_USER_EMAIL
+        sync: false
+      - key: PUBLIC_USER_ID
+        value: 0967a417-da08-4afc-b224-1b979edd5fe7
+
+      # ---- the model.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # ---- sign-in buttons. Optional: an unset pair means the button is not
+      # offered. The Google client id must ALSO be set on the web service as
+      # NEXT_PUBLIC_GOOGLE_CLIENT_ID (baked in at build time).
+      - key: GOOGLE_AUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_AUTH_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+
+      # ---- email. `email` resolves at boot to whichever provider is
+      # configured (Resend wins if both are). Both providers are declared so a
+      # deployment can run on either; see SELF_HOSTING.md, "Email, through
+      # Mailgun or Resend".
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_BASE_URL
+        sync: false
+      - key: INBOUND_EMAIL_ADDRESS
+        sync: false
+      - key: MAILGUN_API_KEY
+        sync: false
+      - key: MAILGUN_SENDING_DOMAIN
+        sync: false
+      - key: OUTBOUND_EMAIL_FROM
+        sync: false
+
+      # ---- Slack (apps/api/src/services.ts / interfaces/rest/slackEvents.ts):
+      # all five together, or the connector does not wire up.
+      - key: SLACK_MOVEMENTS_CLIENT_ID
+        sync: false
+      - key: SLACK_MOVEMENTS_CLIENT_SECRET
+        sync: false
+      - key: SLACK_MOVEMENTS_SIGNING_SECRET
+        sync: false
+      # Not a Slack-issued value: it signs the OAuth `state` on install links,
+      # so any random string will do and rotating it only voids in-flight installs.
+      - key: SLACK_MOVEMENTS_STATE_SECRET
+        generateValue: true
+      - key: SLACK_MOVEMENTS_REDIRECT_URI
+        sync: false
+
+      # ---- object storage. Optional: unset means no file storage, and only
+      # file-touching steps fail, naming what they wanted. Wired to the
+      # listen-fire-minio service above by default. To point this at GCS's own
+      # S3-interoperability HMAC keys or an external S3-compatible bucket
+      # instead: delete listen-fire-minio and the two `fromService` entries below,
+      # then set every value here by hand. Exactly one object store may be
+      # configured.
+      - key: AWS_DOCUMENT_S3_BUCKET
+        value: listen-fire
+      - key: AWS_REGION
+        value: auto
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: listen-fire-minio
+          envVarKey: MINIO_ROOT_USER
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: listen-fire-minio
+          envVarKey: MINIO_ROOT_PASSWORD
+      # MinIO's PUBLIC origin — not a private-network hostname. The API hands
+      # out presigned download URLs to browsers and third parties
+      # (interfaces/rest/files.ts, trpc/views/attachment.ts); only the public
+      # origin resolves for them. Operator-set, because Render appends a suffix
+      # of its own to every service a Blueprint creates, so no literal hostname
+      # written here would survive contact with a real account. Read the MinIO
+      # service's public URL off the dashboard once the Blueprint has run.
+      - key: AWS_S3_ENDPOINT
+        sync: false
+      # Literal lowercase `true` — the adapter compares the exact string
+      # (apps/api/src/services.ts), so `TRUE` or `1` reads as false.
+      - key: AWS_S3_FORCE_PATH_STYLE
+        value: 'true'
+
+  # The sign-in surface and authoring UI. Docker can't select Dockerfile.web's
+  # `web` target (see header), so this runs on the Node runtime against the
+  # `apps/web` workspace directly.
+  - type: web
+    name: listen-fire-web
+    runtime: node
+    rootDir: apps/web
+    # region: oregon   # pick one; it must match on every service (see the header)
+    plan: starter
+    healthCheckPath: /login
+    # pnpm resolves the workspace root by walking up to pnpm-workspace.yaml
+    # regardless of cwd, so `rootDir: apps/web` does not break the
+    # workspace-aware install — it only narrows the cache-invalidation and
+    # `--filter` scope, matching what Dockerfile.web's own build does.
+    buildCommand: pnpm install --frozen-lockfile --prod=false --filter web... && pnpm --filter web build
+    # NODE_ENV=production applies to the build too, and pnpm then skips
+    # devDependencies — next.config.ts needs typescript, which is one. Hence
+    # --prod=false on the install (seen failing on the first deploy, 2026-08-27).
+    startCommand: pnpm --filter web start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # The SERVER-side proxy target — the browser only ever calls
+      # same-origin. Operator-set for the same suffix reason as AWS_S3_ENDPOINT
+      # above: the value is `http://<api service name>:10000` on Render's
+      # private network, and only the dashboard knows the final service name.
+      - key: API_INTERNAL_URL
+        sync: false
+      # Build-time: the login page only renders a provider's button when its
+      # public client id was present at `next build`. Same ids as the API's
+      # GOOGLE_AUTH_CLIENT_ID / MICROSOFT_CLIENT_ID.
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false
+      - key: NEXT_PUBLIC_MICROSOFT_CLIENT_ID
+        sync: false
