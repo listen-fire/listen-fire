@@ -207,6 +207,10 @@ const kgSchema: InstanceSchema = {
         // that cannot be read as a name.
         linked: { target: RELATED_UNION, polymorphic: true, writable: true },
         investments: { target: 'investment', writable: true },
+        // A CREATE-ONLY edge: the system makes the relationship by writing the
+        // record, and cannot join one that already exists (Affinity's list
+        // membership, a note's replies).
+        entries: { target: 'entry', writable: true, linkable: false },
         attachments: { target: 'attachment' },
         mysteries: { target: 'mystery' },
         signals: { target: 'signal', writable: true },
@@ -236,6 +240,7 @@ const kgSchema: InstanceSchema = {
       edges: { participants: { target: 'round_participation', writable: true } },
     },
     round_participation: { properties: { investor_name: 'text', lead: 'boolean' }, edges: {} },
+    entry: { properties: { stage: 'text' }, edges: {} },
     deal: {
       properties: { name: 'text', company: 'text' },
       edges: { company: { target: 'company' } },
@@ -3313,6 +3318,57 @@ describe('link statements', () => {
         ].join('\n'),
       ),
     );
+  });
+
+  // A `writable` edge promises two things — create the target along it, or
+  // join one that is already there — and a system can keep the first without
+  // the second. It says so per edge, and the refusal lands at check time
+  // rather than as a run that fails in the target's API.
+  describe('an edge the system can only WRITE along refuses link and unlink', () => {
+    const withRecords = (rest: string) =>
+      inMovement(
+        [
+          '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
+          '  e = write co-[:entries]-> { stage: "Seed" }',
+          rest,
+        ].join('\n'),
+      );
+
+    it('refuses the bare-handle link, naming the edge', () => {
+      const found = check(withRecords('  link co -[:entries]-> e'));
+      expect(found.map(d => d.code)).toEqual([C.LINK_UNSUPPORTED_EDGE]);
+      expect(found[0].message).toContain('entries');
+      expect(found[0].message).toContain('write co-[:entries]->');
+    });
+
+    it('refuses the criteria link too', () => {
+      expect(codes(withRecords('  link co -[:entries]-> { stage: "Seed" }'))).toEqual([
+        C.LINK_UNSUPPORTED_EDGE,
+      ]);
+    });
+
+    it('refuses unlink — a relationship it cannot make, it cannot sever', () => {
+      const found = check(withRecords('  unlink co -[:entries]-> e'));
+      expect(found.map(d => d.code)).toEqual([C.LINK_UNSUPPORTED_EDGE]);
+      expect(found[0].message).toContain('unlink');
+    });
+
+    it('the WRITE along that same edge stays clean — only the join is refused', () => {
+      expectClean(withRecords('  write co-[:entries]-> { stage: "Series A" }'));
+    });
+
+    it('an edge that says nothing keeps the whole promise', () => {
+      expectClean(
+        inMovement(
+          [
+            '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
+            '  fr = write co-[:rounds]-> { stage: "Seed" }',
+            '  link co -[:rounds]-> fr',
+            '  unlink co -[:rounds]-> fr',
+          ].join('\n'),
+        ),
+      );
+    });
   });
 });
 

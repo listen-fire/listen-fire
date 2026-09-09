@@ -587,6 +587,11 @@ export function instanceSchemaFromDescriptors(input: {
           // `true` projects, and its absence IS the read-only fact. It carries
           // what `creatable` used to, so it gates `createShapes` below.
           ...(ref.writable === true ? { writable: true } : {}),
+          // The half of that promise an adapter can withdraw: `false` says two
+          // records that already exist cannot be joined along this edge, so
+          // `link`/`unlink` are refused at check time rather than at run time.
+          // Absent ⇒ `writable`'s promise stands whole.
+          ...(ref.linkable === false ? { linkable: false } : {}),
           // The far end must still EXIST to traverse (the adapter hydrates it
           // by fetch). An event position whose address pins `action` to the
           // deleted kind drops these edges (listen_narrowing's graft — keyed

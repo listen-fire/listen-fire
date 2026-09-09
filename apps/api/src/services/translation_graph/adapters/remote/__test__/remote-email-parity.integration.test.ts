@@ -41,6 +41,7 @@ import {
 import type { EmailAdapter, EmailPayload } from '../../email';
 import type { Adapter } from '../../../adapter';
 import { RESOURCES_REFERENCE_FIELD_ID } from '../../../adapter';
+import { containerAssociation } from '../../../adapter';
 import { makeUnstablePosition, positionData } from '../../../types';
 import type { SourcePosition } from '../../../types';
 
@@ -339,7 +340,7 @@ function createPolyAdapter(): Adapter {
       return { adapterType: POLY_ADAPTER_TYPE, externalId: 'poly', data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: POLY_ADAPTER_TYPE, externalId: input.externalId, data: {} };
+      return { adapterType: POLY_ADAPTER_TYPE, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

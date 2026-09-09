@@ -62,7 +62,9 @@ cp deploy/.env.example deploy/.env      # set ANTHROPIC_API_KEY, or set nothing 
 ./deploy/up.sh knowledge automations    # any combination of the five units
 ```
 
-`up.sh` builds the images one at a time, waits for the stack to answer, and prints the web URL and the credential to sign in with. Give Docker about 8 GiB; the first build takes several minutes. Add `--demo` to run against stand-in third-party services and a sample dataset, with no API keys at all.
+`up.sh` pulls the published images, waits for the stack to answer, and prints the web URL and the credential to sign in with. Add `--demo` to run against stand-in third-party services and a sample dataset, with no API keys at all, or `--build` to build from your checkout instead (give Docker about 8 GiB; the first build takes several minutes).
+
+A release is a git tag, and the images are published at it. **Pin `LISTEN_FIRE_VERSION=v0.1.0` in `deploy/.env` and the installation moves only when you change that line** — see [`deploy/UPGRADING.md`](deploy/UPGRADING.md).
 
 The web UI answers on port 8080 and the API on 8081. To stop it again, see ["Stopping and removing"](deploy/SELF_HOSTING.md#stopping-and-removing) — `down` keeps your data and `down -v` destroys it, including the volume holding the keys every stored credential is encrypted under. For a deployment behind a real hostname, put the settings in `deploy/.env` and run `docker compose` yourself:
 

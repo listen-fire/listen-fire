@@ -23,6 +23,7 @@ import type { CallbackCall } from '../callback_store';
 import type { ParkedScopeState } from '../serialize';
 
 import { createManualAdapter } from '../../translation_graph/adapters/manual';
+import { containerAssociation } from '../../translation_graph/adapter';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { runMovement, fireCallbackBody, type ParkSink } from '../run';
 
@@ -60,7 +61,7 @@ function makeKgFake() {
       return { adapterType: KG, externalId: `log-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: KG, externalId: input.externalId, data: {} };
+      return { adapterType: KG, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};
@@ -582,7 +583,7 @@ describe('a callback body that ANSWERS a request', () => {
         };
       },
       async updateRecord(input) {
-        return { adapterType: ASK, externalId: input.externalId, data: {} };
+        return { adapterType: ASK, externalId: input.externalId, data: {}, association: containerAssociation(input) };
       },
       async deleteRecord() {
         return {};

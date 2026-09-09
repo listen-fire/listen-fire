@@ -19,7 +19,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../../adapter';
-import { writeParentLinks } from '../../adapter';
+import { writeParentLinks, containerAssociation } from '../../adapter';
 import { neverAsAny } from '../../../../lib/utils/types';
 import { UPDATE_NOT_FOUND } from '../not_found';
 import {
@@ -199,6 +199,7 @@ export async function updateEvertraceRecord(input: {
       externalId: update.externalId,
       recordType: EVERTRACE_DISPLAY_NAME_BY_TYPE[input.typeId],
       data: {},
+      association: containerAssociation(update),
     };
   }
   switch (input.typeId) {
@@ -224,6 +225,7 @@ export async function updateEvertraceRecord(input: {
           externalId: update.externalId,
           recordType: EVERTRACE_SEARCH_DISPLAY_NAME,
           data: { title: search.title, emoji: search.emoji },
+          association: containerAssociation(update),
         };
       } catch (error) {
         if (isNotFound(error)) return UPDATE_NOT_FOUND;
@@ -242,6 +244,7 @@ export async function updateEvertraceRecord(input: {
           externalId: update.externalId,
           recordType: EVERTRACE_LIST_DISPLAY_NAME,
           data: { name: list.name },
+          association: containerAssociation(update),
         };
       } catch (error) {
         if (isNotFound(error)) return UPDATE_NOT_FOUND;
@@ -300,6 +303,7 @@ async function updateSignal(input: {
       ...(screened !== undefined ? { screened } : {}),
       ...(viewed !== undefined ? { viewed } : {}),
     },
+    association: containerAssociation(update),
   };
 }
 

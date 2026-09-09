@@ -233,6 +233,15 @@ export interface WriteRecord {
    * before the field existed.
    */
   outcome?: 'create' | 'update' | 'attach' | 'noop';
+  /**
+   * What became of the parent association this write named, as the TARGET
+   * SYSTEM reported it: 'made' (it did not exist and now does) or 'already'
+   * (it was there). Absent when the write named no parent — and never
+   * 'unsupported', which fails the write instead of being recorded. It rides
+   * alongside `parents` rather than inside it because the parents are what the
+   * author wrote and this is what the system did about them.
+   */
+  association?: 'made' | 'already';
   /** What the engine actually sent to the adapter (after no-op
    *  suppression). Empty for links / unlinks / deletes (the edge or the
    *  removal IS the write). */

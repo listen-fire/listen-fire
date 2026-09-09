@@ -40,6 +40,7 @@ import {
   positionData,
 } from '../../types';
 import type { Adapter, RuntimeCapabilities } from '../../adapter';
+import { containerAssociation } from '../../adapter';
 import type { Catalog, InstanceSchema, PositionSchema } from 'movement-lang';
 import { eventAddressKey } from 'movement-lang';
 import type { TriggerEvent } from '../../triggers/types';
@@ -177,7 +178,7 @@ function makeSlackTargetFake(): { adapter: Adapter; creates: Record<string, unkn
       return { adapterType: 'slack', externalId: `msg-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: 'slack', externalId: input.externalId, data: {} };
+      return { adapterType: 'slack', externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

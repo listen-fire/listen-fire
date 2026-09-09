@@ -103,6 +103,7 @@ import type {
   Adapter,
   RuntimeCapabilities,
 } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { RecordMutationEvent } from '../../translation_graph/mutation_context';
 import {
@@ -156,7 +157,7 @@ function makeTargetFake(adapterType: string): { adapter: Adapter; creates: Recor
       return { adapterType, externalId: `ext-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

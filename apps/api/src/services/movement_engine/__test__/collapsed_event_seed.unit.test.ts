@@ -101,6 +101,7 @@ import { runMovement } from '../run';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { positionData } from '../../translation_graph/types';
 import type { Adapter, ParentLink, RuntimeCapabilities } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 
@@ -198,7 +199,7 @@ function makeChatFake(): { adapter: Adapter; creates: RecordedWrite[] } {
       return { adapterType: 'slack', externalId: `reply-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: 'slack', externalId: input.externalId, data: {} };
+      return { adapterType: 'slack', externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

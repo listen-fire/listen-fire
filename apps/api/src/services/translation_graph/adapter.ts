@@ -873,6 +873,13 @@ export interface Adapter {
   // NOT a write's return value: every adapter's changes reach dependent
   // automations through its own inbound event channel (M-38).
   createRecord(input: WriteInput): Promise<WriteResult>;
+  /**
+   * Write an EXISTING record by id. Beyond the fields, an update answers for
+   * the parent association the write named (`UpdateWriteResult.association`):
+   * a matched record whose fields were all unchanged is reported to the author
+   * as an attach, and that report is only honest if the adapter says whether
+   * the attach happened.
+   */
   updateRecord(input: UpdateInput): Promise<UpdateResult>;
   deleteRecord(input: DeleteInput): Promise<DeleteResult>;
 
@@ -1891,15 +1898,64 @@ export interface UpdateNotFound {
 }
 
 /**
- * An id-based write returns the written record (`WriteResult` — `externalId`
- * echoes the input id) OR the typed not-found signal. Discriminate with
- * `'notFound' in result` (or the `updateRecordSucceeded` helper).
+ * What became of the parent association an update named. Every `updateRecord`
+ * states one, because "the engine sent a parent-only update" and "the record
+ * is attached to its parent" are different facts, and only the adapter knows
+ * which one happened. A matched record whose fields were all unchanged reports
+ * itself as an `attach` on the strength of this value, so a guess here would
+ * be a run that claims a relationship nobody made.
+ *
+ *   - `made`        — the association was absent and now exists.
+ *   - `already`     — it was already there; nothing needed sending.
+ *   - `unsupported` — this system cannot attach an EXISTING record along the
+ *     edge the write named. The engine FAILS the write: the author asked for
+ *     a relationship the system has no way to make, and a quiet success would
+ *     be the very lie this value exists to prevent.
+ *   - `none`        — the write named no parent, so nothing was asked.
  */
-export type UpdateResult = WriteResult | UpdateNotFound;
+export type ParentAssociation = 'made' | 'already' | 'unsupported' | 'none';
+
+/** The association an adapter reports when it has no way to attach a MATCHED
+ *  record to a parent at all: nothing was asked of it (`none`), or something
+ *  was and it cannot deliver (`unsupported`). */
+export function unsupportedAssociation(
+  input: Pick<WriteInput, 'parentLinks'>,
+): ParentAssociation {
+  return writeParentLinks(input).length === 0 ? 'none' : 'unsupported';
+}
+
+/** The association an adapter reports when its parents are CONTAINERS the
+ *  child cannot leave — a row in a tab, an entry that IS its (list, member)
+ *  pair. Having matched the record through the container is already the whole
+ *  of the relationship, so there is nothing left to make. */
+export function containerAssociation(
+  input: Pick<WriteInput, 'parentLinks'>,
+): ParentAssociation {
+  return writeParentLinks(input).length === 0 ? 'none' : 'already';
+}
+
+/**
+ * The success arm of an id-based write: the written record in the flat
+ * `ExternalRecordRef` currency, plus what became of the parent association the
+ * write named. `association` is REQUIRED — an adapter that stays silent about
+ * a parent it was handed is exactly the silent degradation this field removes,
+ * and a new adapter is caught by the compiler rather than by a missing edge in
+ * production.
+ */
+export interface UpdateWriteResult extends ExternalRecordRef {
+  association: ParentAssociation;
+}
+
+/**
+ * An id-based write returns the written record (`UpdateWriteResult` —
+ * `externalId` echoes the input id) OR the typed not-found signal. Discriminate
+ * with `'notFound' in result` (or the `updateRecordSucceeded` helper).
+ */
+export type UpdateResult = UpdateWriteResult | UpdateNotFound;
 
 /** Narrow an `UpdateResult` to the success arm — `false` when the target was
  *  reported not-found. The single discrimination point engine + callers use. */
-export function updateRecordSucceeded(result: UpdateResult): result is WriteResult {
+export function updateRecordSucceeded(result: UpdateResult): result is UpdateWriteResult {
   return !('notFound' in result);
 }
 

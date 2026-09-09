@@ -474,7 +474,22 @@ function makeAdapter(input?: {
       if (input?.personUpdate404 && args.affinityId != null) {
         throw new Error('Affinity Error: 404 Not Found');
       }
-      return { id: args.affinityId ?? 888, isNew: args.affinityId == null };
+      const id = args.affinityId ?? 888;
+      // The live person travels back with the result — the caller builds its
+      // write result from it rather than re-fetching the person.
+      return {
+        id,
+        isNew: args.affinityId == null,
+        orgAssociation: args.orgId ? ('made' as const) : ('none' as const),
+        person: {
+          id,
+          first_name: args.searchQuery.firstName ?? args.searchQuery.name?.split(' ')[0] ?? null,
+          last_name: args.searchQuery.lastName ?? args.searchQuery.name?.split(' ').slice(1).join(' ') ?? null,
+          primary_email: args.searchQuery.email ?? null,
+          emails: args.searchQuery.email ? [args.searchQuery.email] : [],
+          organization_ids: args.orgId ? [args.orgId] : [],
+        },
+      };
     },
     createPerson: async () => ({ id: 888 }),
     createNote: async (args: Record<string, unknown>) => {
@@ -2089,6 +2104,94 @@ describe('AffinityAdapter link / unlink an existing record', () => {
         mutationContext: MUTATION,
       }),
     ).rejects.toThrow(/Enriched Contact/);
+  });
+
+  // The built-in person↔organization association, joined between two records
+  // that already exist. `write org-[:People]-> { … }` onto a matched person and
+  // `link org -[:People]-> p` are the same act, so they run the same code —
+  // and here that shows as the same PUT.
+  describe('the built-in person↔organization association', () => {
+    it('links a person to an organization, keeping their other employers', async () => {
+      const { adapter, calls } = makeAdapter({ personOrgIds: [7101] });
+      expect(
+        await adapter.linkRecords({
+          from: { recordType: 'Organization', externalId: '42' },
+          edgeName: 'People',
+          to: { recordType: 'Person', externalId: '888' },
+          mutationContext: MUTATION,
+        }),
+      ).toEqual({ created: true });
+      expect(calls.updatePerson).toEqual([
+        { id: 888, payload: { organization_ids: [7101, 42] } },
+      ]);
+      // No field value anywhere — the association is not a field.
+      expect(calls.createFieldValue).toEqual([]);
+    });
+
+    it('reads the same association from the PERSON side', async () => {
+      const { adapter, calls } = makeAdapter({ personOrgIds: [] });
+      await adapter.linkRecords({
+        from: { recordType: 'Person', externalId: '888' },
+        edgeName: 'Organizations',
+        to: { recordType: 'Organization', externalId: '42' },
+        mutationContext: MUTATION,
+      });
+      expect(calls.updatePerson).toEqual([{ id: 888, payload: { organization_ids: [42] } }]);
+    });
+
+    it('is idempotent — an employer already there sends nothing', async () => {
+      const { adapter, calls } = makeAdapter({ personOrgIds: [42] });
+      expect(
+        await adapter.linkRecords({
+          from: { recordType: 'Organization', externalId: '42' },
+          edgeName: 'People',
+          to: { recordType: 'Person', externalId: '888' },
+          mutationContext: MUTATION,
+        }),
+      ).toEqual({ created: false });
+      expect(calls.updatePerson).toEqual([]);
+    });
+
+    it('unlink drops that employer and keeps the rest', async () => {
+      const { adapter, calls } = makeAdapter({ personOrgIds: [7101, 42] });
+      expect(
+        await adapter.unlinkRecords({
+          from: { recordType: 'Organization', externalId: '42' },
+          edgeName: 'People',
+          to: { recordType: 'Person', externalId: '888' },
+          mutationContext: MUTATION,
+        }),
+      ).toEqual({ removed: true });
+      expect(calls.updatePerson).toEqual([{ id: 888, payload: { organization_ids: [7101] } }]);
+    });
+
+    it('unlinking an employer that was never there is a quiet no-op', async () => {
+      const { adapter, calls } = makeAdapter({ personOrgIds: [7101] });
+      expect(
+        await adapter.unlinkRecords({
+          from: { recordType: 'Organization', externalId: '42' },
+          edgeName: 'People',
+          to: { recordType: 'Person', externalId: '888' },
+          mutationContext: MUTATION,
+        }),
+      ).toEqual({ removed: false });
+      expect(calls.updatePerson).toEqual([]);
+    });
+
+    // The association is NAMED, not inferred from "this edge is no custom
+    // reference field" — an enrichment-sourced reference the workspace will
+    // not let anyone write is still a refusal, not a silent employer link.
+    it('does not swallow an unwritable reference between the same two types', async () => {
+      const { adapter } = makeAdapter();
+      await expect(
+        adapter.linkRecords({
+          from: { recordType: 'Organization', externalId: '42' },
+          edgeName: 'Enriched Contact',
+          to: { recordType: 'Person', externalId: '888' },
+          mutationContext: MUTATION,
+        }),
+      ).rejects.toThrow(/Enriched Contact/);
+    });
   });
 
   it('an entry reached through the membership COLLECTION cannot say which list it is on', async () => {

@@ -19,18 +19,29 @@ cd "$DEPLOY_DIR"
 VALID_UNITS=(core valuations automations knowledge asks)
 UNITS=()
 DEMO=0
-BUILD=1
+# pull | build | reuse. Pulling is the default because a release is published
+# images: an installation that built from source would be running whatever the
+# checkout happens to be rather than the version it named.
+SOURCE=pull
 
 for arg in "$@"; do
   case "$arg" in
     --demo) DEMO=1 ;;
-    # For a caller that has just built the same images — the smoke script does
-    # this between shapes. Skipping the build is only safe when the tags are
-    # known to be current; a stale tag boots silently and looks like the code.
-    --no-build) BUILD=0 ;;
+    # Build from THIS tree instead of pulling. What you want when you are
+    # working on the code, or on an architecture no published image covers.
+    --build) SOURCE=build ;;
+    # Neither pull nor build: use the images already on this machine. For a
+    # caller that has just built the same tags — the smoke script does this
+    # between shapes. Only safe when they are known to be current; a stale tag
+    # boots silently and looks like the code.
+    --no-build) SOURCE=reuse ;;
     -h|--help)
-      echo "usage: ./up.sh <unit…> [--demo] [--no-build]"
+      echo "usage: ./up.sh <unit…> [--demo] [--build|--no-build]"
       echo "units: ${VALID_UNITS[*]}"
+      echo
+      echo "Images come from ghcr.io/listen-fire at \$LISTEN_FIRE_VERSION (default: latest)."
+      echo "  --build     build them from this tree instead"
+      echo "  --no-build  use the images already on this machine"
       exit 0
       ;;
     -*)
@@ -61,6 +72,27 @@ fi
 
 has_unit() { for u in "${UNITS[@]}"; do [ "$u" = "$1" ] && return 0; done; return 1; }
 
+# A configured value, resolved the way compose resolves it: the shell wins,
+# then deploy/.env. Used for anything this script has to agree with compose
+# about — the image tag it builds or pulls, and which datastores are bundled.
+configured() {
+  local name="$1" value=""
+  eval "value=\${$name:-}"
+  if [ -z "$value" ]; then
+    value="$(sed -n "s/^[[:space:]]*$name=[\"']*//p" .env | tail -1 | tr -d '\r' | sed "s/[\"'].*\$//")"
+  fi
+  printf %s "$value"
+}
+
+# WHICH release this installation runs. Compose interpolates it from .env on
+# its own, but the build and pull below name the tags themselves, so read the
+# same file when the shell does not set it — otherwise a pinned .env and an
+# unpinned shell would build one tag and start another.
+LISTEN_FIRE_VERSION="$(configured LISTEN_FIRE_VERSION)"
+export LISTEN_FIRE_VERSION
+IMAGE_TAG="${LISTEN_FIRE_VERSION:-latest}"
+REGISTRY=ghcr.io/listen-fire
+
 LISTEN_FIRE_PRODUCTS="$(IFS=,; echo "${UNITS[*]}")"
 export LISTEN_FIRE_PRODUCTS
 
@@ -86,8 +118,25 @@ else
   export ASKS_SETTLE_DELIVERY=webhook
 fi
 
-# Redis is not optional and has no profile — see the compose file's header.
+# Each datastore is bundled unless you have named your own, and each one on its
+# own: the compose file parks a service whose variable is set, and this names
+# the profile for every service that is still bundled. The two readings have to
+# agree, which is why both are the presence of the same variable.
 PROFILES=()
+STORES_REPORT=()
+add_store() {
+  local service="$1" variable="$2"
+  if [ -n "$(configured "$variable")" ]; then
+    STORES_REPORT+=("$service (yours, via $variable)")
+  else
+    PROFILES+=("$service")
+    STORES_REPORT+=("$service (bundled)")
+  fi
+}
+add_store postgres DATABASE_URL
+add_store redis MESSAGE_QUEUE_REDIS_HOSTNAME
+add_store minio AWS_S3_ENDPOINT
+
 if has_unit core; then PROFILES+=(admin); fi
 if [ "$DEMO" -eq 1 ]; then
   PROFILES+=(demo)
@@ -117,7 +166,9 @@ compose() { docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"; }
 
 echo "[up] units:     $LISTEN_FIRE_PRODUCTS"
 echo "[up] identity:  $LISTEN_FIRE_PRINCIPAL"
+echo "[up] stores:    ${STORES_REPORT[*]}"
 echo "[up] profiles:  ${PROFILES[*]:-none}"
+echo "[up] images:    $REGISTRY/*:$IMAGE_TAG ($SOURCE)"
 echo
 
 # ── images, ONE AT A TIME ───────────────────────────────────────────────────
@@ -134,27 +185,47 @@ echo
 # overlap, and `compose up` below runs WITHOUT `--build` against the tags they
 # produce. Only the images this composition actually starts are built.
 build_image() {
-  local tag="$1" dockerfile="$2" target="${3:-}"
-  local args=(-f "$DEPLOY_DIR/$dockerfile" -t "$tag")
+  local name="$1" dockerfile="$2" target="${3:-}"
+  # The tag compose will start, so a build and a pull are interchangeable.
+  local args=(-f "$DEPLOY_DIR/$dockerfile" -t "$REGISTRY/$name:$IMAGE_TAG")
   [ -n "$target" ] && args+=(--target "$target")
+  # Only the api declares it; passing it to the others is a warning per build.
+  [ "$name" = "api" ] && args+=(--build-arg "LISTEN_FIRE_VERSION=${LISTEN_FIRE_VERSION:-dev}")
 
-  echo "[up] building $tag …"
+  echo "[up] building $REGISTRY/$name:$IMAGE_TAG …"
   docker build "${args[@]}" "$DEPLOY_DIR/.."
 }
 
-if [ "$BUILD" -eq 1 ]; then
-  # migrate and seed share the api's image, so `api` covers all three.
-  build_image listen-fire-api:local Dockerfile
-  build_image listen-fire-web:local Dockerfile.web web
-  # The admin app rides the `admin` profile, which only core turns on.
-  if has_unit core; then build_image listen-fire-admin:local Dockerfile.web admin; fi
-  # The fake third parties exist only for a demo stack.
-  if [ "$DEMO" -eq 1 ]; then build_image listen-fire-fake-channels:local Dockerfile.web fake-channels; fi
-  echo
-else
-  echo "[up] --no-build: using the existing listen-fire-*:local images"
-  echo
-fi
+case "$SOURCE" in
+  build)
+    # migrate and seed share the api's image, so `api` covers all three.
+    build_image api Dockerfile
+    build_image web Dockerfile.web web
+    # The admin app rides the `admin` profile, which only core turns on.
+    if has_unit core; then build_image admin Dockerfile.web admin; fi
+    # The fake third parties exist only for a demo stack.
+    if [ "$DEMO" -eq 1 ]; then build_image fake-channels Dockerfile.web fake-channels; fi
+    echo
+    ;;
+  pull)
+    echo "[up] pulling $REGISTRY/*:$IMAGE_TAG …"
+    # Only the services this composition starts, and only the ones whose image
+    # is ours — postgres and redis come down with `up` anyway.
+    PULL_SERVICES=(api web)
+    if has_unit core; then PULL_SERVICES+=(admin); fi
+    if [ "$DEMO" -eq 1 ]; then PULL_SERVICES+=(fake-channels); fi
+    if ! docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} pull "${PULL_SERVICES[@]}"; then
+      echo "[up] could not pull $REGISTRY/*:$IMAGE_TAG." >&2
+      echo "[up] Check LISTEN_FIRE_VERSION names a published release, or use --build." >&2
+      exit 1
+    fi
+    echo
+    ;;
+  reuse)
+    echo "[up] --no-build: using the $REGISTRY/*:$IMAGE_TAG images already on this machine"
+    echo
+    ;;
+esac
 
 # `seed` is a normal service so a bare `docker compose up` seeds the demo, but
 # HERE it must not start on its own: this script runs it explicitly below, and
@@ -290,4 +361,9 @@ else
     echo " The magic link is emailed, so a working MAILGUN_* config is required."
   fi
 fi
+echo
+# The matching `down`, printed rather than left to be remembered: a `down` stops
+# only what its profiles name, and these are the profiles THIS shape started.
+echo " Stop it with:     docker compose ${PROFILE_ARGS[*]} down"
+echo " Throw it away:    docker compose ${PROFILE_ARGS[*]} down -v   (destroys the data AND the keys)"
 echo

@@ -61,7 +61,7 @@ methods below. Each row gives the \`params\` you receive and the
 | \`getFieldValue\` | \`{ position, fieldId }\` | the field's value (any JSON), or \`null\` |
 | \`getRelated\` | \`{ position, fieldId, direction }\` | array of related results (\`[]\` if none) |
 | \`createRecord\` | write input (below) | write result (below) |
-| \`updateRecord\` | write input **+ \`externalId\`** | write result, OR \`{ "notFound": true }\` |
+| \`updateRecord\` | write input **+ \`externalId\`** | write result **+ \`association\`**, OR \`{ "notFound": true }\` |
 | \`deleteRecord\` | \`{ recordType, externalId, mutationContext }\` | \`{}\` (optionally \`{ events: [] }\`) |
 
 If your system is read-only, implement \`getFieldValue\` /
@@ -124,8 +124,11 @@ in results:
 - \`fields\` is keyed by your **natural field names** (the
   \`displayName\`s from \`describe\`). Create or update the record
   accordingly.
-- \`parentLinks\` (optional) are edges to attach on create — connect the
-  new record to those parents via the named edge.
+- \`parentLinks\` (optional) are edges to attach — connect the record to
+  those parents via the named edge. They arrive on \`updateRecord\` too:
+  a record that already existed still has to end up attached, and an
+  empty \`fields\` bag with a parent link means exactly that — attach it,
+  change nothing else.
 - On \`updateRecord\`, if the \`externalId\` no longer exists, return
   \`{ "notFound": true }\` (do not throw).
 
@@ -133,5 +136,23 @@ in results:
 
 An \`ExternalRecordRef\` for the record you created or updated.
 \`externalId\` is your system's id for it; \`data\` may echo computed
-fields; \`url\` is optional.`,
+fields; \`url\` is optional.
+
+An \`updateRecord\` result carries one more field, and it matters: say
+what became of each \`parentLink\` you were handed.
+
+\`\`\`json
+{ "adapterType": "acme_crm", "externalId": "c_9", "data": { }, "association": "made" }
+\`\`\`
+- \`"made"\` — the record was not attached to that parent and now is.
+- \`"already"\` — it was already attached; you sent nothing.
+- \`"unsupported"\` — your system cannot attach an EXISTING record along
+  that edge. Listen-Fire fails the run and names the edge, rather than telling
+  the author a relationship exists when it does not.
+- \`"none"\` — the write named no parent.
+
+Omit it and Listen-Fire reads the silence as \`"unsupported"\`: a write that
+named a parent fails rather than claiming a link you never confirmed. A
+connector with no parent edges never sees a \`parentLink\`, so it is
+free to omit the field.`,
 };

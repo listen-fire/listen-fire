@@ -45,7 +45,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../../adapter';
-import { singleParentLink } from '../../adapter';
+import { singleParentLink, unsupportedAssociation } from '../../adapter';
 import { UPDATE_NOT_FOUND } from '../not_found';
 import type {
   SchemaEntryPoint,
@@ -849,6 +849,9 @@ export class AskAdapter extends BaseAdapter implements Adapter {
         [FIELD.state]: outcome.ask.state,
         [FIELD.url]: outcome.ask.url,
       },
+      // An ask is raised, never re-homed: cancelling one is the only update,
+      // and it attaches nothing.
+      association: unsupportedAssociation(input),
     };
   }
 

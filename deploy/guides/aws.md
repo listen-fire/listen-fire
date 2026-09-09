@@ -6,6 +6,8 @@ This is topology and gotchas, not ClickOps. Every AWS console screen described s
 
 Read [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) first — it is the runbook for every shape. This guide translates it onto AWS; it does not replace it.
 
+**What a datastore needs is written once, in [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Bringing your own datastores"**: the extensions and the roles file for Postgres, the no-AUTH-no-TLS shape of the Redis client, the five variables an S3-compatible store takes, and the fact that each store moves on its own. On compose those same variables also park the bundled service; here every store is external from the start, so what follows is only what is specifically AWS about them.
+
 ---
 
 ## The shape
@@ -21,7 +23,7 @@ Read [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) first — it is the runbook 
 
 ## 1. RDS, before anything else
 
-Postgres 16. The composed shape genuinely uses `vector` and `pg_trgm` (knowledge) and `citext` (core, automations), and the migration set is monolithic — it creates all five schemas whatever `LISTEN_FIRE_PRODUCTS` says, so every shape needs the union of the extensions even for schemas it will never read. RDS ships `pgvector` on modern Postgres versions; confirm it is available for the exact engine version you pick before you build anything on top.
+Postgres 16, and it is the one datastore whose setup order matters: the roles file goes in before the first migration. The migration set creates six extensions — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent` and `btree_gin` — and it is monolithic, creating all five schemas whatever `LISTEN_FIRE_PRODUCTS` says, so every shape needs all six even for schemas it will never read. RDS ships `pgvector` on modern Postgres versions; confirm it is available for the exact engine version you pick before you build anything on top.
 
 **Run `deploy/postgres-init/00-roles.sql` by hand, before the first deploy:**
 
@@ -29,7 +31,7 @@ Postgres 16. The composed shape genuinely uses `vector` and `pg_trgm` (knowledge
 psql "$DATABASE_URL" -f deploy/postgres-init/00-roles.sql
 ```
 
-The migration set carries 51 `GRANT … TO agent` / `TO readonly` statements, the first of them early enough that a database without those roles dies having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it on an empty data directory; **RDS has no init hook.** The file's header says so, and this is the single most common way a first deploy fails.
+The migration set carries more than a hundred `GRANT … TO agent` / `TO readonly` statements, the first of them early enough that a database without those roles dies having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it on an empty data directory; **RDS has no init hook.** The file's header says so, and this is the single most common way a first deploy fails.
 
 Run it as the instance's **master user**. It creates roles, which the master user can do; a least-privilege application user cannot. `agent` is created deliberately powerless — no `BYPASSRLS`, because managed databases often refuse to grant it and the design does not want it.
 

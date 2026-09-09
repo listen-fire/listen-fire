@@ -6,10 +6,48 @@
 # single-quoted by the generator, so `.` is safe for base64 and for URLs.
 set -e
 
+# The generated file names the BUNDLED database, so sourcing it blindly would
+# overwrite a database the operator named themselves — the one thing that must
+# not happen, because that variable is also what tells compose not to start the
+# bundled Postgres at all. Whatever the operator set wins; the generated value
+# is the default for an installation that named nothing.
+OPERATOR_DATABASE_URL="${DATABASE_URL:-}"
+OPERATOR_DATABASE_URL_READONLY="${DATABASE_URL_READONLY:-}"
+
 if [ -f /config/generated.env ]; then
   set -a
   . /config/generated.env
   set +a
+fi
+
+if [ -n "$OPERATOR_DATABASE_URL" ]; then
+  export DATABASE_URL="$OPERATOR_DATABASE_URL"
+  # An external database with no replica named: the read-only URL is the same
+  # database, which is what every guide already tells you to set it to. Without
+  # this it would still point at the bundled Postgres, which is not running.
+  export DATABASE_URL_READONLY="${OPERATOR_DATABASE_URL_READONLY:-$OPERATOR_DATABASE_URL}"
+elif [ -n "$OPERATOR_DATABASE_URL_READONLY" ]; then
+  export DATABASE_URL_READONLY="$OPERATOR_DATABASE_URL_READONLY"
+fi
+
+# The bundled object store, on the same rule: an operator who supplied a key of
+# their own has an object store of their own, and nothing here touches it.
+# Otherwise this installation's own MinIO is the store, and these are the four
+# values the S3 adapter needs plus the endpoint and the path-style flag it needs
+# to speak to MinIO at all (the flag is compared to the literal lowercase
+# `true`). The password is a file, not a line in generated.env, because an
+# installation older than the bundled store has a generated.env that the
+# generator will never rewrite.
+# The test is AWS_S3_ENDPOINT, the same variable that tells compose not to start
+# the bundled MinIO, so the two can never disagree about which store is in use.
+if [ -z "${AWS_S3_ENDPOINT:-}" ] && [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] && [ -f /config/minio_password ]; then
+  export AWS_S3_ENDPOINT=http://minio:9000
+  export AWS_ACCESS_KEY_ID=listenfire
+  AWS_SECRET_ACCESS_KEY="$(cat /config/minio_password)"
+  export AWS_SECRET_ACCESS_KEY
+  export AWS_DOCUMENT_S3_BUCKET="${AWS_DOCUMENT_S3_BUCKET:-listen-fire}"
+  export AWS_REGION="${AWS_REGION:-auto}"
+  export AWS_S3_FORCE_PATH_STYLE=true
 fi
 
 # The dev-loop harness ids are a SWITCH, not identity. `isTestHarnessTeam` is a

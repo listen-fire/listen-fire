@@ -3,10 +3,11 @@
 #
 #   ./smoke.sh
 #
-# Part of this chunk's ship gate, not CI: it builds four images and boots four
+# Part of this chunk's ship gate, not CI: it builds four images and boots five
 # stacks, so it costs minutes rather than seconds. Each shape is torn down with
 # its volumes before the next one, so `listen-fire-config` is regenerated every time
-# and the first-boot path is what is actually under test.
+# and the first-boot path is what is actually under test. Four shapes vary which
+# units run; the fifth varies where the database is.
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,11 +28,14 @@ SHAPE_FAILURES=0
 SHAPE_LABEL=""
 JAR=""
 
-# Redis has no profile (see the compose file's header); `admin` and `demo` are
-# the only two, and a `down` has to name both or it leaves their containers
-# behind for the next shape to inherit.
+# Every profile, and both files, on every teardown. A `down` that omits a
+# profile leaves its containers behind for the next shape to inherit, and the
+# external-database shape below adds a file — naming both here means one
+# teardown is correct after any shape, including a crashed one.
+ALL_PROFILES=(--profile postgres --profile redis --profile minio --profile admin --profile demo)
 teardown() {
-  docker compose --profile admin --profile demo down -v --remove-orphans >/dev/null 2>&1 || true
+  docker compose -f docker-compose.yml -f smoke-external-postgres.yml \
+    "${ALL_PROFILES[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap teardown EXIT
 
@@ -283,6 +287,33 @@ assert_magic_link_login() {
   fi
 }
 
+# The datastore switch, read from the outside: a container for the bundled
+# service either exists in this project or it does not.
+assert_bundled_service_absent() {
+  local service="$1" found
+  found="$(docker ps -a --filter 'label=com.docker.compose.project=listen-fire' \
+    --filter "label=com.docker.compose.service=$service" -q)"
+  if [ -z "$found" ]; then
+    pass "the bundled $service is not in the composition"
+  else
+    fail "the bundled $service is still running ($found)"
+  fi
+}
+
+# And read from the inside: the schema is in the database DATABASE_URL names,
+# not in one this composition started for the api's sake.
+assert_schema_in_external_postgres() {
+  local applied
+  applied="$(docker compose exec -T external-postgres \
+    psql -U listenfire -d listenfire -tAc 'select count(*) from _migrations.migrations' \
+    2>/dev/null | tr -d '[:space:]')"
+  case "$applied" in
+    ''|*[!0-9]*) fail "could not count migrations in the external database (got '${applied:-<nothing>}')" ;;
+    0) fail "the external database has no migrations applied" ;;
+    *) pass "the migrations are in the external database ($applied applied)" ;;
+  esac
+}
+
 # The seed runs on every boot of a demo stack, so it has to be safe to run
 # twice against tables it already wrote.
 assert_seed_is_idempotent() {
@@ -326,10 +357,15 @@ start_shape() {
   teardown
   configure_shape "$@"
 
+  # From SOURCE, always: this verifies the TREE, not the registry — a published
+  # image would prove nothing about the change under test. `--no-build` on the
+  # later shapes reuses the tags the first one built, which is why the images
+  # are tracked at all.
   local up_args=("$@") built=0
   if shape_may_skip_build; then
     up_args+=(--no-build)
   else
+    up_args+=(--build)
     built=1
   fi
 
@@ -403,12 +439,31 @@ shape_all_five() {
   assert_seed_is_idempotent
 }
 
+# The one shape that is not about which units run. A second Postgres joins the
+# composition under a name of its own, DATABASE_URL names it, and everything
+# else follows from that single value: the bundled `postgres` service leaves the
+# composition, `migrate` waits for the named database instead of a `depends_on`,
+# and the schema lands where the api reads it.
+shape_external_postgres() {
+  export COMPOSE_FILE="docker-compose.yml:smoke-external-postgres.yml"
+  export DATABASE_URL="postgresql://listenfire:smoke@external-postgres:5432/listenfire"
+  start_shape "external postgres --demo" core automations --demo
+  assert_api_healthy
+  assert_capabilities 'core,automations' 'core'
+  assert_bundled_service_absent postgres
+  assert_schema_in_external_postgres
+  assert_magic_link_login
+  assert_product_page_renders /dashboard
+  unset DATABASE_URL COMPOSE_FILE
+}
+
 echo "[smoke] logs: $LOG_DIR"
 
 run_shape shape_knowledge
 run_shape shape_automations
 run_shape shape_core_knowledge
 run_shape shape_all_five
+run_shape shape_external_postgres
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

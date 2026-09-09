@@ -130,6 +130,7 @@ import type {
   Adapter,
   RuntimeCapabilities,
 } from '../../adapter';
+import { containerAssociation } from '../../adapter';
 import type {
   MutationContext,
   RecordMutationEvent,
@@ -244,7 +245,7 @@ function makeKgFake(): {
       };
     },
     async updateRecord(input) {
-      return { adapterType: 'kg', externalId: input.externalId, data: {} };
+      return { adapterType: 'kg', externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};
@@ -282,7 +283,7 @@ function makeAttioFake(): {
       return { adapterType: 'attio', externalId: `attio-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: 'attio', externalId: input.externalId, data: {} };
+      return { adapterType: 'attio', externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

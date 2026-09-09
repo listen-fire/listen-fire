@@ -46,6 +46,8 @@ import type {
   UpdateResult,
   WriteInput,
   WriteResult,
+  ExternalRecordRef,
+  ParentAssociation,
 } from '../../adapter';
 import type {
   SchemaEntryPoint,
@@ -61,7 +63,7 @@ import { authHeader, postRpc, parseWireResult } from '../../protocol/client';
 import type { AuthStrategy } from '../../protocol/client';
 import { METHODS } from '../../protocol/schema';
 import type { MethodName } from '../../protocol/schema';
-import { writeParentLinks } from '../../adapter';
+import { writeParentLinks, unsupportedAssociation } from '../../adapter';
 import { META_RECORD_TYPE } from '../../types';
 import {
   memoizedResolver,
@@ -428,10 +430,16 @@ export class RemoteAdapter implements Adapter {
   }
 
   async updateRecord(input: UpdateInput): Promise<UpdateResult> {
-    return this.call('updateRecord', {
+    const result = (await this.call('updateRecord', {
       ...(await this.toInternalWriteInput(input)),
       externalId: input.externalId,
-    }) as Promise<UpdateResult>;
+    })) as UpdateResult | (ExternalRecordRef & { association?: ParentAssociation });
+    if ('notFound' in result) return result;
+    // A connector that says nothing about the parent it was handed has told us
+    // nothing, and nothing is not a link. Silence reads as `unsupported`, which
+    // fails a write that named a parent rather than reporting an attach the
+    // server never claimed.
+    return { ...result, association: result.association ?? unsupportedAssociation(input) };
   }
 
   async deleteRecord(input: DeleteInput): Promise<DeleteResult> {

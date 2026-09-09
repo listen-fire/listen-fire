@@ -6,6 +6,15 @@
 # deploy/guides/render.md (Render specifics, plus "What the Blueprint leaves to
 # you" for what this file cannot do).
 #
+# THE VERSION THIS DEPLOYMENT RUNS is the image tag on `listen-fire-api` and
+# `listen-fire-web` below, one line each, both marked. Editing those two lines
+# and redeploying is the whole of an upgrade (deploy/UPGRADING.md). Blueprint
+# YAML has no variable substitution into `image.url` — `envVars` are not
+# readable from it — so the tag is a literal in two places and the two must be
+# kept the same. Nothing else moves the deployment: an image-backed service does
+# not redeploy when a new image is published at the tag it names, so a release
+# only lands when you edit the tag and deploy.
+#
 # Two choices are yours before you deploy:
 #   - `region` is commented out on every service below. Pick one of oregon,
 #     ohio, virginia, frankfurt or singapore and set the SAME one everywhere,
@@ -19,13 +28,22 @@
 # Verified 2026-08-27 against render.com/docs/blueprint-spec, /docs/key-value,
 # /docs/databases, /docs/web-services, /docs/private-network. Facts locked in
 # here because they are load-bearing:
-#   - No Docker build-`target` field exists anywhere in the Blueprint spec, so
-#     the web app — which needs Dockerfile.web's `web` build target — runs on
-#     the Node runtime instead of Docker (see the `listen-fire-web` service
-#     below).
+#   - `runtime: image` + `image.url` pulls a prebuilt image and runs its CMD,
+#     with the tag part of the url. `image.creds` names a registry credential
+#     and is only for a PRIVATE image; the `ghcr.io/listen-fire/*` packages are
+#     public, so nothing here authenticates to pull them.
+#   - An image-backed service does NOT redeploy when a new image appears at its
+#     tag; a deploy is triggered by hand or by webhook. `autoDeploy` is
+#     documented as having no effect on such a service, so the `autoDeploy:
+#     false` lines below say what is already true rather than causing it.
+#   - `preDeployCommand` works on an image-backed service. Render's own
+#     image-deployment page names database migrations as the example
+#     (render.com/docs/deploying-an-image, checked 2026-09-09).
 #   - `runtime: docker` + `dockerfilePath` + `dockerContext` is the whole of
-#     Docker-runtime support; `dockerCommand` exists to override the image's
-#     CMD but isn't needed here.
+#     Docker-runtime support, and no Docker build-`target` field exists
+#     anywhere in the spec — which is why a source build of the WEB app cannot
+#     use Dockerfile.web's `web` target and has to run on the Node runtime
+#     instead (deploy/guides/render.md's appendix, for people who fork).
 #   - `preDeployCommand` is a plain service-level field, run after build and
 #     before start.
 #   - `healthCheckPath` is a web-service-only field.
@@ -146,12 +164,17 @@ services:
   # (deploy/guides/render.md, "One instance").
   - type: web
     name: listen-fire-api
-    runtime: docker
-    dockerfilePath: deploy/Dockerfile
-    dockerContext: .
+    runtime: image
+    image:
+      # ─── THE RELEASE THIS DEPLOYMENT RUNS. Edit this line to upgrade. ───
+      url: ghcr.io/listen-fire/api:v0.1.0
     # region: oregon   # pick one; it must match on every service (see the header)
     plan: standard
     numInstances: 1
+    # Nothing redeploys this service on its own: not a push to a branch, and not
+    # a new image published at the tag. The line above is the only lever, and
+    # this line only restates it (see the header).
+    autoDeploy: false
     healthCheckPath: /.well-known/health-check
     # The migration runner takes the database as an ARGUMENT — it does not
     # read the ambient environment (deploy/guides/render.md, "Migrations").
@@ -171,7 +194,10 @@ services:
       - key: NODE_ENV
         value: production
 
-      # ---- database + redis: referenced, never typed by hand.
+      # ---- database + redis: referenced, never typed by hand. These are the
+      # same three datastore variables every deployment has (SELF_HOSTING.md,
+      # "Bringing your own datastores"); on Render they always name a managed
+      # service, because there is no bundled one to fall back to.
       - key: DATABASE_URL
         fromDatabase:
           name: listen-fire-postgres
@@ -274,9 +300,10 @@ services:
       - key: SLACK_MOVEMENTS_REDIRECT_URI
         sync: false
 
-      # ---- object storage. Optional: unset means no file storage, and only
-      # file-touching steps fail, naming what they wanted. Wired to the
-      # listen-fire-minio service above by default. To point this at GCS's own
+      # ---- object storage. The third datastore, and on Render the only one
+      # that is a service in this file rather than a managed resource. Unset
+      # means no file storage, and only file-touching steps fail, naming what
+      # they wanted. Wired to the listen-fire-minio service above by default. To point this at GCS's own
       # S3-interoperability HMAC keys or an external S3-compatible bucket
       # instead: delete listen-fire-minio and the two `fromService` entries below,
       # then set every value here by hand. Exactly one object store may be
@@ -309,26 +336,23 @@ services:
       - key: AWS_S3_FORCE_PATH_STYLE
         value: 'true'
 
-  # The sign-in surface and authoring UI. Docker can't select Dockerfile.web's
-  # `web` target (see header), so this runs on the Node runtime against the
-  # `apps/web` workspace directly.
+  # The sign-in surface and authoring UI, from the published image. It bakes in
+  # no API origin: `output: standalone` plus a runtime API_INTERNAL_URL makes
+  # the server-side proxy the only thing that knows where the API is, which is
+  # what lets one image run anywhere.
   - type: web
     name: listen-fire-web
-    runtime: node
-    rootDir: apps/web
+    runtime: image
+    image:
+      # ─── THE SAME RELEASE AS THE API ABOVE. Edit both lines together. ───
+      url: ghcr.io/listen-fire/web:v0.1.0
     # region: oregon   # pick one; it must match on every service (see the header)
     plan: starter
+    autoDeploy: false
     healthCheckPath: /login
-    # pnpm resolves the workspace root by walking up to pnpm-workspace.yaml
-    # regardless of cwd, so `rootDir: apps/web` does not break the
-    # workspace-aware install — it only narrows the cache-invalidation and
-    # `--filter` scope, matching what Dockerfile.web's own build does.
-    buildCommand: pnpm install --frozen-lockfile --prod=false --filter web... && pnpm --filter web build
-    # NODE_ENV=production applies to the build too, and pnpm then skips
-    # devDependencies — next.config.ts needs typescript, which is one. Hence
-    # --prod=false on the install (seen failing on the first deploy, 2026-08-27).
-    startCommand: pnpm --filter web start
     envVars:
+      # The image sets NODE_ENV=production itself; declared here so the
+      # dashboard shows what this service runs as.
       - key: NODE_ENV
         value: production
       # The SERVER-side proxy target — the browser only ever calls
@@ -337,10 +361,10 @@ services:
       # private network, and only the dashboard knows the final service name.
       - key: API_INTERNAL_URL
         sync: false
-      # Build-time: the login page only renders a provider's button when its
-      # public client id was present at `next build`. Same ids as the API's
-      # GOOGLE_AUTH_CLIENT_ID / MICROSOFT_CLIENT_ID.
-      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
-        sync: false
-      - key: NEXT_PUBLIC_MICROSOFT_CLIENT_ID
-        sync: false
+      # NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_MICROSOFT_CLIENT_ID are
+      # deliberately absent. They are BUILD-time values — the login page renders
+      # a provider's button only when its public client id was present at
+      # `next build` — and a published image was built without them, so setting
+      # them on this service would change nothing. A deployment that needs those
+      # two sign-in buttons builds the web app from source: see
+      # deploy/guides/render.md, "Appendix: building the web app from source".

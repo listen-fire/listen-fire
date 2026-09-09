@@ -8,6 +8,7 @@ These guides are the second step. They translate that runbook onto a specific pl
 |---|---|
 | [`render.md`](render.md) | Render. The API as a web service on the shipped image, managed Postgres and Redis beside it. A ready-made Blueprint (`deploy/render.yaml`) encodes the whole shape, and you name the units it runs. |
 | [`vercel-plus-container.md`](vercel-plus-container.md) | You are on Vercel and want to stay there. The web app can; the API cannot, and this explains why and what to do instead. Fly.io is the worked example for the other half. |
+| [`gcp-vm.md`](gcp-vm.md) | Google Cloud. One Compute Engine VM running the compose stack, then a section per datastore on moving it to Cloud SQL, Memorystore or GCS — each one a runbook, each one independent of the others. |
 | [`aws.md`](aws.md) | ECS Fargate, RDS, ElastiCache, S3, ALB. Topology and gotchas, not console steps. |
 | [`byo-auth.md`](byo-auth.md) | You want Listen-Fire to use your identity system rather than its own. The Principal and Directory contracts, what a provider must guarantee, and the two routes with their honest effort. |
 
@@ -16,6 +17,7 @@ Three things are true on every platform, and each of them has cost somebody a da
 - **The API is one long-running process** with its background workers inside it. There is no worker deployment to add, no serverless shape, and no scale-to-zero — a process that stops between requests stops the schedulers and the resume loops with it.
 - **`GET /.well-known/health-check` answers `201`.** That is its contract. Platform health checks that default to expecting exactly `200` will drain a perfectly healthy target.
 - **Two Postgres roles must exist before the first migration.** The compose file creates them from `postgres-init/00-roles.sql` on an empty data directory; a managed database has no such hook, so run that file by hand before you start anything.
+- **A datastore is a variable, not a deployment shape.** Postgres, Redis and the object store each move to a managed service on their own, by naming yours; on compose that also takes the bundled service out of the composition. What each one needs is in [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Bringing your own datastores", and these guides carry only the part that is specific to the platform.
 
 One more thing changes off compose: the compose stack generates its own secrets into a Docker volume on first boot, and nothing does that for you elsewhere. Mint them once, keep them where you keep secrets, and never rotate the two encryption keys — see [`SELF_HOSTING.md`](../SELF_HOSTING.md), "What the installation generates for itself".
 

@@ -7,7 +7,10 @@
 //
 // What this pins is that the pinned-id path does the association and NOTHING
 // else: no PUT of the person's own unchanged fields, and no PUT at all once
-// the person already belongs to the org (so a re-run is free).
+// the person already belongs to the org (so a re-run is free) — and that it
+// asks Affinity for the person exactly ONCE. The pinned id's existence, the
+// employer check and the address check are three parts of one question about
+// one record that cannot change between them.
 
 import { AffinityOperations } from '../operations';
 import { createNoopTracer } from '../../../services/translation_graph/adapters/affinity/shared';
@@ -48,35 +51,80 @@ const attachOnly = {
   affinityId: PERSON_ID,
 };
 
+/** The person a call reports back — the record it read, not a fresh fetch. */
+const personWith = (organizationIds: number[], emails: string[] = []) => ({
+  id: PERSON_ID,
+  first_name: 'Ada',
+  last_name: 'Lovelace',
+  primary_email: null,
+  emails,
+  organization_ids: organizationIds,
+});
+
 describe('createOrUpdatePerson — a pinned person with no field changes joins the parent org', () => {
   it('adds the org to organization_ids, and writes nothing else', async () => {
     const { operations, updatePerson, getPersonById } = operationsWith([42]);
 
     const result = await operations.createOrUpdatePerson(attachOnly);
 
-    expect(result).toEqual({ id: PERSON_ID, isNew: false });
+    // The association is not just attempted — the call says it MADE it — and
+    // the record it read travels back with it.
+    expect(result).toEqual({
+      id: PERSON_ID,
+      isNew: false,
+      orgAssociation: 'made',
+      person: { ...personWith([42, ORG_ID]), organization_ids: [42, ORG_ID] },
+    });
     // Exactly one write, and it extends the membership list rather than
     // replacing the person's own fields.
     expect(updatePerson.mock.calls).toEqual([[PERSON_ID, { organization_ids: [42, ORG_ID] }]]);
-    // Reads only against the pinned person — never a name search.
-    expect(getPersonById.mock.calls.every(([id]) => id === PERSON_ID)).toBe(true);
+    // ONE read: the pinned id's existence, the employer check and the result
+    // payload are three parts of one question about one record.
+    expect(getPersonById.mock.calls).toEqual([[PERSON_ID]]);
   });
 
   it('sends no write at all when the person already belongs to the org', async () => {
-    const { operations, updatePerson } = operationsWith([42, ORG_ID]);
+    const { operations, updatePerson, getPersonById } = operationsWith([42, ORG_ID]);
 
     const result = await operations.createOrUpdatePerson(attachOnly);
 
-    expect(result).toEqual({ id: PERSON_ID, isNew: false });
+    expect(result).toEqual({
+      id: PERSON_ID,
+      isNew: false,
+      orgAssociation: 'already',
+      person: personWith([42, ORG_ID]),
+    });
     expect(updatePerson).not.toHaveBeenCalled();
+    expect(getPersonById.mock.calls).toEqual([[PERSON_ID]]);
   });
 
   it('touches nothing when the write names no parent org', async () => {
-    const { operations, updatePerson } = operationsWith([42]);
+    const { operations, updatePerson, getPersonById } = operationsWith([42]);
 
     const result = await operations.createOrUpdatePerson({ ...attachOnly, orgId: undefined });
 
-    expect(result).toEqual({ id: PERSON_ID, isNew: false });
+    expect(result).toEqual({
+      id: PERSON_ID,
+      isNew: false,
+      orgAssociation: 'none',
+      person: personWith([42]),
+    });
     expect(updatePerson).not.toHaveBeenCalled();
+    expect(getPersonById.mock.calls).toEqual([[PERSON_ID]]);
+  });
+
+  // The address check used to open its own GET of the same person. It reads
+  // the record already in hand, and the PUT it makes answers with the updated
+  // one — so an authored address still costs no extra read.
+  it('appends an unowned address off the same read', async () => {
+    const { operations, updatePerson, getPersonById } = operationsWith([ORG_ID]);
+
+    await operations.createOrUpdatePerson({
+      ...attachOnly,
+      searchQuery: { name: 'Ada Lovelace', email: 'ada@example.com' },
+    });
+
+    expect(updatePerson.mock.calls).toEqual([[PERSON_ID, { emails: ['ada@example.com'] }]]);
+    expect(getPersonById.mock.calls).toEqual([[PERSON_ID]]);
   });
 });

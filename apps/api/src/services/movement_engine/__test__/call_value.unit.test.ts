@@ -99,6 +99,7 @@ import {
   type Resource,
 } from '../../translation_graph/adapter';
 import type { FileRef } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import { makeUnstablePosition, positionData } from '../../translation_graph/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
@@ -191,7 +192,7 @@ function makeFakeAdapter(
         externalId: input.externalId,
         fields: input.fields,
       });
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

@@ -7579,6 +7579,20 @@ class Interpreter {
     // update never reaches here with a stale id (it resolved by identity
     // moments ago), but the typed signal is propagated uniformly.
     if (!updateRecordSucceeded(updated)) return { notFound: true };
+    // The adapter answers for the parent the write named, and 'attach' is
+    // reported on the strength of that answer alone. A system that cannot
+    // attach an EXISTING record along the edge the author wrote fails the
+    // write: the author asked for a relationship, and a run that reported
+    // success while nothing joined anything is the bug this whole field
+    // exists to close.
+    if (updated.association === 'unsupported') {
+      const parent = input.parentLinks[0];
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${input.adapter.adapterType}' cannot attach an existing ${input.recordType} to ` +
+          `${parent.recordType} ${parent.externalId} through ${parent.edgeName}`,
+      );
+    }
     return {
       adapterType: input.adapter.adapterType,
       recordType: input.recordType,
@@ -7588,11 +7602,15 @@ class Interpreter {
       writtenValues: fieldsToWrite,
       resultData: writeResultData(updated),
       // 'attach' is the parent-only send: no field of the record's own
-      // changed, the adapter was called purely to make the association.
+      // changed, the adapter was called purely to make the association — and
+      // the adapter has just confirmed the association holds.
       outcome:
         Object.keys(fieldsToWrite).length > 0 || hasResources ? 'update' : 'attach',
       provenance: {},
       ...this.parentSummaries(input.parentLinks),
+      ...(updated.association === 'made' || updated.association === 'already'
+        ? { association: updated.association }
+        : {}),
     };
   }
 

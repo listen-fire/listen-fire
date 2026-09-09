@@ -591,12 +591,25 @@ export interface EdgeSchema {
    *
    * This ONE flag consumed the retired `creatable`: there is no default-true
    * link promise and no separate create fact, because an absent flag must
-   * never become an affirmative claim. The link-vs-create distinction is
-   * PARKED — an edge that can only link over-promises create and fails at
-   * run time rather than being modelled here.
+   * never become an affirmative claim. The two halves of the promise are
+   * separable, and `linkable` is where an adapter withdraws the second.
    *
    */
   writable?: boolean;
+  /**
+   * Whether two records that ALREADY EXIST can be joined along this edge
+   * (`link a -[:e]-> b`, and its inverse `unlink`).
+   *
+   * **Absent ⇒ the `writable` promise covers link too** — that is what the
+   * promise says. `false` WITHDRAWS the second half: the edge creates its
+   * target and cannot join one that is already there, so a `link` along it is
+   * refused (MOV_LINK_UNSUPPORTED_EDGE) instead of failing at run time.
+   *
+   * Only the source system can say this, and it says it per EDGE: Affinity's
+   * list membership is made by adding a company to a list, and there is no way
+   * to point an entry that already exists at a different one.
+   */
+  linkable?: boolean;
   /**
    * Traversing this edge needs the record at its far end to still EXIST
    * (the adapter hydrates it by fetch). Projected from the adapter

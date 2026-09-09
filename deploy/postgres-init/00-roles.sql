@@ -1,7 +1,8 @@
 -- Roles the migration set grants to. Run this ONCE against a new database,
--- BEFORE the first migration — 51 `GRANT … TO agent` / `TO readonly`
--- statements across the migration history fail on a database without them, and
--- the first one is early enough that you get almost no schema at all.
+-- BEFORE the first migration — more than a hundred `GRANT … TO agent` /
+-- `TO readonly` statements across the migration history fail on a database
+-- without them, and the first one is early enough that you get almost no
+-- schema at all.
 --
 -- The compose file mounts this directory into the bundled Postgres, which runs
 -- it automatically on an empty data directory. **A managed database (Neon,

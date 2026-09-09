@@ -39,10 +39,12 @@ describe('the workers surface reports only what this process mounts', () => {
   const saved = {
     products: process.env.LISTEN_FIRE_PRODUCTS,
     principal: process.env.LISTEN_FIRE_PRINCIPAL,
+    version: process.env.LISTEN_FIRE_VERSION,
   };
   afterEach(() => {
     process.env.LISTEN_FIRE_PRODUCTS = saved.products;
     process.env.LISTEN_FIRE_PRINCIPAL = saved.principal;
+    process.env.LISTEN_FIRE_VERSION = saved.version;
   });
 
   it('lists a standalone product\'s workers and nobody else\'s', async () => {
@@ -61,6 +63,14 @@ describe('the workers surface reports only what this process mounts', () => {
     expect(loadHealth('core,knowledge', 'core').mountedWorkerIds()).toEqual([
       'knowledge.mutation_outbox',
     ]);
+  });
+
+  it('reports the release it is running, and says `dev` when nothing baked one in', async () => {
+    process.env.LISTEN_FIRE_VERSION = 'v1.2.3';
+    expect((await loadHealth('asks', 'static').readWorkersHealth()).version).toBe('v1.2.3');
+
+    delete process.env.LISTEN_FIRE_VERSION;
+    expect((await loadHealth('asks', 'static').readWorkersHealth()).version).toBe('dev');
   });
 
   it('reports a worker this process never started as not-started, not as failing', async () => {

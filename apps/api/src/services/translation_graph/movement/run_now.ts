@@ -507,6 +507,11 @@ export interface MovementRunWrite {
   /** The parent record(s) this write hangs off + the connecting edge —
    *  a linked/tuple write's structural attachment. Absent for root writes. */
   parents?: unknown;
+  /** What the TARGET SYSTEM did about those parents: `made` (the record was
+   *  not attached and now is) or `already` (it was). Absent for a root write,
+   *  and for runs recorded before the systems were asked. `parents` is what
+   *  the author wrote; this is what the system did about it. */
+  association?: 'made' | 'already';
   /** The resolved field values sent to the adapter (post no-op suppression) —
    *  every `?:` outcome and enum coercion already applied. */
   values: Record<string, unknown>;
@@ -589,6 +594,9 @@ function appliedPlanToWrite(
     ...(typeof plan.externalId === 'string' ? { externalId: plan.externalId } : {}),
     ...(plan.link !== undefined ? { link: plan.link } : {}),
     ...(Array.isArray(plan.parents) && plan.parents.length > 0 ? { parents: plan.parents } : {}),
+    ...(plan.association === 'made' || plan.association === 'already'
+      ? { association: plan.association }
+      : {}),
     values:
       plan.writtenValues && typeof plan.writtenValues === 'object'
         ? (plan.writtenValues as Record<string, unknown>)

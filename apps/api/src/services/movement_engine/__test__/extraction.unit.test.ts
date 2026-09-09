@@ -137,6 +137,7 @@ import type {
   RuntimeCapabilities,
   ExternalRecordRef,
 } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { MutationContext } from '../../translation_graph/mutation_context';
 import { positionData } from '../../translation_graph/types';
@@ -230,7 +231,7 @@ function makeFakeAdapter(
         externalId: input.externalId,
         fields: input.fields,
       });
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

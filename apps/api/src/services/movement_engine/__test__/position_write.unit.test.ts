@@ -26,6 +26,7 @@ import {
 } from '../../translation_graph/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { createManualAdapter } from '../../translation_graph/adapters/manual';
+import { containerAssociation } from '../../translation_graph/adapter';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000031' as TeamId;
 const KG = 'kg';
@@ -85,7 +86,7 @@ function makeKgFake(collections: Record<string, NodeRow[]>) {
       updates.push(input);
       const node = byId.get(input.externalId);
       if (node) Object.assign(node.fields, input.fields);
-      return { adapterType: KG, externalId: input.externalId, data: {} };
+      return { adapterType: KG, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord(input) {
       deletes.push({ recordType: input.recordType, externalId: input.externalId });

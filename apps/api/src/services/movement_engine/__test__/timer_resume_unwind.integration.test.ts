@@ -49,6 +49,7 @@ import { resolveAdapter } from '../../translation_graph/adapters/resolve';
 import { mintMovementVersionIfChanged } from '../../translation_graph/movement/version_store';
 import { makeStablePosition, positionData } from '../../translation_graph/types';
 import type { Adapter, RuntimeCapabilities } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { Catalog, InstanceSchema, PositionSchema } from 'movement-lang';
 import { eventAddressKey } from 'movement-lang';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
@@ -189,7 +190,7 @@ function makeSlackTargetFake(): { adapter: Adapter; creates: Record<string, unkn
       return { adapterType: 'slack', externalId: `msg-${creates.length}`, data: {} };
     },
     async updateRecord(input) {
-      return { adapterType: 'slack', externalId: input.externalId, data: {} };
+      return { adapterType: 'slack', externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

@@ -10,6 +10,12 @@ export const TESTING_USER_EMAIL = 'testing@listen-fire.local';
 
 export const HEALTH_CHECK_ENDPOINT = '/.well-known/health-check';
 
+// The release this build is, baked into the image at build time
+// (`--build-arg LISTEN_FIRE_VERSION`, which the release workflow sets from the
+// git tag). A tree nobody tagged — a source build, a dev loop — is `dev`, and
+// that is the honest answer rather than a version number nothing produced.
+export const LISTEN_FIRE_VERSION = process.env.LISTEN_FIRE_VERSION || 'dev';
+
 // Worker liveness per mounted product. Separate from the probe above, whose
 // 201-with-no-body is a deploy platform's contract.
 export const WORKERS_HEALTH_ENDPOINT = '/healthz/workers';

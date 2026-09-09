@@ -41,10 +41,13 @@ const handlers = {
     const externalId = myCrm.create(recordType, fields);  // ← your system
     return { adapterType: 'acme_crm', externalId, recordType, data: {} };
   },
-  updateRecord: ({ recordType, externalId, fields }) => {
+  updateRecord: ({ recordType, externalId, fields, parentLinks }) => {
     if (!myCrm.exists(externalId)) return { notFound: true };
     myCrm.update(externalId, fields);                     // ← your system
-    return { adapterType: 'acme_crm', externalId, recordType, data: {} };
+    // Say what became of the parent: Company has no parent edges here, so a
+    // write that named one asked for something this connector cannot do.
+    const association = (parentLinks ?? []).length === 0 ? 'none' : 'unsupported';
+    return { adapterType: 'acme_crm', externalId, recordType, data: {}, association };
   },
   deleteRecord: ({ externalId }) => { myCrm.delete(externalId); return {}; },
 };

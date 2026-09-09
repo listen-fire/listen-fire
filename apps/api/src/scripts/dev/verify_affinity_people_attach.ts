@@ -8,13 +8,25 @@
  * suppressed every field, found nothing left to send, and returned without
  * ever calling the adapter. The adapter is where the association is made.
  *
- * Four things to see:
+ * Seven things to see:
  *   1. the person joins the org even though not one of their own fields
- *      changed, and the run calls it `attach` rather than `update`;
+ *      changed, and the run calls it `attach` — with the association the
+ *      target CONFIRMED (`made`), not one the engine assumed;
  *   2. running it again is free — the person is already a member, so no PUT
- *      is sent at all, and it still reads `attach`;
+ *      is sent at all, and it still reads `attach`, now `already`;
  *   3. the same suppression with NO parent sends nothing and reads `noop`;
- *   4. a write with a genuinely changed field still reads `update`.
+ *   4. a write with a genuinely changed field still reads `update`;
+ *   5. `link org -[:People]-> p` joins the same association the write does,
+ *      through the same code — one PUT, then nothing on a re-run — and
+ *      `unlink` takes it back;
+ *   6. `link org -[:List Entries]-> entry` is refused at CHECK time: Affinity
+ *      makes a membership by adding a company to a list, and cannot point an
+ *      entry that already exists at a different one;
+ *   7. a pinned person update reads the person ONCE inside the write. (Two
+ *      GETs of the person reach the fake in all: the engine's own no-op
+ *      detection read — `readRecord`, which also fetches the custom-field
+ *      values — and then the write's single read, where there used to be
+ *      three.)
  *
  * The write carries the person's address as well as their names — Affinity's
  * identity surface matches a person on their address first, so the whole leg
@@ -25,7 +37,7 @@
  *   FAKE_CHANNELS_PORT=6377 npx tsx apps/fake-channels/src/index.ts   # or the dev loop
  *   FAKE_BASE=http://localhost:6377/affinity npx tsx apps/api/src/scripts/dev/verify_affinity_people_attach.ts
  */
-import { fromCatalogSnapshot, type CatalogSnapshot } from 'movement-lang';
+import { checkProgram, fromCatalogSnapshot, parseProgram, type CatalogSnapshot } from 'movement-lang';
 import { runMovement } from '../../services/movement_engine/run';
 import { AffinityAPIClient } from '../../adapters/affinity/apiClient';
 import {
@@ -149,6 +161,49 @@ movement rename(e: <crm-[:\`Organization\`]->>) {
   }
 }`;
 
+/** The standalone link statements, over the same two records the write joins:
+ *  `link` must reach the SAME association a linked write makes, because it is
+ *  the same code — and `unlink` must take it back. */
+const LINK = `${HEADER}
+movement joinUp(e: <crm-[:\`Organization\`]->>) {
+  org = write crm-[:\`Organization\`]-> {
+    \`Name\`: "${ORG_NAME}"
+  }
+  p = write crm-[:\`Person\`]-> {
+    \`First name\` ?: "${FIRST}"
+    \`Last name\` ?: "${LAST}"
+    \`Email\` ?: "${EMAIL}"
+  }
+  link org -[:\`People\`]-> p
+}`;
+
+const UNLINK = `${HEADER}
+movement partWays(e: <crm-[:\`Organization\`]->>) {
+  org = write crm-[:\`Organization\`]-> {
+    \`Name\`: "${ORG_NAME}"
+  }
+  p = write crm-[:\`Person\`]-> {
+    \`First name\` ?: "${FIRST}"
+    \`Last name\` ?: "${LAST}"
+    \`Email\` ?: "${EMAIL}"
+  }
+  unlink org -[:\`People\`]-> p
+}`;
+
+/** A `link` along an edge Affinity can only WRITE along. Membership is made by
+ *  adding a company to a list; an entry that already exists IS its (list,
+ *  member) pair, so there is nothing to point at a different list. */
+const LINK_ENTRY = `${HEADER}
+movement joinList(e: <crm-[:\`Organization\`]->>) {
+  org = write crm-[:\`Organization\`]-> {
+    \`Name\`: "${ORG_NAME}"
+  }
+  entry = write org-[:\`List Entries\`]-> {
+    \`listName\`: "Pipeline"
+  }
+  link org -[:\`List Entries\`]-> entry
+}`;
+
 const event = {
   pipelineInputId: 'pi-verify',
   adapterType: 'affinity',
@@ -213,6 +268,8 @@ const membership = (personId: number) =>
 const action = (w: WriteRecord) => w.kind ?? w.outcome ?? (w.created ? 'create' : 'update');
 
 const puts = (sent: string[]) => sent.filter((r) => r.startsWith('PUT /persons/'));
+const personGets = (sent: string[], personId: number) =>
+  sent.filter((r) => r === `GET /persons/${personId}`);
 
 async function main() {
   const { orgId, personId } = await seed();
@@ -245,16 +302,58 @@ async function main() {
   console.log(`   writes: ${JSON.stringify(changed.writes.map((w) => [w.recordType, action(w), w.writtenValues]))}`);
   console.log(`   person PUTs: ${JSON.stringify(puts(changed.sent))}`);
 
+  console.log('\n── 5. `link org -[:People]-> p` — the same association, joined by hand');
+  await api(`/persons/${personId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ organization_ids: [] }),
+  });
+  const linked = await run(LINK, 'joinUp', adapter, catalog);
+  console.log(`   the person's organizations after: ${JSON.stringify(await membership(personId))}`);
+  console.log(`   person PUTs: ${JSON.stringify(puts(linked.sent))}`);
+  const relinked = await run(LINK, 'joinUp', adapter, catalog);
+  console.log(`   a second link sends: ${JSON.stringify(puts(relinked.sent))}`);
+  const unlinked = await run(UNLINK, 'partWays', adapter, catalog);
+  const afterUnlink = await membership(personId);
+  console.log(`   after unlink: ${JSON.stringify(afterUnlink)} (PUTs ${JSON.stringify(puts(unlinked.sent))})`);
+
+  console.log('\n── 6. `link org -[:List Entries]-> entry` — refused at check time');
+  const refusals = checkProgram(parseProgram(LINK_ENTRY), catalog).filter(
+    (d) => d.code === 'MOV_LINK_UNSUPPORTED_EDGE',
+  );
+  console.log(`   diagnostics: ${JSON.stringify(refusals.map((d) => d.message))}`);
+
+  console.log('\n── 7. one read per pinned person update (plus the engine\'s no-op detection read)');
+  await api(`/persons/${personId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ organization_ids: [] }),
+  });
+  const reads = await run(ATTACH, 'attach', adapter, catalog);
+  console.log(`   GET /persons/${personId}: ${personGets(reads.sent, personId).length}`);
+  console.log(`   every person call: ${JSON.stringify(reads.sent.filter((r) => r.includes('/persons')))}`);
+
   const orgs = await membership(personId);
   const ok =
     orgs.includes(orgId) &&
     action(first.writes[1]) === 'attach' &&
+    first.writes[1].association === 'made' &&
     puts(first.sent).length === 1 &&
     action(second.writes[1]) === 'attach' &&
+    second.writes[1].association === 'already' &&
     puts(second.sent).length === 0 &&
     action(changed.writes[1]) === 'update' &&
+    changed.writes[1].association === 'already' &&
     action(rooted.writes[0]) === 'noop' &&
-    puts(rooted.sent).length === 0;
+    puts(rooted.sent).length === 0 &&
+    // 5 — the standalone link makes the association, is idempotent, and
+    // unlink takes it back.
+    puts(linked.sent).length === 1 &&
+    puts(relinked.sent).length === 0 &&
+    afterUnlink.includes(orgId) === false &&
+    // 6 — the checker refuses the link Affinity cannot make.
+    refusals.length === 1 &&
+    // 7 — the engine's no-op detection read, then ONE read for the whole
+    // write, where the write used to make three of its own.
+    personGets(reads.sent, personId).length === 2;
 
   console.log(`\n── ${ok ? 'PASS' : 'FAIL'}`);
   process.exit(ok ? 0 : 1);

@@ -82,7 +82,7 @@ function makeAdapter(opts: {
     async getFieldValue() { return null; },
     async getRelated() { return []; },
     async createRecord() { return { adapterType: 'email', externalId: 'stub', data: {} }; },
-    async updateRecord() { return { adapterType: 'email', externalId: 'updated', data: {} }; },
+    async updateRecord() { return { adapterType: 'email', externalId: 'updated', data: {}, association: 'none' }; },
     async deleteRecord() { return {}; },
     getActorCandidates,
     extractActor,

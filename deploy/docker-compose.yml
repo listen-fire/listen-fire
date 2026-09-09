@@ -6,11 +6,14 @@
 # health.
 #
 # Bare `docker compose up` is the whole of Listen-Fire — every unit, with core
-# identity. Add `--profile admin` for the platform-admin UI and `--profile demo`
-# for the fake third parties plus the sample dataset. Nothing a running unit
-# NEEDS is behind a profile: Redis is always up, because core's MCP OAuth flow
-# and automations' runaway-loop guard both keep state there and a bare `up`
-# mounts both.
+# identity. WHICH optional pieces come with it is `COMPOSE_PROFILES` in `.env`,
+# not a flag: `postgres`, `redis` and `minio` are the bundled datastores and are
+# on in the shipped line; `admin` adds the platform-admin UI and `demo` the fake
+# third parties plus the sample dataset. Keep the list there rather than passing
+# `--profile`, which REPLACES it rather than adding to it on older compose
+# versions — that is how a `down` ends up leaving containers behind. `up.sh`
+# names its profiles on the command line and passes no list, which is the same
+# rule from the other side.
 #
 # Secrets are NOT in this file and not in `.env`. The one-shot `init` service
 # mints them into the `listen-fire-config` volume on first boot and never again; every
@@ -18,6 +21,34 @@
 # `with-generated-env`. Postgres reads its password from /config/postgres_password
 # because a named volume is invisible to `env_file` (the docker CLI reads that on
 # the host).
+#
+# ── THE THREE DATASTORES ────────────────────────────────────────────────────
+#
+# Postgres, Redis and the object store each come bundled here and each can be
+# moved to a managed service on its own, by naming that service in `.env` and
+# nothing else:
+#
+#   DATABASE_URL                    set → the bundled `postgres` is not started
+#   MESSAGE_QUEUE_REDIS_HOSTNAME    set → the bundled `redis` is not started
+#   AWS_S3_ENDPOINT                 set → the bundled `minio` is not started
+#
+# The mechanism is the `profiles:` line on each of those three services. A
+# bundled store sits in the profile named after it (`postgres`, `redis`,
+# `minio`), which `deploy/.env`'s COMPOSE_PROFILES enables and `up.sh` names on
+# the command line. Setting the variable rewrites that profile name to
+# `unused-postgres` / `unused-redis` / `unused-minio`, which nothing enables, so
+# the service leaves the composition entirely — it is not started, not built,
+# not `docker compose config`'d. Nothing here needs editing to move a store off
+# the box, which is the whole point: see SELF_HOSTING.md, "Bringing your own
+# datastores".
+#
+# Two consequences of a service that may not exist, both deliberate:
+#   - NOTHING `depends_on` those three. A `depends_on` naming a service that is
+#     not in the composition is a hard error on every compose version this file
+#     supports, so `migrate` waits for the database ITSELF (below), which is the
+#     same wait whether the database is next door or across a VPC.
+#   - The api no longer waits on Redis. It reaches for it lazily, and the
+#     bundled Redis answers long before the migration step finishes.
 
 name: listen-fire
 
@@ -28,11 +59,20 @@ x-node-app: &node-app
     - listen-fire-config:/config
   entrypoint: ['/usr/local/bin/with-generated-env']
 
+# Published images by default; `build:` stays so `docker compose build` and
+# `up.sh --build` still produce exactly these tags from this tree. Which
+# RELEASE an installation runs is `LISTEN_FIRE_VERSION` — pin it in .env and
+# the installation moves only when you change it. Unpinned means `latest`,
+# which moves under you the next time anything pulls.
 x-api-image: &api-image
+  image: ghcr.io/listen-fire/api:${LISTEN_FIRE_VERSION:-latest}
   build:
     context: ..
     dockerfile: deploy/Dockerfile
-  image: listen-fire-api:local
+    args:
+      # A source build of an untagged tree is `dev`, and says so on
+      # /healthz/workers and in the settings page.
+      LISTEN_FIRE_VERSION: ${LISTEN_FIRE_VERSION:-dev}
 
 services:
   # First boot only. Refuses when deploy/.env names no model key and LISTEN_FIRE_DEMO
@@ -51,9 +91,13 @@ services:
     command: ['sh', '/init/generate-env.sh']
     restart: 'no'
 
-  # pgvector because the migration set is monolithic: `vector` + `pg_trgm` for
-  # knowledge and `citext` for core/automations all get created whatever runs.
+  # pgvector because the migration set is monolithic: all six extensions it
+  # creates — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent`, `btree_gin`
+  # — get created whatever units run.
+  #
+  # Parked by naming your own database in DATABASE_URL — see the header.
   postgres:
+    profiles: ['${DATABASE_URL:+unused-}postgres']
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: listenfire
@@ -75,11 +119,13 @@ services:
       retries: 30
 
   # Core's MCP OAuth flow keeps in-flight state here; automations' runaway-loop
-  # guard keeps its counters here. NOT behind a profile: a bare `docker compose
-  # up` mounts every unit, so gating Redis on a flag would leave the shipped
-  # default composition without the store two of its units write to. A shape
-  # that needs none of it pays for one idle alpine container.
+  # guard keeps its counters here. Every shipped composition runs it — a bare
+  # `docker compose up` mounts every unit, and two of them write here — so its
+  # profile is on by default and the only thing that parks it is naming your own
+  # Redis in MESSAGE_QUEUE_REDIS_HOSTNAME. A shape that needs none of it pays
+  # for one idle alpine container.
   redis:
+    profiles: ['${MESSAGE_QUEUE_REDIS_HOSTNAME:+unused-}redis']
     image: redis:7.2-alpine
     command: ['redis-server', '--save', '60', '1', '--loglevel', 'warning']
     volumes:
@@ -90,16 +136,74 @@ services:
       timeout: 5s
       retries: 20
 
+  # The bundled object store. Anything that handles a file — an inbound email
+  # attachment, WhatsApp media, a generated document, a valuations attachment —
+  # wants an S3-compatible bucket, and there is no local-filesystem driver, so
+  # this is that bucket for an installation that has not moved storage to a
+  # managed one. `with-generated-env` points the api at it whenever the operator
+  # has supplied no key of their own.
+  #
+  # Not published to the host, deliberately. The api reaches it over the compose
+  # network, and a presigned link handed to a BROWSER or a third party resolves
+  # only where the hostname `minio` does — so a deployment that hands out file
+  # links points AWS_S3_ENDPOINT at an object store on a public origin, which is
+  # also what parks this service.
+  minio:
+    profiles: ['${AWS_S3_ENDPOINT:+unused-}minio']
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    environment:
+      MINIO_ROOT_USER: listenfire
+      # Same reason postgres takes POSTGRES_PASSWORD_FILE: the password is in a
+      # named volume, which `env_file` cannot read.
+      MINIO_ROOT_PASSWORD_FILE: /config/minio_password
+      MINIO_BROWSER: 'off'
+    # MinIO creates no bucket on its own, and on its single-drive backend a
+    # directory in the data root IS a bucket.
+    entrypoint: ['sh', '-c', 'mkdir -p /data/listen-fire && exec minio server /data --address :9000']
+    volumes:
+      - miniodata:/data
+      - listen-fire-config:/config:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   # One-shot, to completion, before the API starts — so a restart never races
   # the schema. The runner takes the database as an ARGUMENT.
   migrate:
     <<: [*node-app, *api-image]
-    command: ['sh', '-c', 'pnpm schema:migrate "$$DATABASE_URL"']
+    # The wait is here rather than in a `depends_on` because the database may
+    # not be a service in this composition at all (see the header). psql is in
+    # this image for the migration runner's own sake.
+    command:
+      - sh
+      - -c
+      - |
+        tries=90
+        until PGCONNECT_TIMEOUT=5 psql "$$DATABASE_URL" -c 'select 1' >/dev/null 2>&1; do
+          tries=$$((tries - 1))
+          if [ "$$tries" -le 0 ]; then
+            echo '[migrate] the database named by DATABASE_URL never answered' >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        pnpm schema:migrate "$$DATABASE_URL"
     environment:
       LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
+      # See the api's own note on these two.
+      DATABASE_URL:
+      DATABASE_URL_READONLY:
+    # Not postgres — that one may not exist. `init` is what mints the database
+    # URL a bundled installation uses, so it still has to have finished.
     depends_on:
-      postgres:
-        condition: service_healthy
+      init:
+        condition: service_completed_successfully
     restart: 'no'
 
   api:
@@ -127,8 +231,12 @@ services:
       # route is served by the API, and the code's own fallback is
       # OAUTH_REDIRECT_BASE_URL — the web origin — so pin it to the API here.
       EXPOSED_FILE_PUBLIC_BASE_URL: ${EXPOSED_FILE_PUBLIC_BASE_URL:-${API_BASE_URL:-http://localhost:8081}}
-      MESSAGE_QUEUE_REDIS_HOSTNAME: redis
-      MESSAGE_QUEUE_REDIS_PORT: 6379
+      # The bundled Redis unless you name your own — which also parks the
+      # bundled service (see the header). Host and port only: the client is
+      # built from these two and nothing else, so a managed Redis that demands
+      # AUTH or TLS cannot be reached through them.
+      MESSAGE_QUEUE_REDIS_HOSTNAME: ${MESSAGE_QUEUE_REDIS_HOSTNAME:-redis}
+      MESSAGE_QUEUE_REDIS_PORT: ${MESSAGE_QUEUE_REDIS_PORT:-6379}
       # Both default to the composed deployment's answer — an in-process
       # consumer — because a bare `docker compose up` is the composed
       # deployment. `up.sh` overrides them for a shape without automations.
@@ -142,11 +250,19 @@ services:
       # unset, so the code never sees an empty string where it expects absence.
       INBOUND_EMAIL_ADDRESS:
       RESEND_API_BASE_URL:
+      # The database and the object store, when you have named your own. Bare
+      # keys again: set in `.env` they arrive through `env_file` anyway, and set
+      # in the SHELL they need this line to cross into the container at all —
+      # which is what makes the same switch work from either place.
+      DATABASE_URL:
+      DATABASE_URL_READONLY:
+      AWS_S3_ENDPOINT:
+    # Not redis, and not postgres: neither is necessarily a service here. The
+    # schema is what the api genuinely cannot start without, and `migrate` has
+    # already waited for the database on its behalf.
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
     ports:
       - '${API_PORT:-8081}:3000'
     healthcheck:
@@ -159,11 +275,11 @@ services:
 
   web:
     <<: *node-app
+    image: ghcr.io/listen-fire/web:${LISTEN_FIRE_VERSION:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
       target: web
-    image: listen-fire-web:local
     command: ['node', 'apps/web/server.js']
     environment:
       PORT: 3000
@@ -192,11 +308,11 @@ services:
   admin:
     <<: *node-app
     profiles: ['admin']
+    image: ghcr.io/listen-fire/admin:${LISTEN_FIRE_VERSION:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
       target: admin
-    image: listen-fire-admin:local
     command: ['node', 'apps/admin/server.js']
     environment:
       PORT: 3000
@@ -222,11 +338,11 @@ services:
   # The demo's stand-in third parties: Attio, Slack, Airtable, an email outbox.
   fake-channels:
     profiles: ['demo']
+    image: ghcr.io/listen-fire/fake-channels:${LISTEN_FIRE_VERSION:-latest}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
       target: fake-channels
-    image: listen-fire-fake-channels:local
     # Loopback only, deliberately: the outbox holds live magic links, and a
     # single-use login link readable by anything on the LAN is a signed-in
     # session for whoever fetches it first.
@@ -291,6 +407,9 @@ services:
       # address that import is a configuration gap and the seed refuses.
       INBOUND_EMAIL_ADDRESS:
       RESEND_API_BASE_URL: http://fake-channels:5556/resend
+      # See the api's own note on these two.
+      DATABASE_URL:
+      DATABASE_URL_READONLY:
     depends_on:
       api:
         condition: service_healthy
@@ -301,4 +420,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  # The bundled object store's bucket. `down -v` destroys it, and every file an
+  # automation ever wrote with it.
+  miniodata:
   listen-fire-config:

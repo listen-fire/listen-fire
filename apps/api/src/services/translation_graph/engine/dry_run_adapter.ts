@@ -151,7 +151,16 @@ export function wrapAdapterForDryRun(adapter: Adapter, rehearsal: DryRunRehearsa
             externalId: input.externalId,
             ...(parents !== undefined ? { parents } : {}),
           });
-          return { adapterType: target.adapterType, externalId: input.externalId, data: {} };
+          return {
+            adapterType: target.adapterType,
+            externalId: input.externalId,
+            data: {},
+            // Synthesized like create's externalId and link's `created: true`:
+            // a rehearsal reads nothing against the live target, so it answers
+            // as the write it captured would have — the association the author
+            // asked for, made.
+            association: parents === undefined ? ('none' as const) : ('made' as const),
+          };
         };
       }
       if (prop === 'deleteRecord') {

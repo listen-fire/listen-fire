@@ -21,13 +21,33 @@ export default function SettingsPage() {
       <StylePreferencesSection />
       <RecipesSection />
       <PasswordSection />
+      <VersionSection />
     </>
   );
 }
 
+// Which release this installation is running. It comes from the API rather
+// than from anything the browser bundle knows, because the version belongs to
+// the deployed process — a cached page served by an old web build would
+// otherwise report the version it was built beside.
+function VersionSection() {
+  const { data } = trpc.views.userSettings.getDeployment.useQuery();
+  if (!data) return null;
+
+  return (
+    <section className="mt-10" data-testid="settings-version-section">
+      <h2 className="text-[13px] font-semibold text-gray-900">About</h2>
+      <p className="mt-1 text-[12px] text-gray-400">
+        Running Listen-Fire{" "}
+        <span className="font-mono text-gray-600">{data.version}</span>.
+      </p>
+    </section>
+  );
+}
+
 function WhatsAppSection() {
-  const { data: whatsappNumber, isLoading: isLoadingNumber } =
-    trpc.views.userSettings.getWhatsappNumber.useQuery();
+  const { data: deployment, isLoading: isLoadingNumber } =
+    trpc.views.userSettings.getDeployment.useQuery();
   const { data, isLoading } =
     trpc.views.userSettings.getPhoneNumber.useQuery();
   const utils = trpc.useUtils();
@@ -106,14 +126,14 @@ function WhatsAppSection() {
 
   // No number registered on this deployment means there is nothing to verify
   // against, so the section is not offered at all.
-  if (isLoadingNumber || !whatsappNumber?.number) return null;
+  if (isLoadingNumber || !deployment?.whatsappNumber) return null;
 
   return (
     <section className="mt-10" data-testid="settings-whatsapp-section">
       <h2 className="text-[13px] font-semibold text-gray-900">WhatsApp</h2>
       <p className="mt-1 text-[12px] text-gray-400">
-        Verify your WhatsApp number so messages you send to {whatsappNumber.number}{" "}
-        run your automations.
+        Verify your WhatsApp number so messages you send to{" "}
+        {deployment.whatsappNumber} run your automations.
       </p>
 
       {isLoading ? (

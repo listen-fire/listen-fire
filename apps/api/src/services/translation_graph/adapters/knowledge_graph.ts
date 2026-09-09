@@ -1439,6 +1439,7 @@ export class KnowledgeGraphAdapter implements Adapter {
       adapterType: KG_ADAPTER_TYPE,
       externalId: input.externalId,
       data: {},
+      association: result.association,
     };
   }
 

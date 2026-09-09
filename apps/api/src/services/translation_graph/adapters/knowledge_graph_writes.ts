@@ -38,7 +38,7 @@ import { kgFetch, kgFetchOrNull, type KgCredentials, type WireOntology } from '.
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import EvidenceType from '../../../generated/kysely/knowledge/EvidenceType';
 import type { MutationContext, MutationSourceType } from '../mutation_context';
-import type { FieldEvidence, ParentLink, Resource } from '../adapter';
+import type { FieldEvidence, ParentAssociation, ParentLink, Resource } from '../adapter';
 import { persistKgResources } from './knowledge_graph_resources';
 import { logger } from '../../logger';
 
@@ -101,19 +101,15 @@ export async function createKgRecord(input: {
 
   // Edge types are ontology facts, and the ontology is already in hand — this
   // used to be a query per parent link and is now a lookup per parent link.
-  const edges = (input.parentLinks ?? []).map((parentLink) => {
-    const resolved = resolveParentLinkEdgeType({
-      ontology,
-      parentRecordType: parentLink.recordType,
-      childRecordType: input.recordType,
-      edgeName: parentLink.edgeName,
-    });
-    return {
-      edgeTypeId: resolved.edgeTypeId,
-      otherNodeId: parentLink.externalId,
-      direction: resolved.parentIsSource ? ('in' as const) : ('out' as const),
-    };
-  });
+  const edges = resolveParentEdges({
+    ontology,
+    childRecordType: input.recordType,
+    parentLinks: input.parentLinks,
+  }).map((edge) => ({
+    edgeTypeId: edge.edgeTypeId,
+    otherNodeId: edge.parentNodeId,
+    direction: edge.parentIsSource ? ('in' as const) : ('out' as const),
+  }));
 
   const { nodeId } = await kgFetch<{ nodeId: string }>(creds, {
     method: 'POST',
@@ -158,14 +154,15 @@ export async function updateKgRecord(input: {
   evidence?: Record<string, FieldEvidence>;
   mutationContext: MutationContext;
   /**
-   * W4-KG3 — parent context forwarded from the write's parent links, so
-   * edge-anchored field writes on a matched (update) node resolve the
-   * pre-existing edge(s) between the parents and this node.
+   * The parents this node must end up hanging off. Each connecting edge is
+   * ASSERTED here (idempotently), so a matched node attaches exactly as a
+   * freshly created one does — and an edge-anchored field write (W4-KG3)
+   * lands on the edge that assert just answered with.
    */
   parentLinks?: ParentLink[];
   /** Node-level resource provenance (`4d_resources.md`). */
   resources?: Resource[];
-}): Promise<{ ok: true } | { notFound: true }> {
+}): Promise<{ ok: true; association: ParentAssociation } | { notFound: true }> {
   const { creds, ontology } = input.connection;
   const nodeId = input.externalId;
 
@@ -196,53 +193,55 @@ export async function updateKgRecord(input: {
         });
   if (updated === null) return { notFound: true };
 
-  if (edgeAnchored.length > 0) {
-    // The parent-link edges already exist (a matched node re-encountered
-    // through a child action with the same parents). The graph answers each
-    // edge's own id alongside its type, so finding them is one read rather than
-    // one query per parent.
-    const existing = await kgFetch<{
-      data: { edgeId: string; edgeTypeId: string; otherNodeId: string }[];
-    }>(creds, { method: 'GET', path: `/nodes/${nodeId}/edges` });
+  // MATCHING IS NOT ASSOCIATING. A matched node still has to end up hanging
+  // off the parent the write names, and until now nothing here made that
+  // happen: the parent links were consulted only to FIND an edge an
+  // edge-anchored field could be written on, so `write parent-[:edge]-> { … }`
+  // against an existing node created no edge at all.
+  //
+  // The edge assert is the same door `linkKgRecords` uses and the same
+  // resolution the create path uses, so the two spellings of "attach this
+  // child" cannot drift; the door is idempotent, so a re-run makes nothing.
+  // It also answers each edge's own id, which is exactly what an edge-anchored
+  // field write needs — so the separate "find the existing edges" read is gone.
+  const edgeIdByType = new Map<string, string>();
+  let association: ParentAssociation = 'none';
+  const parentEdges = resolveParentEdges({
+    ontology,
+    childRecordType: input.recordType,
+    parentLinks: input.parentLinks,
+  });
+  if (parentEdges.length > 0) association = 'already';
+  for (const edge of parentEdges) {
+    const { edgeId, created } = await kgFetch<{ edgeId: string; created: boolean }>(creds, {
+      method: 'POST',
+      path: '/edges',
+      body: {
+        edgeTypeId: edge.edgeTypeId,
+        ...edgeEnds(!edge.parentIsSource, nodeId, edge.parentNodeId),
+        ...writeProvenance(input.mutationContext),
+      },
+    });
+    edgeIdByType.set(edge.edgeTypeId, edgeId);
+    if (created) association = 'made';
+  }
 
-    const edgeIdByType = new Map<string, string>();
-    for (const parentLink of input.parentLinks ?? []) {
-      const resolved = resolveParentLinkEdgeType({
-        ontology,
-        parentRecordType: parentLink.recordType,
-        childRecordType: input.recordType,
-        edgeName: parentLink.edgeName,
+  for (const write of edgeAnchored) {
+    const edgeTypeId = edgeTypeByProperty.get(write.propertyTypeId)!;
+    const edgeId = edgeIdByType.get(edgeTypeId);
+    if (!edgeId) {
+      logger.debug('[KG updateKgRecord] edge-anchored field without a matching parent-link edge — skipping', {
+        propertyTypeId: write.propertyTypeId,
+        edgeTypeId,
+        parentLinkEdgeTypes: [...edgeIdByType.keys()],
       });
-      const match = existing.data.find(
-        (e) => e.edgeTypeId === resolved.edgeTypeId && e.otherNodeId === parentLink.externalId,
-      );
-      if (match) edgeIdByType.set(resolved.edgeTypeId, match.edgeId);
-      else {
-        logger.debug('[KG updateKgRecord] parent-link edge not found for matched node — edge-anchored writes will skip', {
-          edgeTypeId: resolved.edgeTypeId,
-          nodeId,
-          parentNodeId: parentLink.externalId,
-        });
-      }
+      continue;
     }
-
-    for (const write of edgeAnchored) {
-      const edgeTypeId = edgeTypeByProperty.get(write.propertyTypeId)!;
-      const edgeId = edgeIdByType.get(edgeTypeId);
-      if (!edgeId) {
-        logger.debug('[KG updateKgRecord] edge-anchored field without a matching parent-link edge — skipping', {
-          propertyTypeId: write.propertyTypeId,
-          edgeTypeId,
-          parentLinkEdgeTypes: [...edgeIdByType.keys()],
-        });
-        continue;
-      }
-      await kgFetch(creds, {
-        method: 'PATCH',
-        path: `/edges/${edgeId}`,
-        body: { properties: [write], ...writeProvenance(input.mutationContext) },
-      });
-    }
+    await kgFetch(creds, {
+      method: 'PATCH',
+      path: `/edges/${edgeId}`,
+      body: { properties: [write], ...writeProvenance(input.mutationContext) },
+    });
   }
 
   await persistKgResources({
@@ -252,7 +251,7 @@ export async function updateKgRecord(input: {
     resources: input.resources,
   });
 
-  return { ok: true };
+  return { ok: true, association };
 }
 
 /**
@@ -393,6 +392,29 @@ function edgeEnds(
   return fromIsSource
     ? { sourceNodeId: fromId, targetNodeId: toId }
     : { sourceNodeId: toId, targetNodeId: fromId };
+}
+
+/**
+ * Every parent link a write carries, resolved to the edge that connects it.
+ * ONE resolution shared by the create path (which inserts these edges inside
+ * the node's own transaction) and the update path (which asserts them against
+ * a node that already exists), so a matched child and a fresh one cannot come
+ * to mean different things.
+ */
+function resolveParentEdges(input: {
+  ontology: WireOntology;
+  childRecordType: string;
+  parentLinks: ParentLink[] | undefined;
+}): Array<{ edgeTypeId: string; parentIsSource: boolean; parentNodeId: string }> {
+  return (input.parentLinks ?? []).map((parentLink) => ({
+    ...resolveParentLinkEdgeType({
+      ontology: input.ontology,
+      parentRecordType: parentLink.recordType,
+      childRecordType: input.childRecordType,
+      edgeName: parentLink.edgeName,
+    }),
+    parentNodeId: parentLink.externalId,
+  }));
 }
 
 /**

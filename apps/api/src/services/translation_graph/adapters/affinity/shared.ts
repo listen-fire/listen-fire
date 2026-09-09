@@ -11,7 +11,7 @@ import type { AffinityOperations } from '../../../../adapters/affinity/operation
 import { anthropicChat } from '../../../../lib/anthropic';
 import { logger } from '../../../logger';
 import { isAdapterCallCeilingExceeded } from '../../../movement_engine/call_ledger';
-import type { ParentLink, WriteInput } from '../../adapter';
+import type { ParentAssociation, ParentLink, WriteInput } from '../../adapter';
 import { writeParentLinks } from '../../adapter';
 import {
   decodedFixedType,
@@ -900,9 +900,10 @@ export async function applyCustomReferenceParentLinks(
     write: Pick<WriteInput, 'parentLinks'>;
     holderFor: ReferenceHolderResolver;
   },
-): Promise<void> {
+): Promise<ParentLinkPass> {
+  const outcome = { handled: 0, made: 0 };
   const childId = Number(options.childExternalId);
-  if (!Number.isInteger(childId)) return;
+  if (!Number.isInteger(childId)) return outcome;
 
   for (const parent of writeParentLinks(options.write)) {
     const holder = await options.holderFor(parent);
@@ -911,6 +912,37 @@ export async function applyCustomReferenceParentLinks(
     const fieldDef = await referenceFieldOn(operations, holder, parent.edgeName);
     if (!fieldDef) continue; // not a custom reference — handled elsewhere
 
-    await assertCustomReference(operations, { holder, fieldDef, targetId: childId });
+    outcome.handled += 1;
+    if (await assertCustomReference(operations, { holder, fieldDef, targetId: childId })) {
+      outcome.made += 1;
+    }
   }
+  return outcome;
+}
+
+/** How many of a write's parents one pass accounted for, and how many of those
+ *  it actually connected. Both numbers are needed to answer for the whole
+ *  parent set: a parent no pass accounted for is one this system cannot attach.
+ */
+export interface ParentLinkPass {
+  handled: number;
+  made: number;
+}
+
+/**
+ * The write's association, from the two ways Affinity connects a child to a
+ * parent: the built-in person↔organization employer association, and a custom
+ * reference field on one side or the other. A parent NEITHER pass accounted
+ * for is one this workspace has no way to attach an existing record along, so
+ * the write says so rather than reporting an attach that never happened.
+ */
+export function combineParentAssociation(input: {
+  parents: number;
+  passes: ParentLinkPass[];
+}): ParentAssociation {
+  if (input.parents === 0) return 'none';
+  const handled = input.passes.reduce((n, p) => n + p.handled, 0);
+  const made = input.passes.reduce((n, p) => n + p.made, 0);
+  if (handled < input.parents) return 'unsupported';
+  return made > 0 ? 'made' : 'already';
 }

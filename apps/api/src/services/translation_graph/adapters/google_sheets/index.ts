@@ -42,7 +42,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../../adapter';
-import { writeParentLinks } from '../../adapter';
+import { writeParentLinks, unsupportedAssociation } from '../../adapter';
 import type { TriggerType } from '../../triggers/types';
 import {
   META_RECORD_TYPE,
@@ -829,6 +829,10 @@ export class GoogleSheetsAdapter extends BaseAdapter {
             Title: grant.name,
             url: `https://docs.google.com/spreadsheets/d/${grant.spreadsheetId}/edit`,
           },
+          // A granted spreadsheet is the root of its own tree — nothing hangs
+          // it off a parent, so a write that named one asked for something
+          // Sheets has no way to make.
+          association: unsupportedAssociation(input),
         };
       }
     }

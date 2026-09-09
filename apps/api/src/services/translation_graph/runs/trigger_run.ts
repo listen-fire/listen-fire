@@ -809,6 +809,9 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
     // association only) / noop (nothing sent). `created` cannot tell the last
     // three apart, and a reader needs to.
     ...(write.outcome !== undefined ? { outcome: write.outcome } : {}),
+    // What the target system did about the parents — confirmed by the system,
+    // not inferred from the fact that the engine sent the write.
+    ...(write.association !== undefined ? { association: write.association } : {}),
     ...(write.link !== undefined ? { link: write.link } : {}),
     // Parent → child linkage (the edge a linked/tuple write hangs off) —
     // the inspection surface's "does this record attach to anything".

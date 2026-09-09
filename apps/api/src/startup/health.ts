@@ -17,6 +17,7 @@
 //     `startedHere: false` — either another instance holds the unit's lock, or
 //     the worker has nothing to do here and `idleReason` says what.
 
+import { LISTEN_FIRE_VERSION } from '../constants';
 import { logger } from '../services/logger';
 import { workerTick } from '../lib/worker';
 import { mounts, mountedProducts, type Product, type Unit } from '../products';
@@ -55,6 +56,8 @@ interface WorkerHealth {
 }
 
 interface WorkersHealth {
+  /** The release this process is running — `dev` for a build from an untagged tree. */
+  version: string;
   products: Product[];
   workers: WorkerHealth[];
 }
@@ -107,7 +110,11 @@ async function readWorkersHealth(): Promise<WorkersHealth> {
     registry.workers.map((registered) => readWorker(registry.unit, registered)),
   );
 
-  return { products: mountedProducts(), workers: await Promise.all(rows) };
+  return {
+    version: LISTEN_FIRE_VERSION,
+    products: mountedProducts(),
+    workers: await Promise.all(rows),
+  };
 }
 
 /** The ids this process would report on — the composition, without touching the database. */

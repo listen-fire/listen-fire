@@ -284,6 +284,10 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
       cardinality: 'many',
       direction: 'outgoing',
       writable: true,
+      // A note is WRITTEN onto its owner; Affinity has no way to re-home one
+      // that already exists, so a `link` along this edge would only fail at
+      // run time. Same for files and list entries below.
+      linkable: false,
       description: `Notes attached to this ${parent} (GET /notes scoped to it). A linked write creates a note on it.`,
     },
     {
@@ -293,6 +297,7 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
       cardinality: 'many',
       direction: 'outgoing',
       writable: true,
+      linkable: false,
       description: `Files uploaded to this ${parent} (GET /entity-files scoped to it). A linked write uploads one.`,
     },
     // ONE edge for ONE relationship (rule 6), readable AND writable. An Affinity
@@ -317,6 +322,10 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
       // Affinity's `createListEntry` attaches an org or a person; an opportunity
       // joins a list only at creation, so its collection reads but never writes.
       writable: (WRITABLE_LIST_ENTITY_KINDS as readonly string[]).includes(parent),
+      // Membership is MADE by adding this record to a list. An entry that
+      // already exists IS its (list, member) pair — there is nothing to point
+      // at a different list — so a `link` along this edge cannot be honoured.
+      linkable: false,
       description: `This ${parent}'s rows across the lists it's on. Narrow by \`listName\` to one list and its own entry fields${
         (WRITABLE_LIST_ENTITY_KINDS as readonly string[]).includes(parent)
           ? `; a write adds this ${parent} to the named list.`
@@ -348,7 +357,7 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
       return [
         {
           fieldId: 'people',
-          name: 'People',
+          name: AFFINITY_PEOPLE_EDGE,
           targetTypeId: ENTITY_DISPLAY_NAMES.person,
           cardinality: 'many',
           direction: 'outgoing',
@@ -370,7 +379,7 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
       return [
         {
           fieldId: 'organizations',
-          name: 'Organizations',
+          name: AFFINITY_ORGANIZATIONS_EDGE,
           targetTypeId: ENTITY_DISPLAY_NAMES.organization,
           cardinality: 'many',
           direction: 'outgoing',
@@ -468,6 +477,9 @@ function referencesFor(entity: AffinityEntity, listType?: number): SchemaReferen
           cardinality: 'many',
           direction: 'outgoing',
           writable: true,
+          // A reply is a note WRITTEN under this one; an existing note cannot
+          // be re-parented, so there is nothing to link.
+          linkable: false,
           description:
             'Reply notes threaded under this note (notes whose parent_id is this note). A linked write creates a reply.',
         },
@@ -938,6 +950,22 @@ export const AFFINITY_LIST_NAME_FIELD = 'listName';
  *  and the record reaches the write through THIS edge, so the engine folds it
  *  into the resolve record under this exact name. */
 export const AFFINITY_LIST_ENTRIES_EDGE = 'List Entries';
+
+/**
+ * The two names Affinity's BUILT-IN person↔organization association is
+ * published under — one per side. Declared once and only ever COMPARED: the
+ * catalog publishes exactly these names below, and the link path recognises
+ * them, so neither can drift from the other.
+ *
+ * The association is no field on either record; it is the person's
+ * `organization_ids`, which is why it needs naming at all — every other
+ * relationship Affinity has IS a field, and is found by looking one up.
+ */
+export const AFFINITY_PEOPLE_EDGE = 'People';
+export const AFFINITY_ORGANIZATIONS_EDGE = 'Organizations';
+/** The internal ids of those same two edges, tolerated where an older saved
+ *  program spelled an edge by its fieldId. */
+export const AFFINITY_EMPLOYER_EDGE_IDS = ['people', 'organizations'] as const;
 
 /**
  * The list-membership write target for one entity kind. Its single writable

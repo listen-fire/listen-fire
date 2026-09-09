@@ -105,6 +105,7 @@ import {
   type RuntimeCapabilities,
   type Resource,
 } from '../../adapter';
+import { containerAssociation } from '../../adapter';
 import type { TriggerEvent } from '../../triggers/types';
 import { makeUnstablePosition, positionData } from '../../types';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
@@ -165,7 +166,7 @@ function makeFakeAdapter(
       };
     },
     async updateRecord(input) {
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

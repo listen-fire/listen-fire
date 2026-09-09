@@ -1399,12 +1399,31 @@ export const schemaReferenceDescriptorSchema = z.object({
    * `creatable`, which is why `true` is what gates a linked write
    * (`createShapes` / `writableEdgesOf`) rather than a separate fact.
    *
-   * The link-vs-create distinction is deliberately PARKED: an edge that can
-   * only link over-promises create, and that fails LOUDLY at run time rather
-   * than being modelled now (a `linkable` flag only if it ever hurts).
+   * The two halves of that promise are separable, and `linkable` is where an
+   * adapter withdraws the second one.
    *
    */
   writable: z.boolean().optional(),
+  /**
+   * Whether two records that ALREADY EXIST can be joined along this edge —
+   * `link a -[:e]-> b` and its inverse `unlink`.
+   *
+   * **Absent ⇒ the `writable` promise covers link too**, which is what that
+   * promise has always said: "a linked write may create the target along this
+   * edge, or link an existing one". `false` WITHDRAWS the second half, and the
+   * checker refuses `link`/`unlink` along the edge, naming it.
+   *
+   * The distinction was parked on the reading that an edge which can only LINK
+   * over-promises create. The live case is the mirror: Affinity's list
+   * membership is made by adding a company to a list — there is no way to point
+   * an entry that already exists at a different list — so `write
+   * co-[:List Entries]-> { … }` is real and `link co -[:List Entries]-> entry`
+   * can only fail at run time. An edge that promises what it cannot do is worth
+   * saying at check time, and only the adapter can say it.
+   *
+   * Meaningless without `writable: true` — a read-only edge is already refused.
+   */
+  linkable: z.boolean().optional(),
   /** Writing along this edge performs an ACTION, not a record write —
    *  nothing materialises, nothing reads back (WhatsApp typing). Only
    *  meaningful with `writable: true`. */

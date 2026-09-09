@@ -121,6 +121,7 @@ import type {
   WriteInput,
 } from '../../translation_graph/adapter';
 import { writeParentLinks } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { SchemaTypeDescriptor } from '../../translation_graph/types';
 import type { UniquenessConstraints } from '../../translation_graph/uniqueness';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
@@ -361,7 +362,7 @@ function makeFakeKg() {
         evidence: input.evidence ?? null,
         parentLinks: input.parentLinks ?? null,
       });
-      return { adapterType: KG, externalId: input.externalId, data: {} };
+      return { adapterType: KG, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

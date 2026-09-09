@@ -10,6 +10,7 @@ import type {
   WriteResult,
   UpdateInput,
   UpdateResult,
+  UpdateWriteResult,
 } from '../../adapter';
 import { writeParentLinks } from '../../adapter';
 import { logger } from '../../../logger';
@@ -18,6 +19,7 @@ import { UPDATE_NOT_FOUND, isHttp404 } from '../not_found';
 import {
   applyCustomReferenceParentLinks,
   buildPersonData,
+  combineParentAssociation,
   createNoopTracer,
   customReferenceFieldFor,
   partitionFields,
@@ -62,7 +64,7 @@ export async function createPerson(input: {
    *  When set the operations layer writes this person by id instead of
    *  re-searching by name (mirrors the organization path's `affinityId`). */
   affinityId?: number;
-}): Promise<WriteResult> {
+}): Promise<UpdateWriteResult> {
   const { operations, write } = input;
   const { builtins, custom } = partitionFields('person', write.fields);
   const { name, firstName, lastName, email } = readPersonBuiltins(builtins);
@@ -75,6 +77,8 @@ export async function createPerson(input: {
     );
   }
 
+  const employerOrgId = await parentOrgId(operations, write);
+
   try {
     const result = await operations.createOrUpdatePerson({
       searchQuery: {
@@ -86,7 +90,7 @@ export async function createPerson(input: {
       userText: '',
       tracer: createNoopTracer(),
       fieldConfigurations: [],
-      orgId: await parentOrgId(operations, write),
+      orgId: employerOrgId,
       affinityId: input.affinityId,
     });
 
@@ -108,17 +112,30 @@ export async function createPerson(input: {
 
     // A Person/Organization-valued custom field on the PARENT pointing at this
     // person is set here (e.g. `write org -[:Champion]-> person`).
-    await applyCustomReferenceParentLinks(operations, {
+    const customLinks = await applyCustomReferenceParentLinks(operations, {
       holderFor: input.holderFor,
       childExternalId: String(result.id),
       write,
     });
 
-    const person = await operations.getClient().getPersonById(result.id);
     return {
       adapterType: AFFINITY_ADAPTER_TYPE,
       externalId: String(result.id),
-      data: buildPersonData(person, await input.web.getWebBaseUrl()),
+      // The record the create-or-update already read (and each write it made
+      // answered with) — never a fresh GET of the person we just handled.
+      data: buildPersonData(result.person, await input.web.getWebBaseUrl()),
+      association: combineParentAssociation({
+        parents: writeParentLinks(write).length,
+        passes: [
+          // The built-in employer association covers at most the ONE org
+          // parent `parentOrgId` picked out.
+          {
+            handled: employerOrgId === undefined ? 0 : 1,
+            made: result.orgAssociation === 'made' ? 1 : 0,
+          },
+          customLinks,
+        ],
+      }),
     };
   } catch (err) {
     if (err instanceof AffinityMergedEntityError) {
@@ -149,7 +166,7 @@ export async function updatePerson(input: {
   // pinned person no longer exists, `getPersonById` throws a 404 — map it to
   // the typed signal so the engine's bind self-heal re-mints, instead of
   // letting an opaque error escape (mirrors updateOrganization).
-  let result: WriteResult;
+  let result: UpdateWriteResult;
   try {
     result = await createPerson({
       operations: input.operations,

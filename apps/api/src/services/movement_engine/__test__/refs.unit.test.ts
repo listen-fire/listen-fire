@@ -117,6 +117,7 @@ import {
   AdapterNameDriftError,
   type AdapterIntrospection,
 } from '../../translation_graph/adapters/name_resolution';
+import { containerAssociation } from '../../translation_graph/adapter';
 import { instanceSchemaFromDescriptors } from '../../translation_graph/movement/schema_projection';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
@@ -523,7 +524,7 @@ function makeResolverFake(
       };
     },
     async updateRecord(input) {
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};

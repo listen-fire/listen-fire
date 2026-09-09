@@ -21,6 +21,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../../adapter';
+import { containerAssociation } from '../../adapter';
 import { makeStablePosition } from '../../types';
 import {
   GOOGLE_SHEETS_ADAPTER_TYPE,
@@ -307,6 +308,9 @@ export async function updateRecord(input: {
     adapterType: GOOGLE_SHEETS_ADAPTER_TYPE,
     externalId: input.update.externalId,
     data: { url: buildSpreadsheetUrl(address.spreadsheetId) },
+    // A row's parent is the tab it lives in — a container it cannot leave, so
+    // the row we matched is already where the write says it belongs.
+    association: containerAssociation(input.update),
   };
 }
 

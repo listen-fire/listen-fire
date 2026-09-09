@@ -418,7 +418,17 @@ export const WireWriteResult = WireExternalRecordRef.extend({
  *  back to the engine's bind self-heal rather than being rejected at parse. */
 export const WireUpdateNotFound = z.object({ notFound: z.literal(true) });
 
-export const WireUpdateResult = z.union([WireWriteResult, WireUpdateNotFound]);
+/** What became of the parent association an update named. OPTIONAL on the wire:
+ *  a connector written before this fact existed reports nothing, and the
+ *  boundary reads that silence as "this server has no way to attach a matched
+ *  record" rather than inventing a link it cannot vouch for. */
+export const WireParentAssociation = z.enum(['made', 'already', 'unsupported', 'none']);
+
+export const WireUpdateWriteResult = WireWriteResult.extend({
+  association: WireParentAssociation.optional(),
+});
+
+export const WireUpdateResult = z.union([WireUpdateWriteResult, WireUpdateNotFound]);
 
 export const WireDeleteResult = z
   .object({

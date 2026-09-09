@@ -52,8 +52,15 @@ RUN pnpm prisma generate
 ARG BUILD_HEAP_MB=6144
 RUN NODE_OPTIONS=--max-old-space-size=${BUILD_HEAP_MB} pnpm build
 
+# The release this image IS. A tag build passes it (the release workflow does);
+# a build from a tree nobody tagged is `dev`. Declared here, after the build, so
+# changing it re-runs nothing but these last layers. The process reads it back
+# out of the environment and reports it on /healthz/workers and in the UI.
+ARG LISTEN_FIRE_VERSION=dev
+ENV LISTEN_FIRE_VERSION=${LISTEN_FIRE_VERSION}
+
 LABEL org.opencontainers.image.vendor="Listen-Fire" \
-      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/listen-fire/listen-fire"
 ENV NODE_ENV=production
 ENV TZ=UTC

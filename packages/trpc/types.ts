@@ -355,6 +355,25 @@ export interface CapturedWrite {
     recordType: string;
     fields?: Record<string, unknown>;
     externalId?: string;
+    /**
+     * What this record hangs off, with the edge it hangs off by — 1 for a
+     * linked write, N for a tuple path, absent for a root write.
+     *
+     * Records connect through edges, so a rehearsal that showed only the fields
+     * showed half the write: an entry added to a list is not the same claim as
+     * an entry, and the organization it was added to is the other half of it.
+     *
+     * `rehearsed` marks a parent that does not exist — its id was minted by this
+     * rehearsal a moment ago rather than read off the target — so a reader can
+     * tell "added to the organization you have" from "added to the organization
+     * this run would have created".
+     */
+    parents?: Array<{
+        edgeName: string;
+        recordType: string;
+        externalId: string;
+        rehearsed?: true;
+    }>;
     /** `kind: 'link' | 'unlink'` only — the asserted (or severed) edge.
      *  `recordType` / `externalId` above are the from side; the to side
      *  rides here. */
@@ -4674,6 +4693,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     firesOn?: string[] | undefined;
                     subject?: boolean | undefined;
                     writable?: boolean | undefined;
+                    linkable?: boolean | undefined;
                     ephemeral?: boolean | undefined;
                     requiresLiveRecord?: boolean | undefined;
                     awaitable?: boolean | undefined;
@@ -13993,7 +14013,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
             };
             transformer: _trpc_server.DefaultDataTransformer;
         }>, {
-            getWhatsappNumber: _trpc_server.BuildProcedure<"query", {
+            getDeployment: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{
                     ctx: {
                         authorise: () => Promise<void>;
@@ -14015,7 +14035,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_in: typeof _trpc_server.unsetMarker;
                 _output_out: typeof _trpc_server.unsetMarker;
             }, {
-                number: string | null;
+                version: string;
+                whatsappNumber: string | null;
             }>;
             getPhoneNumber: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{

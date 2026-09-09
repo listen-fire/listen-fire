@@ -180,6 +180,7 @@ import type {
   RuntimeCapabilities,
   ExternalRecordRef,
 } from '../../translation_graph/adapter';
+import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { LlmClient } from '../../translation_graph/engine/batched_extraction';
 import { makeStablePosition, makeUnstablePosition, positionData } from '../../translation_graph/types';
@@ -263,7 +264,7 @@ function makeFakeAdapter(
         externalId: input.externalId,
         fields: input.fields,
       });
-      return { adapterType, externalId: input.externalId, data: {} };
+      return { adapterType, externalId: input.externalId, data: {}, association: containerAssociation(input) };
     },
     async deleteRecord() {
       return {};
@@ -2756,6 +2757,41 @@ describe('a matched child with nothing of its own to change still attaches to it
 
     expect(attio.updates).toEqual([]);
     expect(result.writes.map((w) => [w.created, w.outcome])).toEqual([[false, 'noop']]);
+  });
+
+  // `attach` says the record is attached, not that the engine sent a write —
+  // so the fact comes from the adapter, and the write records which of the two
+  // things happened.
+  it.each([
+    ['made' as const, 'made'],
+    ['already' as const, 'already'],
+  ])("carries the target's own answer (%s) onto the write", async (answer, expected) => {
+    const { fake } = matchingAttio({ name: 'U123' });
+    const base = fake.adapter.updateRecord.bind(fake.adapter);
+    fake.adapter.updateRecord = async (input) => ({ ...(await base(input)), association: answer });
+
+    const result = await run(LINKED, fake.adapter);
+
+    expect(result.writes.map((w) => [w.outcome, w.association])).toEqual([
+      ['create', undefined],
+      ['attach', expected],
+    ]);
+  });
+
+  // The honest outcome when a system cannot attach an existing record along
+  // the edge the author wrote: the run fails, naming the edge. Reporting
+  // success would be exactly the silence that let production drop every edge.
+  it('fails the run when the target cannot attach an existing record', async () => {
+    const { fake } = matchingAttio({ name: 'U123' });
+    const base = fake.adapter.updateRecord.bind(fake.adapter);
+    fake.adapter.updateRecord = async (input) => ({
+      ...(await base(input)),
+      association: 'unsupported' as const,
+    });
+
+    await expect(run(LINKED, fake.adapter)).rejects.toThrow(
+      "'attio' cannot attach an existing company to person ext-attio-1 through company",
+    );
   });
 });
 

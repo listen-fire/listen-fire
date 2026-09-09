@@ -5,18 +5,22 @@
 // to update — so we pass it through as the operations `affinityId`.
 
 import type { AffinityOperations } from '../../../../adapters/affinity/operations';
+import { attachPersonToOrganisation } from '../../../../adapters/affinity/employer_association';
 import { AffinityMergedEntityError } from '../../../../adapters/affinity/apiClient';
 import type {
   WriteInput,
   WriteResult,
   UpdateInput,
   UpdateResult,
+  UpdateWriteResult,
 } from '../../adapter';
 import { writeParentLinks } from '../../adapter';
 import { logger } from '../../../logger';
 import {
   applyCustomReferenceParentLinks,
   buildOrgData,
+  combineParentAssociation,
+  type ParentLinkPass,
   createNoopTracer,
   customReferenceFieldFor,
   partitionFields,
@@ -40,20 +44,21 @@ import { UPDATE_NOT_FOUND, isHttp404 } from '../not_found';
 async function linkParentPeople(
   operations: AffinityOperations,
   options: { write: WriteInput; orgId: number },
-): Promise<void> {
+): Promise<ParentLinkPass> {
   const client = operations.getClient();
+  const pass: ParentLinkPass = { handled: 0, made: 0 };
   for (const parent of writeParentLinks(options.write)) {
     if (decodedFixedType(parent.recordType)?.entity !== 'person') continue;
     const personId = Number(parent.externalId);
     if (!Number.isInteger(personId)) continue;
     if (await customReferenceFieldFor(operations, 'person', parent.edgeName)) continue;
 
+    pass.handled += 1;
     const person = await client.getPersonById(personId);
-    if (person.organization_ids?.includes(options.orgId)) continue;
-    await client.updatePerson(personId, {
-      organization_ids: [...(person.organization_ids ?? []), options.orgId],
-    });
+    const joined = await attachPersonToOrganisation(client, { person, orgId: options.orgId });
+    if (joined.association === 'made') pass.made += 1;
   }
+  return pass;
 }
 
 export async function createOrganization(input: {
@@ -65,7 +70,7 @@ export async function createOrganization(input: {
   holderFor: ReferenceHolderResolver;
   /** Pre-resolved Affinity org id from the engine's resolveEntity, if any. */
   affinityId?: number;
-}): Promise<WriteResult> {
+}): Promise<UpdateWriteResult> {
   const { operations, write } = input;
   const { builtins, custom } = partitionFields('organization', write.fields);
   const { name, domain } = readOrgBuiltins(builtins);
@@ -97,11 +102,11 @@ export async function createOrganization(input: {
     });
 
     // The built-in employer association written from the person side.
-    await linkParentPeople(operations, { write, orgId: result.id });
+    const employers = await linkParentPeople(operations, { write, orgId: result.id });
 
     // A Person/Organization-valued custom field on the PARENT pointing at this
     // org is set here (e.g. `write person -[:Portfolio]-> org`).
-    await applyCustomReferenceParentLinks(operations, {
+    const customLinks = await applyCustomReferenceParentLinks(operations, {
       holderFor: input.holderFor,
       childExternalId: String(result.id),
       write,
@@ -112,6 +117,10 @@ export async function createOrganization(input: {
       adapterType: AFFINITY_ADAPTER_TYPE,
       externalId: String(result.id),
       data: buildOrgData(org, await input.web.getWebBaseUrl()),
+      association: combineParentAssociation({
+        parents: writeParentLinks(write).length,
+        passes: [employers, customLinks],
+      }),
     };
   } catch (err) {
     if (err instanceof AffinityMergedEntityError) {
@@ -141,7 +150,7 @@ export async function updateOrganization(input: {
   // Affinity no longer has it, the REST client throws `Error("Affinity Error:
   // 404 ...")`. Map that to the typed signal so the engine's bind self-heal
   // re-mints, instead of letting an opaque error escape.
-  let result: WriteResult;
+  let result: UpdateWriteResult;
   try {
     result = await createOrganization({
       operations: input.operations,

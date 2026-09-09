@@ -36,7 +36,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../../services/translation_graph/adapter';
-import { BASE_RUNTIME_CAPABILITIES } from '../../services/translation_graph/adapter';
+import { BASE_RUNTIME_CAPABILITIES, containerAssociation } from '../../services/translation_graph/adapter';
 import type {
   SchemaEntryPoint,
   SchemaTypeDescriptor,
@@ -201,6 +201,7 @@ export function createFakeCrmAdapter(): FakeCrmAdapter {
         externalId: input.externalId,
         recordType: input.recordType,
         data: { ...existing.fields },
+        association: containerAssociation(input),
       };
     },
 

@@ -11,10 +11,10 @@ Every firing of an automation — a live event arriving, a "run now" backfill, a
 
 Each listener keeps its own history, and an unchanged \`listen\` keeps its history across saves (retiring a listener orphans its history rather than deleting it — the record of what ran outlives the line that ran it). A run records, in program order, every write the firing performed:
 
-- the target system and record type, and what the write did — **created** the record, **updated** it (at least one field was sent), **attached** it to its parent (a matched record whose own fields were all unchanged, hung off the parent the write names), or **noop** (a matched record with nothing to send at all). Duplicate prevention is visible as "updated" where you expected "created";
+- the target system and record type, and what the write did — **created** the record, **updated** it (at least one field was sent), **attached** it to its parent (a matched record whose own fields were all unchanged, hung off the parent the write names — the target system confirmed the attachment, so \`attach\` means the relationship is there), or **noop** (a matched record with nothing to send at all). Duplicate prevention is visible as "updated" where you expected "created";
 - the written record's id in the target (and a link, where the target provides one);
 - the **values actually sent** — after no-change suppression, so an update that found nothing new shows an empty write rather than a phantom one;
-- the record's **linkage** — for a linked or tuple write, the parent record(s) it hangs off and the connecting edge. This is how you verify the cardinal rule from the record of a run: every write that should be attached shows *what* it attached to;
+- the record's **linkage** — for a linked or tuple write, the parent record(s) it hangs off and the connecting edge, and whether the target **made** the association on this run or found it **already** there. This is how you verify the cardinal rule from the record of a run: every write that should be attached shows *what* it attached to. A system that cannot attach an existing record along the edge you wrote fails the run and says so, rather than reporting a relationship nobody made;
 - standalone \`link\` / \`unlink\` / \`delete\` entries, carrying the asserted or severed edge (or the removed record) with the same provenance as writes;
 - the run's **decision trace** — the gates it evaluated on the way (an \`if\` over an \`AI()\` judgement records the prompt and the outcome), so "why did this run proceed at all" is answerable from the record;
 - for rehearsals (instances constructed \`dry_run: true\`), the writes that *would* have been sent, captured instead of committed — same shape, nothing applied.
@@ -43,5 +43,5 @@ A run's cost is the language-model work inside it: an \`AI()\` on the default ti
 
 - **Verifying from the target system only.** The run shows what was sent and why; the target shows only the end state. When a field looks wrong, read its provenance before editing the automation.
 - **Expecting a quote on transformed values.** Only a value written untouched from its source keeps the verbatim quote; anything combined or rewritten lists its sources without claiming the quote still holds.
-- **Treating an empty update as a bug.** A run that matched an existing record and found every field unchanged sends no fields — that is duplicate prevention working, not a failure. It reads as **attach** when the write hangs off a parent (the association is still made) and **noop** when it does not.`,
+- **Treating an empty update as a bug.** A run that matched an existing record and found every field unchanged sends no fields — that is duplicate prevention working, not a failure. It reads as **attach** when the write hangs off a parent (the target confirmed the association) and **noop** when it does not.`,
 };

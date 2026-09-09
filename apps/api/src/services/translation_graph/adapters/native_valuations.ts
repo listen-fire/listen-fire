@@ -58,7 +58,7 @@ import {
   type SourcePosition,
 } from '../types';
 import type { TriggerEvent, TriggerType } from '../triggers/types';
-import { writeParentLinks, type ParentLink } from '../adapter';
+import { writeParentLinks, type ParentLink, type ParentAssociation } from '../adapter';
 import type { EdgeSequencing, Expression } from '#shared/expression/types';
 import { logger } from '../../logger';
 import { getAutomationsQb } from '../../../lib/kysely';
@@ -2389,9 +2389,12 @@ class NativeValuationsAdapter extends BaseAdapter {
     // NOT-FOUND contract (3b): a PATCH to a record the service no longer
     // has 404s — surface the typed signal so bind self-heal re-mints.
     //
-    // Valuations has no parent to attach a matched record to, so an empty
-    // field set leaves nothing to send: read the record for the same 404 and
-    // the same data bag, without a write that changes nothing.
+    // A parent here is a foreign key COLUMN on the child, stamped when the
+    // child is created. Re-pointing it on a matched row would move an existing
+    // transaction to a different investment — a destructive re-parenting no
+    // author asked for by naming an edge — so the update never writes one. It
+    // reports what the row already says instead: `already` when the key
+    // already names the parent, `unsupported` when it names something else.
     const path = `/api/v1/valuations/${entity.slug}/${input.externalId}`;
     let response: ValuationsRecordResponse<Record<string, unknown>>;
     try {
@@ -2409,7 +2412,37 @@ class NativeValuationsAdapter extends BaseAdapter {
       adapterType: NATIVE_VALUATIONS_ADAPTER_TYPE,
       externalId: input.externalId,
       data: response.data ?? {},
+      association: this.parentKeysAlreadySet({
+        input,
+        childType: entity.displayName,
+        record: response.data ?? {},
+      }),
     };
+  }
+
+  /** Whether every parent the write named is the parent the row's foreign keys
+   *  already name. The row comes back from the same call the update already
+   *  made, so this costs nothing extra. */
+  private parentKeysAlreadySet(args: {
+    input: UpdateInput;
+    childType: string;
+    record: Record<string, unknown>;
+  }): ParentAssociation {
+    const links = writeParentLinks(args.input);
+    if (links.length === 0) return 'none';
+    for (const link of links) {
+      const edge = DOWN_EDGES.find(
+        (e) =>
+          e.parent === link.recordType &&
+          e.target === args.childType &&
+          (e.name === link.edgeName || e.fieldId === link.edgeName),
+      );
+      if (!edge) return 'unsupported';
+      if (String(args.record[edge.childFk] ?? '') !== String(link.externalId)) {
+        return 'unsupported';
+      }
+    }
+    return 'already';
   }
 
   async deleteRecord(input: DeleteInput): Promise<DeleteResult> {

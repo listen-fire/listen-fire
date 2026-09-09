@@ -377,6 +377,12 @@ export const DiagnosticCodes = {
    *  along it. Fires before the generic target-not-writable gate so the
    *  message names the EDGE's read-only nature, not the target's. */
   WRITE_READ_ONLY_EDGE: 'MOV_WRITE_READ_ONLY_EDGE',
+  /** `link` / `unlink` along an edge the source system can only CREATE along
+   *  (`EdgeSchema.linkable: false`). The write promise covers making the
+   *  relationship as part of writing the target; it does not cover joining two
+   *  records that already exist, and the system says so rather than letting
+   *  the run find out. */
+  LINK_UNSUPPORTED_EDGE: 'MOV_LINK_UNSUPPORTED_EDGE',
   // Position writes (`write a { … }` — update the record bound at alias `a`)
   /** The bare-alias write target doesn't resolve to a writable record
    *  position — a meta/extract/block node, or an unknown name, has no single
@@ -2746,10 +2752,16 @@ class Checker {
         this.checkLink(statement.link, scope);
         return;
       case 'unlink':
-        // Mirror name checks only: the runtime owns graph/edge validation
-        // (the inverse of the bare-handle `link`).
+        // Mirror name checks, plus the one edge fact a system can state: an
+        // edge it only creates along cannot be severed between two records
+        // that already exist. The rest of graph/edge validation stays the
+        // runtime's (the inverse of the bare-handle `link`).
         this.resolveName(statement.from, statement.span, scope);
         this.resolveName(statement.to, statement.span, scope);
+        this.checkBareLinkEdge(
+          { from: statement.from, edge: statement.edge, span: statement.span, verb: 'unlink' },
+          scope,
+        );
         this.noteNamedEffect('write', statement.from, scope);
         return;
       case 'delete':
@@ -5320,6 +5332,17 @@ class Checker {
       return {};
     }
 
+    if (input.purpose === 'link' && edge.linkable === false) {
+      this.reportUnlinkableEdge({
+        edgeName,
+        parent,
+        instanceName: instance.name,
+        root: input.path.root,
+        span: input.span,
+      });
+      return {};
+    }
+
     if (edge.ephemeral === true && input.purpose === 'write' && input.isBound === true) {
       this.report(
         DiagnosticCodes.WRITE_EPHEMERAL_BOUND,
@@ -5574,6 +5597,57 @@ class Checker {
   // ── Link statements (the edge-only write) ──
 
   /**
+   * `link`/`unlink` along an edge that only CREATES its target. The edge's
+   * write promise covers making the relationship as part of writing the
+   * record; it does not cover joining two that already exist, and the system
+   * is the only thing that knows which — so it says so here rather than
+   * letting the run discover it.
+   */
+  private reportUnlinkableEdge(input: {
+    edgeName: string;
+    parent: PositionTypeRef;
+    instanceName: string;
+    root: string | undefined;
+    span: Span;
+    verb?: 'link' | 'unlink';
+  }): void {
+    const from = input.root ?? 'the record';
+    this.report(
+      DiagnosticCodes.LINK_UNSUPPORTED_EDGE,
+      `'${input.instanceName}' makes '-[:${input.edgeName}]->' on ${describePosition(input.parent)} by WRITING along it — 'write ${from}-[:${input.edgeName}]-> { … }' creates the record and the relationship together — so there is nothing to ${input.verb ?? 'link'} two records that already exist with`,
+      input.span,
+    );
+  }
+
+  /**
+   * The same gate for the BARE-HANDLE forms (`link a -[:e]-> b`, `unlink a
+   * -[:e]-> b`), which resolve no path: look the edge up on the from side's
+   * own position and refuse it where the system says it cannot be linked.
+   * Everything else about those forms stays the runtime's, as before.
+   */
+  private checkBareLinkEdge(
+    input: { from: string; edge: string; span: Span; verb: 'link' | 'unlink' },
+    scope: Scope,
+  ): void {
+    const symbol = scope.resolve(input.from);
+    if (symbol.kind !== 'found') return;
+    const fromType = this.symbolPositionType(symbol.symbol);
+    // Only a type that BELONGS to an instance can carry a system's promise —
+    // a run-local node or an extract node has no adapter to have made one.
+    if (fromType === undefined || !('instance' in fromType)) return;
+    const edge = positionSchemaOfRef(fromType)?.edges[input.edge];
+    if (edge?.linkable !== false) return;
+    this.reportUnlinkableEdge({
+      edgeName: input.edge,
+      parent: fromType,
+      instanceName: fromType.instance.name,
+      root: input.from,
+      span: input.span,
+      verb: input.verb,
+    });
+  }
+
+  /**
    * `link a -[:e]-> b` / `p = link c-[:portfolio]-> { …criteria… }`.
    * The bare-handle form gets mirror name checks only (the runtime owns
    * graph/edge validation, as it does for `unlink`). The criteria form
@@ -5599,6 +5673,10 @@ class Checker {
     this.noteNamedEffect('write', link.from, scope);
     if (link.target.kind === 'handle') {
       this.resolveName(link.target.name, link.span, scope);
+      this.checkBareLinkEdge(
+        { from: link.from, edge: link.edge, span: link.span, verb: 'link' },
+        scope,
+      );
       this.recordNode({
         kind: 'link',
         span: link.span,

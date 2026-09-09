@@ -1,6 +1,8 @@
 # Listen-Fire on Render
 
-Render runs the API as one always-on web service from the image in `deploy/Dockerfile`, with a managed Postgres and a managed Redis beside it, and the web app as a second service. The API sits behind a stable hostname and is probed at `/.well-known/health-check`. `deploy/render.yaml` is a ready-made Blueprint for exactly this shape.
+Render runs the API as one always-on web service from the **published image** `ghcr.io/listen-fire/api:<tag>`, with a managed Postgres and a managed Redis beside it, and the web app as a second service from `ghcr.io/listen-fire/web:<tag>`. The API sits behind a stable hostname and is probed at `/.well-known/health-check`. `deploy/render.yaml` is a ready-made Blueprint for exactly this shape.
+
+**A Render deployment pins a release, and moves when you edit the tag.** Nothing here builds from your repository, so a push does not deploy and a branch is not a version. Upgrading is one line per service in the Blueprint, followed by a redeploy — see "7. Upgrading" below and [`deploy/UPGRADING.md`](../UPGRADING.md). If you have forked the code and need Render to build it, that is the appendix at the end.
 
 Read [`deploy/SELF_HOSTING.md`](../SELF_HOSTING.md) first — it is the runbook for every shape, and this guide only translates it onto Render. Everything about identity, third-party app registration and honest limitations lives there.
 
@@ -12,17 +14,19 @@ Render's own dashboard, plan names and settings move around. Where this guide de
 
 | # | What | Render resource | Notes |
 |---|---|---|---|
-| 1 | the API and its workers | a **web service**, Docker runtime, `deploy/Dockerfile` | the only always-on process; one instance |
+| 1 | the API and its workers | a **web service**, image runtime, `ghcr.io/listen-fire/api:<tag>` | the only always-on process; one instance |
 | 2 | the database | **Render Postgres 16** | run the roles file by hand before the first deploy |
 | 3 | Redis | **Render Key Value** (Render's managed Redis) | host and port only — read the caveat below |
 | 4 | object storage | not a native Render resource | the Blueprint runs MinIO as a Render web service on a disk; any S3-compatible bucket works, needed only for file features |
-| 5 | the web app | a second **web service**, from `deploy/Dockerfile.web` or the Node runtime on `apps/web` | the sign-in surface and the authoring UI |
+| 5 | the web app | a second **web service**, image runtime, `ghcr.io/listen-fire/web:<tag>` | the sign-in surface and the authoring UI |
+
+The three datastores are the same three every deployment has, and what each one needs is written once in [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Bringing your own datastores". Render is the case where all three are external from the start: there is no compose file here and so no bundled service to move off.
 
 The background workers run inside the API process. There is no worker service to add, and adding one would be wrong — see "One instance" below.
 
 ## 1. The database, before anything else
 
-Create a managed Postgres. Version 16; the composed shape genuinely needs the `pgvector` and `pg_trgm` extensions and every shape needs `citext`, because the migration set is monolithic and creates all five schemas whatever you mount.
+Create a managed Postgres. Version 16. The migration set creates six extensions — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent` and `btree_gin` — and it is monolithic, creating all five schemas whatever you mount, so every shape needs all six.
 
 Then run `deploy/postgres-init/00-roles.sql` against it, by hand, **before the first deploy**:
 
@@ -30,15 +34,15 @@ Then run `deploy/postgres-init/00-roles.sql` against it, by hand, **before the f
 psql "$DATABASE_URL" -f deploy/postgres-init/00-roles.sql
 ```
 
-This is not optional and it is not a nicety. The migration set carries 51 `GRANT … TO agent` / `TO readonly` statements, the first of them early, and a database without those two roles dies partway through the first migration having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it automatically on an empty data directory; **a managed database has no such hook.** The file's own header says the same thing.
+This is not optional and it is not a nicety. The migration set carries more than a hundred `GRANT … TO agent` / `TO readonly` statements, the first of them early, and a database without those two roles dies partway through the first migration having built almost nothing. The compose file mounts that file into the bundled Postgres, which runs it automatically on an empty data directory; **a managed database has no such hook.** The file's own header says the same thing.
 
 It creates roles, so the user you run it as needs the privilege to do that. If your managed database's default user cannot `CREATE ROLE`, that is the first thing to check rather than the last — check Render's documentation for what their default database user is granted.
 
-Extensions are created by the migration set itself, but a managed provider may require you to allow-list them first. `vector`, `pg_trgm` and `citext` are the union; check Render's supported-extensions list as of this writing before you assume.
+Extensions are created by the migration set itself, but a managed provider may require you to allow-list them first. The six above are the union; check Render's supported-extensions list as of this writing before you assume.
 
 ## 2. The API service
 
-Create a web service from your repository with the **Docker** runtime, pointing at `deploy/Dockerfile`. The build context is the **repository root**, not `deploy/` — the Dockerfile says so in its own header, and a context set to `deploy/` cannot see `package.json`.
+Create a web service with the **image** runtime, pointing at `ghcr.io/listen-fire/api:<tag>` — a specific tag, never `latest`. The `ghcr.io/listen-fire/*` packages are public, so Render pulls them without any registry credential (`image.creds` exists for a private image and is not needed here). There is no build: the service starts the image you named, and no push to your repository can change what it runs.
 
 The image runs `node build/server.js`. It listens on whatever `PORT` says and defaults to 3000, so Render's injected port works without any change from you.
 
@@ -50,13 +54,13 @@ The image runs `node build/server.js`. It listens on whatever `PORT` says and de
 
 The compose file runs migrations as a one-shot service that must exit 0 before the API starts, so a restart never races the schema. Render has no such service, so you have to reproduce that ordering yourself. Two ways, in preference order:
 
-**A pre-deploy command**, if your Render plan has one as of this writing (check their documentation — it is not available on every plan):
+**A pre-deploy command**, which is what the Blueprint uses, if your Render plan has one as of this writing (check their documentation — it is not available on every plan):
 
 ```
 pnpm schema:migrate "$DATABASE_URL"
 ```
 
-The migration runner takes the database as an **argument**. It does not read the ambient environment, which is why the URL is passed explicitly here and in the compose file.
+It runs inside the API image, which carries the migration files and `pnpm`, after the image is pulled and before the new process serves. The migration runner takes the database as an **argument**. It does not read the ambient environment, which is why the URL is passed explicitly here and in the compose file.
 
 **Or by hand**, from a shell on the service, before the first deploy and before every upgrade. Migrations are forward-only, applied by file name, tracked in `_migrations.migrations`. Back up before an upgrade; there is no down-migration path.
 
@@ -101,9 +105,9 @@ Other options, all equivalent to the code — remove `listen-fire-minio` from th
 
 ## 5. The web app
 
-The web app is a Next.js application, built by `deploy/Dockerfile.web` (target `web`) for the compose stack and deployable on its own anywhere that runs Node. `deploy/Dockerfile` is the API and its workers alone.
+The web app is a Next.js application, published as `ghcr.io/listen-fire/web:<tag>` from the same release as the API. Deploy it as a second web service with the **image** runtime and the **same tag** as the API service. `ghcr.io/listen-fire/api` is the API and its workers alone; the two are separate images from one release.
 
-Deploy it as a second Render web service — either from `deploy/Dockerfile.web` with the Docker runtime, or with the Node runtime and the root directory `apps/web`, installing the workspace filtered to the web app and running its build. The Blueprint does the latter, because Blueprint YAML has no way to select a Docker build target and the Docker route needs `Dockerfile.web`'s `web` target. It needs to be told where the API is, and there are two ways: `API_INTERNAL_URL` makes the Next server proxy `/api/*` to that origin at run time, so the browser stays same-origin; `NEXT_PUBLIC_API_URL` bakes the API origin into the client bundle instead, which is the split-deployment shape and needs the API's CORS to allow the web origin. `API_INTERNAL_URL` is an origin — a scheme and a host, no path.
+It bakes in no API origin, which is what lets one image run anywhere. It needs to be told where the API is, and there are two ways: `API_INTERNAL_URL` makes the Next server proxy `/api/*` to that origin at run time, so the browser stays same-origin; `NEXT_PUBLIC_API_URL` bakes the API origin into the client bundle instead, which is the split-deployment shape and needs the API's CORS to allow the web origin. `API_INTERNAL_URL` is an origin — a scheme and a host, no path.
 
 Two things do not survive being proxied through the web app, and the code already knows it:
 
@@ -111,6 +115,8 @@ Two things do not survive being proxied through the web app, and the code alread
 - **Long authoring-agent requests.** They outlive most proxy timeouts and should go to the API origin directly.
 
 You need the web app if you run `core` (login links point at it, and without it nobody can sign in) or if you want the authoring UI. You also need it for OAuth connections: the callback paths every OAuth adapter except Slack is registered against are pages in the web app, which hand the authorization code back to the API. See `vercel-plus-container.md` for the URL triangle, which is the same on Render.
+
+**Google and Microsoft sign-in buttons are the one thing a published image cannot give you.** The login page renders a provider's button only when `NEXT_PUBLIC_GOOGLE_CLIENT_ID` or `NEXT_PUBLIC_MICROSOFT_CLIENT_ID` was present at `next build`, and a released image was built without either, so setting them on the service changes nothing. Email links and passwords work as normal. If you need those buttons, build the web app from source — the appendix at the end of this guide.
 
 ## 6. Environment
 
@@ -131,27 +137,70 @@ The full variable reference, with what each one does when unset, is the environm
 
 ## 7. Upgrading
 
-Push, let Render build, and make sure the migration step runs to completion before the new process serves. Back up the database first — migrations are forward-only.
+Snapshot the database, edit the image tag on `listen-fire-api` and `listen-fire-web` to the release you are moving to, and redeploy. Both lines, to the same tag: the API and the web app are two images from one release and are not tested against each other across releases.
+
+The redeploy is deliberate. Render does not pull a new image on its own, so nothing happens between the edit and your deploy, and re-publishing an image at a tag a service already names does not move that service either.
+
+The pre-deploy command runs the migrations before the new process serves. Back up the database first — migrations are forward-only, and **the snapshot is the rollback**: to go back, restore it and re-pin the previous tag, in that order. [`deploy/UPGRADING.md`](../UPGRADING.md) is the whole runbook, and it is the same one everywhere; only this "pull and restart" step is Render's.
 
 Back up `ENCRYPTION_MASTER_KEY` and `ENCRYPTION_SALT_BASE64` somewhere separate from the database, and never rotate them casually. They encrypt every stored third-party credential; without the original values those credentials are unreadable and every connection has to be made again by hand.
 
 ## Blueprint
 
-`deploy/render.yaml` encodes this whole guide — the API and web app as two web services, managed Postgres 16, a managed Key Value (Redis) instance, a MinIO service for object storage, and every environment variable a deployment needs, either fixed, wired up with `fromDatabase`/`fromService`, or left for the dashboard to prompt for (`sync: false`). Its own header comment carries the Render facts it was checked against and the choices it leaves you: the region is commented out, so pick one before you deploy, and the plan sizes are starting points to resize rather than guesses at what your load needs. `LISTEN_FIRE_PRODUCTS` there names the units this deployment runs; change it and `LISTEN_FIRE_PRINCIPAL` together, because the process checks the two against each other at boot.
+`deploy/render.yaml` encodes this whole guide — the API and web app as two image-backed web services, managed Postgres 16, a managed Key Value (Redis) instance, a MinIO service for object storage, and every environment variable a deployment needs, either fixed, wired up with `fromDatabase`/`fromService`, or left for the dashboard to prompt for (`sync: false`). Its own header comment carries the Render facts it was checked against and the choices it leaves you: the region is commented out, so pick one before you deploy, and the plan sizes are starting points to resize rather than guesses at what your load needs. `LISTEN_FIRE_PRODUCTS` there names the units this deployment runs; change it and `LISTEN_FIRE_PRINCIPAL` together, because the process checks the two against each other at boot.
+
+**The version is two lines.** `image.url` on `listen-fire-api` and on `listen-fire-web`, each marked in the file, each ending in the tag. Blueprint YAML has no variable substitution into `image.url` — an `envVar` cannot be read from there — so the tag is a literal, written twice, and keeping the two the same is yours.
+
+Nothing else moves the deployment. An image-backed service does not redeploy when a new image is published at the tag it already names, so even re-publishing `latest` would not move it; a deploy happens when you trigger one. `autoDeploy: false` is on both services to say so, though Render documents that field as having no effect on an image-backed service, so it restates the behaviour rather than causing it.
 
 ### What the Blueprint leaves to you
 
 A Blueprint does not do everything, and does not do it for you automatically on every push. Before or immediately after the first deploy:
 
 - **Database roles.** Run `deploy/postgres-init/00-roles.sql` against `listen-fire-postgres` by hand, as a superuser, before the first deploy — see "1. The database, before anything else" above. A Blueprint has no hook for this.
-- **Extensions.** Allow-list `citext`, `pg_trgm` and `vector` on the Postgres instance if Render requires that step for your plan; the migration set creates the extensions themselves but some managed providers gate which ones a database may request.
+- **Extensions.** Allow-list all six — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent`, `btree_gin` — on the Postgres instance if Render requires that step for your plan; the migration set creates the extensions themselves but some managed providers gate which ones a database may request.
 - **Custom domains.** Put a stable custom domain on both `listen-fire-api` and `listen-fire-web` *before* you register anything or send anything — `API_BASE_URL` is stable forever once webhooks and links are built from it, and the hostname Render hands a new service is not what you want permanently.
 - **Slack app.** Register your own Slack app and set the five `SLACK_MOVEMENTS_*` variables together (`deploy/render.yaml` declares all five as operator-set; the state secret is minted by Render). Three URLs, the same as `SELF_HOSTING.md` lists: Event Subscriptions → `<API_BASE_URL>/api/public/slack/events`; Interactivity → `<API_BASE_URL>/api/public/slack-actions`; OAuth Redirect URL → `<WEB_BASE_URL>/slack/callback`, which is also exactly the value of `SLACK_MOVEMENTS_REDIRECT_URI` (it is passed through verbatim).
 - **Email.** Pick one provider and set its credentials plus `OUTBOUND_EMAIL_FROM` and `INBOUND_EMAIL_ADDRESS`; the Blueprint declares both providers as operator-set so either works. For Resend, point its inbound route and webhook at `<API_BASE_URL>/api/resend/callback`; for Mailgun, at `<API_BASE_URL>/api/mailgun/callback`. Without a working outbound path on a `core` installation nobody can sign in.
 - **MinIO bucket.** Once `listen-fire-minio` is deployed, create the `listen-fire` bucket by hand — see "4. Object storage" above. Nothing does this on your behalf, and file-touching features fail until it exists.
 - **`AWS_S3_ENDPOINT` and `API_INTERNAL_URL`.** Both are operator-set because Render appends a suffix of its own to the service names a Blueprint creates, so no literal hostname in the file would survive contact with a real account. Read the two service names off the dashboard once the Blueprint has run, then fill both in.
+- **The image tags.** The file ships pinned to a release; check it names the one you mean before the first deploy, and remember there are two lines.
 - **Connecting Claude.** The onboarding screen walks through it, pointing Claude's custom-connector dialog at `<API_BASE_URL>/api/v1/mcp/automation` — see "Connecting Claude" in [`SELF_HOSTING.md`](../SELF_HOSTING.md).
 
 ## What this guide does not cover
 
 Registering your own Slack app, Google OAuth client, WhatsApp number and the rest is the long pole of any real deployment, and it is platform-independent. [`SELF_HOSTING.md`](../SELF_HOSTING.md), "Registering your own third-party apps", is the system-by-system runbook, and it belongs at the start of a cutover rather than the end.
+
+## Appendix: building the web app from source
+
+For a fork, or for a deployment that needs the Google or Microsoft sign-in buttons — those are baked in at `next build` and a published image was built without them (see "5. The web app").
+
+Replace the `listen-fire-web` service in the Blueprint with the Node runtime against the `apps/web` workspace:
+
+```yaml
+  - type: web
+    name: listen-fire-web
+    runtime: node
+    rootDir: apps/web
+    plan: starter
+    healthCheckPath: /login
+    buildCommand: pnpm install --frozen-lockfile --prod=false --filter web... && pnpm --filter web build
+    startCommand: pnpm --filter web start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_INTERNAL_URL
+        sync: false
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false
+      - key: NEXT_PUBLIC_MICROSOFT_CLIENT_ID
+        sync: false
+```
+
+Three things about that block are load-bearing, and each has cost a first deploy:
+
+- `--prod=false` on the install. `NODE_ENV=production` applies to the build too, and pnpm then skips devDependencies — `next.config.ts` needs typescript, which is one.
+- `rootDir: apps/web` does not break the workspace-aware install: pnpm resolves the workspace root by walking up to `pnpm-workspace.yaml` regardless of cwd, so it only narrows the cache-invalidation and `--filter` scope, which is what `Dockerfile.web` does too.
+- The **Node** runtime, not Docker. Blueprint YAML has no Docker build-`target` field, and the Docker route would need `Dockerfile.web`'s `web` target.
+
+The API can be built from source the same way — `runtime: docker`, `dockerfilePath: deploy/Dockerfile`, `dockerContext: .` — but then the deployment tracks a branch rather than a release, and the "pin a tag" contract in [`UPGRADING.md`](../UPGRADING.md) no longer describes it. Do it only while you are actually changing the API's code.

@@ -58,7 +58,7 @@ function makeStubAdapter(values: Record<string, unknown>): Adapter {
       return { adapterType: 'stub', externalId: 'stub', data: {} };
     },
     async updateRecord() {
-      return { adapterType: 'stub', externalId: 'updated', data: {} };
+      return { adapterType: 'stub', externalId: 'updated', data: {}, association: 'none' };
     },
     async deleteRecord() {
       return {};

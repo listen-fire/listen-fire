@@ -83,13 +83,32 @@ import {
   type ListEntityKind,
 } from './types';
 import {
+  attachPersonToOrganisation,
+  detachPersonFromOrganisation,
+} from '../../../../adapters/affinity/employer_association';
+import {
   listEntryPoints as catalogListEntryPoints,
   describe as catalogDescribe,
   cachedFields,
   loadPerListTypes,
   AFFINITY_LIST_ENTRIES_EDGE,
   AFFINITY_LIST_NAME_FIELD,
+  AFFINITY_ORGANIZATIONS_EDGE,
+  AFFINITY_PEOPLE_EDGE,
+  AFFINITY_EMPLOYER_EDGE_IDS,
 } from './schema_catalog';
+
+/** Whether an edge name is one of the two the built-in person↔organization
+ *  association is published under — the display name from either side, or the
+ *  internal id an older saved program may have spelled it by. Compared against
+ *  the catalog's own constants; nothing here parses a name. */
+function isEmployerEdge(edgeName: string): boolean {
+  return (
+    edgeName === AFFINITY_PEOPLE_EDGE ||
+    edgeName === AFFINITY_ORGANIZATIONS_EDGE ||
+    (AFFINITY_EMPLOYER_EDGE_IDS as readonly string[]).includes(edgeName)
+  );
+}
 import { resolveEntity as doResolveEntity } from './resolve';
 import { UPDATE_NOT_FOUND } from '../not_found';
 import {
@@ -1436,11 +1455,13 @@ export class AffinityAdapter extends BaseAdapter {
         if (!entry) return UPDATE_NOT_FOUND;
         return updateListEntry({ operations, update: input, entry });
       }
-      // note / file have no in-place update — re-asserting one appends.
+      // note / file have no in-place update — re-asserting one APPENDS, and
+      // the appended record hangs off the parent the write named, so the
+      // association is made by the same act that writes the note.
       case 'note':
-        return createNote({ operations, write: input });
+        return { ...(await createNote({ operations, write: input })), association: 'made' };
       case 'file':
-        return createFile({ operations, write: input });
+        return { ...(await createFile({ operations, write: input })), association: 'made' };
       case 'opportunity':
       case 'reminder':
       case 'interaction':
@@ -1502,64 +1523,92 @@ export class AffinityAdapter extends BaseAdapter {
   // ── 5b. Link / unlink two existing records ──────────────────────────────
 
   /**
-   * `link entry -[:Owners]-> person` — point one of the FROM record's reference
-   * fields at a person or organization that already exists. Affinity models
-   * these as fields rather than as a relationship table, so a link is a field
-   * value: the same act a linked write performs on the child it just created,
-   * with both records already in hand.
+   * `link entry -[:Owners]-> person`, `link org -[:People]-> person` — assert a
+   * relationship between two records that both already exist. Affinity has two
+   * kinds, and both are reachable here:
    *
-   * WHO HOLDS the field is the whole question. A company or a person holds its
-   * own unscoped fields; a list entry holds its list's, and a value on an entry
-   * is addressed by the entry AND the company the entry stands for. That is one
-   * question, asked here exactly where a linked write asks it (`holderFor`), so
-   * the two spellings cannot drift.
+   *   - a CUSTOM REFERENCE field: Affinity models these as fields rather than
+   *     as a relationship table, so the link IS a field value. WHO HOLDS the
+   *     field is the whole question — a company or a person holds its own
+   *     unscoped fields; a list entry holds its list's, and a value on an entry
+   *     is addressed by the entry AND the company the entry stands for. That is
+   *     one question, asked exactly where a linked write asks it (`holderFor`),
+   *     so the two spellings cannot drift.
+   *   - the BUILT-IN person↔organization association, which is no field at all:
+   *     it is the person's `organization_ids`, and it runs the same
+   *     `attachPersonToOrganisation` a linked write onto a matched person runs,
+   *     for the same reason.
    *
-   * Idempotent: a field already naming the target reports `created: false` and
-   * sends nothing.
+   * Idempotent either way: a relationship already there reports
+   * `created: false` and sends nothing.
    */
   async linkRecords(input: LinkRecordsInput): Promise<LinkRecordsResult> {
-    const { operations, holder, fieldDef, targetId } = await this.resolveReferenceLink(
-      input,
-      'linkRecords',
-    );
+    const resolved = await this.resolveLink(input, 'linkRecords');
+    if (resolved.kind === 'employer') {
+      const { operations, personId, orgId } = resolved;
+      const client = operations.getClient();
+      const person = await client.getPersonById(personId);
+      const { association } = await attachPersonToOrganisation(client, { person, orgId });
+      return { created: association === 'made' };
+    }
+    const { operations, holder, fieldDef, targetId } = resolved;
     const created = await assertCustomReference(operations, { holder, fieldDef, targetId });
     return { created };
   }
 
   /**
-   * `unlink entry -[:Owners]-> person` — the inverse. Affinity has no "clear
-   * this field" verb, so the value rows naming the target are deleted: one
-   * target leaves a multi-valued reference, a single-valued one is emptied. A
-   * field that never pointed there reports `removed: false` and sends nothing,
-   * which is the quiet no-op `unlink` promises.
+   * `unlink entry -[:Owners]-> person` — the inverse, over the same two kinds.
+   * Affinity has no "clear this field" verb, so a custom reference's value rows
+   * naming the target are deleted: one target leaves a multi-valued reference,
+   * a single-valued one is emptied. The built-in association drops the org from
+   * the person's employers and keeps the rest. A relationship that was never
+   * there reports `removed: false` and sends nothing, which is the quiet no-op
+   * `unlink` promises.
    */
   async unlinkRecords(input: UnlinkRecordsInput): Promise<UnlinkRecordsResult> {
-    const { operations, holder, fieldDef, targetId } = await this.resolveReferenceLink(
-      input,
-      'unlinkRecords',
-    );
+    const resolved = await this.resolveLink(input, 'unlinkRecords');
+    if (resolved.kind === 'employer') {
+      const { operations, personId, orgId } = resolved;
+      const client = operations.getClient();
+      const person = await client.getPersonById(personId);
+      const { removed } = await detachPersonFromOrganisation(client, { person, orgId });
+      return { removed };
+    }
+    const { operations, holder, fieldDef, targetId } = resolved;
     const removed = await severCustomReference(operations, { holder, fieldDef, targetId });
     return { removed };
   }
 
   /**
-   * The three facts a link needs: the record that HOLDS the reference, the
-   * field the edge names on it, and the Affinity id being pointed at.
+   * WHICH of Affinity's two relationships this link is, resolved to the facts
+   * that one needs.
    *
-   * Every failure here is loud. A standalone link has nowhere else to go —
-   * unlike a linked write, whose non-reference edges are the built-in
-   * associations another writer handles — so an edge that names no writable
-   * reference on the from side is the author's mistake, not a case to skip.
+   *   - a CUSTOM REFERENCE field: the record that HOLDS the field, the field
+   *     the edge names on it, and the Affinity id being pointed at;
+   *   - the BUILT-IN employer association between a person and an
+   *     organization, which is no field at all — it is the person's
+   *     `organization_ids`, written from either side.
+   *
+   * A custom reference wins where both could read: exactly the exclusion the
+   * linked-write path makes (`customReferenceFieldFor`), so `link` and
+   * `write …-[:edge]->` split the two relationships the same way.
+   *
+   * Every remaining failure is loud. A standalone link has nowhere else to go,
+   * so an edge that names neither relationship is the author's mistake.
    */
-  private async resolveReferenceLink(
+  private async resolveLink(
     input: LinkRecordsInput,
     method: 'linkRecords' | 'unlinkRecords',
-  ): Promise<{
-    operations: AffinityOperations;
-    holder: AffinityReferenceHolder;
-    fieldDef: AffinityFieldMeta;
-    targetId: number;
-  }> {
+  ): Promise<
+    | {
+        kind: 'reference';
+        operations: AffinityOperations;
+        holder: AffinityReferenceHolder;
+        fieldDef: AffinityFieldMeta;
+        targetId: number;
+      }
+    | { kind: 'employer'; operations: AffinityOperations; personId: number; orgId: number }
+  > {
     const targetId = Number(input.to.externalId);
     if (!Number.isInteger(targetId)) {
       throw new Error(
@@ -1569,34 +1618,53 @@ export class AffinityAdapter extends BaseAdapter {
     const toDecoded = await this.structuredIdFor(input.to.recordType);
     if (toDecoded?.entity !== 'organization' && toDecoded?.entity !== 'person') {
       throw new Error(
-        `AffinityAdapter.${method}: an Affinity reference field points at a person or an ` +
+        `AffinityAdapter.${method}: an Affinity relationship reaches a person or an ` +
           `organization — "${input.to.recordType}" is neither.`,
       );
     }
     const edgeName = naturalName(input.edgeName);
+    const operations = await this.getOperations();
     const holder = await this.holderFor({
       recordType: input.from.recordType,
       externalId: input.from.externalId,
       edgeName,
     });
+    const fieldDef = holder ? await referenceFieldOn(operations, holder, edgeName) : null;
+    if (holder && fieldDef) {
+      return { kind: 'reference', operations, holder, fieldDef, targetId };
+    }
+
+    // The built-in association: a person and an organization, either way
+    // round, along the edge the catalog publishes it under. NAMED rather than
+    // inferred by exclusion — "anything that is not a custom reference field"
+    // would swallow an enrichment-sourced reference the workspace simply will
+    // not let anyone write, and turn a refusal into a silent employer link.
+    const fromDecoded = await this.structuredIdFor(input.from.recordType);
+    const fromId = Number(input.from.externalId);
+    if (Number.isInteger(fromId) && isEmployerEdge(edgeName)) {
+      if (fromDecoded?.entity === 'organization' && toDecoded.entity === 'person') {
+        return { kind: 'employer', operations, personId: targetId, orgId: fromId };
+      }
+      if (fromDecoded?.entity === 'person' && toDecoded.entity === 'organization') {
+        return { kind: 'employer', operations, personId: fromId, orgId: targetId };
+      }
+    }
+
     if (!holder) {
       throw new Error(
         `AffinityAdapter.${method}: "${input.from.recordType}" ${input.from.externalId} holds no ` +
           `reference fields — a link is a field value on a company, a person, or a list entry ` +
-          `(an entry through its own list's type).`,
+          `(an entry through its own list's type), or the association between a person and an ` +
+          `organization.`,
       );
     }
-    const operations = await this.getOperations();
-    const fieldDef = await referenceFieldOn(operations, holder, edgeName);
-    if (!fieldDef) {
-      throw new Error(
-        `AffinityAdapter.${method}: "${input.edgeName}" is not a writable ${toDecoded.entity} ` +
-          `reference field on "${input.from.recordType}" — a link points one of the from-side's ` +
-          `own reference fields at an existing record.`,
-      );
-    }
-    return { operations, holder, fieldDef, targetId };
+    throw new Error(
+      `AffinityAdapter.${method}: "${input.edgeName}" is not a writable ${toDecoded.entity} ` +
+        `reference field on "${input.from.recordType}" — a link points one of the from-side's ` +
+        `own reference fields at an existing record.`,
+    );
   }
+
 
   // ── 5c. Expression reads ────────────────────────────────────────────────
 

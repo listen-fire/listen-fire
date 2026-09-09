@@ -1,0 +1,109 @@
+name: release
+# A git tag IS the version. Pushing `v0.1.0` publishes the four images an
+# installation runs to ghcr.io/listen-fire/<name>, for both architectures, at
+# that tag and at `latest`; nothing else publishes anything, and there is no
+# schedule — a release happens because somebody tagged.
+#
+# `workflow_dispatch` builds the same matrix against any ref and pushes
+# NOTHING, which is how a change to a Dockerfile or to this file is proved
+# before it is tagged.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref to build (dry run — builds every image, pushes none)"
+        required: false
+        default: ""
+
+# Two tags pushed close together would otherwise race for `:latest`, and the
+# loser would leave `latest` pointing at the older release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    # arm64 is built under QEMU emulation, and the two Next builds are the slow
+    # ones. An hour per image is not normal, but it is not a hang either.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One job per image so a failure names the image that failed, and the
+      # other three still publish — a partial release is recoverable by
+      # re-running one job; a matrix that stops at the first failure is not.
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            dockerfile: deploy/Dockerfile
+            target: ""
+            # Only the api reads a version back out of its environment, and a
+            # build arg no Dockerfile declares is a warning on every build.
+            build-args: |
+              LISTEN_FIRE_VERSION=${{ github.event_name == 'push' && github.ref_name || 'dev' }}
+          - name: web
+            dockerfile: deploy/Dockerfile.web
+            target: web
+            build-args: ""
+          - name: admin
+            dockerfile: deploy/Dockerfile.web
+            target: admin
+            build-args: ""
+          # Only a demo install starts it, but it is part of the release: a
+          # `--demo` stack that had to build one image from source would defeat
+          # the point of publishing the other three.
+          - name: fake-channels
+            dockerfile: deploy/Dockerfile.web
+            target: fake-channels
+            build-args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Empty on a tag push, which checks out the tag.
+          ref: ${{ github.event.inputs.ref }}
+
+      # linux/arm64 on an amd64 runner needs the emulator registered before
+      # buildx will accept the platform.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          # The Dockerfiles COPY from the repository root, not from deploy/.
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          # A dry run builds every layer and publishes nothing, so it proves
+          # the build without minting a version.
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/listen-fire/${{ matrix.name }}:${{ github.ref_name }}
+            ghcr.io/listen-fire/${{ matrix.name }}:latest
+          build-args: ${{ matrix.build-args }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/listen-fire/listen-fire
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+          # Scoped per image: one shared cache would have four images evicting
+          # each other's layers on every release.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max

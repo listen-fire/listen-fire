@@ -10,15 +10,24 @@ import { userProcedure as sharedUserProcedure } from '../procedures';
 import { UserService } from '../../../services/user';
 import { getKnowledgeQb } from '../../../lib/kysely';
 import { WHATSAPP_MOVEMENTS_NUMBER } from '../../../services/translation_graph/adapters/whatsapp';
+import { LISTEN_FIRE_VERSION } from '../../../constants';
 
 const userSettingsRouter = (procedure: typeof trpc.procedure) => {
   const userProcedure = sharedUserProcedure(procedure);
 
   return trpc.router({
-    // Which number to message is a property of the deployment, not of the
-    // user — null on an install with no WhatsApp sender registered, and the
-    // settings section has nothing to offer then.
-    getWhatsappNumber: userProcedure.query(() => ({ number: WHATSAPP_MOVEMENTS_NUMBER })),
+    // Facts about the INSTALLATION rather than about the user: the release it
+    // is running, and the number a person messages to reach it. Both are read
+    // by the settings page and neither depends on who is asking, so they are
+    // one query — a second one-off per deployment fact is how a settings page
+    // ends up making five round trips to render a footer.
+    //
+    // `whatsappNumber` is null on an install with no WhatsApp sender
+    // registered, and the WhatsApp section has nothing to offer then.
+    getDeployment: userProcedure.query(() => ({
+      version: LISTEN_FIRE_VERSION,
+      whatsappNumber: WHATSAPP_MOVEMENTS_NUMBER,
+    })),
 
     getPhoneNumber: userProcedure.query(async () => {
       const ctx = currentContext();

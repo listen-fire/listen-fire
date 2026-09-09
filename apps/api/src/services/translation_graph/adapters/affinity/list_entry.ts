@@ -13,7 +13,7 @@
 
 import type { AffinityOperations } from '../../../../adapters/affinity/operations';
 import type { UpdateInput, UpdateResult, WriteInput, WriteResult } from '../../adapter';
-import { singleParentLink } from '../../adapter';
+import { containerAssociation, singleParentLink } from '../../adapter';
 import { decodedFixedType, AFFINITY_ADAPTER_TYPE, type DecodedTypeId } from './types';
 import { createNoopTracer, writeCustomFieldValues } from './shared';
 import { AFFINITY_LIST_NAME_FIELD } from './schema_catalog';
@@ -132,5 +132,9 @@ export async function updateListEntry(input: {
     adapterType: AFFINITY_ADAPTER_TYPE,
     externalId: String(entry.listEntryId),
     data: {},
+    // An entry IS its (list, member) pair — the parent and the list name are
+    // what identified this entry in the first place, so membership is a fact
+    // before the write starts.
+    association: containerAssociation(input.update),
   };
 }

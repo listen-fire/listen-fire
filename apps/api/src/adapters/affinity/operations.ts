@@ -15,6 +15,13 @@ import { sendSlackNotification } from '../../lib/slack';
 import { notNull } from '../../lib/utils/nullability';
 import { Tracer } from '../../services/tracer';
 import { fieldConfigurationSchema, AffinityFieldConfiguration } from './nodes/shared';
+import type { ParentAssociation } from '../../services/translation_graph/adapter';
+import {
+  attachPersonToOrganisation,
+  type AffinityPersonRecord,
+} from './employer_association';
+
+export type { AffinityPersonRecord };
 
 type AffinityField = z.infer<typeof fieldsValidator>;
 
@@ -275,7 +282,7 @@ Expect the user to provide a name. If for any reason the name cannot be split in
     lastName?: string | null;
     email?: string | null;
     orgId?: number;
-  }): Promise<{ id: number } | null> {
+  }): Promise<AffinityPersonRecord | null> {
     const parts = await this.personNameParts({ name, firstName, lastName });
     if (!parts) {
       logger.warn('Skipping Affinity createPerson: no name to create a person from', { email });
@@ -397,7 +404,15 @@ Expect the user to provide a name. If for any reason the name cannot be split in
      * surfaces as a 404 the caller maps to the not-found signal.
      */
     affinityId?: number;
-  }): Promise<{ id: number; isNew: boolean } | null> {
+  }): Promise<{
+    id: number;
+    isNew: boolean;
+    orgAssociation: ParentAssociation;
+    /** The live person, as the API last reported it. Handed back so the caller
+     *  builds its result from the record this call already read, rather than
+     *  fetching the same person again a moment later. */
+    person: AffinityPersonRecord;
+  } | null> {
     // A name is required only when we have to SEARCH for the person — a pinned
     // update writes by id and may carry no name (e.g. updating one field).
     if (affinityId == null && !searchQuery.name.trim()) {
@@ -411,26 +426,31 @@ Expect the user to provide a name. If for any reason the name cannot be split in
       affinityId != null ? { id: affinityId } : await this.findMatchingPerson(searchQuery);
     tracer.add('foundExistingPerson', !!existingPerson);
 
-    let person: { id: number };
+    let person: AffinityPersonRecord;
+    // What became of the employer association this call was asked to make.
+    // The caller reports it to the engine, which is what lets a matched person
+    // whose own fields never changed say "attached" and mean it.
+    let orgAssociation: ParentAssociation = orgId ? 'already' : 'none';
     if (existingPerson) {
-      person = existingPerson;
       tracer.add('personAction', 'useExisting');
 
-      // Confirm a pinned id still exists so a deleted record surfaces as a 404
-      // (→ not-found) rather than a silent no-op. Unpinned matches already
-      // exist (findMatchingPerson returned them), so only the pinned path needs
-      // the explicit check.
-      if (affinityId != null) {
-        await this.client.getPersonById(affinityId);
-      }
+      // ONE read of the live person answers every question this branch asks of
+      // it: does the pinned id still exist (a deleted record 404s here, which
+      // the caller maps to the not-found signal), is the org already among the
+      // employers, does the person already own the incoming address — and it is
+      // the record the caller hands back. It used to be three GETs of the same
+      // record moments apart, plus a fourth for the result payload; the person
+      // cannot change between them, and each write below answers with the
+      // updated record anyway.
+      person = await this.client.getPersonById(existingPerson.id);
 
+      // Each write below folds what it SENT back onto the record in hand — we
+      // know what we wrote, so the snapshot stays current without depending on
+      // what the PUT chooses to echo.
       if (orgId) {
-        const fullPerson = await this.client.getPersonById(existingPerson.id);
-        if (!fullPerson.organization_ids?.includes(orgId)) {
-          await this.client.updatePerson(existingPerson.id, {
-            organization_ids: [...(fullPerson.organization_ids ?? []), orgId],
-          });
-        }
+        const joined = await attachPersonToOrganisation(this.client, { person, orgId });
+        person = joined.person;
+        orgAssociation = joined.association;
       }
 
       // Compare normalized, or a differently-cased spelling of an address the
@@ -439,14 +459,11 @@ Expect the user to provide a name. If for any reason the name cannot be split in
       // 422 when the address belongs to someone else.
       const authoredEmail = searchQuery.email?.trim();
       const incomingEmail = normalizeEmail(authoredEmail);
-      if (authoredEmail && incomingEmail) {
-        const fullPerson = await this.client.getPersonById(existingPerson.id);
-        if (!ownsEmail(fullPerson.emails, incomingEmail)) {
-          await this.client.updatePerson(existingPerson.id, {
-            // Trimmed, but with the authored capitalisation intact.
-            emails: [...(fullPerson.emails ?? []), authoredEmail],
-          });
-        }
+      if (authoredEmail && incomingEmail && !ownsEmail(person.emails, incomingEmail)) {
+        // Trimmed, but with the authored capitalisation intact.
+        const emails = [...(person.emails ?? []), authoredEmail];
+        await this.client.updatePerson(person.id, { emails });
+        person = { ...person, emails };
       }
     } else {
       tracer.add('personAction', 'create');
@@ -461,6 +478,8 @@ Expect the user to provide a name. If for any reason the name cannot be split in
       // back to the last-token rule rather than giving up.
       if (!newPerson) return null;
       person = newPerson;
+      // A person created WITH an org joins it in the same call.
+      if (orgId) orgAssociation = 'made';
     }
 
     tracer.add('personId', person.id);
@@ -478,8 +497,9 @@ Expect the user to provide a name. If for any reason the name cannot be split in
       });
     }
 
-    return { id: person.id, isNew };
+    return { id: person.id, isNew, orgAssociation, person };
   }
+
 
   async createListEntry({
     listId,

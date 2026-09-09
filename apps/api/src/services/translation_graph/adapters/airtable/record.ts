@@ -20,6 +20,7 @@ import type {
   WriteResult,
   UpdateInput,
   UpdateResult,
+  ParentAssociation,
   DeleteInput,
   DeleteResult,
 } from '../../adapter';
@@ -702,7 +703,7 @@ async function buildWritePayload(input: {
   tables: AirtableTableMeta[];
   fields: Record<string, unknown>;
   parentLinks: WriteInput['parentLinks'];
-}): Promise<Record<string, unknown>> {
+}): Promise<{ fields: Record<string, unknown>; association: ParentAssociation }> {
   const { ctx } = input;
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input.fields)) {
@@ -733,18 +734,26 @@ async function buildWritePayload(input: {
   // Parent linking: each edge name resolves to a multipleRecordLinks field on
   // this (child) table; set it to the parent's external record id. A linked
   // write carries one parent, a tuple write N — each lands its own link field.
+  //
+  // A parent whose edge names no link field on this table cannot be wired at
+  // all. On a create that only cost the edge; on an UPDATE the write reports
+  // itself as an attach, so the fact has to travel: `unsupported`, and the
+  // engine fails the write rather than claiming a link nobody made.
+  let association: ParentAssociation = 'none';
   for (const parentLink of input.parentLinks ?? []) {
     const linkField = resolveParentLinkField({ ctx, edgeName: parentLink.edgeName });
     if (linkField) {
       fields[linkField] = [parentLink.externalId];
+      if (association !== 'unsupported') association = 'made';
     } else {
+      association = 'unsupported';
       logger.warn('[AirtableAdapter] parentLink edge did not resolve to a link field', {
         edgeName: parentLink.edgeName,
       });
     }
   }
 
-  return fields;
+  return { fields, association };
 }
 
 /** One Airtable attachment cell entry built from a FileRef. Airtable fetches
@@ -838,7 +847,7 @@ export async function createRecord(input: {
     throw new Error(`AirtableAdapter.createRecord: table "${tableId}" not found in base "${baseId}".`);
   }
 
-  const fields = await buildWritePayload({
+  const { fields } = await buildWritePayload({
     client: input.client,
     ctx,
     baseId,
@@ -886,7 +895,7 @@ export async function updateRecord(input: {
     throw new Error(`AirtableAdapter.updateRecord: table "${tableId}" not found in base "${baseId}".`);
   }
 
-  const fields = await buildWritePayload({
+  const { fields, association } = await buildWritePayload({
     client: input.client,
     ctx,
     baseId,
@@ -929,6 +938,9 @@ export async function updateRecord(input: {
       tableId,
       primaryFieldId: ctx.table.primaryFieldId,
     }),
+    // Airtable's link cell is REPLACED, not read first, so a wired parent can
+    // only report the write it performed.
+    association,
   };
 }
 

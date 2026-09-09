@@ -33,6 +33,7 @@ import {
 } from '../../translation_graph/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { createManualAdapter } from '../../translation_graph/adapters/manual';
+import { containerAssociation } from '../../translation_graph/adapter';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000020' as TeamId;
 const KG = 'kg';
@@ -117,7 +118,7 @@ function makeGraphFake(input: {
       return { adapterType: input.adapterType, externalId: `new-${writes.length}`, data: {} };
     },
     async updateRecord(update) {
-      return { adapterType: input.adapterType, externalId: update.externalId, data: {} };
+      return { adapterType: input.adapterType, externalId: update.externalId, data: {}, association: containerAssociation(update) };
     },
     async deleteRecord() {
       return {};

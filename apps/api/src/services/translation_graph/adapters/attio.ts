@@ -58,7 +58,7 @@ import type {
   WriteInput,
   WriteResult,
 } from '../adapter';
-import { writeParentLinks } from '../adapter';
+import { writeParentLinks, type ParentAssociation } from '../adapter';
 import { BaseAdapter } from './base';
 import { stubTargetOf, type EdgesFromResult } from '../adapter';
 import { uniformWalk } from './hop';
@@ -4027,11 +4027,15 @@ export class AttioAdapter extends BaseAdapter {
    * Case `parent-ref`: link the child onto the parent's reference attribute.
    * For a multi-value attribute we read-modify-write to union the child in
    * (Attio PATCH replaces the whole list), so existing links survive.
+   *
+   * Returns whether the association was MADE here — false when the parent
+   * already pointed at this child. A single-value attribute is set without a
+   * read, so it can only report the write it performed.
    */
   private async linkParentReference(input: {
     link: Extract<ParentLinkClassification, { kind: 'parent-ref' }>;
     childRecordId: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const client = await this.getApiClient();
     const { parentObjectId, parentRecordId, fieldSlug, isMulti, childObjectSlug } = input.link;
     const childRef = { target_object: childObjectSlug, target_record_id: input.childRecordId };
@@ -4042,7 +4046,7 @@ export class AttioAdapter extends BaseAdapter {
       const existing = extractReferenceTargets(
         (current.values as Record<string, unknown> | undefined)?.[fieldSlug],
       );
-      if (existing.some((r) => r.target_record_id === input.childRecordId)) return; // already linked
+      if (existing.some((r) => r.target_record_id === input.childRecordId)) return false; // already linked
       value = [...existing, childRef];
     }
     await client.updateRecord({
@@ -4050,6 +4054,7 @@ export class AttioAdapter extends BaseAdapter {
       recordId: parentRecordId,
       fields: { [fieldSlug]: value },
     });
+    return true;
   }
 
   async updateRecord(rawInput: UpdateInput): Promise<UpdateResult> {
@@ -4064,13 +4069,20 @@ export class AttioAdapter extends BaseAdapter {
     // (vs newly-created) child still needs its edge(s) to the parent(s) set.
     // A linked write carries one parent, a tuple write N; both ride
     // `parentLinks`, so iterate the list exactly like the create branch.
+    //
+    // A parent whose edge is a reference attribute on NEITHER side cannot be
+    // wired at all (`classifyParentLink` answers null). Dropping it quietly
+    // would report an attach nobody made, so the write says `unsupported` and
+    // the engine fails it.
     const links: ParentLinkClassification[] = [];
+    let association: ParentAssociation = 'none';
     for (const parentLink of writeParentLinks(input)) {
       const link = await this.classifyParentLink({
         childRecordType: input.recordType,
         parentLink,
       });
       if (link) links.push(link);
+      else association = 'unsupported';
     }
     for (const link of links) {
       if (link.kind === 'child-ref') recordFields[link.fieldSlug] = link.value;
@@ -4099,10 +4111,20 @@ export class AttioAdapter extends BaseAdapter {
       if (isHttp404(e)) return UPDATE_NOT_FOUND;
       throw e;
     }
+    // A child-ref parent rode the PATCH above (Attio replaces the whole value,
+    // so there is no read that would separate "was already pointing here" from
+    // "now points here" without a second call) — the write happened, so it
+    // reports `made`. A parent-ref knows, because it reads the parent's current
+    // targets before unioning the child in.
+    let anyMade = links.some((l) => l.kind === 'child-ref');
     for (const link of links) {
       if (link.kind === 'parent-ref') {
-        await this.linkParentReference({ link, childRecordId: input.externalId });
+        const made = await this.linkParentReference({ link, childRecordId: input.externalId });
+        if (made) anyMade = true;
       }
+    }
+    if (association !== 'unsupported' && links.length > 0) {
+      association = anyMade ? 'made' : 'already';
     }
     await this.uploadFileRefs({
       objectSlug: objectId,
@@ -4116,6 +4138,7 @@ export class AttioAdapter extends BaseAdapter {
       externalId: input.externalId,
       url: record.web_url ?? undefined,
       data,
+      association,
     };
   }
 

@@ -8,9 +8,9 @@ cp deploy/.env.example deploy/.env      # set ANTHROPIC_API_KEY — or set nothi
 ./deploy/up.sh knowledge automations    # any combination of the five units below
 ```
 
-`up.sh` builds the images, waits for the stack to answer, and prints the web URL and the credential to sign in with. Add `--demo` to run with stand-in third-party services and a sample dataset, and no keys at all.
+`up.sh` pulls the published images, waits for the stack to answer, and prints the web URL and the credential to sign in with. Add `--demo` to run with stand-in third-party services and a sample dataset, and no keys at all. Add `--build` to build from the checkout instead.
 
-**Give Docker about 8 GiB, and never build the images together.** The api build and the web build each ask for a 6 GiB node heap, and a single `docker compose up --build` hands every service to one BuildKit session, which runs them concurrently — an out-of-memory kill on a stock Docker Desktop, reported as a broken repository rather than a full machine. `up.sh` builds one image at a time for exactly this reason, and the first build takes several minutes.
+**If you build, give Docker about 8 GiB, and never build the images together.** The api build and the web build each ask for a 6 GiB node heap, and a single `docker compose up --build` hands every service to one BuildKit session, which runs them concurrently — an out-of-memory kill on a stock Docker Desktop, reported as a broken repository rather than a full machine. `up.sh --build` builds one image at a time for exactly this reason, and the first build takes several minutes.
 
 ## What you are choosing
 
@@ -32,23 +32,34 @@ Everything else follows from the unit list. Which pages the web UI shows, which 
 
 **`./deploy/up.sh <units…> [--demo]`** is the door for a trial on your own machine. It works out the identity setting, the delivery paths and the optional services from the units you name, waits for health, and prints how to sign in. It also pins the public URLs to `http://localhost:<port>`, which is what makes the printed links work — and what makes it the wrong tool for a deployment behind a real hostname.
 
-**Building each image, then `docker compose up -d`, run from `deploy/`**, is the production shape. Build them one at a time, for the memory reason above — there is no supported `up --build`:
+**`docker compose pull && docker compose up -d`, run from `deploy/`**, is the production shape. It needs no build and no toolchain — just Docker and the tag you pinned:
+
+```bash
+# from deploy/ — COMPOSE_PROFILES in your .env names the optional pieces
+docker compose pull
+docker compose up -d
+```
+
+To run the code in your checkout instead of a release, build the images one at a time, for the memory reason above — there is no supported `up --build`:
 
 ```bash
 # migrate and seed share the api image; the admin one is only worth building
-# with core, and it needs its profile named because it lives behind one
+# with core, whose console it is
 docker compose build api && docker compose build web \
-  && docker compose --profile admin build admin \
+  && docker compose build admin \
   && docker compose up -d
 ```
 
-`docker compose build <service>` has been seen to hang on at least one machine where the plain builder works. `docker build` against the same Dockerfile is the exact equivalent, run from the repository root, and is what `up.sh` itself calls:
+`docker compose build <service>` has been seen to hang on at least one machine where the plain builder works. `docker build` against the same Dockerfile is the exact equivalent, run from the repository root, and tags the same images compose starts — which is what `up.sh --build` itself calls:
 
 ```bash
-docker build -f deploy/Dockerfile -t listen-fire-api:local .
-docker build -f deploy/Dockerfile.web --target web -t listen-fire-web:local .
-docker build -f deploy/Dockerfile.web --target admin -t listen-fire-admin:local .
+docker build -f deploy/Dockerfile --build-arg LISTEN_FIRE_VERSION=dev \
+  -t ghcr.io/listen-fire/api:latest .
+docker build -f deploy/Dockerfile.web --target web -t ghcr.io/listen-fire/web:latest .
+docker build -f deploy/Dockerfile.web --target admin -t ghcr.io/listen-fire/admin:latest .
 ```
+
+Those `:latest` tags are what an unpinned installation starts. With `LISTEN_FIRE_VERSION` pinned, tag the build with that value instead, or compose will pull the release over the top of what you built.
 
 With nothing else set it is the whole of Listen-Fire — every unit, with accounts and login. To run a subset, or to run behind your own hostname, put the settings in `deploy/.env` and start compose directly:
 
@@ -62,9 +73,39 @@ API_BASE_URL=https://api.example.com
 WEB_BASE_URL=https://app.example.com
 ```
 
-Two profiles add the optional pieces: `--profile admin` adds the operator console (only useful with `core`), and `--profile demo` adds the stand-in third-party services and the sample data. **`--profile demo` on its own is not a working demo** — the demo also needs the environment `up.sh` sets for it, and without that the API runs in production mode and the login email goes to a mail provider you have not configured instead of the fake outbox.
+**Which optional pieces run is `COMPOSE_PROFILES` in `deploy/.env`,** not a flag you remember to type. Five profile names exist. Three are the bundled datastores — `postgres`, `redis`, `minio` — and the shipped line turns all three on; each turns itself off when you name a datastore of your own, so leave that part alone (see "Bringing your own datastores"). The other two are `admin`, the operator console, which is only useful with `core`, and `demo`, the stand-in third parties and the sample data:
 
-Redis always runs. It is not behind a profile because the default composition is every unit, and two of them keep state there.
+```
+COMPOSE_PROFILES=postgres,redis,minio,admin
+```
+
+**Put them there rather than on the command line.** A `--profile` flag REPLACES this list on older Docker Compose versions instead of adding to it, which is how a `docker compose --profile admin down` ends up leaving the database container running. One list in one file is correct on every version. `up.sh` names its own profiles on the command line and passes no list, which is the same rule from the other side.
+
+**`demo` on its own is not a working demo** — the demo also needs the environment `up.sh` sets for it, and without that the API runs in production mode and the login email goes to a mail provider you have not configured instead of the fake outbox.
+
+## Versions
+
+A release is a git tag on the public repository, `vMAJOR.MINOR.PATCH`. Tagging publishes four images — `api`, `web`, `admin` and `fake-channels` — to `ghcr.io/listen-fire/<name>` at that tag and at `latest`, for `linux/amd64` and `linux/arm64`. The tag is the version; the `version` fields in the repository's `package.json` files mean nothing and are not maintained.
+
+**Pinning a tag is how an installation chooses when it moves.** Set it in `deploy/.env`:
+
+```
+LISTEN_FIRE_VERSION=v0.1.0
+```
+
+Both `up.sh` and `docker compose` then pull exactly those images and start nothing else, until you edit that line. Leave it unset and every pull takes `latest`, which moves under you.
+
+| | where the images come from |
+|---|---|
+| `./deploy/up.sh <units…>` | pulls `ghcr.io/listen-fire/*` at your pinned tag (the default) |
+| `./deploy/up.sh <units…> --build` | builds them from this checkout instead |
+| `./deploy/up.sh <units…> --no-build` | uses the images already on this machine, pulling and building nothing |
+
+Building from source is the right answer when you have changed the code, or on an architecture no published image covers. A source build is stamped `dev` rather than a version number, because nothing tagged it.
+
+**Where the running version shows.** `GET /healthz/workers` reports it as `version`, unauthenticated, alongside the units this process mounts; the web UI shows it under **Settings → About**. Both read the same value out of the running api process, so they cannot disagree with each other, and neither can be stale the way a page served by an older web build can.
+
+[UPGRADING.md](UPGRADING.md) is what to do when you move from one tag to the next.
 
 ## Ports
 
@@ -75,13 +116,15 @@ Redis always runs. It is not behind a profile because the default composition is
 | operator console | 8082 | only with `core` |
 | stand-in third parties | 8083, bound to `127.0.0.1` | only in demo mode |
 
-Postgres and Redis publish no host port at all, so a self-hosted stack never collides with anything else on the machine. The stand-in third parties are the one service bound to `127.0.0.1` rather than to every interface: their email outbox holds live single-use login links, and anything that can read one is signed in. Change the published ports with `WEB_PORT`, `API_PORT`, `ADMIN_PORT` and `FAKE_CHANNELS_PORT_HOST` — in `deploy/.env` for `docker compose`, or in the shell for `up.sh` (`WEB_PORT=9000 ./deploy/up.sh knowledge`), because `up.sh` exports its own values and a shell value wins over the file.
+Postgres, Redis and the bundled object store publish no host port at all, so a self-hosted stack never collides with anything else on the machine. The stand-in third parties are the one service bound to `127.0.0.1` rather than to every interface: their email outbox holds live single-use login links, and anything that can read one is signed in. Change the published ports with `WEB_PORT`, `API_PORT`, `ADMIN_PORT` and `FAKE_CHANNELS_PORT_HOST` — in `deploy/.env` for `docker compose`, or in the shell for `up.sh` (`WEB_PORT=9000 ./deploy/up.sh knowledge`), because `up.sh` exports its own values and a shell value wins over the file.
 
 The browser only ever talks to the web UI's own origin: the web container proxies API calls to the API container over the internal network. That is why the image bakes in no API hostname, and why one image runs anywhere.
 
 ## What the installation generates for itself
 
 On its very first boot, before anything else starts, Listen-Fire mints every secret this installation will ever use and writes them into a Docker volume called `listen-fire-config`: the database password, the session-signing secret, both encryption keys, the team id, the API key, and the signing secrets for outbound webhooks and document links. You never see them in a file on disk, and no container image carries them.
+
+One value in that volume is not one of those secrets: the bundled object store's root password. Nothing is encrypted under it, so it is minted separately, on any boot that finds it missing, and an installation that loses it re-mints it and carries on.
 
 **Back that volume up, and never regenerate it.**
 
@@ -151,10 +194,32 @@ Demo mode is a way to look at Listen-Fire, not a security posture. Do not expose
 - **Run one instance.** Two are safe — each unit's loops take a lock, so every loop runs on exactly one instance — but you lose the unambiguous reading of a worker reporting that it did not start here, which on a single instance means "wedged, page me".
 - **`GET /.well-known/health-check` answers `201`.** That is its contract. A platform health check that defaults to expecting exactly `200` will drain a perfectly healthy target.
 - **Two database roles must exist before the first migration.** The migration set grants to them, and a database without them dies on an early migration having built almost nothing. The bundled Postgres creates them from `postgres-init/00-roles.sql` automatically on an empty data directory; **a managed database has no such hook, so run that file by hand, as a superuser, before you start anything.** The bundled image is `pgvector/pgvector:pg16` because the migration set is monolithic.
-- **The migration set is monolithic.** It creates every unit's tables whatever you mount, so a `psql` prompt shows tables you have no unit for. They stay empty. The practical consequence is that every installation needs the union of the extensions — `vector`, `pg_trgm`, `citext` — even one whose own tables need none of them.
+- **The migration set is monolithic.** It creates every unit's tables whatever you mount, so a `psql` prompt shows tables you have no unit for. They stay empty. The practical consequence is that every installation needs the union of the extensions — `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent`, `btree_gin` — even one whose own tables need none of them.
 - **`API_BASE_URL` must be stable forever.** Answer links, file links, callbacks and every webhook you register with a third party are absolute at it, and by the time you want to change the hostname they are in other people's inboxes and other systems' configuration. There is no rewrite mechanism and there cannot be one.
-- **There is no local-filesystem file storage.** Anything that handles a file wants an S3-compatible bucket (AWS, Cloudflare R2, MinIO, Supabase). The gap is deliberate: handing an unauthenticated third party a URL to fetch bytes from is a signed byte-serving route, which is a thing to build rather than a switch to flip. Without it the process boots normally and only the file-touching steps fail, naming what they wanted. When you do configure it, `AWS_S3_FORCE_PATH_STYLE` is compared to the literal lowercase `true` — `TRUE` and `1` read as false, which is what bites MinIO and Ceph.
+- **File storage is an S3-compatible bucket, and there is no local-filesystem driver.** Compose bundles one — a MinIO on a volume, wired up for you — so a stack that has named no object store of its own still handles files. Two honest limits on the bundled one: it is reachable only on the compose network, so a presigned link handed to a browser or a third party does not resolve, and it is one container on one disk. A deployment that hands out file links points `AWS_S3_ENDPOINT` at a real object store (AWS, Cloudflare R2, GCS through its S3 API, Supabase), which is also what parks the bundled one — see "Bringing your own datastores". With nothing configured at all the process boots normally and only the file-touching steps fail, naming what they wanted. `AWS_S3_FORCE_PATH_STYLE` is compared to the literal lowercase `true` — `TRUE` and `1` read as false, which is what bites MinIO and Ceph.
 - **A proxy in front of the API loses two things**: WebSocket upgrades, which live updates ride, and very long agent requests, which outlive most proxy timeouts. Both should reach the API origin directly.
+
+## Bringing your own datastores
+
+Postgres, Redis and the object store come bundled, and each one can be moved to a managed service **on its own**, by naming yours in `deploy/.env` and changing nothing else. The bundled service then stops being part of the composition: it is not started, not pulled, and not in `docker compose config`. There is no compose file to edit and no second stack to maintain.
+
+| store | bundled as | name yours with | then the bundled one |
+|---|---|---|---|
+| database | `postgres`, a `pgvector/pgvector:pg16` on the `pgdata` volume | `DATABASE_URL` (and `DATABASE_URL_READONLY`, which follows it when you have no replica) | leaves the composition |
+| cache and counters | `redis`, on the `redisdata` volume | `MESSAGE_QUEUE_REDIS_HOSTNAME` and `MESSAGE_QUEUE_REDIS_PORT` | leaves the composition |
+| object store | `minio`, on the `miniodata` volume | `AWS_S3_ENDPOINT`, with the four `AWS_*` values beside it | leaves the composition |
+
+**Why it is one variable and not two.** The presence of that variable is both what the process connects to and what compose reads to decide whether to start a bundled service, so the two cannot disagree. `up.sh` prints which stores are bundled and which are yours on every start, so a `DATABASE_URL` you forgot was exported in your shell is visible rather than mysterious.
+
+Each move has a runbook in your platform's guide — [GCP](guides/gcp-vm.md), [AWS](guides/aws.md), [Render](guides/render.md) — because moving a store is mostly moving its data. What is true of each of them wherever you are:
+
+**The database.** Postgres 16 with `vector`, `pg_trgm`, `citext`, `pgcrypto`, `unaccent` and `btree_gin`; the migration set is monolithic, so every installation needs the union whatever it mounts. **Run [`postgres-init/00-roles.sql`](postgres-init/00-roles.sql) against it, as a superuser, before anything else** — the compose Postgres runs that file from an init hook and a managed database has none, and more than a hundred grants across the migration history fail without those two roles. `DATABASE_URL_READONLY` must be set even without a replica; leave it unset here and it follows `DATABASE_URL`, which is what it must be either way. The api holds session-level advisory locks, one long-lived connection per mounted unit, so **a pooler in transaction mode breaks the worker guarantee**: session-level pooling only. Budget six long-held connections plus the pools.
+
+**Redis.** Host and port, with no username, password, TLS or URL form anywhere in the client, so a managed Redis that requires AUTH or in-transit encryption cannot be reached at all through these two variables. Use a private network and let that be the boundary. Nothing has to be moved when you switch: what lives there is core's in-flight MCP OAuth state, which costs a person a re-consent, and automations' runaway-loop counters, which fail **open**. Both are rebuilt by use.
+
+**The object store.** Any S3-compatible bucket: set `AWS_S3_ENDPOINT`, `AWS_DOCUMENT_S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` together, and `AWS_S3_FORCE_PATH_STYLE=true` only for a store that needs path-style addressing. On AWS itself leave the endpoint unset. Objects have to be copied across: the bundled store's are in the `miniodata` volume and the `listen-fire` bucket, and any S3 client that speaks to both ends will move them. Do it before you flip the variable, because links already handed out are absolute at the old origin.
+
+**One store at a time is the point.** Moving the database and leaving Redis and the object store bundled is a supported shape, and so is every other combination.
 
 ## Asks
 
@@ -350,7 +415,7 @@ Automations driven by a schedule or a poll can genuinely run on both the old and
 | endpoint | auth | what it tells you |
 |---|---|---|
 | `GET /.well-known/health-check` | none | the process is up, answering `201`. This is what a platform probe should call. |
-| `GET /healthz/workers` | none | every background loop this installation runs, whether this process started it, its last tick, and a reason for any deliberately idle one. |
+| `GET /healthz/workers` | none | the release this process is running (`version`), every background loop this installation runs, whether this process started it, its last tick, and a reason for any deliberately idle one. |
 | `GET /api/v1/valuations/health` | API key | outbound delivery health, with error text |
 | `GET /api/v1/knowledge/graph/health` | API key | graph delivery mode, outbox depth, and whether a model key is configured |
 | `GET /api/v1/asks/health` | API key | delivery mode plus pending and failed counts |
@@ -361,29 +426,32 @@ Two readings to get right before you alert on it. A unit you do not run contribu
 
 ## Upgrading
 
+Snapshot the database, change `LISTEN_FIRE_VERSION` in `deploy/.env`, pull, and start:
+
 ```bash
-git pull
-# from deploy/, serially, as above; drop the admin line without core
-docker compose build api && docker compose build web \
-  && docker compose --profile admin build admin \
-  && docker compose up -d
+# from deploy/ — the full runbook, including the rollback, is UPGRADING.md
+docker compose pull
+docker compose up -d
 ```
 
 Migrations run as a one-shot service before the new API starts. They are forward-only and applied by file name; **back up your database before an upgrade, because there is no down-migration path.** The config volume is untouched by an upgrade — it is generated once and never rewritten.
+
+[UPGRADING.md](UPGRADING.md) has the whole procedure: what to snapshot, how to check the new version is the one running, the smoke checks, and how to roll back.
 
 ## Stopping and removing
 
 ```bash
 # from deploy/ — stop everything, keep the data
-docker compose --profile admin --profile demo down
+docker compose down
 
-# stop everything AND destroy it: database, redis, and the config volume
-docker compose --profile admin --profile demo down -v
+# stop everything AND destroy it: database, redis, the object store, and the
+# config volume
+docker compose down -v
 ```
 
-**Name both profiles.** `admin` and `demo` are the only two, and a `down` that omits them leaves their containers running for the next start to inherit — which is how a stack ends up with the previous shape's operator console or stand-in third parties still attached.
+**A `down` stops what its profiles name, and nothing else.** That is why the profile list belongs in `COMPOSE_PROFILES` in `deploy/.env` rather than on the command line: a `--profile` flag replaces that list on older Docker Compose versions, and a `down` that names fewer profiles than the `up` did leaves the rest running for the next start to inherit. A stack started by `up.sh` is the case where the profiles are on the command line rather than in the file, so `up.sh` prints the matching `down` for the shape it started; use that one.
 
-`down` keeps every volume, so starting again resumes the same installation. **`down -v` also destroys `listen-fire-config`**, which is the volume the section above says must never be regenerated: the encryption keys go with it, and every stored third-party credential in a database you restore afterwards is then permanently unreadable. Use `down -v` to throw an installation away, never to restart one — and if you only meant to reclaim the disk, back the config volume up first.
+`down` keeps every volume, so starting again resumes the same installation. **`down -v` also destroys `listen-fire-config`**, which is the volume the section above says must never be regenerated: the encryption keys go with it, and every stored third-party credential in a database you restore afterwards is then permanently unreadable. It destroys `miniodata` too, which is every file the bundled object store holds. Use `down -v` to throw an installation away, never to restart one — and if you only meant to reclaim the disk, back the config volume up first.
 
 ## Moving a team in or out
 
@@ -415,7 +483,7 @@ WhatsApp is the exception to `--products`: its tenancy is only expressible throu
 
 ## Verifying an installation
 
-`deploy/smoke.sh` boots four different unit combinations from clean Docker state, asserts health, the capability answer, login by both doors and that the product pages render, and tears each one down with its volumes before the next — so the first-boot path is what is actually under test. It builds four images and four stacks, so budget about ten minutes rather than seconds.
+`deploy/smoke.sh` boots five stacks from clean Docker state, asserts health, the capability answer, login by both doors and that the product pages render, and tears each one down with its volumes before the next — so the first-boot path is what is actually under test. Four of them vary which units run. The fifth varies where the database is: a second Postgres joins the composition under a name of its own, `DATABASE_URL` names it, and the assertions are that no bundled `postgres` container exists and that the schema landed in the other database. It builds four images and five stacks, so budget about twelve minutes rather than seconds.
 
 ## Environment reference
 
@@ -443,29 +511,33 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `WEB_PORT` / `API_PORT` / `ADMIN_PORT` / `FAKE_CHANNELS_PORT_HOST` | no | 8080 / 8081 / 8082 / 8083 |
 | `KNOWLEDGE_MUTATION_DELIVERY` | no | derived from your unit list by `up.sh`; the code's own default is `local`. An unrecognised value fails the boot rather than picking one |
 | `ASKS_SETTLE_DELIVERY` | no | as above |
+| `COMPOSE_PROFILES` | only without `up.sh` | nothing optional runs, INCLUDING the bundled datastores. `postgres,redis,minio` is the shipped line; add `admin` for the operator console and `demo` for the stand-ins. Read by `docker compose` itself, from `deploy/.env` |
 | `LISTEN_FIRE_PRODUCTS` | only without `up.sh` | every unit. An unknown name fails the boot |
 | `LISTEN_FIRE_PRINCIPAL` | only without `up.sh` | `core`. Must agree with whether `core` is in the unit list, checked in both directions |
 | `LISTEN_FIRE_SCOPES` | no | `*` — the API key grants everything. Narrow it to what a key actually needs |
 | `LISTEN_FIRE_ACCESS` | no | `write`; `read` makes the key read-only |
 | `LISTEN_FIRE_ALLOW_ANONYMOUS` | no | `false`. `true` removes the key requirement entirely — only on an API nothing else can reach |
+| `DATABASE_URL` | only with your own database | the bundled Postgres, whose URL is generated on first boot. Setting it also takes that service out of the composition |
+| `DATABASE_URL_READONLY` | no | follows `DATABASE_URL`. Set it only for a real read replica; it is never allowed to be absent, which is why it is defaulted rather than required |
+| `MESSAGE_QUEUE_REDIS_HOSTNAME` / `_PORT` | only with your own Redis | the bundled Redis, `redis:6379`. Setting the hostname also takes that service out of the composition. Host and port only: no URL, no AUTH, no TLS |
 | `OUTBOUND_EMAIL_FROM` plus one provider's credentials | yes with `core` in production | no mail is sent, so nobody can log in |
 | `RESEND_API_KEY` / `RESEND_WEBHOOK_SECRET` | with Resend | Mailgun is used instead, if it is configured |
 | `MAILGUN_API_KEY` / `MAILGUN_SENDING_DOMAIN` | with Mailgun | as above, in reverse |
 | `MAILGUN_API_BASE_URL` | US-region Mailgun accounts | Mailgun's EU host |
 | `INBOUND_EMAIL_ADDRESS` | to receive mail at all | none — an automation listening for email is reported unverified |
 | `OUTBOUND_EMAIL_FROM_NAME` / `OUTBOUND_EMAIL_BCC` | no | no display name; no archive copy |
-| `AWS_DOCUMENT_S3_BUCKET` / `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | only for files | all four together, or no storage at all; file-touching steps fail naming them |
-| `AWS_S3_ENDPOINT` | non-AWS S3 | AWS is assumed |
-| `AWS_S3_FORCE_PATH_STYLE` | MinIO and Ceph | off — and only the literal lowercase `true` turns it on |
+| `AWS_S3_ENDPOINT` | only with your own object store | the bundled MinIO, `http://minio:9000`. Setting it also takes that service out of the composition, and leaves the four below to you. Unset it for AWS S3 itself only if you are also naming your own key |
+| `AWS_DOCUMENT_S3_BUCKET` / `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | with your own object store | the bundled MinIO's bucket, region and generated root credential. With your own endpoint it is all four together or no storage at all, and file-touching steps fail naming them |
+| `AWS_S3_FORCE_PATH_STYLE` | MinIO and Ceph | on for the bundled store, off for yours — and only the literal lowercase `true` turns it on |
 | `ALLOW_UNSIGNED_WEBHOOKS` | no | inbound doors stay fail-closed. `true` only on a machine nothing else can reach; ignored in production |
 | `SENTRY_DSN` | no | no error reporting |
 
 The per-system credentials for Slack, Attio, Airtable, Google, Gmail, Dropbox, Telegram, WhatsApp and Twilio are listed with what they do in "Registering your own third-party apps". Every one is optional, and an unset OAuth pair means that system is simply not offered — except Attio's, where it means Attio connects with a pasted access token instead.
 
-Generated on first boot and read from the config volume, never from this file: the database URLs, the session-signing secret and its audience, both encryption keys, the outbound-webhook and document-link signing secrets, the team id and name, the user id, the API key, and the first account's email.
+Generated on first boot and read from the config volume, never from this file: the database URLs, the session-signing secret and its audience, both encryption keys, the outbound-webhook and document-link signing secrets, the team id and name, the user id, the API key, the first account's email, and the bundled object store's root password.
 
 ## Running it somewhere other than compose
 
-`guides/` translates this runbook onto specific platforms — [Render](guides/render.md), [Vercel plus a container](guides/vercel-plus-container.md), [AWS](guides/aws.md) — covering what changes when there is no one-shot migration service and no init hook to create the database roles for you. [`guides/byo-auth.md`](guides/byo-auth.md) is the other kind of substitution: pointing Listen-Fire at your own identity system instead of the two that ship.
+`guides/` translates this runbook onto specific platforms — [a GCP VM](guides/gcp-vm.md), [Render](guides/render.md), [Vercel plus a container](guides/vercel-plus-container.md), [AWS](guides/aws.md) — covering what changes when there is no one-shot migration service and no init hook to create the database roles for you. [`guides/byo-auth.md`](guides/byo-auth.md) is the other kind of substitution: pointing Listen-Fire at your own identity system instead of the two that ship.
 
 Off compose, the secrets this installation generates for itself are yours to supply and to keep: mint them once, store them where you store secrets, and never rotate the encryption pair.
