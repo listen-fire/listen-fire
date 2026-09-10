@@ -817,6 +817,62 @@ describe('movements, shapes, calls', () => {
   });
 });
 
+// ── Extract descriptions are ordinary strings ──
+//
+// A description interpolates wherever it is written, exactly as a write field's
+// value does. Before that was true, `${`Deep Dive Themes`}` reached the model as
+// those eleven literal characters and the model answered null — the language
+// promised interpolation and the extractor silently got source text.
+
+describe('an extract description is a string expression', () => {
+  const withDescriptions = (field: string, node = '"each company"') =>
+    inMovement(
+      [
+        '  `Themes` = "AI Agents, Future of Work"',
+        '  deals = extract from [msg.`text`] {',
+        `    node company: ${node} {`,
+        `      theme: ${field}`,
+        '    }',
+        '  }',
+      ].join('\n'),
+    );
+
+  it('a description that interpolates a constant in scope is clean', () => {
+    expectClean(withDescriptions('"the theme, one of: ${`Themes`}"'));
+  });
+
+  it('MOV_NAME_UNRESOLVED when a field description names nothing in scope', () => {
+    const diagnostics = check(withDescriptions('"the theme, one of: ${`Dive Themes`}"'));
+    expect(diagnostics.map(d => d.code)).toEqual([C.NAME_UNRESOLVED]);
+    expect(diagnostics[0].message).toContain('Dive Themes');
+  });
+
+  it("MOV_NAME_UNRESOLVED when a NODE's description names nothing in scope", () => {
+    expect(codes(withDescriptions('"the theme"', '"each ${vanisher} mentioned"'))).toEqual([
+      C.NAME_UNRESOLVED,
+    ]);
+  });
+
+  it("an extracted field is NOT in scope for a description — the tree's descriptions are evaluated before anything is extracted", () => {
+    expect(
+      codes(
+        inMovement(
+          [
+            '  deals = extract from [msg.`text`] {',
+            '    name: "the name"',
+            '    theme: "the theme for ${name}"',
+            '  }',
+          ].join('\n'),
+        ),
+      ),
+    ).toEqual([C.NAME_UNRESOLVED]);
+  });
+
+  it('a description with no interpolation raises nothing', () => {
+    expectClean(withDescriptions('"the theme, verbatim from the list"'));
+  });
+});
+
 // ── Through args (extract) ──
 
 const extractWith = (through: string, stage2Fields: string) =>

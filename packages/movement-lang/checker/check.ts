@@ -97,6 +97,7 @@ import {
   MovementCondition,
   parseMovementCondition,
   parseMovementExpression,
+  authoredStringText,
 } from '../expression/bridge';
 import {
   borrowableFieldsOf,
@@ -1537,11 +1538,11 @@ function buildExtractGraph(
   name: string,
   stages: ExtractStage[],
   resolveType: ExtractTypeResolver,
-  description?: string,
+  description?: ExprSlot,
 ): ExtractNodeType {
   const node: ExtractNodeType = {
     name,
-    ...(description !== undefined ? { description } : {}),
+    ...(description !== undefined ? { description: authoredStringText(description.raw) } : {}),
     properties: new Map(),
     children: new Map(),
   };
@@ -1559,7 +1560,7 @@ function buildExtractGraph(
       const explicit = resolveType(field);
       node.properties.set(field.name, {
         span: field.span,
-        description: field.description,
+        description: authoredStringText(field.description.raw),
         ...(explicit !== undefined ? { explicit } : {}),
         ...(field.type !== undefined ? { annotationRaw: field.type } : {}),
       });
@@ -7461,7 +7462,10 @@ class Checker {
    * never copied out. Unknown segments are MOV_BORROW_*; a graph in scope
    * without a schema stays silent (unknown never false-positives).
    */
-  private resolveExtractFieldType(field: ExtractField, scope: Scope): FieldType | undefined {
+  private resolveExtractFieldType(
+    field: Pick<ExtractField, 'type' | 'span'>,
+    scope: Scope,
+  ): FieldType | undefined {
     if (field.type === undefined) return undefined;
     return this.resolveNamedType(field.type, field.span, scope);
   }
@@ -7567,7 +7571,7 @@ class Checker {
     for (const field of node.fields) {
       if (borrowedTypeSegments(field.type) === undefined) continue;
       const resolved = this.resolveExtractFieldType(
-        { name: field.name, type: field.type, description: '', span: field.span },
+        { type: field.type, span: field.span },
         scope,
       );
       if (resolved !== undefined) {
@@ -7586,6 +7590,13 @@ class Checker {
    * own or later fields are a forward reference — the pipeline runs before
    * they are extracted. Children declared in a stage inherit fields up to
    * and including that stage.
+   *
+   * A description is checked here on the SAME terms as any other string slot,
+   * against the ordinary statement scope: the whole tree's descriptions are
+   * evaluated when the spec is built, before a single field is extracted, so
+   * an extracted field is not in scope for one. A name a description
+   * interpolates that nothing in scope provides is reported here rather than
+   * reaching the extractor as literal `${…}` text.
    */
   private checkExtractStages(stages: ExtractStage[], scope: Scope, inherited: Set<string>): void {
     const stageFields = stages.map(stage => stage.fields.map(f => f.name));
@@ -7596,8 +7607,12 @@ class Checker {
       for (const plugin of stage.through ?? []) {
         this.checkPluginCall(plugin, scope, { prior: new Set(prior), ownOrLater });
       }
+      for (const field of stage.fields) {
+        this.checkExprSlot(field.description, scope);
+      }
       for (const name of stageFields[k]) prior.add(name);
       for (const child of stage.children) {
+        this.checkExprSlot(child.description, scope);
         this.checkExtractStages(child.stages, scope, new Set(prior));
       }
     }

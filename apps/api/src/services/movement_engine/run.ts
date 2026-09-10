@@ -256,7 +256,7 @@ import {
 import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
-import { withRunCallLedger } from './call_ledger';
+import { withRunCallLedger } from './run_scope';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -579,7 +579,7 @@ export async function runMovement(input: RunMovementInput): Promise<MovementRunR
   // resolution.
   const { program, link } = parseAndCheck(input);
   // Every way into the interpreter opens the same door: one segment, one
-  // third-party call ceiling (call_ledger.ts). A fifth entry point that
+  // third-party call ceiling (run_scope.ts). A fifth entry point that
   // forgets `withRunCallLedger` loses the safeguard silently, so they all
   // wrap here rather than deeper.
   return withRunCallLedger(() => new Interpreter(input, link).run(program));
@@ -4873,13 +4873,20 @@ class Interpreter {
    * annotation instead); only annotation-resolved types constrain.
    */
   private async runExtraction(_bindingName: string, extract: ExtractExpression, env: Environment) {
-    const spec = buildExtractSpec(extract, {
+    const spec = await buildExtractSpec(extract, {
       resolveBorrowed: ([instanceName, rootName, fieldName]) => {
         const schema = this.graphSchemaOf(instanceName, env);
         if (!schema) return undefined;
         return resolveBorrowedField(schema, rootName, fieldName);
       },
       resolveDeclaredType: (name) => this.declaredTypes.get(name),
+      // A description is a string expression like any other, so it is
+      // evaluated in the firing environment — a constant it interpolates is
+      // the same constant a write field would see.
+      resolveDescription: async (slot) => {
+        const { value } = await this.evaluateSlot(slot, { env });
+        return typeof value === 'string' ? value : String(value ?? '');
+      },
     });
     // Where this extract's own trace entries start — the materialiser
     // appends one per LLM region, and the emitted entities are hung off

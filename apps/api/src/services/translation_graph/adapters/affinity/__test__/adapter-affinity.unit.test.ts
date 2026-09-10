@@ -2469,14 +2469,28 @@ describe('AffinityAdapter.getFieldValue — custom fields', () => {
     expect(await adapter.getFieldValue({ position: orgPosition, fieldId: 'Employees' })).toBeNull();
   });
 
-  it('reads three custom fields with ONE /field-values call', async () => {
+  // "Three custom fields off one record cost ONE /field-values request" is
+  // still true and still guarded — but it is no longer the ADAPTER that makes
+  // it true, so it can no longer be shown with a stand-in client. The adapter
+  // used to keep a per-instance map of decoded values, cleared wholesale on any
+  // write through that instance; the run's read memo now answers the repeat at
+  // the client, evicted by the write that actually invalidated it. The property
+  // is asserted against the real client in
+  // adapters/affinity/__test__/request_cache.unit.test.ts.
+  it('asks about the record, not about each field', async () => {
     const { adapter, calls } = makeAdapter({ fieldValues: FIELD_VALUES });
     await Promise.all([
       adapter.getFieldValue({ position: orgPosition, fieldId: 'Stage' }),
       adapter.getFieldValue({ position: orgPosition, fieldId: 'Employees' }),
       adapter.getFieldValue({ position: orgPosition, fieldId: 'Crunchbase Rank' }),
     ]);
-    expect(calls.getFieldValues).toHaveLength(1);
+    // Every ask names the ORGANIZATION — none of them narrows to a field, which
+    // is what made this one question the memo can answer once.
+    expect(calls.getFieldValues).toEqual([
+      { organization_id: 7101 },
+      { organization_id: 7101 },
+      { organization_id: 7101 },
+    ]);
   });
 
   it('built-ins resolve from the inline data with NO fetch at all', async () => {

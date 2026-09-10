@@ -47,6 +47,7 @@ import { assessMovementValidity, validateMovementForTeam } from './authoring';
 import { movementSourceHash } from './version_store';
 import { recordMovementFailureIssue, resolveMovementIssues } from './issues';
 import { clearIntrospectionCache } from './instance_cache';
+import { withFiringContext } from './firing_context';
 
 // ── The shared engine invocation (catalog assembly + runMovement) ───────────
 
@@ -162,9 +163,10 @@ async function refreshValidityOnContradiction(input: {
     if (!contradiction) return;
     // A drift re-check that reads the introspection CACHE can't see drift —
     // the cached schema still describes the pre-drift adapter. Clear it so the
-    // re-validation introspects fresh. Global (no scoped bust yet) but cheap:
-    // contradictions are rare by definition, and the cache re-fills on use.
-    if (input.outcome === 'failure') clearIntrospectionCache();
+    // re-validation introspects fresh. Scoped to THIS team: a failure here says
+    // nothing about anybody else's connections, and busting theirs made every
+    // other tenant in the process re-introspect their whole surface.
+    if (input.outcome === 'failure') clearIntrospectionCache(input.teamId);
     const validation = await validateMovementForTeam({
       teamId: input.teamId as unknown as string,
       source: fresh.source,
@@ -187,7 +189,7 @@ async function refreshValidityOnContradiction(input: {
   }
 }
 
-export async function runMovementFiring(input: {
+type MovementFiringInput = {
   teamId: TeamId;
   triggerId: string;
   /** The trigger row's display name (a `listen as "…"` label when aliased) —
@@ -205,7 +207,18 @@ export async function runMovementFiring(input: {
    *  caller minted the id so it could return it before this firing started).
    *  Absent ⇒ the recorder mints its own id, as before. */
   existingRunId?: TriggerRunId;
-}): Promise<MovementFiringOutcome> {
+};
+
+/** A fresh firing of a listener's movement. */
+export async function runMovementFiring(
+  input: MovementFiringInput,
+): Promise<MovementFiringOutcome> {
+  return withFiringContext(input, () => runMovementFiringInContext(input));
+}
+
+async function runMovementFiringInContext(
+  input: MovementFiringInput,
+): Promise<MovementFiringOutcome> {
   const recorder = new TriggerRunRecorder({
     teamId: input.teamId,
     triggerId: input.triggerId,
@@ -390,7 +403,7 @@ export async function runMovementFiring(input: {
  * (`failed`) — the caller cancels the run's open requests (P14: prior writes
  * stand).
  */
-export async function resumeMovementFiring(input: {
+type ResumeFiringInput = {
   teamId: TeamId;
   triggerId: string;
   triggerName: string;
@@ -436,7 +449,19 @@ export async function resumeMovementFiring(input: {
    *  frame (build receipt from all winners, cancel losers, run the continuation)
    *  instead of resuming a parked leaf. `state` is any completed branch's state. */
   settleRaceFrameAddress?: string;
-}): Promise<MovementFiringOutcome> {
+};
+
+/** A parked run stepping forward: an ask answered, an await settled, a timer
+ *  woken, or a race frame settling its winners. */
+export async function resumeMovementFiring(
+  input: ResumeFiringInput,
+): Promise<MovementFiringOutcome> {
+  return withFiringContext(input, () => resumeMovementFiringInContext(input));
+}
+
+async function resumeMovementFiringInContext(
+  input: ResumeFiringInput,
+): Promise<MovementFiringOutcome> {
   const recorder = new TriggerRunRecorder({
     teamId: input.teamId,
     triggerId: input.triggerId,
@@ -611,7 +636,7 @@ export async function resumeMovementFiring(input: {
  * entry must not kill the primary await (the whole point of running off-request
  * on the append-only step channel).
  */
-export async function fireCallbackFiring(input: {
+type CallbackFiringInput = {
   teamId: TeamId;
   triggerId: string;
   triggerName: string;
@@ -631,7 +656,18 @@ export async function fireCallbackFiring(input: {
   /** This call's index in the ledger — the body's own address frame, so
    *  repeated fires of a repeatable callback never collide. */
   callIndex: number;
-}): Promise<MovementFiringOutcome> {
+};
+
+/** A stored callback being fired against its captured continuation. */
+export async function fireCallbackFiring(
+  input: CallbackFiringInput,
+): Promise<MovementFiringOutcome> {
+  return withFiringContext(input, () => fireCallbackFiringInContext(input));
+}
+
+async function fireCallbackFiringInContext(
+  input: CallbackFiringInput,
+): Promise<MovementFiringOutcome> {
   const recorder = new TriggerRunRecorder({
     teamId: input.teamId,
     triggerId: input.triggerId,

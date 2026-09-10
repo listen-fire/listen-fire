@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { forgetAffinityWorkspace } from '../../adapters/affinity/apiClient';
 import { encryptToken } from '../../lib/credentials';
 import { getAutomationsQb } from '../../lib/kysely';
 import { credentialLifecycle } from './credential_lifecycle';
@@ -121,6 +122,18 @@ export async function persistCredential(input: PersistCredentialInput): Promise<
       throw new CredentialNameTakenError(input.name);
     }
     throw err;
+  }
+
+  // A workspace whose key was just (re)connected is a workspace somebody has
+  // been editing. Whatever we cached about its shape predates that.
+  if (input.type === ExternalServiceType.AFFINITY) {
+    const creds = credentials as { apiKey?: unknown; baseUrl?: unknown };
+    if (typeof creds?.apiKey === 'string') {
+      forgetAffinityWorkspace(
+        creds.apiKey,
+        typeof creds.baseUrl === 'string' ? creds.baseUrl : undefined,
+      );
+    }
   }
 
   return id;

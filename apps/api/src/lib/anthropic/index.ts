@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -5,6 +6,15 @@ import { backOff } from 'exponential-backoff';
 import { z } from 'zod';
 
 import { buildStructuredTool, extractStructuredResult } from './structured';
+import {
+  readAnswerText,
+  readServerToolCounts,
+  readWebToolEvents,
+  WEB_FETCH_MAX_CONTENT_TOKENS,
+  WEB_FETCH_TOOL_TYPE,
+  WEB_SEARCH_TOOL_TYPE,
+} from './web_tools';
+import type { WebToolEvent } from './web_tools';
 
 import { getEnvVar } from '../utils/environment';
 import { Queue } from '../utils/queue';
@@ -69,6 +79,67 @@ async function enqueueQuery<T>(fn: () => Promise<T>, signal?: AbortSignal) {
       },
     });
   });
+}
+
+// ── The usage meter ───────────────────────────────────────────────────────
+//
+// `recordLlmUsage` bills a call; this counts one. The two are different
+// questions: billing rolls a run up per team, while a caller comparing two
+// ways of doing the same job needs the tokens THIS piece of work spent,
+// including the work its helpers did on its behalf. Scoped rather than
+// returned, because the calls being counted are several layers down from the
+// caller that wants the total.
+//
+// Only a LIVE call is counted — a replayed one spent nothing.
+
+interface AnthropicUsageTally {
+  /** Requests that reached Anthropic. A continued or resumed turn is another
+   *  request and counts again. */
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** Server-side web tool requests, when the call declared them. */
+  searches: number;
+  fetches: number;
+}
+
+function emptyTally(): AnthropicUsageTally {
+  return {
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    searches: 0,
+    fetches: 0,
+  };
+}
+
+const usageMeter = new AsyncLocalStorage<AnthropicUsageTally>();
+
+function tallyUsage(delta: Partial<AnthropicUsageTally>): void {
+  const tally = usageMeter.getStore();
+  if (!tally) return;
+  tally.calls += delta.calls ?? 1;
+  tally.inputTokens += delta.inputTokens ?? 0;
+  tally.outputTokens += delta.outputTokens ?? 0;
+  tally.cacheReadTokens += delta.cacheReadTokens ?? 0;
+  tally.cacheCreationTokens += delta.cacheCreationTokens ?? 0;
+  tally.searches += delta.searches ?? 0;
+  tally.fetches += delta.fetches ?? 0;
+}
+
+/** Run `fn` and report what every Anthropic call underneath it cost.
+ *  Nesting is fine: an inner meter and an outer one each see their own scope's
+ *  calls, and the outer one does NOT see the inner one's. */
+async function meterAnthropicUsage<T>(
+  fn: () => Promise<T>,
+): Promise<{ value: T; usage: AnthropicUsageTally }> {
+  const usage = emptyTally();
+  const value = await usageMeter.run(usage, fn);
+  return { value, usage };
 }
 
 interface OpenAIToolDef {
@@ -445,6 +516,13 @@ async function anthropicToolLoop(
 
     onTurn?.(event);
 
+    tallyUsage({
+      inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens,
+      cacheReadTokens: event.cacheReadTokens,
+      cacheCreationTokens: event.cacheCreationTokens,
+    });
+
     recordLlmUsage({
       provider: 'anthropic',
       model,
@@ -717,8 +795,10 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   let totalCacheCreationTokens = 0;
   let stopReason: Anthropic.StopReason | null = null;
   let contentBlockTypes: string[] = [];
+  let turnsTaken = 0;
 
   for (let turn = 0; turn <= maxContinuations; turn++) {
+    turnsTaken += 1;
     logger.info('[anthropic] chat starting', { ...callFields, turn, maxTokens, effort });
 
     const settleWatch = watchSlowCall({ ...callFields, turn });
@@ -804,6 +884,14 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     });
   }
 
+  tallyUsage({
+    calls: turnsTaken,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    cacheReadTokens: totalCacheReadTokens,
+    cacheCreationTokens: totalCacheCreationTokens,
+  });
+
   recordLlmUsage({
     provider: 'anthropic',
     model,
@@ -879,6 +967,13 @@ async function anthropicChatStructured<T>(
   );
   const durationMs = Date.now() - startMs;
 
+  tallyUsage({
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+  });
+
   recordLlmUsage({
     provider: 'anthropic',
     model,
@@ -894,11 +989,224 @@ async function anthropicChatStructured<T>(
   return extractStructuredResult({ response, toolName, schema });
 }
 
+// ── Chat with Anthropic's own web tools ───────────────────────────────────
+
+/** Anthropic's server-side sampling loop pauses after its own iteration
+ *  ceiling and says so with `pause_turn`; re-sending the conversation
+ *  unchanged resumes it. This bounds how often that is worth doing — a turn
+ *  that keeps pausing is searching in circles, not converging. */
+const MAX_WEB_CHAT_RESUMES = 3;
+
+interface AnthropicWebChatOptions {
+  system: string;
+  userMessage: string;
+  model?: Anthropic.Messages.Model;
+  maxTokens?: number;
+  /** Reasoning depth, on the models that read it (see {@link AnthropicChatOptions}). */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  label?: string;
+  /** Hard ceiling on server-side searches for the whole request. Anthropic
+   *  enforces it; past the cap the tool returns `max_uses_exceeded` rather
+   *  than searching. */
+  maxSearches?: number;
+  /** The same ceiling for page reads. `web_fetch` only opens an address that
+   *  is already in the conversation — a search result, or one the prompt put
+   *  there — so it can never wander off on its own. */
+  maxFetches?: number;
+  maxResumes?: number;
+  /** How much of any one fetched page reaches the model's context. Defaults to
+   *  {@link WEB_FETCH_MAX_CONTENT_TOKENS}. */
+  maxFetchContentTokens?: number;
+  /** Cancels the request in flight. A caller with its own deadline needs the
+   *  streaming call ABORTED rather than abandoned — an abandoned turn keeps
+   *  searching, reading and billing after the caller has stopped waiting for
+   *  it. An abort surfaces as a rejection from this function. */
+  signal?: AbortSignal;
+  /** BYOT key (pricing-v2 §B.2). */
+  apiKey?: string;
+}
+
+interface AnthropicWebChatReply {
+  /** The prose the model wrote, across every turn of the paused loop. */
+  text: string;
+  /** Every search and page read it made, in order, failures included. */
+  events: WebToolEvent[];
+  stopReason: Anthropic.StopReason | null;
+  /** How many times the paused loop was resumed. At the ceiling the answer is
+   *  whatever the model had written by then. */
+  resumes: number;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    searches: number;
+    fetches: number;
+  };
+}
+
+/**
+ * One turn with Anthropic's own web search and page reader, resumed through
+ * whatever pauses the server-side loop takes. Everything the model looked at
+ * comes back alongside its answer, so a caller can cite what it read and see
+ * what failed.
+ */
+async function anthropicWebChat(
+  options: AnthropicWebChatOptions,
+): Promise<AnthropicWebChatReply> {
+  const {
+    system,
+    userMessage,
+    model = 'claude-sonnet-5',
+    maxTokens = 8192,
+    effort,
+    label,
+    maxSearches = 6,
+    maxFetches = 3,
+    maxResumes = MAX_WEB_CHAT_RESUMES,
+    maxFetchContentTokens = WEB_FETCH_MAX_CONTENT_TOKENS,
+    signal,
+    apiKey: byotApiKey,
+  } = options;
+  const client = clientFor(byotApiKey);
+
+  const thinkingConfig =
+    effort && usesAdaptiveThinking(model)
+      ? { thinking: { type: 'adaptive' as const }, output_config: { effort } }
+      : {};
+
+  // These tool versions postdate the pinned SDK's types (it stops at
+  // `web_search_20250305` and a beta `web_fetch`), so the definitions cross
+  // into the request the same way `effort: 'xhigh'` does below.
+  const tools = [
+    { type: WEB_SEARCH_TOOL_TYPE, name: 'web_search', max_uses: maxSearches },
+    {
+      type: WEB_FETCH_TOOL_TYPE,
+      name: 'web_fetch',
+      max_uses: maxFetches,
+      max_content_tokens: maxFetchContentTokens,
+    },
+  ];
+
+  const requestId = randomUUID().slice(0, 8);
+  const callFields = { label, model, requestId, ...runFields() };
+  const callStartMs = Date.now();
+
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
+  const events: WebToolEvent[] = [];
+  let text = '';
+  let stopReason: Anthropic.StopReason | null = null;
+  let resumes = 0;
+  const usage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    searches: 0,
+    fetches: 0,
+  };
+
+  for (let turn = 0; turn <= maxResumes; turn++) {
+    logger.info('[anthropic] web chat starting', {
+      ...callFields,
+      turn,
+      maxSearches,
+      maxFetches,
+      effort,
+    });
+
+    const settleWatch = watchSlowCall({ ...callFields, turn });
+    let response: Anthropic.Message;
+    try {
+      response = await enqueueQuery(async () => {
+        const stream = client.messages.stream(
+          {
+            model,
+            max_tokens: maxTokens,
+            system: [
+              { type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } },
+            ],
+            messages,
+            tools,
+            ...thinkingConfig,
+          } as unknown as Anthropic.MessageCreateParamsStreaming,
+          { signal },
+        );
+        return stream.finalMessage();
+      }, signal);
+    } catch (error) {
+      settleWatch('error');
+      throw error;
+    }
+    settleWatch('ok');
+
+    text += readAnswerText(response.content);
+    events.push(...readWebToolEvents(response.content));
+    const counts = readServerToolCounts(response.usage);
+    usage.inputTokens += response.usage.input_tokens;
+    usage.outputTokens += response.usage.output_tokens;
+    usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
+    usage.cacheCreationTokens += response.usage.cache_creation_input_tokens ?? 0;
+    usage.searches += counts.searches;
+    usage.fetches += counts.fetches;
+    stopReason = response.stop_reason;
+
+    if (response.stop_reason !== 'pause_turn') break;
+    if (turn === maxResumes) {
+      logger.warn('[anthropic] web chat still paused at the resume ceiling', {
+        ...callFields,
+        resumes,
+      });
+      break;
+    }
+    // The API resumes on the trailing `server_tool_use` block alone — an
+    // added "continue" turn is the one thing that stops it working.
+    messages.push({ role: 'assistant', content: response.content });
+    resumes += 1;
+  }
+
+  const durationMs = Date.now() - callStartMs;
+  logger.info('[anthropic] web chat', {
+    ...callFields,
+    stopReason,
+    durationMs,
+    resumes,
+    ...usage,
+    failedTools: events.filter((e) => e.kind.endsWith('_failed')).length,
+  });
+
+  tallyUsage({
+    calls: resumes + 1,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheCreationTokens: usage.cacheCreationTokens,
+    searches: usage.searches,
+    fetches: usage.fetches,
+  });
+
+  recordLlmUsage({
+    provider: 'anthropic',
+    model,
+    callType: 'chat',
+    label,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheCreationTokens: usage.cacheCreationTokens,
+    durationMs,
+  }).catch(() => {});
+
+  return { text, events, stopReason, resumes, usage };
+}
+
 export {
   anthropicToolLoop,
   anthropicChat,
   anthropicChatDetailed,
   anthropicChatStructured,
+  anthropicWebChat,
+  meterAnthropicUsage,
   MAX_CHAT_CONTINUATIONS,
 };
 export { StructuredOutputError } from './structured';
@@ -907,5 +1215,9 @@ export type {
   AnthropicToolLoopParams,
   AnthropicChatOptions,
   AnthropicChatStructuredOptions,
+  AnthropicUsageTally,
+  AnthropicWebChatOptions,
+  AnthropicWebChatReply,
   ChatReply,
 };
+export type { WebToolEvent } from './web_tools';

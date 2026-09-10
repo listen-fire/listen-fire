@@ -426,7 +426,7 @@ async function runOne(
   try {
     emission = await materializeExtract({
       extract: fixture.extract,
-      spec: buildExtractSpec(fixture.extract, { resolveDeclaredType }),
+      spec: await buildExtractSpec(fixture.extract, { resolveDeclaredType }),
       runtime: {
         llm,
         transformInvoker: stubInvoker(fixture),

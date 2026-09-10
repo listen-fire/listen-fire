@@ -570,6 +570,21 @@ class Parser {
   }
 
   /**
+   * The same double-quoted string, read as an ordinary expression slot: the
+   * literal WITH its quotes, so the expression bridge desugars its escapes and
+   * its `${…}` exactly as it does in every other string position. A quoted
+   * string is one thing wherever it is written.
+   */
+  private readStringSlot(context: string): ExprSlot {
+    if (this.peekCh() !== '"') {
+      this.error(`Expected a double-quoted string ${context}, found ${this.describeHere()}`);
+    }
+    const start = this.pos;
+    this.scanString();
+    return { raw: this.src.slice(start, this.pos), span: this.spanFrom(start) };
+  }
+
+  /**
    * The core raw scanner: advances until one of `stops` appears at top level — outside
    * ( ) [ ] { } nesting, strings, and backtick names. The stop character is not consumed.
    * Returns where meaningful content ended (trailing whitespace/comments excluded).
@@ -3170,8 +3185,8 @@ class Parser {
           );
         }
       }
-      const { text } = this.readQuotedString(`for the extract field '${name}'`);
-      fields.push({ name, type, description: text, span: this.spanFrom(fieldStart) });
+      const description = this.readStringSlot(`for the extract field '${name}'`);
+      fields.push({ name, type, description, span: this.spanFrom(fieldStart) });
       this.expectStatementEnd();
     }
     return { through, fields, children, span: this.spanFrom(braceOffset) };
@@ -3190,7 +3205,7 @@ class Parser {
         `Expected a double-quoted description for the node '${name}', found ${this.describeHere()}`,
       );
     }
-    const { text } = this.readQuotedString(`for the node '${name}'`);
+    const description = this.readStringSlot(`for the node '${name}'`);
     this.skipAllWs();
     if (this.peekCh() !== '{') {
       this.error(
@@ -3199,7 +3214,7 @@ class Parser {
     }
     const stages: ExtractStage[] = [this.parseExtractStage(undefined)];
     this.parseChainedStages(stages);
-    return { name, description: text, stages, span: this.spanFrom(start) };
+    return { name, description, stages, span: this.spanFrom(start) };
   }
 }
 

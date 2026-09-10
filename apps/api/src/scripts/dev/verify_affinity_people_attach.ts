@@ -22,11 +22,10 @@
  *   6. `link org -[:List Entries]-> entry` is refused at CHECK time: Affinity
  *      makes a membership by adding a company to a list, and cannot point an
  *      entry that already exists at a different one;
- *   7. a pinned person update reads the person ONCE inside the write. (Two
- *      GETs of the person reach the fake in all: the engine's own no-op
- *      detection read — `readRecord`, which also fetches the custom-field
- *      values — and then the write's single read, where there used to be
- *      three.)
+ *   7. a pinned person update reads the person ONCE for the whole run. The
+ *      engine's no-op detection read (`readRecord`) and the write's own read
+ *      are the same question, and the run's read memo answers the second from
+ *      the first — where the write alone used to make three.
  *
  * The write carries the person's address as well as their names — Affinity's
  * identity surface matches a person on their address first, so the whole leg
@@ -322,7 +321,7 @@ async function main() {
   );
   console.log(`   diagnostics: ${JSON.stringify(refusals.map((d) => d.message))}`);
 
-  console.log('\n── 7. one read per pinned person update (plus the engine\'s no-op detection read)');
+  console.log('\n── 7. one read of the person for the whole run');
   await api(`/persons/${personId}`, {
     method: 'PUT',
     body: JSON.stringify({ organization_ids: [] }),
@@ -351,9 +350,9 @@ async function main() {
     afterUnlink.includes(orgId) === false &&
     // 6 — the checker refuses the link Affinity cannot make.
     refusals.length === 1 &&
-    // 7 — the engine's no-op detection read, then ONE read for the whole
-    // write, where the write used to make three of its own.
-    personGets(reads.sent, personId).length === 2;
+    // 7 — ONE read of the person for the run: the engine's no-op detection
+    // read, which the write's own read is then served from.
+    personGets(reads.sent, personId).length === 1;
 
   console.log(`\n── ${ok ? 'PASS' : 'FAIL'}`);
   process.exit(ok ? 0 : 1);

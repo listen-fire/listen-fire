@@ -14,7 +14,7 @@ import { decryptToken } from '../../../../lib/credentials';
 import { getAutomationsQb } from '../../../../lib/kysely';
 import { isTestHarnessTeam, injectFakeBaseUrl } from '../../../../lib/recording';
 import { logger } from '../../../logger';
-import { isAdapterCallCeilingExceeded } from '../../../movement_engine/call_ledger';
+import { isAdapterCallCeilingExceeded } from '../../../movement_engine/run_scope';
 import {
   AffinityAPIClient,
   getAffinityClient,
@@ -90,6 +90,7 @@ import {
   listEntryPoints as catalogListEntryPoints,
   describe as catalogDescribe,
   cachedFields,
+  invalidateFieldCache,
   loadPerListTypes,
   AFFINITY_LIST_ENTRIES_EDGE,
   AFFINITY_LIST_NAME_FIELD,
@@ -236,20 +237,6 @@ export class AffinityAdapter extends BaseAdapter {
   private web: WebUrlSource | null = null;
   private readonly teamId: TeamId;
   private readonly credentialsId: string;
-
-  /**
-   * Per-record custom-field values, memoised for this run so that reading three
-   * custom fields off one record costs ONE `/field-values` call, not three. The
-   * PROMISE is cached, not its result, so fields read concurrently share the
-   * one in-flight fetch instead of racing into three.
-   *
-   * Any write through this adapter clears it — a movement that writes a field
-   * and then reads it back must not be served the pre-write value.
-   */
-  private readonly customFieldValues = new Map<
-    string,
-    Promise<Map<string, AffinityCustomFieldValue>>
-  >();
 
   constructor(input: { teamId: TeamId; credentialsId: string }) {
     super();
@@ -403,6 +390,15 @@ export class AffinityAdapter extends BaseAdapter {
   }
 
   // ── 1. Schema introspection ────────────────────────────────────────────
+
+  /** Forget the workspace's shape — the client's field catalog, lists and
+   *  whoami, and this instance's own per-list type map, which is derived from
+   *  them. Reached from the authoring refresh and from a (re)connected
+   *  credential; a run never calls it. */
+  async invalidateSchemaCache(): Promise<void> {
+    this.perListCache = undefined;
+    invalidateFieldCache(await this.getApiClient());
+  }
 
   async listEntryPoints(): Promise<SchemaEntryPoint[]> {
     const client = await this.getApiClient();
@@ -1356,7 +1352,6 @@ export class AffinityAdapter extends BaseAdapter {
   }
 
   async createRecord(rawInput: WriteInput): Promise<WriteResult> {
-    this.customFieldValues.clear();
     const input = await this.translateWrite(rawInput);
     // `recordType` is the NATURAL type name — recover its structured id from the
     // cache; an unknown type is a hard error.
@@ -1435,7 +1430,6 @@ export class AffinityAdapter extends BaseAdapter {
   }
 
   async updateRecord(rawInput: UpdateInput): Promise<UpdateResult> {
-    this.customFieldValues.clear();
     const input = await this.translateWrite(rawInput);
     const decoded = await this.requireStructuredId(rawInput.recordType, 'updateRecord');
     const operations = await this.getOperations();
@@ -1473,7 +1467,6 @@ export class AffinityAdapter extends BaseAdapter {
   }
 
   async deleteRecord(input: DeleteInput): Promise<DeleteResult> {
-    this.customFieldValues.clear();
     const decoded = await this.structuredIdFor(input.recordType);
     if (!decoded) {
       throw new Error(`AffinityAdapter.deleteRecord: unrecognised recordType "${input.recordType}".`);
@@ -1702,36 +1695,33 @@ export class AffinityAdapter extends BaseAdapter {
     return entry.field.allows_multiple ? entry.values : (entry.values[entry.values.length - 1] ?? null);
   }
 
-  /** Memoised per-record custom-field values (see `customFieldValues`). */
+  /**
+   * A record's custom-field values, decoded.
+   *
+   * Nothing is memoised HERE any more. Both halves of the answer are already
+   * per-run memos of their own — the field catalog on the client (per
+   * credential, five minutes) and the `/field-values` read in the run scope —
+   * so this decodes what is already in the process. The map this replaced was
+   * a third cache over the same two reads, cleared wholesale on any write
+   * through this adapter instance, which threw away every OTHER record's
+   * values to keep one record honest.
+   */
   private async customFieldValuesFor(
     scope: AffinityCustomFieldScope,
   ): Promise<Map<string, AffinityCustomFieldValue>> {
-    const key =
-      scope.kind === 'list-entry'
-        ? `list-entry:${scope.listEntryId}`
-        : `${scope.entityType}:${scope.entityId}`;
-    const hit = this.customFieldValues.get(key);
-    if (hit) return hit;
-
-    const pending = (async () => {
-      const operations = await this.getOperations();
-      const catalogType = scope.kind === 'list-entry' ? scope.catalogType : undefined;
-      return readCustomFieldValues(operations, scope, {
-        // The team-scoped field catalog is already warm for describe, so naming
-        // a record's fields costs no extra call per record.
-        catalog: await cachedFields({
-          client: await this.getApiClient(),
-          teamId: this.teamId,
-          type:
-            catalogType ??
-            (scope.kind === 'entity' && scope.entityType === 'organization'
-              ? 'ORGANIZATION'
-              : 'PERSON'),
-        }),
-      });
-    })();
-    this.customFieldValues.set(key, pending);
-    return pending;
+    const operations = await this.getOperations();
+    const catalogType = scope.kind === 'list-entry' ? scope.catalogType : undefined;
+    return readCustomFieldValues(operations, scope, {
+      catalog: await cachedFields({
+        client: await this.getApiClient(),
+        teamId: this.teamId,
+        type:
+          catalogType ??
+          (scope.kind === 'entity' && scope.entityType === 'organization'
+            ? 'ORGANIZATION'
+            : 'PERSON'),
+      }),
+    });
   }
 
   /**

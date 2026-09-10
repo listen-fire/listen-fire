@@ -14,7 +14,7 @@ import {
   currentRunCallCount,
   isAdapterCallCeilingExceeded,
   withRunCallLedger,
-} from '../call_ledger';
+} from '../run_scope';
 
 const ENV_VAR = 'AFFINITY_MAX_CALLS_PER_RUN';
 

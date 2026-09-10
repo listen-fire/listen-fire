@@ -94,6 +94,13 @@ export type TransformOutput = {
   properties?: Record<string, unknown>;
   edges?: Record<string, EphemeralEmission | EphemeralEmission[]>;
   nodes?: EphemeralEmission[];
+  /**
+   * How the run went, in the plugin's own vocabulary (`resolved`,
+   * `no_match`, …). NOT an addition — nothing downstream reads it as data;
+   * it rides the run record so a plugin that attached nothing can still say
+   * why. A plugin that has nothing to report leaves it unset.
+   */
+  outcome?: string;
 };
 
 /**

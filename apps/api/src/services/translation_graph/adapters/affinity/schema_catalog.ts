@@ -9,7 +9,6 @@
 // constraints (adapter-minimalism). `describe` therefore leaves
 // `uniquenessConstraints` unset.
 
-import { LRUCache } from 'lru-cache';
 import type { AffinityAPIClient } from '../../../../adapters/affinity/apiClient';
 import { logger } from '../../../logger';
 import type {
@@ -37,27 +36,12 @@ import {
   type ListEntityKind,
 } from './types';
 
-// ── Per-team field catalog cache ────────────────────────────────────────────
-// Custom fields rarely change; a 10-minute TTL (matching Attio / Airtable)
-// amortises `getFields` across the `describe` / write / resolve paths. Keyed
-// by `<teamId>:<ORGANIZATION|PERSON>`.
-
-const fieldCatalogCache = new LRUCache<string, AffinityFieldMeta[]>({
-  max: 100,
-  ttl: 10 * 60 * 1000,
-});
-
-/** Per-team list catalog (id → name + entity kind), for the per-list entry
- *  entry-points. `type` is the Affinity `list.type` — it decides each entry's
- *  single parent up-hop and its list-scoped custom-field type. */
-const listCatalogCache = new LRUCache<string, { id: number; name: string; type: number | null }[]>({
-  max: 50,
-  ttl: 10 * 60 * 1000,
-});
-
-function fieldCacheKey(teamId: string, type: 'ORGANIZATION' | 'PERSON'): string {
-  return `${teamId}:${type}`;
-}
+// ── The field catalog ───────────────────────────────────────────────────────
+// The cache itself lives on the CLIENT (adapters/affinity/apiClient.ts), which
+// is the one layer already keyed by the credential — this was keyed by team,
+// which served a team's second Affinity connection the FIRST workspace's
+// schema, and a list-scoped ask skipped it entirely. What remains here is the
+// adapter's own reading of the catalog: the enrichment-source announcement.
 
 export async function cachedFields(input: {
   client: AffinityAPIClient;
@@ -65,22 +49,15 @@ export async function cachedFields(input: {
   type: 'ORGANIZATION' | 'PERSON';
   listId?: number;
 }): Promise<AffinityFieldMeta[]> {
-  // List-scoped queries skip the cache — the list filter narrows the result
-  // and is cheap relative to the dedup window it serves.
-  if (input.listId != null) {
-    const fields = (await input.client.getFields({
-      type: input.type,
-      limitToListId: input.listId,
-    })) as AffinityFieldMeta[];
-    logEnrichmentSources(fields, input.teamId, `${input.type} on list ${input.listId}`);
-    return fields;
-  }
-  const key = fieldCacheKey(input.teamId, input.type);
-  const hit = fieldCatalogCache.get(key);
-  if (hit) return hit;
-  const fields = (await input.client.getFields({ type: input.type })) as AffinityFieldMeta[];
-  logEnrichmentSources(fields, input.teamId, input.type);
-  fieldCatalogCache.set(key, fields);
+  const fields = (await input.client.getFields({
+    type: input.type,
+    ...(input.listId != null ? { limitToListId: input.listId } : {}),
+  })) as AffinityFieldMeta[];
+  logEnrichmentSources(
+    fields,
+    input.teamId,
+    input.listId != null ? `${input.type} on list ${input.listId}` : input.type,
+  );
   return fields;
 }
 
@@ -123,16 +100,15 @@ function logEnrichmentSources(
   );
 }
 
+/** The workspace's lists, named and typed. Cached on the client, per
+ *  credential; `type` is the Affinity `list.type` — it decides each entry's
+ *  single parent up-hop and its list-scoped custom-field type. */
 async function cachedLists(input: {
   client: AffinityAPIClient;
   teamId: string;
 }): Promise<{ id: number; name: string; type: number | null }[]> {
-  const hit = listCatalogCache.get(input.teamId);
-  if (hit) return hit;
   const lists = await input.client.getAllLists();
-  const mapped = lists.map((l) => ({ id: l.id, name: l.name ?? `List ${l.id}`, type: l.type ?? null }));
-  listCatalogCache.set(input.teamId, mapped);
-  return mapped;
+  return lists.map((l) => ({ id: l.id, name: l.name ?? `List ${l.id}`, type: l.type ?? null }));
 }
 
 // ── Entity → built-in fields + references ───────────────────────────────────
@@ -1192,11 +1168,11 @@ export async function describe(input: {
   };
 }
 
-/** Drop a team's cached fields — exposed for completeness (not hot path). */
-export function invalidateFieldCache(teamId: string): void {
-  fieldCatalogCache.delete(fieldCacheKey(teamId, 'ORGANIZATION'));
-  fieldCatalogCache.delete(fieldCacheKey(teamId, 'PERSON'));
-  listCatalogCache.delete(teamId);
+/** Drop one WORKSPACE's cached shape — the credential's, not a team's: two
+ *  credentials on one team are two workspaces, and a team-wide bust would have
+ *  been both too wide and, for the second workspace, wrong. */
+export function invalidateFieldCache(client: AffinityAPIClient): void {
+  client.invalidateSchemaCache();
 }
 
 export { AFFINITY_ADAPTER_TYPE };

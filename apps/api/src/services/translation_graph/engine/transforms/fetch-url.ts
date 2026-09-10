@@ -142,7 +142,9 @@ export const fetchUrlImpl: TransformImpl = {
         durationMs: Date.now() - started,
         ...run,
       });
-      return {};
+      // A failed load and an empty page attached the same nothing, so the run's
+      // trace read `empty` for both. Say which this was.
+      return { outcome: 'fetch_failed' };
     }
 
     logger.info('[transform:fetch-url] Fetched', {
@@ -151,6 +153,6 @@ export const fetchUrlImpl: TransformImpl = {
       durationMs: Date.now() - started,
       ...run,
     });
-    return { edges: { fetchedUrl: emissionOf(fetched) } };
+    return { edges: { fetchedUrl: emissionOf(fetched) }, outcome: 'fetched' };
   },
 };

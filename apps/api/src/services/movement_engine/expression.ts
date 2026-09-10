@@ -830,6 +830,13 @@ export type MovementTraceEntry =
       /** Set when nothing was invoked: the required argument that resolved
        *  to nothing, so this entity had nothing for the plugin to work on. */
       skippedParam?: string;
+      /** How the plugin says the invocation went, in its own vocabulary — a
+       *  plugin that stood down, refused to search, or found no confident
+       *  match spends real time and attaches nothing, and the fields alone
+       *  cannot tell those apart. Free text: the plugin owns its outcomes and
+       *  the engine only carries them, so a new plugin is readable on the
+       *  trace without the engine learning its words. */
+      outcome?: string;
     }
   | { kind: 'ai'; prompt: string; hasValue: boolean }
   | { kind: 'gate'; outcome: boolean }

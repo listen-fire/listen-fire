@@ -101,6 +101,8 @@ jest.mock('../../runs/trigger_run', () => ({
     recordStepFailure,
     finish: recorderFinish,
     startOpsRun: jest.fn(async () => undefined),
+    ensureStarted: jest.fn(async () => undefined),
+    beginLiveTrace: jest.fn(),
     endLiveTrace: jest.fn(),
   })),
 }));
@@ -117,6 +119,12 @@ jest.mock('../../movement/store', () => ({
 }));
 jest.mock('../../movement/catalog', () => ({
   movementCatalogForTeam: jest.fn(),
+}));
+
+// The team-Context seam a background firing runs inside — pass-through here;
+// it has its own test (movement/__test__/firing_context.unit.test.ts).
+jest.mock('../../movement/firing_context', () => ({
+  withFiringContext: <T>(_firing: unknown, fn: () => Promise<T>) => fn(),
 }));
 
 // Adapter resolution — production-path runMovement resolves through this.

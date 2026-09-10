@@ -3,8 +3,9 @@
 // Side-effecting module: importing it (at most once at api-process
 // boot, typically from the evaluator or the api entrypoint) registers
 // the bundled plugins — `vc-url-retrieval`, `fetch-url`,
-// `linkedin-enrichment` and `linkedin-research` — into the
-// framework-global transform registry.
+// `linkedin-enrichment`, `linkedin-research`, `web-research` and `research`
+// — into
+// the framework-global transform registry.
 //
 // Kept separate from the barrel (`./index.ts`) so that consumers who
 // only need the registry helpers / types don't transitively trigger
@@ -34,6 +35,8 @@ import {
   linkedinResearchImpl,
   LINKEDIN_RESEARCH_PLUGIN_MANIFEST,
 } from './linkedin-research';
+import { webResearchImpl, WEB_RESEARCH_PLUGIN_MANIFEST } from './web-research';
+import { researchImpl, RESEARCH_PLUGIN_MANIFEST } from './research';
 import type { PluginManifest, TransformImpl } from './registry';
 
 const BUNDLED_TRANSFORMS: readonly TransformImpl[] = [
@@ -41,6 +44,8 @@ const BUNDLED_TRANSFORMS: readonly TransformImpl[] = [
   fetchUrlImpl,
   linkedinEnrichmentImpl,
   linkedinResearchImpl,
+  webResearchImpl,
+  researchImpl,
 ];
 
 export function registerBundledTransforms(): void {
@@ -63,6 +68,8 @@ const BUNDLED_PLUGIN_MANIFESTS: readonly PluginManifest[] = [
   FETCH_URL_PLUGIN_MANIFEST,
   LINKEDIN_ENRICHMENT_PLUGIN_MANIFEST,
   LINKEDIN_RESEARCH_PLUGIN_MANIFEST,
+  WEB_RESEARCH_PLUGIN_MANIFEST,
+  RESEARCH_PLUGIN_MANIFEST,
 ];
 
 /**

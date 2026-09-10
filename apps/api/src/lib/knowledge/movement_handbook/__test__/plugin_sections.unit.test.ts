@@ -89,12 +89,15 @@ describe('the shipped plugin sections', () => {
   // what makes this a mechanism rather than a feature of whichever plugin got
   // a chapter first. The two retrieval markers are the choice a reader is here
   // to make: scan a message, or load the link a record already carries; the
-  // two LinkedIn ones are the other choice — a name in, or an address in.
+  // two LinkedIn ones are the other choice — a name in, or an address in. The
+  // research one is the choice not to choose: it takes whatever the record has.
   it.each([
     ['plugin:vc_url_retrieval', 'through [vc_url_retrieval]'],
     ['plugin:fetch_url', 'through [fetch_url(url: website)]'],
     ['plugin:linkedin_enrichment', 'through [linkedin_enrichment]'],
     ['plugin:linkedin_research', 'through [linkedin_research(url: linkedin)]'],
+    ['plugin:web_research', 'web_research(name: name, context: description'],
+    ['plugin:research', 'questions: "what it does, which sector it is in, where it is based"'],
   ])('%s is on the shelf and reads back', (chapter, marker) => {
     const read = readBook({ bookId: 'automations', chapter });
     if (!('content' in read)) throw new Error('expected a chapter body');

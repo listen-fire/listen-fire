@@ -90,6 +90,12 @@ jest.mock('../store', () => ({
   getMovementRow: jest.fn(),
 }));
 
+// The team-Context seam a background firing runs inside — pass-through here;
+// it has its own test (./firing_context.unit.test.ts).
+jest.mock('../firing_context', () => ({
+  withFiringContext: <T>(_firing: unknown, fn: () => Promise<T>) => fn(),
+}));
+
 jest.mock('../../../logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));

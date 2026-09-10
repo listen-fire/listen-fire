@@ -11,7 +11,14 @@
  * unpublishable and unrepeatable; what a bake-off needs is a source whose
  * correct answer is not a matter of opinion.
  */
-import type { ExtractExpression, ExtractField, ExtractNode, ExtractStage, Span } from 'movement-lang';
+import type {
+  ExprSlot,
+  ExtractExpression,
+  ExtractField,
+  ExtractNode,
+  ExtractStage,
+  Span,
+} from 'movement-lang';
 
 import type { FieldType } from 'movement-lang';
 import type { TransformInvocationResult } from '../../../services/movement_engine/extraction';
@@ -25,8 +32,20 @@ import type { TransformInvocationResult } from '../../../services/movement_engin
 
 const SPAN: Span = { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } };
 
+/** A description slot spelled exactly as the parser would produce it — the
+ *  quoted literal, escapes and all — so a fixture goes through the same
+ *  string desugaring a written movement does. */
+function descriptionSlot(text: string): ExprSlot {
+  return { raw: JSON.stringify(text), span: SPAN };
+}
+
 function field(name: string, description: string, type?: string): ExtractField {
-  return { name, description, ...(type !== undefined ? { type } : {}), span: SPAN };
+  return {
+    name,
+    description: descriptionSlot(description),
+    ...(type !== undefined ? { type } : {}),
+    span: SPAN,
+  };
 }
 
 function stage(
@@ -43,7 +62,7 @@ function stage(
 }
 
 function node(name: string, description: string, stages: ExtractStage[]): ExtractNode {
-  return { name, description, stages, span: SPAN };
+  return { name, description: descriptionSlot(description), stages, span: SPAN };
 }
 
 function extract(stages: ExtractStage[]): ExtractExpression {

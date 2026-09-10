@@ -145,6 +145,12 @@ import type { TeamId } from '../../../generated/kysely/core/Team';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000010' as TeamId;
 
+/** A description as the parser hands it over: the quoted literal, so the
+ *  engine desugars it through the same bridge a written movement uses. */
+function desc(text: string, at: Span = { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } }) {
+  return { raw: JSON.stringify(text), span: at };
+}
+
 /** A cancel gate a test can stamp mid-run, standing in for the DB-backed one. */
 function makeTestCancelGate() {
   let stamped = false;
@@ -1403,6 +1409,20 @@ describe('a stage whose plugins contributed nothing', () => {
     expect(writes).toEqual([{ name: 'Gondor', summary: null }]);
   });
 
+  it('carries the plugin’s own outcome onto its trace entry', async () => {
+    const { trace } = await intake(PER_ENTITY_FETCH_MOVEMENT, [GONDOR], async () => ({
+      outcome: 'has_link',
+    }));
+
+    expect(trace).toContainEqual(
+      expect.objectContaining({ kind: 'plugin', plugin: 'fetch_url', outcome: 'has_link' }),
+    );
+    // An outcome is not enrichment — the stage is still skipped as pointless.
+    expect(trace).toContainEqual(
+      expect.objectContaining({ kind: 'extraction', skipped: 'no_enrichment' }),
+    );
+  });
+
   it('records the call it did not make, and what each plugin did', async () => {
     const { trace } = await intake(PER_ENTITY_FETCH_MOVEMENT, [GONDOR], async () => ({}));
 
@@ -1472,12 +1492,12 @@ describe('a stage whose plugins contributed nothing', () => {
       from: [{ raw: 'text', span }],
       stages: [
         {
-          fields: [{ name: 'name', description: "the company's name", span }],
+          fields: [{ name: 'name', description: desc("the company's name", span), span }],
           children: [],
           span,
         },
         {
-          fields: [{ name: 'summary', description: 'what the company does', span }],
+          fields: [{ name: 'summary', description: desc('what the company does', span), span }],
           children: [],
           span,
         },
@@ -1487,7 +1507,7 @@ describe('a stage whose plugins contributed nothing', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: {
         llm: llm.client,
         transformInvoker: {
@@ -2631,9 +2651,21 @@ describe('registryTransformInvoker dispatch', () => {
         throw new Error('boom');
       },
     };
+    // A plugin that attached nothing but has something to say about why.
+    const outcomeImpl: TransformImpl = {
+      signature: {
+        name: '__test_outcome',
+        description: 'reports an outcome and attaches nothing',
+        params: [],
+        dataDependency: 'extracted_context',
+        additions: {},
+      },
+      run: async () => ({ outcome: 'no_match' }),
+    };
     registerTransform(preImpl);
     registerTransform(ctxImpl);
     registerTransform(throwImpl);
+    registerTransform(outcomeImpl);
   });
 
   it('dispatches a pre-extraction plugin with pre-extraction input and pipes its edge-text into result.text', async () => {
@@ -2656,6 +2688,15 @@ describe('registryTransformInvoker dispatch', () => {
     expect(seenKind.ctx).toBe('context-dependent');
     expect(result.data).toEqual({ added: 'value' });
     expect(result.text).toBeUndefined();
+  });
+
+  it('carries a plugin’s declared outcome back with its result', async () => {
+    const result = await registryTransformInvoker.invoke({
+      plugin: '__test_outcome',
+      config: {},
+      extractedContext: {},
+    });
+    expect(result).toEqual({ outcome: 'no_match' });
   });
 
   it('turns a throwing plugin into an empty result rather than failing the run', async () => {
@@ -4123,8 +4164,8 @@ describe('a field answered without a usable citation still answers', () => {
     stages: [
       {
         fields: [
-          { name: 'name', description: 'the name on the line', span },
-          { name: 'flag_reason', description: 'why the line was flagged', span },
+          { name: 'name', description: desc('the name on the line', span), span },
+          { name: 'flag_reason', description: desc('why the line was flagged', span), span },
         ],
         children: [],
         span,
@@ -4138,7 +4179,7 @@ describe('a field answered without a usable citation still answers', () => {
   async function answered(entity: Record<string, unknown>) {
     const llm = queuedMovementLlm([{ 'x:extract_result#1': [entity] }]);
     const trace: MovementTraceEntry[] = [];
-    const spec = buildExtractSpec(extract);
+    const spec = await buildExtractSpec(extract);
     const emission = await materializeExtract({
       extract,
       spec,
@@ -4214,7 +4255,7 @@ describe('a field answered without a usable citation still answers', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: {
         llm: llm.client,
         transformInvoker: {
@@ -4256,8 +4297,8 @@ describe('a reply that answered outside the envelope is re-wrapped, not rejected
     stages: [
       {
         fields: [
-          { name: 'name', description: 'the name on the line', span },
-          { name: 'flag_reason', description: 'why the line was flagged', span },
+          { name: 'name', description: desc('the name on the line', span), span },
+          { name: 'flag_reason', description: desc('why the line was flagged', span), span },
         ],
         children: [],
         span,
@@ -4272,7 +4313,7 @@ describe('a reply that answered outside the envelope is re-wrapped, not rejected
     const trace: MovementTraceEntry[] = [];
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: {
         llm: llm.client,
         transformInvoker: {
@@ -4380,16 +4421,16 @@ describe('a retry over a shape failure asks for the envelope, not for the values
     from: [{ raw: 'text', span }],
     stages: [
       {
-        fields: [{ name: 'digest', description: 'a one-line summary', span }],
+        fields: [{ name: 'digest', description: desc('a one-line summary', span), span }],
         children: [
           {
             name: 'entry',
-            description: 'each line in the message',
+            description: desc('each line in the message', span),
             stages: [
               {
                 fields: [
-                  { name: 'name', description: 'the name on the line', span },
-                  { name: 'flag_reason', description: 'why it was flagged', span },
+                  { name: 'name', description: desc('the name on the line', span), span },
+                  { name: 'flag_reason', description: desc('why it was flagged', span), span },
                 ],
                 children: [],
                 span,
@@ -4414,7 +4455,7 @@ describe('a retry over a shape failure asks for the envelope, not for the values
     const llm = queuedMovementLlm([first, GOOD]);
     await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: {
         llm: llm.client,
         transformInvoker: {
@@ -4597,5 +4638,105 @@ describe('a per-entity refinement that is never answered keeps the entity, not t
     );
 
     expect((failure as MovementRunFailed).message).toContain('the connection went away');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 14. A description is a string, so it interpolates
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Production (2026-09-10): a field whose description interpolated a
+// constant holding the theme list reached the model as the eleven literal
+// characters `${`Themes`}`, so the model had no list and answered null. A
+// quoted string is one thing wherever it is written — a description is
+// evaluated in the firing environment exactly as a write field's value is.
+
+const INTERPOLATED_DESCRIPTION_MOVEMENT = [
+  MOVEMENT_PRELUDE,
+  'import { fetch_url } from plugins',
+  '',
+  'movement intake(msg: <inbox-[:message]->>) {',
+  '  `Themes` = "AI Agents, Future of Work, Vertical SaaS"',
+  '  deals = extract from [msg.`text`] {',
+  '    node company: "each company working on ${`Themes`}" {',
+  '      name:    "the company\'s name"',
+  '      website: "the company\'s web address"',
+  '    } through [fetch_url(url: website)] {',
+  '      deep_dive: "the theme(s), VERBATIM from the list. ${`Themes`}"',
+  '    }',
+  '  }',
+  '  deals-[c:company]-> {',
+  '    write crm-[:companies]-> {',
+  '      unique by (`name`)',
+  '      name:    c.`name`',
+  '      summary: c.`deep_dive`',
+  '    }',
+  '  }',
+  '}',
+].join('\n');
+
+describe('an extract description interpolates in the firing environment', () => {
+  const event = webhookEvent('email', { text: 'Gondor (gondor.fi) is worth a look.' });
+
+  async function run() {
+    const llm = queuedMovementLlm([
+      { 'x:extract_result#1': [{ company: [{ name: wrap('Gondor'), website: wrap('gondor.fi') }] }] },
+      { 'x:company#3': [{ deep_dive: wrap('AI Agents') }] },
+    ]);
+    const writes: CapturedWrite[] = [];
+    await runMovement({
+      source: INTERPOLATED_DESCRIPTION_MOVEMENT,
+      event,
+      teamId: TEAM_ID,
+      catalog: movementCatalog,
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: makeFakeAdapter('attio').adapter,
+        slack: makeFakeAdapter('slack').adapter,
+      }),
+      llm: llm.client,
+      transformInvoker: {
+        async invoke() {
+          return { text: 'a page about that company' };
+        },
+      },
+      dryRun: true,
+      writeSink: (w) => writes.push(w),
+    });
+    return { calls: llm.calls, writes };
+  }
+
+  it("carries the constant's text into a NODE description, not the source that names it", async () => {
+    const { calls } = await run();
+    expect(calls[0].system).toContain(
+      'each company working on AI Agents, Future of Work, Vertical SaaS',
+    );
+    expect(calls[0].system).not.toContain('${');
+  });
+
+  it("carries the constant's text into a stage-2 FIELD description", async () => {
+    const { calls } = await run();
+    expect(calls[1].system).toContain(
+      '`deep_dive` (text): the theme(s), VERBATIM from the list. AI Agents, Future of Work, Vertical SaaS',
+    );
+    expect(calls[1].system).not.toContain('${');
+  });
+
+  it('leaves a description that interpolates nothing byte-for-byte as written', async () => {
+    const { calls } = await run();
+    expect(calls[0].system).toContain("- `name` (text): the company's name");
+    expect(calls[0].system).toContain("- `website` (text): the company's web address");
+  });
+
+  it('still extracts against the interpolated prompt', async () => {
+    const { writes } = await run();
+    expect(writes).toEqual([
+      {
+        kind: 'create',
+        adapterType: 'attio',
+        recordType: 'company',
+        fields: { name: 'Gondor', summary: 'AI Agents' },
+      },
+    ]);
   });
 });

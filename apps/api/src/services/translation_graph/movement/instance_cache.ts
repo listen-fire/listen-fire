@@ -354,6 +354,7 @@ function freshState(input: {
   teamId: TeamId;
   credentialsId?: string;
   constructionArgs?: Record<string, string>;
+  forceRefresh?: boolean;
 }): InstanceState {
   const adapterPromise = resolveAdapter({
     adapterType: input.adapterType,
@@ -363,7 +364,14 @@ function freshState(input: {
   });
   return {
     adapterPromise,
-    entriesPromise: adapterPromise.then((a) => a.listEntryPoints()),
+    // A forced refresh is somebody saying the system has changed since we last
+    // looked. Dropping this cache alone would re-describe against the
+    // adapter's OWN cached schema and report the same stale surface back with
+    // a straight face, so the adapter is told to forget too.
+    entriesPromise: adapterPromise.then(async (a) => {
+      if (input.forceRefresh) await a.invalidateSchemaCache?.();
+      return a.listEntryPoints();
+    }),
     descriptorPromises: new Map(),
     positionsByName: new Map(),
     expiresAt: Date.now() + TTL_MS,
@@ -737,7 +745,24 @@ export function adapterInstanceIsWarm(input: {
   return state !== undefined && state.expiresAt > Date.now();
 }
 
-/** Test hook. */
-export function clearIntrospectionCache(): void {
-  states.clear();
+/**
+ * Drop cached introspection — one team's, or (with no team named) everyone's.
+ *
+ * The scoped form is what a run failure uses: a failure says something about
+ * the team whose adapters just misbehaved and nothing at all about anyone
+ * else's, and a global bust made every other tenant in the process re-introspect
+ * their whole connection surface to pay for it. The unscoped form is the test
+ * hook.
+ */
+export function clearIntrospectionCache(teamId?: TeamId): void {
+  if (teamId === undefined) {
+    states.clear();
+    return;
+  }
+  // `cacheKey` leads with the team, so the team's entries are exactly its
+  // prefix — no separate index to keep in step with the key format.
+  const prefix = `${teamId}::`;
+  for (const key of [...states.keys()]) {
+    if (key.startsWith(prefix)) states.delete(key);
+  }
 }

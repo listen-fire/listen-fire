@@ -28,13 +28,29 @@ import { runFields } from '../../../../lib/llm_usage';
 import { parseJson } from '../../../../lib/utils/parse_json';
 import { looksLikeNonHtmlAddress } from '../../../../lib/utils/url';
 import { logger } from '../../../logger';
-import { WebSearchService } from '../../../web_search';
 import { resolvePersonContext } from './extracted_fields';
 import { describeError, fetchWithTimeout } from './fetch_resource';
+import {
+  addHit,
+  containsAnchor,
+  distinctiveOrganisation,
+  isConsistent,
+  runSearch,
+} from './search_hygiene';
+import {
+  canonicalProfileUrl,
+  isLinkedInLink,
+  isThin,
+  matchesSlug,
+  profileSlug,
+  readTitle,
+} from './linkedin_identity';
 import { LINKEDIN_RESEARCH_HANDBOOK_SECTION } from './linkedin_research_handbook_section';
 import { importIdentifier } from '../../movement/schema_projection';
 import type { ResolvedField } from './extracted_fields';
 import type { PluginManifest, TransformImpl, TransformOutput } from './registry';
+import type { Anchors, SearchHit } from './search_hygiene';
+import type { ProfileIdentity } from './linkedin_identity';
 import type { TransformSignature } from '../../types';
 
 // ── Signature ─────────────────────────────────────────────────────────────
@@ -114,26 +130,6 @@ const PROFILE_WAIT_MS = 75 * SECOND;
  *  has. The profile service wait counts toward it. */
 const WALL_CLOCK_MS = 3 * MINUTE;
 
-/** What people write where an employer would go. Anchoring a search on one of
- *  these searches for the placeholder rather than for a company: "Stealth
- *  Startup" is thousands of unrelated people's answer to the same question, so
- *  every result is a namesake and every page fetched is wasted. Kept short and
- *  literal — a longer list starts discarding real companies. */
-const PLACEHOLDER_ORGANISATIONS = new Set([
-  'stealth',
-  'stealth startup',
-  'stealth mode',
-  'confidential',
-  'self employed',
-  'independent',
-  'freelance',
-  'n/a',
-  // Not an employer at all: it is the trailing segment of the index's own
-  // title, and reading it as a company sends every query after the site
-  // rather than after the person.
-  'linkedin',
-]);
-
 const AGGREGATOR_SITES = [
   'site:crunchbase.com',
   'site:dealroom.co',
@@ -143,113 +139,27 @@ const AGGREGATOR_SITES = [
 
 const LOG = '[transform:linkedin-research]';
 
-// ── The address ───────────────────────────────────────────────────────────
+// ── Identity ──────────────────────────────────────────────────────────────
 
-const PROFILE_SLUG_REGEX =
-  /^(?:https?:\/\/)?(?:[\w-]+\.)?linkedin\.com\/in\/([^/?#\s]+)/i;
-
-/** The slug the address anchors on, or null when it is not a profile address
- *  at all. A company page, a post, a bare name: nothing to research from. */
-function profileSlug(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const match = PROFILE_SLUG_REGEX.exec(value.trim());
-  if (!match) return null;
-  const slug = decodeURIComponent(match[1]).trim();
-  return slug ? slug : null;
-}
-
-function canonicalProfileUrl(slug: string): string {
-  return `https://www.linkedin.com/in/${slug}`;
-}
-
-function isLinkedInLink(link: string): boolean {
-  return /(?:^|\/\/|\.)linkedin\.com\//i.test(link);
-}
-
-// ── Identity, from the index ──────────────────────────────────────────────
-
-interface Identity {
-  name: string | null;
-  headline: string | null;
-  role: string | null;
-  organisation: string | null;
-  /** The profile text, when the service was asked for it. */
+/** Who the profile is, plus the profile text when the service was asked for
+ *  it. The address and the index entry are read by `./linkedin_identity`.*/
+interface Identity extends ProfileIdentity {
   profileText: string | null;
 }
 
-/** A LinkedIn result's title reads "Name - Headline - Organisation | LinkedIn"
- *  in most vintages, and something else in the rest, so this is best effort:
- *  the first segment is the name, whatever follows is the headline, and a
- *  third segment is the organisation often enough to be worth taking.
- *
- *  The site's own name is never one of those segments, whichever punctuation
- *  the index used to append it — current vintages write "- LinkedIn" as often
- *  as "| LinkedIn", and taking that last segment for an employer is how a
- *  research run ends up searching Crunchbase for "LinkedIn". */
-function readTitle(title: string): Pick<Identity, 'name' | 'headline' | 'role' | 'organisation'> {
-  const stripped = title.replace(/\s*[|\-–—]\s*LinkedIn\s*$/i, '').trim();
-  const parts = stripped
-    .split(/\s+[-–—]\s+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  const [name, ...rest] = parts;
-  return {
-    name: name ?? null,
-    headline: rest.length ? rest.join(' - ') : null,
-    role: rest[0] ?? null,
-    organisation: rest.length > 1 ? rest[rest.length - 1] : null,
-  };
-}
-
-/** Thin means the index told us nothing to check a search result against —
- *  no role and no organisation — which is exactly when the profile service
- *  is worth its wait. */
-function isThin(identity: Identity): boolean {
-  return !identity.role && !identity.organisation;
-}
-
-type SearchHit = { title: string; snippet: string; link: string };
-
 // ── What makes a query, or a result, about this person ────────────────────
-
-/** The organisation as something to search for, or null when the headline
- *  named a placeholder rather than an organisation. */
-function distinctiveOrganisation(name: string | null): string | null {
-  const trimmed = name?.trim();
-  if (!trimmed) return null;
-  const normalised = trimmed
-    .toLowerCase()
-    .replace(/[^a-z0-9/]+/g, ' ')
-    .trim();
-  if (!normalised) return null;
-  // "Stealth", "Stealth Startup", "Stealth mode company" — one non-answer.
-  if (normalised.startsWith('stealth')) return null;
-  return PLACEHOLDER_ORGANISATIONS.has(normalised) ? null : trimmed;
-}
 
 /** The terms that make a query or a result about THIS person rather than about
  *  their subject in general: their name, their surname on its own — a page's
  *  title carries the surname alone often enough to matter — and their
  *  organisation, when they have a distinctive one. */
-interface Anchors {
-  name: string[];
-  organisation: string[];
-}
-
 function anchorsOf(identity: Identity, organisation: string | null): Anchors {
   const name = identity.name?.trim();
   const parts = name ? name.split(/\s+/) : [];
-  return {
-    name: name ? (parts.length > 1 ? [name, parts[parts.length - 1]] : [name]) : [],
-    organisation: organisation ? [organisation] : [],
-  };
-}
-
-function containsAnchor(text: string, anchors: Anchors): boolean {
-  const haystack = text.toLowerCase();
-  return [...anchors.name, ...anchors.organisation].some((term) =>
-    haystack.includes(term.toLowerCase()),
-  );
+  return [
+    ...(name ? (parts.length > 1 ? [name, parts[parts.length - 1]] : [name]) : []),
+    ...(organisation ? [organisation] : []),
+  ];
 }
 
 /** Whether loading this result could tell us anything about the person at all:
@@ -417,7 +327,7 @@ export const linkedinResearchImpl: TransformImpl = {
         continue;
       }
       activitySearches += 1;
-      const results = await runSearch(planned.query, run);
+      const results = await runSearch(planned.query, LOG, run);
       for (const hit of results) {
         if (!addHit(hits, hit)) continue;
         // Loading a page costs a large part of the wall clock, so a result
@@ -438,7 +348,7 @@ export const linkedinResearchImpl: TransformImpl = {
     let organisationSearched = false;
     if (searchableOrganisation && budgetLeft()) {
       organisationSearched = true;
-      const results = await runSearch(`"${searchableOrganisation}" ${AGGREGATOR_SITES}`, run);
+      const results = await runSearch(`"${searchableOrganisation}" ${AGGREGATOR_SITES}`, LOG, run);
       for (const hit of results) {
         if (!isConsistent(hit, plan.terms)) continue;
         if (addHit(hits, hit) && !isLinkedInLink(hit.link) && canEnrich(hit, anchors)) {
@@ -534,7 +444,7 @@ async function identityFromIndex(
 
   for (const query of [profileUrl, `site:linkedin.com/in/${slug}`]) {
     blank.searches += 1;
-    const results = await runSearch(query, run);
+    const results = await runSearch(query, LOG, run);
     const match = results.find((r) => matchesSlug(r.link, slug));
     if (!match) continue;
     const read = readTitle(match.title);
@@ -549,11 +459,6 @@ async function identityFromIndex(
 
   logger.info(`${LOG} The index knows nothing about this address`, { slug, ...run });
   return blank;
-}
-
-function matchesSlug(link: string, slug: string): boolean {
-  const linked = profileSlug(link);
-  return linked != null && linked.toLowerCase() === slug.toLowerCase();
 }
 
 /**
@@ -725,38 +630,6 @@ function readReply<T>(
 
 function describeFields(fields: ResolvedField[]): string {
   return fields.map((f) => `  ${f.label}: ${f.value}`).join('\n');
-}
-
-/** Append a hit unless its address is already held. Returns whether it is new,
- *  so the caller can decide about fetching exactly once per address. */
-function addHit(hits: SearchHit[], hit: SearchHit): boolean {
-  if (hits.some((h) => h.link === hit.link)) return false;
-  hits.push(hit);
-  return true;
-}
-
-/** The acceptance rule, applied where we can apply it ourselves: an
- *  aggregator page about some other organisation of the same name is a
- *  namesake by another route. The synthesiser applies the rule again over
- *  everything, in prose, where the judgement is less mechanical. */
-function isConsistent(hit: SearchHit, terms: string[]): boolean {
-  if (terms.length === 0) return true;
-  const haystack = `${hit.title} ${hit.snippet}`.toLowerCase();
-  return terms.some((term) => haystack.includes(term.toLowerCase()));
-}
-
-async function runSearch(query: string, run: Record<string, unknown>): Promise<SearchHit[]> {
-  try {
-    const results = await WebSearchService.search(query);
-    const hits = (results.items ?? []).flatMap((item) =>
-      item.link ? [{ title: item.title ?? '', snippet: item.snippet ?? '', link: item.link }] : [],
-    );
-    logger.info(`${LOG} Searched`, { query, results: hits.length, ...run });
-    return hits;
-  } catch (error) {
-    logger.warn(`${LOG} A search failed`, { query, error: describeError(error), ...run });
-    return [];
-  }
 }
 
 /**

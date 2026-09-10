@@ -440,7 +440,7 @@ describe('§C traversal-headed blocks', () => {
     expect(extract.from.map((f) => f.raw)).toEqual(['msg.`text`']);
     expect(extract.stages).toHaveLength(1);
     expect(extract.stages[0].children.map((c) => c.name)).toEqual(['company']);
-    expect(extract.stages[0].children[0].description).toBe('each company mentioned');
+    expect(extract.stages[0].children[0].description.raw).toBe('"each company mentioned"');
     expect(extract.stages[0].children[0].stages[0].fields.map((f) => f.name)).toEqual(['name']);
 
     const orgsAssign = as(program.statements[1], 'assign');
@@ -512,8 +512,8 @@ describe('§D extraction is materialisation', () => {
     const investor = round.stages[0].children[0];
     expect(investor.name).toBe('investor');
     expect(investor.stages[0].fields.map((f) => f.name)).toEqual(['name', 'lead']);
-    expect(investor.stages[0].fields[1].description).toBe(
-      'whether this investor is leading the round',
+    expect(investor.stages[0].fields[1].description.raw).toBe(
+      '"whether this investor is leading the round"',
     );
   });
 
@@ -525,7 +525,7 @@ describe('§D extraction is materialisation', () => {
     expect(extract.stages[0].fields[0]).toMatchObject({
       name: 'amount',
       type: 'number',
-      description: 'the amount being raised',
+      description: { raw: '"the amount being raised"' },
     });
   });
 
@@ -537,7 +537,7 @@ describe('§D extraction is materialisation', () => {
     expect(extract.stages[0].fields[0]).toMatchObject({
       name: 'stage',
       type: 'crm.companies.funding_stage',
-      description: "the round's stage",
+      description: { raw: '"the round\'s stage"' },
     });
   });
 

@@ -212,6 +212,18 @@ export function affinityRoutes(store: EntityStore): Router {
     res.json({ success: true });
   });
 
+  /** The workspace the API key belongs to. The adapter reads it for ONE thing —
+   *  the `<subdomain>.affinity.co` prefix every record url is built from — and
+   *  a fake that 404s it made that one call look free, so a cache over it could
+   *  not be measured at all. */
+  r.get('/auth/whoami', (_req, res) => {
+    res.json({
+      tenant: { id: 1, name: 'Fake Channels', subdomain: 'fake' },
+      user: { id: 1, firstName: 'Fake', lastName: 'User', email: 'fake@example.test' },
+      grant: { type: 'api-key', scope: 'full', createdAt: '2020-01-01T00:00:00Z' },
+    });
+  });
+
   r.get('/lists', (_req, res) => {
     const lists = store.list(SVC, 'list');
     res.json(lists.map((l) => ({ id: Number(l.id), ...l.data })));

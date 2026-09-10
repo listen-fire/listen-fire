@@ -684,6 +684,16 @@ export interface Adapter {
   describe(typeId: string): Promise<SchemaTypeDescriptor | null>;
 
   /**
+   * Forget whatever this adapter has cached about its system's SHAPE — the
+   * field catalog, the collections, the workspace identity.
+   *
+   * Called where a person has just had reason to change it: the forced refresh
+   * behind `describeConnection`, and a credential being (re)connected. An
+   * adapter that caches nothing has nothing to do here and may leave it out.
+   */
+  invalidateSchemaCache?(): void | Promise<void>;
+
+  /**
    * Walk the META-GRAPH of types (optional).
    *
    * Introspection is a walk, not a dump: from the schema root (`meta`), the

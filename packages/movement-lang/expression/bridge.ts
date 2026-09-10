@@ -905,6 +905,28 @@ function liftInterpolatedStrings(raw: string): {
 
 // ── Public API ──
 
+/**
+ * A string slot's text for a READER — the story, a diagnostic, a listing.
+ * A literal that interpolates has no text until it is evaluated in a firing
+ * environment, so what a reader is shown is the source they wrote: the point
+ * is that the `${…}` stays visible AS an interpolation rather than being
+ * mistaken for the words the extractor will get. Anything that needs the real
+ * text must evaluate the slot.
+ */
+export function authoredStringText(raw: string): string {
+  const open = wholeStringSlot(raw);
+  if (open === null) return raw;
+  let parsed: Expression;
+  try {
+    parsed = desugarInterpolatedString(raw, open);
+  } catch {
+    return raw.slice(open + 1, raw.length - 1);
+  }
+  if (parsed.type === 'static') return typeof parsed.value === 'string' ? parsed.value : raw;
+  // Interpolating: the source between the quotes, `${…}` and all.
+  return raw.slice(open + 1, raw.lastIndexOf('"'));
+}
+
 export function parseMovementExpression(raw: string): Expression {
   rejectRetiredConstructs(raw);
 

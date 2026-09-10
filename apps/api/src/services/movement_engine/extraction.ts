@@ -43,7 +43,12 @@
 // constrains what reaches the LLM.
 
 import { z } from 'zod';
-import { borrowedTypeSegments, parseFieldTypeName } from 'movement-lang';
+import {
+  BridgeError,
+  borrowedTypeSegments,
+  parseFieldTypeName,
+  parseMovementExpression,
+} from 'movement-lang';
 import type {
   ExprSlot,
   ExtractExpression,
@@ -171,13 +176,53 @@ export interface ExtractSpecOptions {
    * told to pick from a fetched one.
    */
   resolveDeclaredType?: (name: string) => FieldType | undefined;
+  /**
+   * Evaluate a description in the FIRING environment. A description is an
+   * ordinary string expression — `deep_dive: "pick from ${\`Deep Dive
+   * Themes\`}"` interpolates exactly as a write field's value does — so the
+   * words the extractor is given are only known once the environment exists.
+   * Building the spec per firing is what makes that honest.
+   *
+   * Absent, only descriptions that interpolate NOTHING can be resolved; one
+   * that does throws rather than pasting `${…}` into the prompt.
+   */
+  resolveDescription?: (slot: ExprSlot) => Promise<string>;
 }
 
-export function buildExtractSpec(
+export async function buildExtractSpec(
   extract: ExtractExpression,
   options?: ExtractSpecOptions,
-): ExtractNodeSpec {
+): Promise<ExtractNodeSpec> {
   return buildNodeSpec('extract result', ROOT_EXTRACT_DESCRIPTION, extract.stages, options);
+}
+
+/**
+ * One description, as text. The literal is desugared by the shared bridge —
+ * the same code path as every other string in the language, so escapes and
+ * `${…}` mean here exactly what they mean in a write field.
+ */
+async function describeSlot(
+  slot: ExprSlot,
+  options: ExtractSpecOptions | undefined,
+): Promise<string> {
+  let expr;
+  try {
+    expr = parseMovementExpression(slot.raw);
+  } catch (e) {
+    if (!(e instanceof BridgeError)) throw e;
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `invalid extract description (the checker should have caught this): ${e.message}`,
+    );
+  }
+  if (expr.type === 'static') return typeof expr.value === 'string' ? expr.value : `${expr.value ?? ''}`;
+  if (options?.resolveDescription === undefined) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `an extract description that interpolates (${slot.raw}) can only be built with a firing environment — build the spec with 'resolveDescription'`,
+    );
+  }
+  return options.resolveDescription(slot);
 }
 
 /** EXPLICIT annotations only (adoption is demoted): a primitive type name, a
@@ -198,28 +243,36 @@ function resolveFieldType(
   return options?.resolveBorrowed?.([segments[0], segments[1], segments[2]]);
 }
 
-function buildNodeSpec(
+async function buildNodeSpec(
   name: string,
   description: string,
   stages: ExtractStage[],
   options: ExtractSpecOptions | undefined,
-): ExtractNodeSpec {
+): Promise<ExtractNodeSpec> {
   return {
     name,
     description,
     exported: [...new Set(stages.flatMap((stage) => stage.fields.map((f) => f.name)))],
-    stages: stages.map((stage) => ({
-      through: stage.through ?? [],
-      fields: stage.fields.map((f) => {
-        const type = resolveFieldType(f, options);
-        return {
-          name: f.name,
-          description: f.description,
-          ...(type !== undefined ? { type } : {}),
-        };
-      }),
-      children: stage.children.map((c) => buildNodeSpec(c.name, c.description, c.stages, options)),
-    })),
+    stages: await Promise.all(
+      stages.map(async (stage) => ({
+        through: stage.through ?? [],
+        fields: await Promise.all(
+          stage.fields.map(async (f) => {
+            const type = resolveFieldType(f, options);
+            return {
+              name: f.name,
+              description: await describeSlot(f.description, options),
+              ...(type !== undefined ? { type } : {}),
+            };
+          }),
+        ),
+        children: await Promise.all(
+          stage.children.map(async (c) =>
+            buildNodeSpec(c.name, await describeSlot(c.description, options), c.stages, options),
+          ),
+        ),
+      })),
+    ),
   };
 }
 
@@ -229,6 +282,10 @@ function buildNodeSpec(
 export interface TransformInvocationResult {
   text?: string;
   data?: Record<string, unknown>;
+  /** What the plugin says became of the invocation, in its own words. Carried
+   *  to the trace and nowhere else — an outcome is not enrichment, so a
+   *  plugin that reports one and attaches nothing still counts as empty. */
+  outcome?: string;
 }
 
 export interface MovementTransformInvoker {
@@ -297,11 +354,13 @@ export const registryTransformInvoker: MovementTransformInvoker = {
     const out: TransformInvocationResult = {};
     if (fetchedText) out.text = fetchedText;
     if (Object.keys(data).length > 0) out.data = data;
+    if (result.outcome) out.outcome = result.outcome;
 
     logger.info('[movement:transform] ran', {
       plugin,
       addedFields: Object.keys(data),
       fetchedChars: fetchedText?.length ?? 0,
+      ...(result.outcome ? { outcome: result.outcome } : {}),
       ...runFields(),
     });
 
@@ -1603,6 +1662,7 @@ class Materializer {
       durationMs: Date.now() - started,
       ...(result.text ? { chars: result.text.length } : {}),
       ...(fields.length > 0 ? { fields } : {}),
+      ...(result.outcome ? { outcome: result.outcome } : {}),
     });
     return result;
   }

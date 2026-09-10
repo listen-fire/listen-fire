@@ -39,7 +39,7 @@ function slot(raw: string): ExprSlot {
 /** A single-stage extract: `extract from [<rawSlots>] { <fields> }`. */
 function extractExpr(fromSlots: string[], fields: { name: string; description: string }[]): ExtractExpression {
   const stage: ExtractStage = {
-    fields: fields.map((f) => ({ name: f.name, description: f.description, span: SPAN })),
+    fields: fields.map((f) => ({ name: f.name, description: slot(JSON.stringify(f.description)), span: SPAN })),
     children: [],
     span: SPAN,
   };
@@ -110,7 +110,7 @@ describe('extract from a file attachment — text + provenance', () => {
     ]);
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: runtimeFor({
         llm: llm.client,
         slots: { attachment: fileRef() },
@@ -156,7 +156,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: runtimeFor({ llm: llm.client, slots: { attachment: fileRef() }, resolveFileText }),
     });
 
@@ -174,7 +174,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: runtimeFor({
         llm: llm.client,
         slots: { body: 'A plain text body mentioning From Text.', attachment: ref },
@@ -211,7 +211,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       // Same FileRef (same owner handle) bound to two `from` slots.
       runtime: runtimeFor({ llm: llm.client, slots: { a: ref, b: ref }, resolveFileText }),
     });
@@ -237,7 +237,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: runtimeFor({ llm: llm.client, slots: { attachment: ref }, resolveFileText }),
     });
 
@@ -259,7 +259,7 @@ describe('extract from a file attachment — text + provenance', () => {
     const extract = extractExpr(['body'], [{ name: 'name', description: 'name' }]);
     const emission = await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       runtime: runtimeFor({ llm: llm.client, slots: { body: 'Acme raised a seed round.' } }),
     });
     const textResources = emission.resources.filter((r) => r.type === 'TEXT');
@@ -273,7 +273,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
     await materializeExtract({
       extract,
-      spec: buildExtractSpec(extract),
+      spec: await buildExtractSpec(extract),
       // No resolveFileText → the FileRef stringifies (pre-existing behaviour).
       runtime: runtimeFor({ llm: llm.client, slots: { attachment: fileRef() } }),
     });

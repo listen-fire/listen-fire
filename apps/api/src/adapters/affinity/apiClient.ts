@@ -9,8 +9,12 @@ import { SECOND } from '../../constants';
 import { currentContext } from '../../services/context';
 import {
   bindAdapterCallCounter,
+  fillMemoisedRead,
+  forgetMemoisedReads,
+  forgetMemoisedReadsUnder,
   isAdapterCallCeilingExceeded,
-} from '../../services/movement_engine/call_ledger';
+  memoisedRead,
+} from '../../services/movement_engine/run_scope';
 import { sendSlackNotification } from '../../lib/slack';
 
 const RETRY_LIMIT = 5;
@@ -23,6 +27,22 @@ const RATE_LIMIT_DELAY = 30 * SECOND;
  *  while more remain. Sent explicitly so the page size is a stated fact rather
  *  than a default we inherit. */
 const AFFINITY_PAGE_SIZE = 500;
+
+/**
+ * How long a workspace's own SHAPE is treated as settled: the field catalog,
+ * the lists, and who the key belongs to.
+ *
+ * These change when a person edits their Affinity workspace, never when a run
+ * writes — so asking again inside one run can only ever get the same answer
+ * back. A single upsert asked for the field catalog seventeen times.
+ *
+ * Five minutes is the window where both halves stay true: an author who adds a
+ * field, then comes back to the editor, sees it; a run pays for it once. The
+ * describe/authoring refresh and a re-connected credential drop it outright
+ * (`invalidateSchemaCache`), so the TTL is the floor on staleness, not the
+ * only way out of it.
+ */
+const SCHEMA_TTL = 5 * 60 * 1000;
 
 const MERGED_ENTITY_PATTERN = /(\w+_id): (\d+) no longer exists as it has been merged into (\d+)/;
 
@@ -332,9 +352,89 @@ class AffinityAPIClient {
   private baseUrl: string;
   private rateLimitQueue = new Queue<unknown>({ concurrency: 4 });
 
+  /**
+   * The workspace's shape, cached HERE because here is the one place that is
+   * already keyed by the credential: a client is minted per (api key, base
+   * url), so what it caches belongs to exactly one Affinity workspace. The
+   * layer above used to key the same cache by TEAM, which handed a team's
+   * second Affinity connection the first workspace's schema.
+   *
+   * The PROMISE is stored, not the payload, so callers that ask at the same
+   * moment share one flight instead of racing into several.
+   */
+  private readonly schemaCache = new Map<string, { at: number; value: Promise<unknown> }>();
+
+  /**
+   * The prefix on every per-run memo key this client writes: the workspace it
+   * speaks to. One run may speak to two Affinity workspaces, and `person 41` is
+   * a different person in each; neither may be answered from the other's reads.
+   * In memory only, and never logged.
+   */
+  private readonly memoScope: string;
+
   constructor({ apiKey, baseUrl = 'https://api.affinity.co' }: { apiKey: string; baseUrl?: string }) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
+    this.memoScope = `affinity:${baseUrl}:${apiKey}:`;
+  }
+
+  // ── Per-run read memo (services/movement_engine/run_scope.ts) ─────────────
+  // A record read once in a run is read again by the write that follows it,
+  // and again by the second write to the same record. The keys below name the
+  // QUESTION; the writes further down forget the ones they just answered
+  // differently.
+
+  private recordKey(kind: 'person' | 'organization', id: number | string): string {
+    return `${this.memoScope}record/${kind}/${id}`;
+  }
+
+  private listEntryKey(listId: number | string, listEntryId: number | string): string {
+    return `${this.memoScope}record/list-entry/${listId}/${listEntryId}`;
+  }
+
+  private fieldValuesKey(kind: 'person' | 'organization' | 'list-entry', id: number): string {
+    return `${this.memoScope}field-values/${kind}/${id}`;
+  }
+
+  private searchKey(kind: string, term: string): string {
+    return `${this.memoScope}search/${kind}/${term}`;
+  }
+
+  /** A field-value row names its own id, never its owner — so a write to one
+   *  cannot say which record's values it changed. Every field-value answer for
+   *  this workspace goes; they are cheap to re-read and there are few of them
+   *  in a run that is writing at all. */
+  private forgetFieldValues(): void {
+    forgetMemoisedReadsUnder(`${this.memoScope}field-values/`);
+  }
+
+  /** A record that did not exist a moment ago is exactly what a search was
+   *  asked about. Every search of that kind goes: a search answers with a
+   *  MATCH, and only the workspace knows which terms the new record matches. */
+  private forgetSearches(kind: 'person' | 'organization'): void {
+    forgetMemoisedReadsUnder(`${this.memoScope}search/${kind}`);
+  }
+
+  private cachedSchema<T>(key: string, load: () => Promise<T>): Promise<T> {
+    const hit = this.schemaCache.get(key);
+    if (hit && Date.now() - hit.at < SCHEMA_TTL) return hit.value as Promise<T>;
+    // A FAILED load is not an answer — remembering it would serve the error to
+    // everyone for the rest of the TTL, and the retry that would have fixed it
+    // never happens.
+    let value: Promise<T>;
+    value = load().catch((err) => {
+      if (this.schemaCache.get(key)?.value === value) this.schemaCache.delete(key);
+      throw err;
+    });
+    this.schemaCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  /** Forget the workspace's shape. Called where a person has just had reason to
+   *  change it — the authoring refresh behind `describeConnection`, and a
+   *  credential being (re)connected. */
+  invalidateSchemaCache(): void {
+    this.schemaCache.clear();
   }
 
   async fetch<T = unknown, U = unknown>({
@@ -369,7 +469,7 @@ class AffinityAPIClient {
     // Bound HERE, not inside the job: this client is a process-wide singleton,
     // so the queue below dequeues a job in whichever other job's async context
     // happened to free a slot. Capturing the run at the point the call was
-    // ISSUED charges the run that asked for it (call_ledger.ts).
+    // ISSUED charges the run that asked for it (run_scope.ts).
     const countCall = bindAdapterCallCounter('affinity');
 
     return this.rateLimitQueue.enqueue(async () => {
@@ -510,15 +610,19 @@ class AffinityAPIClient {
     // an unbounded number of calls for a match that is in the first page or
     // nowhere useful. The ROOT reads (`listOrganisations`) walk every page,
     // because there the count IS the answer.
-    const orgs = await this.fetch({
-      route: '/organizations',
-      query: { term: search },
-      method: 'GET',
-      responseValidator: z.object({
-        organizations: organisationValidator.array(),
+    const orgs = await memoisedRead(this.searchKey('organization/match', search), () =>
+      this.fetch({
+        route: '/organizations',
+        query: { term: search },
+        method: 'GET',
+        responseValidator: z.object({
+          organizations: organisationValidator.array(),
+        }),
       }),
-    });
+    );
 
+    // The GLOBAL filter is ours, applied to the same answer — so both callers
+    // share one search rather than each paying for the term.
     // Only include entries from the user's private CRM, not Affinity's full records
     return includeGlobal ? orgs.organizations : orgs.organizations.filter((org) => !org.global);
   }
@@ -536,32 +640,41 @@ class AffinityAPIClient {
    * still filters what comes back.
    */
   async listOrganisations({ term }: { term?: string } = {}) {
-    const orgs = await this.fetchAllPages({
-      route: '/organizations',
-      ...(term ? { query: { term } } : {}),
-      pageValidator: z.object({
-        organizations: organisationValidator.array(),
-        next_page_token: z.string().nullish(),
+    const orgs = await memoisedRead(this.searchKey('organization/list', term ?? ''), () =>
+      this.fetchAllPages({
+        route: '/organizations',
+        ...(term ? { query: { term } } : {}),
+        pageValidator: z.object({
+          organizations: organisationValidator.array(),
+          next_page_token: z.string().nullish(),
+        }),
+        select: (page) => page.organizations,
       }),
-      select: (page) => page.organizations,
-    });
+    );
     return orgs.filter((org) => !org.global);
   }
 
+  /** Who this key belongs to. Read for ONE thing — the `<subdomain>.affinity.co`
+   *  prefix under which every record's url is built — and the answer is a
+   *  property of the key, so it is asked once per credential. */
   async getWhoami() {
-    return this.fetch({
-      route: '/auth/whoami',
-      method: 'GET',
-      responseValidator: whoamiValidator,
-    });
+    return this.cachedSchema('whoami', () =>
+      this.fetch({
+        route: '/auth/whoami',
+        method: 'GET',
+        responseValidator: whoamiValidator,
+      }),
+    );
   }
 
   async getOrganisationById(id: number) {
-    return this.fetch({
-      route: `/organizations/${id}`,
-      method: 'GET',
-      responseValidator: organisationValidator,
-    });
+    return memoisedRead(this.recordKey('organization', id), () =>
+      this.fetch({
+        route: `/organizations/${id}`,
+        method: 'GET',
+        responseValidator: organisationValidator,
+      }),
+    );
   }
 
   async createOrganisation({ name, domain }: { name: string; domain?: string | null }) {
@@ -576,6 +689,12 @@ class AffinityAPIClient {
       payloadValidator: organisationPayloadValidator,
     });
 
+    // A company that did not exist a moment ago is precisely what the searches
+    // in this run were asked about, and one of them has already answered "no".
+    this.forgetSearches('organization');
+    fillMemoisedRead(this.recordKey('organization', org.id), org);
+
+    // The confirming read, which the line above just made free.
     await this.getOrganisationById(org.id);
 
     return org;
@@ -585,15 +704,32 @@ class AffinityAPIClient {
   // returns { success: true } on the happy path. ──────────────────────────
 
   async deleteOrganisation(id: number) {
-    return this.fetch({ route: `/organizations/${id}`, method: 'DELETE' });
+    const result = await this.fetch({ route: `/organizations/${id}`, method: 'DELETE' });
+    forgetMemoisedReads(this.recordKey('organization', id));
+    this.forgetSearches('organization');
+    this.forgetFieldValues();
+    return result;
   }
 
   async deletePerson(id: number) {
-    return this.fetch({ route: `/persons/${id}`, method: 'DELETE' });
+    const result = await this.fetch({ route: `/persons/${id}`, method: 'DELETE' });
+    forgetMemoisedReads(this.recordKey('person', id));
+    this.forgetSearches('person');
+    this.forgetFieldValues();
+    return result;
   }
 
   async deleteListEntry({ listId, listEntryId }: { listId: number; listEntryId: number }) {
-    return this.fetch({ route: `/lists/${listId}/list-entries/${listEntryId}`, method: 'DELETE' });
+    const result = await this.fetch({
+      route: `/lists/${listId}/list-entries/${listEntryId}`,
+      method: 'DELETE',
+    });
+    // The entry is gone, and so is the membership row every entity read carries
+    // inline — which entity, only the entry knew.
+    forgetMemoisedReads(this.listEntryKey(listId, listEntryId));
+    forgetMemoisedReadsUnder(`${this.memoScope}record/`);
+    this.forgetFieldValues();
+    return result;
   }
 
   async deleteNote(id: number) {
@@ -611,18 +747,25 @@ class AffinityAPIClient {
       payloadValidator: organisationUpdatePayloadValidator,
     });
 
+    // The response IS the record as it now stands; a domain change also
+    // changes what a domain search answers.
+    fillMemoisedRead(this.recordKey('organization', id), org);
+    this.forgetSearches('organization');
+
     return org;
   }
 
   async findManyPeople({ search }: { search: string }) {
-    const response = await this.fetch({
-      route: '/persons',
-      query: { term: search },
-      method: 'GET',
-      responseValidator: z.object({
-        persons: personValidator.array(),
+    const response = await memoisedRead(this.searchKey('person/match', search), () =>
+      this.fetch({
+        route: '/persons',
+        query: { term: search },
+        method: 'GET',
+        responseValidator: z.object({
+          persons: personValidator.array(),
+        }),
       }),
-    });
+    );
 
     return response.persons;
   }
@@ -632,23 +775,27 @@ class AffinityAPIClient {
    *  the org list's does: a substring match over name and email, so a superset
    *  of any equality on either. */
   async listPersons({ term }: { term?: string } = {}) {
-    return this.fetchAllPages({
-      route: '/persons',
-      ...(term ? { query: { term } } : {}),
-      pageValidator: z.object({
-        persons: personValidator.array(),
-        next_page_token: z.string().nullish(),
+    return memoisedRead(this.searchKey('person/list', term ?? ''), () =>
+      this.fetchAllPages({
+        route: '/persons',
+        ...(term ? { query: { term } } : {}),
+        pageValidator: z.object({
+          persons: personValidator.array(),
+          next_page_token: z.string().nullish(),
+        }),
+        select: (page) => page.persons,
       }),
-      select: (page) => page.persons,
-    });
+    );
   }
 
   async getPersonById(id: number) {
-    return this.fetch({
-      route: `/persons/${id}`,
-      method: 'GET',
-      responseValidator: personValidator,
-    });
+    return memoisedRead(this.recordKey('person', id), () =>
+      this.fetch({
+        route: `/persons/${id}`,
+        method: 'GET',
+        responseValidator: personValidator,
+      }),
+    );
   }
 
   async createPerson({
@@ -675,19 +822,28 @@ class AffinityAPIClient {
       payloadValidator: personPayloadValidator,
     });
 
+    this.forgetSearches('person');
+    fillMemoisedRead(this.recordKey('person', person.id), person);
+
+    // The confirming read, which the line above just made free.
     await this.getPersonById(person.id);
 
     return person;
   }
 
   async updatePerson(id: number, payload: z.infer<typeof personUpdatePayloadValidator>) {
-    return this.fetch({
+    const person = await this.fetch({
       route: `/persons/${id}`,
       method: 'PUT',
       body: payload,
       responseValidator: personValidator,
       payloadValidator: personUpdatePayloadValidator,
     });
+    // The response IS the record as it now stands. An address or a name change
+    // also changes what a person search answers.
+    fillMemoisedRead(this.recordKey('person', id), person);
+    this.forgetSearches('person');
+    return person;
   }
 
   async addPersonToOrganisation({
@@ -699,13 +855,6 @@ class AffinityAPIClient {
   }) {
     await this.updatePerson(person.id, {
       organization_ids: uniq([...(person.organization_ids ?? []), org.id]),
-    });
-    await this.fetch({
-      route: `/persons/${person.id}`,
-      method: 'PUT',
-      body: {
-        organization_ids: uniq([...(person.organization_ids ?? []), org.id]),
-      },
     });
 
     return null;
@@ -720,11 +869,16 @@ class AffinityAPIClient {
   }
 
   async getAllLists() {
-    return this.fetch({
-      route: '/lists',
-      method: 'GET',
-      responseValidator: listValidator.array(),
-    });
+    const lists = await this.cachedSchema('lists', () =>
+      this.fetch({
+        route: '/lists',
+        method: 'GET',
+        responseValidator: listValidator.array(),
+      }),
+    );
+    // A copy: the cached array outlives this call, and a caller that sorted or
+    // spliced it would be editing every later caller's answer.
+    return [...lists];
   }
 
   /**
@@ -753,6 +907,16 @@ class AffinityAPIClient {
       responseValidator: listEntryValidator,
     });
 
+    // A membership is carried INLINE on the entity, so the entity we read
+    // before this now says something untrue. Which kind of entity it is, this
+    // call does not know — both go.
+    forgetMemoisedReads(
+      this.recordKey('organization', org.id),
+      this.recordKey('person', org.id),
+    );
+    fillMemoisedRead(this.listEntryKey(list.id, listEntry.id), listEntry);
+
+    // The confirming read, which the line above just made free.
     const fetchedListEntry = await this.getListEntry({
       listId: list.id,
       listEntryId: listEntry.id,
@@ -767,11 +931,13 @@ class AffinityAPIClient {
    * against — the entry alone is not an addressable owner of a value.
    */
   async getListEntry({ listId, listEntryId }: { listId: number; listEntryId: number }) {
-    return this.fetch({
-      route: `/lists/${listId}/list-entries/${listEntryId}`,
-      method: 'GET',
-      responseValidator: listEntryValidator,
-    });
+    return memoisedRead(this.listEntryKey(listId, listEntryId), () =>
+      this.fetch({
+        route: `/lists/${listId}/list-entries/${listEntryId}`,
+        method: 'GET',
+        responseValidator: listEntryValidator,
+      }),
+    );
   }
 
   /**
@@ -787,18 +953,14 @@ class AffinityAPIClient {
     entityId: number;
     entityType: 'organization' | 'person';
   }) {
+    // Through the by-id getters, not a fetch of its own: this is the same
+    // question ("what does this record look like now?"), and asking it by a
+    // different route was one of the three GETs a single upsert made of one
+    // organization.
     const entity =
       entityType === 'person'
-        ? await this.fetch({
-            route: `/persons/${entityId}`,
-            method: 'GET',
-            responseValidator: personValidator,
-          })
-        : await this.fetch({
-            route: `/organizations/${entityId}`,
-            method: 'GET',
-            responseValidator: organisationValidator,
-          });
+        ? await this.getPersonById(entityId)
+        : await this.getOrganisationById(entityId);
     return entity.list_entries ?? [];
   }
 
@@ -857,6 +1019,37 @@ class AffinityAPIClient {
     });
   }
 
+  /**
+   * The workspace's WHOLE field catalog for one entity kind — the payload every
+   * scoped view below is derived from, cached per credential.
+   *
+   * `entity_type` is the only narrowing Affinity itself does here; a list scope
+   * has always been applied on our side, over this same array. So there is one
+   * request per entity kind per workspace, and every list's view of it is a
+   * filter in memory.
+   */
+  private allFields(type?: 'PERSON' | 'ORGANIZATION') {
+    return this.cachedSchema(`fields:${type ?? 'ALL'}`, () =>
+      this.fetch({
+        route: '/fields',
+        query: {
+          with_modified_names: 'true',
+          ...(type ? { entity_type: { PERSON: '0', ORGANIZATION: '1' }[type] } : {}),
+        },
+        method: 'GET',
+        responseValidator: fieldsValidator.array(),
+      }),
+    );
+  }
+
+  /**
+   * The fields a caller may address: every unscoped field, plus — when
+   * `limitToListId` names a list — that list's own.
+   *
+   * The list filter is ours, not Affinity's, and it runs over the cached
+   * catalog. It used to cost a second request (`getAllLists`) purely to turn a
+   * list NAME into an id, on a path that already had the answer in hand.
+   */
   async getFields({
     limitToListId,
     type,
@@ -864,22 +1057,10 @@ class AffinityAPIClient {
     limitToListId?: number | string;
     type?: 'PERSON' | 'ORGANIZATION';
   }) {
-    const query: Record<string, string> = {
-      with_modified_names: 'true',
-    };
+    const fields = await this.allFields(type);
+    if (limitToListId == null) return [...fields];
 
-    if (type) {
-      query.entity_type = { PERSON: '0', ORGANIZATION: '1' }[type];
-    }
-
-    const fields = await this.fetch({
-      route: '/fields',
-      query,
-      method: 'GET',
-      responseValidator: fieldsValidator.array(),
-    });
-
-    const lists = limitToListId ? await this.getAllLists() : [];
+    const lists = await this.getAllLists();
     const matchingList = lists.find(
       (list) => list.id === limitToListId || list.name === limitToListId,
     );
@@ -954,36 +1135,51 @@ class AffinityAPIClient {
       query.list_entry_id = list_entry_id.toString();
     }
 
-    const values = await this.fetch({
-      route: '/field-values',
-      query,
-      method: 'GET',
-      responseValidator: fieldValuesValidator.array(),
-    });
+    const scope: ['person' | 'organization' | 'list-entry', number] | null = person_id
+      ? ['person', person_id]
+      : organization_id
+        ? ['organization', organization_id]
+        : list_entry_id
+          ? ['list-entry', list_entry_id]
+          : null;
 
-    return values;
+    const read = () =>
+      this.fetch({
+        route: '/field-values',
+        query,
+        method: 'GET',
+        responseValidator: fieldValuesValidator.array(),
+      });
+
+    // An unscoped query is every value in the workspace — not a question about
+    // one record, and not something to remember.
+    return scope ? memoisedRead(this.fieldValuesKey(scope[0], scope[1]), read) : read();
   }
 
   /** A failed write PROPAGATES. Whether a field that did not land is fatal is
    *  the caller's policy, and a caller that never hears about it has no policy
    *  at all — which is what a swallow here silently imposed on everyone. */
   async updateFieldValue({ id, value }: { id: number; value: unknown }) {
-    return this.fetch({
+    const result = await this.fetch({
       route: `/field-values/${id}`,
       method: 'PUT',
       body: { value },
     });
+    this.forgetFieldValues();
+    return result;
   }
 
   /** Remove a field value outright. Affinity has no "clear this field" verb —
    *  a value row IS the value, so deleting the row is how a single-valued
    *  reference is emptied and how one target leaves a multi-valued one. */
   async deleteFieldValue({ id }: { id: number }) {
-    return this.fetch({
+    const result = await this.fetch({
       route: `/field-values/${id}`,
       method: 'DELETE',
       responseValidator: z.unknown(),
     });
+    this.forgetFieldValues();
+    return result;
   }
 
   async createFieldValue({
@@ -997,7 +1193,7 @@ class AffinityAPIClient {
     list_entry_id?: number;
     value: unknown;
   }) {
-    return this.fetch({
+    const result = await this.fetch({
       route: '/field-values',
       method: 'POST',
       body: {
@@ -1013,6 +1209,8 @@ class AffinityAPIClient {
         value: z.any(),
       }),
     });
+    this.forgetFieldValues();
+    return result;
   }
 
   async createNote({
@@ -1284,9 +1482,23 @@ const getAffinityClient = (apiKey: string, baseUrl?: string): AffinityAPIClient 
   return webClientsByAccessToken[cacheKey];
 };
 
+/**
+ * Forget what we know about the workspace behind these credentials.
+ *
+ * A key being (re)connected is a person telling us their Affinity changed —
+ * and a reconnect with the SAME key lands on the very client that is holding
+ * the old answer. A key we have never used has no client and nothing to
+ * forget.
+ */
+const forgetAffinityWorkspace = (apiKey: string, baseUrl?: string): void => {
+  const cacheKey = baseUrl ? `${apiKey}:${baseUrl}` : apiKey;
+  webClientsByAccessToken[cacheKey]?.invalidateSchemaCache();
+};
+
 export {
   AffinityAPIClient,
   AffinityMergedEntityError,
+  forgetAffinityWorkspace,
   getAffinityClient,
   affinityCredsParser,
   organisationValidator,

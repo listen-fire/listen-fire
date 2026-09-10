@@ -1084,8 +1084,8 @@ function extractEntitySection(text: string, identityValues: Record<string, unkno
   if (rawValues.length === 0) return text;
 
   // Build search needles from identity + extracted values.
-  // The LLM may have disambiguated names (e.g. "Stealth (Paul Boellhoff)")
-  // but the original text has "linkedin.com/in/paul-boellhoff". We generate:
+  // The LLM may have disambiguated names (e.g. "Stealth (Ada Lovelace)")
+  // but the original text has "linkedin.com/in/ada-lovelace". We generate:
   // - Full values as-is
   // - Parenthetical content + slug variants (spaces→hyphens, no spaces)
   // - URL path segments
@@ -1099,9 +1099,9 @@ function extractEntitySection(text: string, identityValues: Record<string, unkno
 
   function addNameVariants(name: string) {
     addNeedle(name);
-    // "Paul Boellhoff" → "paul-boellhoff" (LinkedIn slug style)
+    // "Ada Lovelace" → "ada-lovelace" (LinkedIn slug style)
     addNeedle(name.replace(/\s+/g, '-'));
-    // "Paul Boellhoff" → "paulboellhoff" (no separator)
+    // "Ada Lovelace" → "adalovelace" (no separator)
     addNeedle(name.replace(/\s+/g, ''));
   }
 

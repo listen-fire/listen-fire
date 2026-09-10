@@ -1025,14 +1025,23 @@ export interface ExtractField {
    *  flowing into a typed write target gets a checker SUGGESTION to
    *  annotate, never a silent adopted type. */
   type?: string;
-  description: string;
+  /**
+   * The words the extractor is given for this field — an ORDINARY string
+   * expression, so it interpolates wherever it is written, exactly as a write
+   * field's value or an `AI()` prompt does. The slot's `raw` is the whole
+   * literal INCLUDING its quotes, which is what `parseMovementExpression`
+   * takes: a plain literal desugars to a `static`, an interpolating one to a
+   * `concat`. Nothing downstream may paste `raw` — it is source, not text.
+   */
+  description: ExprSlot;
   span: Span;
 }
 
 /** `node company: "description" { stage } through […] { stage } …` */
 export interface ExtractNode {
   name: string;
-  description: string;
+  /** The node's own words, on the same terms as a field's (see `ExtractField`). */
+  description: ExprSlot;
   stages: ExtractStage[];
   span: Span;
 }

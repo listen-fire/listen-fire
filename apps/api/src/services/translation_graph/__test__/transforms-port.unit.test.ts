@@ -141,6 +141,20 @@ describe('transform registration (via register-bundled side-effect import)', () 
     // stage of an extraction like the other two.
     expect(t?.signature.dataDependency).toBe('extracted_context');
   });
+
+  it('registers web-research', () => {
+    const t = getTransform('web-research');
+    expect(t).toBeDefined();
+    // It works from the name and the context a stage before it extracted.
+    expect(t?.signature.dataDependency).toBe('extracted_context');
+  });
+
+  it('registers research', () => {
+    const t = getTransform('research');
+    expect(t).toBeDefined();
+    // Name, context and addresses are all fields a stage before it extracted.
+    expect(t?.signature.dataDependency).toBe('extracted_context');
+  });
 });
 
 // ── Signature shapes ──────────────────────────────────────────────────────
@@ -388,6 +402,7 @@ describe('fetch-url.run — the link it is given', () => {
     expect(out.edges?.fetchedUrl).toEqual({
       data: expect.objectContaining({ url: 'https://gondor.fi', file: null }),
     });
+    expect(out.outcome).toBe('fetched');
   });
 
   it('reads a bare host as an https address', async () => {
@@ -448,10 +463,14 @@ describe('fetch-url.run — the link it is given', () => {
     expect(mockPitchDeckUrlTool).not.toHaveBeenCalled();
   });
 
-  it('emits nothing when the page cannot be fetched', async () => {
+  // A failed load and an empty page both attach nothing, and the run's trace
+  // could not tell them apart — so the failure says so in its own word.
+  it('says the fetch failed when the page cannot be loaded', async () => {
     mockIsSupportedUrl.mockReturnValue(false);
     mockGetWebsite.mockResolvedValue('');
-    expect(await fetchUrlImpl.run(input({ url: 'https://dead.example.com' }))).toEqual({});
+    expect(await fetchUrlImpl.run(input({ url: 'https://dead.example.com' }))).toEqual({
+      outcome: 'fetch_failed',
+    });
   });
 
   // LinkedIn answers a scrape with its login wall, so the profile service —
@@ -498,7 +517,7 @@ describe('fetch-url.run — the link it is given', () => {
     const getProfileTextByUrl = jest.fn();
     services.linkedin = { getProfileTextByUrl };
 
-    expect(await fetchUrlImpl.run(input({ url }))).toEqual({});
+    expect(await fetchUrlImpl.run(input({ url }))).toEqual({ outcome: 'fetch_failed' });
 
     expect(mockGetWebsite).not.toHaveBeenCalled();
     expect(getProfileTextByUrl).not.toHaveBeenCalled();
@@ -508,7 +527,9 @@ describe('fetch-url.run — the link it is given', () => {
     mockIsSupportedUrl.mockReturnValue(false);
     services.linkedin = undefined;
 
-    expect(await fetchUrlImpl.run(input({ url: 'https://www.linkedin.com/in/ada' }))).toEqual({});
+    expect(await fetchUrlImpl.run(input({ url: 'https://www.linkedin.com/in/ada' }))).toEqual({
+      outcome: 'fetch_failed',
+    });
 
     expect(mockGetWebsite).not.toHaveBeenCalled();
   });

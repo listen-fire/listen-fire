@@ -19,7 +19,7 @@ jest.mock('../../../services/context', () => ({
 }));
 
 import { AffinityAPIClient } from '../apiClient';
-import { withRunCallLedger } from '../../../services/movement_engine/call_ledger';
+import { withRunCallLedger } from '../../../services/movement_engine/run_scope';
 
 const BASE = 'https://affinity.test';
 const ENV_VAR = 'AFFINITY_MAX_CALLS_PER_RUN';
