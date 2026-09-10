@@ -32,7 +32,7 @@ The web app is a Next.js application in `apps/web`. It is not in `deploy/Dockerf
 |---|---|
 | `NEXT_PUBLIC_API_URL` | your API's public origin — the container's hostname, not a Vercel internal one. It bakes that origin into the client bundle, so the API's CORS must allow the Vercel origin. (The containerised web image uses `API_INTERNAL_URL` instead, proxying at run time so the browser stays same-origin; on Vercel the rewrites below do that job.) |
 
-The rest are optional and only turn on the feature they name: `NEXT_PUBLIC_SITE_URL`, and the `NEXT_PUBLIC_GOOGLE_*` / `NEXT_PUBLIC_MICROSOFT_CLIENT_ID` client ids for the browser-side pickers and sign-in buttons.
+The rest are optional and only turn on the feature they name: `NEXT_PUBLIC_SITE_URL`, and the `NEXT_PUBLIC_GOOGLE_*` ids for the browser-side pickers. The Google and Microsoft SIGN-IN buttons are not among them — those client ids live on the API (`GOOGLE_AUTH_CLIENT_ID`, `MICROSOFT_CLIENT_ID`) and the login page reads them at run time.
 
 **What the rewrites do, and why they matter.** The web app proxies a fixed set of paths to `NEXT_PUBLIC_API_URL`: `/api/trpc/*`, `/api/public/*`, `/api/asks/*`, `/api/auth/*`, `/subscriptions/*`, the MCP routes under `/api/v1/mcp/*`, and the OAuth metadata documents. Those rewrites are load-bearing for the OAuth connect flow in §5 — the callback pages hand the authorization code back through `/api/public/*` on their own origin.
 

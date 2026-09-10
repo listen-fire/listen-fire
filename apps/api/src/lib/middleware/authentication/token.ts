@@ -2,6 +2,7 @@ import { sign, verify, JwtPayload } from 'jsonwebtoken';
 import { z } from 'zod';
 
 import { requireEnv } from '../../utils/environment';
+import { MAGIC_LINK_EXPIRY, SECOND } from '../../../constants';
 import { sessionJwtAudience } from './session_jwt_audience';
 import { unauthorisedGetUserByEmail } from './identify_user';
 
@@ -40,21 +41,28 @@ const generateRealtimeToken = (email: string) =>
     audience: sessionJwtAudience(),
   });
 
-const generateMagicLinkToken = (
-  email: string,
-  options: { expiresIn: string } = { expiresIn: '1h' },
-) => {
-  return sign({ email }, getEnv().TOKEN_SECRET, options);
-};
+const generateMagicLinkToken = (email: string) =>
+  // Seconds, which is what `exp` is. The row this token is about to be stored
+  // in is stamped from the same constant, so the two expiries cannot drift.
+  sign({ email }, getEnv().TOKEN_SECRET, { expiresIn: MAGIC_LINK_EXPIRY / SECOND });
 
-const verifyMagicLinkToken = (token: string) => {
-  const verified = verify(token, getEnv().TOKEN_SECRET);
+const magicLinkClaims = z.object({ email: z.string() });
 
-  return z
-    .object({
-      email: z.string(),
-    })
-    .parse(verified);
+/**
+ * The address a sign-in link proves control of, or `null` if it proves nothing.
+ *
+ * Expired, tampered with, signed by a rotated secret, not a JWT at all: every
+ * one of those is the same answer to the caller, and none of them is a server
+ * error. Returning it rather than throwing is what makes the handler's
+ * "Invalid or expired token" reachable — a throw here left the row check as
+ * the only guard and turned a stale link into a 500.
+ */
+const verifyMagicLinkToken = (token: string): { email: string } | null => {
+  try {
+    return magicLinkClaims.parse(verify(token, getEnv().TOKEN_SECRET));
+  } catch {
+    return null;
+  }
 };
 
 const getCookieAuthUser = async (token: string) => {

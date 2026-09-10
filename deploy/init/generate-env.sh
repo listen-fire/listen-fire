@@ -37,21 +37,35 @@ if [ ! -f "$MINIO_PASS_FILE" ]; then
   mv "$MINIO_PASS_FILE.tmp" "$MINIO_PASS_FILE"
 fi
 
+# A deployment with no model key has no agents, no property arbitration and no
+# extraction. It is still a deployment: the graph, the CRM writes, the query
+# surfaces and the whole of core work without one, and the code treats a
+# missing key as a supported state that degrades LOUDLY at the point of use
+# (`KnowledgeLlmUnavailable`, and a platform key read on first call rather than
+# on import, so that a keyless process boots on purpose).
+#
+# This used to exit 1, which stopped an operator standing the stack up at all
+# before they had a key — including the ordinary order of standing it up,
+# proving it healthy behind TLS, and then configuring it. It also sat below the
+# early exit above, so it only ever fired on the very first boot: an
+# installation that came up once with --demo never saw it again. A check that
+# holds once is not a guarantee, and this one guarded nothing this script
+# writes. So: say it, loudly, on every boot.
+if [ "${LISTEN_FIRE_DEMO:-0}" != "1" ] &&
+   [ -z "${ANTHROPIC_API_KEY:-}" ] &&
+   [ -z "${KNOWLEDGE_LLM_API_KEY:-}" ] &&
+   [ -z "${OPENAI_API_KEY:-}" ]; then
+  echo "[init] WARNING: deploy/.env names no model key." >&2
+  echo "[init]   Any ONE of ANTHROPIC_API_KEY, KNOWLEDGE_LLM_API_KEY or" >&2
+  echo "[init]   OPENAI_API_KEY satisfies this." >&2
+  echo "[init]   The stack will start and serve. Agents, extraction and the" >&2
+  echo "[init]   arbitration of conflicting facts will fail when they are asked" >&2
+  echo "[init]   for, naming the missing key." >&2
+fi
+
 if [ -f "$TARGET" ]; then
   echo "[init] $TARGET exists — leaving every secret exactly as it is."
   exit 0
-fi
-
-# A deployment with no model key has no agents, no property arbitration and no
-# extraction. That is a supported DEMO (the sample data is already there) and a
-# broken real install, so the refusal is conditional on --demo.
-if [ "${LISTEN_FIRE_DEMO:-0}" != "1" ]; then
-  if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${KNOWLEDGE_LLM_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-    echo "[init] REFUSING TO START: deploy/.env names no model key." >&2
-    echo "[init]   Set ANTHROPIC_API_KEY (or KNOWLEDGE_LLM_API_KEY, or OPENAI_API_KEY)" >&2
-    echo "[init]   in deploy/.env, or start with --demo to run without one." >&2
-    exit 1
-  fi
 fi
 
 # The dev-loop harness ids (TEST_HARNESS_TEAM_ID / TEST_HARNESS_USER_ID) are

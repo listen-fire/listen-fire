@@ -47,7 +47,13 @@ export const isProd = process.env.NODE_ENV === 'production';
 export const AUTH_COOKIE = 'listen_fire_token';
 export const IMPERSONATE_COOKIE = 'listen_fire_impersonate';
 
-export const MAGIC_LINK_EXPIRY = 5 * HOUR;
+// How long a sign-in link lives. ONE number, because it governs two things that
+// have to agree: the `expires_at` on the magic_link_token row, and the `exp` of
+// the JWT stored in that row. They used to disagree — 5h on the row, 1h on the
+// JWT — and the verify path checks the row first, so a link in between passed
+// the row check and then threw out of `verify()` as a 500 rather than as the
+// "Invalid or expired token" every other rejection returns.
+export const MAGIC_LINK_EXPIRY = 1 * HOUR;
 
 export const ADVISORY_LOCK_SCOPES = {
   LISTEN_FIRE_API_APPLICATION: 1,

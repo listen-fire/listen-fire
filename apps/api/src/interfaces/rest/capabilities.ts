@@ -24,6 +24,7 @@ import { principalMode, type PrincipalMode } from '../../services/principal/mode
 import { mintStaticSessionToken } from '../../services/auth/static_session';
 import { clearAuthCookies, setAuthCookies } from './auth_cookies';
 import { AUTOMATION_MCP_PATH, KNOWLEDGE_MCP_PATH, VALUATIONS_MCP_PATH } from '../mcp/paths';
+import { publicConfigHandler } from './public_config';
 
 type Env = Record<string, string | undefined>;
 
@@ -121,6 +122,8 @@ const staticLogoutHandler: RequestHandler = (_req, res) => {
 const preAuthRouter: ReturnType<typeof Router> = Router();
 
 preAuthRouter.get('/capabilities', capabilitiesHandler);
+// Which sign-in providers exist, for the one page that has no session yet.
+preAuthRouter.get('/config', publicConfigHandler);
 
 // Only where it is the login: core mounts its own family on `publicRouter`, and
 // two live login doors on one deployment is a second way in nobody chose.

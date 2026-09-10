@@ -153,14 +153,57 @@ fi
 PROFILE_ARGS=()
 for p in ${PROFILES[@]+"${PROFILES[@]}"}; do PROFILE_ARGS+=(--profile "$p"); done
 
-# Host ports, so the printed URLs and the health waits agree with the mapping.
-WEB_PORT="${WEB_PORT:-8080}"
-API_PORT="${API_PORT:-8081}"
-ADMIN_PORT="${ADMIN_PORT:-8082}"
-FAKE_CHANNELS_PORT_HOST="${FAKE_CHANNELS_PORT_HOST:-8083}"
-export WEB_PORT API_PORT ADMIN_PORT FAKE_CHANNELS_PORT_HOST
-export API_BASE_URL="http://localhost:${API_PORT}"
-export WEB_BASE_URL="http://localhost:${WEB_PORT}"
+# Host ports and public URLs. deploy/.env WINS over every default here.
+#
+# These used to be exported unconditionally, and an exported value beats one
+# compose reads from .env — so an installation behind a real hostname that ran
+# up.sh republished itself at localhost, silently: every capability link it
+# handed out unreachable, its session cookie no longer `Secure` and therefore
+# dropped by the browser, every webhook it re-registered pointing at nowhere.
+# `configured` resolves each one the way compose does (shell, then .env), so
+# what this script supplies is a DEFAULT for an installation that named none.
+default_from_env() {
+  local name="$1" fallback="$2" value
+  value="$(configured "$name")"
+  eval "$name=\"\${value:-\$fallback}\""
+  export "$name"
+}
+default_from_env WEB_PORT 8080
+default_from_env API_PORT 8081
+default_from_env ADMIN_PORT 8082
+default_from_env FAKE_CHANNELS_PORT_HOST 8083
+
+# WHICH address the published ports bind to. Loopback is what a deployment
+# behind a reverse proxy wants — the proxy is on the box, and nothing else
+# should be able to reach a plain-HTTP port. Every interface is what a trial on
+# your own machine wants, and is the default.
+default_from_env LISTEN_FIRE_BIND 0.0.0.0
+
+# A port variable used to be able to carry its own bind address
+# (`API_PORT=127.0.0.1:8081`), because compose interpolates the value whole.
+# LISTEN_FIRE_BIND is now the place that lives, and the two forms cannot both be
+# right — `0.0.0.0:127.0.0.1:8081:3000` is not a mapping. Say so here rather
+# than let compose fail on a string it cannot explain.
+for _port_var in WEB_PORT API_PORT ADMIN_PORT FAKE_CHANNELS_PORT_HOST; do
+  eval "_port_value=\$$_port_var"
+  case "$_port_value" in
+    *:*)
+      echo "up.sh: $_port_var is '$_port_value' — a port number, not an address." >&2
+      echo "up.sh: set LISTEN_FIRE_BIND=${_port_value%:*} in deploy/.env instead." >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Where THIS machine reaches the stack, whatever the world reaches it on: the
+# health waits below run on the box, and on a hostname deployment the public
+# URL goes through a proxy that may not be up yet (or at all, on first boot).
+API_LOCAL="http://localhost:${API_PORT}"
+WEB_LOCAL="http://localhost:${WEB_PORT}"
+ADMIN_LOCAL="http://localhost:${ADMIN_PORT}"
+
+default_from_env API_BASE_URL "$API_LOCAL"
+default_from_env WEB_BASE_URL "$WEB_LOCAL"
 
 compose() { docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"; }
 
@@ -237,7 +280,7 @@ compose up "${UP_ARGS[@]}"
 
 echo -n "[up] waiting for the API"
 for i in $(seq 1 90); do
-  if curl -fsS "http://localhost:${API_PORT}/.well-known/health-check" >/dev/null 2>&1; then
+  if curl -fsS "${API_LOCAL}/.well-known/health-check" >/dev/null 2>&1; then
     echo " ready."
     break
   fi
@@ -253,7 +296,7 @@ done
 
 echo -n "[up] waiting for the web app"
 for i in $(seq 1 60); do
-  if curl -fsS "http://localhost:${WEB_PORT}/login" >/dev/null 2>&1; then
+  if curl -fsS "${WEB_LOCAL}/login" >/dev/null 2>&1; then
     echo " ready."
     break
   fi
@@ -270,7 +313,7 @@ done
 if has_unit core; then
   echo -n "[up] waiting for the admin app"
   for i in $(seq 1 30); do
-    if curl -fsS "http://localhost:${ADMIN_PORT}/login" >/dev/null 2>&1; then
+    if curl -fsS "${ADMIN_LOCAL}/login" >/dev/null 2>&1; then
       echo " ready."
       break
     fi
@@ -317,9 +360,9 @@ if [ "${#UNITS[@]}" -eq 1 ] && has_unit asks; then ASKS_ONLY=1; fi
 echo
 echo "──────────────────────────────────────────────────────────────"
 if [ "$ASKS_ONLY" -eq 1 ]; then
-  echo " Listen-Fire is up:  http://localhost:${API_PORT}"
+  echo " Listen-Fire is up:  ${API_BASE_URL}"
 else
-  echo " Listen-Fire is up:  http://localhost:${WEB_PORT}"
+  echo " Listen-Fire is up:  ${WEB_BASE_URL}"
 fi
 echo "──────────────────────────────────────────────────────────────"
 if [ "$ASKS_ONLY" -eq 1 ]; then
@@ -336,7 +379,7 @@ if [ "$LISTEN_FIRE_PRINCIPAL" = "static" ]; then
 else
   ADMIN_EMAIL="$(read_generated LISTEN_FIRE_BOOTSTRAP_USER_EMAIL)"
   if [ "$DEMO" -eq 1 ]; then
-    curl -fsS -X POST "http://localhost:${API_PORT}/api/public/auth/requestMagicLink" \
+    curl -fsS -X POST "${API_LOCAL}/api/public/auth/requestMagicLink" \
       -H 'content-type: application/json' \
       -d "{\"email\":\"${ADMIN_EMAIL}\"}" >/dev/null
     # The send is queued, so the outbox is a moment behind the request.
@@ -357,8 +400,50 @@ else
     echo
     echo "   ${LINK:-<no link in the fake outbox — check: docker compose logs api>}"
   else
-    echo " Sign in at http://localhost:${WEB_PORT}/login as ${ADMIN_EMAIL}."
-    echo " The magic link is emailed, so a working MAILGUN_* config is required."
+    # Day one on a real installation, nobody can sign in: the link is emailed
+    # and no mail provider is configured yet, which is the thing you would sign
+    # in to configure. The link is MINTED either way, and it is stored in the
+    # clear, so ask for one and read back the row rather than leave an operator
+    # to find the recipe in a guide. (gcp-vm.md keeps it, for a stack that was
+    # not started through this script.)
+    curl -fsS -X POST "${API_LOCAL}/api/public/auth/requestMagicLink" \
+      -H 'content-type: application/json' \
+      -d "{\"email\":\"${ADMIN_EMAIL}\"}" >/dev/null 2>&1 || true
+
+    # Read through the api image, which is what makes this work against a
+    # database the operator named in DATABASE_URL as well as the bundled one:
+    # `with-generated-env` resolves the same URL the api itself connects to,
+    # and psql is in that image for the migration runner's sake. Bounded in
+    # time so a token left over from an earlier run can never be mistaken for
+    # the one just asked for — and so an address that is not this
+    # installation's bootstrap user, which mints nothing and says nothing,
+    # comes back empty rather than stale.
+    RECENT_LINK_SQL="select token from core.magic_link_token where created_at > now() - interval '2 minutes' order by created_at desc limit 1"
+    if ! TOKEN="$(compose run --rm --no-deps -e RECENT_LINK_SQL="$RECENT_LINK_SQL" \
+        --entrypoint /usr/local/bin/with-generated-env api \
+        sh -c 'psql "$DATABASE_URL" -tAc "$RECENT_LINK_SQL"' 2>/dev/null)"; then
+      TOKEN=""
+    fi
+    TOKEN="$(printf %s "$TOKEN" | tr -d '[:space:]')"
+
+    if [ -n "$TOKEN" ]; then
+      echo " Sign in for ${ADMIN_EMAIL} with this one-time link:"
+      echo
+      echo "   ${WEB_BASE_URL}/magic?token=${TOKEN}"
+      echo
+      echo " It is single-use and good for an hour. Treat it as a live session:"
+      echo " anyone who reads it is signed in as that admin."
+      echo
+      echo " Every link after this one is emailed, so set OUTBOUND_EMAIL_FROM plus"
+      echo " either RESEND_API_KEY (preferred; it wins when both are set) or"
+      echo " MAILGUN_API_KEY + MAILGUN_SENDING_DOMAIN — a half-set Mailgun pair"
+      echo " is the same as no provider at all."
+    else
+      echo " Sign in at ${WEB_BASE_URL}/login as ${ADMIN_EMAIL}."
+      echo " The magic link is emailed, so this needs OUTBOUND_EMAIL_FROM plus"
+      echo " either RESEND_API_KEY (preferred) or MAILGUN_API_KEY +"
+      echo " MAILGUN_SENDING_DOMAIN."
+    fi
   fi
 fi
 echo

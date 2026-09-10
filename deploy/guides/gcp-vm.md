@@ -30,11 +30,45 @@ Then, when you want a managed datastore, the second half of this page is a runbo
 
 **Reserve nothing else on the machine.** The stack publishes 8080, 8081 and 8082 for your proxy to reach; those ports must be free.
 
+**Check that you can actually get a shell before you need one.** `gcloud compute ssh` uses OS Login wherever it is turned on, and OS Login refuses an account that belongs to a different organisation than the project until somebody grants it `roles/compute.osLoginExternalUser` **on that external organisation** — which is not a role a project owner can grant themselves. The symptom is a permission error on `importSshPublicKey` at the moment of the first connection, long after the VM exists. Either arrange that role, or turn OS Login off for this instance and use metadata keys:
+
+```bash
+gcloud compute instances add-metadata listen-fire --zone <zone> \
+  --metadata enable-oslogin=FALSE
+```
+
 ## 2. The disk the data lives on
 
 Every piece of state is a Docker named volume: `pgdata`, `redisdata`, `miniodata` and `listen-fire-config`. They all live under Docker's data root, so putting that directory on its own persistent disk puts all of them there at once, and lets the disk be snapshotted and resized without touching the VM.
 
 Attach a `pd-balanced` disk (100 GB is a reasonable start; it grows online), format it once, and mount it at `/var/lib/docker` **before Docker first starts**. Add it to `/etc/fstab` with `discard,defaults,nofail` so a missing disk does not stop the machine from booting, and turn **auto-delete off** on the attachment so deleting the VM does not delete the data.
+
+Attach it with a `--device-name`, because that name — not the kernel's `/dev/sd*` ordering, which moves — is how the disk is addressed on the machine:
+
+```bash
+# on the VM, once, BEFORE installing Docker. `data` is the --device-name.
+DEV=/dev/disk/by-id/google-data
+sudo mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard -F "$DEV"
+sudo mkdir -p /var/lib/docker
+UUID=$(sudo blkid -s UUID -o value "$DEV")
+echo "UUID=$UUID /var/lib/docker ext4 discard,defaults,nofail 0 2" | sudo tee -a /etc/fstab
+sudo mount /var/lib/docker
+```
+
+By UUID rather than by device path, for the same reason.
+
+**Docker's data root is no longer all of Docker's data.** Docker 29 stores images through containerd, whose own root is `/var/lib/containerd` — *outside* `/var/lib/docker` and therefore on the boot disk, not on the disk you just attached. The named volumes, which are the state that matters, are still under `/var/lib/docker/volumes` and are still on the data disk and still in its snapshots. What is on the boot disk is the images, and one release of this stack is about 5 GB of them, kept alongside every release you have not pruned. A 30 GB boot disk holds roughly four upgrades before it fills, and a full boot disk stops Docker rather than degrading it. Either give the boot disk room and `docker image prune -a` after each upgrade, or put containerd on the data disk too:
+
+```bash
+sudo systemctl stop docker containerd
+sudo mkdir -p /var/lib/docker/containerd-root
+sudo mv /var/lib/containerd/* /var/lib/docker/containerd-root/ 2>/dev/null || true
+echo "/var/lib/docker/containerd-root /var/lib/containerd none bind 0 0" | sudo tee -a /etc/fstab
+sudo mount /var/lib/containerd
+sudo systemctl start containerd docker
+```
+
+`docker info` reports the data root, but confirm the image store separately — `sudo du -sh /var/lib/containerd` is the number that tells you which disk your images are on.
 
 On Container-Optimized OS the stateful partition already holds `/var/lib/docker`; there the equivalent is to grow the boot disk rather than attach a second one.
 
@@ -51,19 +85,34 @@ Terminate TLS on the VM with nginx or Caddy, proxying `app.example.com` to `127.
 - **WebSocket upgrades must pass through** on the API host. In nginx that is `proxy_http_version 1.1` with the `Upgrade` and `Connection` headers set.
 - **Raise the proxy read timeout** on the API host, to several minutes. The default of 60 seconds cuts off live subscriptions and long agent requests.
 
+**Both of those are Caddy defaults**, which is the reason to prefer it here: Caddy proxies an upgrade transparently and imposes no response timeout of its own, and it obtains and renews the certificates without a second tool. The whole configuration is the two sites:
+
+```
+app.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}
+
+api.example.com {
+	reverse_proxy 127.0.0.1:8081
+}
+```
+
+Caddy redirects `:80` to `:443` for both names on its own. It obtains a certificate on the first request for a name, so **the A records must resolve before you start it** — a name that does not resolve yet spends failed ACME attempts against Let's Encrypt's rate limit rather than waiting politely.
+
 The health probe is `GET /.well-known/health-check`, and **it answers `201`**, which is its contract. Anything that checks for exactly `200` will report a healthy stack as down.
 
 **Firewall: 80 and 443 from anywhere, and nothing else.** The public surface is deliberate rather than incidental: inbound webhook doors for Slack events, Slack interactivity, Telegram, WhatsApp and your mail provider all land on `API_BASE_URL`, and they come from those vendors' addresses rather than yours. Port 22 is best reached through IAP TCP forwarding rather than opened.
 
-**Bind the stack's own ports to loopback**, so the firewall is not the only thing standing between the internet and a plain-HTTP port. The port variables are interpolated into the compose port mapping whole, so an address in front of the number is carried through:
+**Bind the stack's own ports to loopback**, so the firewall is not the only thing standing between the internet and a plain-HTTP port. One line does all three apps:
 
 ```
-WEB_PORT=127.0.0.1:8080
-API_PORT=127.0.0.1:8081
-ADMIN_PORT=127.0.0.1:8082
+LISTEN_FIRE_BIND=127.0.0.1
 ```
 
-The proxy reaches them on `127.0.0.1`, and nothing else can.
+The proxy reaches them on `127.0.0.1`, and nothing else can. `WEB_PORT`, `API_PORT` and `ADMIN_PORT` stay plain numbers — an address written into one of them is a configuration error now, and `up.sh` says so by name rather than letting compose fail on `0.0.0.0:127.0.0.1:8081:3000`.
+
+`deploy/.env` wins over `up.sh`'s defaults, so this line binds whichever way the stack is started. Keep the firewall rule below anyway: a bind address is one layer, not the plan.
 
 Once TLS is on, set `API_BASE_URL` and `WEB_BASE_URL` to the `https` names. They also decide cookie security: the session cookie is marked `Secure` only when those URLs are `https`, and a `Secure` cookie on a plain-http address is set, dropped by the browser, and the person is bounced back to the login they just completed.
 
@@ -83,9 +132,15 @@ LISTEN_FIRE_PRODUCTS=core,automations
 LISTEN_FIRE_PRINCIPAL=core
 API_BASE_URL=https://api.example.com
 WEB_BASE_URL=https://app.example.com
+LISTEN_FIRE_BIND=127.0.0.1
+LISTEN_FIRE_TEAM_NAME=Acme
 LISTEN_FIRE_ADMIN_EMAIL=you@example.com
 COMPOSE_PROFILES=postgres,redis,minio,admin
 ```
+
+**A model key is what buys you agents**, and any one of `ANTHROPIC_API_KEY`, `KNOWLEDGE_LLM_API_KEY` or `OPENAI_API_KEY` is enough. Without one the stack starts and serves, and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for — `init` warns at every boot and so does the API. On `v0.1.0` it was a hard refusal: `init` exited 1 and nothing started at all, so a stack could not come up before you had a key.
+
+**`LISTEN_FIRE_TEAM_NAME` and `LISTEN_FIRE_ADMIN_EMAIL` are read once, on the very first boot.** `init` copies them into the config volume as `LISTEN_FIRE_BOOTSTRAP_TEAM_NAME` and `LISTEN_FIRE_BOOTSTRAP_USER_EMAIL` and then never rewrites that file again — editing either line later changes nothing. Get them right before the first `up`, or the team is called `Acme` for the rest of its life.
 
 Then, from `deploy/`:
 
@@ -94,19 +149,60 @@ docker compose pull
 docker compose up -d
 ```
 
-**Use `docker compose` rather than `up.sh` here.** `up.sh` is the door for a trial on your own machine and pins the public URLs to `http://localhost:<port>`, which is exactly wrong behind a real hostname.
+**`docker compose` is the plain way to run this, and `up.sh` no longer fights it.** `up.sh` supplies `API_BASE_URL`, `WEB_BASE_URL`, the three ports and `LISTEN_FIRE_BIND` only as defaults for an installation that names none, so the values above survive a run through it. It is still the trial door — what it adds is working out the unit composition for you, which you have already written down here.
 
 **`LISTEN_FIRE_VERSION` is what this installation runs**, and it moves only when you edit that line. Leave it unset and every pull takes `latest`, which moves under you.
 
-**Login needs a mail provider** on an installation with `core`: the sign-in link is genuinely emailed, so `RESEND_API_KEY` or `MAILGUN_API_KEY` plus `OUTBOUND_EMAIL_FROM` is not optional. Nobody can sign in until it is set.
+**Login needs a mail provider** on an installation with `core`: the sign-in link is genuinely emailed, so `OUTBOUND_EMAIL_FROM` plus one complete provider — either `RESEND_API_KEY`, or `MAILGUN_API_KEY` **and** `MAILGUN_SENDING_DOMAIN` together — is not optional. A half-set Mailgun pair is the same as no provider at all: the adapter logs that it is unconfigured, the send returns false, and the link is never delivered. Nobody can sign in until it is set.
 
-Every long-running service in the file carries `restart: unless-stopped`, so the stack comes back after a reboot as long as Docker starts at boot (`systemctl enable docker`). The one-shot services that mint secrets and run migrations do not restart, which is what they should do. Nothing here needs a systemd unit of its own.
+**Signing in on day one, before mail is configured.** The link is minted whether or not it can be sent, and it is stored in the database in the clear, so an operator with a shell on the box can read the one they just asked for. This is the bootstrap path — the way to get into a fresh installation and add a mail provider from the settings page — and not something to keep doing.
+
+**`up.sh` does this for you** on any shape with `core`, and prints the link at the end of its run. The recipe below is for a stack brought up with `docker compose`, or for a second link later:
+
+```bash
+# from deploy/, as the bootstrap address in LISTEN_FIRE_ADMIN_EMAIL
+EMAIL=you@example.com
+curl -fsS -X POST "http://127.0.0.1:8081/api/public/auth/requestMagicLink" \
+  -H 'content-type: application/json' -d "{\"email\":\"$EMAIL\"}"
+TOKEN=$(docker compose exec -T postgres psql -U listenfire -d listenfire -tAc \
+  "select token from core.magic_link_token order by created_at desc limit 1")
+echo "$WEB_BASE_URL/magic?token=$TOKEN"
+```
+
+The link is single-use and **good for one hour** — the row and the token inside it are stamped from one number, so that is the whole of it. (On `v0.1.0` they were two numbers, 5h on the row and 1h on the token, and a link in between failed as a server error rather than as the "invalid or expired token" the code means to return. Mint the link when you are ready to click it, on any version.)
+
+Treat it as a live session: anyone who reads it is signed in as that admin.
+
+Long-running services carry `restart: unless-stopped`, so the stack comes back after a reboot as long as Docker starts at boot (`systemctl enable docker`). The one-shot services that mint secrets and run migrations do not restart, which is what they should do. Nothing here needs a systemd unit of its own.
+
+**On `v0.1.0` the bundled datastores are the exception, and they need fixing by hand.** That release's `postgres` and `redis` services carry no restart policy at all, so a reboot leaves them stopped while everything in front of them comes back. What that looks like is worse than an outage that announces itself: `GET /.well-known/health-check` still answers `201`, `/api/public/capabilities` still answers `200`, and the sign-in route answers `401 Invalid or expired session` — which reads as a credential problem rather than as a database that is not running. `/healthz/workers` is the surface that tells the truth, with `startedHere: false` on every loop. Later releases carry the policy in the file; on `v0.1.0`, set it on the containers:
+
+```bash
+docker update --restart unless-stopped listen-fire-postgres-1 listen-fire-redis-1
+```
+
+That override is a property of the containers, not of the file, so re-apply it whenever compose recreates them — or upgrade, which is what actually ends the problem.
+
+**Reboot the machine once, deliberately, before you put anything on it.** It is the only way to find out what actually comes back, and it is worth doing on a release that has the policy too.
 
 ## 5. Backups
 
 **Two backups, because they protect different things.**
 
 A **snapshot schedule** on the data disk is the machine: the database files, the object store, and the config volume with the encryption keys. Attach a resource policy to the disk with a daily schedule and a retention you can live with. Restoring it is creating a disk from the snapshot and attaching it to a VM.
+
+The policy is regional and the disk is zonal, so the two must name the same region:
+
+```bash
+gcloud compute resource-policies create snapshot-schedule listen-fire-data-daily \
+  --region <region> --daily-schedule --start-time 02:00 \
+  --max-retention-days 14 --on-source-disk-delete keep-auto-snapshots
+
+gcloud compute disks add-resource-policies listen-fire-data \
+  --zone <zone> --resource-policies listen-fire-data-daily
+```
+
+`--on-source-disk-delete keep-auto-snapshots` is the half that makes it a backup: without it, deleting the disk deletes its snapshots with it. Confirm the attachment on the disk itself (`gcloud compute disks describe listen-fire-data --format='value(resourcePolicies)'`) rather than on the policy — a policy can exist attached to nothing.
 
 A **`pg_dump`** is the database on its own, which is what an upgrade rollback needs and what a snapshot is clumsy for:
 

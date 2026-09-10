@@ -75,8 +75,11 @@ const verifyMagicLinkHandler: RequestHandler = async (req, res) => {
     return res.json({ error: 'Invalid or expired token' });
   }
 
-  const { email } = verifyMagicLinkToken(token);
-  if (email) {
+  // The row says the link has not been used or timed out; this says the link is
+  // genuinely ours and still inside its own life. Both have to hold.
+  const claims = verifyMagicLinkToken(token);
+  if (claims) {
+    const { email } = claims;
     // The link proves control of the address, so it goes through the same door
     // as every other verified sign-in — which is also what refuses a member
     // removed between the link being sent and being clicked.

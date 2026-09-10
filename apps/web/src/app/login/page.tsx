@@ -8,6 +8,7 @@ import { PublicClientApplication, type Configuration } from "@azure/msal-browser
 import { useAuth } from "@/lib/auth";
 import { firstMountedHref, loginMode } from "@/lib/capabilities";
 import { useCapabilities, useCapabilitiesSettled } from "@/lib/capabilities-provider";
+import { useSignInConfig } from "@/lib/sign-in-config-hook";
 import { usePageTitle } from "@/components/page-title";
 
 // Only allow same-origin paths to prevent open-redirect via ?returnUrl=...
@@ -66,25 +67,29 @@ function buildAttribution(): Attribution {
   return attribution;
 }
 
-const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
-const microsoftClientId = process.env.NEXT_PUBLIC_MICROSOFT_CLIENT_ID ?? "";
-
-const msalConfig: Configuration = {
-  auth: {
-    clientId: microsoftClientId || "unused",
-    authority: "https://login.microsoftonline.com/common",
-    redirectUri: typeof window !== "undefined" ? window.location.origin + "/login" : "",
-  },
-};
-
+// The client id arrives from the API at run time (see `useSignInConfig`), so
+// MSAL cannot be built at module load the way a `NEXT_PUBLIC_*` constant let it
+// be. It is still a singleton — MSAL keeps redirect state in session storage and
+// a second instance for the same id would race the first over it — just one
+// keyed on the id it was built for.
 let msalInstance: PublicClientApplication | null = null;
+let msalInstanceClientId: string | null = null;
 let msalInitPromise: Promise<void> | null = null;
 
-function getMsalInstance() {
-  if (!msalInstance && microsoftClientId && typeof window !== "undefined") {
-    msalInstance = new PublicClientApplication(msalConfig);
-    msalInitPromise = msalInstance.initialize();
-  }
+function getMsalInstance(clientId: string | undefined) {
+  if (!clientId || typeof window === "undefined") return null;
+  if (msalInstance && msalInstanceClientId === clientId) return msalInstance;
+
+  const config: Configuration = {
+    auth: {
+      clientId,
+      authority: "https://login.microsoftonline.com/common",
+      redirectUri: window.location.origin + "/login",
+    },
+  };
+  msalInstance = new PublicClientApplication(config);
+  msalInstanceClientId = clientId;
+  msalInitPromise = msalInstance.initialize();
   return msalInstance;
 }
 
@@ -108,7 +113,13 @@ function AuthShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LoginForm() {
+function LoginForm({
+  googleClientId,
+  microsoftClientId,
+}: {
+  googleClientId?: string;
+  microsoftClientId?: string;
+}) {
   const searchParams = useSearchParams();
   const isSignup = searchParams.get("mode") === "signup";
 
@@ -290,7 +301,7 @@ function LoginForm() {
     if (!microsoftClientId || msalHandled.current) return;
     msalHandled.current = true;
 
-    const msal = getMsalInstance();
+    const msal = getMsalInstance(microsoftClientId);
     if (!msal) return;
 
     msalInitPromise!.then(() =>
@@ -341,7 +352,7 @@ function LoginForm() {
 
   const handleMicrosoftLogin = async () => {
     if (signupBlocked) return;
-    const msal = getMsalInstance();
+    const msal = getMsalInstance(microsoftClientId);
     if (!msal) return;
     await msalInitPromise;
     // Redirect to Microsoft — we'll handle the response on page load
@@ -714,10 +725,12 @@ export default function LoginPage() {
   const capabilities = useCapabilities();
   const settled = useCapabilitiesSettled();
   const mode = loginMode({ capabilities, settled });
+  const { config, settled: configSettled } = useSignInConfig();
 
-  // The probe answers in milliseconds off a same-origin endpoint. Hold the
-  // frame rather than render a door that may turn out to be the wrong one.
-  if (mode === "pending") {
+  // Both probes answer in milliseconds off same-origin endpoints. Hold the
+  // frame rather than render a door that may turn out to be the wrong one — or
+  // a form that grows a Google button a beat after the person started typing.
+  if (mode === "pending" || !configSettled) {
     return <main className="min-h-screen" />;
   }
 
@@ -727,13 +740,16 @@ export default function LoginPage() {
     return <LoginForm />;
   }
 
-  if (googleClientId) {
-    return (
-      <GoogleOAuthProvider clientId={googleClientId}>
-        <LoginForm />
-      </GoogleOAuthProvider>
-    );
+  const form = (
+    <LoginForm
+      googleClientId={config.googleClientId}
+      microsoftClientId={config.microsoftClientId}
+    />
+  );
+
+  if (config.googleClientId) {
+    return <GoogleOAuthProvider clientId={config.googleClientId}>{form}</GoogleOAuthProvider>;
   }
 
-  return <LoginForm />;
+  return form;
 }

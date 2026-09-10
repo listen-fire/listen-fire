@@ -117,6 +117,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+    restart: unless-stopped
 
   # Core's MCP OAuth flow keeps in-flight state here; automations' runaway-loop
   # guard keeps its counters here. Every shipped composition runs it — a bare
@@ -135,6 +136,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    restart: unless-stopped
 
   # The bundled object store. Anything that handles a file — an inbound email
   # attachment, WhatsApp media, a generated document, a valuations attachment —
@@ -263,8 +265,13 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # LISTEN_FIRE_BIND is WHICH host address the published ports answer on, for
+    # all three apps. `127.0.0.1` is what a deployment behind a reverse proxy on
+    # the same box wants — the proxy reaches them, and nothing else can, so the
+    # firewall stops being the only thing between the internet and a plain-HTTP
+    # port. Every interface is the default, because a trial has no proxy.
     ports:
-      - '${API_PORT:-8081}:3000'
+      - '${LISTEN_FIRE_BIND:-0.0.0.0}:${API_PORT:-8081}:3000'
     healthcheck:
       test: ['CMD-SHELL', 'curl -fsS http://localhost:3000/.well-known/health-check || exit 1']
       interval: 10s
@@ -290,7 +297,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - '${WEB_PORT:-8080}:3000'
+      - '${LISTEN_FIRE_BIND:-0.0.0.0}:${WEB_PORT:-8080}:3000'
     healthcheck:
       test:
         - 'CMD'
@@ -322,7 +329,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - '${ADMIN_PORT:-8082}:3000'
+      - '${LISTEN_FIRE_BIND:-0.0.0.0}:${ADMIN_PORT:-8082}:3000'
     healthcheck:
       test:
         - 'CMD'

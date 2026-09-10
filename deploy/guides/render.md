@@ -118,7 +118,7 @@ Two things do not survive being proxied through the web app, and the code alread
 
 You need the web app if you run `core` (login links point at it, and without it nobody can sign in) or if you want the authoring UI. You also need it for OAuth connections: the callback paths every OAuth adapter except Slack is registered against are pages in the web app, which hand the authorization code back to the API. See `vercel-plus-container.md` for the URL triangle, which is the same on Render.
 
-**Google and Microsoft sign-in buttons are the one thing a published image cannot give you.** The login page renders a provider's button only when `NEXT_PUBLIC_GOOGLE_CLIENT_ID` or `NEXT_PUBLIC_MICROSOFT_CLIENT_ID` was present at `next build`, and a released image was built without either, so setting them on the service changes nothing. Email links and passwords work as normal. If you need those buttons, build the web app from source — the appendix at the end of this guide.
+**Google and Microsoft sign-in buttons need nothing from the web service.** The login page asks the API which providers exist, at run time, so set `GOOGLE_AUTH_CLIENT_ID` (with its secret) and `MICROSOFT_CLIENT_ID` on the **API** service and the buttons appear. An id the API does not have is a button the login page does not draw, which is the same rule the API applies when it validates the token.
 
 ## 6. Environment
 
@@ -174,7 +174,7 @@ Registering your own Slack app, Google OAuth client, WhatsApp number and the res
 
 ## Appendix: building the web app from source
 
-For a fork, or for a deployment that needs the Google or Microsoft sign-in buttons — those are baked in at `next build` and a published image was built without them (see "5. The web app").
+For a fork, or for any change to the web app itself. The sign-in buttons are **not** a reason to be here any more: they come from the API at run time, so the published image serves them.
 
 Replace the `listen-fire-web` service in the Blueprint with the Node runtime against the `apps/web` workspace:
 
@@ -191,10 +191,6 @@ Replace the `listen-fire-web` service in the Blueprint with the Node runtime aga
       - key: NODE_ENV
         value: production
       - key: API_INTERNAL_URL
-        sync: false
-      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
-        sync: false
-      - key: NEXT_PUBLIC_MICROSOFT_CLIENT_ID
         sync: false
 ```
 

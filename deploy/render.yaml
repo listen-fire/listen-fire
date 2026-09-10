@@ -256,9 +256,9 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
 
-      # ---- sign-in buttons. Optional: an unset pair means the button is not
-      # offered. The Google client id must ALSO be set on the web service as
-      # NEXT_PUBLIC_GOOGLE_CLIENT_ID (baked in at build time).
+      # ---- sign-in buttons. Optional: an unset id means the button is not
+      # offered. These are the ONLY place the client ids go — the login page
+      # reads them from the API at run time, off /api/public/config.
       - key: GOOGLE_AUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_AUTH_CLIENT_SECRET
@@ -361,10 +361,7 @@ services:
       # private network, and only the dashboard knows the final service name.
       - key: API_INTERNAL_URL
         sync: false
-      # NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_MICROSOFT_CLIENT_ID are
-      # deliberately absent. They are BUILD-time values — the login page renders
-      # a provider's button only when its public client id was present at
-      # `next build` — and a published image was built without them, so setting
-      # them on this service would change nothing. A deployment that needs those
-      # two sign-in buttons builds the web app from source: see
-      # deploy/guides/render.md, "Appendix: building the web app from source".
+      # The sign-in client ids are deliberately absent here. They belong to the
+      # API service (GOOGLE_AUTH_CLIENT_ID / MICROSOFT_CLIENT_ID, above), which
+      # serves them to the login page at run time — so a published image offers
+      # exactly the providers the API is configured to accept.

@@ -44,6 +44,10 @@ docker compose pull
 docker compose up -d
 ```
 
+**Either option is safe for an installation behind a real hostname.** `up.sh` supplies `API_BASE_URL`, `WEB_BASE_URL`, the three ports and `LISTEN_FIRE_BIND` only as defaults for an installation that names none, so a production `deploy/.env` survives an upgrade run through it with its own URLs and its own bind address intact.
+
+On `v0.1.0` it did not: `up.sh` exported those values, an exported value wins over `deploy/.env`, and an upgrade through it silently republished the installation at localhost — every capability link unreachable, the session cookie no longer `Secure` and dropped by the browser, every re-registered webhook pointing at nowhere. **Upgrading FROM `v0.1.0`, use `docker compose`** — the `up.sh` you run is the old one in your checkout until you have pulled this repository too.
+
 Migrations run as the one-shot `migrate` service, to completion, **before** the new api starts — the api's `depends_on` says so, so a restart never races the schema. That is where an upgrade fails if it is going to: `docker compose logs migrate`.
 
 Migrations are forward-only and append-only from `v0.1.0`. A published release never edits or removes a migration an earlier release applied, so the ledger of a running installation is always a prefix of the new version's, and applying the difference is the whole of the schema change.

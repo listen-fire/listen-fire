@@ -224,6 +224,17 @@ async function main() {
   if (process.env.NODE_ENV === 'production' && (mounts('automations') || mounts('knowledge') || mounts('valuations'))) {
     requireEnv('API_BASE_URL');
   }
+  // A keyless deployment is supported and boots on purpose — the platform
+  // client reads its key on first call rather than on import, exactly so that
+  // it can. What is not supported is finding out only when the first agent
+  // request fails, so the process says it at boot as well. Any ONE of these
+  // three is enough, which is why the check is their disjunction.
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.KNOWLEDGE_LLM_API_KEY && !process.env.OPENAI_API_KEY) {
+    logger.warn(
+      'No model key is configured. Agents, extraction and property arbitration will fail when asked for. ' +
+        'Set any one of ANTHROPIC_API_KEY, KNOWLEDGE_LLM_API_KEY or OPENAI_API_KEY.',
+    );
+  }
   // Each product serves its own MCP connector, and only where it runs.
   mountMcpConnectors(app);
   Sentry.setupExpressErrorHandler(app);

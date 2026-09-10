@@ -30,7 +30,7 @@ Everything else follows from the unit list. Which pages the web UI shows, which 
 
 ## Two ways to start it
 
-**`./deploy/up.sh <units…> [--demo]`** is the door for a trial on your own machine. It works out the identity setting, the delivery paths and the optional services from the units you name, waits for health, and prints how to sign in. It also pins the public URLs to `http://localhost:<port>`, which is what makes the printed links work — and what makes it the wrong tool for a deployment behind a real hostname.
+**`./deploy/up.sh <units…> [--demo]`** is the door for a trial on your own machine. It works out the identity setting, the delivery paths and the optional services from the units you name, waits for health, and prints how to sign in. It defaults the public URLs to `http://localhost:<port>`, which is what makes the printed links work on a machine that has named none — but `deploy/.env` wins over every one of those defaults, so an installation behind a real hostname keeps its own URLs, ports and bind address through an `up.sh` run.
 
 **`docker compose pull && docker compose up -d`, run from `deploy/`**, is the production shape. It needs no build and no toolchain — just Docker and the tag you pinned:
 
@@ -116,7 +116,9 @@ Building from source is the right answer when you have changed the code, or on a
 | operator console | 8082 | only with `core` |
 | stand-in third parties | 8083, bound to `127.0.0.1` | only in demo mode |
 
-Postgres, Redis and the bundled object store publish no host port at all, so a self-hosted stack never collides with anything else on the machine. The stand-in third parties are the one service bound to `127.0.0.1` rather than to every interface: their email outbox holds live single-use login links, and anything that can read one is signed in. Change the published ports with `WEB_PORT`, `API_PORT`, `ADMIN_PORT` and `FAKE_CHANNELS_PORT_HOST` — in `deploy/.env` for `docker compose`, or in the shell for `up.sh` (`WEB_PORT=9000 ./deploy/up.sh knowledge`), because `up.sh` exports its own values and a shell value wins over the file.
+Postgres, Redis and the bundled object store publish no host port at all, so a self-hosted stack never collides with anything else on the machine. The stand-in third parties are always bound to `127.0.0.1`, whatever the rest of the stack is bound to: their email outbox holds live single-use login links, and anything that can read one is signed in. Change the published ports with `WEB_PORT`, `API_PORT`, `ADMIN_PORT` and `FAKE_CHANNELS_PORT_HOST`, in `deploy/.env` — which `up.sh` reads too, and a shell value still wins over both.
+
+**`LISTEN_FIRE_BIND` is which host address those ports answer on**, and it applies to the web app, the API and the admin console alike. Unset it binds every interface, which is what a trial wants. Set it to `127.0.0.1` for a deployment behind a reverse proxy on the same box: the proxy reaches the stack and nothing else can, so the firewall stops being the only thing standing between the internet and a plain-HTTP port. The port variables are numbers — an address belongs in `LISTEN_FIRE_BIND`, and `up.sh` refuses a port that carries one rather than letting compose fail on a mapping it cannot explain.
 
 The browser only ever talks to the web UI's own origin: the web container proxies API calls to the API container over the internal network. That is why the image bakes in no API hostname, and why one image runs anywhere.
 
@@ -152,7 +154,7 @@ docker compose run --rm --no-deps --entrypoint /usr/local/bin/with-generated-env
 
 `deploy/.env` is the human half — copy it from `deploy/.env.example`. It is read relative to the compose file, so it applies whichever directory you run `docker compose -f deploy/docker-compose.yml` from.
 
-**A model key is required** unless you start with `--demo`: `ANTHROPIC_API_KEY` (or `KNOWLEDGE_LLM_API_KEY`, or `OPENAI_API_KEY`). A deployment with no model key has no agents, no arbitration of conflicting facts and no extraction, so the installer refuses to mint an installation rather than let you find out later. That refusal is the only hard requirement in the file.
+**A model key is what buys you agents**, and any one of `ANTHROPIC_API_KEY`, `KNOWLEDGE_LLM_API_KEY` or `OPENAI_API_KEY` is enough. Without one the stack starts and serves — the graph, the CRM writes, the query surfaces and the whole of core need no model — and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for, each naming the key it wanted. `init` warns at every boot and so does the API, so it is not something you find out from a user. Nothing in this file is a hard requirement for starting.
 
 **Set your real URLs before you register anything or send anything.** `API_BASE_URL` and `WEB_BASE_URL` are where this installation is reachable from the internet, and both are used to build links that end up in other people's inboxes and in other systems' webhook registrations. They also decide cookie security: the session cookie is marked `Secure` only when those URLs are `https`, because a `Secure` cookie on a plain-http LAN address is set, silently dropped by the browser, and the person is bounced back to the login they just completed. Behind TLS, set them to your https URLs; on a plain-http trial, leave them http.
 
@@ -168,7 +170,7 @@ Integration credentials are all optional. An OAuth connector whose client id and
 
 Three things happen in order, once, and each is visible in the log.
 
-1. **Secrets are minted** into `listen-fire-config` (above). This step refuses to start the stack if no model key is configured and you did not ask for a demo.
+1. **Secrets are minted** into `listen-fire-config` (above). This step warns, at every boot, if no model key is configured and you did not ask for a demo.
 2. **Migrations run to completion** as a separate one-shot service before the API starts, so a restart never races the schema. If they fail, the API does not start at all.
 3. **On a `core` installation, the first account is provisioned** against the empty database: your team, your admin user, and an internal identity that unauthenticated routes run as. It is all-or-nothing — a half-provisioned database is no longer empty and would never be provisioned again — and it is skipped forever once the installation has people in it.
 
@@ -180,7 +182,9 @@ Papercut, stated plainly: **the first account is not a platform administrator**,
 
 **Single-tenant (no `core`).** `up.sh` prints the generated API key. Paste it into the web UI's login page, and use the same key as a `Authorization: Bearer …` token for the REST and agent-facing surfaces. Two things follow from the key being the whole credential: choose a long random one if you ever replace the generated key by hand, because the login door has no rate limit; and if the web UI cannot reach the API, its login page cannot know it is a single-tenant installation and will not offer the key form until the API answers.
 
-**With `core`.** People sign in by email — a single-use link, or a password. In a demo, `up.sh` reads the link out of the stand-in mail outbox and prints it. In production the link is genuinely emailed, so **login does not work at all until a mail provider is configured** — either `RESEND_API_KEY`, or `MAILGUN_API_KEY` with `MAILGUN_SENDING_DOMAIN`, and in both cases `OUTBOUND_EMAIL_FROM`. This is the one place where absent mail is not a degradation but a locked door.
+**With `core`.** People sign in by email — a single-use link, or a password. In production the link is genuinely emailed, so **login does not work at all until a mail provider is configured** — either `RESEND_API_KEY` (preferred, and it wins when both are set), or `MAILGUN_API_KEY` with `MAILGUN_SENDING_DOMAIN`, and in both cases `OUTBOUND_EMAIL_FROM`. This is the one place where absent mail is not a degradation but a locked door.
+
+**Day one is the exception, and `up.sh` handles it.** The first link is what you would sign in to configure mail WITH, so `up.sh` prints one at the end of every `core` run: in a demo it reads the link out of the stand-in mail outbox, and on a real installation it asks for one and reads the row back out of the database, where the link is stored in the clear. Single-use, good for an hour, and to be treated as a live session — anyone who reads it is signed in as that admin. A stack brought up with `docker compose` rather than `up.sh` can mint one by hand; see the recipe in [`guides/gcp-vm.md`](guides/gcp-vm.md).
 
 ## Demo mode
 
@@ -316,7 +320,7 @@ Accounts, teams, invitations, login, and the OAuth server that lets an agent con
 
 **Sign-in is invited-only.** There is no self-serve signup: an address that is neither an existing account nor a pending invitation is refused with "Ask an admin of your team to add you." An admin adds an address on `/settings/team` and that is the whole act — nothing is emailed, and the person joins the first time they sign in with it. Removing a member ends their memberships and kills their live sessions; re-adding the address lets them back in.
 
-Login is by emailed link or by password, and both need working mail — see "Signing in". Google and Microsoft sign-in buttons appear only if you configure their client ids: `GOOGLE_AUTH_CLIENT_ID` + `GOOGLE_AUTH_CLIENT_SECRET` on the API and the same id as `NEXT_PUBLIC_GOOGLE_CLIENT_ID` on the web app (a build-time value); `MICROSOFT_CLIENT_ID` on the API and `NEXT_PUBLIC_MICROSOFT_CLIENT_ID` on the web app. The Google client is a web-application OAuth client whose authorised JavaScript origin is `WEB_BASE_URL`; sign-in uses the token flow, so it needs no redirect URI.
+Login is by emailed link or by password, and both need working mail — see "Signing in". Google and Microsoft sign-in buttons appear only if you configure their client ids, and they are configured **on the API only**: `GOOGLE_AUTH_CLIENT_ID` with `GOOGLE_AUTH_CLIENT_SECRET`, and `MICROSOFT_CLIENT_ID`. The login page asks the API which providers exist (`GET /api/public/config`, unauthenticated because it is the page nobody has a session on yet) and draws a button only for an id that is there — so the button and the token check read the same value and cannot disagree. The Google client is a web-application OAuth client whose authorised JavaScript origin is `WEB_BASE_URL`; sign-in uses the token flow, so it needs no redirect URI.
 
 Redis is what makes the agent connect flow survive a restart: somebody clicks connect, consents, and their agent then exchanges a code for a token, which has to outlive whatever happens to the process in between. Held only in memory, an in-flight connection dies at a deploy and the exchange fails *after* the person has already consented, which is felt as a connect button that needed pressing twice.
 
@@ -491,7 +495,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 
 | variable | required | unset behaviour |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | yes, unless `--demo` | the installer refuses to mint an installation. Also the key the agents use, and the fallback for the graph's arbitration |
+| `ANTHROPIC_API_KEY` | no, but agents need one | the key the agents use, and the fallback for the graph's arbitration. Absent, `init` and the API warn at boot and every model-backed call fails naming it |
 | `KNOWLEDGE_LLM_API_KEY` | no | falls back to `ANTHROPIC_API_KEY`; with neither, contested properties hold their value and the queue grows, visibly |
 | `KNOWLEDGE_LLM_MODEL` | no | `claude-opus-5` |
 | `KNOWLEDGE_AGENT_PROVIDER` | recommended | which provider the conversational surfaces use; the default is not the same in all of them, so set it rather than inherit the disagreement |
@@ -508,7 +512,8 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `LISTEN_FIRE_DEMO` | no | `0`. `--demo` sets `1`, which is what wires the stand-in third parties to the installation and lets the sample dataset be seeded. Not something to turn on by hand on a real installation |
 | `PUBLIC_URL` | only behind a host-rewriting proxy | the agent connector's issuer origin is derived from the request |
 | `NEXT_PUBLIC_CLAUDE_DIRECTORY_URL` | no, and not for a self-host | unset. A build-time value on the web app, set only for the one deployment listed in Claude's connector directory; unset shows the paste-the-URL custom-connector steps instead |
-| `WEB_PORT` / `API_PORT` / `ADMIN_PORT` / `FAKE_CHANNELS_PORT_HOST` | no | 8080 / 8081 / 8082 / 8083 |
+| `WEB_PORT` / `API_PORT` / `ADMIN_PORT` / `FAKE_CHANNELS_PORT_HOST` | no | 8080 / 8081 / 8082 / 8083. Numbers only |
+| `LISTEN_FIRE_BIND` | no | every interface. `127.0.0.1` publishes the three apps to loopback only, for a reverse proxy on the same box |
 | `KNOWLEDGE_MUTATION_DELIVERY` | no | derived from your unit list by `up.sh`; the code's own default is `local`. An unrecognised value fails the boot rather than picking one |
 | `ASKS_SETTLE_DELIVERY` | no | as above |
 | `COMPOSE_PROFILES` | only without `up.sh` | nothing optional runs, INCLUDING the bundled datastores. `postgres,redis,minio` is the shipped line; add `admin` for the operator console and `demo` for the stand-ins. Read by `docker compose` itself, from `deploy/.env` |
