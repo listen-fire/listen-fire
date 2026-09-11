@@ -82,6 +82,7 @@ describe('anthropicChat with a text-free reply', () => {
   it('stops instead of continuing when max_tokens is hit before any text', async () => {
     // Thinking consumed the whole budget: one thinking block, no text. Continuing
     // would push `{ role: "assistant", content: "" }`, which the API rejects.
+    // No effort was named, so there is no depth to step down from either.
     finalMessage.mockResolvedValueOnce(
       reply({
         content: [{ type: 'thinking', thinking: '', signature: 'sig' }],
@@ -128,7 +129,147 @@ describe('anthropicChatDetailed', () => {
       text: 'done',
       stopReason: 'end_turn',
       truncated: false,
+      continuations: 0,
+      thinkingOnly: false,
+      maxTokens: 16384,
     });
+  });
+});
+
+/**
+ * Thinking is paid for out of the SAME ceiling as the answer, so a model asked
+ * to think as hard as it can over a long document can spend the whole budget
+ * before writing a character. The turn is not salvageable — there is no partial
+ * answer to continue from — but the QUESTION is: asked one step less deeply, the
+ * same call has room left for its reply.
+ *
+ * The step down happens once. A second text-free turn means the ceiling, not the
+ * depth, is what the call is short of, and that is the caller's problem to name.
+ */
+describe('a turn that spends the whole ceiling thinking', () => {
+  const thinkingOnly = () =>
+    reply({
+      content: [{ type: 'thinking', thinking: 'and on, and on', signature: 'sig' }],
+      stopReason: 'max_tokens',
+    });
+
+  function effortOf(call: number): unknown {
+    const [request] = stream.mock.calls[call] as unknown as [Record<string, unknown>];
+    return (request.output_config as Record<string, unknown> | undefined)?.effort;
+  }
+
+  it('asks the same question again one effort lower', async () => {
+    finalMessage
+      .mockResolvedValueOnce(thinkingOnly())
+      .mockResolvedValueOnce(reply({ content: [text('the answer')], stopReason: 'end_turn' }));
+
+    const result = await anthropicChatDetailed({
+      system: 's',
+      userMessage: 'u',
+      effort: 'xhigh',
+      label: 'movement_extraction',
+    });
+
+    expect(result.text).toBe('the answer');
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(effortOf(0)).toBe('xhigh');
+    expect(effortOf(1)).toBe('high');
+
+    // The retry is the SAME question — not a continuation of an answer that
+    // was never written.
+    const [first] = stream.mock.calls[0] as unknown as [Record<string, unknown>];
+    const [second] = stream.mock.calls[1] as unknown as [Record<string, unknown>];
+    expect(second.messages).toEqual(first.messages);
+  });
+
+  it('says in the log that it stepped down, and what it stepped between', async () => {
+    finalMessage
+      .mockResolvedValueOnce(thinkingOnly())
+      .mockResolvedValueOnce(reply({ content: [text('ok')], stopReason: 'end_turn' }));
+
+    await anthropicChatDetailed({
+      system: 's',
+      userMessage: 'u',
+      effort: 'xhigh',
+      label: 'movement_extraction',
+      maxTokens: 64_000,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      '[anthropic] thought past the ceiling — retrying one effort lower',
+      expect.objectContaining({
+        label: 'movement_extraction',
+        model: 'claude-sonnet-5',
+        from: 'xhigh',
+        to: 'high',
+        maxTokens: 64_000,
+      }),
+    );
+  });
+
+  it('tells the caller the answer it got was the stepped-down one', async () => {
+    finalMessage
+      .mockResolvedValueOnce(thinkingOnly())
+      .mockResolvedValueOnce(reply({ content: [text('ok')], stopReason: 'end_turn' }));
+
+    const result = await anthropicChatDetailed({ system: 's', userMessage: 'u', effort: 'xhigh' });
+
+    expect(result.steppedDown).toEqual({ from: 'xhigh', to: 'high' });
+    expect(result.effort).toBe('high');
+  });
+
+  it('steps down only once, and hands back the facts the failure has to name', async () => {
+    finalMessage.mockResolvedValueOnce(thinkingOnly()).mockResolvedValueOnce(thinkingOnly());
+
+    const result = await anthropicChatDetailed({
+      system: 's',
+      userMessage: 'u',
+      effort: 'xhigh',
+      maxTokens: 64_000,
+    });
+
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({
+        text: '',
+        truncated: true,
+        thinkingOnly: true,
+        // The ceiling was never reached by an ANSWER, so no continuation was
+        // ever attempted — the error must not claim five.
+        continuations: 0,
+        effort: 'high',
+        maxTokens: 64_000,
+      }),
+    );
+  });
+
+  it('has nowhere to step from at the shallowest effort', async () => {
+    finalMessage.mockResolvedValueOnce(thinkingOnly());
+
+    const result = await anthropicChatDetailed({ system: 's', userMessage: 'u', effort: 'low' });
+
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(result.thinkingOnly).toBe(true);
+    expect(result.effort).toBe('low');
+    expect(warn).not.toHaveBeenCalledWith(
+      '[anthropic] thought past the ceiling — retrying one effort lower',
+      expect.anything(),
+    );
+  });
+
+  // The regression guard: a truncation WITH text is a half-written answer, and
+  // continuing it is still the right move.
+  it('continues a truncation that did produce text rather than stepping down', async () => {
+    finalMessage
+      .mockResolvedValueOnce(reply({ content: [text('half an ')], stopReason: 'max_tokens' }))
+      .mockResolvedValueOnce(reply({ content: [text('answer')], stopReason: 'end_turn' }));
+
+    const result = await anthropicChatDetailed({ system: 's', userMessage: 'u', effort: 'xhigh' });
+
+    expect(result.text).toBe('half an answer');
+    expect(result.steppedDown).toBeUndefined();
+    expect(result.continuations).toBe(1);
+    expect(effortOf(1)).toBe('xhigh');
   });
 });
 

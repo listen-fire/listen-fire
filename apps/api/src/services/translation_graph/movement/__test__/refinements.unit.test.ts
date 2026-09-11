@@ -40,10 +40,18 @@ const members = [
   { name: 'Other Sheet', data: { Title: 'Other Sheet', Owner: 'sales' } },
 ];
 
+/** The TYPE a member lands, which is NOT the name the member is addressed by.
+ *  Every walking adapter with per-container types works this way — Affinity's
+ *  `List Entries` edge publishes a member addressed `Portfolio` whose records
+ *  are stamped `List Entry — Portfolio` — and a fixture where the two strings
+ *  agree cannot tell a gate that compares the right one from a gate that
+ *  compares the wrong one. */
+const landedTypeName = (member: string) => `Sheet — ${member}`;
+
 /** Pipeline Sheet's own surface: Title + ONLY the Companies table edge. */
 const selectedDescriptor: SchemaTypeDescriptor = {
-  typeId: SPREADSHEET,
-  displayName: SPREADSHEET,
+  typeId: landedTypeName('Pipeline Sheet'),
+  displayName: landedTypeName('Pipeline Sheet'),
   fields: [
     { fieldId: 'Title', displayName: 'Title', kind: 'string', writable: true, required: true },
   ],
@@ -82,7 +90,11 @@ const instanceWith = (
   adapterType: 'google_sheets',
   schema: unionSchema,
   entryPoints,
-  describeType: async () => selectedDescriptor,
+  describeType: async (typeName: string) => ({
+    ...selectedDescriptor,
+    typeId: landedTypeName(typeName),
+    displayName: landedTypeName(typeName),
+  }),
   membersOf: async () => members,
   ...overrides,
 });
@@ -117,6 +129,49 @@ describe('refineInstanceSchema', () => {
     // Copy-on-write: the shared cached schema is untouched.
     expect(unionSchema.refinements).toBeUndefined();
     expect(Object.keys(unionSchema.positions)).not.toContain(refinedName);
+  });
+
+  // The runtime half of the same narrowing. `refinements` tells the checker
+  // which POSITION to type the hop as; `selectedMembers` tells the engine which
+  // MEMBER's records are on that path, so a landed record of any other member
+  // is dropped instead of having the selected member's WHERE read off it. Two
+  // facts, one key, one pass — they cannot disagree about which member won.
+  it('records the member TYPE it selected under the same key, for the runtime', async () => {
+    const where = '`Title` == "Pipeline Sheet" AND `Owner` == "ops"';
+    const { schema } = await refineInstanceSchema({
+      instance: instanceWith(),
+      chains: scanInstanceChains(sourceWith(where)),
+    });
+
+    // The TYPE the selected member lands — the string an adapter stamps on one
+    // of its records — taken from the descriptor the walk just fetched. NOT
+    // the name the member is addressed by (`Pipeline Sheet`), which no record
+    // ever carries, and not the refined position's display name.
+    expect(schema.selectedMembers?.[keyFor(where)]).toBe('Sheet — Pipeline Sheet');
+    expect(schema.selectedMembers?.[keyFor(where)]).not.toBe('Pipeline Sheet');
+    expect(schema.refinements?.[keyFor(where)]).toBe('Spreadsheet "Pipeline Sheet"');
+    expect(unionSchema.selectedMembers).toBeUndefined();
+  });
+
+  // Two spellings of one selection are two keys naming ONE member, and the
+  // second answers from the pass's own memory rather than a second describe —
+  // so it must still carry the member TYPE, not fall back to the addressing
+  // name that costs nothing to reach for.
+  it('a second spelling records the same member TYPE, with no second walk', async () => {
+    const flipped = '"Pipeline Sheet" == `Title`';
+    const both = `${sourceWith('`Title` == "Pipeline Sheet"')}\n${sourceWith(flipped)
+      .split('\n')
+      .slice(3)
+      .join('\n')}`;
+    const { schema } = await refineInstanceSchema({
+      instance: instanceWith(),
+      chains: scanInstanceChains(both),
+    });
+
+    expect(schema.selectedMembers?.[keyFor('`Title` == "Pipeline Sheet"')]).toBe(
+      'Sheet — Pipeline Sheet',
+    );
+    expect(schema.selectedMembers?.[keyFor(flipped)]).toBe('Sheet — Pipeline Sheet');
   });
 
   // The point of narrowing-by-evaluation: a conjunction needs nothing widened.
@@ -321,6 +376,8 @@ describe('narrowForInspection', () => {
       'Pipeline Sheet': selectedDescriptor,
       'Other Sheet': {
         ...selectedDescriptor,
+        typeId: landedTypeName('Other Sheet'),
+        displayName: landedTypeName('Other Sheet'),
         references: [{ fieldId: 'Deals (table)', targetTypeId: 'tbl-deals', cardinality: 'many' }],
       },
     };

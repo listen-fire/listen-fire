@@ -76,6 +76,11 @@ export interface LlmCallResult {
    *  text away (and every test stub) simply omits it, and observers fall
    *  back to the parsed body. Never persisted except on an anomaly. */
   rawText?: string;
+  /** Present when the client got its answer only by asking less deeply than the
+   *  caller said: the first attempt spent its whole output ceiling thinking and
+   *  wrote nothing. The answer in hand is the cheaper one, and an observer has
+   *  to be able to see that rather than infer it from a thin reply. */
+  effortSteppedDown?: { from: string; to: string };
 }
 
 export interface LlmCallInput {

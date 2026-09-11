@@ -57,7 +57,7 @@ import type {
   FieldType,
   PluginCall,
 } from 'movement-lang';
-import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS } from '../../lib/anthropic';
+import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS, type ChatReply } from '../../lib/anthropic';
 import { currentLlmUsageContext, runFields } from '../../lib/llm_usage';
 import { RunCancelledSignal } from './cancel_gate';
 import { parseJsonReply } from '../../lib/prompts/execute';
@@ -717,13 +717,31 @@ function logTruncatedExtraction(input: { label: string; userMessage: string }, r
   const partial = parseJsonReply(reply.text, { label: input.label, prompt: input.userMessage });
   logger.warn('[extraction] truncated', {
     label: input.label,
-    // ChatReply carries no usage figures (only text/stopReason/truncated), so
+    // ChatReply carries the call's boundary facts but no usage figures, so
     // this is the same chars/4 estimate `extractionMaxTokens` sizes a budget
     // with — good enough to tell "a little over budget" from "wildly over".
     estimatedOutputTokens: Math.round(reply.text.length / CHARS_PER_TOKEN),
     entitiesParsed: countPartialEntities(partial),
     tail: reply.text.slice(-TRUNCATED_TAIL_CHARS),
   });
+}
+
+/**
+ * Why the reply is a fragment, in the terms the next reader needs. Two
+ * different failures end a call at the ceiling and they want opposite fixes:
+ * an answer too long to finish, or an answer never started because the
+ * THINKING spent the whole ceiling first (adaptive models pay for both out of
+ * one budget). Both name the continuations actually attempted — the ceiling
+ * the wrapper was allowed says nothing about what this call did, and quoting
+ * it sent the incident's readers looking for a long answer that was never
+ * written.
+ */
+function describeTruncation(reply: ChatReply, ceiling: number): string {
+  const spent = `${reply.continuations} continuation${reply.continuations === 1 ? '' : 's'}`;
+  if (reply.thinkingOnly) {
+    return `the model spent the whole ${ceiling}-token output ceiling thinking${reply.effort ? ` at effort ${reply.effort}` : ''} and produced no text, after ${spent}`;
+  }
+  return `the model hit the ${ceiling}-token output ceiling and was still truncated after ${spent}`;
 }
 
 /** Anthropic-backed default client — the same wiring as the TG
@@ -772,7 +790,7 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
       if (reply.truncated) {
         logTruncatedExtraction(input, reply);
         throw new Error(
-          `Extraction '${input.label}' produced no complete answer: the model hit the ${maxTokens}-token output ceiling and was still truncated after ${maxContinuations} continuation${maxContinuations === 1 ? '' : 's'} (EXTRACTION_OUTPUT_BUDGET ${budgetOn ? 'on' : 'off'}).`,
+          `Extraction '${input.label}' produced no complete answer: ${describeTruncation(reply, maxTokens)} (EXTRACTION_OUTPUT_BUDGET ${budgetOn ? 'on' : 'off'}).`,
         );
       }
       return {
@@ -782,6 +800,7 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
         // life of one call; only a misbehaving call ever persists a (capped)
         // slice of it.
         rawText: reply.text,
+        ...(reply.steppedDown ? { effortSteppedDown: reply.steppedDown } : {}),
       };
     },
   };
@@ -1259,6 +1278,9 @@ class Materializer {
       : replyDigest(telemetry.lastReply, why, focus);
     return {
       model: telemetry.model,
+      ...(telemetry.lastReply?.effortSteppedDown
+        ? { effortSteppedDown: telemetry.lastReply.effortSteppedDown }
+        : {}),
       ...(telemetry.durationMs !== undefined ? { durationMs: telemetry.durationMs } : {}),
       ...(telemetry.retried ? { retried: telemetry.retried } : {}),
       ...(digest ? { reply: digest } : {}),

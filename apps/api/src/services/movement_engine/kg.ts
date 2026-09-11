@@ -76,6 +76,38 @@ import {
 // It is UNIFORM — the KG is not special. It lives here because the kg-seeded
 // source was its first consumer, but it carries no KG knowledge.
 
+/**
+ * WHAT THE ADAPTER SAID THIS RECORD IS — its own stamp, where the schema
+ * recognises the name as a position; `undefined` when it does not.
+ *
+ * The declared edge target is what the SCHEMA says a hop lands on; a walked
+ * adapter often knows better, because the landing is polymorphic and it just
+ * resolved which member it actually got (Affinity's `List Entries` declares the
+ * collection `Organization List Entry`; the adapter lands the concrete `List
+ * Entry — Pipeline`, which is the type that genuinely has `Deal Stage`).
+ *
+ * So the adapter's stamp WINS whenever the projected schema knows that name as
+ * a position — it is a more specific answer to the same question, and the
+ * schema knowing it is exactly the evidence that downstream reads can resolve
+ * against it. Everything else is "the adapter told us nothing usable": the read
+ * wrapper falls back to the declared target, and the member gate treats the
+ * record as making no claim about which member it belongs to.
+ *
+ * ONE definition, because those two are the same question asked twice — the
+ * wrapper decides what to STAMP a landing with and the gate decides what a
+ * landing's stamp MEANS, and a gate that answered differently would compare a
+ * name no record can ever carry (which is exactly how a narrowed `List Entries`
+ * hop came to drop every record it landed).
+ */
+export function stampedPositionName(input: {
+  schema: InstanceSchema | undefined;
+  position: SourcePosition;
+}): string | undefined {
+  const concrete = input.position.recordType;
+  if (concrete === null || concrete === undefined) return undefined;
+  return input.schema?.positions[concrete] !== undefined ? concrete : undefined;
+}
+
 export function surfaceReadAdapter(input: {
   inner: Adapter;
   /** The source instance's schema — hop target types resolve against it. */
@@ -118,32 +150,11 @@ export function surfaceReadAdapter(input: {
   };
 
   /**
-   * The type a LANDED position should carry.
-   *
-   * The declared edge target is what the SCHEMA says the hop lands on; a walked
-   * adapter often knows better, because the landing is polymorphic and it just
-   * resolved which member it actually got (Affinity's `List Entries` declares
-   * the collection `Organization List Entry`; the adapter lands the concrete
-   * `List Entry — Pipeline`, which is the type that genuinely has `Deal Stage`).
-   *
-   * So the adapter's own stamp WINS whenever the projected schema knows that
-   * name as a position — it is a more specific answer to the same question, and
-   * the schema knowing it is exactly the evidence that downstream reads can
-   * resolve against it. The declared target is the FALLBACK, for the ordinary
-   * case where the adapter yields nothing usable.
-   *
-   * This is what `restamp` below always claimed ("an adapter that already
-   * yields a concrete type isn't clobbered") — a guarantee that in fact only
-   * held when the schema had NO declared target, which is precisely when the
-   * question doesn't arise.
+   * The type a LANDED position should carry: the adapter's own stamp where the
+   * schema recognises it, else the declared edge target.
    */
-  const landedType = (position: SourcePosition, declared: string | undefined): string | undefined => {
-    const concrete = position.recordType;
-    if (concrete !== null && concrete !== undefined && schema?.positions[concrete] !== undefined) {
-      return concrete;
-    }
-    return declared;
-  };
+  const landedType = (position: SourcePosition, declared: string | undefined): string | undefined =>
+    stampedPositionName({ schema, position }) ?? declared;
 
   // Re-stamp a position's `recordType` with a NATURAL type so the adapter's
   // own getFieldValue resolves the right type. `natural` undefined means "we

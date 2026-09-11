@@ -652,7 +652,7 @@ describe('AI(): runMovement through the LlmClient seam', () => {
     expect(byPrompt.get('normalise the company name')).toEqual({ model: 'sonnet' });
     expect(byPrompt.get('weigh this against the thesis')).toEqual({
       model: 'opus5',
-      maxTokens: 32000,
+      maxTokens: 64000,
     });
     // The spelling that predates the tiers still runs, and runs as `careful`.
     expect(byPrompt.get('a note')).toEqual({ model: 'sonnet' });

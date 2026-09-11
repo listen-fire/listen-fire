@@ -244,12 +244,26 @@ export async function refineInstanceSchema(input: {
   let schema = instance.schema;
   let positions = schema.positions;
   let refinements = schema.refinements ?? {};
+  /** The selected member's own TYPE, per key — the runtime half of the same
+   *  fact. The checker rebinds the hop to `refinements[key]`; the engine drops
+   *  any landed record whose own type is not `selectedMembers[key]`, so the two
+   *  sides cannot disagree about which member a WHERE chose.
+   *
+   *  The TYPE, never the ADDRESSING name: a member is ADDRESSED by the label
+   *  the meta walk filed it under (Affinity's `"Portfolio"`) and LANDS records
+   *  of a type of its own (`"List Entry — Portfolio"`), and it is the landed
+   *  type the adapter stamps. Storing the addressing name made the gate compare
+   *  two different vocabularies, which is never true, so every record of every
+   *  narrowed `List Entries` hop was silently dropped. */
+  let selectedMembers = schema.selectedMembers ?? {};
   const attempted = new Set<string>();
-  /** The refined positions THIS pass grafted. A key is the WHERE as written, so
-   *  two spellings of one selection (`` `T` == "F" `` and `` "F" == `T` ``) are
-   *  two keys naming ONE member — the second must reuse the first's position
-   *  rather than trip the name-taken guard below and silently not narrow. */
-  const grafted = new Set<string>();
+  /** The refined positions THIS pass grafted, each with the member type it
+   *  lands. A key is the WHERE as written, so two spellings of one selection
+   *  (`` `T` == "F" `` and `` "F" == `T` ``) are two keys naming ONE member —
+   *  the second must reuse the first's position rather than trip the name-taken
+   *  guard below and silently not narrow, and must record the same member type
+   *  without paying for the describe that names it. */
+  const grafted = new Map<string, string>();
 
   const graft = async (typeName: string, filter: Expression) => {
     const key = refinementKey({ type: typeName, filter });
@@ -277,12 +291,14 @@ export async function refineInstanceSchema(input: {
     const selected = selection.value;
 
     const refinedName = refinedTypeName({ typeName, member: selected });
-    if (grafted.has(refinedName)) {
+    const already = grafted.get(refinedName);
+    if (already !== undefined) {
       // A different spelling of this same selection — one member, one position,
       // now reachable under both keys. Answered before the walk, so a second
       // spelling costs nothing.
       refinements = { ...refinements, [key]: refinedName };
-      schema = { ...schema, refinements };
+      selectedMembers = { ...selectedMembers, [key]: already };
+      schema = { ...schema, refinements, selectedMembers };
       return refinedName;
     }
     if (positions[refinedName] !== undefined) return undefined; // name taken — leave unnarrowed
@@ -291,6 +307,13 @@ export async function refineInstanceSchema(input: {
     // a second spelling of one selection pays a second walk.
     const described = await describeMember({ instance, member: selected });
     if (!described.ok) return noteFailure(described.failure);
+    // The member's own type, as the walk names it — the SAME string a landed
+    // record of this member carries, because both come from this descriptor
+    // (the projection keys positions by `displayName`, and an adapter stamps
+    // the type it published). Derived here, at the one point the selection is
+    // made, so nothing downstream has to reconstruct it from the addressing
+    // name.
+    const memberType = described.value.displayName;
 
     const refinedPosition = projectRefinedPosition({
       instance,
@@ -302,8 +325,9 @@ export async function refineInstanceSchema(input: {
 
     positions = { ...positions, [refinedName]: refinedPosition };
     refinements = { ...refinements, [key]: refinedName };
-    schema = { ...schema, positions, refinements };
-    grafted.add(refinedName);
+    selectedMembers = { ...selectedMembers, [key]: memberType };
+    schema = { ...schema, positions, refinements, selectedMembers };
+    grafted.set(refinedName, memberType);
     return refinedName;
   };
 

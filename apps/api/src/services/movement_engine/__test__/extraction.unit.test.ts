@@ -773,22 +773,23 @@ describe('the extraction tier', () => {
       { model: 'sonnet', effort: 'low' },
       { model: 'sonnet', effort: 'low' },
     ]);
+    // Both tiers that REASON spend a flat budget rather than one sized from the
+    // question, and a larger one than anything else here — that budget pays for
+    // the thinking as well as the answer.
     expect(await callsFor('careful')).toEqual([
-      { model: 'sonnet', effort: 'high' },
-      { model: 'sonnet', effort: 'high' },
+      { model: 'sonnet', effort: 'high', maxTokens: 64_000 },
+      { model: 'sonnet', effort: 'high', maxTokens: 64_000 },
     ]);
-    // `thorough` spends a flat budget rather than one sized from the
-    // question, on top of the deepest named effort.
     expect(await callsFor('thorough')).toEqual([
-      { model: 'sonnet', effort: 'xhigh', maxTokens: 32_000 },
-      { model: 'sonnet', effort: 'xhigh', maxTokens: 32_000 },
+      { model: 'sonnet', effort: 'xhigh', maxTokens: 64_000 },
+      { model: 'sonnet', effort: 'xhigh', maxTokens: 64_000 },
     ]);
   });
 
   it('runs the legacy spelling as the tier it means', async () => {
     expect(await callsFor('smart')).toEqual([
-      { model: 'sonnet', effort: 'high' },
-      { model: 'sonnet', effort: 'high' },
+      { model: 'sonnet', effort: 'high', maxTokens: 64_000 },
+      { model: 'sonnet', effort: 'high', maxTokens: 64_000 },
     ]);
   });
 });
@@ -3038,6 +3039,8 @@ describe('the Anthropic-backed extraction client', () => {
       text: TRUNCATED_BODY,
       stopReason: 'max_tokens',
       truncated: true,
+      continuations: 5,
+      thinkingOnly: false,
     });
 
     await expect(makeAnthropicLlmClient().call(callInput)).rejects.toThrow(
@@ -3050,6 +3053,8 @@ describe('the Anthropic-backed extraction client', () => {
       text: TRUNCATED_BODY,
       stopReason: 'max_tokens',
       truncated: true,
+      continuations: 5,
+      thinkingOnly: false,
     });
 
     await expect(makeAnthropicLlmClient().call(callInput)).rejects.toThrow();
@@ -3080,16 +3085,54 @@ describe('the Anthropic-backed extraction client', () => {
       expect(detailed.mock.calls[0][0]).not.toHaveProperty('maxContinuations');
     });
 
-    it('names the flat ceiling and the wrapper default continuation count in the truncation error, and says the guard was off', async () => {
+    it('names the flat ceiling and the continuations the wrapper actually spent, and says the guard was off', async () => {
       detailed.mockResolvedValueOnce({
         text: TRUNCATED_BODY,
         stopReason: 'max_tokens',
         truncated: true,
+        continuations: 5,
+        thinkingOnly: false,
+        maxTokens: 32_000,
       });
 
       await expect(makeAnthropicLlmClient().call(callInput)).rejects.toThrow(
         /32000-token output ceiling.*5 continuations \(EXTRACTION_OUTPUT_BUDGET off\)/s,
       );
+    });
+  });
+
+  // The failure this names: a morning-recap run whose model spent the whole
+  // 32k ceiling thinking at `xhigh` and wrote nothing. The error blamed "5
+  // continuations" — the ceiling the wrapper was ALLOWED, not the zero it
+  // actually attempted — and sent its readers looking for a long answer that
+  // was never written.
+  describe('when the model spent the whole ceiling thinking', () => {
+    const thinkingOnlyReply = {
+      text: '',
+      stopReason: 'max_tokens' as const,
+      truncated: true,
+      continuations: 0,
+      thinkingOnly: true,
+      effort: 'high' as const,
+      maxTokens: 64_000,
+    };
+
+    it('says so — the ceiling, the depth it was thinking at, and that no text came back', async () => {
+      detailed.mockResolvedValueOnce(thinkingOnlyReply);
+
+      await expect(
+        makeAnthropicLlmClient().call({ ...callInput, effort: 'xhigh', maxTokens: 64_000 }),
+      ).rejects.toThrow(
+        /spent the whole 64000-token output ceiling thinking at effort high and produced no text/,
+      );
+    });
+
+    it('counts the continuations it took, not the ones it was allowed', async () => {
+      detailed.mockResolvedValueOnce(thinkingOnlyReply);
+
+      await expect(
+        makeAnthropicLlmClient().call({ ...callInput, effort: 'xhigh', maxTokens: 64_000 }),
+      ).rejects.toThrow(/0 continuations/);
     });
   });
 
@@ -3137,6 +3180,9 @@ describe('the Anthropic-backed extraction client', () => {
         text: TRUNCATED_BODY,
         stopReason: 'max_tokens',
         truncated: true,
+        continuations: 1,
+        thinkingOnly: false,
+        maxTokens: 8_000,
       });
 
       await expect(makeAnthropicLlmClient().call(callInput)).rejects.toThrow(
@@ -3528,12 +3574,28 @@ describe('an extraction call describes itself on the run', () => {
   async function intake(
     source: string,
     responses: unknown[],
-    options?: { runId?: string; fetchedChars?: number },
+    options?: {
+      runId?: string;
+      fetchedChars?: number;
+      /** The client answered one effort lower than it was asked to. */
+      steppedDown?: { from: string; to: string };
+    },
   ): Promise<{
     calls: LlmCallInput[];
     trace: Awaited<ReturnType<typeof runMovement>>['trace'];
   }> {
-    const llm = queuedMovementLlm(responses);
+    const queued = queuedMovementLlm(responses);
+    const steppedDown = options?.steppedDown;
+    const llm = {
+      calls: queued.calls,
+      client: steppedDown
+        ? {
+            async call(input: LlmCallInput): Promise<LlmCallResult> {
+              return { ...(await queued.client.call(input)), effortSteppedDown: steppedDown };
+            },
+          }
+        : queued.client,
+    };
     const fire = () =>
       runMovement({
         source,
@@ -3589,6 +3651,23 @@ describe('an extraction call describes itself on the run', () => {
     expect(entry).not.toHaveProperty('retried');
     expect(entry).not.toHaveProperty('dropped');
     expect(entry).not.toHaveProperty('failed');
+    expect(entry).not.toHaveProperty('effortSteppedDown');
+  });
+
+  // A call that answered only because it was asked less deeply is not the call
+  // the author paid for, and the difference shows up as a thinner answer. It
+  // sits next to the model, which is the other half of "what answered this".
+  it('records that a call was answered one effort lower than it was asked', async () => {
+    const { trace } = await intake(
+      ONE_STAGE_FETCH_MOVEMENT,
+      [{ 'x:extract_result#1': [{ company: [{ name: wrap('Gondor') }] }] }],
+      { steppedDown: { from: 'xhigh', to: 'high' } },
+    );
+
+    expect(extractions(trace)[0]).toMatchObject({
+      model: expect.any(String),
+      effortSteppedDown: { from: 'xhigh', to: 'high' },
+    });
   });
 
   it('the input shape adds up to the total, so two sibling calls are comparable', async () => {

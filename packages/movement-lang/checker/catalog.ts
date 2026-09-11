@@ -1104,6 +1104,24 @@ export interface InstanceSchema {
    */
   refinements?: Record<string, string>;
   /**
+   * The TYPE the member each refinement selected lands, under the SAME
+   * `refinementKey` as `refinements` — the name that type is PUBLISHED under,
+   * which is exactly what a landed record's `recordType` carries.
+   *
+   * Not the member's ADDRESSING name. A polymorphic member is addressed by the
+   * label the meta walk filed it under (Affinity's `"Portfolio"`) and lands
+   * records of a type of its own (`"List Entry — Portfolio"`); those are two
+   * strings, and only the second one a record can ever equal.
+   *
+   * `refinements` is the TYPE half of a narrowing and `selectedMembers` is the
+   * RUNTIME half: the checker rebinds the hop to the member's surface, the
+   * engine drops any landed record of a different member before reading a
+   * field off it. Two facts, one key, one host pass — so the two halves cannot
+   * disagree about which member a WHERE chose. Absent ⇒ nothing narrowed, and
+   * every landed record faces the whole WHERE as it always has.
+   */
+  selectedMembers?: Record<string, string>;
+  /**
    * Construction-site landings (2026-07-30): positions synthesized from ONE
    * write's own literals, keyed by `genericLandingKey`. The refinements
    * mechanism one door over — there the program's WHERE selects a position the

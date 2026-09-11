@@ -750,6 +750,44 @@ interface ChatReply {
   /** The loop ran out of road while still truncated — continuations exhausted,
    *  `noContinue`, or the text-free bail. The text is a fragment. */
   truncated: boolean;
+  /** Continuation turns actually attempted, NOT the ceiling that was allowed.
+   *  A reply that died before writing a character attempted none, and a caller
+   *  that reports the ceiling instead sends its reader after the wrong thing. */
+  continuations: number;
+  /** The last turn spent its whole ceiling thinking: `max_tokens`, no text, and
+   *  nothing in the reply but reasoning. There is no fragment to salvage. */
+  thinkingOnly: boolean;
+  /** The depth the LAST turn ran at — the caller's, unless the step-down below
+   *  lowered it. Absent when the caller named none. */
+  effort?: ChatEffort;
+  /** Set when a thinking-only turn was retried one effort lower. The answer in
+   *  hand is the cheaper one, and a caller that meters or traces its calls has
+   *  to be able to say so. */
+  steppedDown?: { from: ChatEffort; to: ChatEffort };
+  /** The output ceiling every turn ran under. */
+  maxTokens: number;
+}
+
+type ChatEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * One rung down the reasoning ladder — `undefined` at the bottom, and for a
+ * caller that named no depth at all (there is nothing to lower: the model is
+ * already at its own default, and naming one for it would be a different
+ * question than the caller asked).
+ */
+function effortBelow(effort: ChatEffort | undefined): ChatEffort | undefined {
+  switch (effort) {
+    case 'xhigh':
+      return 'high';
+    case 'high':
+      return 'medium';
+    case 'medium':
+      return 'low';
+    case 'low':
+    case undefined:
+      return undefined;
+  }
 }
 
 async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<ChatReply> {
@@ -770,10 +808,12 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
 
   // Adaptive thinking is ON by default on these models; the only lever a chat
   // caller has over its depth is `effort`, and it only lands if `thinking` is
-  // sent alongside it.
-  const thinkingConfig =
-    effort && usesAdaptiveThinking(model)
-      ? { thinking: { type: 'adaptive' as const }, output_config: { effort } }
+  // sent alongside it. `currentEffort` is what THIS turn asks for — the
+  // caller's, until a turn spends the whole ceiling thinking.
+  let currentEffort = effort;
+  const thinkingConfigFor = (depth: ChatEffort | undefined) =>
+    depth && usesAdaptiveThinking(model)
+      ? { thinking: { type: 'adaptive' as const }, output_config: { effort: depth } }
       : {};
 
   const requestId = randomUUID().slice(0, 8);
@@ -796,10 +836,20 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   let stopReason: Anthropic.StopReason | null = null;
   let contentBlockTypes: string[] = [];
   let turnsTaken = 0;
+  let steppedDown: { from: ChatEffort; to: ChatEffort } | undefined;
+  let thinkingOnly = false;
 
-  for (let turn = 0; turn <= maxContinuations; turn++) {
+  // `turn` counts CONTINUATIONS, not requests: a step-down asks the same
+  // question again rather than continuing an answer, so it does not spend one.
+  let turn = 0;
+  for (;;) {
     turnsTaken += 1;
-    logger.info('[anthropic] chat starting', { ...callFields, turn, maxTokens, effort });
+    logger.info('[anthropic] chat starting', {
+      ...callFields,
+      turn,
+      maxTokens,
+      effort: currentEffort,
+    });
 
     const settleWatch = watchSlowCall({ ...callFields, turn });
     let response: Anthropic.Message;
@@ -813,7 +863,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
           max_tokens: maxTokens,
           system: systemBlock,
           messages,
-          ...thinkingConfig,
+          ...thinkingConfigFor(currentEffort),
           ...(temperature != null && { temperature }),
           // `effort: 'xhigh'` is a real value this SDK's pinned types predate
           // (its `OutputConfig.effort` union stops at `'max'`) — same
@@ -839,18 +889,40 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     totalCacheCreationTokens += response.usage.cache_creation_input_tokens ?? 0;
     stopReason = response.stop_reason;
     contentBlockTypes = response.content.map((b) => b.type);
+    thinkingOnly =
+      response.stop_reason === 'max_tokens' &&
+      text === '' &&
+      contentBlockTypes.length > 0 &&
+      contentBlockTypes.every((type) => type === 'thinking');
 
     if (response.stop_reason !== 'max_tokens' || noContinue) break;
 
-    // Truncated *before* any text — the whole budget went on thinking, so there
-    // is nothing to continue from. The continuation below would push an empty
-    // assistant turn, which the API rejects (text blocks must be non-empty),
-    // turning a thin reply into four retries and a 400.
-    if (text === '') break;
+    // Truncated *before* any text — the whole budget went on THINKING, which is
+    // paid for out of the same ceiling as the answer. There is nothing to
+    // continue from (the continuation below would push an empty assistant turn,
+    // which the API rejects), but the question can be asked again less deeply:
+    // the depth is what ate the room the answer needed. Once only — a second
+    // text-free turn means the ceiling itself is short, and that is the
+    // caller's to report.
+    if (text === '') {
+      const from = thinkingOnly && !steppedDown ? currentEffort : undefined;
+      const lower = from && effortBelow(from);
+      if (!from || !lower) break;
+      logger.warn('[anthropic] thought past the ceiling — retrying one effort lower', {
+        ...callFields,
+        from,
+        to: lower,
+        maxTokens,
+      });
+      steppedDown = { from, to: lower };
+      currentEffort = lower;
+      continue;
+    }
 
     if (turn === maxContinuations) break;
 
-    logger.info('[anthropic] chat truncated, continuing', { ...callFields, turn: turn + 1 });
+    turn += 1;
+    logger.info('[anthropic] chat truncated, continuing', { ...callFields, turn });
 
     // Feed partial output back as assistant turn, ask to continue
     messages.push({ role: 'assistant', content: text });
@@ -903,7 +975,16 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     cacheCreationTokens: totalCacheCreationTokens,
   }).catch(() => {});
 
-  return { text: accumulated, stopReason, truncated: stopReason === 'max_tokens' };
+  return {
+    text: accumulated,
+    stopReason,
+    truncated: stopReason === 'max_tokens',
+    continuations: turn,
+    thinkingOnly,
+    ...(currentEffort ? { effort: currentEffort } : {}),
+    ...(steppedDown ? { steppedDown } : {}),
+    maxTokens,
+  };
 }
 
 /**

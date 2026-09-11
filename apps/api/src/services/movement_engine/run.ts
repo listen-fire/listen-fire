@@ -192,6 +192,7 @@ import {
   describeBinding,
   evalMovementExpr,
   evaluateMovementExpression,
+  hopMemberGate,
   hopOrderKeyReader,
   nodeEdgeLandings,
   unsupported,
@@ -1145,7 +1146,7 @@ interface ResolvedWriteTarget {
   /**
    * The type the resulting HANDLE stands on, when it is more specific than the
    * type the write is addressed to. A discriminated write is addressed at a
-   * collection — `write org-[:List Entries]-> { listName: "Master Deals List" }`
+   * collection — `write org-[:List Entries]-> { listName: "Portfolio" }`
    * — and creates a row of the one list the body named: the type that genuinely
    * carries that list's own fields and reference edges. So a chained write or
    * `link` off the handle resolves against the list's type, which is what the
@@ -2506,6 +2507,7 @@ class Interpreter {
           ...(eventAddress !== undefined ? { eventAddress } : {}),
         }),
         instanceName: sourceBinding.name,
+        ...(sourceBinding.schema !== undefined ? { schema: sourceBinding.schema } : {}),
       };
       this.sourceInstance = sourceBinding;
       if (this.input.event.triggerType === 'snapshot') {
@@ -2770,7 +2772,11 @@ class Interpreter {
       adapter = surfaceReadAdapter({ inner, schema: binding.schema });
       this.sourceAdapterCache.set(cacheKey, adapter);
     }
-    return { adapter, instanceName: binding.name };
+    return {
+      adapter,
+      instanceName: binding.name,
+      ...(binding.schema !== undefined ? { schema: binding.schema } : {}),
+    };
   }
 
   /**
@@ -5471,6 +5477,9 @@ class Interpreter {
         edgeProperties: adapter.runtimeCapabilities().traversal.edgeProperties,
       });
       for (const path of paths) {
+        // A WHERE that narrowed this hop to one member addresses THAT member;
+        // records of the others are not matches and are never read from.
+        const isMember = hopMemberGate({ step, origin: path.position, read });
         const fieldId = read.edgeFieldId?.(step.edgeTypeId, path.position) ?? step.edgeTypeId;
         const landed = adapter.iterateRelated
           ? adapter.iterateRelated({
@@ -5487,6 +5496,7 @@ class Interpreter {
             });
         const kept: typeof paths = [];
         for await (const r of landed) {
+          if (!isMember(r.position)) continue;
           const edgeProperties =
             r.edgeProperties !== undefined ? { edgeProperties: r.edgeProperties } : {};
           const positionScope = {

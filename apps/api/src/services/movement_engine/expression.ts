@@ -81,6 +81,7 @@ import {
   coerceToNumber,
   FILE_FUNCTION_ID,
   POSITION_SENTINEL,
+  refinementKey,
   stdlibFunctionById,
 } from 'movement-lang';
 import type {
@@ -108,6 +109,7 @@ import {
   compareToNull,
   compareValues,
   evaluatePredicate,
+  flattenAndConjuncts,
   isNullLiteral,
   isPurePredicate,
   leafReadKey,
@@ -132,6 +134,7 @@ import {
   positionRecordId,
   type SourcePosition,
 } from '../translation_graph/types';
+import { stampedPositionName } from './kg';
 import type { ExtractEmission } from './extraction';
 import type { CallbackParamSpec } from './callback_store';
 import { renderFileArtifact, type RenderFileArtifact } from './file_render';
@@ -597,6 +600,11 @@ export interface SourceRead {
    * pass-through (fake adapters are surface-name-native).
    */
   edgeFieldId?: (edgeName: string, position: SourcePosition) => string;
+  /** The instance's schema, as the catalog assembled it — including the
+   *  narrowings the host resolved for this program (`selectedMembers`). Absent
+   *  for seams with no schema behind them (an ask's landing, test fakes):
+   *  nothing narrows, and every landed record faces the whole WHERE. */
+  schema?: InstanceSchema;
 }
 
 export interface MovementExprContext {
@@ -723,6 +731,11 @@ export type MovementTraceEntry =
        *  the call was retried). */
       model?: string;
       durationMs?: number;
+      /** Present when the answer came back only because the call was asked
+       *  less deeply than its tier says: the first attempt spent its whole
+       *  output ceiling thinking and wrote nothing, so it was asked again one
+       *  effort lower. The answer on this entry is the cheaper one. */
+      effortSteppedDown?: { from: string; to: string };
       /** Set when the stage was skipped without an LLM call: the extract had
        *  no source text at all (`empty_source`), or this entity's stage
        *  pipeline contributed nothing to read (`no_enrichment`) so the call
@@ -2179,8 +2192,13 @@ async function evaluateExists(
     }
     const next: Binding[] = [];
     for (const cursor of cursors) {
+      const isMember =
+        cursor.kind === 'sourcePosition'
+          ? hopMemberGate({ step, origin: cursor.position, read: cursor.read ?? ctx.source })
+          : undefined;
       const kept: Binding[] = [];
       for (const landed of await stepExistsCursor(cursor, step, ctx)) {
+        if (isMember && landed.kind === 'sourcePosition' && !isMember(landed.position)) continue;
         if (step.expressionFilter) {
           const keep = await evalScopedFilter(step.expressionFilter, scopeOf(landed), ctx);
           if (!keep) continue;
@@ -2389,6 +2407,77 @@ export function hopOrderKeyReader(
 }
 
 /**
+ * The TYPE the member a hop's WHERE narrowed its POLYMORPHIC edge to lands, and
+ * the hop's declared target — the two names a landed record's own stamp is
+ * judged against.
+ *
+ * The host resolves the selection once, during catalog assembly, by evaluating
+ * the WHERE over the members the meta walk published, and records both halves
+ * of the answer under one `refinementKey`: `refinements` names the POSITION the
+ * checker types the hop as, `selectedMembers` names the TYPE whose records are
+ * on that path (`List Entry — Portfolio`, never the addressing name
+ * `Portfolio` — a record is stamped with the former and never the latter). The
+ * runtime re-derives nothing — it looks the key up, so the two sides cannot
+ * disagree about which member a WHERE chose.
+ */
+function hopSelection(input: {
+  step: Pick<EdgeStep, 'edgeTypeId' | 'expressionFilter'>;
+  origin: SourcePosition;
+  read: SourceRead | undefined;
+}): { memberType: string; declaredTarget: string; schema: InstanceSchema } | undefined {
+  const filter = input.step.expressionFilter;
+  const schema = input.read?.schema;
+  if (filter === undefined || schema?.selectedMembers === undefined) return undefined;
+  const from = input.origin.recordType;
+  const declaredTarget =
+    (from !== null ? schema.positions[from]?.edges[input.step.edgeTypeId]?.target : undefined) ??
+    schema.collections[input.step.edgeTypeId]?.target;
+  if (declaredTarget === undefined) return undefined;
+  const memberType = schema.selectedMembers[refinementKey({ type: declaredTarget, filter })];
+  return memberType === undefined ? undefined : { memberType, declaredTarget, schema };
+}
+
+/**
+ * Whether a landed record is one the hop is ABOUT.
+ *
+ * A narrowed polymorphic edge is procedurally a NAMED one: the hop addresses
+ * the selected member, so a record of a different member is not a match — it is
+ * dropped before any of its fields are read, with no error and no drift note,
+ * because the field the WHERE goes on to test is one that member never had.
+ * (Drift is the source's schema having CHANGED; this record's type simply isn't
+ * on the path.) Doing it here rather than leaning on the WHERE to fail first is
+ * the point: the checker narrows the hop as a whole, so which member a hop is
+ * about cannot depend on which conjunct the author wrote first.
+ *
+ * Judged on the record's OWN stamp, read through `stampedPositionName` — the
+ * SAME rule the read wrapper uses to decide whether that stamp survives. Two
+ * readings of one fact would be two chances to disagree, and that is precisely
+ * the defect this gate first shipped with: it compared a record's type against
+ * the member's ADDRESSING name (`Portfolio`) while the adapter stamps the
+ * member TYPE (`List Entry — Portfolio`), so a gate meant to drop the other
+ * list's entries dropped every entry there was.
+ *
+ * A stamp the schema does not recognise, or one saying nothing more specific
+ * than the edge's declared target, tells us nothing about membership: the WHERE
+ * runs against that record exactly as it always has (Sheets lands a tab typed
+ * as the declared target and is unaffected). Likewise a hop the host did not
+ * narrow gates nothing.
+ */
+export function hopMemberGate(input: {
+  step: Pick<EdgeStep, 'edgeTypeId' | 'expressionFilter'>;
+  origin: SourcePosition;
+  read: SourceRead | undefined;
+}): (landed: SourcePosition) => boolean {
+  const selection = hopSelection(input);
+  if (selection === undefined) return () => true;
+  return (landed) => {
+    const stamped = stampedPositionName({ schema: selection.schema, position: landed });
+    if (stamped === undefined || stamped === selection.declaredTarget) return true;
+    return stamped === selection.memberType;
+  };
+}
+
+/**
  * Evaluate a hop / EXISTS WHERE predicate to its keep decision, position-
  * scoped at the landed subject. A PURE predicate (`isPurePredicate`) routes
  * through the shared filter unit: its leaf reads are resolved once each through
@@ -2399,6 +2488,12 @@ export function hopOrderKeyReader(
  * its leaf value is pre-resolved through `evalMovementExpr`'s meta resolver
  * (`case 'meta'`) under `leafReadKey` (`@<key>`), exactly like any other leaf.
  *
+ * A top-level AND is taken one conjunct at a time, in the order written, and a
+ * false one ends the evaluation — the full evaluator short-circuits, so
+ * resolving leaves it would never have read is not an optimisation but the
+ * difference between agreeing with it and raising an error it never would.
+ * (Inside an OR or a NOT, every leaf of the surviving conjunct is still
+ * resolved before it is evaluated.)
  */
 async function evalScopedFilter(
   filter: Expression,
@@ -2410,15 +2505,23 @@ async function evalScopedFilter(
     return evaluateMovementExpression(filter, scopedCtx);
   }
   const reads = new Map<string, unknown>();
-  for (const leaf of pureLeafReads(filter)) {
-    const name = leafReadKey(leaf);
-    if (reads.has(name)) continue;
-    // `evalMovementExpr` resolves every leaf form — including a zero-step
-    // traverse (`t.firedAt`) via its alias-rooted read seam — so the value (and
-    // therefore the decision) is identical to the full async evaluator.
-    reads.set(name, (await evalMovementExpr(leaf, scopedCtx)).value);
+  const decide = async (conjunct: Expression): Promise<unknown> => {
+    for (const leaf of pureLeafReads(conjunct)) {
+      const name = leafReadKey(leaf);
+      if (reads.has(name)) continue;
+      // `evalMovementExpr` resolves every leaf form — including a zero-step
+      // traverse (`t.firedAt`) via its alias-rooted read seam — so the value
+      // (and therefore the decision) is identical to the full async evaluator.
+      reads.set(name, (await evalMovementExpr(leaf, scopedCtx)).value);
+    }
+    return evaluatePredicate(conjunct, { read: (name) => reads.get(name) });
+  };
+  let last: unknown = true;
+  for (const conjunct of flattenAndConjuncts(filter)) {
+    last = await decide(conjunct);
+    if (!last) return last;
   }
-  return evaluatePredicate(filter, { read: (name) => reads.get(name) });
+  return last;
 }
 
 // ── Bracket ORDER BY / LIMIT (post-stream, per origin position) ─────────────
@@ -2581,6 +2684,9 @@ async function walkAdapterPositions(input: {
       edgeProperties: read.adapter.runtimeCapabilities().traversal.edgeProperties,
     });
     for (const cursor of cursors) {
+      // A WHERE that narrowed this hop to one member addresses THAT member;
+      // records of the others are not matches and are never read from.
+      const isMember = hopMemberGate({ step, origin: cursor, read });
       const fieldId = read.edgeFieldId?.(step.edgeTypeId, cursor) ?? step.edgeTypeId;
       const related = await read.adapter.getRelated({
         position: cursor,
@@ -2590,6 +2696,7 @@ async function walkAdapterPositions(input: {
       });
       const kept: Array<Extract<Binding, { kind: 'sourcePosition' }>> = [];
       for (const r of related) {
+        if (!isMember(r.position)) continue;
         const candidate: Extract<Binding, { kind: 'sourcePosition' }> = {
           kind: 'sourcePosition',
           position: r.position,
