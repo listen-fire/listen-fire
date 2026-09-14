@@ -182,6 +182,38 @@ describe('a closure is an ordinary value', () => {
   });
 });
 
+describe('MOV_EXPR_CLOSURE_POSITION never fires at a legal closure position', () => {
+  // bridge.ts rejects a bare `=>` wherever the FORMULA grammar (not the
+  // statement parser) is handed the raw text — a call argument, a write
+  // field, a hop WHERE. Every position below is read by the statement
+  // parser's own `atClosure`/`parseClosure`, so the raw closure text never
+  // reaches the bridge; this pins that structural split against regression.
+  it('an assignment RHS is clean', () => {
+    expect(codes(inMovement('  pick = (n: <number>) => { return n }'))).not.toContain(
+      C.EXPR_CLOSURE_POSITION,
+    );
+  });
+
+  it('a MAP function slot is clean', () => {
+    const source = inMovement(
+      '  names = COLLECT(inbox-[:messages]->.`Subject`)\n  loud = MAP(names, (t) => { return t })',
+    );
+    expect(codes(source)).not.toContain(C.EXPR_CLOSURE_POSITION);
+  });
+
+  it('a race arm is clean', () => {
+    const source = inMovement(
+      '  r = await race([() => { return e.`Subject` }, () => { await sleep(2d) }])',
+    );
+    expect(codes(source)).not.toContain(C.EXPR_CLOSURE_POSITION);
+  });
+
+  it("a callback's subject is clean", () => {
+    const source = inMovement('  cb = callback((n: <number>) => { return n })');
+    expect(codes(source)).not.toContain(C.EXPR_CLOSURE_POSITION);
+  });
+});
+
 describe('the retired inline block names its replacement', () => {
   it('`{ … }.name` is refused, pointing at return and closures', () => {
     const source = inMovement('  x = { t = e.`Subject` }.t');

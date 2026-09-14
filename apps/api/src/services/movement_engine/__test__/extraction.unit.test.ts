@@ -2480,9 +2480,9 @@ describe('Layer 5 — extracted-node `_resources` carries the source file forwar
       catalog: carryFileSchema().catalog,
       resolveAdapter: makeResolver({ email: emailWithFile, attio: attio.adapter }),
       llm: llm.client,
-      // OCR yields nothing — the production resolver returns null for an
-      // unsupported/empty file (e.g. a scanned image).
-      resolveFileText: async () => null,
+      // OCR yields nothing — the production resolver answers `no_text` for an
+      // empty file (e.g. a scanned image with nothing in it).
+      resolveFileText: async () => ({ unreadable: 'no_text' as const }),
     });
 
     expect(attio.creates).toHaveLength(2);
@@ -2542,7 +2542,7 @@ describe('Layer 5 — extracted-node `_resources` carries the source file forwar
       catalog: carryFileSchema().catalog,
       resolveAdapter: makeResolver({ email: emailWithFile, attio: attio.adapter }),
       llm: llm.client,
-      resolveFileText: async () => null,
+      resolveFileText: async () => ({ unreadable: 'no_text' as const }),
     });
 
     // Exactly two creates: the plain write + ONE carry write for the FILE
@@ -2589,7 +2589,7 @@ describe('Layer 5 — extracted-node `_resources` carries the source file forwar
       catalog: carryFileSchema().catalog,
       resolveAdapter: makeResolver({ email: emailWithFile, attio: attio.adapter }),
       llm: llm.client,
-      resolveFileText: async () => null,
+      resolveFileText: async () => ({ unreadable: 'no_text' as const }),
     });
 
     expect(attio.creates).toHaveLength(2);

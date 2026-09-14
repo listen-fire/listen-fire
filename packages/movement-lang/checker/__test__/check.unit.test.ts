@@ -958,6 +958,43 @@ describe('through args', () => {
   });
 });
 
+// ── Duplicate extract fields ──
+
+describe('extract field duplicates', () => {
+  it('MOV_EXTRACT_FIELD_DUPLICATE for two description fields in one node', () => {
+    const diagnostics = check(
+      inMovement(
+        [
+          '  deals = extract from [msg.`text`] {',
+          '    node company: "each company" {',
+          '      description: "the pitch"',
+          '      description: "the summary"',
+          '    }',
+          '  }',
+        ].join('\n'),
+      ),
+    );
+    expect(diagnostics.map(d => d.code)).toEqual([C.EXTRACT_FIELD_DUPLICATE]);
+    expect(diagnostics[0].message).toContain("'description'");
+  });
+
+  it('a later stage may redeclare an earlier stage\'s field (transformation wins)', () => {
+    expectClean(
+      inMovement(
+        [
+          '  deals = extract from [msg.`text`] {',
+          '    node company: "each company" {',
+          '      name: "the raw name"',
+          '    } through [vc_url_retrieval(urls: name)] {',
+          '      name: "the cleaned name"',
+          '    }',
+          '  }',
+        ].join('\n'),
+      ),
+    );
+  });
+});
+
 // ── Diagnostics carry usable spans ──
 
 describe('diagnostic spans', () => {

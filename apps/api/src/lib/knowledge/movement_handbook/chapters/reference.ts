@@ -250,5 +250,6 @@ The description carries cardinality ("the company" = one; "each company" = all).
 - **Reading \`_resources\` off the input.** Provenance lives on extracted nodes, not on the input position.
 - **Verifying from the target system only.** The run record shows what was sent and why; read provenance before editing the automation.
 - **Using a maybe-absent value unguarded.** A write/traversal target, a dot-plane field read, or an ordered comparison off a \`FIRST\`/\`LAST\`/\`MIN\`/\`MAX\`/\`at\` result is refused until narrowed — guard with \`if x == null { ERROR(…) }\`, \`EXISTS(x)\`, or \`?:\` on the write field.
-- **Binding a field just to test it.** \`EXISTS(x.\`Field\`)\` and \`ISNULL(x.\`Field\`)\` read the field directly; no intermediate binding.`,
+- **Binding a field just to test it.** \`EXISTS(x.\`Field\`)\` and \`ISNULL(x.\`Field\`)\` read the field directly; no intermediate binding.
+- **Writing a closure where an argument or field value goes.** \`(n) => { … }\` only parses in an assignment, a return, a MAP/FILTER/REDUCE slot, a race/parallel arm, or a callback's subject — bind it to a name there and pass the name instead.`,
 };

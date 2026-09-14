@@ -303,6 +303,40 @@ describe('parseMovementExpression', () => {
     });
   });
 
+  describe('closures outside their one legal position', () => {
+    it('rejects a closure literal as a call argument value, with its own code', () => {
+      expect(() => parseMovementExpression('(n) => n.`name`')).toThrow(BridgeError);
+      try {
+        parseMovementExpression('(n) => n.`name`');
+        fail('expected BridgeError');
+      } catch (e) {
+        expect((e as BridgeError).code).toBe('MOV_EXPR_CLOSURE_POSITION');
+        expect((e as BridgeError).message).toMatch(/closure cannot be written here/);
+      }
+    });
+
+    it('rejects a closure literal inside a hop WHERE', () => {
+      const raw = 'crm-[:companies WHERE (n) => TRUE]->.`__movement_head_probe__`';
+      expect(() => parseMovementExpression(raw)).toThrow(BridgeError);
+      try {
+        parseMovementExpression(raw);
+        fail('expected BridgeError');
+      } catch (e) {
+        expect((e as BridgeError).code).toBe('MOV_EXPR_CLOSURE_POSITION');
+      }
+    });
+
+    it('does NOT trip on a closure-shaped arrow inside a string literal', () => {
+      expect(parseMovementExpression('"x => 1"')).toEqual({ type: 'static', value: 'x => 1' });
+    });
+
+    it('does NOT trip on >=, <=, or == comparisons', () => {
+      expect(() => parseMovementExpression('a >= b')).not.toThrow();
+      expect(() => parseMovementExpression('a <= b')).not.toThrow();
+      expect(() => parseMovementExpression('a == b')).not.toThrow();
+    });
+  });
+
   describe('prefix EXISTS(…) lifting', () => {
     it('parses alias-rooted EXISTS into a re-rooted exists node', () => {
       expect(parseMovementExpression('EXISTS(rec-[:Company]->)')).toEqual({

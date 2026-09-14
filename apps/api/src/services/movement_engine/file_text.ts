@@ -7,7 +7,8 @@
 //
 //   FileRef
 //     → resolveFileRef  (owner adapter fetches bytes → Readable, OWN creds)
-//     → OCR/text extractor  (services.ocr.extractPdf for scanned PDFs;
+//     → OCR/text extractor  (the PDF's own text layer first, then
+//                            services.ocr.extractPdf for scanned PDFs;
 //                            getPptxText / getXlsxContent for decks/sheets)
 //     → getOrCreateRawTextId  (checksum dedup + store → stable id; the
 //       Context-free Kysely twin of RawTextService — see raw_text_store.ts)
@@ -22,12 +23,17 @@
 // text — so spoken words flow into `extract from [ … ]` exactly where a
 // deck's slides do. The audio's duration is metered as its own ledger line.
 //
-// Unsupported types (anything past PDF/PPTX/XLSX/audio) and empty extractions
-// return `null`: the materialiser then skips the file rather than emitting a
-// garbage FRAGMENT. The text-extraction primitives are the SAME ones
+// Unsupported types (anything past PDF/PPTX/XLSX/audio), unreachable bytes, a
+// failed extractor and empty extractions all come back as an UNREADABLE reason:
+// the materialiser skips the file either way rather than emitting a garbage
+// FRAGMENT, but the run can then name the file it could not read and say why —
+// a deployment with no OCR provider otherwise reports an empty source and no
+// sign there was ever a file. The text-extraction primitives are the SAME ones
 // `lib/agent/tools/extract_document_text.ts` calls — we operate on the
 // resolved stream directly because that tool is keyed by a `Document` record
 // id, which a source `FileRef` doesn't have.
+
+import { Readable } from 'node:stream';
 
 import { services } from '../../adapters/registry';
 import { MB } from '../../constants';
@@ -37,7 +43,7 @@ import { logger } from '../logger';
 import type { FileRef, ResolveFileRefResult } from '../translation_graph/adapter';
 import { streamFileRef } from '../translation_graph/engine/files/retrieve';
 import { getOrCreateRawTextId } from './raw_text_store';
-import type { FileTextResult } from './extraction';
+import type { FileTextResolution, FileUnreadable } from './extraction';
 
 type FileKind = 'pdf' | 'pptx' | 'xlsx' | 'audio';
 
@@ -103,8 +109,15 @@ async function bufferStreamCapped(
  * run's cost meter (the `transcription` ledger line) off the ambient usage
  * context — mirroring how the plugin call sites reach the meter.
  */
-async function transcribeAudio(resolved: ResolveFileRefResult, ref: FileRef): Promise<string | null> {
+async function transcribeAudio(
+  resolved: ResolveFileRefResult,
+  ref: FileRef,
+): Promise<string | FileUnreadable | null> {
   const cap = maxTranscriptionBytes();
+  const tooLarge = (): FileUnreadable => ({
+    unreadable: 'extraction_failed',
+    detail: `the audio is larger than the ${cap}-byte transcription limit`,
+  });
   const declaredSize = resolved.size ?? ref.size;
   if (declaredSize !== undefined && declaredSize > cap) {
     logger.warn('[movement:file-text] audio too large to transcribe — skipping', {
@@ -112,7 +125,7 @@ async function transcribeAudio(resolved: ResolveFileRefResult, ref: FileRef): Pr
       size: declaredSize,
       cap,
     });
-    return null;
+    return tooLarge();
   }
   const audio = await bufferStreamCapped(resolved.stream, cap);
   if (audio === null) {
@@ -120,7 +133,7 @@ async function transcribeAudio(resolved: ResolveFileRefResult, ref: FileRef): Pr
       name: ref.name,
       cap,
     });
-    return null;
+    return tooLarge();
   }
   const result = await services.transcription.transcribe(audio, {
     name: ref.name,
@@ -130,14 +143,88 @@ async function transcribeAudio(resolved: ResolveFileRefResult, ref: FileRef): Pr
   return result.text;
 }
 
+/** A born-digital PDF's text is judged PER PAGE, not in total: a flat total
+ *  would accept a sixty-page scan whose only text is the page numbers a
+ *  stamping tool wrote, and that file is exactly the one that still needs OCR.
+ *  Fifty non-whitespace characters a page is well under any real page of prose
+ *  and well over the headers and page numbers a scan carries. */
+const PDF_TEXT_LAYER_CHARS_PER_PAGE = 50;
+
+/** Reading the text layer means holding the bytes: both readers start from the
+ *  first byte, and a stream is read once. Past this the file is never buffered
+ *  — it streams to OCR exactly as it always did. */
+function maxPdfBufferBytes(): number {
+  const fromEnv = Number(process.env.MAX_PDF_BUFFER_BYTES);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 64 * MB;
+}
+
+/**
+ * The PDF's own text layer, when it has a real one — no OCR service in the
+ * path, which is the whole point: a deployment with no OCR provider can still
+ * read every born-digital PDF it is sent. A scanned page has no text layer, so
+ * the caller falls through to the provider.
+ */
+async function pdfTextLayer(bytes: Buffer, ref: FileRef): Promise<string | null> {
+  try {
+    const { extractText } = await import('unpdf');
+    const { text, totalPages } = await extractText(new Uint8Array(bytes), { mergePages: true });
+    const dense = text.replace(/\s/g, '').length;
+    if (totalPages > 0 && dense / totalPages > PDF_TEXT_LAYER_CHARS_PER_PAGE) return text;
+    logger.debug('[movement:file-text] the PDF has no usable text layer — trying OCR', {
+      name: ref.name,
+      totalPages,
+      chars: dense,
+    });
+    return null;
+  } catch (error) {
+    logger.warn('[movement:file-text] the PDF text layer could not be read — trying OCR', {
+      name: ref.name,
+      message: error instanceof Error ? error.message : String(error),
+      error,
+    });
+    return null;
+  }
+}
+
+/**
+ * A PDF: its text layer first, the OCR provider second. An OCR failure after an
+ * empty text layer says BOTH halves — "no text layer; OCR is not configured …"
+ * — because either one alone sends the reader after the wrong thing.
+ */
+async function extractPdfText(
+  resolved: ResolveFileRefResult,
+  ref: FileRef,
+): Promise<string | FileUnreadable | null> {
+  const declaredSize = resolved.size ?? ref.size ?? 0;
+  const cap = maxPdfBufferBytes();
+  if (declaredSize > cap) return services.ocr.extractPdf(resolved.stream, { size: declaredSize });
+
+  const bytes = await bufferStreamCapped(resolved.stream, cap);
+  if (bytes === null) {
+    // The stream is spent, so OCR can no longer be offered the bytes either.
+    return {
+      unreadable: 'extraction_failed',
+      detail: `the PDF is larger than the ${cap}-byte limit for reading a PDF`,
+    };
+  }
+  const layer = await pdfTextLayer(bytes, ref);
+  if (layer !== null) return layer;
+  try {
+    return await services.ocr.extractPdf(Readable.from(bytes), { size: bytes.length });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`no text layer; ${message}`, { cause: error });
+  }
+}
+
 async function extractTextFromStream(
   kind: FileKind,
   resolved: ResolveFileRefResult,
   ref: FileRef,
-): Promise<string | null> {
+): Promise<string | FileUnreadable | null> {
   switch (kind) {
     case 'pdf':
-      return services.ocr.extractPdf(resolved.stream, { size: resolved.size ?? ref.size ?? 0 });
+      return extractPdfText(resolved, ref);
     case 'pptx':
       return getPptxText(resolved.stream);
     case 'xlsx':
@@ -152,7 +239,7 @@ async function extractTextFromStream(
  * module owns the byte-resolution → text-extraction → store pipeline so it stays
  * injectable for tests. Byte resolution is the FileRef's own `retrieve()`.
  */
-export function makeFileTextResolver(): (ref: FileRef) => Promise<FileTextResult | null> {
+export function makeFileTextResolver(): (ref: FileRef) => Promise<FileTextResolution> {
   return async (ref) => {
     const kind = fileKind(ref);
     if (!kind) {
@@ -160,33 +247,39 @@ export function makeFileTextResolver(): (ref: FileRef) => Promise<FileTextResult
         name: ref.name,
         contentType: ref.contentType,
       });
-      return null;
+      return {
+        unreadable: 'unsupported_type',
+        ...(ref.contentType !== undefined ? { detail: ref.contentType } : {}),
+      };
     }
     let resolved: ResolveFileRefResult;
     try {
       resolved = await streamFileRef(ref);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       logger.warn('[movement:file-text] failed to resolve file bytes', {
         name: ref.name,
-        message: error instanceof Error ? error.message : String(error),
+        message,
         error,
       });
-      return null;
+      return { unreadable: 'bytes_unavailable', detail: message };
     }
 
-    let text: string | null;
+    let text: string | FileUnreadable | null;
     try {
       text = await extractTextFromStream(kind, resolved, ref);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       logger.warn('[movement:file-text] text extraction failed', {
         name: ref.name,
         kind,
-        message: error instanceof Error ? error.message : String(error),
+        message,
         error,
       });
-      return null;
+      return { unreadable: 'extraction_failed', detail: message };
     }
-    if (!text || text.trim().length === 0) return null;
+    if (text !== null && typeof text !== 'string') return text;
+    if (!text || text.trim().length === 0) return { unreadable: 'no_text' };
 
     const rawTextId = await getOrCreateRawTextId(text);
     return { text, rawTextId };

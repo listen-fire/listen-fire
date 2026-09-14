@@ -79,7 +79,12 @@ import { makeEphemeralPosition } from '../translation_graph/types';
 import type { FileRef, Resource } from '../translation_graph/adapter';
 import { isFileRef } from '../translation_graph/engine/files/retrieve';
 import { stampResourceId } from '../translation_graph/engine/files/resources';
-import { MovementEngineError, type MovementTraceEntry } from './expression';
+import {
+  MovementEngineError,
+  type ExtractionTraceFile,
+  type FileUnreadableReason,
+  type MovementTraceEntry,
+} from './expression';
 import type { ExtractSiteRef, Provenance, ProvenanceOrigin } from './provenance';
 
 // ── The result graph ────────────────────────────────────────────────────────
@@ -817,6 +822,26 @@ export interface FileTextResult {
   rawTextId?: string;
 }
 
+/** A source file the seam could not turn into text, and why — the sentence a
+ *  run needs so "extracted nothing" and "could not read the attachment" stop
+ *  looking identical. `detail` carries the underlying extractor's own message
+ *  (e.g. the OCR-not-configured sentence). */
+export interface FileUnreadable {
+  unreadable: FileUnreadableReason;
+  detail?: string;
+}
+
+/** What the `resolveFileText` seam answers with: the file's text, or the
+ *  reason there is none. Never a bare absence — a file that was there and
+ *  could not be read has to be able to say so. */
+export type FileTextResolution = FileTextResult | FileUnreadable;
+
+export function isFileUnreadable(
+  resolution: FileTextResolution,
+): resolution is FileUnreadable {
+  return 'unreadable' in resolution;
+}
+
 export interface ExtractRuntime {
   llm: LlmClient;
   transformInvoker: MovementTransformInvoker;
@@ -829,11 +854,13 @@ export interface ExtractRuntime {
    * Materialise a source `FileRef` (an attachment) to its extracted TEXT —
    * the knowledge-pipeline parity path: resolve the owner adapter's bytes,
    * run the OCR/text extractor (scanned PDFs included), and dedup-store via
-   * RawText. Returns `null` for an unsupported type or an empty extraction
-   * (the file is then skipped — no garbage FRAGMENT). Absent on the runtime
-   * → files fall through to the legacy stringifying behaviour (no engine in
-   * the path can resolve them). */
-  resolveFileText?: (ref: FileRef) => Promise<FileTextResult | null>;
+   * RawText. An unsupported type, unreachable bytes, a failed extractor or an
+   * empty extraction come back as a `FileUnreadable` reason rather than a bare
+   * absence: the file contributes no prompt segment either way, but the run can
+   * then say WHICH file it could not read and why. Absent on the runtime →
+   * files fall through to the legacy stringifying behaviour (no engine in the
+   * path can resolve them). */
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResolution>;
   /** The run's observability trace — extraction calls record their
    *  input size and per-alias yields (and the silent empty-source skip,
    *  which otherwise looks identical to "extracted nothing"). */
@@ -847,12 +874,57 @@ interface Segment {
   content: string;
 }
 
+/**
+ * How much of ONE source file's text may reach the extraction prompt. Fifty
+ * thousand characters is the figure `fetch_url` already bounds a fetched page
+ * at, and it takes a twenty-page deck whole; past it a single lookbook crowds
+ * every other source out of the prompt — and is re-sent on EVERY staged call of
+ * the extract, so the cost is per call, not per run. Read per call so a
+ * deployment can raise it without a deploy.
+ */
+function maxFileChars(): number {
+  const fromEnv = Number(process.env.EXTRACTION_FILE_CHARS);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 50_000;
+}
+
+/** A source file's text as the PROMPT sees it. `chars` is how much of the
+ *  file's own text went in; the marker the model reads is extra. */
+interface BoundedFileText {
+  content: string;
+  chars: number;
+  truncatedFrom?: number;
+}
+
+/** Bound one file's text for the prompt, visibly: the model is TOLD it was
+ *  handed a prefix, so it answers about what it read instead of treating a
+ *  sentence cut mid-word as the end of the document. The stored copy
+ *  (`rawTextId`) and the carry-forward FILE resource keep the whole text —
+ *  only the prompt is bounded. */
+function boundFileText(text: string, ref: FileRef): BoundedFileText {
+  const ceiling = maxFileChars();
+  if (text.length <= ceiling) return { content: text, chars: text.length };
+  logger.warn('[movement:extract] truncating a source file for the prompt', {
+    name: ref.name,
+    chars: ceiling,
+    of: text.length,
+    ...runFields(),
+  });
+  return {
+    content: `${text.slice(0, ceiling)}\n[… truncated: first ${ceiling} of ${text.length} characters]`,
+    chars: ceiling,
+    truncatedFrom: text.length,
+  };
+}
+
 /** A resolved source `FileRef`'s Layer-5 contribution: the FILE `Resource`
  *  (always — carry-forward provenance) plus, when OCR yielded text, the
- *  extraction `text` (the segment the AI extracts from + its evidence origin). */
+ *  extraction `text` (the segment the AI extracts from + its evidence origin).
+ *  `traced` is the same resolution as the run's trace tells it: what the file
+ *  contributed, or why it contributed nothing. */
 interface FileResolution {
   resource: Resource;
   text?: { segment: Segment; origin: ProvenanceOrigin };
+  traced: ExtractionTraceFile;
 }
 
 /** One site of a planned LLM call: a (node, stage) plus the nested
@@ -933,6 +1005,11 @@ class Materializer {
    *  the same attachment listed twice is resolved once. A `null` entry records
    *  an unsupported/empty file so it isn't retried. */
   private readonly fileTextCache = new Map<string, FileResolution | null>();
+  /** Every source file this extract's `from [ … ]` resolved to, as the trace
+   *  tells it. It rides every call's shape for the reason `inputs` does: which
+   *  call read the attachment — and which read nothing because nothing could
+   *  read it — is only answerable if each entry says so itself. */
+  private sourceFiles: ExtractionTraceFile[] = [];
 
   constructor(private readonly runtime: ExtractRuntime) {}
 
@@ -940,6 +1017,7 @@ class Materializer {
     this.tier = extract.tier;
     const trace = TraceSink.root(this.runtime.trace);
     const fromData = await this.resolveFromData(extract.from);
+    this.sourceFiles = fromData.files;
     let segments = fromData.segments;
     this.sourceText = fromData.segments.map((s) => s.content).join('\n\n');
     // The data sources every call of this extract sees — the `from`
@@ -995,9 +1073,12 @@ class Materializer {
 
   // ── `from` data → segments ──
 
-  private async resolveFromData(
-    slots: ExprSlot[],
-  ): Promise<{ segments: Segment[]; sources: ProvenanceOrigin[]; resources: Resource[] }> {
+  private async resolveFromData(slots: ExprSlot[]): Promise<{
+    segments: Segment[];
+    sources: ProvenanceOrigin[];
+    resources: Resource[];
+    files: ExtractionTraceFile[];
+  }> {
     const segments: Segment[] = [];
     const sources: ProvenanceOrigin[] = [];
     // The source content as resources (Layer 5 provenance) — one FILE resource
@@ -1005,6 +1086,9 @@ class Materializer {
     // datum. This is what an extracted node attaches to `WriteInput.resources`
     // and what `extractedNode-[:_resources]->` walks.
     const resources: Resource[] = [];
+    // Every source file, readable or not — a file that yielded nothing still
+    // has to appear on the run, or the extraction reads as "no source at all".
+    const files: ExtractionTraceFile[] = [];
     const seen = new Set<ProvenanceOrigin>();
     // FILE resources dedupe on their stable engine-stamped id (the file-text
     // memo returns the same resource by identity for a repeated attachment).
@@ -1034,6 +1118,7 @@ class Materializer {
             if (file.resource.id !== undefined && !seenResourceIds.has(file.resource.id)) {
               seenResourceIds.add(file.resource.id);
               resources.push(file.resource);
+              files.push(file.traced);
             }
             // The extraction text is OCR-gated: only a non-empty result yields a
             // segment + evidence origin (deduped by origin identity).
@@ -1050,7 +1135,7 @@ class Materializer {
         if (textResource) resources.push(textResource);
       }
     }
-    return { segments, sources, resources };
+    return { segments, sources, resources, files };
   }
 
   /**
@@ -1073,22 +1158,44 @@ class Materializer {
       if (cached !== undefined) return cached ?? undefined;
     }
     const result = await this.runtime.resolveFileText(ref);
+    const read = isFileUnreadable(result) ? undefined : result;
+    const bounded =
+      read && read.text.trim().length > 0 ? boundFileText(read.text, ref) : undefined;
     const text =
-      result && result.text.trim().length > 0
+      read && bounded
         ? {
-            segment: { classification: 'FILE', content: result.text } satisfies Segment,
+            segment: { classification: 'FILE', content: bounded.content } satisfies Segment,
             origin: {
               kind: 'file',
-              ...(result.rawTextId !== undefined ? { rawTextId: result.rawTextId } : {}),
+              ...(read.rawTextId !== undefined ? { rawTextId: read.rawTextId } : {}),
               ...(ref.source?.handle !== undefined ? { handle: ref.source.handle } : {}),
               ...(ref.name !== undefined ? { name: ref.name } : {}),
               ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
             } satisfies ProvenanceOrigin,
           }
         : undefined;
+    const named = {
+      ...(ref.name !== undefined ? { name: ref.name } : {}),
+      ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+    };
     const resolution: FileResolution = {
-      resource: stampResourceId(fileResourceForRef(ref, result ?? undefined)),
+      resource: stampResourceId(fileResourceForRef(ref, read)),
       ...(text !== undefined ? { text } : {}),
+      traced: isFileUnreadable(result)
+        ? {
+            ...named,
+            unreadable: result.unreadable,
+            ...(result.detail !== undefined ? { detail: result.detail } : {}),
+          }
+        : bounded
+          ? {
+              ...named,
+              chars: bounded.chars,
+              ...(bounded.truncatedFrom !== undefined
+                ? { truncatedFrom: bounded.truncatedFrom }
+                : {}),
+            }
+          : { ...named, unreadable: 'no_text' },
     };
     if (cacheKey !== undefined) this.fileTextCache.set(cacheKey, resolution);
     return resolution;
@@ -1175,6 +1282,12 @@ class Materializer {
       ...(parts.length > 0 ? { inputs: parts.slice(0, TRACE_INPUT_PARTS) } : {}),
       ...(parts.length > TRACE_INPUT_PARTS
         ? { inputsTruncated: parts.length - TRACE_INPUT_PARTS }
+        : {}),
+      ...(this.sourceFiles.length > 0
+        ? { files: this.sourceFiles.slice(0, TRACE_INPUT_PARTS) }
+        : {}),
+      ...(this.sourceFiles.length > TRACE_INPUT_PARTS
+        ? { filesTruncated: this.sourceFiles.length - TRACE_INPUT_PARTS }
         : {}),
     };
     if (userMessage.trim().length === 0) {
@@ -2506,6 +2619,10 @@ function safeStringify(value: unknown): string {
 // them unchanged.
 
 /** The source `FileRef` → a FILE `Resource` carrying the SAME `FileRef`.
+ *  Its `content` is the file's WHOLE text, never the prompt's bounded copy: a
+ *  resource is what a carry-forward write and the stored provenance read, so
+ *  cutting it there would silently write a fragment of the document into a
+ *  record. The ceiling is a prompt-cost bound and belongs only to the prompt.
  *  `data.file` exposes the byte channel a write reads (`r.\`file\`` → the FileRef
  *  → `streamFileRef` upload). Built for EVERY source file regardless of OCR; the
  *  extracted `text`, when present, rides `content` (and `rawTextId` in metadata)

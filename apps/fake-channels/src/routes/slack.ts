@@ -37,6 +37,31 @@ function tsBound(raw: unknown): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
+/** The bytes of a stored file. An upload writes both a utf-8 `content` and a
+ *  base64 copy; a seeded binary (a PDF is not text) carries only the base64. */
+function fileBytes(data: Record<string, unknown>): Buffer {
+  if (typeof data.content_base64 === 'string') return Buffer.from(data.content_base64, 'base64');
+  return Buffer.from(typeof data.content === 'string' ? data.content : '');
+}
+
+/** A stored file dressed as Slack's `files.info` payload. The download URL
+ *  points back at this server — bytes never ride the API response in real
+ *  Slack, and an adapter that expects them to must fail here, not in prod. */
+function slackFile(id: string, data: Record<string, unknown>, base: string): Record<string, unknown> {
+  const name = String(data.name ?? data.title ?? `${id}.bin`);
+  const url = `${base}/slack/files/${id}/download`;
+  return {
+    id,
+    name,
+    title: data.title ?? name,
+    mimetype: data.mimetype ?? data.content_type ?? 'application/octet-stream',
+    filetype: data.filetype ?? String(name.split('.').pop() ?? 'bin'),
+    size: fileBytes(data).length,
+    url_private: url,
+    url_private_download: url,
+  };
+}
+
 export function slackRoutes(store: EntityStore): Router {
   const r = Router();
 
@@ -250,6 +275,31 @@ export function slackRoutes(store: EntityStore): Router {
     res.json({ ok: true });
   });
 
+  // Slack never puts file bytes in an API response: `files.info` names an
+  // authenticated `url_private_download` and the caller fetches THAT with the
+  // bot token. Both halves are modelled here, because an adapter that forgets
+  // the Authorization header is exactly the failure worth catching in the loop.
+  r.post('/files.info', (req, res) => {
+    const id = String(req.body.file ?? '');
+    const file = store.get(SVC, 'file', id);
+    if (!file) return res.json({ ok: false, error: 'file_not_found' });
+    res.json({ ok: true, file: slackFile(id, file.data, `${req.protocol}://${req.get('host')}`) });
+  });
+
+  r.get('/files/:fileId/download', (req, res) => {
+    if (!String(req.headers.authorization ?? '').startsWith('Bearer ')) {
+      return res.status(401).json({ ok: false, error: 'not_authed' });
+    }
+    const file = store.get(SVC, 'file', req.params.fileId);
+    if (!file) return res.status(404).json({ ok: false, error: 'file_not_found' });
+    const bytes = fileBytes(file.data);
+    res.setHeader(
+      'content-type',
+      String(file.data.mimetype ?? file.data.content_type ?? 'application/octet-stream'),
+    );
+    res.send(bytes);
+  });
+
   r.post('/files.getUploadURLExternal', (req, res) => {
     const fileId = store.nextId(SVC, 'file');
     res.json({
@@ -262,24 +312,26 @@ export function slackRoutes(store: EntityStore): Router {
   const rawBody = express.raw({ type: '*/*', limit: '50mb' });
 
   r.post('/upload/:fileId', rawBody, (req, res) => {
-    const content = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : String(req.body ?? '');
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
     const contentType = req.headers['content-type'] ?? 'application/octet-stream';
     store.create(SVC, 'file', {
       file_id: req.params.fileId,
       uploaded: true,
-      content,
+      content: raw.toString('utf-8'),
+      content_base64: raw.toString('base64'),
       content_type: contentType,
     }, req.params.fileId);
     res.json({ ok: true });
   });
 
   r.put('/upload/:fileId', rawBody, (req, res) => {
-    const content = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : String(req.body ?? '');
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
     const contentType = req.headers['content-type'] ?? 'application/octet-stream';
     store.create(SVC, 'file', {
       file_id: req.params.fileId,
       uploaded: true,
-      content,
+      content: raw.toString('utf-8'),
+      content_base64: raw.toString('base64'),
       content_type: contentType,
     }, req.params.fileId);
     res.json({ ok: true });

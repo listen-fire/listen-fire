@@ -22,11 +22,12 @@ import {
   buildExtractSpec,
   materializeExtract,
   type ExtractRuntime,
-  type FileTextResult,
+  type FileTextResolution,
 } from '../extraction';
 import type { FileRef } from '../../translation_graph/adapter';
 import { NO_PROVENANCE } from '../provenance';
 import type { LlmCallInput, LlmCallResult } from '../../translation_graph/engine/batched_extraction';
+import type { MovementTraceEntry } from '../expression';
 
 // ── Builders ────────────────────────────────────────────────────────────────
 
@@ -79,7 +80,8 @@ const wrap = (value: unknown) => ({ evidence: 'q', value });
 function runtimeFor(opts: {
   llm: { call(input: LlmCallInput): Promise<LlmCallResult> };
   slots: Record<string, unknown>;
-  resolveFileText?: (ref: FileRef) => Promise<FileTextResult | null>;
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResolution>;
+  trace?: MovementTraceEntry[];
 }): ExtractRuntime {
   return {
     llm: opts.llm,
@@ -89,7 +91,17 @@ function runtimeFor(opts: {
       return { value, provenance: NO_PROVENANCE };
     },
     ...(opts.resolveFileText ? { resolveFileText: opts.resolveFileText } : {}),
+    ...(opts.trace ? { trace: opts.trace } : {}),
   };
+}
+
+/** The extraction entries of a trace, in order. */
+function extractionEntries(
+  trace: MovementTraceEntry[],
+): Array<Extract<MovementTraceEntry, { kind: 'extraction' }>> {
+  return trace.filter(
+    (e): e is Extract<MovementTraceEntry, { kind: 'extraction' }> => e.kind === 'extraction',
+  );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -99,7 +111,7 @@ describe('extract from a file attachment — text + provenance', () => {
     const llm = queuedLlm([
       { 'x:extract_result#1': [{ name: wrap('Acme'), amount: wrap('5M') }] },
     ]);
-    const resolveFileText = jest.fn(async (_ref: FileRef): Promise<FileTextResult | null> => ({
+    const resolveFileText = jest.fn(async (_ref: FileRef): Promise<FileTextResolution> => ({
       text: 'Acme is raising a $5M seed round. Revenue is $1.2M ARR.',
       rawTextId: 'rt-123',
     }));
@@ -148,7 +160,7 @@ describe('extract from a file attachment — text + provenance', () => {
     const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('Scanned Co') }] }]);
     // The resolver stands in for resolveFileRef → services.ocr.extractPdf:
     // a scanned PDF that yields OCR text.
-    const resolveFileText = jest.fn(async (): Promise<FileTextResult | null> => ({
+    const resolveFileText = jest.fn(async (): Promise<FileTextResolution> => ({
       text: 'OCR: Scanned Co pitch deck — Series B.',
       rawTextId: 'rt-ocr',
     }));
@@ -166,9 +178,11 @@ describe('extract from a file attachment — text + provenance', () => {
 
   it('an OCR-empty file contributes NO extraction text but STILL a FILE resource (carry-forward)', async () => {
     const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('From Text') }] }]);
-    // resolveFileText returns null (the production resolver does this for
-    // unsupported types / empty OCR — e.g. a scanned image with no text).
-    const resolveFileText = jest.fn(async (): Promise<FileTextResult | null> => null);
+    // The production resolver answers this way for an empty OCR result — e.g.
+    // a scanned image with no text in it at all.
+    const resolveFileText = jest.fn(
+      async (): Promise<FileTextResolution> => ({ unreadable: 'no_text' }),
+    );
     const ref = fileRef({ name: 'scan.png', contentType: 'image/png' });
     const extract = extractExpr(['body', 'attachment'], [{ name: 'name', description: 'the company name' }]);
 
@@ -202,7 +216,7 @@ describe('extract from a file attachment — text + provenance', () => {
 
   it('de-duplicates the same attachment — text is extracted once even if the file appears twice', async () => {
     const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('Once') }] }]);
-    const resolveFileText = jest.fn(async (): Promise<FileTextResult | null> => ({
+    const resolveFileText = jest.fn(async (): Promise<FileTextResolution> => ({
       text: 'Deck text once.',
       rawTextId: 'rt-dup',
     }));
@@ -228,7 +242,7 @@ describe('extract from a file attachment — text + provenance', () => {
     const llm = queuedLlm([
       { 'x:extract_result#1': [{ name: wrap('Acme') }] },
     ]);
-    const resolveFileText = jest.fn(async (): Promise<FileTextResult | null> => ({
+    const resolveFileText = jest.fn(async (): Promise<FileTextResolution> => ({
       text: 'Acme is raising a $5M seed round.',
       rawTextId: 'rt-xyz',
     }));
@@ -265,6 +279,161 @@ describe('extract from a file attachment — text + provenance', () => {
     const textResources = emission.resources.filter((r) => r.type === 'TEXT');
     expect(textResources).toHaveLength(1);
     expect(textResources[0].content).toContain('Acme raised a seed round');
+  });
+
+  it('names the file it could not read on the trace, even when the extraction is skipped for want of any source', async () => {
+    // The production shape of this: a PDF on a deployment with no OCR
+    // provider. The prompt is empty, so no call is made at all — and without
+    // the file on the entry the run says only "it read nothing", which is
+    // indistinguishable from a message that carried no attachment.
+    const llm = queuedLlm([]);
+    const trace: MovementTraceEntry[] = [];
+    const resolveFileText = jest.fn(
+      async (): Promise<FileTextResolution> => ({
+        unreadable: 'extraction_failed',
+        detail: 'OCR is not configured, so text cannot be extracted from this PDF.',
+      }),
+    );
+    const extract = extractExpr(['attachment'], [{ name: 'name', description: 'the company name' }]);
+
+    await materializeExtract({
+      extract,
+      spec: await buildExtractSpec(extract),
+      runtime: runtimeFor({
+        llm: llm.client,
+        slots: { attachment: fileRef() },
+        resolveFileText,
+        trace,
+      }),
+    });
+
+    expect(llm.calls).toHaveLength(0);
+    const entries = extractionEntries(trace);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      skipped: 'empty_source',
+      inputChars: 0,
+      files: [
+        {
+          name: 'deck.pdf',
+          contentType: 'application/pdf',
+          unreadable: 'extraction_failed',
+          detail: 'OCR is not configured, so text cannot be extracted from this PDF.',
+        },
+      ],
+    });
+  });
+
+  it('reports the unreadable file on the call it still made from the text source', async () => {
+    const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('From Text') }] }]);
+    const trace: MovementTraceEntry[] = [];
+    const resolveFileText = jest.fn(
+      async (): Promise<FileTextResolution> => ({
+        unreadable: 'bytes_unavailable',
+        detail: 'file not found (404)',
+      }),
+    );
+    const extract = extractExpr(['body', 'attachment'], [{ name: 'name', description: 'the company name' }]);
+
+    const emission = await materializeExtract({
+      extract,
+      spec: await buildExtractSpec(extract),
+      runtime: runtimeFor({
+        llm: llm.client,
+        slots: { body: 'A plain text body mentioning From Text.', attachment: fileRef() },
+        resolveFileText,
+        trace,
+      }),
+    });
+
+    // The text still extracts …
+    expect(emission.fields).toEqual({ name: 'From Text' });
+    expect(llm.calls[0].userMessage).toContain('A plain text body mentioning From Text');
+    // … and the same entry says the attachment was there and gave nothing.
+    const entry = extractionEntries(trace)[0];
+    expect(entry.skipped).toBeUndefined();
+    expect(entry.files).toEqual([
+      {
+        name: 'deck.pdf',
+        contentType: 'application/pdf',
+        unreadable: 'bytes_unavailable',
+        detail: 'file not found (404)',
+      },
+    ]);
+  });
+
+  it('counts what a readable file contributed', async () => {
+    const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('Acme') }] }]);
+    const trace: MovementTraceEntry[] = [];
+    const text = 'Acme is raising a $5M seed round.';
+    const resolveFileText = jest.fn(
+      async (): Promise<FileTextResolution> => ({ text, rawTextId: 'rt-chars' }),
+    );
+    const extract = extractExpr(['attachment'], [{ name: 'name', description: 'name' }]);
+
+    await materializeExtract({
+      extract,
+      spec: await buildExtractSpec(extract),
+      runtime: runtimeFor({ llm: llm.client, slots: { attachment: fileRef() }, resolveFileText, trace }),
+    });
+
+    expect(extractionEntries(trace)[0].files).toEqual([
+      { name: 'deck.pdf', contentType: 'application/pdf', chars: text.length },
+    ]);
+  });
+
+  it("bounds ONE file's text in the prompt, and says so — to the model and on the trace", async () => {
+    const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('Acme') }] }]);
+    const trace: MovementTraceEntry[] = [];
+    const long = 'a'.repeat(120_000);
+    const resolveFileText = jest.fn(
+      async (): Promise<FileTextResolution> => ({ text: long, rawTextId: 'rt-long' }),
+    );
+    const extract = extractExpr(['attachment'], [{ name: 'name', description: 'name' }]);
+
+    const emission = await materializeExtract({
+      extract,
+      spec: await buildExtractSpec(extract),
+      runtime: runtimeFor({ llm: llm.client, slots: { attachment: fileRef() }, resolveFileText, trace }),
+    });
+
+    // The prompt carries the first 50k characters and a marker saying so …
+    const prompt = llm.calls[0].userMessage;
+    expect(prompt).toContain('[… truncated: first 50000 of 120000 characters]');
+    expect(prompt).toContain('a'.repeat(50_000));
+    expect(prompt).not.toContain('a'.repeat(50_001));
+    // … the trace says how much went in and how much there was …
+    expect(extractionEntries(trace)[0].files).toEqual([
+      { name: 'deck.pdf', contentType: 'application/pdf', chars: 50_000, truncatedFrom: 120_000 },
+    ]);
+    // … and the STORED copy is untouched: the evidence points at the whole
+    // document, and the carry-forward resource carries all of it.
+    const site = emission.provenance.name?.kind === 'extraction' ? emission.provenance.name.site : undefined;
+    expect(site?.dataSources).toContainEqual(expect.objectContaining({ kind: 'file', rawTextId: 'rt-long' }));
+    expect(emission.resources.find((r) => r.type === 'FILE')?.content).toHaveLength(120_000);
+  });
+
+  it('raises the ceiling from the environment', async () => {
+    process.env.EXTRACTION_FILE_CHARS = '10';
+    try {
+      const llm = queuedLlm([{ 'x:extract_result#1': [{ name: wrap('Acme') }] }]);
+      const trace: MovementTraceEntry[] = [];
+      const resolveFileText = jest.fn(
+        async (): Promise<FileTextResolution> => ({ text: 'b'.repeat(40), rawTextId: 'rt-env' }),
+      );
+      const extract = extractExpr(['attachment'], [{ name: 'name', description: 'name' }]);
+      await materializeExtract({
+        extract,
+        spec: await buildExtractSpec(extract),
+        runtime: runtimeFor({ llm: llm.client, slots: { attachment: fileRef() }, resolveFileText, trace }),
+      });
+      expect(llm.calls[0].userMessage).toContain('[… truncated: first 10 of 40 characters]');
+      expect(extractionEntries(trace)[0].files).toEqual([
+        { name: 'deck.pdf', contentType: 'application/pdf', chars: 10, truncatedFrom: 40 },
+      ]);
+    } finally {
+      delete process.env.EXTRACTION_FILE_CHARS;
+    }
   });
 
   it('falls back to the legacy stringify when no resolveFileText seam is present', async () => {

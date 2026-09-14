@@ -225,7 +225,7 @@ import {
   materializeExtract,
   registryTransformInvoker,
   type ExtractEmission,
-  type FileTextResult,
+  type FileTextResolution,
   type MovementTransformInvoker,
 } from './extraction';
 import { RunCancelledSignal } from './cancel_gate';
@@ -323,7 +323,7 @@ export interface RunMovementInput {
    * §3a). Defaults to the production resolver (owner-adapter byte fetch →
    * OCR/text → RawText); tests inject a deterministic stub mocking the
    * resolve + OCR boundary. */
-  resolveFileText?: (ref: FileRef) => Promise<FileTextResult | null>;
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResolution>;
   /**
    * File-import resolution (movement libraries, §H) — the ONE seam the
    * engine takes for imports. Resolution itself lives in movement-lang

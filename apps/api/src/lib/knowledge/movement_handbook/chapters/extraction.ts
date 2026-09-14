@@ -54,6 +54,7 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
 \`\`\`
 
 - \`from [ … ]\` lists the source data — body text, attachment files, several at once. Documents are read as text; audio is transcribed, and the spoken words join the source text like any other file's content.
+- A source can be a walk bound to a name first — \`docs = go-[:Files]->.\`File\`\` then \`extract from [go.\`Text\`, docs]\`. A named walk is a file source exactly like the inline \`go-[:Files]->.\`File\`\` form.
 - \`node <name>: "<description>"\` declares a kind of record, and the description carries the cardinality: "the company" yields one, "each company" yields all. A record with no value in any of its fields is dropped rather than emitted all-null — say so in the description if you want the empty ones. Where a record may genuinely not be there, say so too: "the company, if mentioned" keeps one from being invented to fill the slot.
 - Every field is something the model was **asked** for and may not have found, so reading one is \`T | absent\`: a write field takes it with the \`?:\` fill (\`Stage ?: c.stage\`), or give it a fallback with \`COALESCE\`, or gate on it first. The *values-that-may-not-be-there* section of the expressions chapter has every discharge.
 - Nest a \`node\` when a child only makes sense inside its parent — a company's people, an order's line items. The child arrives already attached, so the write that links them has the relationship in hand.

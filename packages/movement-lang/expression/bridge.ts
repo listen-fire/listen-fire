@@ -81,11 +81,16 @@ import {
 
 export class BridgeError extends Error {
   pos?: number;
+  /** A specific diagnostic code the checker should report instead of the
+   *  generic MOV_EXPR_PARSE — set by a targeted rejection (e.g. a closure
+   *  literal) that wants its own code, not a bare parse failure's. */
+  code?: string;
 
-  constructor(message: string, pos?: number) {
+  constructor(message: string, pos?: number, code?: string) {
     super(message);
     this.name = 'BridgeError';
     if (pos !== undefined) this.pos = pos;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -227,6 +232,33 @@ function rejectRetiredConstructs(raw: string): void {
       extractEdge.index,
     );
   }
+}
+
+// ── Closures outside their one legal position ──
+//
+// `(n) => { … }` parses in a handful of places — an assignment RHS, a
+// `return`, a MAP/FILTER/REDUCE-family function slot, a race or parallel arm,
+// an `await until` condition, a callback's subject — every one of them read
+// by the statement parser's own `atClosure`/`parseClosure` before an
+// expression slot is ever handed to this bridge. Anywhere else a closure is
+// typed — a call argument, a write field, a hop WHERE — the formula grammar
+// has no production for it: `=` reads as equality and the parser then dies
+// on the bare `>` with a generic, unhelpful MOV_EXPR_PARSE. This scans for
+// the tell (a literal `=>`, outside string/backtick literals) and reports
+// the real reason instead.
+
+function rejectClosurePosition(raw: string): void {
+  const blanked = blankLiterals(raw);
+  const arrow = blanked.indexOf('=>');
+  if (arrow === -1) return;
+  throw new BridgeError(
+    'a closure cannot be written here — bind it to a name first '
+      + '(`pick = (n) => { … }`) and pass the name; a closure is written in an '
+      + 'assignment, a return, a MAP/FILTER/REDUCE function slot, a race or '
+      + "parallel arm, an `await until` condition, or a callback's subject",
+    arrow,
+    'MOV_EXPR_CLOSURE_POSITION',
+  );
 }
 
 // ── Identity resolvers (M1) ──
@@ -929,6 +961,7 @@ export function authoredStringText(raw: string): string {
 
 export function parseMovementExpression(raw: string): Expression {
   rejectRetiredConstructs(raw);
+  rejectClosurePosition(raw);
 
   const open = wholeStringSlot(raw);
   if (open !== null) {

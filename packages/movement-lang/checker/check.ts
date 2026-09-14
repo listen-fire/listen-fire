@@ -221,6 +221,15 @@ export const DiagnosticCodes = {
   IMPORT_DUPLICATE: 'MOV_IMPORT_DUPLICATE',
   IMPORT_FILE_UNSUPPORTED: 'MOV_IMPORT_FILE_UNSUPPORTED',
   EXPR_PARSE: 'MOV_EXPR_PARSE',
+  /** A closure literal (`(n) => { … }`) written where the formula grammar
+   *  takes over — a call argument, a write field, a hop WHERE. The formula
+   *  grammar has no closure production (it dies on the bare `>`), so this
+   *  gives the real reason instead of that generic parse error. A closure is
+   *  only legal in an assignment, a return, a MAP/FILTER/REDUCE-family
+   *  function slot, a race or parallel arm, an `await until` condition, or a
+   *  callback's subject — all read by the statement parser's own
+   *  `atClosure`/`parseClosure`, never by this formula grammar. */
+  EXPR_CLOSURE_POSITION: 'MOV_EXPR_CLOSURE_POSITION',
   NAME_UNRESOLVED: 'MOV_NAME_UNRESOLVED',
   USE_BEFORE_BIND: 'MOV_USE_BEFORE_BIND',
   CONSTRUCT_NOT_ADAPTER: 'MOV_CONSTRUCT_NOT_ADAPTER',
@@ -297,6 +306,12 @@ export const DiagnosticCodes = {
    *  it — its input is the `from [ … ]` text, or the fields the extract has
    *  produced so far. There is nothing for a bare call to pass it. */
   PLUGIN_FED_BY_EXTRACTION: 'MOV_PLUGIN_FED_BY_EXTRACTION',
+  /** The same field name declared twice in one extract stage — within a
+   *  stage, `buildExtractGraph` keeps the last one and the other silently
+   *  vanishes. A LATER stage redeclaring a field is the documented
+   *  "transformation wins" semantic and stays legal; this only catches two
+   *  fields naming the same thing in the same stage. */
+  EXTRACT_FIELD_DUPLICATE: 'MOV_EXTRACT_FIELD_DUPLICATE',
   // Listeners (trigger rows are derived from `listen` statements)
   LISTEN_FILE_LEVEL: 'MOV_LISTEN_FILE_LEVEL',
   LISTEN_NOT_INSTANCE: 'MOV_LISTEN_NOT_INSTANCE',
@@ -5822,7 +5837,11 @@ class Checker {
       parsed = parseMovementExpression(probeText);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
-      this.report(DiagnosticCodes.EXPR_PARSE, `Invalid traversal path: ${e.message}`, head.span);
+      if (e.code !== undefined) {
+        this.report(e.code, e.message, head.span);
+      } else {
+        this.report(DiagnosticCodes.EXPR_PARSE, `Invalid traversal path: ${e.message}`, head.span);
+      }
     }
     let steps: TraversalStep[] | undefined;
     if (parsed) {
@@ -7607,7 +7626,16 @@ class Checker {
       for (const plugin of stage.through ?? []) {
         this.checkPluginCall(plugin, scope, { prior: new Set(prior), ownOrLater });
       }
+      const seen = new Set<string>();
       for (const field of stage.fields) {
+        if (seen.has(field.name)) {
+          this.report(
+            DiagnosticCodes.EXTRACT_FIELD_DUPLICATE,
+            `'${field.name}' is declared twice in this node — each field names one thing`,
+            field.span,
+          );
+        }
+        seen.add(field.name);
         this.checkExprSlot(field.description, scope);
       }
       for (const name of stageFields[k]) prior.add(name);
@@ -7761,7 +7789,7 @@ class Checker {
       parsed = parseMovementExpression(slot.raw);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
-      this.report(DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
+      this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
       return {};
     }
     const names = collectExpressionNames(parsed);
@@ -7806,7 +7834,7 @@ class Checker {
       condition = parseMovementCondition(slot.raw);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
-      this.report(DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
+      this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
       return;
     }
     this.checkCondition(condition, slot, scope, narrowInto);

@@ -699,6 +699,27 @@ export interface MovementExprContext {
 }
 
 /**
+ * Why a source FILE gave the extraction no text. `extraction_failed` carries
+ * the extractor's own sentence alongside it — on a deployment with no OCR
+ * provider that sentence names the configuration that is missing, which is the
+ * whole difference between "the PDF said nothing" and "nothing read the PDF".
+ */
+export type FileUnreadableReason =
+  | 'unsupported_type'
+  | 'bytes_unavailable'
+  | 'extraction_failed'
+  | 'no_text';
+
+/** One source file on an extraction trace entry: what it is, and either what
+ *  it contributed or why it contributed nothing. `truncatedFrom` is the file's
+ *  FULL length when only its first `chars` characters reached the prompt — a
+ *  ceiling is never silent. */
+export type ExtractionTraceFile = { name?: string; contentType?: string } & (
+  | { chars: number; truncatedFrom?: number }
+  | { unreadable: FileUnreadableReason; detail?: string }
+);
+
+/**
  * One recorded decision point of a firing. Persisted onto the trigger
  * run's step diagnostics and rendered in the run's Recent-activity
  * expansion — the answer to "this run made no changes… why?".
@@ -727,6 +748,15 @@ export type MovementTraceEntry =
       inputs?: Array<{ classification: string; chars: number }>;
       /** How many prompt parts `inputs` left out at its cap. */
       inputsTruncated?: number;
+      /** Every source FILE the `from [ … ]` slots resolved to, readable or
+       *  not — the file's name plus either the characters it contributed to
+       *  the prompt or why it contributed none. Without this an attachment
+       *  nothing could read is indistinguishable from no attachment at all:
+       *  the prompt is short (or empty) and the run says only that it read
+       *  nothing. Capped. */
+      files?: ExtractionTraceFile[];
+      /** How many source files `files` left out at its cap. */
+      filesTruncated?: number;
       /** Which model answered, and how long it took (both attempts, when
        *  the call was retried). */
       model?: string;
