@@ -45,9 +45,15 @@ const groupDimensions = [
 type GroupDimension = (typeof groupDimensions)[number];
 
 /** Dates arrive over the wire as ISO strings and in-process as `Date`s; the
- *  engine only ever deals in `Date`. */
+ *  engine only ever deals in `Date`.
+ *
+ *  The declared type is the WIRE type — a string — because this schema is also
+ *  published as JSON Schema (the MCP `queryValuations` tool reads the shape off
+ *  this procedure), and a `z.date()` branch has no JSON Schema spelling: it
+ *  makes the whole tool list unserialisable. An in-process `Date` is narrowed
+ *  to its ISO string before validation instead, so both callers still work. */
 const queryDate = z
-  .union([z.string(), z.date()])
+  .preprocess((value) => (value instanceof Date ? value.toISOString() : value), z.string())
   .transform((value) => new Date(value))
   .refine((date) => !Number.isNaN(date.getTime()), { message: 'Invalid date' });
 

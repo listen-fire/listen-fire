@@ -4,10 +4,12 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { getCoreQb, getValuationsQb } from '../../../../lib/kysely';
 import { Context } from '../../../../services/context';
-import { createMcpRouter } from '../../server';
+import { buildMcpServer, createMcpRouter } from '../../server';
 import { valuationsTools } from '..';
 import { valuationsWriteTools } from '../writes';
 import CurrencyIsoCode from '../../../../generated/kysely/valuations/CurrencyIsoCode';
@@ -17,6 +19,7 @@ import LegalEntityType from '../../../../generated/kysely/valuations/LegalEntity
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { UserId } from '../../../../generated/kysely/core/User';
 import { userPrincipal } from '../../../../services/principal';
+import { valuationQueryInput } from '../../../../lib/valuations/query';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const anyVals = (v: Record<string, unknown>) => v as any;
@@ -64,6 +67,34 @@ describe('valuations tool surface', () => {
     expect(valuationsTools.getPriceAssetOptions.annotations.readOnlyHint).toBe(true);
   });
 
+  // The list is the only thing a client ever sees, and the SDK builds every
+  // tool's JSON Schema inside the handler that serves it — so one unconvertible
+  // input (a `z.date()` read off a procedure) takes down the WHOLE list, as a
+  // JSON-RPC error inside an HTTP 200. Asserting on our registration objects
+  // would have proved nothing: they were all fine. Ask a real client instead.
+  it('serves the whole surface to a real client', async () => {
+    const server = buildMcpServer(
+      { name: 'test', domain: 'valuations', tools: valuationsTools },
+      async () => ({ content: [{ type: 'text' as const, text: '{}' }] }),
+    );
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-host', version: '1.0.0' });
+    await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+    try {
+      const listed = await client.listTools();
+      const names = listed.tools.map((tool) => tool.name);
+      expect(names).toEqual(expect.arrayContaining(Object.keys(valuationsTools)));
+      // The date filters are published as the strings a client can send.
+      const query = listed.tools.find((tool) => tool.name === 'queryValuations');
+      expect((query?.inputSchema.properties as Record<string, unknown>).asOfDate).toEqual({
+        type: 'string',
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('a write tool (addPrice) round-trips through the caller', async () => {
     // The mutation runs in the caller's transaction, which commits when the
     // context closes — so assert against the committed row after run() returns.
@@ -88,6 +119,17 @@ describe('valuations tool surface', () => {
   });
 
   describe('queryValuations', () => {
+    // The tool publishes a string because that is all a client can send, but
+    // the procedure is also called in-process with real `Date`s — both must
+    // still land on the same parsed `Date`.
+    it('takes its dates as an ISO string or as a Date', () => {
+      const fromString = valuationQueryInput.parse({ currency: 'USD', asOfDate: '2024-03-01' });
+      const fromDate = valuationQueryInput.parse({ currency: 'USD', asOfDate: new Date('2024-03-01') });
+      expect(fromString.asOfDate).toEqual(new Date('2024-03-01'));
+      expect(fromDate.asOfDate).toEqual(new Date('2024-03-01'));
+      expect(() => valuationQueryInput.parse({ currency: 'USD', asOfDate: 'not a date' })).toThrow();
+    });
+
     // A share-for-share deal, mirroring
     // ../../../trpc/views/__test__/csvExportAtoms.integration.test.ts: $50k for
     // 20 A-shares, then Company B acquires Company A for 15 B-shares plus $5k

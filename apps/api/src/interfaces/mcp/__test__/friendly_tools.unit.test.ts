@@ -1,4 +1,6 @@
-import { assertFriendlyTool, directoryAnnotations } from '../server';
+import { z } from 'zod';
+
+import { assertFriendlyTool, assertRepresentableSchema, directoryAnnotations } from '../server';
 
 const ok = { title: 'Save an automation', annotations: { destructiveHint: true } };
 
@@ -37,5 +39,44 @@ describe('directoryAnnotations', () => {
   });
   it('preserves an already-explicit readOnlyHint on a read tool', () => {
     expect(directoryAnnotations('List things', { readOnlyHint: true }).readOnlyHint).toBe(true);
+  });
+});
+
+// A tool's input is only ever seen as JSON Schema, and the SDK converts it
+// inside its `tools/list` handler — so a type with no JSON Schema spelling
+// fails the WHOLE list, at request time, as a JSON-RPC error inside an HTTP
+// 200. The symptom is a connector that authenticates and then offers no tools.
+// This guard moves that failure to the deploy.
+describe('assertRepresentableSchema', () => {
+  it('accepts the wire types a client can actually send', () => {
+    expect(() =>
+      assertRepresentableSchema('queryThings', {
+        since: z.string().optional(),
+        limit: z.number().int().optional(),
+        group: z.array(z.enum(['a', 'b'])).optional(),
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a z.date(), which has no JSON Schema spelling', () => {
+    expect(() => assertRepresentableSchema('queryThings', { since: z.date() })).toThrow(
+      /cannot be published as JSON Schema/,
+    );
+  });
+
+  it('rejects a z.date() hidden in a union or nested object', () => {
+    expect(() =>
+      assertRepresentableSchema('queryThings', { since: z.union([z.string(), z.date()]).optional() }),
+    ).toThrow(/cannot be published as JSON Schema/);
+    expect(() =>
+      assertRepresentableSchema('queryThings', { window: z.object({ from: z.date().optional() }) }),
+    ).toThrow(/cannot be published as JSON Schema/);
+  });
+
+  it('accepts a Date narrowed to its wire type before validation', () => {
+    const wireDate = z
+      .preprocess((value) => (value instanceof Date ? value.toISOString() : value), z.string())
+      .transform((value) => new Date(value));
+    expect(() => assertRepresentableSchema('queryThings', { since: wireDate })).not.toThrow();
   });
 });

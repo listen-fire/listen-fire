@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { normalizeObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
+import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -189,6 +191,33 @@ function assertFriendlyTool(
   const leaked = [...tokens(toolName), ...tokens(tool.title)].find((t) => INTERNAL_WORDS.has(t));
   if (leaked) {
     throw new Error(`MCP tool ${toolName}: internal vocabulary "${leaked}" must not reach users — see the friendly-wording spec`);
+  }
+}
+
+/**
+ * Every tool's input must survive the trip to JSON Schema, because that is the
+ * only form a client ever sees it in.
+ *
+ * The SDK converts a tool's zod input INSIDE its `tools/list` handler, so a
+ * type with no JSON Schema spelling (`z.date()` is the one that bites: the
+ * shape is read off a tRPC procedure, where a `Date` is a perfectly good
+ * in-process input) throws there and nowhere else. The whole list fails — not
+ * the one tool — and the client is handed a JSON-RPC error inside an HTTP 200,
+ * which reads as a connector that authenticates fine and then offers no tools
+ * at all. Convert it here, at registration, with the SAME options the list
+ * handler uses, so the failure lands on the deploy instead.
+ */
+function assertRepresentableSchema(toolName: string, inputSchema: ZodShape): void {
+  const schema = normalizeObjectSchema(z.object(inputSchema));
+  if (!schema) return;
+  try {
+    toJsonSchemaCompat(schema, { strictUnions: true, pipeStrategy: 'input' });
+  } catch (err) {
+    throw new Error(
+      `MCP tool ${toolName}: input schema cannot be published as JSON Schema — ${
+        err instanceof Error ? err.message : String(err)
+      }. Declare the wire type (a string) and narrow to the in-process type inside the schema.`,
+    );
   }
 }
 
@@ -403,6 +432,7 @@ function createMcpRouter(options: McpRouterOptions): ReturnType<typeof Router> {
 
   for (const [toolName, tool] of Object.entries(options.tools ?? {})) {
     assertFriendlyTool(toolName, tool);
+    assertRepresentableSchema(toolName, tool.inputSchema);
     if (!tool.endpoint === !tool.handler) {
       throw new Error(`MCP tool ${toolName}: set exactly one of endpoint or handler`);
     }
@@ -435,5 +465,5 @@ function createMcpRouter(options: McpRouterOptions): ReturnType<typeof Router> {
   return router;
 }
 
-export { createMcpRouter, buildMcpServer, assertFriendlyTool, directoryAnnotations, APP_MIME_TYPE };
+export { createMcpRouter, buildMcpServer, assertFriendlyTool, assertRepresentableSchema, directoryAnnotations, APP_MIME_TYPE };
 export type { TopLevelTool, ToolApp, McpRouterOptions, McpToolResult, LocalApiCall };
