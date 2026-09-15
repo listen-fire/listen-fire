@@ -447,7 +447,7 @@ const movementCatalog = mockCatalog({
   },
   plugins: {
     vc_fetch: { args: ['urls'] },
-    // Real registered transform; `content` is an `auto` param, so it takes NO
+    // Real registered transform; `text` is an `auto` param, so it takes NO
     // author args (the engine auto-feeds the source content).
     vc_url_retrieval: { args: [] },
     // The targeted twin: every argument is the author's, and `url` is required.
@@ -937,7 +937,7 @@ describe('through-staged extraction', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 2b. `auto` plugin params (vc_url_retrieval's `content`) are engine-fed
+// 2b. `auto` plugin params (vc_url_retrieval's `text`) are engine-fed
 // ═════════════════════════════════════════════════════════════════════════════
 
 const AUTO_CONTENT_MOVEMENT = [
@@ -986,9 +986,9 @@ describe('through auto-content (vc_url_retrieval)', () => {
     });
     expect(invocations).toHaveLength(1);
     expect(invocations[0].plugin).toBe('vc_url_retrieval');
-    // `content` is injected from the `from [msg.\`text\`]` source — the author
+    // `text` is injected from the `from [msg.\`text\`]` source — the author
     // passed nothing.
-    expect(invocations[0].config).toEqual({ content: 'Acme (acme.com) is fundraising.' });
+    expect(invocations[0].config).toEqual({ text: 'Acme (acme.com) is fundraising.' });
   });
 });
 

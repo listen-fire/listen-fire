@@ -977,7 +977,7 @@ export async function materializeExtract(input: {
 class Materializer {
   private siteCounter = 0;
   /** The extract's source text — what `from [...]` resolved to. Auto-fed to a
-   *  plugin's `auto` params (e.g. vc_url_retrieval's `content`), so the author
+   *  plugin's `auto` params (e.g. vc_url_retrieval's `text`), so the author
    *  writes `through [vc_url_retrieval]` with no argument. */
   private sourceText = '';
   /** The extraction's tier, as its author wrote it. Statement-level: every
@@ -1732,7 +1732,7 @@ class Materializer {
         config[arg.name] = (await this.runtime.evalSlot(arg.value)).value;
       }
     }
-    // Engine-injected `auto` params (e.g. vc_url_retrieval's `content`): fed
+    // Engine-injected `auto` params (e.g. vc_url_retrieval's `text`): fed
     // from the extract source text, not author-supplied. Done last so the
     // author can't override them.
     const impl = getTransform(plugin.plugin) ?? getTransform(plugin.plugin.replace(/_/g, '-'));

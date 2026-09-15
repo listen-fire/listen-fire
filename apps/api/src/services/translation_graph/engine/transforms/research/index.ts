@@ -113,6 +113,44 @@ export const RESEARCH_SIGNATURE: TransformSignature = {
       dossier: { kind: 'string' },
     },
   },
+  // The dossier, read by name. Every field is optional because every one of them
+  // is filled only when the research actually found it — a subject with no
+  // confident match comes back with an outcome and nothing else.
+  output: {
+    kind: 'record',
+    fields: {
+      summary: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'A short answer to what you asked, in prose.',
+      },
+      confidence: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'How sure the reading is that this is the right subject.',
+      },
+      sources: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The addresses the answer rests on, numbered, one per line.',
+      },
+      website: {
+        type: { kind: 'string' },
+        optional: true,
+        description: "The subject's own web address, as resolved.",
+      },
+      linkedin: {
+        type: { kind: 'string' },
+        optional: true,
+        description: "The subject's profile address, as resolved.",
+      },
+      dossier: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The long form — everything read, kept for a later question.',
+      },
+    },
+  },
 };
 
 export const RESEARCH_PLUGIN_MANIFEST: PluginManifest = {

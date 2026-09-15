@@ -1276,7 +1276,7 @@ describe('adapterNameResolver over the KG introspection', () => {
 //
 // `PluginSpec.requiredArgs` is projected from `TransformParam.required`
 // (types.ts) — the checker's REFUSE-a-missing-required-argument gate reads
-// only this. `fetch-url`'s `url` and `vc-url-retrieval`'s `content` are the
+// only this. `fetch-url`'s `url` and `vc-url-retrieval`'s `text` are the
 // real registered plugins that exercise both halves of the rule: a required
 // AUTHOR arg projects, a required AUTO arg (engine-injected, never in the
 // author-facing surface at all) does not.
@@ -1289,9 +1289,9 @@ describe('registeredPluginSpecs — required-argument projection', () => {
     expect(specs.fetch_url?.requiredArgs).toEqual(['url']);
   });
 
-  it('a required AUTO param is excluded from both args and requiredArgs (vc_url_retrieval.content)', () => {
-    expect(specs.vc_url_retrieval?.args).not.toContain('content');
-    expect(specs.vc_url_retrieval?.requiredArgs ?? []).not.toContain('content');
+  it('a required AUTO param is excluded from both args and requiredArgs (vc_url_retrieval.text)', () => {
+    expect(specs.vc_url_retrieval?.args).not.toContain('text');
+    expect(specs.vc_url_retrieval?.requiredArgs ?? []).not.toContain('text');
   });
 
   it('an optional author param stays out of requiredArgs (fetch_url.email, vc_url_retrieval.email)', () => {
@@ -1299,5 +1299,64 @@ describe('registeredPluginSpecs — required-argument projection', () => {
     expect(specs.fetch_url?.requiredArgs ?? []).not.toContain('email');
     expect(specs.vc_url_retrieval?.args).toContain('email');
     expect(specs.vc_url_retrieval?.requiredArgs ?? []).not.toContain('email');
+  });
+});
+
+// ── registeredPluginSpecs — what a plain call gets back ─────────────────────
+//
+// The plugin's own signature is the single source: the checker types
+// `page = fetch_url(url: …)` from the same declaration the engine hands the
+// value back against, so the two cannot disagree about what came out.
+
+describe('registeredPluginSpecs — declared output', () => {
+  const specs = registeredPluginSpecs();
+
+  it('a page fetch hands back the text, and may hand back nothing', () => {
+    expect(specs.fetch_url?.output).toEqual({
+      kind: 'value',
+      type: { kind: 'maybeAbsent', of: 'text' },
+    });
+  });
+
+  it('research hands back a record whose every field may be unfilled', () => {
+    const output = specs.research?.output;
+    expect(output?.kind).toBe('record');
+    const fields = output?.kind === 'record' ? output.fields : {};
+    expect(Object.keys(fields).sort()).toEqual([
+      'confidence',
+      'dossier',
+      'linkedin',
+      'sources',
+      'summary',
+      'website',
+    ]);
+    for (const type of Object.values(fields)) {
+      expect(type).toEqual({ kind: 'maybeAbsent', of: 'text' });
+    }
+  });
+
+  it('every bundled plugin that takes arguments of its own says what it hands back', () => {
+    for (const [name, spec] of Object.entries(specs)) {
+      if (spec.fedByExtraction === true) continue;
+      expect([name, spec.output !== undefined]).toEqual([name, true]);
+    }
+  });
+
+  it('the one plugin the extraction alone feeds stays a stage', () => {
+    // No parameters and a body that reads the enclosing extract's fields —
+    // there is no call an author could write, so it declares no output either.
+    expect(specs.linkedin_enrichment?.fedByExtraction).toBe(true);
+    expect(specs.linkedin_enrichment?.output).toBeUndefined();
+  });
+
+  it('a plugin with parameters is callable however it is SCHEDULED', () => {
+    // `dataDependency` says when a stage runs, not what the plugin runs on.
+    expect(specs.fetch_url?.fedByExtraction).toBeUndefined();
+    expect(specs.research?.fedByExtraction).toBeUndefined();
+  });
+
+  it("the scanned text is one parameter a stage gets fed and a call writes", () => {
+    expect(specs.vc_url_retrieval?.fedArgs).toEqual([{ name: 'text', required: true }]);
+    expect(specs.vc_url_retrieval?.fedByExtraction).toBeUndefined();
   });
 });

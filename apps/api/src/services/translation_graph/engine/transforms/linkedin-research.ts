@@ -85,6 +85,39 @@ export const LINKEDIN_RESEARCH_SIGNATURE: TransformSignature = {
       activity_sources: { kind: 'string' },
     },
   },
+  // What the person is currently doing, read by name. Every field is optional:
+  // a profile that could not be read confidently attaches an outcome and
+  // nothing else.
+  output: {
+    kind: 'record',
+    fields: {
+      activity_summary: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'What they are currently doing, in prose.',
+      },
+      activity_confidence: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'How sure the reading is.',
+      },
+      current_role: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'Their role, as stated.',
+      },
+      current_organisation: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The organisation they are at.',
+      },
+      activity_sources: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The addresses the reading rests on, one per line.',
+      },
+    },
+  },
 };
 
 export const LINKEDIN_RESEARCH_PLUGIN_MANIFEST: PluginManifest = {

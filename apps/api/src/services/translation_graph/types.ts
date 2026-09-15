@@ -2100,6 +2100,47 @@ export const transformAdditionsSchema = z.object({
 
 export type TransformAdditions = z.infer<typeof transformAdditionsSchema>;
 
+/** One thing a plugin's output carries: its value type, and whether the plugin
+ *  may leave it unfilled. `ExpressionType` — the vocabulary `additions` and
+ *  `params` already speak — says the type; `optional` is the one thing it
+ *  cannot say, and it maps onto the checker's `T | absent` exactly. */
+export const transformOutputFieldSchema = z.object({
+  type: expressionTypeSchema,
+  /** The plugin may not fill this — a fetch that failed, a search that found
+   *  nothing. Read downstream as `T | absent`, so it has to be discharged
+   *  before it can be written anywhere that demands a value. */
+  optional: z.boolean().optional(),
+  description: z.string().optional(),
+});
+
+/**
+ * What a PLAIN call to this plugin hands back (`page = fetch_url(url: …)`) —
+ * on whichever plane it lives, which is the same two planes every bound value
+ * in the language has:
+ *
+ *   - `value`  — one value, read as itself;
+ *   - `record` — several values read by name (`more.summary`).
+ *
+ * A `through [ … ]` stage declares `additions` instead, and the two answer
+ * different questions: `additions` is what reaches the EXTRACTOR, this is what
+ * reaches a NAME. Absent means nobody has said, and the language keeps such a
+ * plugin to stages.
+ */
+export const transformOutputSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('value'),
+    type: expressionTypeSchema,
+    optional: z.boolean().optional(),
+    description: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('record'),
+    fields: z.record(z.string(), transformOutputFieldSchema),
+  }),
+]);
+
+export type TransformOutputShape = z.infer<typeof transformOutputSchema>;
+
 export const transformSignatureSchema = z.object({
   /** Unique transform identifier — the value an author writes in
    *  `-[…:#transform { plugin: "<name>" }]->`. Must be unique across
@@ -2131,6 +2172,16 @@ export const transformSignatureSchema = z.object({
    *  field-mapping autocomplete after a `#transform` step in the
    *  traversal. */
   additions: transformAdditionsSchema,
+  /**
+   * What a PLAIN call hands back — see `transformOutputSchema`. Absent is
+   * nobody having said, and the language keeps such a plugin to `through [ … ]`
+   * stages, where its output goes to the extractor rather than to a name.
+   *
+   * Declare it TRUTHFULLY, field by field: a plugin that fills `summary` only
+   * when it found something declares that field `optional`, and every read of
+   * it downstream then has to discharge the absence.
+   */
+  output: transformOutputSchema.optional(),
 });
 
 export type TransformSignature = z.infer<typeof transformSignatureSchema>;
