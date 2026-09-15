@@ -226,13 +226,14 @@ const THIN_INSTANCE_SCHEMAS: Record<string, InstanceSchema> = {
  * projection, so the static catalog, the live one and the editor snapshot
  * cannot disagree about what a plugin accepts or what it does.
  *
- * `auto` params are engine-injected from the extract source, not author
- * arguments, so they are excluded: the validator rejects passing them and
- * autocomplete never offers them. `TransformParam.required` is projected the
- * same way, into `requiredArgs` — a required `auto` param (`vc-url-retrieval`'s
- * `content`) still has nothing an author could omit, so it's excluded from
- * both. The effect row rides through verbatim — absent stays absent, which is
- * what keeps an undeclared plugin to `through [ … ]` stages.
+ * `auto` params are what a `through [ … ]` stage is FED — the engine fills them
+ * from the extract source — so they stay out of `args` and `requiredArgs`,
+ * which are what a STAGE may write. They ride `fedArgs` instead, because a
+ * plain call has no stage behind it and writes them itself.
+ *
+ * The effect row rides through verbatim, and so does the declared output —
+ * absent stays absent either way, which is what keeps a plugin nobody has
+ * described to `through [ … ]` stages.
  */
 function pluginSpecOf(signature: TransformSignature): PluginSpec {
   const authorParams = signature.params.filter((p) => !p.auto);
