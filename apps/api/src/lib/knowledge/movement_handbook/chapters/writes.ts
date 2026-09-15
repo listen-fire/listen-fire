@@ -82,6 +82,7 @@ unique by (\`First Name\`, \`Last Name\`)
 - One clause is an AND-group — this one matches only when *both* do. Two clauses mean OR: match if either rule does.
 - A component may be a **handle** rather than a field: \`unique by (parent, \`Stage\`)\` scopes identity to a parent, the way an order is unique *within* its customer.
 - \`FUZZY\` matches a component by *similarity*: \`unique by (FUZZY \`Name\`)\` treats "Acme, Inc." and "Acme Inc" as one company. Use it on names and labels, never on ids or emails; not every target offers it.
+- A \`FUZZY\` match is settled in two steps: the target surfaces the candidates by its own means, and a judge picks the best one, if any. A record the run built judges the same way.
 
 Identity at write time is the **union** of the target's own rules and your \`unique by\`, so author only the identity the target lacks: compound business keys, parent-scoped identity, fields it treats as ordinary.
 
