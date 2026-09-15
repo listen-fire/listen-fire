@@ -79,9 +79,12 @@ import {
   coerceToDate,
   coerceToDatetime,
   coerceToNumber,
+  chunkText,
+  CHUNKS_FUNCTION_ID,
   FILE_FUNCTION_ID,
   POSITION_SENTINEL,
   READ_FUNCTION_ID,
+  readChunkSpec,
   refinementKey,
   stdlibFunctionById,
 } from 'movement-lang';
@@ -938,6 +941,14 @@ export type MovementTraceEntry =
    * truncate — the per-file ceiling belongs to what reaches a PROMPT.
    */
   | ({ kind: 'read' } & ExtractionTraceFile)
+  /**
+   * One `CHUNKS(text, { … })` — how many pieces the text came out in, and how
+   * long each one is. The pieces themselves are not here: a trace is read by a
+   * person looking for why a run went the way it did, and the text is already
+   * in the run. The counts are what answer that — a text that cut into one
+   * piece, or into four hundred, explains what happened next.
+   */
+  | { kind: 'chunks'; pieces: number; sizes: number[]; unit: 'chars' }
   | { kind: 'ai'; prompt: string; hasValue: boolean }
   | { kind: 'gate'; outcome: boolean }
   | { kind: 'block'; root: string; positions: number };
@@ -1276,6 +1287,7 @@ export async function evalMovementExpr(
       // transformation: union survives, `direct` drops).
       if (expr.fn === FILE_FUNCTION_ID) return evaluateFileFunction(expr, ctx);
       if (expr.fn === READ_FUNCTION_ID) return evaluateReadFunction(expr, ctx);
+      if (expr.fn === CHUNKS_FUNCTION_ID) return evaluateChunksFunction(expr, ctx);
 
       // Namespaced stdlib calls (the bridge folds `CURRENCY.FN(…)` to a
       // dotted `fn` id) — deterministic implementations from the shared
@@ -1873,6 +1885,69 @@ async function evaluateReadFunction(
     // trail rides along as taint.
     provenance: { ...unionProvenance([file.provenance, fromOrigin(origin)]), direct: origin },
   };
+}
+
+// ── CHUNKS() (the text→pieces built-in; the cut itself is in movement-lang) ──
+
+/**
+ * `CHUNKS(<text>, { size, overlap })` — the pieces of a text, in order.
+ *
+ * Pure: the cut is `movement-lang`'s (`expression/chunk.ts`), so the same text
+ * and the same options give the same pieces here, in a replay, and in the unit
+ * tests that pin the rule. Nothing about it is a seam.
+ *
+ * A text that isn't there has NO pieces rather than one empty one — `absent`
+ * has no place in the result type, so "nothing to cut" has to be spelled as
+ * the empty list. The trace says it happened either way: a run that cut a text
+ * into nothing, and a run that never had one, look identical in a field write
+ * and must not look identical here.
+ */
+async function evaluateChunksFunction(
+  expr: Extract<Expression, { type: 'function' }>,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
+  const [textArg, optionsArg] = expr.args;
+  if (!textArg || !optionsArg) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      'CHUNKS(text, { size, overlap }) expects a text and an options map — the checker should have caught this',
+    );
+  }
+  const text = await evalMovementExpr(textArg, ctx);
+  const options = await evalMovementExpr(optionsArg, ctx);
+  const provenance = transformed(unionProvenance([text.provenance, options.provenance]));
+
+  const bag = options.value;
+  if (bag === null || typeof bag !== 'object' || Array.isArray(bag)) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      'CHUNKS() takes its options as a map — the checker should have caught this',
+    );
+  }
+  const read = readChunkSpec(
+    (bag as Record<string, unknown>).size,
+    (bag as Record<string, unknown>).overlap,
+  );
+  if ('error' in read) throw new MovementEngineError('MOVENG_RUNTIME', read.error);
+
+  if (text.value == null) {
+    ctx.trace?.push({ kind: 'chunks', pieces: 0, sizes: [], unit: 'chars' });
+    return { value: [], provenance };
+  }
+  if (typeof text.value !== 'string') {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `CHUNKS() cuts a text, and this is ${typeof text.value} — the checker should have caught this`,
+    );
+  }
+  const pieces = chunkText(text.value, read.spec);
+  ctx.trace?.push({
+    kind: 'chunks',
+    pieces: pieces.length,
+    sizes: pieces.map((piece) => piece.length),
+    unit: 'chars',
+  });
+  return { value: pieces, provenance };
 }
 
 async function evaluateTraverse(
@@ -3263,6 +3338,7 @@ export function isMovementBuiltinFunction(fn: string): boolean {
     INTERPRETED_FUNCTIONS.has(fn) ||
     fn === FILE_FUNCTION_ID ||
     fn === READ_FUNCTION_ID ||
+    fn === CHUNKS_FUNCTION_ID ||
     stdlibFunctionById(fn) !== undefined
   );
 }
