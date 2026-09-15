@@ -72,7 +72,8 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - Coercers (bare): \`DATE(v)\`, \`DATETIME(v)\`, \`NUMBER(v)\`.
 - Helper families (deterministic, \`FAMILY.FUNCTION(…)\`): \`CURRENCY.GET_NUMBER_FROM_FIGURE\`, \`CURRENCY.GET_CODE_FROM_FIGURE\`, \`DATE.PARSE\`, \`DATE.ADD_DAYS\`, \`DATE.FORMAT(value, "MMMM D, YYYY")\`, \`DATE.FORMAT_ISO\`, \`DATE.TODAY("Europe/Berlin")\`, \`DATETIME.AT(date, "07:00", "Europe/Berlin")\`, \`TEXT.REGEX_EXTRACT\`, \`TEXT.SLUG\`.
 - Time zones: \`DATE.TODAY(zone)\` is the day it is there (the run's firing moment, one answer per run); \`DATETIME.AT(date, time, zone)\` is the instant a wall-clock time names there. Move days with \`DATE.ADD_DAYS\` on the date and anchor each end of a window separately — daylight saving then takes care of itself. Zone and time are literals, checked when you save.
-- File artifact: \`FILE(content, "pdf" | "text")\`.
+- File artifact: \`FILE(content, "pdf" | "text")\`. The other way: \`READ(file)\` → \`text | absent\`.
+- Text pieces: \`CHUNKS(text, { size, overlap })\` → a list of text, each piece at most \`size\` characters; \`unit:\` takes \`"chars"\` and nothing else.
 - Integration functions (e.g. a target's own message builder) run **only as the value of the write field that advertises them**.
 
 ### meta-fields
@@ -248,6 +249,7 @@ The description carries cardinality ("the company" = one; "each company" = all).
 - **Handing a combinator anything but functions.** An arm is \`() => { … }\` or the name of a declaration; a plain value or a bare block is refused when you save.
 - **Leaving an unattended review with no timeout.** An \`await\` on its own waits forever; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
 - **Reading \`_resources\` off the input.** Provenance lives on extracted nodes, not on the input position.
+- **Expecting one extraction per piece from a list.** \`extract from [pieces]\` reads them all as a single job; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is the per-piece form.
 - **Verifying from the target system only.** The run record shows what was sent and why; read provenance before editing the automation.
 - **Using a maybe-absent value unguarded.** A write/traversal target, a dot-plane field read, or an ordered comparison off a \`FIRST\`/\`LAST\`/\`MIN\`/\`MAX\`/\`at\` result is refused until narrowed — guard with \`if x == null { ERROR(…) }\`, \`EXISTS(x)\`, or \`?:\` on the write field.
 - **Binding a field just to test it.** \`EXISTS(x.\`Field\`)\` and \`ISNULL(x.\`Field\`)\` read the field directly; no intermediate binding.
