@@ -193,7 +193,19 @@ Beyond the built-ins, a target system may supply functions of its own on particu
 File: FILE(digest, "pdf")
 \`\`\`
 
-\`FILE(content, type)\` turns a composed string into a **file** you can write into a file-typed field — an attachment, a document slot. \`type\` is a literal \`"pdf"\` or \`"text"\`, and the content is rendered as plain text preserving your line breaks, so compose it first (interpolation, or \`JOIN\` over a block's results — the patterns chapter has the digest shape) and then wrap it. The artifact remembers where its content came from: its provenance trail carries the reads that fed the string.`,
+\`FILE(content, type)\` turns a composed string into a **file** you can write into a file-typed field — an attachment, a document slot. \`type\` is a literal \`"pdf"\` or \`"text"\`, and the content is rendered as plain text preserving your line breaks, so compose it first (interpolation, or \`JOIN\` over a block's results — the patterns chapter has the digest shape) and then wrap it. The artifact remembers where its content came from: its provenance trail carries the reads that fed the string.
+
+Read a file the other way — \`READ(file)\` hands back the text in it, and \`CHUNKS\` cuts a long text into pieces:
+
+\`\`\`
+text   = READ(f.\`File\`)
+pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
+\`\`\`
+
+- \`READ\` answers \`text | absent\`, discharged like any other absence — \`COALESCE\`, a \`?:\` write field, an \`== null\` guard. Why a file gave nothing back is on the run's own record.
+- \`extract from [file]\` reads the file itself, so it already means \`extract from [READ(file)]\`. Reach for \`READ\` where you want the text in hand — to cut it, measure it, or pass it to a plugin.
+- \`CHUNKS(text, { size, overlap })\` hands back a list of text pieces, each at most \`size\` characters and repeating \`overlap\` characters of the one before it. \`unit:\` takes \`"chars"\` and nothing else.
+- \`extract from [pieces]\` is one extraction reading every piece as a segment; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is one extraction per piece. Reach for the second where each piece should be read on its own.`,
   engineClaims: [
     {
       construct: 'SORT over a collection in hand, then an order-sensitive fold',
@@ -452,6 +464,35 @@ function m(evt: <crm-[:\`Webhook Event\` WHERE \`action\` == "record.created"]->
     domain = FIRST(co.Domains)
     if domain == null { ERROR("no domain on this company") }
     write co { Description: domain }
+  }
+}
+`,
+    },
+    {
+      construct: 'READ a file into text, CHUNKS the text into pieces, extract over the pieces',
+      status: 'runs',
+      probe: `
+import { manual, attio } from adapters
+import { acme } from credentials
+
+runs = manual()
+crm  = attio(credentials: acme)
+
+function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
+  go-[f:Files]-> {
+    text   = READ(f.\`File\`)
+    pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
+    found  = extract from [pieces] {
+      node company: "each company named in this piece of text" {
+        name: "the company's name"
+      }
+    }
+    found-[c:company]-> {
+      write crm-[:Companies]-> {
+        unique by (FUZZY \`Name\`)
+        Name: c.name
+      }
+    }
   }
 }
 `,

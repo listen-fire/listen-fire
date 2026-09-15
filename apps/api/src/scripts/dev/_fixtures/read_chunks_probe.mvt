@@ -1,0 +1,36 @@
+import { manual, slack } from adapters
+import { `Dev Loop Slack` } from credentials
+
+runs = manual()
+chat = slack(credentials: `Dev Loop Slack`)
+
+# Verifies READ + CHUNKS over the SAME file-extraction seam `extract from [
+# … .`File`]` already uses: reuses the born-digital attachment
+# `verify_file_extraction_e2e_seed.ts` seeds on the fake Slack `general`
+# channel, but reads it explicitly (`READ(f.`File`)`) and cuts it
+# (`CHUNKS(…, { size: 120, overlap: 20 })`) before extracting, instead of
+# handing the raw file straight to `extract from [ … ]`. Confirms both new
+# built-ins' trace entries (`read`, `chunks`) appear on the run alongside the
+# extraction's own trace, and that extraction still emits off the cut text.
+movement read_chunks_probe(go: <runs-[:Invocation]->>) {
+  chat-[ch:Channels WHERE `Name` == "general"]-> {
+    ch-[m:Messages]-> {
+      m-[f:Files]-> {
+        pieces = CHUNKS(READ(f.`File`), { size: 120, overlap: 20 })
+
+        found = extract from [pieces] {
+          node company: "each company named in this piece of text" {
+            name: "the company's name"
+            stage: "the funding round or stage the document names, if any"
+          }
+        }
+
+        found-[c:company]-> {
+          write m-[:Replies]-> { Message ?: c.`name` }
+        }
+      }
+    }
+  }
+}
+
+listen to runs {} fire read_chunks_probe

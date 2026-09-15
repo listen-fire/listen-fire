@@ -116,6 +116,29 @@ sent-[m:messages]-> {
 - The records come back in the order the links ran, and traversing the entry is the ordinary traversal: write off each one exactly as you would off any record.
 - An entry nothing was linked to traverses zero times, and \`COUNT\` over it is 0.
 
+Type the entry with a **declaration** rather than an address, and \`write\` into it to gather records before any of them reaches a system:
+
+\`\`\`
+node Company { name: <text> website: <text> }
+
+deduped = node { companies: <Company> }
+
+found-[c:company]-> {
+  write deduped-[:companies]-> {
+    unique by (FUZZY name)
+    name:      c.name
+    website ?: c.website
+  }
+}
+
+deduped-[c:companies ORDER BY \`name\`]-> { … }
+\`\`\`
+
+- \`<Company>\` says what the landings CARRY rather than where they come from, so what lands is judged by its structure.
+- The write builds or merges by identity exactly as a write into a system does: \`unique by\` decides, and \`?:\` fills only what is absent. The *identity* section of the writes chapter has the forms.
+- Only records the run built on the entry are candidates to merge into — one you linked in or traversed to lives in a system, and is left alone.
+- \`link\` still appends by reference, and both forms may grow the same entry.
+
 ### declared-structures
 
 Name that structure when a callee wants to say what it takes — with the same nesting the literal uses, so a declaration reads like the record it describes:
@@ -136,7 +159,7 @@ function \`Process Deal\`(d: <Deal>) { … }
 - A body holds typed fields and nested \`node <name> { … }\` declarations. **Nesting declares the relationship, and the nested name IS the relationship's name** — \`company\` above is what the callee traverses: \`d-[c:company]->\`. Nesting recurses; a declaration is a tree.
 - A field's type is \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, or \`<json>\` — or borrowed from a real graph's field, which keeps the declaration in step with the system it feeds: \`Stage: <crm-[:Companies]->.Stage>\`.
 - The name is an annotation, never an identity: **what fits is decided by structure.** Anything carrying \`Title\` and \`Raised\` fits \`<Deal>\` — a literal built here, or a position that arrived from anywhere else. A nested node never gates the fit: a record with no \`company\` links fits too, and the traversal simply finds none. Extra entries are fine; the callee cannot see them.
-- A declaration is not a place records live. There is nothing to write into it — build the record with a \`node { … }\` literal.
+- A declaration is not a place records live. There is nothing to write into \`Deal\` itself — build the record with a \`node { … }\` literal, or write into an entry typed by it (see *collect-what-you-wrote*).
 
 ### automations
 
@@ -434,6 +457,43 @@ function \`Store\`(d: <Doc>) {
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
   \`Store\`(d: node { Title: m.\`Subject\`, files: lazy m-[a:Attachments]-> node { Label: a.\`Name\` } })
+}
+`,
+    },
+    {
+      construct: 'a write into a declaration-typed entry of a node the run built',
+      status: 'runs',
+      probe: `
+import { manual } from adapters
+
+runs = manual()
+
+node Company {
+  name:    <text>
+  website: <text>
+}
+
+function \`Dedupe\`(go: <runs-[:Invocation]->>) {
+  found = extract from [go.\`Text\`] {
+    node company: "each company named in the supplied text" {
+      name:    "the company's name"
+      website: "its website, if given"
+    }
+  }
+
+  deduped = node { companies: <Company> }
+
+  found-[c:company]-> {
+    write deduped-[:companies]-> {
+      unique by (FUZZY name)
+      name:      c.name
+      website ?: c.website
+    }
+  }
+
+  deduped-[c:companies ORDER BY \`name\`]-> {
+    return c.name
+  }
 }
 `,
     },
