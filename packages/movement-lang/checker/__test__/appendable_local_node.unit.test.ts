@@ -54,9 +54,19 @@ const catalog = mockCatalog({
   },
 });
 
+// A DECLARED NODE — the structure a `<Feed>` entry says its landings have. A
+// Channel carries all of it (Name, and a Messages edge whose landing carries
+// Text); a Person carries none of it.
 const PRELUDE = `import { email, chat } from adapters
 inbox = email()
 sl = chat()
+
+node Feed {
+  Name: <text>
+  node Messages {
+    Text: <text>
+  }
+}
 `;
 
 const DECLARED = 'sent = node { messages: <sl-[:Channels]->-[:Messages]->> }';
@@ -184,5 +194,84 @@ describe('what the link does NOT change', () => {
   }`);
     expect(row.write).toEqual([]);
     expect(row.partial).toBe(false);
+  });
+});
+
+// A declared edge typed by a DECLARED NODE rather than by an address. The entry
+// still starts empty and still grows by `link`; what changes is where the
+// landing type comes from — a structure this file declares, belonging to no
+// system — and therefore how a landing is judged: structurally, exactly as an
+// argument reaching a `<Feed>` parameter is, because there is no instance to
+// compare.
+describe('a declared node types a declared edge', () => {
+  const SHAPED = 'feeds = node { channels: <Feed> }';
+
+  it('the entry is accepted — a structure says what lands there', () => {
+    expect(codes(`  ${SHAPED}`)).toEqual([]);
+  });
+
+  it('reading it back sees the fields the DECLARATION carries', () => {
+    expect(codes(`  ${SHAPED}\n  feeds-[c:channels]-> {\n    n = c.\`Name\`\n  }`)).toEqual([]);
+  });
+
+  it('a field the declaration never carries is refused through it', () => {
+    expect(codes(`  ${SHAPED}\n  feeds-[c:channels]-> {\n    n = c.\`Nope\`\n  }`)).toContain(
+      C.UNKNOWN_PROPERTY,
+    );
+  });
+
+  it('a nested declared node is an edge off the landing', () => {
+    const body = `  ${SHAPED}
+  feeds-[c:channels]-> {
+    c-[mm:Messages]-> {
+      t = mm.\`Text\`
+    }
+  }`;
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a record carrying the declared structure is appended', () => {
+    const body = `  ${SHAPED}
+  sl-[ch:Channels]-> {
+    link feeds -[:channels]-> ch
+  }`;
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a record missing part of it is refused, naming what is missing', () => {
+    const body = `  ${SHAPED}
+  sl-[p:People]-> {
+    link feeds -[:channels]-> p
+  }`;
+    expect(codes(body)).toContain(C.NODE_LINK_SHAPE);
+    expect(messages(body)).toMatch(/`Name`/);
+  });
+
+  it('a synthesised node is judged by the same structure, nested edges included', () => {
+    const fits = `  ${SHAPED}
+  made = node { Name: "general", Messages: node { Text: "hi" } }
+  link feeds -[:channels]-> made`;
+    expect(codes(fits)).toEqual([]);
+
+    const missingField = `  ${SHAPED}
+  bare = node { Text: "hi" }
+  link feeds -[:channels]-> bare`;
+    expect(codes(missingField)).toContain(C.NODE_LINK_SHAPE);
+
+    const badLanding = `  ${SHAPED}
+  wrong = node { Name: "general", Messages: node { Nope: "hi" } }
+  link feeds -[:channels]-> wrong`;
+    expect(codes(badLanding)).toContain(C.NODE_LINK_SHAPE);
+  });
+
+  it('an entry naming neither a declared node nor an address offers both spellings', () => {
+    const body = '  bad = node { messages: <text> }';
+    expect(codes(body)).toContain(C.NODE_ENTRY_TYPE);
+    expect(messages(body)).toMatch(/node text \{ … \}/);
+    expect(messages(body)).toMatch(/<text-\[:Edge\]->>/);
+  });
+
+  it('an instance is neither — it is a whole graph, not a structure', () => {
+    expect(codes('  bad = node { messages: <sl> }')).toContain(C.NODE_ENTRY_TYPE);
   });
 });

@@ -365,11 +365,13 @@ describe('node literals — declared edge entries', () => {
     expect(node.entries.map((e) => e.kind)).toEqual(['value', 'declared', 'nodes']);
   });
 
-  it('a marker with NO hops is a value type, and the fix is the address', () => {
-    expectParseError(
-      'd = node { messages: <text> }',
-      /'messages: <text>' names a value type.*'messages: <text-\[:Edge\]->>'/,
-    );
+  it('a marker with NO hops is a DECLARED NODE reference — the checker resolves the name', () => {
+    const node = literal('d = node { companies: <Company> }');
+    const companies = entry(node, 'companies');
+    expect(companies.kind).toBe('declared');
+    if (companies.kind !== 'declared') throw new Error('unreachable');
+    expect(companies.type.graph).toBe('Company');
+    expect(companies.type.hopsRaw).toBeUndefined();
   });
 
   it('the retired dotted spelling still names its address replacement', () => {

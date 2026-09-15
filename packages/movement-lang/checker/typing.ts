@@ -556,6 +556,12 @@ export interface LocalEdge {
    *  and the same load-bearing distinction: traversing it is unknown, not an
    *  unknown NAME. */
   target?: PositionTypeRef;
+  /** The landing type is a DECLARED NODE — a structure, belonging to no system
+   *  — so landings are compared by what they OFFER, the way an argument
+   *  reaching a `<Company>` parameter is. An edge typed by an ADDRESS keeps the
+   *  nominal test: its landings are records of that system, and one from
+   *  elsewhere is not one of them. */
+  structural?: true;
   /** The edge's landings are RECOMPUTED at every read (a `lazy` entry's walk),
    *  so there is no array for a `link` to append to — appending to one would be
    *  a landing that vanishes at the next read. */

@@ -1672,23 +1672,18 @@ class Parser {
   }
 
   /**
-   * `messages: <slack-[:Channels]->-[:Messages]->>` — the DECLARED edge: an
-   * address marker (the hop-allowing form a movement parameter takes) standing
-   * where a value would, saying what the edge's landings are and starting with
-   * none.
+   * `messages: <slack-[:Channels]->-[:Messages]->>` — the DECLARED edge: a type
+   * marker (the very one a movement parameter takes) standing where a value
+   * would, saying what the edge's landings are and starting with none.
    *
-   * A marker with no hops is a VALUE type, and a value type declares nothing to
-   * land on — refused with the address spelling it should have had.
+   * Either spelling a parameter accepts says that: an ADDRESS, whose landings
+   * are the records that walk ends on, or a DECLARED NODE (`<Company>`), whose
+   * landings are whatever carries that structure. Which one a hop-less marker
+   * is depends on what the name RESOLVES to, so the parser records the marker
+   * as written and the checker — the only side with a scope — decides.
    */
   private parseDeclaredEdgeEntry(name: string, entryStart: number): NodeEntry {
-    const markerStart = this.pos;
     const marker = this.readTypeMarker(`for the entry '${name}'`, { allowHops: true });
-    if (marker.hopsRaw === undefined) {
-      this.error(
-        `'${name}: <${marker.text}>' names a value type, and an entry that starts EMPTY is an edge — give it the address its landings come from: '${name}: <${marker.text}-[:Edge]->>'`,
-        markerStart,
-      );
-    }
     return {
       kind: 'declared',
       name,

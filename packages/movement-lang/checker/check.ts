@@ -274,6 +274,11 @@ export const DiagnosticCodes = {
    *  compared STRUCTURALLY: it fits when it has every field and edge the
    *  parameter declares (extras are fine — the callee can't see them). */
   NODE_ARG_SHAPE: 'MOV_NODE_ARG_SHAPE',
+  /** A declared entry (`companies: <Company>`) whose marker names neither a
+   *  node this file declares nor an address. An entry that starts EMPTY is an
+   *  edge, so its type has to say what LANDS there, and only those two
+   *  spellings do. */
+  NODE_ENTRY_TYPE: 'MOV_NODE_ENTRY_TYPE',
   /** A `link` onto an edge name the run-local node never declared. The literal
    *  is the whole of what the node has, so the edge is a typo rather than
    *  something a system might know about. */
@@ -1653,36 +1658,37 @@ function callArgSpan(arg: CallArg): Span {
 }
 
 /**
- * Does a SYNTHESISED node fit a declared parameter type?
+ * Does a supplied position fit a required one BY STRUCTURE?
  *
- * A node literal belongs to no graph, so there is no instance token to compare
- * — the whole point of `positionsMatch` above does not apply to it. It is typed
- * by its STRUCTURE, and it fits when it carries every member the parameter's
- * type declares, recursively through edges. That is TS's structural
- * assignability, unchanged: extra entries are fine (the callee cannot see
- * them), missing ones are not.
+ * Asked wherever there is no instance token to compare — the whole point of
+ * `positionsMatch` above does not apply. A node literal belongs to no graph; a
+ * declared node (`<Company>`) belongs to no system. Either way the required
+ * side is typed by its STRUCTURE, and the supplied side fits when it carries
+ * every member that structure declares, recursively through edges. That is TS's
+ * structural assignability, unchanged: extra entries are fine (the other side
+ * cannot see them), missing ones are not.
  *
  * Returns the first thing that doesn't fit, phrased for the author, or
- * `undefined` when the node fits (or when the parameter's shape isn't known, in
+ * `undefined` when it fits (or when the required side's shape isn't known, in
  * which case there is nothing to check against and silence is the honest
  * answer).
  *
  */
-function synthesisedNodeMisfit(
-  node: Extract<PositionTypeRef, { kind: 'local' }>,
-  param: PositionTypeRef,
+function structuralMisfit(
+  supplied: PositionTypeRef,
+  required: PositionTypeRef,
   path = '',
 ): string | undefined {
-  switch (param.kind) {
+  switch (required.kind) {
     case 'position':
-      return nodeMisfitAgainst(node, param.instance, param.position, path);
+      return nodeMisfitAgainst(supplied, required.instance, required.position, path);
     case 'union': {
       // A union parameter accepts anything one of its variants accepts —
       // exactly what an `IS` test would then narrow. Fitting NO variant is the
       // misfit, and the message names the one that came closest to nothing.
       const misfits: string[] = [];
-      for (const variant of param.variants) {
-        const misfit = nodeMisfitAgainst(node, param.instance, variant, path);
+      for (const variant of required.variants) {
+        const misfit = nodeMisfitAgainst(supplied, required.instance, variant, path);
         if (misfit === undefined) return undefined;
         misfits.push(`${variant} (${misfit})`);
       }
@@ -5803,8 +5809,15 @@ class Checker {
     const toType = toSymbol !== undefined ? this.symbolPositionType(toSymbol) : undefined;
     const target = edge.target;
     if (toType === undefined || target === undefined) return;
+    // Two comparisons, and which one applies is a fact about the EDGE's type.
+    // An edge typed by a declared node names a structure no system owns, so
+    // every landing is judged by what it offers; a synthesised node takes that
+    // road whatever the edge says, because it belongs to no graph and the
+    // nominal test could only ever say no.
     const misfit =
-      toType.kind === 'local' ? synthesisedNodeMisfit(toType, target) : undefined;
+      edge.structural === true || toType.kind === 'local'
+        ? structuralMisfit(toType, target)
+        : undefined;
     if (misfit !== undefined) {
       this.report(
         DiagnosticCodes.NODE_LINK_SHAPE,
@@ -5813,7 +5826,11 @@ class Checker {
       );
       return;
     }
-    if (toType.kind !== 'local' && positionsMatch(toType, target) === false) {
+    if (
+      edge.structural !== true
+      && toType.kind !== 'local'
+      && positionsMatch(toType, target) === false
+    ) {
       this.report(
         DiagnosticCodes.NODE_LINK_SHAPE,
         `'${link.edge}' lands on ${describePosition(target)}, but '${link.target.name}' is ${describePosition(toType)}`,
@@ -6199,10 +6216,9 @@ class Checker {
           // The DECLARED edge: no landings yet, and a type that says what the
           // ones `link` appends have to be. Same promises as any other
           // synthesised edge — readable, and nothing else.
-          const target = this.declaredEdgeTarget(entry.type, scope);
           edges[entry.name] = {
             schema: { target: entry.name, readable: true },
-            ...(target !== undefined ? { target } : {}),
+            ...this.declaredEdgeLanding(entry, scope),
           };
           break;
         }
@@ -6239,15 +6255,46 @@ class Checker {
   }
 
   /**
-   * Where a declared edge's landings live: the address marker, WALKED — the
-   * same hop chain a traversal head walks, so `<slack-[:Channels]->-[:Messages]->>`
-   * means in a declaration exactly what it means in a movement.
+   * Where a declared edge's landings live — and by which comparison they are
+   * judged. A declared entry's type is the one a movement parameter takes, and
+   * it has the parameter's two spellings:
+   *
+   *   - an ADDRESS, WALKED — the same hop chain a traversal head walks, so
+   *     `<slack-[:Channels]->-[:Messages]->>` means in a declaration exactly
+   *     what it means in a movement. Landings are that system's records, so a
+   *     record from elsewhere is not one and the comparison stays nominal.
+   *   - a DECLARED NODE (`<Company>`) — a structure no system owns. Nothing
+   *     nominal exists to compare, so landings are judged by what they OFFER,
+   *     exactly as an argument reaching a `<Company>` parameter is.
    *
    * Nothing is read here and nothing is recorded: a declaration is a type, and
-   * the run never walks it. The hop chain is still reported on, because a
-   * declared edge nobody could type would accept every `link` in silence.
+   * the run never walks it. The type is still reported on, because a declared
+   * edge nobody could type would accept every `link` in silence.
    */
-  private declaredEdgeTarget(type: TypeRef, scope: Scope): PositionTypeRef | undefined {
+  private declaredEdgeLanding(
+    entry: Extract<NodeEntry, { kind: 'declared' }>,
+    scope: Scope,
+  ): Pick<LocalEdge, 'target' | 'structural'> {
+    const { type } = entry;
+    if (type.hopsRaw === undefined) {
+      const resolution = scope.resolve(type.graph);
+      if (resolution.kind === 'found' && resolution.symbol.kind === 'shape') {
+        const target = declaredRootPosition(resolution.symbol);
+        return target !== undefined ? { target, structural: true } : {};
+      }
+      this.report(
+        DiagnosticCodes.NODE_ENTRY_TYPE,
+        `'${entry.name}: <${type.graph}>' has to say what LANDS on the edge, and '${type.graph}' is neither a node this file declares nor an address — declare the structure its landings have ('node ${type.graph} { … }'), or give it the address they come from ('${entry.name}: <${type.graph}-[:Edge]->>')`,
+        type.span,
+      );
+      return {};
+    }
+    const target = this.declaredEdgeAddress(type, scope);
+    return target !== undefined ? { target } : {};
+  }
+
+  /** The address half of `declaredEdgeLanding`: the hop chain, walked. */
+  private declaredEdgeAddress(type: TypeRef, scope: Scope): PositionTypeRef | undefined {
     const symbol = this.resolveName(type.graph, type.span, scope);
     if (symbol === undefined) return undefined;
     if (symbol.kind === 'adapter') {
@@ -6338,7 +6385,7 @@ class Checker {
   ): void {
     if (argType === undefined || paramType === undefined) return;
     if (argType.kind === 'local') {
-      const misfit = synthesisedNodeMisfit(argType, paramType);
+      const misfit = structuralMisfit(argType, paramType);
       if (misfit !== undefined) {
         this.report(
           DiagnosticCodes.NODE_ARG_SHAPE,
