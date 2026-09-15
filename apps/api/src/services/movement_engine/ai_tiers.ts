@@ -82,6 +82,26 @@ export interface TierCallSettings {
 }
 
 /**
+ * The provider's own id for one of the four aliases above — the ONLY place
+ * that spells out `claude-sonnet-5` and friends for a call routed through a
+ * tier. `LlmClient`'s Anthropic wiring uses this; any other caller that wants
+ * "whatever model a tier means today" (rather than the frozen chat/extraction
+ * seam) should call it too, instead of copying the string.
+ */
+export function claudeModelId(model: TierCallSettings['model']): string {
+  switch (model) {
+    case 'opus':
+      return 'claude-opus-4-7';
+    case 'opus5':
+      return 'claude-opus-5';
+    case 'haiku':
+      return 'claude-haiku-4-5-20251001';
+    case 'sonnet':
+      return 'claude-sonnet-5';
+  }
+}
+
+/**
  * An `AI(prompt[, tier])` call's settings.
  *
  * An omitted tier is the platform default, and it is deliberately the same as

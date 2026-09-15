@@ -68,7 +68,7 @@ import type {
   LlmClient,
 } from '../translation_graph/engine/batched_extraction';
 import { selectModel } from '../translation_graph/engine/batched_extraction/schema_synthesis';
-import { extractionSettings, type TierCallSettings } from './ai_tiers';
+import { claudeModelId, extractionSettings, type TierCallSettings } from './ai_tiers';
 import { getTransform } from '../translation_graph/engine/transforms/registry';
 import type {
   TransformImpl,
@@ -784,14 +784,7 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
       // WITHIN a single statement at the next call boundary. It reaches this
       // seam off the LlmUsageContext.
       await throwIfCancelled();
-      const model =
-        input.model === 'opus'
-          ? 'claude-opus-4-7'
-          : input.model === 'opus5'
-            ? 'claude-opus-5'
-            : input.model === 'haiku'
-              ? 'claude-haiku-4-5-20251001'
-              : 'claude-sonnet-5';
+      const model = claudeModelId(input.model);
       // The caller's own ceiling wins where it named one (the most expensive
       // tier does). Otherwise: the guard on ⇒ one sized from what the call was
       // asked about, capped at one continuation; guard off (the default) ⇒ the
