@@ -79,6 +79,17 @@ type TraceEntry =
       /** Set when it didn't run: the argument that had nothing in it. */
       skippedParam?: string;
     }
+  /** One file read into text. Either it says how much text came back, or it
+   *  says why none did — the reason the automation itself can't say, because
+   *  a value that isn't there carries no reason. */
+  | {
+      kind: "read";
+      name?: string;
+      contentType?: string;
+      chars?: number;
+      unreadable?: "unsupported_type" | "bytes_unavailable" | "extraction_failed" | "no_text";
+      detail?: string;
+    }
   | { kind: "ai"; prompt: string; hasValue: boolean }
   | { kind: "gate"; outcome: boolean }
   | { kind: "block"; root: string; positions: number };
@@ -95,6 +106,7 @@ function traceOf(steps: unknown): TraceEntry[] {
 /** Warnings explain a quiet run; informational entries narrate it. */
 function traceSeverity(entry: TraceEntry): "warn" | "info" {
   if (entry.kind === "field_miss") return "warn";
+  if (entry.kind === "read") return entry.unreadable ? "warn" : "info";
   if (entry.kind === "plugin") return entry.skippedParam ? "warn" : "info";
   if (entry.kind === "extraction") {
     // Not reading again for want of anything new is the engine working, not a
@@ -153,6 +165,19 @@ function describeTraceEntry(entry: TraceEntry): string {
           ? `, added ${entry.fields.join(", ")}`
           : "";
       return `${entry.plugin} ran on ${prettyAlias(entry.node)}${entry.url ? ` (${entry.url})` : ""}${took}${got}`;
+    }
+    case "read": {
+      const named = entry.name ? `“${entry.name}”` : "a file";
+      if (!entry.unreadable) {
+        return `Read ${named} — ${(entry.chars ?? 0).toLocaleString()} characters of text.`;
+      }
+      const why = {
+        unsupported_type: `nothing here reads ${entry.contentType ?? "that kind of file"}`,
+        bytes_unavailable: "the file itself couldn’t be fetched",
+        extraction_failed: "reading it failed",
+        no_text: "there is no text in it",
+      }[entry.unreadable];
+      return `Couldn’t read ${named} — ${why}.${entry.detail ? ` (${entry.detail})` : ""}`;
     }
     case "ai": {
       const prompt =
