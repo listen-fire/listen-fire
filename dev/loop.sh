@@ -28,6 +28,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Names the docker compose project (and its container names) uniquely per
+# checkout, so a second clone or fork on the same machine never treats this
+# repo's Postgres/Redis as its own service to recreate. Without this,
+# compose derives the project name from the compose file's directory
+# basename ("dev"), which every checkout shares.
+export LISTEN_FIRE_STACK="${LISTEN_FIRE_STACK:-listenfire-$(basename "$REPO_ROOT")}"
+
 PROFILE="${DEV_LOOP_PROFILE:-default}"
 FORCE_KILL=0
 for arg in "$@"; do
@@ -39,6 +46,7 @@ done
 
 echo "[dev:loop] Repo: $REPO_ROOT"
 echo "[dev:loop] Profile: $PROFILE"
+echo "[dev:loop] Compose project: $LISTEN_FIRE_STACK"
 
 # Profile-specific port assignments. Each profile reserves an api/web
 # pair in the 3000-range and a fake-channels pair in the 5000-6000 range.
@@ -96,7 +104,7 @@ export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-$API_BASE_URL}"
 
 # 1. Ensure docker (postgres + redis) is up
 echo "[dev:loop] Bringing up postgres + redis (idempotent)..."
-docker compose -f dev/docker-compose.yml up -d
+docker compose -p "$LISTEN_FIRE_STACK" -f dev/docker-compose.yml up -d
 
 # 2. Wait for postgres
 echo -n "[dev:loop] Waiting for postgres on localhost:9432"

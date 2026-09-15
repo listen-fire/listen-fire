@@ -133,6 +133,20 @@ active stack by scanning `.dev-loop/profiles/*.json`. Resolution:
   chosen stack always wins over a `.env` default, while a real shell
   override is left untouched.
 
+### Multiple checkouts on one machine
+
+The docker compose project (and its Postgres/Redis container names) is
+namespaced by `$LISTEN_FIRE_STACK`, which `dev/loop.sh` exports before every
+`docker compose` call, defaulting to `listenfire-<repo dir basename>`. Without
+this, compose derives the project name from the compose file's directory
+(`dev`), which every checkout shares — booting a second clone or fork then
+treats the first checkout's containers as its own, stopping and renaming them.
+Each checkout still binds the same host ports (9432 / 6379), so a second one
+fails honestly on a port conflict instead of silently reusing the first
+checkout's containers; set `LISTEN_FIRE_STACK` yourself if you need two
+checkouts' datastores up at once (and pick a compose file with different host
+ports, or run one at a time).
+
 ### Lifecycle commands
 
 ```bash
