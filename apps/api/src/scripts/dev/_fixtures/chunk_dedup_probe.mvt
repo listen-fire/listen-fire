@@ -1,0 +1,53 @@
+import { manual, slack } from adapters
+import { `Dev Loop Slack` } from credentials
+
+runs = manual()
+chat = slack(credentials: `Dev Loop Slack`)
+
+# A local node declaration (piece 1 of the four under verification): a
+# structure this file owns, with no address anywhere in a real system. Its
+# landings are typed by this shape, not by an adapter's schema.
+node Company {
+  name: <text>
+  website: <text>
+}
+
+# Verifies, end to end, on synthetic content only (Acme / Actions / Faction /
+# Example Ventures — no real companies or people):
+#   (a) CHUNKS cuts the pasted text into pieces small enough to force >= 3
+#   (b) extract reads every piece — a list-typed `from` slot flattens into
+#       one extraction call over N text segments, no MAP/closure needed
+#       (MAP(pieces, (p) => { extract from [p] {...} }) also checks and
+#       runs, and DOES fan out one model call per piece, if that per-call
+#       isolation is ever wanted instead)
+#   (c) each extracted company is deduplicated into `deduped` by FUZZY name
+#   (d) the deduplicated list is read back and posted as the run's result
+movement chunk_dedup_probe(go: <runs-[:Invocation]->>) {
+  deduped = node { companies: <Company> }
+
+  pieces = CHUNKS(go.`Text`, { size: 110, overlap: 15 })
+
+  found = extract from [pieces] {
+    node company: "each company named in this piece of text" {
+      name: "the company's name"
+      website: "the company's website, if the text gives one"
+    }
+  }
+
+  found-[c:company]-> {
+    write deduped-[:companies]-> {
+      unique by (FUZZY name)
+      name: c.`name`
+      website ?: c.`website`
+    }
+  }
+
+  names = COLLECT(deduped-[:companies ORDER BY `name`]->.`name`)
+  summary = JOIN(names, ", ")
+
+  chat-[ch:Channels WHERE `Name` == "general"]-> {
+    write ch-[:Messages]-> { Message: "Deduplicated companies: ${summary}" }
+  }
+}
+
+listen to runs {} fire chunk_dedup_probe
