@@ -62,6 +62,48 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
 - The binding (\`found\`) is the result's root: traverse it with ordinary blocks, read its fields with ordinary reads. Fields declared outside any \`node\` describe the source as a whole (\`found.sentiment\`).
 - A larger declared tree runs on a more capable model, so it costs more. Declare the records and fields you will use, not every one you could.
 
+Cut a long document into pieces, read each piece on its own, and gather what they found into one place before any of it reaches a system:
+
+\`\`\`
+node Company { name: <text> website: <text> }
+
+function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
+  docs   = go-[:Files]->.\`File\`
+  pieces = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
+
+  found = MAP(pieces, (p) => {
+    return extract from [p] {
+      node company: "each company named" {
+        name:    "the company's name"
+        website: "its website, if given"
+      }
+    }
+  })
+
+  deduped = node { companies: <Company> }
+
+  found-[c:company]-> {
+    write deduped-[:companies]-> {
+      unique by (FUZZY name)
+      name:      c.name
+      website ?: c.website
+    }
+  }
+
+  deduped-[c:companies ORDER BY \`name\`]-> {
+    page = fetch_url(url: c.website)
+    write crm-[:Companies]-> {
+      unique by (FUZZY \`Name\`)
+      Name:          c.name
+      Description ?: page
+    }
+  }
+}
+\`\`\`
+
+- \`extract from [pieces]\` over a list is ONE extraction reading every piece as a segment; the \`MAP\` above is one extraction per piece. Reach for the \`MAP\` where each piece should be read on its own.
+- \`READ\` and \`CHUNKS\` are in the expressions chapter, the gathering node \`deduped\` in the anatomy chapter's *collect-what-you-wrote*, and the plain plugin call in *through* below.
+
 ### how hard it works
 
 \`\`\`
@@ -100,6 +142,18 @@ mentions = extract from [msg.\`Body\`] through [vc_url_retrieval] {
 - A stage inherits every field the stage before it declared, so a later stage declares only what it changes — a field you are happy with is not restated. Re-declaring a field is how you transform it: the later description is what runs, and its value is the one you read back.
 - A stage runs only when its plugins bring something back. When every plugin of a stage is skipped for that record, or runs and finds nothing, there is nothing there the earlier stage did not already read: the stage's own fields are left with no value, and a field it re-declares keeps the value it already had.
 - Several plugins in one pipeline cover each other. \`through [fetch_url(url: website, email: @user_email), web_research(name: name, context: description, website: website, linkedin: linkedin)]\` loads the page for a record that arrived with an address, and researches the address for one that arrived with nothing but a name — each plugin is handed the record's link fields so it stands down where another has it covered.
+
+Call a plugin on its own where you want its value rather than a stage's fields:
+
+\`\`\`
+page = fetch_url(url: c.website)
+more = research(name: c.name, questions: "what it does, which sector, where it is based")
+\`\`\`
+
+- Import it the same way — \`import { fetch_url, research } from plugins\` at the top of the file — then call it anywhere a value goes.
+- What a call hands back is what the plugin declared: \`fetch_url\` gives \`text | absent\`, and \`research\` gives a record read by name (\`more.summary\`, \`more.website\`) whose every field may be absent.
+- A plugin the extraction would have fed takes that input explicitly outside a stage — \`vc_url_retrieval(text: t)\`. Inside \`through [ … ]\` the extraction supplies it, and a stage may not write it.
+- A plugin whose only inputs are the enclosing extraction's own fields stays a stage, and a plain call is refused naming the argument it wants.
 
 ### source-content-of-an-extracted-node
 
@@ -272,6 +326,81 @@ function \`Intake With Source\`(go: <runs-[:Invocation]->>) {
 }
 
 listen to runs {} fire \`Intake With Source\`
+`,
+    },
+    {
+      construct:
+        'a long document READ, CHUNKS-cut, extracted per piece, deduplicated into a local node, then enriched by a plain plugin call',
+      status: 'runs',
+      probe: `
+import { manual, attio } from adapters
+import { acme } from credentials
+import { fetch_url } from plugins
+
+runs = manual()
+crm  = attio(credentials: acme)
+
+node Company {
+  name:    <text>
+  website: <text>
+}
+
+function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
+  docs   = go-[:Files]->.\`File\`
+  pieces = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
+
+  found = MAP(pieces, (p) => {
+    return extract from [p] {
+      node company: "each company named" {
+        name:    "the company's name"
+        website: "its website, if given"
+      }
+    }
+  })
+
+  deduped = node { companies: <Company> }
+
+  found-[c:company]-> {
+    write deduped-[:companies]-> {
+      unique by (FUZZY name)
+      name:      c.name
+      website ?: c.website
+    }
+  }
+
+  deduped-[c:companies ORDER BY \`name\`]-> {
+    page = fetch_url(url: c.website)
+    write crm-[:Companies]-> {
+      unique by (FUZZY \`Name\`)
+      Name:          c.name
+      Description ?: page
+    }
+  }
+}
+`,
+    },
+    {
+      construct: 'plugins called plainly, outside any extraction',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+import { fetch_url, research, vc_url_retrieval } from plugins
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Enrich\`(m: <inbox-[:Email]->>) {
+  linked = vc_url_retrieval(text: m.\`Body\`)
+  page   = fetch_url(url: "https://example.com")
+  more   = research(name: m.\`Subject\`, questions: "what it does, which sector, where it is based")
+  write crm-[:Companies]-> {
+    unique by (FUZZY \`Name\`)
+    Name:          m.\`Subject\`
+    Description ?: COALESCE(more.summary, page, linked)
+    Domains ?:     more.website
+  }
+}
 `,
     },
   ],
