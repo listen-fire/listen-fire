@@ -2019,3 +2019,67 @@ describe('a declared edge grows by `link`', () => {
     expect(() => JSON.stringify(callbacks.mints[0].state)).not.toThrow();
   });
 });
+
+// The same appendable edge, typed by a DECLARED NODE instead of an address:
+// `<Company>` says what the landings CARRY rather than where they come from.
+// Nothing about the run changes — the entry still starts empty, `link` still
+// appends in program order, and the traversal afterwards reads the fields the
+// declaration named — which is the point: the landing type is a checker-side
+// fact, and the interpreter treats landings as values whatever typed them.
+describe('a declared edge typed by a declared node', () => {
+  const COMPANY = ['node Company {', '  name: <text>', '}', ''].join('\n');
+
+  it('grows by `link` across branches, and the traversal reads the declared field', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+
+    await run(
+      COMPANY +
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  crm = attio(credentials: acme_main)',
+          '  seen = node { companies: <Company> }',
+          '  if (msg.`subject` == "both") {',
+          '    one = node { name: "a" }',
+          '    link seen -[:companies]-> one',
+          '    two = node { name: "b" }',
+          '    link seen -[:companies]-> two',
+          '  } else {',
+          '    three = node { name: "c" }',
+          '    link seen -[:companies]-> three',
+          '  }',
+          '  seen-[c:companies]-> {',
+          '    write crm-[:companies]-> { name: c.`name` }',
+          '  }',
+          '}',
+        ].join('\n'),
+      { subject: 'both' },
+      { email: email.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((w) => w.fields.name)).toEqual(['a', 'b']);
+  });
+
+  it('an edge nothing linked traverses as empty', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+
+    await run(
+      COMPANY +
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  crm = attio(credentials: acme_main)',
+          '  seen = node { companies: <Company> }',
+          '  seen-[c:companies]-> {',
+          '    write crm-[:companies]-> { name: c.`name` }',
+          '  }',
+          '  write crm-[:companies]-> { name: COUNT(seen-[:companies]->) }',
+          '}',
+        ].join('\n'),
+      {},
+      { email: email.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates).toEqual([{ recordType: 'company', fields: { name: 0 } }]);
+  });
+});
