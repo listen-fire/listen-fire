@@ -71,13 +71,19 @@ type TraceEntry =
   | {
       kind: "plugin";
       plugin: string;
-      node: string;
+      /** Which record it ran on. Missing when it was called on its own rather
+       *  than as a step of a read-out — there is no record then. */
+      node?: string;
       url?: string;
       durationMs: number;
       chars?: number;
       fields?: string[];
       /** Set when it didn't run: the argument that had nothing in it. */
       skippedParam?: string;
+      /** What the call handed back, when it was called on its own. `absent`
+       *  means it ran and came back with nothing — the reason everything after
+       *  it may look like it did nothing. */
+      returned?: "value" | "absent";
     }
   /** One file read into text. Either it says how much text came back, or it
    *  says why none did — the reason the automation itself can't say, because
@@ -119,7 +125,10 @@ function traceSeverity(entry: TraceEntry): "warn" | "info" {
   // A text that cut into no pieces is the reason everything after it was
   // quiet, so it reads as one.
   if (entry.kind === "chunks") return entry.pieces === 0 ? "warn" : "info";
-  if (entry.kind === "plugin") return entry.skippedParam ? "warn" : "info";
+  // Nothing came back: the reason the next step had nothing to work with.
+  if (entry.kind === "plugin") {
+    return entry.skippedParam || entry.returned === "absent" ? "warn" : "info";
+  }
   if (entry.kind === "extraction") {
     // Not reading again for want of anything new is the engine working, not a
     // problem — the lookup that found nothing warns on its own line.
@@ -166,7 +175,7 @@ function describeTraceEntry(entry: TraceEntry): string {
       return `Extraction over ${entry.inputChars.toLocaleString()} characters${yields ? ` → ${yields}` : ""}${askedAgain}`;
     }
     case "plugin": {
-      if (entry.skippedParam) {
+      if (entry.skippedParam && entry.node) {
         return `${entry.plugin} didn’t run on ${prettyAlias(entry.node)} — its “${entry.skippedParam}” was empty.`;
       }
       const took =
@@ -175,8 +184,11 @@ function describeTraceEntry(entry: TraceEntry): string {
         ? `, ${entry.chars.toLocaleString()} characters back`
         : entry.fields?.length
           ? `, added ${entry.fields.join(", ")}`
-          : "";
-      return `${entry.plugin} ran on ${prettyAlias(entry.node)}${entry.url ? ` (${entry.url})` : ""}${took}${got}`;
+          : entry.returned === "absent"
+            ? ", nothing back"
+            : "";
+      const on = entry.node ? ` on ${prettyAlias(entry.node)}` : "";
+      return `${entry.plugin} ran${on}${entry.url ? ` (${entry.url})` : ""}${took}${got}`;
     }
     case "read": {
       const named = entry.name ? `“${entry.name}”` : "a file";
