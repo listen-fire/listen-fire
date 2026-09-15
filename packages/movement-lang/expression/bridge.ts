@@ -54,8 +54,9 @@
 // whose terminal is a function call — the bridge folds that shape into
 // a plain `function` node carrying the dotted id (see ./stdlib.ts and
 // `normalizeCalls`). No @listen-fire/shared grammar change. The same walk
-// validates the flat FILE(content, "pdf" | "text") artifact built-in and
-// the flat READ(file) text built-in.
+// validates the flat FILE(content, "pdf" | "text") artifact built-in,
+// the flat READ(file) text built-in, and the options MAP a built-in
+// declaring one takes (CHUNKS(text, { size, overlap })).
 //
 // M1 scope notes (documented limitations, not oversights):
 //   - Resolvers are identity (`name => name`): property/edge names pass
@@ -76,9 +77,13 @@ import {
   FILE_SIGNATURE,
   READ_FUNCTION_ID,
   READ_SIGNATURE,
+  builtinOptionsFor,
+  describeBuiltinOptions,
   describeStdlibFamily,
   listStdlibNamespaces,
   stdlibFamily,
+  type BuiltinOptionSpec,
+  type BuiltinOptionsSpec,
   type StdlibFamily,
 } from './stdlib';
 
@@ -628,8 +633,8 @@ function substitute(expr: Expression, repl: Map<string, Expression>): Expression
 // stdlib family (./stdlib.ts), so the checker and the engine see an
 // ordinary call — and rejects, with the family's inventory in the
 // message, calls into a family that doesn't exist or members a family
-// doesn't have. The same walk validates FILE(content, "pdf" | "text") and
-// READ(file):
+// doesn't have. The same walk validates FILE(content, "pdf" | "text"),
+// READ(file) and an options map (CHUNKS(text, { size, overlap })):
 // its artifact type is part of the call's static shape, so it is
 // checked here, where every consumer (checker, interpretability scan,
 // engine) shares the result.
@@ -733,6 +738,118 @@ function validateReadCall(expr: Extract<Expression, { type: 'function' }>): void
       `${READ_SIGNATURE} takes exactly 1 argument, got ${expr.args.length} — e.g. READ(attachment)`,
     );
   }
+}
+
+/**
+ * A built-in that takes its options as a map — CHUNKS(text, { size, … }) and
+ * whatever declares a contract next. The KEYS are static call shape: they are
+ * written into the source, nothing computes one, and a key nobody knows is a
+ * typo the author must see at save. So the whole key surface is settled here —
+ * that the map is a map, that every key is one the built-in has, that no key
+ * is written twice, that the required ones are there, and that an option whose
+ * value is a SPELLING (`unit: "chars"`) carries one of the spellings.
+ *
+ * The VALUES are ordinary expressions (`size: LENGTH(body) / 3`), so their
+ * types belong to the checker — except where the author wrote a literal, which
+ * needs no typing to be read, and is the form that gets a rule spanning two
+ * options (an overlap under the size).
+ */
+function validateOptionsCall(expr: Extract<Expression, { type: 'function' }>): void {
+  const spec = builtinOptionsFor(expr.fn);
+  if (spec === undefined) return;
+  const inventory = describeBuiltinOptions(spec);
+  if (expr.args.length !== spec.arity) {
+    throw new BridgeError(
+      `${spec.signature} takes exactly ${spec.arity} arguments, got ${expr.args.length} — the options are a map: ${inventory}`,
+    );
+  }
+  const map = expr.args[spec.index];
+  if (map.type !== 'object') {
+    throw new BridgeError(
+      `${spec.signature} takes its options as a map — write { ${spec.options[0].key}: … }, not a bare value. The options are: ${inventory}`,
+    );
+  }
+
+  const literals = new Map<string, string | number | boolean | null>();
+  const seen = new Set<string>();
+  for (const entry of map.entries) {
+    const option = spec.options.find((o) => o.key === entry.key);
+    if (option === undefined) {
+      throw new BridgeError(
+        `${spec.signature} has no option '${entry.key}'${didYouMean(entry.key, spec.options.map((o) => o.key))} — the options are: ${inventory}`,
+      );
+    }
+    if (seen.has(entry.key)) {
+      throw new BridgeError(`${spec.signature} is given '${entry.key}' twice — write it once`);
+    }
+    seen.add(entry.key);
+    if (entry.value.type === 'static') literals.set(entry.key, entry.value.value);
+    if (option.type === 'literal') validateLiteralOption(spec, option, entry.value);
+  }
+
+  for (const option of spec.options) {
+    if (option.required && !seen.has(option.key)) {
+      throw new BridgeError(
+        `${spec.signature} needs '${option.key}' — ${option.summary}. The options are: ${inventory}`,
+      );
+    }
+  }
+
+  const disagreement = spec.agree?.(literals);
+  if (disagreement !== undefined) throw new BridgeError(`${spec.signature}: ${disagreement}`);
+}
+
+/** An option whose value is a SPELLING: it has to be written down (nothing
+ *  computes one), it has to be a spelling the built-in knows, and a spelling
+ *  the grammar reserves but nothing implements yet says so in its own words. */
+function validateLiteralOption(
+  spec: BuiltinOptionsSpec,
+  option: BuiltinOptionSpec,
+  value: Expression,
+): void {
+  const choices = (option.values ?? []).map((v) => `"${v}"`).join(' or ');
+  if (value.type !== 'static' || typeof value.value !== 'string') {
+    throw new BridgeError(
+      `${spec.signature}: '${option.key}' is written down, not worked out — write ${option.key}: ${choices}`,
+    );
+  }
+  if (!(option.values ?? []).includes(value.value)) {
+    throw new BridgeError(
+      `${spec.signature}: '${option.key}' has no value "${value.value}" — write ${option.key}: ${choices}`,
+    );
+  }
+  const unavailable = option.unavailable?.[value.value];
+  if (unavailable !== undefined) throw new BridgeError(`${spec.signature}: ${unavailable}`);
+}
+
+/** ` (did you mean 'size'?)` — the same nudge a typo'd enum value gets, by the
+ *  same measure: one edit away, or a prefix of the real thing. */
+function didYouMean(written: string, known: ReadonlyArray<string>): string {
+  const near = known.find(
+    (k) => k.startsWith(written) || written.startsWith(k) || editDistanceAtMostOne(k, written),
+  );
+  return near === undefined ? '' : ` (did you mean '${near}'?)`;
+}
+
+function editDistanceAtMostOne(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length === b.length) {
+      i++;
+      j++;
+    } else if (a.length > b.length) i++;
+    else j++;
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
 function normalizeInSteps(steps: TraversalStep[]): TraversalStep[] {
@@ -847,6 +964,7 @@ function normalizeCalls(expr: Expression): Expression {
       const normalized = { ...expr, args: expr.args.map((a) => normalizeCalls(a)) };
       validateFileCall(normalized);
       validateReadCall(normalized);
+      validateOptionsCall(normalized);
       return normalized;
     }
     case 'kg_exists':

@@ -183,6 +183,25 @@ describe('MAP / FILTER / REDUCE run the function once per member, in order', () 
     });
   });
 
+  it('MAP reads the pieces CHUNKS cut — they are a text collection like any other', async () => {
+    // Proof the built-in's answer needs nothing in between: no COLLECT, no
+    // guard, no reshaping. `size: 12` with no break inside the last character
+    // of each piece means every cut falls at the ceiling.
+    const creates = await runBody(
+      [
+        '  body = "aaaa bbbb cccc dddd eeee ffff gggg hhhh"',
+        '  pieces = CHUNKS(body, { size: 12 })',
+        '  lengths = MAP(pieces, (p) => { return LENGTH(p) })',
+        '  write graph-[:note]-> { payload: { pieces: pieces, lengths: lengths } }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates[0].fields.payload).toEqual({
+      pieces: ['aaaa bbbb cc', 'cc dddd eeee', ' ffff gggg h', 'hhh'],
+      lengths: [12, 12, 12, 3],
+    });
+  });
+
   it('FILTER keeps the members the function answered TRUE for', async () => {
     const creates = await runBody(
       [

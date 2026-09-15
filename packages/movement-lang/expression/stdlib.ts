@@ -45,6 +45,13 @@
 // type is the checker's (it must be a file), and the seam that reads it
 // lives in the engine (apps/api/src/services/movement_engine/file_text.ts,
 // reached through movement_engine/expression.ts).
+//
+// CHUNKS(text, { size, overlap }) is a third flat built-in, and the first
+// to take its arguments as a MAP. What the map may hold is declared here
+// too (`BUILTIN_OPTIONS`) rather than written into the bridge, so the
+// next built-in that wants options declares its keys instead of growing
+// a second copy of the same validation. Its body is pure and lives beside
+// it (./chunk.ts) — only the trace entry belongs to the engine.
 
 import { cronTimezoneError } from '@listen-fire/shared/cron';
 import {
@@ -146,6 +153,113 @@ export const FILE_SIGNATURE = 'FILE(content, "pdf" | "text")';
 export const READ_FUNCTION_ID = 'read';
 
 export const READ_SIGNATURE = 'READ(file)';
+
+// ── CHUNKS() — the flat text→pieces built-in, and the options-map contract ───
+
+/** The `fn` id CHUNKS(text, { … }) parses to (a generic function call). */
+export const CHUNKS_FUNCTION_ID = 'chunks';
+
+export const CHUNKS_SIGNATURE = 'CHUNKS(text, { size, overlap })';
+
+/**
+ * One key a built-in's options map may carry.
+ *
+ * `type` is the value's, and it is checked where the type is known: a
+ * `literal` option is settled at the BRIDGE, because its value is a spelling
+ * written into the source and nothing computes one; `number` and `text` are
+ * the CHECKER's, because an ordinary expression stands there
+ * (`size: LENGTH(body) / 3`) and only the checker types one.
+ */
+export interface BuiltinOptionSpec {
+  key: string;
+  type: 'number' | 'text' | 'literal';
+  required: boolean;
+  /** One-line description — diagnostics list the options with these. */
+  summary: string;
+  /** `literal` only: every spelling the grammar takes. */
+  values?: ReadonlyArray<string>;
+  /** `literal` only: of those spellings, the ones nothing implements yet, and
+   *  what to write instead. Reserving a word in the grammar and refusing it
+   *  with a sentence is how the spelling stays ours without pretending to
+   *  work. */
+  unavailable?: Readonly<Record<string, string>>;
+}
+
+/** A flat built-in that takes its options as a map literal. */
+export interface BuiltinOptionsSpec {
+  /** The parsed `fn` id this contract belongs to. */
+  fn: string;
+  signature: string;
+  /** Total argument count, the map included. */
+  arity: number;
+  /** Which argument the map is. */
+  index: number;
+  options: ReadonlyArray<BuiltinOptionSpec>;
+  /**
+   * A rule spanning two options that literal values already settle
+   * (`overlap` under `size`). Reads the LITERAL value of each key, absent
+   * where the author wrote an expression, and answers with the sentence to
+   * refuse the call with.
+   */
+  agree?: (literals: ReadonlyMap<string, string | number | boolean | null>) => string | undefined;
+}
+
+const CHUNKS_OPTIONS: BuiltinOptionsSpec = {
+  fn: CHUNKS_FUNCTION_ID,
+  signature: CHUNKS_SIGNATURE,
+  arity: 2,
+  index: 1,
+  options: [
+    {
+      key: 'size',
+      type: 'number',
+      required: true,
+      summary: 'the most characters a piece may be',
+    },
+    {
+      key: 'overlap',
+      type: 'number',
+      required: false,
+      summary: 'how many characters each piece repeats from the one before it (none by default)',
+    },
+    {
+      key: 'unit',
+      type: 'literal',
+      required: false,
+      summary: 'what size counts — "chars"',
+      values: ['chars', 'tokens'],
+      unavailable: {
+        tokens: 'token chunking is not available yet; use unit: "chars"',
+      },
+    },
+  ],
+  agree: (literals) => {
+    const size = literals.get('size');
+    const overlap = literals.get('overlap');
+    if (typeof size !== 'number' || typeof overlap !== 'number') return undefined;
+    if (overlap < size) return undefined;
+    return `an overlap of ${overlap} is not smaller than a size of ${size} — each piece would repeat the whole of the one before it and the text would never advance`;
+  },
+};
+
+const BUILTIN_OPTIONS: ReadonlyArray<BuiltinOptionsSpec> = [CHUNKS_OPTIONS];
+
+const BUILTIN_OPTIONS_BY_FN = new Map(BUILTIN_OPTIONS.map((spec) => [spec.fn, spec]));
+
+/** The options contract for a parsed `function` node's `fn` id, where it has
+ *  one. The bridge validates the map's KEYS with it; the checker types the
+ *  values. */
+export function builtinOptionsFor(fn: string): BuiltinOptionsSpec | undefined {
+  return BUILTIN_OPTIONS_BY_FN.get(fn);
+}
+
+/** `size (the most characters a piece may be), overlap (…), unit (…)` — the
+ *  inventory a diagnostic prints when a key is wrong or missing. */
+export function describeBuiltinOptions(spec: BuiltinOptionsSpec): string {
+  return spec.options
+    .map((option) => `${option.key}${option.required ? ' (required)' : ''} — ${option.summary}`)
+    .join('; ');
+}
 
 // ── CURRENCY ─────────────────────────────────────────────────────────────────
 

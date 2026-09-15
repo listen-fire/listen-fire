@@ -4007,3 +4007,88 @@ describe('READ(file)', () => {
     );
   });
 });
+
+// `CHUNKS(text, { size, overlap })` cuts a long text into pieces. The type is
+// `list of text` and never `| absent`: a text that isn't there has no pieces,
+// which is an empty collection rather than an absence, so the result is usable
+// without a guard. The options arrive as a MAP — the first built-in to take
+// one — whose keys the bridge settles (they are written down) and whose values
+// the checker types, since an ordinary expression stands in each.
+describe('CHUNKS(text, { size, overlap })', () => {
+  it('types as a collection of TEXT — a piece added up is the arithmetic error', () => {
+    expect(
+      codes(inMovement([
+        '  pieces = CHUNKS(msg.`text`, { size: 2000, overlap: 200 })',
+        '  bad = MAP(pieces, (p) => { return p + 1 })',
+      ].join('\n'))),
+    ).toContain(C.ARITH_NON_NUMERIC);
+  });
+
+  it('reads as a collection, so the collection ops take it with nothing in between', () => {
+    expectClean(inMovement([
+      '  pieces = CHUNKS(msg.`text`, { size: 2000, overlap: 200 })',
+      '  loud = MAP(pieces, (p) => { return UPPER(p) })',
+    ].join('\n')));
+  });
+
+  it('is never absent — an unguarded result is not MOV_ABSENT_REQUIRED', () => {
+    expect(
+      codes(inMovement('  pieces = CHUNKS(msg.`text`, { size: 2000 })')),
+    ).not.toContain(C.ABSENT_REQUIRED);
+  });
+
+  it('a text that may itself be absent is fine — nothing to cut is no pieces', () => {
+    expectClean(
+      inMovement([
+        '  msg-[f:files]-> {',
+        '    pieces = CHUNKS(READ(f.`data`), { size: 2000 })',
+        '    loud = MAP(pieces, (p) => { return UPPER(p) })',
+        '  }',
+      ].join('\n')),
+    );
+  });
+
+  it('cutting something that is not a text names the type it got', () => {
+    const found = check(
+      inMovement([
+        '  msg-[f:files]-> {',
+        '    pieces = CHUNKS(f.`data`, { size: 2000 })',
+        '  }',
+      ].join('\n')),
+    );
+    expect(found.map(d => d.code)).toContain(C.CHUNKS_NOT_TEXT);
+    expect(found.find(d => d.code === C.CHUNKS_NOT_TEXT)?.message).toContain('file');
+  });
+
+  it('a computed size is fine — only the KEYS are written down', () => {
+    expectClean(inMovement('  pieces = CHUNKS(msg.`text`, { size: LENGTH(msg.`text`) / 3 })'));
+  });
+
+  it('a size that is not a number names the option and the type it got', () => {
+    const found = check(inMovement('  pieces = CHUNKS(msg.`text`, { size: msg.`subject` })'));
+    expect(found.map(d => d.code)).toContain(C.OPTION_INVALID);
+    expect(found.find(d => d.code === C.OPTION_INVALID)?.message).toContain("'size'");
+  });
+
+  it('a size that may not answer is refused where it is written, not at the run', () => {
+    // A read off a list may find nothing there, so the size is `number |
+    // absent` — which at the run is a size of nothing.
+    const found = check(
+      inMovement('  pieces = CHUNKS(msg.`text`, { size: AT([1000, 2000], 0) })'),
+    );
+    expect(found.map(d => d.code)).toContain(C.OPTION_INVALID);
+    expect(found.find(d => d.code === C.OPTION_INVALID)?.message).toContain('may not answer');
+  });
+
+  it('an option key nobody has reaches the author as a diagnostic, not a silence', () => {
+    const found = check(inMovement('  pieces = CHUNKS(msg.`text`, { size: 10, stride: 2 })'));
+    expect(found.map(d => d.message).join('\n')).toContain("has no option 'stride'");
+  });
+
+  it('a missing size reaches the author too', () => {
+    expect(
+      check(inMovement('  pieces = CHUNKS(msg.`text`, { overlap: 10 })'))
+        .map(d => d.message).join('\n'),
+    ).toContain("needs 'size'");
+  });
+});

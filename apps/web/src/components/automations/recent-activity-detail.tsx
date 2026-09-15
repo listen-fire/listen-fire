@@ -90,6 +90,15 @@ type TraceEntry =
       unreadable?: "unsupported_type" | "bytes_unavailable" | "extraction_failed" | "no_text";
       detail?: string;
     }
+  /** One long text cut into pieces. How many, and how big — the text itself
+   *  is already in the run; what a reader wants here is whether it came out as
+   *  one piece or four hundred. */
+  | {
+      kind: "chunks";
+      pieces: number;
+      sizes: number[];
+      unit: "chars";
+    }
   | { kind: "ai"; prompt: string; hasValue: boolean }
   | { kind: "gate"; outcome: boolean }
   | { kind: "block"; root: string; positions: number };
@@ -107,6 +116,9 @@ function traceOf(steps: unknown): TraceEntry[] {
 function traceSeverity(entry: TraceEntry): "warn" | "info" {
   if (entry.kind === "field_miss") return "warn";
   if (entry.kind === "read") return entry.unreadable ? "warn" : "info";
+  // A text that cut into no pieces is the reason everything after it was
+  // quiet, so it reads as one.
+  if (entry.kind === "chunks") return entry.pieces === 0 ? "warn" : "info";
   if (entry.kind === "plugin") return entry.skippedParam ? "warn" : "info";
   if (entry.kind === "extraction") {
     // Not reading again for want of anything new is the engine working, not a
@@ -178,6 +190,12 @@ function describeTraceEntry(entry: TraceEntry): string {
         no_text: "there is no text in it",
       }[entry.unreadable];
       return `Couldn’t read ${named} — ${why}.${entry.detail ? ` (${entry.detail})` : ""}`;
+    }
+    case "chunks": {
+      if (entry.pieces === 0) return "Nothing to cut into pieces — the text was empty.";
+      const longest = Math.max(...entry.sizes);
+      const piece = entry.pieces === 1 ? "piece" : "pieces";
+      return `Cut into ${entry.pieces.toLocaleString()} ${piece} of up to ${longest.toLocaleString()} characters.`;
     }
     case "ai": {
       const prompt =

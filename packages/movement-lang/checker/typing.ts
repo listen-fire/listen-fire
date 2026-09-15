@@ -30,10 +30,14 @@ import { orderKeyProperty } from '@listen-fire/shared/expression/order_limit';
 import { quoteName } from '@listen-fire/shared/expression/formula';
 import { POSITION_SENTINEL } from '../expression/bridge';
 import {
+  builtinOptionsFor,
+  CHUNKS_FUNCTION_ID,
+  CHUNKS_SIGNATURE,
   FILE_FUNCTION_ID,
   READ_FUNCTION_ID,
   READ_SIGNATURE,
   stdlibFunctionById,
+  type BuiltinOptionsSpec,
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
 import { Span } from '../parser/ast';
@@ -323,6 +327,16 @@ export const TypedDiagnosticCodes = {
    *  this error: reading nothing answers nothing. An argument the checker
    *  cannot type stays silent, as everywhere else. */
   READ_NOT_FILE: 'MOV_READ_NOT_FILE',
+  /** `CHUNKS(x, { … })` where `x` is not a text. Cutting a text into pieces is
+   *  the only thing this does, and everything else has to be made into text
+   *  first. A text that may itself be ABSENT is not this error: there is
+   *  nothing to cut, so the answer is no pieces. */
+  CHUNKS_NOT_TEXT: 'MOV_CHUNKS_NOT_TEXT',
+  /** An option in a built-in's options map (`CHUNKS(t, { size: … })`) whose
+   *  value is the wrong type, or may not answer at all. The map's KEYS are
+   *  the bridge's — they are written down, so a typo is a parse-time fact;
+   *  the values are ordinary expressions, so only the checker sees them. */
+  OPTION_INVALID: 'MOV_OPTION_INVALID',
   /** Info severity: a tier written in a spelling that predates the tiers
    *  (`AI(…, "smart")`). It still means what it always meant, so nothing is
    *  broken and this never gates a save — but the word the language now uses
@@ -2289,7 +2303,15 @@ export class ExpressionTyping {
         if (expr.promptExpression) this.inferAt(expr.promptExpression, position);
         return undefined;
       case 'function': {
-        const args = expr.args.map(a => this.inferAt(a, position));
+        // A built-in that takes its options as a MAP walks its arguments
+        // differently: each option's value is typed on its own against the
+        // contract, so the map is never typed as the dict it merely looks
+        // like. The keys were settled at the bridge.
+        const withOptions = builtinOptionsFor(expr.fn);
+        const args = expr.args.map((a, i) =>
+          withOptions !== undefined && i === withOptions.index
+            ? this.typeOptionsMap(a, withOptions, position)
+            : this.inferAt(a, position));
         // FILE(content, "pdf"|"text") yields a file value; the bare
         // coercers DATE/DATETIME/NUMBER retype their argument to the named
         // category (this is what lets a cross-category comparison clear by
@@ -2300,6 +2322,7 @@ export class ExpressionTyping {
         // every other bare function stays untyped (silent).
         if (expr.fn === FILE_FUNCTION_ID) return 'file';
         if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);
+        if (expr.fn === CHUNKS_FUNCTION_ID) return this.typeChunksCall(args);
         if (expr.fn in BARE_COERCER_RETURNS) return BARE_COERCER_RETURNS[expr.fn];
         if (expr.fn === COALESCE_FUNCTION_ID) return coalesceAbsence(args);
         const stdlibSpec = stdlibFunctionById(expr.fn);
@@ -2827,6 +2850,63 @@ export class ExpressionTyping {
       );
     }
     return maybeAbsent('text');
+  }
+
+  /**
+   * `CHUNKS(text, { … })` — the pieces of a text, as a `list of text`.
+   *
+   * Always a list, never `list of text | absent`: a text that isn't there has
+   * no pieces, which is an EMPTY list and not an absence. That keeps the
+   * result usable without a guard — `MAP`, `FILTER` and the rest read an empty
+   * collection the way they read any other — and it is the honest answer,
+   * since "nothing to cut" and "cut into nothing" are the same fact here.
+   *
+   * The ARGUMENT is the author-time mistake: only a text has pieces.
+   */
+  private typeChunksCall(args: Array<FieldType | undefined>): FieldType {
+    const arg = args[0]; // arity is the bridge's to report
+    if (arg !== undefined && stripAbsent(arg) !== 'text') {
+      this.report(
+        TypedDiagnosticCodes.CHUNKS_NOT_TEXT,
+        `${CHUNKS_SIGNATURE} cuts a text into pieces, and this is ${describeFieldType(stripAbsent(arg))} — read the text out of it first (a file's text is READ(file)).`,
+      );
+    }
+    return { kind: 'list', of: 'text' };
+  }
+
+  /**
+   * The options map of a built-in that declares one. Every value is walked
+   * (an expression inside one is validated like any other) and typed against
+   * the key's declared type, where the contract names one the checker can
+   * check — a `literal` option was settled at the bridge, since its value is a
+   * spelling and nothing computes one.
+   *
+   * The map itself has no value type: it is call shape, not a value the
+   * expression hands on.
+   */
+  private typeOptionsMap(
+    arg: Expression,
+    spec: BuiltinOptionsSpec,
+    position: PositionTypeRef | undefined,
+  ): undefined {
+    if (arg.type !== 'object') return undefined; // the bridge already refused it
+    for (const entry of arg.entries) {
+      const got = this.inferAt(entry.value, position);
+      const option = spec.options.find(o => o.key === entry.key);
+      if (option === undefined || option.type === 'literal' || got === undefined) continue;
+      if (stripAbsent(got) !== option.type) {
+        this.report(
+          TypedDiagnosticCodes.OPTION_INVALID,
+          `${spec.signature}: '${entry.key}' is ${option.summary}, so it is a ${option.type} — and this is ${describeFieldType(stripAbsent(got))}.`,
+        );
+      } else if (isMaybeAbsent(got)) {
+        this.report(
+          TypedDiagnosticCodes.OPTION_INVALID,
+          `${spec.signature}: '${entry.key}' is ${option.summary}, and this may not answer at all — fill it in ('COALESCE(…, 2000)') so the run always has one.`,
+        );
+      }
+    }
+    return undefined;
   }
 
   private checkStdlibLiteralArgs(
