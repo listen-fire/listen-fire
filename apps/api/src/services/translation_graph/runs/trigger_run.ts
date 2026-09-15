@@ -813,6 +813,10 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
     // not inferred from the fact that the engine sent the write.
     ...(write.association !== undefined ? { association: write.association } : {}),
     ...(write.link !== undefined ? { link: write.link } : {}),
+    // A write into the run's OWN graph (a node this run built) — no system, no
+    // external id. Carried so the inspection surface says so, rather than
+    // showing a write that mysteriously committed nothing nowhere.
+    ...(write.local !== undefined ? { local: write.local } : {}),
     // Parent → child linkage (the edge a linked/tuple write hangs off) —
     // the inspection surface's "does this record attach to anything".
     ...(write.parents !== undefined ? { parents: write.parents } : {}),

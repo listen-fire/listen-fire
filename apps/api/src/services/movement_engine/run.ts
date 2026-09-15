@@ -219,6 +219,7 @@ import {
   type SummarisedOrigin,
 } from './provenance';
 import { surfaceReadAdapter } from './kg';
+import { localEdgeAdapter } from './local_edge_adapter';
 import {
   buildExtractSpec,
   makeAnthropicLlmClient,
@@ -1178,6 +1179,15 @@ interface ResolvedWriteTarget {
     data?: Record<string, unknown>;
   }>;
 }
+
+/**
+ * What a write needs to know about its destination BEFORE there is a graph to
+ * put a handle in: an adapter, a type, and the parents it hangs off. Every
+ * ordinary write target is one of these and more; a write into an edge of a
+ * node this run built is one of these and nothing more — there is no instance
+ * behind it, so `graph` cannot be invented and is not asked for.
+ */
+type WriteDestination = Pick<ResolvedWriteTarget, 'adapter' | 'recordType' | 'parents'>;
 
 /** A standalone link statement's resolved shape (see `resolveLinkStatement`)
  *  — adapter + engine-currency endpoints, plus the endpoint handles for the
@@ -5619,6 +5629,9 @@ class Interpreter {
       if (rootBinding?.kind === 'shape') {
         return this.materializeShapeWrite(write, rootBinding, bindingName, env);
       }
+      if (rootBinding?.kind === 'nodePosition') {
+        return this.executeLocalWrite(write, write.target, rootBinding, bindingName, env, body);
+      }
     }
     if (write.target.kind === 'position') {
       return this.executePositionWrite(write, write.target, bindingName, env);
@@ -5730,7 +5743,7 @@ class Interpreter {
    *
    */
   private async executeResolvedWrite(input: {
-    target: ResolvedWriteTarget;
+    target: WriteDestination;
     adapter: Adapter;
     descriptor: Awaited<ReturnType<Adapter['describe']>>;
     resolveRecord: Record<string, unknown>;
@@ -6016,7 +6029,7 @@ class Interpreter {
    */
   private async evaluateWriteFields(input: {
     write: WriteExpression;
-    target: ResolvedWriteTarget;
+    target: WriteDestination;
     env: Environment;
   }): Promise<{
     fields: Record<string, unknown>;
@@ -6286,6 +6299,125 @@ class Interpreter {
       'MOVENG_RUNTIME',
       `can't update '${alias}' — it has no stable record to update (an inbound payload, an extracted node, or a write that produced no record). Create a new record instead`,
     );
+  }
+
+  /**
+   * `write deduped-[:companies]-> { unique by (FUZZY `name`), … }` — a write
+   * into an edge of a node THIS RUN BUILT: in-process deduplication, spelled in
+   * the write's own vocabulary.
+   *
+   * Nothing here is a second write path. The destination is the run's own
+   * graph, so the engine stands in as the ADAPTER (`localEdgeAdapter`, over the
+   * edge's landings array) and the ordinary identity-resolve write runs
+   * unchanged on top of it: the same `unique by` lowering, the same candidate
+   * arbitration and the same one judge, the same `?:` / `+:` fill modes against
+   * the matched landing's current values, the same create / update / noop
+   * outcomes. A create appends a landing; a match merges into the one already
+   * there, in place and without moving it.
+   *
+   * What the statement HANDS BACK is the landing itself — the position that is
+   * now on the edge — not a handle: a handle names a record in a graph, and
+   * this record is in none. Reading a field off it, linking it onto another
+   * local edge, parking it: all of that is what a synthesised node already
+   * does, because that is exactly what it is.
+   *
+   * The firing log still gets a row, because the author asked for a write and
+   * wants to see what it did. It carries `local` instead of an `externalId`,
+   * and `committed: false` — nothing left the run.
+   */
+  private async executeLocalWrite(
+    write: WriteExpression,
+    target: Extract<WriteExpression['target'], { kind: 'linked' }>,
+    from: Extract<Binding, { kind: 'nodePosition' }>,
+    bindingName: string | undefined,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<Binding> {
+    const edgeName = this.singleWriteEdge(target.path);
+    const at = `write ${target.path.root ?? ''}-[:${edgeName}]->`;
+    if (write.bind !== undefined) {
+      throw unsupported(
+        `'bind' on a write into a node this run built (${at})`,
+        'a binding is a correspondence between a record here and a record in a system; a landing on the run\'s own edge has no system to correspond with',
+      );
+    }
+    const edge = from.edges[edgeName];
+    if (edge === undefined || edge.kind !== 'landed') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `${at}: '${target.path.root}' has no appendable edge '${edgeName}' — the checker should have caught this`,
+      );
+    }
+    const store = localEdgeAdapter({ edge, edgeName });
+    // The edge name IS the written type here: the landing type is a
+    // checker-side fact and the run holds values whatever typed them, so the
+    // edge is the only name the interpreter has for what it wrote.
+    const destination: WriteDestination = {
+      adapter: store.adapter,
+      recordType: edgeName,
+      parents: [],
+    };
+    const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources, descriptor } =
+      await this.evaluateWriteFields({ write, target: destination, env });
+    const identity = this.uniqueByIdentity(write, destination);
+    const record = await this.executeResolvedWrite({
+      target: destination,
+      adapter: store.adapter,
+      descriptor,
+      resolveRecord: { ...fields, ...identity.valueOverlay },
+      constraints: identity.constraints,
+      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      fields,
+      fieldSemantics,
+      fieldEvidence,
+      resources,
+      parentLinks: [],
+      body,
+    });
+    const landing = store.landingOf(record.externalId);
+    if (landing === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `${at}: the write produced no landing on '${edgeName}'`,
+      );
+    }
+    // The trail of each value that was actually SENT — the fill / append / no-op
+    // gates already decided which those are. A field the write suppressed keeps
+    // the trail the earlier landing had.
+    for (const field of Object.keys(record.writtenValues)) {
+      landing.fieldProvenance[field] = fieldProvenance[field] ?? NO_PROVENANCE;
+    }
+    const { externalId: _local, ...row } = record;
+    this.recordLocalWrite({
+      record: {
+        ...row,
+        committed: false,
+        local: { edge: edgeName, ...(store.capped() ? { candidatesCapped: true as const } : {}) },
+      },
+      fieldProvenance,
+      bindingName,
+    });
+    if (bindingName !== undefined) env.declare(bindingName, landing);
+    return landing;
+  }
+
+  /** The firing-log half of `recordWrite`, for a write with no graph behind it
+   *  — the row is recorded, and the binding is the landing rather than a
+   *  handle wrapping the row. */
+  private recordLocalWrite(input: {
+    record: WriteRecord;
+    fieldProvenance: Record<string, Provenance>;
+    bindingName: string | undefined;
+  }): void {
+    const record = input.record;
+    for (const fieldId of Object.keys(record.writtenValues)) {
+      record.provenance[fieldId] = this.summariser.summariseTrail(
+        input.fieldProvenance[fieldId] ?? NO_PROVENANCE,
+      );
+    }
+    if (input.bindingName !== undefined) record.bindingName = input.bindingName;
+    record.origin = { kind: 'write', writeIndex: this.writes.length };
+    this.writes.push(record);
   }
 
   /**
@@ -7389,7 +7521,7 @@ class Interpreter {
    */
   private uniqueByIdentity(
     write: WriteExpression,
-    target: ResolvedWriteTarget,
+    target: Pick<ResolvedWriteTarget, 'parents'>,
   ): {
     constraints: UniquenessConstraints;
     valueOverlay: Record<string, unknown>;

@@ -237,6 +237,19 @@ export interface WriteRecord {
    */
   outcome?: 'create' | 'update' | 'attach' | 'noop';
   /**
+   * This write landed on an edge of a node THIS RUN BUILT (`write
+   * deduped-[:companies]-> { … }`) — the run's own graph rather than a system.
+   * `edge` names the edge it landed on, which is the only name the run has for
+   * what it wrote. There is no `externalId` (no system holds one) and
+   * `committed` is false, because nothing was committed anywhere.
+   *
+   * `candidatesCapped` marks a write whose identity search stopped at the
+   * engine's candidate ceiling with landings still unexamined — a merge it
+   * could have made and did not consider. Absent means the search saw
+   * everything.
+   */
+  local?: { edge: string; candidatesCapped?: true };
+  /**
    * What became of the parent association this write named, as the TARGET
    * SYSTEM reported it: 'made' (it did not exist and now does) or 'already'
    * (it was there). Absent when the write named no parent — and never
