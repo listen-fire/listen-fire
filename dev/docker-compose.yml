@@ -1,7 +1,18 @@
 version: "3.6"
+# Container names are parameterized on $LISTEN_FIRE_STACK so two checkouts on
+# the same machine (a fork, a second clone) never collide on the same
+# Postgres/Redis containers. dev/loop.sh exports it, and also passes it as
+# `docker compose -p`, before every `docker compose` call — defaulting to
+# `listenfire-<repo dir basename>` (the compose project name itself must come
+# from `-p` on the command line rather than a top-level `name:` field here:
+# older Docker Compose does not interpolate `${VAR}` in that field, so it
+# would render literally instead of varying per checkout). Set
+# $LISTEN_FIRE_STACK yourself if you drive this file directly. Host ports
+# (9432, 6379) are still fixed, so a second checkout fails honestly on a port
+# conflict rather than silently reusing the first checkout's containers.
 services:
   postgres:
-    container_name: postgres_listenfire
+    container_name: ${LISTEN_FIRE_STACK}-postgres
     build:
       context: ..
       dockerfile: dev/Dockerfile
@@ -15,6 +26,7 @@ services:
       - 9432:5432
 
   redis:
+    container_name: ${LISTEN_FIRE_STACK}-redis
     image: redis:7.2-alpine
     restart: always
     ports:
