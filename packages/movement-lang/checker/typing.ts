@@ -31,6 +31,8 @@ import { quoteName } from '@listen-fire/shared/expression/formula';
 import { POSITION_SENTINEL } from '../expression/bridge';
 import {
   FILE_FUNCTION_ID,
+  READ_FUNCTION_ID,
+  READ_SIGNATURE,
   stdlibFunctionById,
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
@@ -314,6 +316,13 @@ export const TypedDiagnosticCodes = {
    *  message carries the vocabulary and a did-you-mean, the way a typo'd enum
    *  value does. */
   STDLIB_ARG_INVALID: 'MOV_STDLIB_ARG_INVALID',
+  /** `READ(x)` where `x` is not a file. READ turns a FILE into its text, and
+   *  nothing else has bytes to read — a text argument is either a value the
+   *  author already has (so the call does nothing) or the wrong name. The
+   *  message says which type it got. A file that may itself be ABSENT is not
+   *  this error: reading nothing answers nothing. An argument the checker
+   *  cannot type stays silent, as everywhere else. */
+  READ_NOT_FILE: 'MOV_READ_NOT_FILE',
   /** Info severity: a tier written in a spelling that predates the tiers
    *  (`AI(…, "smart")`). It still means what it always meant, so nothing is
    *  broken and this never gates a save — but the word the language now uses
@@ -2284,6 +2293,7 @@ export class ExpressionTyping {
         // (bridge-folded dotted ids) declare their returns. Additive only —
         // every other bare function stays untyped (silent).
         if (expr.fn === FILE_FUNCTION_ID) return 'file';
+        if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);
         if (expr.fn in BARE_COERCER_RETURNS) return BARE_COERCER_RETURNS[expr.fn];
         if (expr.fn === COALESCE_FUNCTION_ID) return coalesceAbsence(args);
         const stdlibSpec = stdlibFunctionById(expr.fn);
@@ -2790,6 +2800,29 @@ export class ExpressionTyping {
 
   /** A stdlib argument the function READS — a format pattern — must be written
    *  down, and must be right, at save. */
+  /**
+   * `READ(file)` — a file's TEXT, or absent. The absence carries no reason
+   * here, because no absence in this language does: what could not be read,
+   * and why, is on the run's trace. So the type is simply `text | absent`,
+   * discharged like any other (`COALESCE`, `?:`, an `==` guard).
+   *
+   * The ARGUMENT is where this can be wrong at author time: only a file has
+   * bytes to read. A file that may itself be absent passes — READ of nothing
+   * is nothing, and the result was already `text | absent`, so the absence has
+   * nowhere new to go. An argument the checker cannot type says nothing, the
+   * "unknown stays silent" contract everywhere else in this file.
+   */
+  private typeReadCall(args: Array<FieldType | undefined>): FieldType | undefined {
+    const arg = args[0]; // arity is the bridge's to report
+    if (arg !== undefined && stripAbsent(arg) !== 'file') {
+      this.report(
+        TypedDiagnosticCodes.READ_NOT_FILE,
+        `${READ_SIGNATURE} reads a file's text, and this is ${describeFieldType(stripAbsent(arg))} — name the file itself (an attachment's file field), or drop the READ if you already have the text.`,
+      );
+    }
+    return maybeAbsent('text');
+  }
+
   private checkStdlibLiteralArgs(
     spec: StdlibFunctionSpec,
     args: ReadonlyArray<Expression>,

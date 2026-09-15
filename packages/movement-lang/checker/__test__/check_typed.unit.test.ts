@@ -3954,3 +3954,56 @@ describe('a write handle is a traversal head (checker agrees with the engine)', 
     ).toContain(C.TRAVERSE_UNKNOWN_EDGE);
   });
 });
+
+// `READ(file)` turns an attachment into its text. The type is `text | absent`:
+// a file nothing could read answers with nothing, and the REASON is on the run
+// trace rather than in the type (an absence in this language carries no reason).
+// The argument has to be a file — reading a piece of text is a mistake visible
+// here — but a file that may itself be absent is fine: READ of nothing is
+// nothing.
+describe('READ(file)', () => {
+  const inAttachment = (body: string) =>
+    inMovement([
+      '  msg-[f:files]-> {',
+      `    ${body}`,
+      '  }',
+    ].join('\n'));
+
+  it('types as text — a COALESCE fill writes into a text field cleanly', () => {
+    expectClean(
+      inAttachment('write graph-[:contact]-> { name: COALESCE(READ(f.`data`), ""), email: "a@b.c" }'),
+    );
+  });
+
+  it('types as POSSIBLY ABSENT — unguarded into a required field is MOV_ABSENT_REQUIRED', () => {
+    expect(
+      codes(inAttachment('write graph-[:contact]-> { name: READ(f.`data`), email: "a@b.c" }')),
+    ).toContain(C.ABSENT_REQUIRED);
+  });
+
+  it('a `?:` fill discharges the absence, exactly as it does for DATE.PARSE', () => {
+    expect(
+      codes(inAttachment('write graph-[:contact]-> { name ?: READ(f.`data`), email: "a@b.c" }')),
+    ).not.toContain(C.ABSENT_REQUIRED);
+  });
+
+  it('reading something that is not a file names the type it got', () => {
+    const found = check(
+      inAttachment('write graph-[:contact]-> { name: COALESCE(READ(f.`filename`), ""), email: "a@b.c" }'),
+    );
+    expect(found.map(d => d.code)).toContain(C.READ_NOT_FILE);
+    expect(found.find(d => d.code === C.READ_NOT_FILE)?.message).toContain('text');
+  });
+
+  it('reading a literal is the same mistake', () => {
+    expect(
+      codes(inMovement('write graph-[:contact]-> { name: COALESCE(READ("x"), ""), email: "a@b.c" }')),
+    ).toContain(C.READ_NOT_FILE);
+  });
+
+  it('an untyped argument stays silent — an unknown surface is not a claim', () => {
+    expectClean(
+      inAttachment('write graph-[:contact]-> { name: COALESCE(READ(AI("the deck")), ""), email: "a@b.c" }'),
+    );
+  });
+});
