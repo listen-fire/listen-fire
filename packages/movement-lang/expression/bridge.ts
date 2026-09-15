@@ -54,7 +54,8 @@
 // whose terminal is a function call — the bridge folds that shape into
 // a plain `function` node carrying the dotted id (see ./stdlib.ts and
 // `normalizeCalls`). No @listen-fire/shared grammar change. The same walk
-// validates the flat FILE(content, "pdf" | "text") artifact built-in.
+// validates the flat FILE(content, "pdf" | "text") artifact built-in and
+// the flat READ(file) text built-in.
 //
 // M1 scope notes (documented limitations, not oversights):
 //   - Resolvers are identity (`name => name`): property/edge names pass
@@ -73,6 +74,8 @@ import {
   FILE_FUNCTION_ID,
   FILE_ARTIFACT_TYPES,
   FILE_SIGNATURE,
+  READ_FUNCTION_ID,
+  READ_SIGNATURE,
   describeStdlibFamily,
   listStdlibNamespaces,
   stdlibFamily,
@@ -625,7 +628,8 @@ function substitute(expr: Expression, repl: Map<string, Expression>): Expression
 // stdlib family (./stdlib.ts), so the checker and the engine see an
 // ordinary call — and rejects, with the family's inventory in the
 // message, calls into a family that doesn't exist or members a family
-// doesn't have. The same walk validates FILE(content, "pdf" | "text"):
+// doesn't have. The same walk validates FILE(content, "pdf" | "text") and
+// READ(file):
 // its artifact type is part of the call's static shape, so it is
 // checked here, where every consumer (checker, interpretability scan,
 // engine) shares the result.
@@ -715,6 +719,18 @@ function validateFileCall(expr: Extract<Expression, { type: 'function' }>): void
   ) {
     throw new BridgeError(
       `FILE()'s second argument is the artifact type — a literal ${FILE_ARTIFACT_TYPES.map((t) => `"${t}"`).join(' or ')}`,
+    );
+  }
+}
+
+/** READ(file) — one argument, and that is the whole static shape. WHAT it
+ *  reads is a type question (the checker requires a file), not a parse one,
+ *  so only the count is settled here. */
+function validateReadCall(expr: Extract<Expression, { type: 'function' }>): void {
+  if (expr.fn !== READ_FUNCTION_ID) return;
+  if (expr.args.length !== 1) {
+    throw new BridgeError(
+      `${READ_SIGNATURE} takes exactly 1 argument, got ${expr.args.length} — e.g. READ(attachment)`,
     );
   }
 }
@@ -830,6 +846,7 @@ function normalizeCalls(expr: Expression): Expression {
     case 'function': {
       const normalized = { ...expr, args: expr.args.map((a) => normalizeCalls(a)) };
       validateFileCall(normalized);
+      validateReadCall(normalized);
       return normalized;
     }
     case 'kg_exists':

@@ -80,9 +80,11 @@ import type { FileRef, Resource } from '../translation_graph/adapter';
 import { isFileRef } from '../translation_graph/engine/files/retrieve';
 import { stampResourceId } from '../translation_graph/engine/files/resources';
 import {
+  isFileUnreadable,
   MovementEngineError,
   type ExtractionTraceFile,
-  type FileUnreadableReason,
+  type FileTextResolution,
+  type FileTextResult,
   type MovementTraceEntry,
 } from './expression';
 import type { ExtractSiteRef, Provenance, ProvenanceOrigin } from './provenance';
@@ -811,36 +813,16 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
   };
 }
 
-/**
- * The extracted text of a source `FileRef`, plus the link back to the
- * stored copy. Mirrors the knowledge pipeline: bytes → OCR/text → RawText
- * → a stable id the field evidence can reference.
- */
-export interface FileTextResult {
-  text: string;
-  /** The `RawText` row the text was deduped/stored into (provenance link). */
-  rawTextId?: string;
-}
-
-/** A source file the seam could not turn into text, and why — the sentence a
- *  run needs so "extracted nothing" and "could not read the attachment" stop
- *  looking identical. `detail` carries the underlying extractor's own message
- *  (e.g. the OCR-not-configured sentence). */
-export interface FileUnreadable {
-  unreadable: FileUnreadableReason;
-  detail?: string;
-}
-
-/** What the `resolveFileText` seam answers with: the file's text, or the
- *  reason there is none. Never a bare absence — a file that was there and
- *  could not be read has to be able to say so. */
-export type FileTextResolution = FileTextResult | FileUnreadable;
-
-export function isFileUnreadable(
-  resolution: FileTextResolution,
-): resolution is FileUnreadable {
-  return 'unreadable' in resolution;
-}
+// The `resolveFileText` seam's own vocabulary lives beside the trace shape it
+// feeds (./expression.ts) — `READ(file)` reads files through the same seam, so
+// neither caller owns the types. Re-exported here because this module is where
+// the seam was introduced and where its importers still name it.
+export {
+  isFileUnreadable,
+  type FileTextResolution,
+  type FileTextResult,
+  type FileUnreadable,
+} from './expression';
 
 export interface ExtractRuntime {
   llm: LlmClient;

@@ -38,6 +38,13 @@
 // its NAME and argument contract live here (the bridge validates them);
 // the rendering seam lives in the engine
 // (apps/api/src/services/movement_engine/file_render.ts).
+//
+// READ(file) is the same shape pointing the other way — a file to its
+// text — and is effectful for the same reason (it fetches bytes and runs
+// an extractor). Its name and argument COUNT live here; the argument's
+// type is the checker's (it must be a file), and the seam that reads it
+// lives in the engine (apps/api/src/services/movement_engine/file_text.ts,
+// reached through movement_engine/expression.ts).
 
 import { cronTimezoneError } from '@listen-fire/shared/cron';
 import {
@@ -132,6 +139,13 @@ export const FILE_ARTIFACT_TYPES = ['pdf', 'text'] as const;
 export type FileArtifactType = (typeof FILE_ARTIFACT_TYPES)[number];
 
 export const FILE_SIGNATURE = 'FILE(content, "pdf" | "text")';
+
+// ── READ() — the flat file→text built-in's contract (arity at the bridge) ────
+
+/** The `fn` id READ(file) parses to (a generic function call). */
+export const READ_FUNCTION_ID = 'read';
+
+export const READ_SIGNATURE = 'READ(file)';
 
 // ── CURRENCY ─────────────────────────────────────────────────────────────────
 

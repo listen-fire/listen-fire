@@ -9,7 +9,9 @@
 //      functions; unknown ALL-CAPS namespace in call position lists the
 //      families; arity mistakes name the signature.
 //   3. FILE(content, "pdf" | "text") — static shape validation.
-//   4. The implementations — pure, deterministic, null-safe.
+//   4. READ(file) — static shape validation (the argument's TYPE is the
+//      checker's; only the count is call shape).
+//   5. The implementations — pure, deterministic, null-safe.
 
 import {
   BridgeError,
@@ -23,6 +25,7 @@ import {
   coerceToDatetime,
   coerceToNumber,
   FILE_FUNCTION_ID,
+  READ_FUNCTION_ID,
   STDLIB_FAMILIES,
   stdlibFamily,
   stdlibFunctionById,
@@ -190,7 +193,37 @@ describe('FILE(content, "pdf" | "text") validates at the bridge', () => {
   });
 });
 
-// ── 4. The implementations ───────────────────────────────────────────────────
+// ── 4. READ() static shape ───────────────────────────────────────────────────
+
+describe('READ(file) validates at the bridge', () => {
+  it('parses to a plain function node carrying its one argument', () => {
+    expect(parseMovementExpression('READ(attachment)')).toEqual({
+      type: 'function',
+      fn: READ_FUNCTION_ID,
+      args: [{ type: 'property', propertyTypeId: 'attachment' }],
+    });
+  });
+
+  it('rejects no argument', () => {
+    expect(() => parseMovementExpression('READ()')).toThrow(
+      /READ\(file\) takes exactly 1 argument, got 0/,
+    );
+  });
+
+  it('rejects more than one argument', () => {
+    expect(() => parseMovementExpression('READ(attachment, "pdf")')).toThrow(
+      /READ\(file\) takes exactly 1 argument, got 2/,
+    );
+  });
+
+  it('validates inside larger expressions', () => {
+    expect(() => parseMovementExpression('COALESCE(READ(a, b), "")')).toThrow(
+      /READ\(file\) takes exactly 1 argument, got 2/,
+    );
+  });
+});
+
+// ── 5. The implementations ───────────────────────────────────────────────────
 
 describe('CURRENCY', () => {
   it('GET_NUMBER_FROM_FIGURE parses figures with symbols, separators, magnitudes', () => {
