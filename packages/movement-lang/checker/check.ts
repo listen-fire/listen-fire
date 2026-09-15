@@ -4873,6 +4873,8 @@ class Checker {
     let root: WritableRootSchema | undefined;
     let rootDescription = 'the write target';
     let handle: PositionTypeRef | undefined;
+    /** The target is an edge of a node this run built — the run's own graph. */
+    let local = false;
     /** The write form's parent paths (linked / tuple) — required-edge satisfaction. */
     const parents: Array<{ type?: string; edge: string }> = [];
 
@@ -4889,6 +4891,7 @@ class Checker {
       );
       root = linked.root;
       handle = linked.handle;
+      local = linked.local === true;
       if (linked.description !== undefined) rootDescription = linked.description;
       if (linked.resolved) {
         parents.push({
@@ -4934,8 +4937,12 @@ class Checker {
     handle = this.applyGenericLandings(handle, write, root, rootDescription);
 
     // The write's own effect: whichever graph the handle lands in. An ask is a
-    // write like any other — its adapter is the one it is addressed to.
-    this.noteTypedEffect('write', handle);
+    // write like any other — its adapter is the one it is addressed to. A write
+    // into a node this run built lands in NO graph: the row carries the systems
+    // a run touches, and this one touches none — the same silence `link` on a
+    // local node keeps. Noting it would mark the row incomplete ("a site nobody
+    // could place"), which is a different fact and a false one.
+    if (!local) this.noteTypedEffect('write', handle);
 
     if (write.bind !== undefined) this.checkBindClause(write, scope, handle);
 
@@ -5028,7 +5035,12 @@ class Checker {
           for (const ref of new Set(names.refs)) {
             if (names.aliases.has(ref)) continue; // bound by a step within the predicate
             if (ref in root.fields) continue;
-            if (scope.resolve(ref).kind === 'found') continue; // a bound handle
+            // A bare name that is a bound handle is the EDGE-SCOPED identity
+            // spelling: identify the record by the parent it hangs off. A
+            // landing on a local node's edge hangs off nothing, so there is no
+            // parent for the name to be — it can only be a field of the
+            // landing, and letting it through would identify by nothing at all.
+            if (!local && scope.resolve(ref).kind === 'found') continue; // a bound handle
             this.report(
               DiagnosticCodes.UNIQUE_UNKNOWN_FIELD,
               `'${ref}' is not a field of ${rootDescription} or a bound handle — a 'unique by' predicate identifies by fields of the written record or by a bound parent`,
@@ -5207,6 +5219,70 @@ class Checker {
   }
 
   /**
+   * `write deduped-[:companies]-> { … }` — a write into an edge of a node THIS
+   * RUN BUILT. The run's own graph is the target: the landing either joins one
+   * already on the edge or becomes a new one, and nothing reaches a system.
+   *
+   * There is therefore no adapter to ask what may be set, and no need for one:
+   * the EDGE already says what its landings carry, so the landing type IS the
+   * write shape. A body may set exactly its fields, a `unique by` component may
+   * name exactly those fields, and the handle stands on a local node — because
+   * that is precisely what the run appends.
+   *
+   * FUZZY is available here without a capability. Everywhere else it is gated
+   * because only some systems can search by similarity; here the ENGINE is the
+   * store, so the promise is the engine's own to make.
+   */
+  private localWriteTarget(
+    from: Extract<PositionTypeRef, { kind: 'local' }>,
+    edgeName: string,
+    span: Span,
+  ): { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string; local?: true } {
+    const edge = from.edges?.[edgeName];
+    if (edge === undefined) {
+      const declared = Object.keys(from.edges ?? {});
+      this.report(
+        DiagnosticCodes.NODE_EDGE_UNDECLARED,
+        `${from.label} this run built declares no edge '${edgeName}'${
+          declared.length > 0
+            ? ` — it has: ${declared.join(', ')}`
+            : ` — declare it on the literal ('${edgeName}: <SomeNode>')`
+        }`,
+        span,
+      );
+      return { local: true };
+    }
+    if (edge.deferred === true) {
+      this.report(
+        DiagnosticCodes.NODE_EDGE_DEFERRED,
+        `'${edgeName}' is a lazy entry — its landings come from a walk that runs again at every read, so a written one would be gone by the next. Declare a separate edge for what this run writes ('${edgeName}Written: <SomeNode>')`,
+        span,
+      );
+      return { local: true };
+    }
+    const description = `'${edgeName}' on ${from.label} this run built`;
+    const landing = edge.target;
+    const schema = landing !== undefined ? positionSchemaOfRef(landing) : undefined;
+    // An edge nobody could type says nothing about the body — the write still
+    // happens, and silence is the honest answer for what it may set.
+    if (schema === undefined) return { local: true, description };
+    return {
+      local: true,
+      description,
+      root: {
+        fields: schema.properties,
+        resultShape: schema.properties,
+        fuzzyResolution: true,
+      },
+      // The landing the write appends belongs to no graph and carries no edges
+      // of its own — exactly the fields the body set, and nothing else. So the
+      // handle is a LOCAL node, and every later use of it (a dot read, a `link`
+      // onto another declared edge) is judged by the structure it really has.
+      handle: { kind: 'local', label: `a '${edgeName}' landing`, reads: schema.properties },
+    };
+  }
+
+  /**
    * A linked path's destination (check 5) — shared by linked writes, every
    * tuple-write path, and the criteria-form `link`: the path must start
    * from a typed handle/position, every hop must be a declared edge, and
@@ -5230,6 +5306,10 @@ class Checker {
     root?: WritableRootSchema;
     handle?: PositionTypeRef;
     description?: string;
+    /** The path landed on an edge of a node THIS RUN BUILT — no system behind
+     *  it, so the write touches nothing the effect row carries and no bound
+     *  parent can stand in for a component of its identity. */
+    local?: true;
     /** The fully-typed resolution — tuple agreement and required-edge satisfaction. */
     resolved?: {
       instanceToken: object;
@@ -5261,6 +5341,14 @@ class Checker {
     const linkStep = head.steps[head.steps.length - 1];
     if (linkStep.type !== 'edge') return {}; // a meta-edge is not a linkable reference
     const edgeName = linkStep.edgeTypeId;
+
+    // A node THIS RUN built. Its edges are not a system's collections, so none
+    // of what follows — the instance, the write promise, the target's own
+    // writability — has anything to consult. The edge's landing type is the
+    // whole answer, and `localWriteTarget` is where it is read.
+    if (parent.kind === 'local' && input.purpose === 'write') {
+      return this.localWriteTarget(parent, edgeName, input.span);
+    }
 
     // A write handle to a WRITABLE-ONLY type mints no position (an ask family:
     // you can raise one, you can never enumerate them), so its relationship
