@@ -321,9 +321,55 @@ export interface PluginSpec {
    *
    * A fact about the plugin's own signature, derived where the signature is —
    * not a second declaration an author could get out of step with the first.
+   *
+   * Narrow on purpose: it means the extraction is the plugin's ONLY way in. A
+   * plugin whose engine-injected parameter an ordinary call could write itself
+   * is `fedArgs`, not this — that one is callable, it just has to be handed
+   * what the stage would have handed it.
    */
   fedByExtraction?: boolean;
+  /**
+   * Arguments the EXTRACTION fills inside a `through [ … ]` stage — the engine
+   * feeds them from the `from [ … ]` source, which is why a stage never writes
+   * one and `args` deliberately excludes them.
+   *
+   * A PLAIN call has no extraction behind it, so it writes them itself: they
+   * are accepted there, and a required one omitted is
+   * MOV_PLUGIN_FED_BY_EXTRACTION naming the argument. The same parameter, two
+   * ways of being filled — not two parameters.
+   */
+  fedArgs?: PluginFedArg[];
+  /**
+   * What a plain call HANDS BACK. Absent ⇒ nobody declared, and a plain call
+   * is refused (MOV_PLUGIN_OUTPUT_UNDECLARED): a value nothing describes would
+   * type as unknown everywhere it flowed, which is the silence this checker
+   * exists to refuse. A `through [ … ]` stage is unaffected — a stage's output
+   * goes to the extractor, not to a name.
+   */
+  output?: PluginOutput;
 }
+
+/** One `fedArgs` entry: the argument's name, and whether a PLAIN call must
+ *  write it (a stage never does either way). */
+export interface PluginFedArg {
+  name: string;
+  required?: true;
+}
+
+/**
+ * What a plugin's plain call evaluates to, on whichever PLANE it lives — the
+ * same two planes every other bound value has, and no third type language:
+ *
+ *   - `value`  — one value on the dot plane, an ordinary `FieldType`. Absence
+ *                is spelled the way absence is spelled everywhere else, with
+ *                `maybeAbsent`;
+ *   - `record` — several values read by name, which is a node on the arrow
+ *                plane: the checker mints a LOCAL node whose reads are these
+ *                fields, exactly as `callback(…)` and a node literal do.
+ */
+export type PluginOutput =
+  | { kind: 'value'; type: FieldType }
+  | { kind: 'record'; fields: Record<string, FieldType> };
 
 // ── Field value types ──
 

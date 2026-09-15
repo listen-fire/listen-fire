@@ -76,15 +76,23 @@ movement look(t: <svc-[:ticket]->>) {
 ${call}
 }`;
 
+/** A plugin that has said everything a plain call needs: what running it does,
+ *  and what it hands back. The fixtures below vary one of those at a time. */
+const FOUND_TEXT = {
+  args: ['url'],
+  effects: { reads: ['the web'], ai: true },
+  output: { kind: 'value' as const, type: { kind: 'maybeAbsent' as const, of: 'text' as const } },
+};
+
 describe('a plugin is a function whose row is declared', () => {
   it('a declared row makes an ordinary call legal', () => {
     const source = PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)');
-    const plugins = { scan_web: { args: ['url'], effects: { reads: ['the web'], ai: true } } };
+    const plugins = { scan_web: FOUND_TEXT };
     expect(errors(source, PUSHED, plugins)).toEqual([]);
   });
 
   it('the declared row FOLDS — the picture says the movement reads the web', () => {
-    const plugins = { scan_web: { args: ['url'], effects: { reads: ['the web'], ai: true } } };
+    const plugins = { scan_web: FOUND_TEXT };
     const result = storyOf({
       source: PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)'),
       catalog: mockCatalog({
@@ -138,7 +146,7 @@ describe('a plugin is a function whose row is declared', () => {
   });
 
   it('an argument the plugin does not accept reads the same either way', () => {
-    const plugins = { scan_web: { args: ['url'], effects: { reads: ['the web'] } } };
+    const plugins = { scan_web: { ...FOUND_TEXT, effects: { reads: ['the web'] } } };
     expect(errors(PLUGIN_PROGRAM('  scan_web(depth: 2)'), PUSHED, plugins)).toEqual([
       C.THROUGH_BAD_ARG,
     ]);
@@ -146,7 +154,7 @@ describe('a plugin is a function whose row is declared', () => {
 
   it('a required argument the ordinary call omits reads the same either way', () => {
     const plugins = {
-      scan_web: { args: ['url'], requiredArgs: ['url'], effects: { reads: ['the web'] } },
+      scan_web: { ...FOUND_TEXT, requiredArgs: ['url'], effects: { reads: ['the web'] } },
     };
     const errs = errors(PLUGIN_PROGRAM('  scan_web()'), PUSHED, plugins);
     expect(errs).toEqual([C.THROUGH_ARG_MISSING]);
@@ -156,7 +164,7 @@ describe('a plugin is a function whose row is declared', () => {
   it('a plugin the EXTRACTION feeds stays a stage, and the refusal says why', () => {
     const source = PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)');
     const plugins = {
-      scan_web: { args: ['url'], effects: { reads: ['the web'] }, fedByExtraction: true },
+      scan_web: { ...FOUND_TEXT, effects: { reads: ['the web'] }, fedByExtraction: true },
     };
     expect(errors(source, PUSHED, plugins)).toEqual([C.PLUGIN_FED_BY_EXTRACTION]);
     expect(messages(source, PUSHED, plugins)).toContain('through [scan_web]');
@@ -165,6 +173,114 @@ describe('a plugin is a function whose row is declared', () => {
     name: "the company"
   }`;
     expect(errors(PLUGIN_PROGRAM(stage), PUSHED, plugins)).toEqual([]);
+  });
+});
+
+// ── What a plugin hands back ─────────────────────────────────────────────────
+
+describe('a plugin declares what it hands back, so a plain call is typed', () => {
+  it('a declared VALUE output is the bound name\u2019s type', () => {
+    const source = PLUGIN_PROGRAM(`  page = scan_web(url: t.\`Title\`)
+  head = COALESCE(page, "") > "a"`);
+    expect(errors(source, PUSHED, { scan_web: FOUND_TEXT })).toEqual([]);
+  });
+
+  it('the declared absence is REAL — an unguarded read into a plain field is refused', () => {
+    const source = PLUGIN_PROGRAM(`  page = scan_web(url: t.\`Title\`)
+  head = page > "a"`);
+    expect(errors(source, PUSHED, { scan_web: FOUND_TEXT })).toContain(T.ABSENT_REQUIRED);
+  });
+
+  it('a declared RECORD output is read by name, and an undeclared field is not', () => {
+    const plugins = {
+      scan_web: {
+        args: ['name'],
+        effects: { reads: ['the web'], ai: true },
+        output: {
+          kind: 'record' as const,
+          fields: {
+            summary: { kind: 'maybeAbsent' as const, of: 'text' as const },
+            website: { kind: 'maybeAbsent' as const, of: 'text' as const },
+          },
+        },
+      },
+    };
+    const good = PLUGIN_PROGRAM(`  more = scan_web(name: t.\`Title\`)
+  head = COALESCE(more.website, more.summary, "") > "a"`);
+    expect(errors(good, PUSHED, plugins)).toEqual([]);
+
+    const bad = PLUGIN_PROGRAM(`  more = scan_web(name: t.\`Title\`)
+  head = COALESCE(more.headcount, "") > "a"`);
+    expect(errors(bad, PUSHED, plugins).length).toBeGreaterThan(0);
+  });
+
+  it('declaring no output keeps the plugin to a stage, and says which fact is missing', () => {
+    const source = PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)');
+    const plugins = { scan_web: { args: ['url'], effects: { reads: ['the web'] } } };
+    expect(errors(source, PUSHED, plugins)).toEqual([C.PLUGIN_OUTPUT_UNDECLARED]);
+    expect(messages(source, PUSHED, plugins)).toContain('hands back');
+    // …and the stage form, whose output goes to the extractor, stays legal.
+    const stage = `  m = extract from [t.\`Title\`] through [scan_web] {
+    name: "the company"
+  }`;
+    expect(errors(PLUGIN_PROGRAM(stage), PUSHED, plugins)).toEqual([]);
+  });
+
+  it('an undeclared ROW is reported instead of an undeclared output — one refusal per call', () => {
+    const source = PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)');
+    expect(errors(source, PUSHED, { scan_web: { args: ['url'] } })).toEqual([
+      C.PLUGIN_ROW_UNDECLARED,
+    ]);
+  });
+});
+
+// ── The argument a stage gets fed for free ───────────────────────────────────
+
+describe('a fed argument is one parameter with two ways of being filled', () => {
+  const FED = {
+    args: ['email'],
+    effects: { reads: ['the web'], ai: true },
+    fedArgs: [{ name: 'text', required: true as const }],
+    output: { kind: 'value' as const, type: { kind: 'maybeAbsent' as const, of: 'text' as const } },
+  };
+
+  it('a plain call WRITES it, and is legal', () => {
+    const source = PLUGIN_PROGRAM('  pages = scan_web(text: t.`Title`)');
+    expect(errors(source, PUSHED, { scan_web: FED })).toEqual([]);
+  });
+
+  it('a plain call that omits it is refused, and the refusal names the argument', () => {
+    const source = PLUGIN_PROGRAM('  pages = scan_web()');
+    expect(errors(source, PUSHED, { scan_web: FED })).toEqual([C.PLUGIN_FED_BY_EXTRACTION]);
+    expect(messages(source, PUSHED, { scan_web: FED })).toContain("'text'");
+  });
+
+  it('a STAGE never writes it — the extraction still supplies it', () => {
+    const stage = `  m = extract from [t.\`Title\`] through [scan_web] {
+    name: "the company"
+  }`;
+    expect(errors(PLUGIN_PROGRAM(stage), PUSHED, { scan_web: FED })).toEqual([]);
+    const written = `  m = extract from [t.\`Title\`] through [scan_web(text: t.\`Title\`)] {
+    name: "the company"
+  }`;
+    expect(errors(PLUGIN_PROGRAM(written), PUSHED, { scan_web: FED })).toEqual([C.THROUGH_BAD_ARG]);
+  });
+});
+
+// ── Reaching for a plugin that was never imported ────────────────────────────
+
+describe('a registered plugin nobody imported says which line is missing', () => {
+  it('names the import rather than "unknown name"', () => {
+    const source = `import { desk } from adapters
+
+svc = desk()
+
+movement look(t: <svc-[:ticket]->>) {
+  page = scan_web(url: t.\`Title\`)
+}`;
+    const plugins = { scan_web: FOUND_TEXT };
+    expect(errors(source, PUSHED, plugins)).toContain(C.NAME_UNRESOLVED);
+    expect(messages(source, PUSHED, plugins)).toContain('import { scan_web } from plugins');
   });
 });
 
