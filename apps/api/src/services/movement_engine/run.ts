@@ -5869,11 +5869,20 @@ class Interpreter {
       input.identityPostFilter !== undefined
         ? this.narrowCandidatesByPredicate(resolved.candidates, input.identityPostFilter)
         : resolved.candidates;
+    // Distinguishes "the judge looked and genuinely declined" from "the judge
+    // never got an answer" — both resolve `chosen` to null, but only the
+    // second is a caveat the resulting create needs to carry (2026-09-15,
+    // the entity judge routing incident: a judge call that always failed
+    // read identically to an honest decline and created duplicates silently).
+    let judgeUnavailable: string | undefined;
     const chosen = await arbitrateEntityCandidates({
       asserted: input.fields,
       candidates,
       recordType: target.recordType,
       constraints: input.constraints,
+      onJudgeUnavailable: (message) => {
+        judgeUnavailable = message;
+      },
     });
     const matchedExternalId = chosen !== null ? resolved.candidates[chosen].externalId : undefined;
 
@@ -5892,7 +5901,7 @@ class Interpreter {
       // if the adapter nonetheless reports not-found, fall through to create.
       if (!('notFound' in updated)) return updated;
     }
-    return this.applyCreate({
+    const created = await this.applyCreate({
       adapter,
       recordType: target.recordType,
       fields: input.fields,
@@ -5902,6 +5911,10 @@ class Interpreter {
       parentLinks: input.parentLinks,
       isRoot: target.parents.length === 0,
     });
+    if (judgeUnavailable !== undefined) {
+      created.note = `judge unavailable: ${judgeUnavailable}; created rather than merged`;
+    }
+    return created;
   }
 
   /**

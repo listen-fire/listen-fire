@@ -348,6 +348,39 @@ describe('a FUZZY component blocks on the distinctive word', () => {
     ]);
     expect(mockExecute).toHaveBeenCalledTimes(1);
   });
+
+  it('a THROWN judge still creates (never errors the write) but marks the write with a note', async () => {
+    mockExecute.mockRejectedValue(new Error('anthropic 529'));
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    const result = await run(
+      [
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Faction AI"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Faction Labs"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (FUZZY `name`)',
+        '    name: "Faction"',
+        '  }',
+        ...READ_BACK,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    // Same observable outcome as a considered decline — a create, not an
+    // error — but the write is no longer indistinguishable from an honest
+    // "no match": it carries a note saying the judge never got an answer.
+    expect(attio.creates.map((w) => w.fields.name)).toEqual([
+      'Faction AI',
+      'Faction Labs',
+      'Faction',
+    ]);
+    const thirdLocalWrite = result.writes.filter((w) => w.local !== undefined)[2];
+    expect(thirdLocalWrite.note).toBe(
+      'judge unavailable: anthropic 529; created rather than merged',
+    );
+  });
 });
 
 describe('the row the firing log gets', () => {

@@ -304,6 +304,15 @@ export interface WriteRecord {
   /** The handle name when the statement was bound (`co = write …`,
    *  `p = link …` for a criteria link's FOUND handle). */
   bindingName?: string;
+  /**
+   * An honest caveat about how this write's own decision was made, for a
+   * run inspector to surface directly — never something a reader has to
+   * infer from `outcome` alone. Set today when the entity-match judge threw
+   * rather than deciding: the write still lands (declining would create on
+   * top of an already-violated constraint too), but a CREATE here may be
+   * standing in for a merge the judge never got to attempt.
+   */
+  note?: string;
 }
 
 /**

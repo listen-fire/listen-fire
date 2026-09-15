@@ -10,7 +10,7 @@
 import { execute } from '../../../../lib/prompts/execute';
 import type { ExternalRecordRef } from '../../adapter';
 import type { UniquenessConstraints } from '../../uniqueness';
-import { arbitrateEntityCandidates, judgeEntityMatch } from '../entity_match';
+import { arbitrateEntityCandidates, judgeEntityMatch, JUDGE_MODEL } from '../entity_match';
 
 // Mock ONLY the LLM call. entity_match imports just `execute` from this module.
 jest.mock('../../../../lib/prompts/execute', () => ({
@@ -31,6 +31,17 @@ function judged(match_index: number | null, confidence: number) {
 
 beforeEach(() => {
   mockExecute.mockReset();
+});
+
+describe('the judge runs on a Claude model', () => {
+  it('names a claude- model, so a deployment with only ANTHROPIC_API_KEY can still judge', () => {
+    // Self-hosted deployments document ANTHROPIC_API_KEY only (no OpenAI key).
+    // `execute()` only routes to Anthropic when the prompt definition's
+    // `model` starts with 'claude-' — anything else silently needs
+    // OPENAI_API_KEY and every ambiguous FUZZY write fails closed into a
+    // duplicate create.
+    expect(JUDGE_MODEL.startsWith('claude-')).toBe(true);
+  });
 });
 
 describe('judgeEntityMatch — structural short-circuits (no LLM)', () => {
@@ -88,6 +99,33 @@ describe('judgeEntityMatch — LLM decision gating', () => {
     mockExecute.mockRejectedValue(new Error('anthropic 529'));
     const out = await judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: twoCandidates, recordType: 'co' });
     expect(out).toBeNull();
+  });
+
+  it('reports a THROWN judge via onJudgeUnavailable, distinct from a considered decline', async () => {
+    mockExecute.mockRejectedValue(new Error('anthropic 529'));
+    const onJudgeUnavailable = jest.fn();
+    const out = await judgeEntityMatch({
+      asserted: { name: 'Acme' },
+      candidates: twoCandidates,
+      recordType: 'co',
+      onJudgeUnavailable,
+    });
+    expect(out).toBeNull();
+    expect(onJudgeUnavailable).toHaveBeenCalledTimes(1);
+    expect(onJudgeUnavailable).toHaveBeenCalledWith('anthropic 529');
+  });
+
+  it('does NOT call onJudgeUnavailable when the judge answers but declines (low confidence)', async () => {
+    mockExecute.mockResolvedValue(judged(1, 0.1));
+    const onJudgeUnavailable = jest.fn();
+    const out = await judgeEntityMatch({
+      asserted: { name: 'Acme' },
+      candidates: twoCandidates,
+      recordType: 'co',
+      onJudgeUnavailable,
+    });
+    expect(out).toBeNull();
+    expect(onJudgeUnavailable).not.toHaveBeenCalled();
   });
 });
 
@@ -185,5 +223,19 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     });
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(out).toBeNull();
+  });
+
+  it('forwards onJudgeUnavailable through to the LLM judge on a throw', async () => {
+    mockExecute.mockRejectedValue(new Error('anthropic 529'));
+    const onJudgeUnavailable = jest.fn();
+    const out = await arbitrateEntityCandidates({
+      asserted: { domain: 'acme.com' },
+      candidates: [ref({ domain: 'x.com' }, 'a'), ref({ domain: 'y.com' }, 'b')],
+      recordType: 'co',
+      constraints: constraintsOn('domain'),
+      onJudgeUnavailable,
+    });
+    expect(out).toBeNull();
+    expect(onJudgeUnavailable).toHaveBeenCalledWith('anthropic 529');
   });
 });

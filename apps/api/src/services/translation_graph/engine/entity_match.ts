@@ -16,6 +16,15 @@ import { promptDef } from '../../../lib/prompts/definition';
 import { logger } from '../../logger';
 import type { ExternalRecordRef } from '../adapter';
 import { candidateIsAllExact, type UniquenessConstraints } from '../uniqueness';
+import { aiExpressionSettings, claudeModelId } from '../../movement_engine/ai_tiers';
+
+// The judge runs on the SAME model `AI()`'s "careful" tier names — reused
+// rather than hard-coded so a self-hosted deployment with only
+// ANTHROPIC_API_KEY (no OpenAI key) can still resolve FUZZY writes: an
+// unnamed `model` here would route through `execute()`'s OpenAI-only default
+// and every ambiguous match would fail closed into a silent duplicate create.
+// Exported so a test can pin it without hard-coding the id a second time.
+export const JUDGE_MODEL = claudeModelId(aiExpressionSettings('careful').model);
 
 const entityMatchPromptDef = promptDef({
   description: 'Match an asserted record against candidate records from a target system',
@@ -56,6 +65,7 @@ Candidates:
 {{{candidates}}}`,
     },
   ],
+  model: JUDGE_MODEL,
   validator: z.object({
     match_index: z.number().nullable(),
     confidence: z.number(),
@@ -85,11 +95,17 @@ function formatCandidate(candidate: ExternalRecordRef, index: number): string {
  * Decide which candidate (if any) is the same entity as the asserted
  * record. Returns the index into `candidates`, or null to create a
  * new record. Confidence below 0.5 is treated as a decline.
+ *
+ * A THROWN judge call also declines (never errors the write), but that is
+ * a different fact than a considered decline — `onJudgeUnavailable`, when
+ * given, hears the failure so the write path can say so on the record
+ * instead of silently reading identically to "genuinely ambiguous".
  */
 export async function judgeEntityMatch(input: {
   asserted: Record<string, unknown>;
   candidates: ExternalRecordRef[];
   recordType: string;
+  onJudgeUnavailable?: (message: string) => void;
 }): Promise<number | null> {
   if (input.candidates.length === 0) return null;
   if (input.candidates.length === 1) return 0;
@@ -106,11 +122,13 @@ export async function judgeEntityMatch(input: {
       candidates: candidateText,
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     logger.warn('[tg_entity_match] judge call failed; declining to merge', {
       recordType: input.recordType,
       candidateCount: input.candidates.length,
-      error: err instanceof Error ? err.message : String(err),
+      error: message,
     });
+    input.onJudgeUnavailable?.(message);
     return null;
   }
 
@@ -152,6 +170,7 @@ export async function arbitrateEntityCandidates(input: {
   candidates: ExternalRecordRef[];
   recordType: string;
   constraints: UniquenessConstraints;
+  onJudgeUnavailable?: (message: string) => void;
 }): Promise<number | null> {
   if (input.candidates.length === 0) return null;
   if (input.candidates.length === 1) return 0;
@@ -163,5 +182,6 @@ export async function arbitrateEntityCandidates(input: {
     asserted: input.asserted,
     candidates: input.candidates,
     recordType: input.recordType,
+    onJudgeUnavailable: input.onJudgeUnavailable,
   });
 }
