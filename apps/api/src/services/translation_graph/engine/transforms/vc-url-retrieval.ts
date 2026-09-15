@@ -35,9 +35,11 @@ import type { TransformSignature } from '../../types';
  * `urls.name / urls.url / urls.file / urls.text` resolves at extract
  * time.
  *
- * `params.content` is the text the transform scans for URLs. The
- * engine populates it from the source node's content field (an
- * expression in the `config:` object of the `#transform` step).
+ * `params.text` is what the transform scans for URLs. One parameter, two ways
+ * of being filled: inside a `through [ … ]` stage the engine populates it from
+ * the extract source, so the author writes `through [vc_url_retrieval]` and
+ * nothing else; called plainly there is no extraction to fill it, so the
+ * caller writes `vc_url_retrieval(text: …)` themselves.
  *
  * `params.email` is author-supplied: the email to type into an
  * email-gated link (DocSend, a data room, …) if fetching one requires
@@ -50,14 +52,15 @@ export const VC_URL_RETRIEVAL_SIGNATURE: TransformSignature = {
     'Discover, classify, and fetch URLs in a message. Emits one ephemeral Url record per fetched resource.',
   params: [
     {
-      name: 'content',
+      name: 'text',
       type: { kind: 'string' },
       required: true,
-      // Engine-injected from the extract source — the author writes
-      // `through [vc_url_retrieval]` with no argument. Not in the author-facing
-      // arg list (validator/hints/docs all exclude it).
+      // Engine-injected INSIDE A STAGE, from the extract source — the author
+      // writes `through [vc_url_retrieval]` with no argument, and a stage that
+      // wrote one would be overriding what it is there to receive. A plain call
+      // has no stage behind it, so it writes this itself.
       auto: true,
-      description: 'The extract source text to scan for URLs (auto-fed by the engine).',
+      description: 'The text to scan for URLs. Inside a stage the extraction supplies it.',
     },
     {
       name: 'email',
@@ -90,6 +93,16 @@ export const VC_URL_RETRIEVAL_SIGNATURE: TransformSignature = {
         },
       },
     },
+  },
+  // Every page it discovered and fetched, as one text. Nothing when the message
+  // carried no link worth following, or nothing came back from the ones it did.
+  output: {
+    kind: 'value',
+    type: { kind: 'string' },
+    optional: true,
+    description:
+      'The text of every page it fetched, run together. Nothing when there was no link '
+      + 'worth following.',
   },
 };
 
@@ -279,7 +292,7 @@ export const vcUrlRetrievalImpl: TransformImpl = {
       );
     }
 
-    const content = typeof input.config.content === 'string' ? input.config.content : '';
+    const content = typeof input.config.text === 'string' ? input.config.text : '';
     if (!content) {
       logger.debug('[transform:vc-url-retrieval] No content in config');
       return {};

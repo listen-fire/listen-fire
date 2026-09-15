@@ -177,6 +177,7 @@ import {
   positionRecordId,
   type SchemaFieldDescriptor,
   type SourcePosition,
+  type TransformOutputShape,
 } from '../translation_graph/types';
 import { mergeUniqueness, type UniquenessConstraints } from '../translation_graph/uniqueness';
 import type { LlmClient } from '../translation_graph/engine/batched_extraction';
@@ -225,9 +226,11 @@ import {
   makeAnthropicLlmClient,
   materializeExtract,
   registryTransformInvoker,
+  tracedUrl,
   type ExtractEmission,
   type FileTextResolution,
   type MovementTransformInvoker,
+  type TransformInvocationResult,
 } from './extraction';
 import { RunCancelledSignal } from './cancel_gate';
 import { getErrorMessage } from '../../lib/utils/error';
@@ -2580,6 +2583,14 @@ class Interpreter {
         }
         for (const { name, alias } of statement.names) {
           if (alias !== undefined) this.importOriginals.set(alias, name);
+          // A PLUGIN import binds the plugin's name. Nothing runs here — a
+          // plugin is a function whose body isn't visible — but a call on this
+          // name means something different from a call on a movement, and the
+          // binding is what says so, exactly as the checker's scope does.
+          if (statement.source.namespace === 'plugins') {
+            env.declare(alias ?? name, { kind: 'plugin', plugin: name });
+            continue;
+          }
           // A bare adapter import is NOT an instance — instantiation is
           // explicit (`go = manual()`). The import name binds opaque; an
           // instance exists only from a construction (the `assign` case
@@ -2595,8 +2606,9 @@ class Interpreter {
             // The construction-shaped spelling of a CALL reaches here too, and
             // means the same thing it means anywhere: run the movement. There
             // is nothing at file scope to run it about.
-            if (env.resolve(statement.value.construct.callee)?.kind === 'movement') {
-              throw fileLevelCall();
+            {
+              const kind = env.resolve(statement.value.construct.callee)?.kind;
+              if (kind === 'movement' || kind === 'plugin') throw fileLevelCall();
             }
             env.declare(
               statement.name,
@@ -2942,7 +2954,8 @@ class Interpreter {
         // movement runs and its value is bound. The grammar cannot
         // tell them apart, so it doesn't (parser/ast `constructionAsCall`).
         const construct = value.construct;
-        if (env.resolve(construct.callee)?.kind === 'movement') {
+        const calleeKind = env.resolve(construct.callee)?.kind;
+        if (calleeKind === 'movement' || calleeKind === 'plugin') {
           const call = constructionAsCall(construct);
           env.declare(
             name,
@@ -3450,6 +3463,12 @@ class Interpreter {
   ): Promise<Binding | undefined> {
     const callee = env.resolve(statement.callee);
     if (callee?.kind !== 'movement') {
+      // One function sort: a plugin is a function whose body isn't visible, so
+      // a call on one is an ordinary call and its value is what the plugin
+      // declared it hands back.
+      if (callee?.kind === 'plugin') {
+        return this.executePluginCall(statement, callee.plugin, env, body);
+      }
       if (callee?.kind === 'opaque') {
         throw unsupported(
           `calling the import '${statement.callee}'`,
@@ -3522,6 +3541,76 @@ class Interpreter {
       this.callStack.pop();
     }
     return outcome.returned ? outcome.value : undefined;
+  }
+
+  /**
+   * `page = fetch_url(url: c.website)` — a plugin called plainly. The arguments
+   * are evaluated in the caller's source order like any other call's, handed to
+   * the plugin as its config, and what comes back is bound as the DECLARED
+   * output: a value on the dot plane, or a node whose reads are the fields the
+   * plugin declared.
+   *
+   * The invocation has two channels — the text it fetched and the properties it
+   * attached — and the declaration is what says which of them the bound name
+   * IS. A `value` output is the text; a `record` output reads the properties,
+   * with the fetched text under `text` for the plugins that declare it, since a
+   * plugin that fetched a page and had no way to hand it back would be throwing
+   * away most of what it did.
+   */
+  private async executePluginCall(
+    statement: Extract<Statement, { kind: 'call' }>,
+    plugin: string,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<Binding | undefined> {
+    const invoker = this.input.transformInvoker ?? registryTransformInvoker;
+    const output = invoker.declaredOutput?.(plugin);
+    if (output === undefined) {
+      // The checker refuses a plain call to a plugin that declared no output,
+      // so reaching here means the two disagree — which is worth saying, not
+      // guessing past.
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${statement.callee}' declares no output, so there is nothing a call to it can hand back — the checker should have caught this`,
+      );
+    }
+    const config: Record<string, unknown> = {};
+    const trails: Provenance[] = [];
+    for (const arg of statement.args) {
+      if (arg.kind !== 'expr') {
+        // A plugin's parameters are values. A record passed into one has no
+        // meaning the plugin could act on, so it is refused here rather than
+        // arriving as an unreadable config entry.
+        throw unsupported(
+          `a ${arg.kind} argument to the plugin '${statement.callee}'`,
+          'a plugin takes values — pass a field or an expression',
+        );
+      }
+      const { value, provenance } = await this.evaluateSlot(arg.expr, { env });
+      config[arg.name] = value;
+      trails.push(provenance);
+    }
+    const started = Date.now();
+    const result = await invoker.invoke({ plugin, config, extractedContext: {} });
+    // What the plugin brought back is no longer justified by the quote that
+    // pointed at it, so the origins survive and the direct citation does not.
+    const { binding, handedBack } = pluginCallBinding(
+      output,
+      result,
+      transformed(unionProvenance(trails)),
+    );
+    const fields = Object.keys(result.data ?? {});
+    this.trace.push({
+      kind: 'plugin',
+      plugin,
+      ...(typeof config.url === 'string' ? { url: tracedUrl(config.url) } : {}),
+      durationMs: Date.now() - started,
+      ...(result.text ? { chars: result.text.length } : {}),
+      ...(fields.length > 0 ? { fields } : {}),
+      ...(result.outcome ? { outcome: result.outcome } : {}),
+      returned: handedBack ? 'value' : 'absent',
+    });
+    return binding;
   }
 
   private async evaluateCallArg(
@@ -8004,6 +8093,7 @@ class Interpreter {
       case 'instance':
       case 'shape':
       case 'movement':
+      case 'plugin':
       case 'opaque':
         return undefined;
     }
@@ -8546,4 +8636,45 @@ function deepEqual(a: unknown, b: unknown): boolean {
     }
   }
   return true;
+}
+
+/**
+ * The field a `record`-output plugin hands its fetched PAGE back under. The
+ * invocation has two channels — the properties a plugin attached and the text
+ * it fetched — and a record output reads both: the properties by their own
+ * names, the text by this one. A plugin that attaches a property of the same
+ * name wins, since that is the more specific claim.
+ */
+const PLUGIN_FETCHED_TEXT_FIELD = 'text';
+
+/**
+ * What a plain plugin call binds, and whether the plugin actually handed
+ * anything back.
+ *
+ * The binding always EXISTS — a declared output is `T | absent`, and absence in
+ * this language is a value that reads null, never a missing name. So a fetch
+ * that failed binds null and `page == null` answers it; a record whose plugin
+ * attached nothing binds a node whose every read is null. `handedBack` is the
+ * separate question, and it is the trace's, not the program's.
+ */
+function pluginCallBinding(
+  output: TransformOutputShape,
+  result: TransformInvocationResult,
+  provenance: Provenance,
+): { binding: Binding; handedBack: boolean } {
+  if (output.kind === 'value') {
+    const value = result.text !== undefined && result.text !== '' ? result.text : null;
+    return { binding: { kind: 'value', value, provenance }, handedBack: value !== null };
+  }
+  const fields: Record<string, unknown> = {};
+  const fieldProvenance: Record<string, Provenance> = {};
+  if (result.text !== undefined && result.text !== '') {
+    fields[PLUGIN_FETCHED_TEXT_FIELD] = result.text;
+  }
+  Object.assign(fields, result.data ?? {});
+  for (const name of Object.keys(fields)) fieldProvenance[name] = provenance;
+  return {
+    binding: { kind: 'nodePosition', fields, fieldProvenance, edges: {} },
+    handedBack: Object.keys(fields).length > 0,
+  };
 }

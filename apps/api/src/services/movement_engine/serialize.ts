@@ -375,6 +375,12 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       return { kind: 'shape', name: binding.declaration.name };
     case 'movement':
       return { kind: 'movement', name: binding.declaration.name };
+    case 'plugin':
+      // A plugin name is an import like any other, and travels the same way: a
+      // code ref re-resolved from the re-parsed AST, keyed by the slot name the
+      // scope walk fills in below. Carrying the registry name instead would
+      // break an aliased import, whose slot is not the plugin's name.
+      return { kind: 'opaque', what: 'a plugin', name: '' };
     case 'opaque':
       // An import. `what` is the descriptive label; the binding has no stored
       // name, so re-resolution is by the descriptor's tag — opaque imports are

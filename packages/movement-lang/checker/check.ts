@@ -308,9 +308,15 @@ export const DiagnosticCodes = {
    *  pipeline bounds what it reaches. */
   PLUGIN_ROW_UNDECLARED: 'MOV_PLUGIN_ROW_UNDECLARED',
   /** A plugin called as an ordinary function when the EXTRACTION is what feeds
-   *  it — its input is the `from [ … ]` text, or the fields the extract has
-   *  produced so far. There is nothing for a bare call to pass it. */
+   *  it — either the extraction is its only way in (nothing a bare call could
+   *  pass it), or the one argument a stage gets fed for free was left out of a
+   *  call that has no stage behind it. */
   PLUGIN_FED_BY_EXTRACTION: 'MOV_PLUGIN_FED_BY_EXTRACTION',
+  /** A plugin called as an ordinary function whose registry entry says nothing
+   *  about what it HANDS BACK. A stage's output goes to the extractor and needs
+   *  no type; a call's output is bound to a name, and a name whose type nothing
+   *  describes is silence every read downstream inherits. */
+  PLUGIN_OUTPUT_UNDECLARED: 'MOV_PLUGIN_OUTPUT_UNDECLARED',
   /** The same field name declared twice in one extract stage — within a
    *  stage, `buildExtractGraph` keeps the last one and the other silently
    *  vanishes. A LATER stage redeclaring a field is the documented
@@ -7824,11 +7830,19 @@ class Checker {
     spec: PluginSpec | undefined,
     arg: string,
     span: Span,
+    /** A PLAIN call also accepts the arguments a stage gets fed for free —
+     *  there is no extraction here to fill them, so the author does. */
+    options?: { plain?: true },
   ): void {
     if (spec === undefined || spec.args.includes(arg)) return;
+    if (options?.plain === true && spec.fedArgs?.some(fed => fed.name === arg)) return;
+    const accepted =
+      options?.plain === true
+        ? [...spec.args, ...(spec.fedArgs ?? []).map(fed => fed.name)]
+        : spec.args;
     this.report(
       DiagnosticCodes.THROUGH_BAD_ARG,
-      `'${name}' does not accept an argument '${arg}'${spec.args.length ? ` — it accepts: ${spec.args.join(', ')}` : ''}`,
+      `'${name}' does not accept an argument '${arg}'${accepted.length ? ` — it accepts: ${accepted.join(', ')}` : ''}`,
       span,
     );
   }
@@ -7872,29 +7886,86 @@ class Checker {
   private checkPluginApplication(statement: CallStatement, symbol: ScopeSymbol): ReturnShape {
     const spec = this.catalog.plugin(symbol.importedName ?? statement.callee);
     this.absorbPluginRow(spec);
-    if (spec !== undefined && spec.effects === undefined) {
-      this.report(
-        DiagnosticCodes.PLUGIN_ROW_UNDECLARED,
-        `'${statement.callee}' is a plugin that hasn't declared what it does, so it can only run as an extraction stage — write it in a 'through [ … ]' (\`extract from [ … ] through [${statement.callee}] { … }\`).`,
-        statement.span,
-      );
-    } else if (spec?.fedByExtraction === true) {
-      this.report(
-        DiagnosticCodes.PLUGIN_FED_BY_EXTRACTION,
-        `'${statement.callee}' runs on what an extraction gives it, so it only makes sense as a stage of one — write it in a 'through [ … ]' (\`extract from [ … ] through [${statement.callee}] { … }\`).`,
-        statement.span,
-      );
-    }
     const supplied = new Set(statement.args.map(arg => arg.name));
+    // Three ways a plugin is a stage and nothing else, in the order they
+    // answer "why can't I call this": nobody said what it DOES, nobody said
+    // what it HANDS BACK, or the extraction is its only way in. One refusal
+    // per call — the first true one is the one to fix.
+    const stageOnly = this.refusePlainPluginCall(statement, spec, supplied);
     this.reportPluginMissingArgs(statement.callee, spec, supplied, statement.span);
     for (const arg of statement.args) {
-      this.reportPluginBadArg(statement.callee, spec, arg.name, callArgSpan(arg));
+      this.reportPluginBadArg(statement.callee, spec, arg.name, callArgSpan(arg), {
+        plain: true,
+      });
     }
-    // Nothing describes a plugin's OUTPUT — the registry declares what it adds
-    // to an extraction, not a value. So the call's value is unknown, which is
-    // true and refuses nothing: binding one is silent rather than
-    // MOV_CALL_RETURNS_NOTHING, which would be a claim.
-    return UNKNOWN_RETURN;
+    // The call's value is what the plugin DECLARED it hands back, on the plane
+    // that declaration lives on. Undeclared (or refused above) leaves it
+    // unknown — true, and it refuses nothing: binding one stays silent rather
+    // than MOV_CALL_RETURNS_NOTHING, which would be a claim.
+    if (stageOnly || spec?.output === undefined) return UNKNOWN_RETURN;
+    return spec.output.kind === 'value'
+      ? { returns: true, fieldType: spec.output.type }
+      : {
+          returns: true,
+          posType: {
+            kind: 'local',
+            label: `what '${statement.callee}' found`,
+            reads: { ...spec.output.fields },
+          },
+        };
+  }
+
+  /**
+   * Whether this plugin can be called at all outside a `through [ … ]` stage,
+   * reporting the reason when it cannot. A plugin is a function whose body
+   * isn't visible, so everything a call needs to know has to have been
+   * declared: what running it does, what it hands back, and what it runs ON.
+   */
+  private refusePlainPluginCall(
+    statement: CallStatement,
+    spec: PluginSpec | undefined,
+    supplied: Set<string>,
+  ): boolean {
+    if (spec === undefined) return false;
+    const stage = `write it in a 'through [ … ]' (\`extract from [ … ] through [${statement.callee}] { … }\`)`;
+    if (spec.effects === undefined) {
+      this.report(
+        DiagnosticCodes.PLUGIN_ROW_UNDECLARED,
+        `'${statement.callee}' is a plugin that hasn't declared what it does, so it can only run as an extraction stage — ${stage}.`,
+        statement.span,
+      );
+      return true;
+    }
+    if (spec.fedByExtraction === true) {
+      this.report(
+        DiagnosticCodes.PLUGIN_FED_BY_EXTRACTION,
+        `'${statement.callee}' runs on what an extraction gives it and takes nothing of its own, so it only makes sense as a stage of one — ${stage}.`,
+        statement.span,
+      );
+      return true;
+    }
+    if (spec.output === undefined) {
+      this.report(
+        DiagnosticCodes.PLUGIN_OUTPUT_UNDECLARED,
+        `'${statement.callee}' is a plugin that hasn't declared what it hands back, so there is nothing to bind — it can only run as an extraction stage, where its output goes to the extractor: ${stage}.`,
+        statement.span,
+      );
+      return true;
+    }
+    // A stage gets this argument fed to it; a plain call has no stage behind
+    // it, so the author writes what the extraction would have written.
+    const unfed = (spec.fedArgs ?? []).filter(
+      fed => fed.required === true && !supplied.has(fed.name),
+    );
+    if (unfed.length > 0) {
+      this.report(
+        DiagnosticCodes.PLUGIN_FED_BY_EXTRACTION,
+        `'${statement.callee}' is missing ${unfed.length === 1 ? 'the argument' : 'the arguments'} ${unfed.map(fed => `'${fed.name}'`).join(', ')} — inside a 'through [ … ]' the extraction supplies ${unfed.length === 1 ? 'it' : 'them'}, so a call on its own has to say ${unfed.length === 1 ? 'it' : 'them'} (\`${statement.callee}(${unfed.map(fed => `${fed.name}: …`).join(', ')})\`).`,
+        statement.span,
+      );
+      return true;
+    }
+    return false;
   }
 
   // ── Expression slots ──
@@ -8306,6 +8377,16 @@ class Checker {
             DiagnosticCodes.NAME_UNRESOLVED,
             `'${name}' is not in scope — import it and construct an instance first: `
               + `import { ${name} } from adapters, then '<name> = ${this.constructionCall(name)}'`,
+            span,
+          );
+          return;
+        }
+        // Same story one namespace over: the plugin exists, the import line
+        // doesn't. A plugin needs no construction, so that is the whole fix.
+        if (this.catalog.plugin(name) !== undefined) {
+          this.report(
+            DiagnosticCodes.NAME_UNRESOLVED,
+            `'${name}' is a plugin — import it: import { ${name} } from plugins`,
             span,
           );
           return;

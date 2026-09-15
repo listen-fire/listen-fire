@@ -116,6 +116,24 @@ export const WEB_RESEARCH_SIGNATURE: TransformSignature = {
       },
     },
   },
+  // Both halves of what it did: the address it settled on, and the page it
+  // fetched from there. Either can be missing — a record that already carried a
+  // link makes this stand down, and a search that found nothing fetches nothing.
+  output: {
+    kind: 'record',
+    fields: {
+      website: {
+        type: { kind: 'string' },
+        optional: true,
+        description: "The company's own web address, as found.",
+      },
+      text: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The text of the page it fetched from that address.',
+      },
+    },
+  },
 };
 
 export const WEB_RESEARCH_PLUGIN_MANIFEST: PluginManifest = {

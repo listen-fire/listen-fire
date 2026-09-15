@@ -367,6 +367,13 @@ export type NodeEdge =
 export type Binding =
   /** The movement parameter — the trigger's event position. */
   | { kind: 'event' }
+  /**
+   * `import { fetch_url } from plugins` — the name of a plugin, which is a
+   * function whose body isn't visible. Nothing runs at the import; the name
+   * exists so a CALL on it can be told apart from a call on a movement, which
+   * is the same distinction the checker's scope makes.
+   */
+  | { kind: 'plugin'; plugin: string }
   /** `crm = attio(credentials: acme_main)`. Carries the catalog's
    *  instance schema so borrowed type annotations
    *  (`crm.companies.funding_stage`) resolve live at extraction time
@@ -535,6 +542,7 @@ export const describeBinding: Record<Binding['kind'], string> = {
   nodePosition: 'a synthesised node',
   lazyWalk: 'a deferred traversal',
   callback: 'a callback',
+  plugin: 'a plugin',
   opaque: 'an import',
 };
 
@@ -919,8 +927,10 @@ export type MovementTraceEntry =
        */
       kind: 'plugin';
       plugin: string;
-      /** The node whose entity the invocation ran for. */
-      node: string;
+      /** The node whose entity the invocation ran for. ABSENT for a PLAIN call
+       *  (`page = fetch_url(url: …)`) — there is no extraction and so no node,
+       *  which is the one thing that tells the two forms apart on a trace. */
+      node?: string;
       /** The URL the invocation was pointed at, when it took one as an
        *  argument — a fetch that ran to its timeout is identifiable by this
        *  plus `durationMs`. Truncated. */
@@ -940,6 +950,15 @@ export type MovementTraceEntry =
        *  the engine only carries them, so a new plugin is readable on the
        *  trace without the engine learning its words. */
       outcome?: string;
+      /**
+       * What the CALL handed back — a plain call only. The plugin's own
+       * `outcome` says what it made of the work; this says what the LANGUAGE
+       * got, which is the fact a reader needs when the next statement did
+       * nothing: an absent value and a record of empty fields are different
+       * things and look identical otherwise. A stage hands nothing to a name,
+       * so it never carries one.
+       */
+      returned?: 'value' | 'absent';
     }
   /**
    * One `READ(file)` — the file it was pointed at, and either how much text

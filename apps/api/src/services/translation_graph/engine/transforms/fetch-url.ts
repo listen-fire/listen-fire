@@ -84,6 +84,16 @@ export const FETCH_URL_SIGNATURE: TransformSignature = {
       },
     },
   },
+  // Called plainly, what it hands back is the page's text — and nothing, when
+  // the load failed or the page was empty. One value: the other three things on
+  // the edge (the name, the url, the file) are what an EXTRACTOR reads, and a
+  // caller who wanted the url already has it, because they passed it.
+  output: {
+    kind: 'value',
+    type: { kind: 'string' },
+    optional: true,
+    description: "The page's text. Nothing when the load failed or the page was empty.",
+  },
 };
 
 export const FETCH_URL_PLUGIN_MANIFEST: PluginManifest = {

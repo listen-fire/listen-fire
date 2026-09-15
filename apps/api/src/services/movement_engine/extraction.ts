@@ -71,11 +71,12 @@ import { selectModel } from '../translation_graph/engine/batched_extraction/sche
 import { extractionSettings, type TierCallSettings } from './ai_tiers';
 import { getTransform } from '../translation_graph/engine/transforms/registry';
 import type {
+  TransformImpl,
   TransformInput,
   TransformOutput,
 } from '../translation_graph/engine/transforms/registry';
 import { logger } from '../logger';
-import { makeEphemeralPosition } from '../translation_graph/types';
+import { makeEphemeralPosition, type TransformOutputShape } from '../translation_graph/types';
 import type { FileRef, Resource } from '../translation_graph/adapter';
 import { isFileRef } from '../translation_graph/engine/files/retrieve';
 import { stampResourceId } from '../translation_graph/engine/files/resources';
@@ -295,6 +296,13 @@ export interface TransformInvocationResult {
   outcome?: string;
 }
 
+/** A plugin by either spelling: movement identifiers can't carry dashes, so a
+ *  program writes `vc_url_retrieval` for a transform registered as
+ *  `vc-url-retrieval`. */
+function transformFor(plugin: string): TransformImpl | undefined {
+  return getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-'));
+}
+
 export interface MovementTransformInvoker {
   invoke(input: {
     plugin: string;
@@ -303,6 +311,18 @@ export interface MovementTransformInvoker {
     /** The entity's extracted fields so far (working fields included). */
     extractedContext: Record<string, unknown>;
   }): Promise<TransformInvocationResult>;
+  /**
+   * What a PLAIN call to this plugin hands back — the plugin's own declaration,
+   * the same one the checker typed the call against. The engine asks because
+   * `invoke`'s two channels (the text it fetched, the properties it attached)
+   * carry everything a plugin can produce, and the declaration is what says
+   * which of them the bound name IS.
+   *
+   * Absent (or undefined for this plugin) ⇒ the plugin never declared one, so a
+   * plain call should not have got past the checker; the engine refuses rather
+   * than guessing. A `through [ … ]` stage never asks.
+   */
+  declaredOutput?(plugin: string): TransformOutputShape | undefined;
 }
 
 /**
@@ -313,8 +333,11 @@ export interface MovementTransformInvoker {
  * the underscore spelling resolves too (`vc_url_retrieval`).
  */
 export const registryTransformInvoker: MovementTransformInvoker = {
+  declaredOutput(plugin): TransformOutputShape | undefined {
+    return transformFor(plugin)?.signature.output;
+  },
   async invoke({ plugin, config, extractedContext }): Promise<TransformInvocationResult> {
-    const impl = getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-'));
+    const impl = transformFor(plugin);
     if (!impl) {
       logger.warn('[movement:transform] no such plugin — skipping', { plugin, ...runFields() });
       return {};
@@ -977,7 +1000,7 @@ export async function materializeExtract(input: {
 class Materializer {
   private siteCounter = 0;
   /** The extract's source text — what `from [...]` resolved to. Auto-fed to a
-   *  plugin's `auto` params (e.g. vc_url_retrieval's `content`), so the author
+   *  plugin's `auto` params (e.g. vc_url_retrieval's `text`), so the author
    *  writes `through [vc_url_retrieval]` with no argument. */
   private sourceText = '';
   /** The extraction's tier, as its author wrote it. Statement-level: every
@@ -1732,10 +1755,10 @@ class Materializer {
         config[arg.name] = (await this.runtime.evalSlot(arg.value)).value;
       }
     }
-    // Engine-injected `auto` params (e.g. vc_url_retrieval's `content`): fed
+    // Engine-injected `auto` params (e.g. vc_url_retrieval's `text`): fed
     // from the extract source text, not author-supplied. Done last so the
     // author can't override them.
-    const impl = getTransform(plugin.plugin) ?? getTransform(plugin.plugin.replace(/_/g, '-'));
+    const impl = transformFor(plugin.plugin);
     for (const param of impl?.signature.params ?? []) {
       if (param.auto) config[param.name] = this.sourceText;
     }
@@ -1795,7 +1818,7 @@ function firstIssue(error: z.ZodError): string {
 }
 
 /** A URL as the trace carries it — bounded like every other traced value. */
-function tracedUrl(url: string): string {
+export function tracedUrl(url: string): string {
   return url.length > TRACE_URL_CHARS ? `${url.slice(0, TRACE_URL_CHARS)}…` : url;
 }
 
