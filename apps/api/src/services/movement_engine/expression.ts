@@ -81,6 +81,7 @@ import {
   coerceToNumber,
   FILE_FUNCTION_ID,
   POSITION_SENTINEL,
+  READ_FUNCTION_ID,
   refinementKey,
   stdlibFunctionById,
 } from 'movement-lang';
@@ -123,8 +124,10 @@ import type {
   ActingUser,
   ActorIdentity,
   Adapter,
+  FileRef,
   Resource,
 } from '../translation_graph/adapter';
+import { isFileRef } from '../translation_graph/engine/files/retrieve';
 import { resolveActingUser } from '../translation_graph/adapters/acting_user/resolve';
 import type { TriggerEvent } from '../translation_graph/triggers/types';
 import type { LlmClient } from '../translation_graph/engine/batched_extraction';
@@ -690,6 +693,15 @@ export interface MovementExprContext {
    */
   renderFile?: RenderFileArtifact;
   /**
+   * The `READ(file)` seam — resolves a `FileRef` to its extracted text (the
+   * same one the extraction's file sources go through, so a file read either
+   * way is read once the same way). Wired by the interpreter; absent in ad-hoc
+   * evaluations, where READ fails loud rather than quietly answering absent —
+   * "nothing was configured to read it" and "the file had no text" are
+   * different facts, and only one of them is the author's.
+   */
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResolution>;
+  /**
    * The run's observability trace — decision points append entries so a
    * run that writes nothing can still explain itself (AI() outcomes,
    * gate decisions, event-field reads that miss). Shared by reference
@@ -718,6 +730,38 @@ export type ExtractionTraceFile = { name?: string; contentType?: string } & (
   | { chars: number; truncatedFrom?: number }
   | { unreadable: FileUnreadableReason; detail?: string }
 );
+
+/**
+ * The extracted text of a source `FileRef`, plus the link back to the
+ * stored copy. Mirrors the knowledge pipeline: bytes → OCR/text → RawText
+ * → a stable id the field evidence can reference.
+ */
+export interface FileTextResult {
+  text: string;
+  /** The `RawText` row the text was deduped/stored into (provenance link). */
+  rawTextId?: string;
+}
+
+/** A source file the seam could not turn into text, and why — the sentence a
+ *  run needs so "extracted nothing" and "could not read the attachment" stop
+ *  looking identical. `detail` carries the underlying extractor's own message
+ *  (e.g. the OCR-not-configured sentence). */
+export interface FileUnreadable {
+  unreadable: FileUnreadableReason;
+  detail?: string;
+}
+
+/** What the `resolveFileText` seam answers with: the file's text, or the
+ *  reason there is none. Never a bare absence — a file that was there and
+ *  could not be read has to be able to say so. Two callers share it: the
+ *  extraction's `from [ … ]` file sources, and the `READ(file)` built-in. */
+export type FileTextResolution = FileTextResult | FileUnreadable;
+
+export function isFileUnreadable(
+  resolution: FileTextResolution,
+): resolution is FileUnreadable {
+  return 'unreadable' in resolution;
+}
 
 /**
  * One recorded decision point of a firing. Persisted onto the trigger
@@ -881,6 +925,19 @@ export type MovementTraceEntry =
        *  trace without the engine learning its words. */
       outcome?: string;
     }
+  /**
+   * One `READ(file)` — the file it was pointed at, and either how much text
+   * came back or why none did. The LANGUAGE says only `text | absent`, because
+   * no absence in it carries a reason; this is where the reason lives, so a
+   * movement that read an attachment and got nothing can say whether the file
+   * was of a type nothing reads, unreachable, or simply empty.
+   *
+   * The shape is the extraction's per-file entry verbatim, so a file read
+   * through `READ` and a file read as an `extract from [ … ]` source report
+   * identically. `truncatedFrom` never appears on one of these: READ does not
+   * truncate — the per-file ceiling belongs to what reaches a PROMPT.
+   */
+  | ({ kind: 'read' } & ExtractionTraceFile)
   | { kind: 'ai'; prompt: string; hasValue: boolean }
   | { kind: 'gate'; outcome: boolean }
   | { kind: 'block'; root: string; positions: number };
@@ -1218,6 +1275,7 @@ export async function evalMovementExpr(
       // seam; the FileRef carries the content's trail (a render is a
       // transformation: union survives, `direct` drops).
       if (expr.fn === FILE_FUNCTION_ID) return evaluateFileFunction(expr, ctx);
+      if (expr.fn === READ_FUNCTION_ID) return evaluateReadFunction(expr, ctx);
 
       // Namespaced stdlib calls (the bridge folds `CURRENCY.FN(…)` to a
       // dotted `fn` id) — deterministic implementations from the shared
@@ -1742,6 +1800,78 @@ async function evaluateFileFunction(
   return {
     value: ref,
     provenance: transformed(unionProvenance([content.provenance, typeResult.provenance])),
+  };
+}
+
+// ── READ() (the file→text built-in, on the file_text seam) ──────────────────
+
+/**
+ * `READ(<file>)` — a file's text, or absent. The seam is the extraction's
+ * (`./file_text.ts`): resolve the FileRef's own bytes, run the text extractor
+ * (a PDF's text layer, OCR, a deck, a sheet, a transcript), and dedup-store
+ * the result so the text has a stable id.
+ *
+ * Absence in this language carries no reason, so neither does this one: an
+ * unreadable file yields `absent` and the reason goes on the run's trace. The
+ * value that DOES come back carries a `file` origin — the same origin the
+ * extraction stamps for a file source — so `extract from [READ(f)]` still
+ * traces its evidence to the attachment, `rawTextId` and all.
+ */
+async function evaluateReadFunction(
+  expr: Extract<Expression, { type: 'function' }>,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
+  const [fileArg] = expr.args;
+  if (!fileArg) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      'READ(file) expects one argument — the checker should have caught this',
+    );
+  }
+  const file = await evalMovementExpr(fileArg, ctx);
+  // The argument may itself be absent (`file | absent` types fine). Reading
+  // nothing is nothing — the seam is never asked.
+  if (file.value == null) return { value: null, provenance: transformed(file.provenance) };
+  if (!isFileRef(file.value)) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `READ() reads a file, and this is ${typeof file.value} — the checker should have caught this`,
+    );
+  }
+  if (!ctx.resolveFileText) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      "READ() has nothing in scope that can read a file's bytes — this expression is being evaluated outside a run",
+    );
+  }
+  const ref: FileRef = file.value;
+  const named = {
+    ...(ref.name !== undefined ? { name: ref.name } : {}),
+    ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+  };
+  const result = await ctx.resolveFileText(ref);
+  if (isFileUnreadable(result)) {
+    ctx.trace?.push({
+      kind: 'read',
+      ...named,
+      unreadable: result.unreadable,
+      ...(result.detail !== undefined ? { detail: result.detail } : {}),
+    });
+    return { value: null, provenance: transformed(file.provenance) };
+  }
+  ctx.trace?.push({ kind: 'read', ...named, chars: result.text.length });
+  const origin: ProvenanceOrigin = {
+    kind: 'file',
+    ...(result.rawTextId !== undefined ? { rawTextId: result.rawTextId } : {}),
+    ...(ref.source?.handle !== undefined ? { handle: ref.source.handle } : {}),
+    ...named,
+  };
+  return {
+    value: result.text,
+    // The text IS the file, un-transformed — a quote out of it cites the
+    // attachment faithfully — so the file origin is `direct`; the handle's own
+    // trail rides along as taint.
+    provenance: { ...unionProvenance([file.provenance, fromOrigin(origin)]), direct: origin },
   };
 }
 
@@ -3132,6 +3262,7 @@ export function isMovementBuiltinFunction(fn: string): boolean {
   return (
     INTERPRETED_FUNCTIONS.has(fn) ||
     fn === FILE_FUNCTION_ID ||
+    fn === READ_FUNCTION_ID ||
     stdlibFunctionById(fn) !== undefined
   );
 }

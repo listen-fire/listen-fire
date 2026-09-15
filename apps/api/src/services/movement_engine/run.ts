@@ -1432,6 +1432,7 @@ class Interpreter {
    *  resolution would. */
   private declaredTypes: Map<string, FieldType> = new Map();
   private defaultLlm?: LlmClient;
+  private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in
    *  place by the evaluator's meta resolvers — one chain per run). */
   private readonly actingUserCache: MovementMetaContext['actingUserCache'] = {};
@@ -4905,7 +4906,7 @@ class Interpreter {
         llm: this.llmClient(),
         transformInvoker: this.input.transformInvoker ?? registryTransformInvoker,
         evalSlot: (slot) => this.evaluateSlot(slot, { env }),
-        resolveFileText: this.input.resolveFileText ?? makeFileTextResolver(),
+        resolveFileText: this.fileTextResolver(),
         trace: this.trace,
       },
     });
@@ -4925,6 +4926,14 @@ class Interpreter {
     if (this.input.llm) return this.input.llm;
     this.defaultLlm ??= makeAnthropicLlmClient();
     return this.defaultLlm;
+  }
+
+  /** The one file→text seam for the whole run — an `extract from [ … ]` file
+   *  source and a `READ(file)` in an expression read a file the same way. */
+  private fileTextResolver(): (ref: FileRef) => Promise<FileTextResolution> {
+    if (this.input.resolveFileText) return this.input.resolveFileText;
+    this.defaultFileTextResolver ??= makeFileTextResolver();
+    return this.defaultFileTextResolver;
   }
 
   // ── Traversal-headed blocks ──
@@ -7791,6 +7800,7 @@ class Interpreter {
           iteration.landing !== undefined ? [iteration.landing] : [],
         ),
       llm: this.llmClient(),
+      resolveFileText: this.fileTextResolver(),
       trace: this.trace,
       // `@<key>` resolution — the dispatch context the frozen engine's
       // resolveMetaKey reads, with the run-wide actor caches. The bag
