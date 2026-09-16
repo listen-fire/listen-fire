@@ -21,6 +21,7 @@ const CREDENTIAL_TYPE_OPTIONS = [
   { label: "Airtable", value: ExternalServiceType.AIRTABLE, icon: typeIcon(ExternalServiceType.AIRTABLE) },
   { label: "Attio", value: ExternalServiceType.ATTIO, icon: typeIcon(ExternalServiceType.ATTIO) },
   { label: "Listen-Fire Valuations", value: ExternalServiceType.NATIVE_VALUATIONS, icon: typeIcon(ExternalServiceType.NATIVE_VALUATIONS) },
+  { label: "Dealroom", value: ExternalServiceType.DEALROOM, icon: typeIcon(ExternalServiceType.DEALROOM) },
   { label: "Dropbox", value: ExternalServiceType.DROPBOX, icon: typeIcon(ExternalServiceType.DROPBOX) },
   { label: "Evertrace", value: ExternalServiceType.EVERTRACE, icon: typeIcon(ExternalServiceType.EVERTRACE) },
   { label: "Gmail", value: ExternalServiceType.GOOGLE_GMAIL, icon: typeIcon(ExternalServiceType.GOOGLE_GMAIL) },
@@ -232,6 +233,7 @@ export function IntegrationModal({
   const [affinityApiKey, setAffinityApiKey] = useState("");
   const [granolaApiKey, setGranolaApiKey] = useState("");
   const [evertraceApiKey, setEvertraceApiKey] = useState("");
+  const [dealroomApiKey, setDealroomApiKey] = useState("");
   const [attioAccessToken, setAttioAccessToken] = useState("");
   // Listen-Fire Valuations auto-mints its api-key server-side. The user only
   // provides an optional Base URL override (empty = use env default).
@@ -264,6 +266,7 @@ export function IntegrationModal({
     setAffinityApiKey("");
     setGranolaApiKey("");
     setEvertraceApiKey("");
+    setDealroomApiKey("");
     setAttioAccessToken("");
     setValuationsBaseUrl("");
     setClaimToken(null);
@@ -284,6 +287,7 @@ export function IntegrationModal({
     (type === ExternalServiceType.AFFINITY && !!affinityApiKey) ||
     (type === ExternalServiceType.GRANOLA && !!granolaApiKey) ||
     (type === ExternalServiceType.EVERTRACE && !!evertraceApiKey) ||
+    (type === ExternalServiceType.DEALROOM && !!dealroomApiKey) ||
     (attioKeyEntry && !!attioAccessToken) ||
     // Valuations needs no user-supplied credential — clicking save mints one.
     type === ExternalServiceType.NATIVE_VALUATIONS ||
@@ -314,6 +318,13 @@ export function IntegrationModal({
           await updateCredential({ id: existing.id, name: name.trim(), type, credentials: { apiKey: evertraceApiKey } });
         } else {
           await addCredential({ name: name.trim(), type, credentials: { apiKey: evertraceApiKey } });
+        }
+      } else if (type === ExternalServiceType.DEALROOM) {
+        if (!dealroomApiKey) return;
+        if (existing) {
+          await updateCredential({ id: existing.id, name: name.trim(), type, credentials: { apiKey: dealroomApiKey } });
+        } else {
+          await addCredential({ name: name.trim(), type, credentials: { apiKey: dealroomApiKey } });
         }
       } else if (attioKeyEntry) {
         if (!attioAccessToken) return;
@@ -448,6 +459,25 @@ export function IntegrationModal({
             />
             <p className="mt-1 text-[11px] text-gray-400">
               Evertrace → API access → your key
+            </p>
+          </div>
+        )}
+
+        {/* Dealroom — API key input */}
+        {type === ExternalServiceType.DEALROOM && (
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-gray-600">
+              API Key
+            </label>
+            <input
+              type="text"
+              value={dealroomApiKey}
+              onChange={(e) => setDealroomApiKey(e.target.value)}
+              placeholder="API Key..."
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-gray-400">
+              Dealroom → account settings → API
             </p>
           </div>
         )}

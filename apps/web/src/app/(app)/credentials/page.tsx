@@ -49,6 +49,7 @@ const TYPE_LABELS: Record<string, string> = {
   AIRTABLE: "Airtable",
   ATTIO: "Attio",
   NATIVE_VALUATIONS: "Listen-Fire Valuations",
+  DEALROOM: "Dealroom",
   DROPBOX: "Dropbox",
   EVERTRACE: "Evertrace",
   GOOGLE: "Google Drive",

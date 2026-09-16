@@ -22,6 +22,7 @@ import { dropboxCredsParser } from '../../../adapters/dropbox/authClient';
 import { nativeValuationsCredsParser } from '../../../services/translation_graph/adapters/native_valuations';
 import { granolaCredsParser } from '../../../services/credentials/connect_form_spec';
 import { evertraceCredsParser } from '../../../adapters/evertrace/apiClient';
+import { dealroomCredsParser } from '../../../adapters/dealroom/apiClient';
 import { credentialLifecycle } from '../../../services/credentials/credential_lifecycle';
 import { persistCredential } from '../../../services/credentials/persist_credential';
 import { intrinsicProvisionerForType } from '../../../services/credentials/intrinsic_provision';
@@ -124,6 +125,10 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
               type: z.literal(ExternalServiceType.EVERTRACE),
               credentials: evertraceCredsParser,
             }),
+            z.object({
+              type: z.literal(ExternalServiceType.DEALROOM),
+              credentials: dealroomCredsParser,
+            }),
             // The intrinsic types — we own both ends of the auth. The caller
             // supplies no key; the server mints one with the right scope,
             // registers it for echo suppression, and stores the plaintext
@@ -223,6 +228,10 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
             z.object({
               type: z.literal(ExternalServiceType.EVERTRACE),
               credentials: evertraceCredsParser,
+            }),
+            z.object({
+              type: z.literal(ExternalServiceType.DEALROOM),
+              credentials: dealroomCredsParser,
             }),
             // NATIVE_VALUATIONS updates never rotate the api-key (re-mint
             // means a stale platform_owned_token entry — handled by

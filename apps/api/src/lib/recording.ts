@@ -25,6 +25,7 @@ const fakeBaseUrlByService: Record<string, string> = {
   AIRTABLE: `${FAKE_CHANNELS_URL}/airtable`,
   GRANOLA: `${FAKE_CHANNELS_URL}/granola`,
   EVERTRACE: `${FAKE_CHANNELS_URL}/evertrace`,
+  DEALROOM: `${FAKE_CHANNELS_URL}/dealroom`,
   WEBHOOK: `${FAKE_CHANNELS_URL}/webhook`,
 };
 

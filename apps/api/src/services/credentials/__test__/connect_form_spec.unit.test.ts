@@ -60,6 +60,7 @@ describe('connect_form_spec', () => {
       ExternalServiceType.ATTIO,
       ExternalServiceType.GRANOLA,
       ExternalServiceType.EVERTRACE,
+      ExternalServiceType.DEALROOM,
     ]) {
       const spec = connectFormSpecForType(type)!;
       expect(spec.guide?.length ?? 0).toBeGreaterThan(0);
@@ -70,6 +71,13 @@ describe('connect_form_spec', () => {
     const spec = connectFormSpecForType(ExternalServiceType.EVERTRACE)!;
     expect(spec.fields.map((f) => f.name)).toEqual(['apiKey', 'baseUrl']);
     expect(spec.parse({ apiKey: ' sk_live_x ', baseUrl: '' })).toEqual({ apiKey: 'sk_live_x' });
+    expect(() => spec.parse({ apiKey: '  ' })).toThrow();
+  });
+
+  it('renders the Dealroom form as a secret key plus an optional base URL', () => {
+    const spec = connectFormSpecForType(ExternalServiceType.DEALROOM)!;
+    expect(spec.fields.map((f) => f.name)).toEqual(['apiKey', 'baseUrl']);
+    expect(spec.parse({ apiKey: ' dr_key ', baseUrl: '' })).toEqual({ apiKey: 'dr_key' });
     expect(() => spec.parse({ apiKey: '  ' })).toThrow();
   });
 
