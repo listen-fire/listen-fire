@@ -366,8 +366,32 @@ export interface DeferredWalk {
  * walk, and every read of the edge runs it again against the live source.
  */
 export type NodeEdge =
-  | { kind: 'landed'; landings: Binding[] }
+  | {
+      kind: 'landed';
+      landings: Binding[];
+      /** The nested edges every landing the RUN BUILDS on this edge starts
+       *  with — present only where the edge was declared by a node
+       *  declaration, which is the only thing that says what a landing
+       *  carries. A landing that came from somewhere else (a linked handle, a
+       *  traversed position) brings its own edges and this says nothing about
+       *  it. */
+      landingShape?: LocalLandingShape;
+    }
   | { kind: 'deferred'; walk: DeferredWalk };
+
+/**
+ * The nested nodes a declared landing carries, as a tree — `{ founder: {
+ * profile: {} } }` for a declaration that nests twice.
+ *
+ * A node declaration IS a tree, so a landing written into one of its edges is a
+ * whole node of that shape: it carries the declaration's nested nodes as empty
+ * appendable edges, and each of those carries its own. Nothing here is a type —
+ * the landing type is a checker-side fact — only the NAMES the run has to mint
+ * an edge for, so a `link` has somewhere to append.
+ */
+export interface LocalLandingShape {
+  [edge: string]: LocalLandingShape;
+}
 
 /**
  * One Environment binding. The instance binding carries construction

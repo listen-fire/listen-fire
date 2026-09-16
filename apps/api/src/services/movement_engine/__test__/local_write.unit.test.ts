@@ -174,6 +174,16 @@ const PRELUDE = [
   '  summary: <text>',
   '}',
   '',
+  // A declaration is a TREE, and a landing written into an `<Entry>` edge is an
+  // Entry — so it carries `founder` the way the literal carries `entries`.
+  'node Entry {',
+  '  name: <text>',
+  '  node founder {',
+  '    first: <text>',
+  '    last: <text>',
+  '  }',
+  '}',
+  '',
 ].join('\n');
 
 function webhookEvent(payload: Record<string, unknown>): TriggerEvent {
@@ -182,12 +192,22 @@ function webhookEvent(payload: Record<string, unknown>): TriggerEvent {
 
 /** The movement body, wrapped — every case declares the same deduping node. */
 function run(body: string[], adapters: { email: Adapter; attio: Adapter }) {
+  return runWith('  deduped = node { companies: <Company> }', body, adapters);
+}
+
+/** The same wrapper with the deduping node spelled by the caller — the nested
+ *  cases dedupe `<Entry>`, which carries an edge of its own. */
+function runWith(
+  declaration: string,
+  body: string[],
+  adapters: { email: Adapter; attio: Adapter },
+) {
   const source =
     PRELUDE +
     [
       'movement intake(msg: <inbox-[:message]->>) {',
       '  crm = attio(credentials: acme_main)',
-      '  deduped = node { companies: <Company> }',
+      declaration,
       ...body,
       '}',
     ].join('\n');
@@ -422,5 +442,103 @@ describe('the row the firing log gets', () => {
       { email: email.adapter, attio: attio.adapter },
     );
     expect(attio.creates.map((w) => w.fields)).toEqual([{ name: 'Acme' }]);
+  });
+});
+
+// A landing written into a shape-typed edge is a whole node of that shape, so
+// the edges the declaration nested on it are there to grow — empty at the
+// create, appended in program order by `link`, and read back by an ordinary
+// two-hop traversal. A MERGE writes into the landing already there, which is
+// what keeps the founders an earlier write linked.
+describe('the nested edges a written landing carries', () => {
+  const NESTED = '  deduped = node { entries: <Entry> }';
+
+  /** The two hops, read back into real writes — the only honest way to see
+   *  what is on the nested edge, and in what order. */
+  const READ_FOUNDERS = [
+    '  deduped-[x:entries]-> {',
+    '    x-[f:founder]-> {',
+    '      write crm-[:companies]-> { name: f.`first`, summary: f.`last` }',
+    '    }',
+    '  }',
+  ];
+
+  it('link appends to the nested edge, and the traversal reads them in link order', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    await runWith(
+      NESTED,
+      [
+        '  h = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  jane = node { first: "Jane", last: "Doe" }',
+        '  john = node { first: "John", last: "Roe" }',
+        '  link h -[:founder]-> jane',
+        '  link h -[:founder]-> john',
+        ...READ_FOUNDERS,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    expect(attio.creates.map((w) => w.fields)).toEqual([
+      { name: 'Jane', summary: 'Doe' },
+      { name: 'John', summary: 'Roe' },
+    ]);
+  });
+
+  it('a merged write keeps the first landing’s founders, and new links append to them', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    const result = await runWith(
+      NESTED,
+      [
+        '  first = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  jane = node { first: "Jane", last: "Doe" }',
+        '  link first -[:founder]-> jane',
+        '  again = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  john = node { first: "John", last: "Roe" }',
+        '  link again -[:founder]-> john',
+        ...READ_FOUNDERS,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    // ONE entry, and the second write's handle IS the first landing — so the
+    // founders accumulate on it rather than the second link landing nowhere.
+    expect(result.writes.filter((w) => w.local !== undefined).map((w) => w.outcome)).toEqual([
+      'create',
+      'noop',
+    ]);
+    expect(attio.creates.map((w) => w.fields)).toEqual([
+      { name: 'Jane', summary: 'Doe' },
+      { name: 'John', summary: 'Roe' },
+    ]);
+  });
+
+  it('a write into the nested edge builds there, and merges by its own identity', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    await runWith(
+      NESTED,
+      [
+        '  h = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  write h-[:founder]-> { unique by (`first`)',
+        '    first: "Jane"',
+        '    last: "Doe"',
+        '  }',
+        '  write h-[:founder]-> { unique by (`first`)',
+        '    first: "Jane"',
+        '    last ?: "ignored"',
+        '  }',
+        ...READ_FOUNDERS,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    expect(attio.creates.map((w) => w.fields)).toEqual([{ name: 'Jane', summary: 'Doe' }]);
   });
 });

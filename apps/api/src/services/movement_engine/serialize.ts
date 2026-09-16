@@ -43,6 +43,7 @@ import type {
   DeferredWalk,
   Environment,
   HandleGraph,
+  LocalLandingShape,
   NodeEdge,
   SourceRead,
   WriteRecord,
@@ -148,7 +149,11 @@ export type BindingDescriptor =
   | { kind: 'opaque'; what: string; name: string };
 
 export type NodeEdgeDescriptor =
-  | { kind: 'landed'; landings: BindingDescriptor[] }
+  /** `landingShape` rides across because it is what a write AFTER the resume
+   *  mints its landing's edges from — dropping it would make the same write
+   *  build a landing with no nested edges, which a later `link` could not
+   *  append to. */
+  | { kind: 'landed'; landings: BindingDescriptor[]; landingShape?: LocalLandingShape }
   | { kind: 'deferred'; walk: DeferredWalkDescriptor };
 
 /**
@@ -339,7 +344,11 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       for (const [name, edge] of Object.entries(binding.edges)) {
         edges[name] =
           edge.kind === 'landed'
-            ? { kind: 'landed', landings: edge.landings.map(serializeBinding) }
+            ? {
+                kind: 'landed',
+                landings: edge.landings.map(serializeBinding),
+                ...(edge.landingShape !== undefined ? { landingShape: edge.landingShape } : {}),
+              }
             : { kind: 'deferred', walk: serializeDeferredWalk(edge.walk) };
       }
       return {
@@ -522,6 +531,7 @@ export async function rehydrateBinding(
             ? {
                 kind: 'landed',
                 landings: await Promise.all(edge.landings.map((l) => rehydrateBinding(l, ctx))),
+                ...(edge.landingShape !== undefined ? { landingShape: edge.landingShape } : {}),
               }
             : { kind: 'deferred', walk: await rehydrateDeferredWalk(edge.walk, ctx) };
       }
