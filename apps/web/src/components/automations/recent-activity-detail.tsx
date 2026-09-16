@@ -53,6 +53,12 @@ type TraceEntry =
       fallback?: "kept_previous_stage";
       /** Present when the reading had to be asked for a second time. */
       retried?: string[];
+      /** The answer was too long to finish in one go, so it was asked to
+       *  carry on from where it stopped. What it never reached — the items at
+       *  the end of what it read — is simply not there, and nothing else in
+       *  the run says so. */
+      continued?: true;
+      continuations?: number;
       /** Kept only when something went wrong: the keys the reading came
        *  back under, and the head of it. */
       reply?: { why: string[]; keys: string[]; sample: string };
@@ -104,6 +110,11 @@ type TraceEntry =
       pieces: number;
       sizes: number[];
       unit: "chars";
+      /** How the pieces were sized: by characters, or by how many records
+       *  each one is expected to hold. Runs recorded before the second way
+       *  existed carry neither this nor the expectations below. */
+      mode?: "size" | "entities";
+      expectedEntities?: number[];
     }
   | { kind: "ai"; prompt: string; hasValue: boolean }
   | { kind: "gate"; outcome: boolean }
@@ -133,6 +144,10 @@ function traceSeverity(entry: TraceEntry): "warn" | "info" {
     // Not reading again for want of anything new is the engine working, not a
     // problem — the lookup that found nothing warns on its own line.
     if (entry.skipped === "no_enrichment") return "info";
+    // An answer that ran out of room is missing whatever it never reached,
+    // and the run looks entirely clean otherwise — this line is the only
+    // place that fact exists.
+    if (entry.continued) return "warn";
     if (entry.skipped || entry.failed || entry.retried) return "warn";
     const discarded = entry.dropped ?? entry.empty;
     if (discarded && Object.keys(discarded).length > 0) return "warn";
@@ -172,7 +187,11 @@ function describeTraceEntry(entry: TraceEntry): string {
         })
         .join(", ");
       const askedAgain = entry.retried ? " — asked again after an unusable answer" : "";
-      return `Extraction over ${entry.inputChars.toLocaleString()} characters${yields ? ` → ${yields}` : ""}${askedAgain}`;
+      const times = entry.continuations ?? 1;
+      const ranOn = entry.continued
+        ? ` The answer ran past its output ceiling and was continued ${times} time${times === 1 ? "" : "s"}; items near the end of the input may be missing — cut the input into pieces.`
+        : "";
+      return `Extraction over ${entry.inputChars.toLocaleString()} characters${yields ? ` → ${yields}` : ""}${askedAgain}${ranOn}`;
     }
     case "plugin": {
       if (entry.skippedParam && entry.node) {
@@ -205,9 +224,16 @@ function describeTraceEntry(entry: TraceEntry): string {
     }
     case "chunks": {
       if (entry.pieces === 0) return "Nothing to cut into pieces — the text was empty.";
-      const longest = Math.max(...entry.sizes);
       const piece = entry.pieces === 1 ? "piece" : "pieces";
-      return `Cut into ${entry.pieces.toLocaleString()} ${piece} of up to ${longest.toLocaleString()} characters.`;
+      const count = `Cut into ${entry.pieces.toLocaleString()} ${piece}`;
+      // Cut by expected records, the pieces are deliberately uneven, so their
+      // lengths explain nothing on their own — what they were cut ON does.
+      if (entry.mode === "entities" && entry.expectedEntities?.length) {
+        const most = Math.max(...entry.expectedEntities);
+        return `${count}, each expected to hold up to ${most.toLocaleString()} record${most === 1 ? "" : "s"}.`;
+      }
+      const longest = Math.max(...entry.sizes);
+      return `${count} of up to ${longest.toLocaleString()} characters.`;
     }
     case "ai": {
       const prompt =
