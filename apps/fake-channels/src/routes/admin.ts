@@ -30,6 +30,17 @@ export function adminRoutes(store: EntityStore): Router {
     res.json(entities.map((e) => ({ id: e.id, ...e.data })));
   });
 
+  // Delete one entity type's rows, leaving the rest of the service alone (no
+  // re-seed). What a request log needs: clear it, drive one movement, read back
+  // exactly the calls that movement made.
+  r.delete('/:service/:entityType/state', (req, res) => {
+    const { service, entityType } = req.params;
+    if (!SERVICES.includes(service)) return res.status(400).json({ error: `Unknown service: ${service}` });
+    const rows = store.list(service, entityType);
+    for (const row of rows) store.delete(service, entityType, row.id);
+    res.json({ ok: true, service, entityType, deleted: rows.length });
+  });
+
   // Delete all state for a service then re-seed defaults
   r.delete('/:service/state', (req, res) => {
     const { service } = req.params;

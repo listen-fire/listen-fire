@@ -1180,6 +1180,191 @@ async function injectEvertraceListEntry(args: { list: string; signal?: string })
   };
 }
 
+interface DealroomInjectArgs {
+  /** Dealroom's own round label, e.g. "SERIES A" / "SEED". Matched
+   *  case-insensitively by the fake, as Dealroom's terms filter is. */
+  round?: string;
+  /** Which company raised — its Dealroom id, its path slug, or its name. */
+  company?: string;
+  /** Round size in `--currency` (millions are the unit Dealroom records). */
+  amount?: string;
+  currency?: string;
+  /** Investor ids/names/paths taking part; the first is the lead. Defaults to
+   *  the two the fake seeds first. */
+  investors?: string[];
+  /** Fire the poll WITHOUT seeding anything. What "the first poll after going
+   *  live emits nothing" looks like as a command: the fake already holds a
+   *  dozen rounds, and an honest poll returns none of them. */
+  noSeed?: boolean;
+}
+
+/** `"YYYY-MM-DD HH:mm:ss"` — the UTC timestamp format every Dealroom date
+ *  field and `created_utc_min` filter uses. */
+function dealroomTimestamp(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/**
+ * Seed a NEW funding round into the fake Dealroom API, then fire the team's
+ * dealroom POLL trigger IN-PROCESS — Dealroom has no inbound HTTP route, so
+ * this mirrors `evertrace`: it runs the real poll path (`pollTriggerNow` →
+ * getEvents → discriminate → dispatch → movement run) in the CLI process
+ * against the shared DB + fakes.
+ *
+ * The round carries a fresh NUMERIC id (the API types a round id as a number)
+ * and a `created_utc` of now, so it is always past the trigger's checkpoint and
+ * re-delivers on every inject. Its company and investors are existing seeded
+ * records, so the run's `Company` and `Investors` hops land on real rows.
+ *
+ * Run `pnpm dev:dealroom setup` first to provision the listener; give SETUP a
+ * `--round` to narrow the listen, then inject a different label to prove the
+ * excluded round produces nothing.
+ */
+async function injectDealroom(args: DealroomInjectArgs) {
+  const seed = await ensureDevLoopTeam();
+
+  if (args.noSeed === true) {
+    const idle = (await findTriggersByKind({ teamId: seed.teamId, kinds: ['dealroom'] })).filter(
+      (t) => t.movementId != null && t.runMode !== 'off',
+    );
+    if (idle.length === 0) {
+      return { seeded: false, error: 'No dealroom movement trigger — run `pnpm dev:dealroom setup` first.' };
+    }
+    const polled: unknown[] = [];
+    for (const t of idle) {
+      try {
+        polled.push({ triggerId: t.id, movement: t.name, ...(await pollTriggerNow({ triggerId: t.id })) });
+      } catch (err) {
+        polled.push({ triggerId: t.id, movement: t.name, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { seeded: false, results: polled };
+  }
+
+  const state = await fetch(`${FAKE_CHANNELS_URL}/admin/dealroom/state`);
+  if (!state.ok) {
+    throw new Error(`fake-channels dealroom state failed: ${state.status} ${await state.text()}`);
+  }
+  const grouped = (await state.json()) as Record<string, Record<string, unknown>[]>;
+  const companies = grouped.company ?? [];
+  const investors = grouped.investor ?? [];
+  const rounds = grouped.round ?? [];
+  if (companies.length === 0 || investors.length === 0) {
+    return { error: 'The fake Dealroom API has no companies/investors — run `pnpm dev:seed` first.' };
+  }
+
+  const pick = (rows: Record<string, unknown>[], needle: string | undefined, fallback: number) => {
+    if (needle === undefined) return rows[fallback] ?? rows[0];
+    const lower = needle.toLowerCase();
+    return (
+      rows.find((r) => String(r.id) === needle) ??
+      rows.find((r) => String(r.path ?? '').toLowerCase() === lower) ??
+      rows.find((r) => String(r.name ?? '').toLowerCase() === lower) ??
+      rows[fallback] ??
+      rows[0]
+    );
+  };
+
+  const company = pick(companies, args.company, 0);
+  const chosenInvestors =
+    args.investors && args.investors.length > 0
+      ? args.investors.map((needle) => pick(investors, needle, 0))
+      : [investors[0], investors[1]].filter(Boolean);
+
+  // A round id is a NUMBER over the wire, so a fresh one is the next integer —
+  // not a `dr-<timestamp>` string, which the client's schema would reject.
+  const nextId = String(
+    rounds.reduce((high, r) => Math.max(high, Number(r.id) || 0), 0) + 1,
+  );
+  const now = Date.now();
+  const createdUtc = dealroomTimestamp(now);
+  const date = createdUtc.slice(0, 10);
+  const label = args.round ?? 'SERIES A';
+  const amount = args.amount === undefined ? 12 : Number(args.amount);
+  const currency = args.currency ?? 'USD';
+
+  const round = {
+    id: nextId,
+    companyId: String(company.id),
+    date,
+    year: Number(date.slice(0, 4)),
+    month: Number(date.slice(5, 7)),
+    amount,
+    amount_source: Math.round(amount * 1_000_000),
+    currency,
+    round: label,
+    standardised_round_label: label,
+    valuation: null,
+    is_verified: true,
+    is_undisclosed: false,
+    news_source: null,
+    unknown_investors: [],
+    amount_eur_million: amount,
+    amount_usd_million: amount,
+    last_updated: `${createdUtc.replace(' ', 'T')}+00:00`,
+    last_updated_utc: createdUtc,
+    created_utc: createdUtc,
+  };
+
+  // The round and its investor join rows in one seed call — `round_investor` is
+  // its own row in the fake (nothing is duplicated between a round and its
+  // participants), and the first investor leads.
+  const entities = [
+    { entity_type: 'round', id: nextId, data: round },
+    ...chosenInvestors.map((investor, index) => ({
+      entity_type: 'round_investor',
+      id: `ri_inject_${nextId}_${investor.id}`,
+      data: { id: `ri_inject_${nextId}_${investor.id}`, roundId: nextId, investorId: String(investor.id), lead: index === 0 },
+    })),
+  ];
+  const seedRes = await fetch(`${FAKE_CHANNELS_URL}/admin/dealroom/seed`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ entities }),
+  });
+  if (!seedRes.ok) {
+    throw new Error(`fake-channels dealroom seed failed: ${seedRes.status} ${await seedRes.text()}`);
+  }
+
+  const triggers = (await findTriggersByKind({ teamId: seed.teamId, kinds: ['dealroom'] })).filter(
+    (t) => t.movementId != null && t.runMode !== 'off',
+  );
+  if (triggers.length === 0) {
+    return {
+      seededRoundId: nextId,
+      error:
+        'No dealroom movement trigger on the dev-loop team. Run `pnpm dev:dealroom setup` first ' +
+        '(it saves a movement with `listen to dr {} fire …`).',
+    };
+  }
+
+  // Fire the poll in-process for each dealroom trigger (forced — bypasses the
+  // interval gate). `eventCount: 0` is the honest answer when the listen's
+  // `rounds` filter excludes the label just seeded.
+  const results: unknown[] = [];
+  for (const t of triggers) {
+    try {
+      const out = await pollTriggerNow({ triggerId: t.id });
+      results.push({ triggerId: t.id, movement: t.name, ...out });
+    } catch (err) {
+      results.push({
+        triggerId: t.id,
+        movement: t.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return {
+    seededRoundId: nextId,
+    round: label,
+    createdUtc,
+    company: { id: company.id, name: company.name },
+    investors: chosenInvestors.map((i) => ({ id: i.id, name: i.name })),
+    results,
+  };
+}
+
 /**
  * Fire a synthetic KG mutation so a `listen to <graph> { type: "…" }` movement
  * dispatches. Resolves the node type by name (or id), picks an existing node of
@@ -2396,6 +2581,19 @@ async function main() {
     return;
   }
 
+  if (subcommand === 'dealroom') {
+    const out = await injectDealroom({
+      round: flags.round,
+      company: flags.company,
+      amount: flags.amount,
+      currency: flags.currency,
+      investors: flags.investors ? flags.investors.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+      noSeed: flags['no-seed'] === 'true',
+    });
+    printResult(out, PRETTY);
+    return;
+  }
+
   if (subcommand === 'callback' || subcommand === 'cb') {
     if (!flags['cb-id']) {
       console.error(
@@ -2440,7 +2638,7 @@ async function main() {
 
   console.error(`Unknown subcommand: ${subcommand}`);
   console.error(
-    'Available: raw, attio-webhook, airtable-webhook, slack-event, slack-interactivity, mailgun-email, resend-email, telegram-event, telegram-builtin, telegram-callback, telegram-start, whatsapp, cron, granola, evertrace, evertrace-list-entry, kg-mutation, callback',
+    'Available: raw, attio-webhook, airtable-webhook, slack-event, slack-interactivity, mailgun-email, resend-email, telegram-event, telegram-builtin, telegram-callback, telegram-start, whatsapp, cron, granola, evertrace, evertrace-list-entry, dealroom, kg-mutation, callback',
   );
   process.exit(2);
 }

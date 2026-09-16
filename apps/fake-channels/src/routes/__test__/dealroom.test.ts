@@ -233,3 +233,53 @@ test('dealroom: admin seed creates a round that appears in /transactions with cr
     await close();
   }
 });
+
+test('dealroom: every call is recorded in the request log, and one entity type clears on its own', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    await fetch(`${baseUrl}/dealroom/companies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...basicAuth() },
+      body: JSON.stringify({
+        keyword: 'Nimbusly',
+        keyword_type: 'name',
+        keyword_match_type: 'exact',
+        form_data: { must: { industries: ['Fintech'] } },
+        sort: '-total_funding',
+        limit: 3,
+        offset: 0,
+      }),
+    });
+
+    // The log is what proves a WHERE/ORDER BY reached Dealroom rather than
+    // being applied to the response afterwards.
+    const logged = (await fetch(`${baseUrl}/admin/dealroom/request_log/state`).then((r) => r.json())) as {
+      method: string;
+      path: string;
+      body: Record<string, unknown>;
+    }[];
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].method, 'POST');
+    assert.equal(logged[0].path, '/companies');
+    assert.equal(logged[0].body.keyword, 'Nimbusly');
+    assert.equal(logged[0].body.sort, '-total_funding');
+    assert.deepEqual(logged[0].body.form_data, { must: { industries: ['Fintech'] } });
+
+    // An unauthenticated call never reaches the log — the auth gate runs first.
+    await fetch(`${baseUrl}/dealroom/companies`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(((await fetch(`${baseUrl}/admin/dealroom/request_log/state`).then((r) => r.json())) as unknown[]).length, 1);
+
+    const cleared = await fetch(`${baseUrl}/admin/dealroom/request_log/state`, { method: 'DELETE' }).then((r) => r.json());
+    assert.equal(cleared.deleted, 1);
+    assert.equal(((await fetch(`${baseUrl}/admin/dealroom/request_log/state`).then((r) => r.json())) as unknown[]).length, 0);
+    // Clearing one entity type leaves the rest of the service alone.
+    const companies = (await fetch(`${baseUrl}/admin/dealroom/company/state`).then((r) => r.json())) as unknown[];
+    assert.equal(companies.length, 8);
+  } finally {
+    await close();
+  }
+});

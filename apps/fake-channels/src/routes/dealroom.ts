@@ -27,6 +27,9 @@ const SVC = 'dealroom';
 
 // ── shared shapes ─────────────────────────────────────────────────────────
 
+/** `city`, `country` and `continent` are Shared_Param objects (`{id,name}`),
+ *  not bare strings — the same nested shape every other taxonomy value on a
+ *  Dealroom entity carries. */
 interface LocationRow {
   id: number;
   is_headquarters: boolean;
@@ -37,9 +40,9 @@ interface LocationRow {
   zip: string | null;
   lat: number | null;
   lon: number | null;
-  continent: string | null;
-  country: string | null;
-  city: string | null;
+  continent: { id: number; name: string } | null;
+  country: { id: number; name: string } | null;
+  city: { id: number; name: string } | null;
 }
 
 interface FormData {
@@ -223,7 +226,10 @@ function matchesLocationText(locations: unknown, wanted: unknown): boolean {
   const want = termsToArray(wanted).map((w) => w.toLowerCase());
   if (want.length === 0) return true;
   const rows = (locations as LocationRow[] | undefined) ?? [];
-  const haystacks = rows.flatMap((l) => [l.city, l.country, l.address].filter((s): s is string => Boolean(s)).map((s) => s.toLowerCase()));
+  const haystacks = rows
+    .flatMap((l) => [l.city?.name, l.country?.name, l.address])
+    .filter((s): s is string => Boolean(s))
+    .map((s) => s.toLowerCase());
   return want.some((w) => haystacks.some((h) => h.includes(w)));
 }
 
@@ -306,9 +312,11 @@ export function mkLocation(input: {
     zip: null,
     lat: input.lat ?? null,
     lon: input.lon ?? null,
-    continent: input.continent,
-    country: input.country,
-    city: input.city,
+    // Dealroom numbers each location part of its own; derived here so a seeded
+    // location needs only the names.
+    continent: { id: input.id * 10 + 1, name: input.continent },
+    country: { id: input.id * 10 + 2, name: input.country },
+    city: { id: input.id * 10 + 3, name: input.city },
   };
 }
 
@@ -789,6 +797,36 @@ function similarCompanies(store: EntityStore, companyId: string): Entity[] {
     .filter((c) => c.id !== companyId && paramNames(c.data.industries).some((n) => myIndustries.has(n)));
 }
 
+// ── request log ────────────────────────────────────────────────────────
+
+/** How many recent requests the log keeps. Enough to read one movement run's
+ *  whole conversation with Dealroom, small enough to stay readable. */
+const REQUEST_LOG_LIMIT = 40;
+
+/**
+ * Every call the adapter makes, in order, as its own `request_log` entity.
+ *
+ * WHERE and ORDER BY pushdown is a claim about what the adapter SENDS, and the
+ * response alone cannot tell a pushed-down search from one the engine filtered
+ * afterwards — both return the same rows. So the fake records the request
+ * bodies and `pnpm dev:inspect dealroom` reads them back: `keyword`,
+ * `form_data` and `sort` present on the wire IS the pushdown.
+ */
+function logRequest(store: EntityStore, req: import('express').Request): void {
+  const id = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+  store.create(SVC, 'request_log', {
+    at: new Date().toISOString(),
+    method: req.method,
+    path: req.path,
+    query: req.query ?? {},
+    body: req.method === 'POST' ? (req.body ?? {}) : undefined,
+  }, id);
+  const rows = store.list(SVC, 'request_log');
+  for (const stale of rows.slice(0, Math.max(0, rows.length - REQUEST_LOG_LIMIT))) {
+    store.delete(SVC, 'request_log', stale.id);
+  }
+}
+
 // ── router ─────────────────────────────────────────────────────────────
 
 export function dealroomRoutes(store: EntityStore): Router {
@@ -809,6 +847,7 @@ export function dealroomRoutes(store: EntityStore): Router {
     }
     const [apiKey] = decoded.split(':');
     if (!apiKey) return res.status(401).json({ message: 'Unauthorized' });
+    logRequest(store, req);
     next();
   });
 
