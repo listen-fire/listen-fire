@@ -189,7 +189,7 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
     'fires on rounds Dealroom recorded since the last poll, and the first poll ' +
     'delivers nothing.',
   handbookSection: {
-    title: 'Dealroom: startups, rounds',
+    title: 'Dealroom: companies, investors, rounds',
     content: DEALROOM_HANDBOOK_CONTENT,
   },
   triggerExpectation:
