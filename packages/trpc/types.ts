@@ -27,7 +27,8 @@ export const enum ExternalServiceType {
     NATIVE_KNOWLEDGE = "NATIVE_KNOWLEDGE",
     TELEGRAM = "TELEGRAM",
     REMOTE = "REMOTE",
-    EVERTRACE = "EVERTRACE"
+    EVERTRACE = "EVERTRACE",
+    DEALROOM = "DEALROOM"
 }
 
 /** Identifier type for automations.external_service_credentials */
@@ -3929,6 +3930,12 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                         baseUrl?: string | undefined;
                     };
                 } | {
+                    type: ExternalServiceType.DEALROOM;
+                    credentials: {
+                        apiKey: string;
+                        baseUrl?: string | undefined;
+                    };
+                } | {
                     type: ExternalServiceType.NATIVE_VALUATIONS | ExternalServiceType.NATIVE_KNOWLEDGE;
                     baseUrl?: string | undefined;
                 } | {
@@ -3996,6 +4003,12 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     };
                 } | {
                     type: ExternalServiceType.EVERTRACE;
+                    credentials: {
+                        apiKey: string;
+                        baseUrl?: string | undefined;
+                    };
+                } | {
+                    type: ExternalServiceType.DEALROOM;
                     credentials: {
                         apiKey: string;
                         baseUrl?: string | undefined;
@@ -4094,6 +4107,12 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                         baseUrl?: string | undefined;
                     };
                 } | {
+                    type: ExternalServiceType.DEALROOM;
+                    credentials: {
+                        apiKey: string;
+                        baseUrl?: string | undefined;
+                    };
+                } | {
                     type: ExternalServiceType.NATIVE_VALUATIONS;
                     baseUrl?: string | undefined;
                 } | {
@@ -4162,6 +4181,12 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     };
                 } | {
                     type: ExternalServiceType.EVERTRACE;
+                    credentials: {
+                        apiKey: string;
+                        baseUrl?: string | undefined;
+                    };
+                } | {
+                    type: ExternalServiceType.DEALROOM;
                     credentials: {
                         apiKey: string;
                         baseUrl?: string | undefined;
@@ -13949,8 +13974,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     currency: CurrencyIsoCode;
                     investments?: {
                         ids?: string[] | undefined;
-                        investedFrom?: string | Date | undefined;
-                        investedTo?: string | Date | undefined;
+                        investedFrom?: unknown;
+                        investedTo?: unknown;
                         roundId?: string | undefined;
                         investingEntityIds?: string[] | undefined;
                         investeeEntityIds?: string[] | undefined;
@@ -13964,10 +13989,10 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     leafType?: "cash" | "held" | undefined;
                     cashSign?: "paid" | "received" | undefined;
                     factWindow?: {
-                        from?: string | Date | undefined;
-                        to?: string | Date | undefined;
+                        from?: unknown;
+                        to?: unknown;
                     } | undefined;
-                    asOfDate?: string | Date | undefined;
+                    asOfDate?: unknown;
                     groupBy?: ("asset" | "investment" | "company" | "degree" | "round" | "investingEntity" | "trackedEntity")[] | undefined;
                     strategy?: "FIFO" | "LIFO" | undefined;
                 };

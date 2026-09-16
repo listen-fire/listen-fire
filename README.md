@@ -45,6 +45,7 @@ Each system is reached through an adapter, which presents it as a graph. The ada
 | `dropbox` | Dropbox |
 | `granola` | Granola meeting notes |
 | `evertrace` | Evertrace |
+| `dealroom` | Dealroom |
 | `kg` | the built-in knowledge graph |
 | `ask` | a question put to a person, answered on a link |
 | `cron` | a schedule |
