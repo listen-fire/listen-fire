@@ -81,6 +81,7 @@ import {
   coerceToNumber,
   chunkText,
   CHUNKS_FUNCTION_ID,
+  estimateEntities,
   FILE_FUNCTION_ID,
   POSITION_SENTINEL,
   READ_FUNCTION_ID,
@@ -843,6 +844,15 @@ export type MovementTraceEntry =
        *  output ceiling thinking and wrote nothing, so it was asked again one
        *  effort lower. The answer on this entry is the cheaper one. */
       effortSteppedDown?: { from: string; to: string };
+      /** Set when the answer ran past the model's output ceiling and the
+       *  client fed the partial text back asking it to continue. Nothing
+       *  downstream can tell: the stitched reply parses, the schema is
+       *  all-optional, and the records the model never got to at the end of
+       *  its input are simply absent. `continuations` counts the turns it
+       *  took. A continued reading is a CHUNKING problem — the input was more
+       *  than one answer's worth. */
+      continued?: true;
+      continuations?: number;
       /** Set when the stage was skipped without an LLM call: the extract had
        *  no source text at all (`empty_source`), or this entity's stage
        *  pipeline contributed nothing to read (`no_enrichment`) so the call
@@ -989,7 +999,22 @@ export type MovementTraceEntry =
    * in the run. The counts are what answer that — a text that cut into one
    * piece, or into four hundred, explains what happened next.
    */
-  | { kind: 'chunks'; pieces: number; sizes: number[]; unit: 'chars' }
+  | {
+      kind: 'chunks';
+      pieces: number;
+      sizes: number[];
+      unit: 'chars';
+      /** Which way the author asked for the cut: by characters, or by how
+       *  many records a piece is expected to yield. The sizes below read
+       *  very differently under the two, so the mode has to be on the entry
+       *  rather than inferred from how even they look. */
+      mode: 'size' | 'entities';
+      /** Entities mode only: what each piece is expected to yield. This is
+       *  the number the cut was made on, so a reader comparing it against
+       *  what the reading actually produced can see the estimate being wrong
+       *  — which is the only way that ever becomes visible. */
+      expectedEntities?: number[];
+    }
   | { kind: 'ai'; prompt: string; hasValue: boolean }
   | { kind: 'gate'; outcome: boolean }
   | { kind: 'block'; root: string; positions: number };
@@ -1951,7 +1976,7 @@ async function evaluateChunksFunction(
   if (!textArg || !optionsArg) {
     throw new MovementEngineError(
       'MOVENG_RUNTIME',
-      'CHUNKS(text, { size, overlap }) expects a text and an options map — the checker should have caught this',
+      'CHUNKS(text, { size | entities, overlap }) expects a text and an options map — the checker should have caught this',
     );
   }
   const text = await evalMovementExpr(textArg, ctx);
@@ -1965,14 +1990,17 @@ async function evaluateChunksFunction(
       'CHUNKS() takes its options as a map — the checker should have caught this',
     );
   }
-  const read = readChunkSpec(
-    (bag as Record<string, unknown>).size,
-    (bag as Record<string, unknown>).overlap,
-  );
+  const asked = bag as Record<string, unknown>;
+  const read = readChunkSpec({
+    size: asked.size,
+    entities: asked.entities,
+    overlap: asked.overlap,
+  });
   if ('error' in read) throw new MovementEngineError('MOVENG_RUNTIME', read.error);
+  const mode = read.spec.mode;
 
   if (text.value == null) {
-    ctx.trace?.push({ kind: 'chunks', pieces: 0, sizes: [], unit: 'chars' });
+    ctx.trace?.push({ kind: 'chunks', pieces: 0, sizes: [], unit: 'chars', mode });
     return { value: [], provenance };
   }
   if (typeof text.value !== 'string') {
@@ -1987,6 +2015,13 @@ async function evaluateChunksFunction(
     pieces: pieces.length,
     sizes: pieces.map((piece) => piece.length),
     unit: 'chars',
+    mode,
+    // What the cut was MADE of, in the entities mode: the estimate is the
+    // whole reason each piece ends where it does, so a piece that came out
+    // far bigger than the rest is readable as the one long line it holds.
+    ...(mode === 'entities'
+      ? { expectedEntities: pieces.map((piece) => estimateEntities(piece)) }
+      : {}),
   });
   return { value: pieces, provenance };
 }

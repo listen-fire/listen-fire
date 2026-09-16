@@ -11,7 +11,7 @@
 //   3. FILE(content, "pdf" | "text") — static shape validation.
 //   4. READ(file) — static shape validation (the argument's TYPE is the
 //      checker's; only the count is call shape).
-//   5. CHUNKS(text, { size, overlap }) — the options MAP's keys, which are
+//   5. CHUNKS(text, { size | entities, overlap }) — the options MAP's keys, which are
 //      call shape for the same reason an artifact type is: they are written
 //      down, and nothing computes one.
 //   6. The implementations — pure, deterministic, null-safe.
@@ -231,7 +231,7 @@ describe('READ(file) validates at the bridge', () => {
 
 // ── 5. CHUNKS() options map ──────────────────────────────────────────────────
 
-describe('CHUNKS(text, { size, overlap }) validates its options at the bridge', () => {
+describe('CHUNKS(text, { size | entities, overlap }) validates its options at the bridge', () => {
   it('parses to a plain function node carrying the text and the map', () => {
     expect(parseMovementExpression('CHUNKS(body, { size: 2000, overlap: 200 })')).toEqual({
       type: 'function',
@@ -283,10 +283,32 @@ describe('CHUNKS(text, { size, overlap }) validates its options at the bridge', 
     );
   });
 
-  it('rejects a call with no size — the one option that has no default', () => {
+  it('rejects a call that says neither how many characters nor how many records', () => {
     expect(() => parseMovementExpression('CHUNKS(body, { overlap: 10 })')).toThrow(
-      /needs 'size'/,
+      /needs one of 'size' or 'entities'/,
     );
+  });
+
+  it('takes a number of expected records instead of a size', () => {
+    expect(() => parseMovementExpression('CHUNKS(body, { entities: 20 })')).not.toThrow();
+  });
+
+  it('rejects both ways of saying how big a piece is', () => {
+    expect(() => parseMovementExpression('CHUNKS(body, { size: 2000, entities: 20 })')).toThrow(
+      /'size' and 'entities', which are two ways of saying how big a piece is/,
+    );
+  });
+
+  it('takes an overlap beside a count of records — there is no size for it to exceed', () => {
+    expect(() =>
+      parseMovementExpression('CHUNKS(body, { entities: 20, overlap: 5000 })'),
+    ).not.toThrow();
+  });
+
+  it('takes an ordinary expression for a count of records', () => {
+    expect(() =>
+      parseMovementExpression('CHUNKS(body, { entities: LENGTH(body) / 5000 })'),
+    ).not.toThrow();
   });
 
   it('rejects an overlap that is not smaller than the size, where both are written down', () => {
@@ -323,7 +345,7 @@ describe('CHUNKS(text, { size, overlap }) validates its options at the bridge', 
 
   it('validates inside larger expressions', () => {
     expect(() => parseMovementExpression('COALESCE(CHUNKS(b, { overlap: 1 }), [])')).toThrow(
-      /needs 'size'/,
+      /needs one of 'size' or 'entities'/,
     );
   });
 });
@@ -332,9 +354,13 @@ describe('the options contract is declared, not hand-written', () => {
   it('CHUNKS declares its keys, so a future built-in can declare its own', () => {
     const spec = builtinOptionsFor(CHUNKS_FUNCTION_ID);
     expect(spec?.options.map(o => [o.key, o.type, o.required])).toEqual([
-      ['size', 'number', true],
+      ['size', 'number', false],
+      ['entities', 'number', false],
       ['overlap', 'number', false],
       ['unit', 'literal', false],
+    ]);
+    expect(spec?.exactlyOne).toEqual([
+      { keys: ['size', 'entities'], what: 'how big a piece is' },
     ]);
   });
 
@@ -344,8 +370,9 @@ describe('the options contract is declared, not hand-written', () => {
 
   it('the inventory a diagnostic prints comes from the contract', () => {
     const spec = builtinOptionsFor(CHUNKS_FUNCTION_ID)!;
-    expect(describeBuiltinOptions(spec)).toContain('size (required)');
+    expect(describeBuiltinOptions(spec)).toContain('size — the most characters');
     expect(describeBuiltinOptions(spec)).toContain('overlap');
+    expect(describeBuiltinOptions(spec)).toContain("exactly one of 'size' or 'entities'");
   });
 });
 

@@ -205,6 +205,7 @@ pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
 - \`READ\` answers \`text | absent\`, discharged like any other absence — \`COALESCE\`, a \`?:\` write field, an \`== null\` guard. Why a file gave nothing back is on the run's own record.
 - \`extract from [file]\` reads the file itself, so it already means \`extract from [READ(file)]\`. Reach for \`READ\` where you want the text in hand — to cut it, measure it, or pass it to a plugin.
 - \`CHUNKS(text, { size, overlap })\` hands back a list of text pieces, each at most \`size\` characters and repeating \`overlap\` characters of the one before it. \`unit:\` takes \`"chars"\` and nothing else.
+- Say \`entities\` instead of \`size\` to cut by what a piece is expected to yield — \`CHUNKS(text, { entities: 20 })\` fills each piece with about twenty records' worth of lines, and never splits a line. One of the two is required, and \`overlap\` works with either.
 - \`extract from [pieces]\` is one extraction reading every piece as a segment; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is one extraction per piece. Reach for the second where each piece should be read on its own.`,
   engineClaims: [
     {

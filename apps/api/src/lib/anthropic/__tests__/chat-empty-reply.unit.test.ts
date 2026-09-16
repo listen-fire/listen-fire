@@ -117,8 +117,11 @@ describe('anthropicChatDetailed', () => {
       );
     }
 
+    // The count is the turns actually SPENT, and it is what a caller reports
+    // to the next reader: a fragment stitched out of five answers is a
+    // different thing to explain than one that died on its first.
     await expect(anthropicChatDetailed({ system: 's', userMessage: 'u' })).resolves.toEqual(
-      expect.objectContaining({ stopReason: 'max_tokens', truncated: true }),
+      expect.objectContaining({ stopReason: 'max_tokens', truncated: true, continuations: 5 }),
     );
   });
 
@@ -359,7 +362,7 @@ describe('bounding what a chat call may spend', () => {
 
     await expect(
       anthropicChatDetailed({ system: 's', userMessage: 'u', maxContinuations: 1 }),
-    ).resolves.toEqual(expect.objectContaining({ truncated: true }));
+    ).resolves.toEqual(expect.objectContaining({ truncated: true, continuations: 1 }));
 
     // One initial turn plus one continuation — not the generic five.
     expect(stream).toHaveBeenCalledTimes(2);

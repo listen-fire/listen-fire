@@ -56,7 +56,7 @@
 // `normalizeCalls`). No @listen-fire/shared grammar change. The same walk
 // validates the flat FILE(content, "pdf" | "text") artifact built-in,
 // the flat READ(file) text built-in, and the options MAP a built-in
-// declaring one takes (CHUNKS(text, { size, overlap })).
+// declaring one takes (CHUNKS(text, { size | entities, overlap })).
 //
 // M1 scope notes (documented limitations, not oversights):
 //   - Resolvers are identity (`name => name`): property/edge names pass
@@ -634,7 +634,7 @@ function substitute(expr: Expression, repl: Map<string, Expression>): Expression
 // ordinary call — and rejects, with the family's inventory in the
 // message, calls into a family that doesn't exist or members a family
 // doesn't have. The same walk validates FILE(content, "pdf" | "text"),
-// READ(file) and an options map (CHUNKS(text, { size, overlap })):
+// READ(file) and an options map (CHUNKS(text, { size | entities, overlap })):
 // its artifact type is part of the call's static shape, so it is
 // checked here, where every consumer (checker, interpretability scan,
 // engine) shares the result.
@@ -746,7 +746,8 @@ function validateReadCall(expr: Extract<Expression, { type: 'function' }>): void
  * written into the source, nothing computes one, and a key nobody knows is a
  * typo the author must see at save. So the whole key surface is settled here —
  * that the map is a map, that every key is one the built-in has, that no key
- * is written twice, that the required ones are there, and that an option whose
+ * is written twice, that the required ones are there, that a choice between
+ * two spellings of one question is made exactly once, and that an option whose
  * value is a SPELLING (`unit: "chars"`) carries one of the spellings.
  *
  * The VALUES are ordinary expressions (`size: LENGTH(body) / 3`), so their
@@ -791,6 +792,28 @@ function validateOptionsCall(expr: Extract<Expression, { type: 'function' }>): v
     if (option.required && !seen.has(option.key)) {
       throw new BridgeError(
         `${spec.signature} needs '${option.key}' — ${option.summary}. The options are: ${inventory}`,
+      );
+    }
+  }
+
+  // Two spellings of one question (`size` and `entities`): both, or neither,
+  // is a call that has not said what it wants. Which KEYS are written is the
+  // whole of it, so it settles here beside the rest of the key surface.
+  for (const choice of spec.exactlyOne ?? []) {
+    const written = choice.keys.filter((key) => seen.has(key));
+    const spellings = choice.keys.map((key) => `'${key}'`).join(' or ');
+    if (written.length === 0) {
+      const summaries = choice.keys
+        .map((key) => spec.options.find((o) => o.key === key)?.summary)
+        .filter((summary): summary is string => summary !== undefined)
+        .join(', or ');
+      throw new BridgeError(
+        `${spec.signature} needs one of ${spellings} — ${summaries}. The options are: ${inventory}`,
+      );
+    }
+    if (written.length > 1) {
+      throw new BridgeError(
+        `${spec.signature} is given ${written.map((key) => `'${key}'`).join(' and ')}, which are two ways of saying ${choice.what} — write one of them`,
       );
     }
   }

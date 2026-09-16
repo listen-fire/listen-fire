@@ -125,6 +125,8 @@ It applies to the whole extraction — every stage, every record, the nested tre
 
 Leave it off and the extraction sizes itself from the tree you declared, which is what it has always done. Naming a tier is you overriding that, in either direction: \`"quick"\` on a big tree of plain fields is the cheapest thing here, and \`"thorough"\` on a small tree of hard ones is worth what it costs.
 
+- Cut the input into pieces when a run says a reading was *continued* — \`MAP(CHUNKS(transcript, { entities: 20 }), (p) => { return extract from [p] { … } })\`. An answer that ran past its output ceiling is missing the records at the end of what it read, and \`entities\` sizes each piece by the records it is expected to hold rather than by its length.
+
 ### through
 
 \`\`\`
