@@ -119,7 +119,11 @@ sent-[m:messages]-> {
 Type the entry with a **declaration** rather than an address, and \`write\` into it to gather records before any of them reaches a system:
 
 \`\`\`
-node Company { name: <text> website: <text> }
+node Company {
+  name:    <text>
+  website: <text>
+  node founder { name: <text> }
+}
 
 deduped = node { companies: <Company> }
 
@@ -138,6 +142,7 @@ deduped-[c:companies ORDER BY \`name\`]-> { … }
 - The write builds or merges by identity exactly as a write into a system does: \`unique by\` decides, and \`?:\` fills only what is absent. The *identity* section of the writes chapter has the forms.
 - Only records the run built on the entry are candidates to merge into — one you linked in or traversed to lives in a system, and is left alone.
 - \`link\` still appends by reference, and both forms may grow the same entry.
+- Grow a node the declaration NESTED on what the write handed back: \`c = write deduped-[:companies]-> { … }\`, then \`link c -[:founder]-> person\`. A landing is a whole record of that shape, so every nested node comes with it — empty, and appendable exactly as the entry itself is.
 
 ### declared-structures
 
