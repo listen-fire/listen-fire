@@ -13974,8 +13974,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     currency: CurrencyIsoCode;
                     investments?: {
                         ids?: string[] | undefined;
-                        investedFrom?: unknown;
-                        investedTo?: unknown;
+                        investedFrom?: string | Date | undefined;
+                        investedTo?: string | Date | undefined;
                         roundId?: string | undefined;
                         investingEntityIds?: string[] | undefined;
                         investeeEntityIds?: string[] | undefined;
@@ -13989,10 +13989,10 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     leafType?: "cash" | "held" | undefined;
                     cashSign?: "paid" | "received" | undefined;
                     factWindow?: {
-                        from?: unknown;
-                        to?: unknown;
+                        from?: string | Date | undefined;
+                        to?: string | Date | undefined;
                     } | undefined;
-                    asOfDate?: unknown;
+                    asOfDate?: string | Date | undefined;
                     groupBy?: ("asset" | "investment" | "company" | "degree" | "round" | "investingEntity" | "trackedEntity")[] | undefined;
                     strategy?: "FIFO" | "LIFO" | undefined;
                 };
