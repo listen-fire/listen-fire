@@ -73,8 +73,11 @@ const CUT_WINDOW = 0.1;
  * this is the same rule where a run computed them.
  */
 export function readChunkSpec(options: ChunkOptions): { spec: ChunkSpec } | { error: string } {
-  const bySize = options.size != null;
-  const byEntities = options.entities != null;
+  // WRITTEN, not answered: a size the run worked out to nothing was still
+  // asked for, and saying "you named neither" to an author who named one sends
+  // them to the wrong line.
+  const bySize = options.size !== undefined;
+  const byEntities = options.entities !== undefined;
   if (bySize && byEntities) {
     return {
       error: `CHUNKS is given both a size (${describe(options.size)}) and an expected ${describe(options.entities)} records — they are two ways of saying how big a piece is, so a cut is made by one of them`,

@@ -281,6 +281,12 @@ describe('the options a run is handed, cutting by records', () => {
     expect('error' in read && read.error).toContain('worked out neither');
   });
 
+  it('a size written down and worked out to nothing is still a size', () => {
+    expect(readChunkSpec({ size: null })).toEqual({
+      error: expect.stringContaining('at least 1 character'),
+    });
+  });
+
   it('lets an overlap stand beside a count — there is no size for it to exceed', () => {
     expect(readChunkSpec({ entities: 2, overlap: 5_000 })).toEqual({
       spec: { mode: 'entities', entities: 2, overlap: 5_000 },
