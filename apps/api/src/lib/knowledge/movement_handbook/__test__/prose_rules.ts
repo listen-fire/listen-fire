@@ -65,12 +65,12 @@ export function proseViolations(chapter: Chapter): string[] {
   // The use-cases chapter is, by design, a per-use-case playbook; the dealflow
   // playbook is dealflow-specific on purpose. Every other chapter — a system's
   // section included — must stay use-case-neutral.
-  if (chapter.id !== 'use-cases') {
-    const vc = VC_TUNING.exec(chapter.content);
-    if (vc) violations.push(`is tuned to one use case: "${vc[0]}"`);
-  }
   if (((chapter.content.match(/```/g) ?? []).length % 2) !== 0) {
     violations.push('leaves a code fence unclosed');
+  }
+  if (chapter.id !== 'use-cases') {
+    const vc = VC_TUNING.exec(proseOnly(chapter.content));
+    if (vc) violations.push(`is tuned to one use case: "${vc[0]}"`);
   }
   const prose = proseOnly(body);
   if (/\bmovements?\b/i.test(prose)) violations.push('says "movement" outside code');

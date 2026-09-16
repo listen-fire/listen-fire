@@ -2415,6 +2415,7 @@ enum ExternalServiceType {
   TELEGRAM
   REMOTE
   EVERTRACE
+  DEALROOM
 
   @@schema("automations")
 }

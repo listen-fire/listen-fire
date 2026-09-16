@@ -4090,7 +4090,8 @@ CREATE TYPE automations."ExternalServiceType" AS ENUM (
     'NATIVE_KNOWLEDGE',
     'TELEGRAM',
     'REMOTE',
-    'EVERTRACE'
+    'EVERTRACE',
+    'DEALROOM'
 );
 
 CREATE TABLE automations.external_service_credentials (

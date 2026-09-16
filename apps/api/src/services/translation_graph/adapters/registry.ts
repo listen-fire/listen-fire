@@ -45,6 +45,12 @@ import {
   createEvertraceAdapter,
 } from './evertrace';
 import { createEvertracePollSource } from './evertrace/poll';
+import {
+  DEALROOM_ADAPTER_TYPE,
+  DEALROOM_MANIFEST,
+  createDealroomAdapter,
+} from './dealroom';
+import { createDealroomPollSource } from './dealroom/poll';
 import { ASK_ADAPTER_TYPE, ASK_MANIFEST, createAskAdapter } from './ask';
 
 /**
@@ -140,6 +146,11 @@ const ADAPTER_FACTORIES: Record<string, AdapterFactory> = {
   // production lives on its PollSource (POLL_SOURCE_FACTORIES below).
   [EVERTRACE_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
     createEvertraceAdapter({ teamId, credentialsId }),
+  // Dealroom — polled source (new funding rounds) and read-only otherwise: the
+  // API has no record-writing endpoint at all. Event production lives on its
+  // PollSource (POLL_SOURCE_FACTORIES below).
+  [DEALROOM_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
+    createDealroomAdapter({ teamId, credentialsId }),
   // Ask adapter — the awaitable "ask a person" intrinsic (asks-as-adapter).
   // Credential-free, team-scoped; families (Check/Provide/Select/Review) are
   // its writable positions. Runs alongside the legacy `ask` statement.
@@ -158,6 +169,8 @@ const POLL_SOURCE_FACTORIES: Record<string, PollSourceFactory> = {
     createGranolaPollSource({ teamId, credentialsId }),
   [EVERTRACE_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
     createEvertracePollSource({ teamId, credentialsId }),
+  [DEALROOM_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
+    createDealroomPollSource({ teamId, credentialsId }),
 };
 
 /** Whether a slug (or trigger-kind alias) has a registered PollSource. */
@@ -206,6 +219,7 @@ const ADAPTER_MANIFESTS: Record<string, AdapterManifest> = {
   [MANUAL_ADAPTER_TYPE]: MANUAL_MANIFEST,
   [GRANOLA_ADAPTER_TYPE]: GRANOLA_MANIFEST,
   [EVERTRACE_ADAPTER_TYPE]: EVERTRACE_MANIFEST,
+  [DEALROOM_ADAPTER_TYPE]: DEALROOM_MANIFEST,
   [ASK_ADAPTER_TYPE]: ASK_MANIFEST,
 };
 

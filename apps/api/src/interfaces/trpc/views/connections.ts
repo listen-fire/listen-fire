@@ -174,6 +174,7 @@ const FIRST_CLASS_KINDS = new Set<string>([
   'GMAIL',
   'GRANOLA',
   'EVERTRACE',
+  'DEALROOM',
   'NATIVE_VALUATIONS',
   'CHROME_EXTENSION',
   'API',
@@ -198,6 +199,7 @@ const KIND_LABELS: Record<string, string> = {
   WEB_QUESTION: 'Question',
   GRANOLA: 'Granola',
   EVERTRACE: 'Evertrace',
+  DEALROOM: 'Dealroom',
   NATIVE_VALUATIONS: 'Listen-Fire Valuations',
   KG_MUTATION: 'Knowledge change',
 };

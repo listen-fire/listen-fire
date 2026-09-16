@@ -192,6 +192,7 @@ export interface SeedResult {
     attioCredentials: boolean;
     airtableCredentials: boolean;
     evertraceCredentials: boolean;
+    dealroomCredentials: boolean;
     knowledgeCredential: boolean;
     remoteAdapter: boolean;
     currencies: boolean;
@@ -235,6 +236,7 @@ export async function ensureDevLoopTeam(): Promise<SeedResult> {
     attioCredentials: false,
     airtableCredentials: false,
     evertraceCredentials: false,
+    dealroomCredentials: false,
     knowledgeCredential: false,
     remoteAdapter: false,
     currencies: false,
@@ -469,6 +471,33 @@ export async function ensureDevLoopTeam(): Promise<SeedResult> {
       } as any)
       .execute();
     created.evertraceCredentials = true;
+  }
+
+  // 6b-ii. Mock Dealroom credentials — same pasted-api-key pattern (the
+  // fake-channels base url is injected for the test-harness team). The
+  // `dev_loop_dealroom` movement import resolves to the row named
+  // 'Dev Loop Dealroom'.
+  const existingDealroomCreds = await getAutomationsQb(['external_service_credentials'])
+    .selectFrom('external_service_credentials')
+    .where('team_id', '=', teamId as TeamId)
+    .where('type', '=', ExternalServiceType.DEALROOM)
+    .where('name', '=', 'Dev Loop Dealroom')
+    .select('id')
+    .executeTakeFirst();
+  if (!existingDealroomCreds) {
+    const credId = randomUUID() as ExternalServiceCredentialsId;
+    const encrypted = await encryptToken(JSON.stringify({ apiKey: 'dev-loop-dealroom-key' }), credId);
+    await getAutomationsQb(['external_service_credentials'])
+      .insertInto('external_service_credentials')
+      .values({
+        id: credId,
+        name: 'Dev Loop Dealroom',
+        type: ExternalServiceType.DEALROOM,
+        credentials: encrypted,
+        team_id: teamId,
+      } as any)
+      .execute();
+    created.dealroomCredentials = true;
   }
 
   // 6c. The knowledge-graph connection. Unconditional: the helper is

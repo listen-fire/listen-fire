@@ -8,6 +8,7 @@ import { sheetsRoutes } from './routes/sheets';
 import { airtableRoutes } from './routes/airtable';
 import { granolaRoutes } from './routes/granola';
 import { evertraceRoutes } from './routes/evertrace';
+import { dealroomRoutes } from './routes/dealroom';
 import { emailRoutes } from './routes/email';
 import { resendRoutes } from './routes/resend';
 import { whatsappRoutes } from './routes/whatsapp';
@@ -35,6 +36,7 @@ app.use('/sheets', sheetsRoutes(store));
 app.use('/airtable', airtableRoutes(store));
 app.use('/granola', granolaRoutes(store));
 app.use('/evertrace', evertraceRoutes(store));
+app.use('/dealroom', dealroomRoutes(store));
 app.use('/email', emailRoutes(store));
 app.use('/resend', resendRoutes(store));
 app.use('/whatsapp', whatsappRoutes(store));
@@ -49,5 +51,5 @@ app.use('/admin', adminRoutes(store));
 
 app.listen(PORT, () => {
   console.log(`Fake channel server running on http://localhost:${PORT}`);
-  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /dropbox, /admin');
+  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /dealroom, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /dropbox, /admin');
 });

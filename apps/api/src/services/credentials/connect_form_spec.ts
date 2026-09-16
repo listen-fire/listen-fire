@@ -20,6 +20,7 @@ import ExternalServiceType from '../../generated/kysely/automations/ExternalServ
 import { affinityCredsParser } from '../../adapters/affinity/apiClient';
 import { attioCredsParser } from '../../adapters/attio/apiClient';
 import { evertraceCredsParser } from '../../adapters/evertrace/apiClient';
+import { dealroomCredsParser } from '../../adapters/dealroom/apiClient';
 import { RemoteAdapterCredentialPayload } from '../translation_graph/adapters/remote/manifest';
 
 /** Stored Granola credential — the API key the user pastes. */
@@ -183,6 +184,28 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
         'Open Settings, then API access, and create a key.',
         'Copy the key (it starts with "sk_live_") and paste it below.',
       ],
+    },
+  ),
+  [ExternalServiceType.DEALROOM]: specFor(
+    dealroomCredsParser,
+    [
+      { name: 'apiKey', label: 'API key', secret: true, optional: false, kind: 'text' },
+      {
+        name: 'baseUrl',
+        label: 'API base URL (optional)',
+        secret: false,
+        optional: true,
+        kind: 'url',
+        help: "Leave this blank \u2014 it's only needed if Dealroom has given you a custom API address.",
+      },
+    ],
+    {
+      guide: [
+        'Sign in to Dealroom in your browser.',
+        'Open your account settings and find the API section.',
+        'Copy the API key and paste it below.',
+      ],
+      note: 'API access is part of a Dealroom Premium plan \u2014 ask your account manager if the API section is missing.',
     },
   ),
   // A user-installed remote adapter authenticates with a single secret (the

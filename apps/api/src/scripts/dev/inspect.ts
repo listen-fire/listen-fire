@@ -10,6 +10,8 @@
  *   pnpm dev:inspect valuations            → Valuations entity counts + recent outbox
  *   pnpm dev:inspect valuations legal_entity → rows under one Valuations entity
  *   pnpm dev:inspect evertrace             → seeded signals/lists/searches + the evertrace poll trigger
+ *   pnpm dev:inspect dealroom              → fake Dealroom entity counts, recent API requests + the dealroom poll trigger
+ *   pnpm dev:inspect dealroom --clear-requests → wipe the Dealroom request log first (isolate one run's calls)
  *   pnpm dev:inspect callbacks             → minted callbacks + their call ledgers
  *   pnpm dev:inspect callbacks <runId>     → one run's callbacks
  *   pnpm dev:inspect tg-runs               → recent translation-graph runs
@@ -47,6 +49,7 @@ type Domain =
   | 'airtable'
   | 'granola'
   | 'evertrace'
+  | 'dealroom'
   | 'affinity'
   | 'valuations'
   | 'asks'
@@ -64,6 +67,7 @@ const ALL_DOMAINS: Exclude<Domain, 'all'>[] = [
   'airtable',
   'granola',
   'evertrace',
+  'dealroom',
   'affinity',
   'valuations',
   'asks',
@@ -482,6 +486,83 @@ async function inspectEvertrace() {
   return { service: 'evertrace', teamId: seed.teamId, signals, lists, searches, triggers };
 }
 
+/**
+ * Dealroom-specific view: what the fake Dealroom API holds, the calls the
+ * adapter last made to it, and the dev-loop team's dealroom POLL trigger rows
+ * with their `poll_checkpoint` / `poll_last_at`.
+ *
+ * The request log is the pushdown evidence. A response alone cannot tell a
+ * search Dealroom narrowed from one the engine filtered afterwards — both
+ * return the same rows — so each entry shows what actually went on the wire:
+ * `keyword` (a Name or Website WHERE), `form_data.must` (every other pushed
+ * WHERE), `sort` (a pushed ORDER BY) and `limit`.
+ */
+async function inspectDealroom(options: { clearRequests?: boolean } = {}) {
+  const seed = await ensureDevLoopTeam();
+  if (options.clearRequests) {
+    try {
+      await http('/admin/dealroom/request_log/state', 'DELETE');
+    } catch {
+      // fake-channels not up — the counts below will show empty too.
+    }
+  }
+
+  let counts: Record<string, number> = {};
+  let requests: unknown[] = [];
+  let recentRounds: unknown[] = [];
+  try {
+    const state = await http<Record<string, Record<string, unknown>[]>>('/admin/dealroom/state');
+    counts = Object.fromEntries(
+      Object.entries(state)
+        .filter(([type]) => type !== 'request_log')
+        .map(([type, rows]) => [type, rows.length]),
+    );
+    requests = (state.request_log ?? [])
+      .slice()
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+      .map((entry) => {
+        const body = (entry.body ?? {}) as Record<string, unknown>;
+        return {
+          at: entry.at,
+          call: `${entry.method} ${entry.path}`,
+          ...(entry.query && Object.keys(entry.query).length > 0 ? { query: entry.query } : {}),
+          ...(body.keyword !== undefined
+            ? { keyword: body.keyword, keyword_type: body.keyword_type, keyword_match_type: body.keyword_match_type }
+            : {}),
+          ...(body.form_data !== undefined ? { form_data: body.form_data } : {}),
+          ...(body.sort !== undefined ? { sort: body.sort } : {}),
+          ...(body.limit !== undefined ? { limit: body.limit, offset: body.offset } : {}),
+        };
+      });
+    recentRounds = (state.round ?? [])
+      .slice()
+      .sort((a, b) => String(b.created_utc ?? '').localeCompare(String(a.created_utc ?? '')))
+      .slice(0, 5)
+      .map((r) => ({ id: r.id, companyId: r.companyId, round: r.round, amount: r.amount, created_utc: r.created_utc }));
+  } catch {
+    // fake-channels not up — surface an empty view rather than throwing.
+  }
+
+  const triggers = await getAutomationsQb(['trigger'])
+    .selectFrom('trigger')
+    .where('team_id', '=', seed.teamId as TeamId)
+    .where('kind', '=', 'dealroom')
+    .select([
+      'id',
+      'kind',
+      'run_mode',
+      'config',
+      'credentials_id',
+      'movement_id',
+      'fired_movement_name',
+      'poll_checkpoint',
+      'poll_last_at',
+    ])
+    .execute();
+
+  return { service: 'dealroom', teamId: seed.teamId, counts, recentRounds, requests, triggers };
+}
+
 async function inspectGeneric(svc: 'sheets' | 'affinity') {
   // Dump the service's entities via the admin state route. The route is
   // `/admin/:service/state` and returns entities grouped by entity_type
@@ -510,10 +591,15 @@ async function reset() {
 }
 
 async function main() {
-  const args = process.argv.slice(2).filter((a) => a !== '--pretty' && a !== '--reset');
+  const args = process.argv
+    .slice(2)
+    .filter((a) => a !== '--pretty' && a !== '--reset' && a !== '--clear-requests');
   const flags = new Set(process.argv.slice(2));
   const PRETTY = flags.has('--pretty');
   const RESET = flags.has('--reset');
+  // Wipe the Dealroom request log before reading, so the next run's calls are
+  // the only ones in it.
+  const CLEAR_REQUESTS = flags.has('--clear-requests');
 
   if (RESET) {
     await reset();
@@ -533,6 +619,7 @@ async function main() {
     results.push(await inspectAirtable());
     results.push(await inspectGranola());
     results.push(await inspectEvertrace());
+    results.push(await inspectDealroom());
     for (const svc of ['sheets', 'affinity'] as const) {
       results.push(await inspectGeneric(svc));
     }
@@ -564,6 +651,8 @@ async function main() {
     results.push(await inspectGranola());
   } else if (domain === 'evertrace') {
     results.push(await inspectEvertrace());
+  } else if (domain === 'dealroom') {
+    results.push(await inspectDealroom({ clearRequests: CLEAR_REQUESTS }));
   } else if (['sheets', 'affinity'].includes(domain)) {
     results.push(await inspectGeneric(domain as any));
   } else {

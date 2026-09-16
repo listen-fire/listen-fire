@@ -78,6 +78,12 @@ const ICON_PATHS: Record<string, { d: string; fill?: boolean; viewBox?: string }
     d: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-4.5 5.5h7v1.8h-5.1v2.1h4.6v1.8h-4.6v2.6h5.3v1.8h-7.2v-10.1z",
     fill: true,
   },
+  // Dealroom — a stroke "D", in the absence of an official brand SVG to
+  // extract from (as for Evertrace above).
+  DEALROOM: {
+    d: "M8 5 H13 A7 7 0 0 1 13 19 H8 Z",
+    fill: false,
+  },
   // Webhook — curly braces (API/code)
   WEBHOOK: {
     d: "M7 8l-4 4 4 4m10-8l4 4-4 4M14 4l-4 16",

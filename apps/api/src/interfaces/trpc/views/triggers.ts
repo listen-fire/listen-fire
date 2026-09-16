@@ -1183,6 +1183,7 @@ function kindToLabel(kind: string): string {
     WEB_QUESTION: 'Question',
     GRANOLA: 'Granola',
     EVERTRACE: 'Evertrace',
+    DEALROOM: 'Dealroom',
     NATIVE_VALUATIONS: 'Listen-Fire Valuations',
     KG_MUTATION: 'Knowledge change',
   };

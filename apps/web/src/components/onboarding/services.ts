@@ -41,6 +41,7 @@ export const PICKER_SERVICES: PickerService[] = [
   { key: "ATTIO", label: "Attio", category: "CRM", brand: "#1D1D1F" },
   { key: "AFFINITY", label: "Affinity", category: "CRM", brand: "#3A5BFF" },
   { key: "EVERTRACE", label: "Evertrace", category: "CRM", brand: "#111827" },
+  { key: "DEALROOM", label: "Dealroom", category: "CRM", brand: "#0B3B8C" },
   { key: "EMAIL", label: "Email", category: "Email", brand: "#64748B" },
   { key: "SLACK", label: "Slack", category: "Messaging", brand: "#611F69" },
   { key: "TELEGRAM", label: "Telegram", category: "Messaging", brand: "#26A5E4" },

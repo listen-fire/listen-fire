@@ -31,6 +31,7 @@
     "dev:granola": "cd apps/api && pnpm run dev:granola",
     "dev:telegram": "cd apps/api && pnpm run dev:telegram",
     "dev:evertrace": "cd apps/api && pnpm run dev:evertrace",
+    "dev:dealroom": "cd apps/api && pnpm run dev:dealroom",
     "health": "cd apps/api && pnpm run health",
     "dev:describe": "cd apps/api && pnpm run dev:describe",
     "dev:graph": "cd apps/api && pnpm run dev:graph",
