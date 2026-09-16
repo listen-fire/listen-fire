@@ -81,6 +81,30 @@ describe('adapter-declared handbook sections', () => {
       'says "movement" outside code',
     ]);
   });
+
+  it('a use-case word backticked as a record or field name is an identifier, not tuning', () => {
+    const named: AdapterManifest = {
+      ...SECTION_MANIFEST,
+      handbookSection: {
+        title: 'Orderly',
+        content: 'An order hangs off the customer who placed it, reachable as `Investors`.',
+      },
+    };
+    expect(proseViolations(adapterSectionChapters([named])[0])).toEqual([]);
+  });
+
+  it('the same word bare in prose is still tuning', () => {
+    const bare: AdapterManifest = {
+      ...SECTION_MANIFEST,
+      handbookSection: {
+        title: 'Orderly',
+        content: 'An order hangs off the customer who placed it, reachable from investors.',
+      },
+    };
+    expect(proseViolations(adapterSectionChapters([bare])[0])).toEqual([
+      'is tuned to one use case: "investors"',
+    ]);
+  });
 });
 
 describe('a declared section reaches the reader', () => {

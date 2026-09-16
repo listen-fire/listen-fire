@@ -112,7 +112,7 @@ export {
   DEALROOM_PERSON_TYPE_ID,
 };
 
-const DEALROOM_HANDBOOK_CONTENT = `Dealroom is a database of **companies**, **investors**, **people** and **funding rounds**, with the links between them. It is read-only: look something up by name or domain, walk out to what it is connected to, and react to new rounds.
+const DEALROOM_HANDBOOK_CONTENT = `Dealroom is a database of \`Companies\`, \`Investors\`, \`People\` and \`Funding Rounds\`, with the links between them. It is read-only: look something up by name or domain, walk out to what it is connected to, and react to new rounds.
 
 ### looking something up
 
@@ -120,7 +120,7 @@ const DEALROOM_HANDBOOK_CONTENT = `Dealroom is a database of **companies**, **in
 company = FIRST(dealroom-[c:Companies WHERE \`Website\` = "acme.com"]->)
 \`\`\`
 
-A domain is the surest way to land on one company; a \`Name\` equality is an exact-name search and \`contains\` is a fuzzy one. Filter on \`Website\`, the domain on its own — \`Website URL\` holds the full URL and is applied after the fetch. Dealroom takes part of the WHERE itself and the rest is applied to what comes back, so the result is the same either way — only the amount fetched changes. What reaches Dealroom on \`Companies\`: \`Name\`, \`Website\`, \`Industries\`, \`Tags\`, \`Growth Stage\`, \`Company Status\`, \`HQ City\`, \`HQ Country\`, \`Total Funding\` and \`Launch Year\` bounds, and lower bounds on \`Last Updated\` and \`Created At\`. \`Investors\` takes \`Name\`, \`Website\`, \`Investor Type\`, \`Investment Stages\`, \`Industry Experience\` and the HQ location; \`People\` takes \`Name\`, \`Website\`, \`Gender\`, \`Backgrounds\`, the HQ location and the founder-strength flags; \`Funding Rounds\` takes \`Round\`, \`Date\` bounds, \`Amount\` bounds and \`Is Verified\`.
+A domain is the surest way to land on one company; a \`Name\` equality is an exact-name search and \`contains\` is a fuzzy one. Filter on \`Website\`, the domain on its own — \`Website URL\` holds the full URL and is applied after the fetch. Dealroom takes part of the WHERE itself and the rest is applied to what comes back, so the result is the same either way — only the amount fetched changes. What reaches Dealroom on \`Companies\`: \`Name\`, \`Website\`, \`Industries\`, \`Tags\`, \`Growth Stage\`, \`Company Status\`, \`HQ City\`, \`HQ Country\`, \`Total Funding\` and \`Launch Year\` bounds, and lower bounds on \`Last Updated\` and \`Created At\`. \`Investors\` takes \`Name\`, \`Website\`, \`Investor Type\`, \`Investment Stages\`, \`Industry Experience\` and the HQ location; \`People\` takes \`Name\`, \`Website\`, \`Gender\`, \`Backgrounds\`, the HQ location and flags like \`Is Strong Founder\`; \`Funding Rounds\` takes \`Round\`, \`Date\` bounds, \`Amount\` bounds and \`Is Verified\`.
 
 An \`ORDER BY\` on \`Name\`, \`Total Funding\`, \`Last Updated\` or \`Created At\` reaches Dealroom's own sort, so \`LIMIT 5\` is one page rather than a scan. An unbounded walk stops at Dealroom's 10,000-result ceiling with an error rather than a short answer — narrow it or bound it.
 
@@ -142,11 +142,11 @@ rounds = JOIN(company-[r:\`Funding Rounds\` ORDER BY \`Date\` DESC]->.\`Round\`,
 
 \`Team\` lands on a membership rather than the person: \`Titles\`, \`Is Founder\`, \`Is Executive\`, \`Is Partner\`, \`Past\`, \`Start Year\` and \`End Year\` are facts about the pair. \`Person\` from there is the full profile, and costs a fetch.
 
-An investor walks to \`Investments\`, \`Funding Rounds\`, \`Co-Investors\`, \`Funds\` and \`Team\` the same way. A person walks to \`Companies\` — that one rides the person's own record, so it costs nothing and carries the summary fields rather than the full company.
+An \`Investor\` walks to \`Investments\`, \`Funding Rounds\`, \`Co-Investors\`, \`Funds\` and \`Team\` the same way. A person walks to \`Companies\` — that one rides the person's own record, so it costs nothing and carries the summary fields rather than the full company.
 
 ### rounds
 
-A round's \`Company\` is who raised. Its \`Investors\` are participations, not investors: \`Lead\` is a fact about the pair, and \`Investor\` from one is the full record. \`Unknown Investors\` are names Dealroom has no record for, so they are NOT on \`Investors\`.
+A round's \`Company\` is who raised. Its \`Investors\` are participations, not backers themselves: \`Lead\` is a fact about the pair, and \`Investor\` from one is the full record. \`Unknown Investors\` are names Dealroom has no record for, so they are NOT on \`Investors\`.
 
 \`Date\` is the round's year and month as a date — Dealroom records no day, so every round in a month reads as the first of it.
 
@@ -189,7 +189,7 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
     'fires on rounds Dealroom recorded since the last poll, and the first poll ' +
     'delivers nothing.',
   handbookSection: {
-    title: 'Dealroom — companies, investors, people and rounds',
+    title: 'Dealroom: startups, rounds',
     content: DEALROOM_HANDBOOK_CONTENT,
   },
   triggerExpectation:
