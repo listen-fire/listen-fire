@@ -29,8 +29,6 @@
  * seeded round flows through the real getEvents → discriminate → seed → run
  * path. `--round` on SETUP narrows the listen (the `rounds` terms filter), so
  * an inject of any other round label must produce nothing.
- *
- * @decision plans/dealroom-adapter-2026-09-16/0_mission.md
  */
 
 import './_profile_loader';
