@@ -319,6 +319,66 @@ describe('MEMBERS — a closed type, in declaration order', () => {
   });
 });
 
+describe('a block head rooted at a value', () => {
+  // The handbook's chunked rehearsal: one extraction per piece, gathered by a
+  // block over the list of results. `MAP` hands each answer back in the
+  // currency it arrived in, so the list holds extraction ROOTS — something the
+  // value plane has no word for, which is exactly why it stays silent and runs.
+  const CHUNKED = [
+    '  pieces = CHUNKS(COALESCE(c.`Name`, ""), { size: 40 })',
+    '  found = MAP(pieces, (p) => {',
+    '    return extract from [p] {',
+    '      node company: "each company named" {',
+    '        name: "the company\'s name"',
+    '      }',
+    '    }',
+    '  })',
+  ].join('\n');
+
+  it('a list of extraction results walks', () => {
+    const body = [
+      CHUNKED,
+      '  found-[x:company]-> {',
+      '    write chat-[:note]-> { Body ?: x.name }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('one result held on the value plane walks too', () => {
+    const body = [
+      CHUNKED,
+      '  one = AT(found, 0)',
+      '  one-[x:company]-> {',
+      '    write chat-[:note]-> { Body ?: x.name }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a list whose type IS known is refused — no value is a position', () => {
+    const body = [
+      '  names = COLLECT(c-[m:Messages]->.`Text`)',
+      '  names-[x:company]-> {',
+      '    write chat-[:note]-> { Body: "x" }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_HEAD_NOT_A_POSITION');
+    expect(messages(body)).toContain('list of text');
+    expect(messages(body)).toContain('hop walks from a POSITION');
+  });
+
+  it('a plain text binding is refused the same way', () => {
+    const body = [
+      '  label = "hello"',
+      '  label-[x:company]-> {',
+      '    write chat-[:note]-> { Body: "x" }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_HEAD_NOT_A_POSITION');
+  });
+});
+
 describe('a parameter with no type, where nothing supplies one', () => {
   it('a bare closure parameter is refused', () => {
     const body = '  f = (x) => { return x }';

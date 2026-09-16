@@ -332,6 +332,10 @@ export const DiagnosticCodes = {
    *  `listen to`. Instantiation is explicit: construct + name the instance
    *  first (`go = manual()`), then reference it by name. */
   ADAPTER_NOT_CONSTRUCTED: 'MOV_ADAPTER_NOT_CONSTRUCTED',
+  /** A block head rooted at a name bound on the VALUE plane — text, a number, a
+   *  list of them. The value plane holds no positions, so the hop can never
+   *  land; a value whose type is not known stays silent and walks. */
+  HEAD_NOT_A_POSITION: 'MOV_HEAD_NOT_A_POSITION',
   /** The listened system has no inbound surface at all — its manifest names
    *  zero trigger types, so nothing it does can ever reach us. A definite
    *  fact, not an unknown: see `AdapterSpec.canFire`. */
@@ -5986,6 +5990,29 @@ class Checker {
       );
     }
     const rootType = rootSymbol ? this.symbolPositionType(rootSymbol) : undefined;
+    // A head rooted at a name that is a VALUE. There are no positions on the
+    // value plane — a value type is text, a number, a list or a dict of them,
+    // and never a record — so a hop off a name whose value type is KNOWN can
+    // never land anywhere, and it is said here rather than at run time, after
+    // everything that produced the value has already been paid for.
+    //
+    // A value whose type is NOT known stays silent and runs (the honesty rule):
+    // `MAP(pieces, (p) => { return extract … })` hands back a list of
+    // extraction results, which the value plane has no word for — the engine
+    // walks each of them in turn.
+    if (
+      steps !== undefined &&
+      rootType === undefined &&
+      head.root !== undefined &&
+      rootSymbol?.bindingPlane === 'scalar' &&
+      rootSymbol.fieldType !== undefined
+    ) {
+      this.report(
+        DiagnosticCodes.HEAD_NOT_A_POSITION,
+        `'${head.root}' is ${describeFieldType(rootSymbol.fieldType)}, and a hop walks from a POSITION — there is nothing here to hop from. A head starts at a record, an extraction's result, or a list of them ('found = MAP(pieces, (p) => { return extract … })'); read a value with the value functions instead.`,
+        head.span,
+      );
+    }
     // The head, recorded HERE — the one place the compiler reads a path — so a
     // renderer never has to read the syntax back. Landings are attached by the
     // caller that walks the chain; it is the only one that knows them.
