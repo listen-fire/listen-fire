@@ -102,6 +102,7 @@ function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
 \`\`\`
 
 - \`extract from [pieces]\` over a list is ONE extraction reading every piece as a segment; the \`MAP\` above is one extraction per piece. Reach for the \`MAP\` where each piece should be read on its own.
+- \`found\` is then a list of results — one per piece — and a block over it (\`found-[c:company]->\`) walks each in turn, in the order the pieces were in.
 - \`READ\` and \`CHUNKS\` are in the expressions chapter, the gathering node \`deduped\` in the anatomy chapter's *collect-what-you-wrote*, and the plain plugin call in *through* below.
 
 ### how hard it works
