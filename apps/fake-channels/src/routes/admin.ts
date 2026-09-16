@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { EntityStore } from '../store';
 import { seedDefaults } from '../seed';
 
-const SERVICES = ['affinity', 'attio', 'slack', 'sheets', 'airtable', 'granola', 'evertrace', 'webhook', 'whatsapp', 'gdrive', 'dropbox'];
+const SERVICES = ['affinity', 'attio', 'slack', 'sheets', 'airtable', 'granola', 'evertrace', 'dealroom', 'webhook', 'whatsapp', 'gdrive', 'dropbox'];
 
 export function adminRoutes(store: EntityStore): Router {
   const r = Router();

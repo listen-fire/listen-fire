@@ -1,4 +1,5 @@
 import type { EntityStore } from './store';
+import { mkLocation, mkParams } from './routes/dealroom';
 
 /**
  * Seeds the fake-channels store with default configuration data
@@ -1147,5 +1148,361 @@ export function seedDefaults(store: EntityStore) {
     );
 
     console.log('  Seeded evertrace: 2 companies, 2 schools, 4 signals, 2 searches (Stealth founders, Strong outside Japan), 2 lists (Pipeline with 1 entry, Watchlist)');
+  }
+
+  // ── Dealroom ──────────────────────────────────────────────
+  // 8 companies (3 industries × 3 countries, mixed growth stages), 6
+  // investors (3 VC, 2 angel, 1 corporate), 12 people (founders + a few
+  // executives, three of them doing double duty as a venture partner too —
+  // team membership is a company/investor↔person join either way), 12 rounds
+  // over the last 3 years with lead flags, and the joins the adapter's graph
+  // walks (round_investor, company_investor, team_membership, fund). All
+  // timestamps are fixed strings, not `now()` — sort/filter tests must be
+  // stable across runs. Two rounds (R4, R12) carry recent `created_utc` so a
+  // poll after a checkpoint has something to return without the admin seed.
+  if (store.list('dealroom', 'company').length === 0) {
+    const loc = (id: number, city: string, country: string, continent: string, lat: number, lon: number) =>
+      mkLocation({ id, city, country, continent, lat, lon });
+
+    const companies = [
+      {
+        id: '1', name: 'Nimbusly', path: 'nimbusly', tagline: 'Cash flow forecasting for SMBs',
+        about: 'Nimbusly gives small businesses a real-time picture of their cash position.',
+        website_url: 'https://nimbusly.io', linkedin_url: 'https://www.linkedin.com/company/nimbusly/', twitter_url: null,
+        employees: '11-50', employees_latest: 38, growth_stage: 'early stage', company_status: 'active',
+        launch_year: 2022, launch_month: 3,
+        industries: mkParams(['Fintech'], 101), sub_industries: mkParams(['Accounting Software'], 201),
+        technologies: mkParams(['Open Banking'], 301), tags: mkParams(['SMB', 'Cash Flow'], 401),
+        hq_locations: [loc(1001, 'San Francisco', 'United States', 'North America', 37.7749, -122.4194)],
+        job_openings: 4, patents_count: 0, has_strong_founder: true, has_super_founder: false, has_promising_founder: false,
+        last_updated: '2026-08-01T09:00:00+00:00', last_updated_utc: '2026-08-01 09:00:00', created_utc: '2022-03-10 12:00:00',
+      },
+      {
+        id: '2', name: 'Ledgerly', path: 'ledgerly', tagline: 'Bookkeeping automation for freelancers',
+        about: 'Ledgerly reconciles invoices and receipts automatically for freelance professionals.',
+        website_url: 'https://ledgerly.co.uk', linkedin_url: 'https://www.linkedin.com/company/ledgerly/', twitter_url: null,
+        employees: '2-10', employees_latest: 9, growth_stage: 'seed stage', company_status: 'active',
+        launch_year: 2023, launch_month: 1,
+        industries: mkParams(['Fintech'], 102), sub_industries: mkParams(['Bookkeeping'], 202),
+        technologies: mkParams(['OCR'], 302), tags: mkParams(['Freelance'], 402),
+        hq_locations: [loc(1002, 'London', 'United Kingdom', 'Europe', 51.5072, -0.1276)],
+        job_openings: 2, patents_count: 0, has_strong_founder: true, has_super_founder: false, has_promising_founder: true,
+        last_updated: '2026-07-20T09:00:00+00:00', last_updated_utc: '2026-07-20 09:00:00', created_utc: '2023-01-05 12:00:00',
+      },
+      {
+        id: '3', name: 'Vaultwise', path: 'vaultwise', tagline: 'Treasury management for scale-ups',
+        about: 'Vaultwise helps growth-stage companies manage multi-currency treasury operations.',
+        website_url: 'https://vaultwise.de', linkedin_url: 'https://www.linkedin.com/company/vaultwise/', twitter_url: null,
+        employees: '51-200', employees_latest: 140, growth_stage: 'late stage', company_status: 'active',
+        launch_year: 2020, launch_month: 6,
+        industries: mkParams(['Fintech'], 103), sub_industries: mkParams(['Treasury Management'], 203),
+        technologies: mkParams(['Payments Infrastructure'], 303), tags: mkParams(['Treasury', 'B2B'], 403),
+        hq_locations: [loc(1003, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        job_openings: 9, patents_count: 1, has_strong_founder: true, has_super_founder: true, has_promising_founder: false,
+        last_updated: '2026-09-01T09:00:00+00:00', last_updated_utc: '2026-09-01 09:00:00', created_utc: '2020-06-15 12:00:00',
+      },
+      {
+        id: '4', name: 'Carewave', path: 'carewave', tagline: 'Remote patient monitoring platform',
+        about: 'Carewave connects chronic care patients to their clinical teams between visits.',
+        website_url: 'https://carewave.health', linkedin_url: 'https://www.linkedin.com/company/carewave/', twitter_url: null,
+        employees: '201-500', employees_latest: 310, growth_stage: 'breakout stage', company_status: 'active',
+        launch_year: 2019, launch_month: 9,
+        industries: mkParams(['HealthTech'], 104), sub_industries: mkParams(['Remote Monitoring'], 204),
+        technologies: mkParams(['Wearables'], 304), tags: mkParams(['Chronic Care'], 404),
+        hq_locations: [loc(1004, 'Boston', 'United States', 'North America', 42.3601, -71.0589)],
+        job_openings: 14, patents_count: 3, has_strong_founder: true, has_super_founder: true, has_promising_founder: false,
+        last_updated: '2026-09-05T09:00:00+00:00', last_updated_utc: '2026-09-05 09:00:00', created_utc: '2019-09-20 12:00:00',
+      },
+      {
+        id: '5', name: 'Curely', path: 'curely', tagline: 'Async triage for primary care clinics',
+        about: 'Curely lets primary care clinics triage patient messages without a phone queue.',
+        website_url: 'https://curely.io', linkedin_url: 'https://www.linkedin.com/company/curely/', twitter_url: null,
+        employees: '11-50', employees_latest: 22, growth_stage: 'early stage', company_status: 'active',
+        launch_year: 2023, launch_month: 4,
+        industries: mkParams(['HealthTech'], 105), sub_industries: mkParams(['Clinic Operations'], 205),
+        technologies: mkParams(['Messaging'], 305), tags: mkParams(['Primary Care'], 405),
+        hq_locations: [loc(1005, 'London', 'United Kingdom', 'Europe', 51.5072, -0.1276)],
+        job_openings: 3, patents_count: 0, has_strong_founder: false, has_super_founder: false, has_promising_founder: true,
+        last_updated: '2026-08-15T09:00:00+00:00', last_updated_utc: '2026-08-15 09:00:00', created_utc: '2023-04-02 12:00:00',
+      },
+      {
+        id: '6', name: 'Pulsegrid', path: 'pulsegrid', tagline: 'Staffing analytics for hospital networks',
+        about: 'Pulsegrid forecasts hospital staffing needs from historical admissions data.',
+        website_url: 'https://pulsegrid.de', linkedin_url: 'https://www.linkedin.com/company/pulsegrid/', twitter_url: null,
+        employees: '2-10', employees_latest: 7, growth_stage: 'seed stage', company_status: 'active',
+        launch_year: 2023, launch_month: 2,
+        industries: mkParams(['HealthTech'], 106), sub_industries: mkParams(['Workforce Analytics'], 206),
+        technologies: mkParams(['Forecasting Models'], 306), tags: mkParams(['Hospitals'], 406),
+        hq_locations: [loc(1006, 'Munich', 'Germany', 'Europe', 48.1351, 11.582)],
+        job_openings: 1, patents_count: 0, has_strong_founder: false, has_super_founder: false, has_promising_founder: false,
+        last_updated: '2026-06-10T09:00:00+00:00', last_updated_utc: '2026-06-10 09:00:00', created_utc: '2023-02-01 12:00:00',
+      },
+      {
+        id: '7', name: 'Codeforge', path: 'codeforge', tagline: 'Build caching for monorepos',
+        about: 'Codeforge is a remote build cache and task orchestrator for large monorepos.',
+        website_url: 'https://codeforge.dev', linkedin_url: 'https://www.linkedin.com/company/codeforge/', twitter_url: null,
+        employees: '11-50', employees_latest: 26, growth_stage: 'late stage', company_status: 'active',
+        launch_year: 2021, launch_month: 5,
+        industries: mkParams(['Developer Tools'], 107), sub_industries: mkParams(['Build Systems'], 207),
+        technologies: mkParams(['Distributed Caching'], 307), tags: mkParams(['Monorepo', 'CI/CD'], 407),
+        hq_locations: [loc(1007, 'Austin', 'United States', 'North America', 30.2672, -97.7431)],
+        job_openings: 6, patents_count: 0, has_strong_founder: true, has_super_founder: false, has_promising_founder: false,
+        last_updated: '2026-08-25T09:00:00+00:00', last_updated_utc: '2026-08-25 09:00:00', created_utc: '2021-05-18 12:00:00',
+      },
+      {
+        id: '8', name: 'Devsloop', path: 'devsloop', tagline: 'Preview environments on every pull request',
+        about: 'Devsloop spins up a full preview environment for every pull request automatically.',
+        website_url: 'https://devsloop.dev', linkedin_url: 'https://www.linkedin.com/company/devsloop/', twitter_url: null,
+        employees: '2-10', employees_latest: 6, growth_stage: 'early stage', company_status: 'active',
+        launch_year: 2024, launch_month: 1,
+        industries: mkParams(['Developer Tools'], 108), sub_industries: mkParams(['Preview Environments'], 208),
+        technologies: mkParams(['Kubernetes'], 308), tags: mkParams(['DevOps'], 408),
+        hq_locations: [loc(1008, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        job_openings: 2, patents_count: 0, has_strong_founder: false, has_super_founder: false, has_promising_founder: true,
+        last_updated: '2026-09-02T09:00:00+00:00', last_updated_utc: '2026-09-02 09:00:00', created_utc: '2024-01-08 12:00:00',
+      },
+    ];
+    for (const c of companies) store.create('dealroom', 'company', c, c.id);
+
+    const investors = [
+      {
+        id: '1', name: 'Northbridge Ventures', path: 'northbridge_ventures', investor_type: 'Venture Capital',
+        tagline: 'Early to growth stage fintech and healthtech investor', about: 'Northbridge backs fintech and healthtech founders from seed to growth.',
+        website_url: 'https://northbridge.vc', linkedin_url: 'https://www.linkedin.com/company/northbridge-ventures/',
+        employees: '11-50', employees_latest: 24, deal_size: '$2M-$20M', launch_year: 2014,
+        investment_stages: mkParams(['Series A', 'Series B'], 501), industry_experience: mkParams(['Fintech', 'HealthTech'], 601),
+        location_experience: mkParams(['North America', 'Europe'], 701), tags: mkParams(['B2B'], 801),
+        hq_locations: [loc(1101, 'San Francisco', 'United States', 'North America', 37.7749, -122.4194)],
+        last_updated: '2026-09-01T09:00:00+00:00', last_updated_utc: '2026-09-01 09:00:00', created_utc: '2014-01-10 12:00:00',
+      },
+      {
+        id: '2', name: 'Solstice Capital', path: 'solstice_capital', investor_type: 'Venture Capital',
+        tagline: 'Seed specialist backing European fintech', about: 'Solstice writes first checks into European fintech and dev-tools founders.',
+        website_url: 'https://solsticecap.com', linkedin_url: 'https://www.linkedin.com/company/solstice-capital/',
+        employees: '2-10', employees_latest: 8, deal_size: '$200K-$3M', launch_year: 2018,
+        investment_stages: mkParams(['Pre-Seed', 'Seed', 'Series A'], 502), industry_experience: mkParams(['Fintech', 'Developer Tools'], 602),
+        location_experience: mkParams(['Europe'], 702), tags: mkParams(['Seed'], 802),
+        hq_locations: [loc(1102, 'London', 'United Kingdom', 'Europe', 51.5072, -0.1276)],
+        last_updated: '2026-08-28T09:00:00+00:00', last_updated_utc: '2026-08-28 09:00:00', created_utc: '2018-03-01 12:00:00',
+      },
+      {
+        id: '3', name: 'Ferrovia Partners', path: 'ferrovia_partners', investor_type: 'Venture Capital',
+        tagline: 'DACH-region growth investor', about: 'Ferrovia backs founders across the DACH region from seed through growth.',
+        website_url: 'https://ferrovia.partners', linkedin_url: 'https://www.linkedin.com/company/ferrovia-partners/',
+        employees: '11-50', employees_latest: 19, deal_size: '$1M-$25M', launch_year: 2011,
+        investment_stages: mkParams(['Seed', 'Series A', 'Series B'], 503), industry_experience: mkParams(['Fintech', 'HealthTech', 'Developer Tools'], 603),
+        location_experience: mkParams(['Europe'], 703), tags: mkParams(['DACH'], 803),
+        hq_locations: [loc(1103, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        last_updated: '2026-09-03T09:00:00+00:00', last_updated_utc: '2026-09-03 09:00:00', created_utc: '2011-06-01 12:00:00',
+      },
+      {
+        id: '4', name: 'Elena Krauss', path: 'elena_krauss', investor_type: 'Angel Investor',
+        tagline: 'Fintech operator turned angel', about: 'Elena angel-invests in fintech and healthtech after a decade operating payments companies.',
+        website_url: null, linkedin_url: 'https://www.linkedin.com/in/elena-krauss/',
+        employees: null, employees_latest: null, deal_size: '$25K-$150K', launch_year: 2019,
+        investment_stages: mkParams(['Pre-Seed', 'Seed'], 504), industry_experience: mkParams(['Fintech', 'HealthTech'], 604),
+        location_experience: mkParams(['Europe'], 704), tags: mkParams(['Angel'], 804),
+        hq_locations: [loc(1104, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        last_updated: '2026-07-15T09:00:00+00:00', last_updated_utc: '2026-07-15 09:00:00', created_utc: '2019-05-20 12:00:00',
+      },
+      {
+        id: '5', name: 'Marcus Boone', path: 'marcus_boone', investor_type: 'Angel Investor',
+        tagline: 'Serial founder and angel investor', about: 'Marcus angel-invests after two exits in healthtech and fintech.',
+        website_url: null, linkedin_url: 'https://www.linkedin.com/in/marcus-boone/',
+        employees: null, employees_latest: null, deal_size: '$25K-$100K', launch_year: 2017,
+        investment_stages: mkParams(['Seed'], 505), industry_experience: mkParams(['Fintech', 'HealthTech'], 605),
+        location_experience: mkParams(['North America'], 705), tags: mkParams(['Angel'], 805),
+        hq_locations: [loc(1105, 'San Francisco', 'United States', 'North America', 37.7749, -122.4194)],
+        last_updated: '2026-06-30T09:00:00+00:00', last_updated_utc: '2026-06-30 09:00:00', created_utc: '2017-02-14 12:00:00',
+      },
+      {
+        id: '6', name: 'Atlas Industrial Holdings', path: 'atlas_industrial_holdings', investor_type: 'Corporate Investor',
+        tagline: 'Corporate venture arm investing in healthtech', about: 'Atlas is the corporate venture arm of a hospital operator, investing in care-delivery technology.',
+        website_url: 'https://atlasindustrial.example', linkedin_url: 'https://www.linkedin.com/company/atlas-industrial-holdings/',
+        employees: '51-200', employees_latest: 60, deal_size: '$5M-$40M', launch_year: 2016,
+        investment_stages: mkParams(['Series B', 'Series C'], 506), industry_experience: mkParams(['HealthTech'], 606),
+        location_experience: mkParams(['North America'], 706), tags: mkParams(['Corporate'], 806),
+        hq_locations: [loc(1106, 'Boston', 'United States', 'North America', 42.3601, -71.0589)],
+        last_updated: '2026-08-10T09:00:00+00:00', last_updated_utc: '2026-08-10 09:00:00', created_utc: '2016-09-01 12:00:00',
+      },
+    ];
+    for (const i of investors) store.create('dealroom', 'investor', i, i.id);
+
+    const people = [
+      { id: '1', name: 'Priya Anand', path: 'priya_anand', tagline: 'CEO & Co-Founder, Nimbusly', linkedin_url: 'https://www.linkedin.com/in/priya-anand/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: false, is_promising_founder: false,
+        founder_score: 78, founded_companies_total_funding: 16.5, backgrounds: mkParams(['Product'], 901),
+        hq_locations: [loc(1201, 'San Francisco', 'United States', 'North America', 37.7749, -122.4194)],
+        last_updated: '2026-08-01T09:00:00+00:00', last_updated_utc: '2026-08-01 09:00:00', created_utc: '2022-03-10 12:00:00' },
+      { id: '2', name: 'Tom Ridley', path: 'tom_ridley', tagline: 'CTO & Co-Founder, Nimbusly · Venture Partner, Northbridge Ventures', linkedin_url: 'https://www.linkedin.com/in/tom-ridley/', twitter_url: null, website_url: null,
+        gender: 'male', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: false, is_promising_founder: false,
+        founder_score: 74, founded_companies_total_funding: 16.5, backgrounds: mkParams(['Engineering'], 902),
+        hq_locations: [loc(1202, 'San Francisco', 'United States', 'North America', 37.7749, -122.4194)],
+        last_updated: '2026-08-01T09:00:00+00:00', last_updated_utc: '2026-08-01 09:00:00', created_utc: '2022-03-10 12:00:00' },
+      { id: '3', name: 'Sofia Marchetti', path: 'sofia_marchetti', tagline: 'CEO & Founder, Ledgerly', linkedin_url: 'https://www.linkedin.com/in/sofia-marchetti/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: false, is_promising_founder: true,
+        founder_score: 70, founded_companies_total_funding: 10.8, backgrounds: mkParams(['Finance'], 903),
+        hq_locations: [loc(1203, 'London', 'United Kingdom', 'Europe', 51.5072, -0.1276)],
+        last_updated: '2026-07-20T09:00:00+00:00', last_updated_utc: '2026-07-20 09:00:00', created_utc: '2023-01-05 12:00:00' },
+      { id: '4', name: 'Hugo Bennett', path: 'hugo_bennett', tagline: 'CEO & Co-Founder, Vaultwise', linkedin_url: 'https://www.linkedin.com/in/hugo-bennett/', twitter_url: null, website_url: null,
+        gender: 'male', is_founder: true, is_serial_founder: true, is_strong_founder: true, is_super_founder: true, is_promising_founder: false,
+        founder_score: 91, founded_companies_total_funding: 39, backgrounds: mkParams(['Operations'], 904),
+        hq_locations: [loc(1204, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        last_updated: '2026-09-01T09:00:00+00:00', last_updated_utc: '2026-09-01 09:00:00', created_utc: '2020-06-15 12:00:00' },
+      { id: '5', name: 'Lena Fischer', path: 'lena_fischer', tagline: 'COO & Co-Founder, Vaultwise · Venture Partner, Solstice Capital', linkedin_url: 'https://www.linkedin.com/in/lena-fischer/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: true, is_promising_founder: false,
+        founder_score: 88, founded_companies_total_funding: 39, backgrounds: mkParams(['Operations', 'Finance'], 905),
+        hq_locations: [loc(1205, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        last_updated: '2026-09-01T09:00:00+00:00', last_updated_utc: '2026-09-01 09:00:00', created_utc: '2020-06-15 12:00:00' },
+      { id: '6', name: 'Dana Okafor', path: 'dana_okafor', tagline: 'CEO & Founder, Carewave', linkedin_url: 'https://www.linkedin.com/in/dana-okafor/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: true, is_promising_founder: false,
+        founder_score: 93, founded_companies_total_funding: 47, backgrounds: mkParams(['Clinical', 'Product'], 906),
+        hq_locations: [loc(1206, 'Boston', 'United States', 'North America', 42.3601, -71.0589)],
+        last_updated: '2026-09-05T09:00:00+00:00', last_updated_utc: '2026-09-05 09:00:00', created_utc: '2019-09-20 12:00:00' },
+      { id: '7', name: 'James Whitfield', path: 'james_whitfield', tagline: 'CFO, Carewave', linkedin_url: 'https://www.linkedin.com/in/james-whitfield/', twitter_url: null, website_url: null,
+        gender: 'male', is_founder: false, is_serial_founder: false, is_strong_founder: false, is_super_founder: false, is_promising_founder: false,
+        founder_score: 0, founded_companies_total_funding: 0, backgrounds: mkParams(['Finance'], 907),
+        hq_locations: [loc(1207, 'Boston', 'United States', 'North America', 42.3601, -71.0589)],
+        last_updated: '2026-09-05T09:00:00+00:00', last_updated_utc: '2026-09-05 09:00:00', created_utc: '2023-02-01 12:00:00' },
+      { id: '8', name: 'Grace Liu', path: 'grace_liu', tagline: 'CEO & Founder, Curely', linkedin_url: 'https://www.linkedin.com/in/grace-liu/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: false, is_super_founder: false, is_promising_founder: true,
+        founder_score: 61, founded_companies_total_funding: 2.1, backgrounds: mkParams(['Clinical'], 908),
+        hq_locations: [loc(1208, 'London', 'United Kingdom', 'Europe', 51.5072, -0.1276)],
+        last_updated: '2026-08-15T09:00:00+00:00', last_updated_utc: '2026-08-15 09:00:00', created_utc: '2023-04-02 12:00:00' },
+      { id: '9', name: 'Milo Petrov', path: 'milo_petrov', tagline: 'CEO & Founder, Pulsegrid', linkedin_url: 'https://www.linkedin.com/in/milo-petrov/', twitter_url: null, website_url: null,
+        gender: 'male', is_founder: true, is_serial_founder: false, is_strong_founder: false, is_super_founder: false, is_promising_founder: false,
+        founder_score: 52, founded_companies_total_funding: 1.5, backgrounds: mkParams(['Data Science'], 909),
+        hq_locations: [loc(1209, 'Munich', 'Germany', 'Europe', 48.1351, 11.582)],
+        last_updated: '2026-06-10T09:00:00+00:00', last_updated_utc: '2026-06-10 09:00:00', created_utc: '2023-02-01 12:00:00' },
+      { id: '10', name: 'Ana Souza', path: 'ana_souza', tagline: 'CEO & Co-Founder, Codeforge', linkedin_url: 'https://www.linkedin.com/in/ana-souza/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: false, is_promising_founder: false,
+        founder_score: 76, founded_companies_total_funding: 10, backgrounds: mkParams(['Engineering'], 910),
+        hq_locations: [loc(1210, 'Austin', 'United States', 'North America', 30.2672, -97.7431)],
+        last_updated: '2026-08-25T09:00:00+00:00', last_updated_utc: '2026-08-25 09:00:00', created_utc: '2021-05-18 12:00:00' },
+      { id: '11', name: 'Ben Harcourt', path: 'ben_harcourt', tagline: 'CTO & Co-Founder, Codeforge · Venture Partner, Ferrovia Partners', linkedin_url: 'https://www.linkedin.com/in/ben-harcourt/', twitter_url: null, website_url: null,
+        gender: 'male', is_founder: true, is_serial_founder: false, is_strong_founder: true, is_super_founder: false, is_promising_founder: false,
+        founder_score: 72, founded_companies_total_funding: 10, backgrounds: mkParams(['Engineering'], 911),
+        hq_locations: [loc(1211, 'Austin', 'United States', 'North America', 30.2672, -97.7431)],
+        last_updated: '2026-08-25T09:00:00+00:00', last_updated_utc: '2026-08-25 09:00:00', created_utc: '2021-05-18 12:00:00' },
+      { id: '12', name: 'Nora Vance', path: 'nora_vance', tagline: 'CEO & Founder, Devsloop', linkedin_url: 'https://www.linkedin.com/in/nora-vance/', twitter_url: null, website_url: null,
+        gender: 'female', is_founder: true, is_serial_founder: false, is_strong_founder: false, is_super_founder: false, is_promising_founder: true,
+        founder_score: 58, founded_companies_total_funding: 2, backgrounds: mkParams(['Engineering', 'DevOps'], 912),
+        hq_locations: [loc(1212, 'Berlin', 'Germany', 'Europe', 52.52, 13.405)],
+        last_updated: '2026-09-02T09:00:00+00:00', last_updated_utc: '2026-09-02 09:00:00', created_utc: '2024-01-08 12:00:00' },
+    ];
+    for (const p of people) store.create('dealroom', 'person', p, p.id);
+
+    const membership = (
+      id: string, orgType: 'company' | 'investor', orgId: string, personId: string, titleId: number, titleName: string,
+      opts: { founder?: boolean; executive?: boolean; partner?: boolean; start: number; end?: number | null },
+    ) => ({
+      id, orgType, orgId, personId, titles: [param(titleId, titleName)], past: false,
+      is_founder: opts.founder ?? false, is_executive: opts.executive ?? false, is_partner: opts.partner ?? false,
+      year_start: opts.start, year_end: opts.end ?? null,
+    });
+    function param(id: number, name: string) {
+      return { id, name };
+    }
+
+    const teamMemberships = [
+      membership('tm_1', 'company', '1', '1', 1301, 'Chief Executive Officer', { founder: true, executive: true, start: 2022 }),
+      membership('tm_2', 'company', '1', '2', 1302, 'Chief Technology Officer', { founder: true, executive: true, start: 2022 }),
+      membership('tm_3', 'company', '2', '3', 1303, 'Chief Executive Officer', { founder: true, executive: true, start: 2023 }),
+      membership('tm_4', 'company', '3', '4', 1304, 'Chief Executive Officer', { founder: true, executive: true, start: 2020 }),
+      membership('tm_5', 'company', '3', '5', 1305, 'Chief Operating Officer', { founder: true, executive: true, start: 2020 }),
+      membership('tm_6', 'company', '4', '6', 1306, 'Chief Executive Officer', { founder: true, executive: true, start: 2019 }),
+      membership('tm_7', 'company', '4', '7', 1307, 'Chief Financial Officer', { executive: true, start: 2023 }),
+      membership('tm_8', 'company', '5', '8', 1308, 'Chief Executive Officer', { founder: true, executive: true, start: 2023 }),
+      membership('tm_9', 'company', '6', '9', 1309, 'Chief Executive Officer', { founder: true, executive: true, start: 2023 }),
+      membership('tm_10', 'company', '7', '10', 1310, 'Chief Executive Officer', { founder: true, executive: true, start: 2021 }),
+      membership('tm_11', 'company', '7', '11', 1311, 'Chief Technology Officer', { founder: true, executive: true, start: 2021 }),
+      membership('tm_12', 'company', '8', '12', 1312, 'Chief Executive Officer', { founder: true, executive: true, start: 2024 }),
+      membership('tm_13', 'investor', '1', '2', 1313, 'Venture Partner', { partner: true, start: 2025 }),
+      membership('tm_14', 'investor', '2', '5', 1314, 'Venture Partner', { partner: true, start: 2025 }),
+      membership('tm_15', 'investor', '3', '11', 1315, 'Venture Partner', { partner: true, start: 2025 }),
+    ];
+    for (const tm of teamMemberships) store.create('dealroom', 'team_membership', tm, tm.id);
+
+    const round = (
+      id: string, companyId: string, roundLabel: string, std: string, date: string,
+      amount: number | null, currency: string, valuation: number | null, verified: boolean, undisclosed: boolean,
+      eur: number | null, usd: number | null, createdUtc: string,
+    ) => ({
+      id, companyId, date, year: Number(date.slice(0, 4)), month: Number(date.slice(5, 7)),
+      amount, amount_source: amount == null ? null : Math.round(amount * 1_000_000), currency,
+      round: roundLabel, standardised_round_label: std, valuation, is_verified: verified, is_undisclosed: undisclosed,
+      news_source: null, unknown_investors: [], amount_eur_million: eur, amount_usd_million: usd,
+      last_updated: `${createdUtc.replace(' ', 'T')}+00:00`, last_updated_utc: createdUtc, created_utc: createdUtc,
+    });
+
+    const rounds = [
+      round('1', '1', 'seed', 'Seed', '2023-10-12', 2.5, 'USD', 12, true, false, 2.3, 2.5, '2023-10-15 09:00:00'),
+      round('2', '1', 'series a', 'Series A', '2025-02-20', 14, 'USD', 70, true, false, 12.88, 14, '2025-02-22 10:00:00'),
+      round('3', '2', 'seed', 'Seed', '2023-12-05', 1.8, 'GBP', 9, true, false, 2.09, 2.29, '2023-12-07 09:30:00'),
+      round('4', '2', 'series a', 'Series A', '2026-07-02', 9, 'GBP', 45, true, false, 10.44, 11.43, '2026-07-04 11:00:00'),
+      round('5', '3', 'series a', 'Series A', '2023-05-09', 11, 'EUR', 55, true, false, 11, 11.99, '2023-05-11 08:45:00'),
+      round('6', '3', 'series b', 'Series B', '2024-04-22', 28, 'EUR', 140, true, false, 28, 30.52, '2024-04-24 09:15:00'),
+      round('7', '4', 'series a', 'Series A', '2023-08-14', 15, 'USD', 60, true, false, 13.8, 15, '2023-08-16 10:20:00'),
+      round('8', '4', 'series b', 'Series B', '2024-11-03', 32, 'USD', 180, true, false, 29.44, 32, '2024-11-05 09:00:00'),
+      round('9', '5', 'seed', 'Seed', '2024-02-27', 2.1, 'GBP', 10, true, false, 2.44, 2.67, '2024-03-01 09:40:00'),
+      // Undisclosed — amount/valuation/currency conversions null on purpose,
+      // to exercise the nullable-amount path the adapter must tolerate.
+      round('10', '6', 'seed', 'Seed', '2023-09-19', null, 'EUR', null, false, true, null, null, '2023-09-21 10:05:00'),
+      round('11', '7', 'series a', 'Series A', '2025-05-08', 10, 'USD', 55, true, false, 9.2, 10, '2025-05-10 09:50:00'),
+      round('12', '8', 'seed', 'Seed', '2026-08-30', 2, 'EUR', 9, true, false, 2, 2.18, '2026-08-30 12:00:00'),
+    ];
+    for (const rnd of rounds) store.create('dealroom', 'round', rnd, rnd.id);
+
+    const roundInvestors: { id: string; roundId: string; investorId: string; lead: boolean }[] = [
+      { id: 'ri_1', roundId: '1', investorId: '2', lead: true }, { id: 'ri_2', roundId: '1', investorId: '5', lead: false },
+      { id: 'ri_3', roundId: '2', investorId: '1', lead: true }, { id: 'ri_4', roundId: '2', investorId: '2', lead: false },
+      { id: 'ri_5', roundId: '3', investorId: '2', lead: true },
+      { id: 'ri_6', roundId: '4', investorId: '3', lead: true }, { id: 'ri_7', roundId: '4', investorId: '2', lead: false }, { id: 'ri_8', roundId: '4', investorId: '4', lead: false },
+      { id: 'ri_9', roundId: '5', investorId: '3', lead: true },
+      { id: 'ri_10', roundId: '6', investorId: '3', lead: true }, { id: 'ri_11', roundId: '6', investorId: '1', lead: false },
+      { id: 'ri_12', roundId: '7', investorId: '1', lead: true }, { id: 'ri_13', roundId: '7', investorId: '5', lead: false },
+      { id: 'ri_14', roundId: '8', investorId: '6', lead: true }, { id: 'ri_15', roundId: '8', investorId: '1', lead: false },
+      { id: 'ri_16', roundId: '9', investorId: '2', lead: true }, { id: 'ri_17', roundId: '9', investorId: '4', lead: false },
+      { id: 'ri_18', roundId: '10', investorId: '3', lead: true },
+      { id: 'ri_19', roundId: '11', investorId: '1', lead: true }, { id: 'ri_20', roundId: '11', investorId: '2', lead: false },
+      { id: 'ri_21', roundId: '12', investorId: '3', lead: true }, { id: 'ri_22', roundId: '12', investorId: '4', lead: false },
+    ];
+    for (const ri of roundInvestors) store.create('dealroom', 'round_investor', ri, ri.id);
+
+    // Per-company investor roster (lead = led at least one of that company's
+    // rounds; exited is a standalone fact, not derivable from round history —
+    // one row set true to prove the field is wired).
+    const companyInvestors: { id: string; companyId: string; investorId: string; lead: boolean; exited: boolean }[] = [
+      { id: 'ci_1', companyId: '1', investorId: '1', lead: true, exited: false },
+      { id: 'ci_2', companyId: '1', investorId: '2', lead: true, exited: false },
+      { id: 'ci_3', companyId: '1', investorId: '5', lead: false, exited: true },
+      { id: 'ci_4', companyId: '2', investorId: '2', lead: true, exited: false },
+      { id: 'ci_5', companyId: '2', investorId: '3', lead: true, exited: false },
+      { id: 'ci_6', companyId: '2', investorId: '4', lead: false, exited: false },
+      { id: 'ci_7', companyId: '3', investorId: '3', lead: true, exited: false },
+      { id: 'ci_8', companyId: '3', investorId: '1', lead: false, exited: false },
+      { id: 'ci_9', companyId: '4', investorId: '1', lead: true, exited: false },
+      { id: 'ci_10', companyId: '4', investorId: '5', lead: false, exited: false },
+      { id: 'ci_11', companyId: '4', investorId: '6', lead: true, exited: false },
+      { id: 'ci_12', companyId: '5', investorId: '2', lead: true, exited: false },
+      { id: 'ci_13', companyId: '5', investorId: '4', lead: false, exited: false },
+      { id: 'ci_14', companyId: '6', investorId: '3', lead: true, exited: false },
+      { id: 'ci_15', companyId: '7', investorId: '1', lead: true, exited: false },
+      { id: 'ci_16', companyId: '7', investorId: '2', lead: false, exited: false },
+      { id: 'ci_17', companyId: '8', investorId: '3', lead: true, exited: false },
+      { id: 'ci_18', companyId: '8', investorId: '4', lead: false, exited: false },
+    ];
+    for (const ci of companyInvestors) store.create('dealroom', 'company_investor', ci, ci.id);
+
+    const funds = [
+      { id: '1', investorId: '1', fund_name: 'Northbridge Fund II', fund_type: 'Venture Capital', amount: 150000000, currency: 'USD', is_closed: true, date: '2022-01-15T00:00:00+00:00', date_utc: '2022-01-15 00:00:00' },
+      { id: '2', investorId: '1', fund_name: 'Northbridge Fund III', fund_type: 'Venture Capital', amount: 220000000, currency: 'USD', is_closed: false, date: '2025-03-01T00:00:00+00:00', date_utc: '2025-03-01 00:00:00' },
+      { id: '3', investorId: '2', fund_name: 'Solstice Growth Fund I', fund_type: 'Venture Capital', amount: 90000000, currency: 'GBP', is_closed: true, date: '2021-11-10T00:00:00+00:00', date_utc: '2021-11-10 00:00:00' },
+      { id: '4', investorId: '3', fund_name: 'Ferrovia Fund I', fund_type: 'Venture Capital', amount: 120000000, currency: 'EUR', is_closed: true, date: '2020-06-01T00:00:00+00:00', date_utc: '2020-06-01 00:00:00' },
+      { id: '5', investorId: '6', fund_name: 'Atlas Ventures Fund', fund_type: 'Corporate', amount: 60000000, currency: 'USD', is_closed: false, date: '2023-09-01T00:00:00+00:00', date_utc: '2023-09-01 00:00:00' },
+    ];
+    for (const f of funds) store.create('dealroom', 'fund', f, f.id);
+
+    console.log('  Seeded dealroom: 8 companies, 6 investors, 12 people, 12 rounds, 22 round-investor rows, 18 company-investor rows, 15 team memberships, 5 funds');
   }
 }
