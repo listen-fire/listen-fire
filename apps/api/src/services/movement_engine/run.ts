@@ -126,6 +126,7 @@ import type {
   Program,
   ProgramLink,
   ResolveFile,
+  ShapeNode,
   Statement,
   TraversalBlock,
   WriteExpression,
@@ -200,6 +201,7 @@ import {
   type Binding,
   type DeferredWalk,
   type NodeEdge,
+  type LocalLandingShape,
   type HandleGraph,
   type MovementEvalResult,
   type MovementExprContext,
@@ -866,6 +868,25 @@ function blockValue(returned: Binding[]): Binding {
 /** The value a slot holds when its arm handed nothing back — a filled slot and
  *  an empty one are the same shape, so a null check is the only difference. */
 const NULL_SLOT: Binding = { kind: 'value', value: null, provenance: NO_PROVENANCE };
+
+/**
+ * What a landing on a `<Entry>`-typed edge starts with — the declaration's
+ * nested nodes, as a tree.
+ *
+ * The nesting IS the edge (`shapeToSchema` composes a child's key the same
+ * way), so this is that same fact in the interpreter's currency: the names an
+ * appendable edge has to exist under for a `link` to have somewhere to append.
+ * Nothing but a node DECLARATION says it, so anything else resolves to nothing.
+ */
+function declaredLandingShape(binding: Binding | undefined): LocalLandingShape | undefined {
+  if (binding?.kind !== 'shape') return undefined;
+  const shape = nestedEdgeNames(binding.declaration.root);
+  return Object.keys(shape).length > 0 ? shape : undefined;
+}
+
+function nestedEdgeNames(node: ShapeNode): LocalLandingShape {
+  return Object.fromEntries(node.children.map((child) => [child.name, nestedEdgeNames(child)]));
+}
 
 /** What a `link` may append to a run-local node's edge: the binding kinds that
  *  ARE positions. A value, an instance or a closure is not one, and landing it
@@ -6619,12 +6640,27 @@ class Interpreter {
           edges[entry.name] = { kind: 'landed', landings };
           break;
         }
-        case 'declared':
+        case 'declared': {
           // A DECLARED edge starts empty and grows by `link`. Landed with no
           // landings is exactly that: traversing it runs a body zero times,
           // like any other empty edge.
-          edges[entry.name] = { kind: 'landed', landings: [] };
+          //
+          // A DECLARED NODE also says what a landing the run builds here
+          // carries, and a declaration is a tree — so the nested nodes ride
+          // along, and a write into this edge mints them on its landing. The
+          // ADDRESS spelling carries none: those landings are one system's
+          // records, whose edges are that system's to offer.
+          const shape =
+            entry.type.hopsRaw === undefined
+              ? declaredLandingShape(env.resolve(entry.type.graph))
+              : undefined;
+          edges[entry.name] = {
+            kind: 'landed',
+            landings: [],
+            ...(shape !== undefined ? { landingShape: shape } : {}),
+          };
           break;
+        }
         case 'traversal': {
           // The mapping rides WITH the walk, so `lazy` defers the synthesis
           // along with the hop and eager does both here — one rule, not two.

@@ -38,7 +38,7 @@ import {
   type WriteResult,
 } from '../translation_graph/adapter';
 import type { UniquenessConstraints } from '../translation_graph/uniqueness';
-import type { Binding, NodeEdge } from './expression';
+import type { Binding, LocalLandingShape, NodeEdge } from './expression';
 
 /** The `adapterType` a write into the run's own graph records. Compared, never
  *  parsed — it names the absence of a system, not one more of them. */
@@ -88,6 +88,27 @@ const GENERIC_TOKENS: ReadonlySet<string> = new Set([
 
 /** One landing this store owns — a position the run synthesised. */
 type LocalLanding = Extract<Binding, { kind: 'nodePosition' }>;
+
+/**
+ * The edges a landing this store CREATES starts with: one empty appendable
+ * edge per nested node the declaration named, each carrying its own nested
+ * names so a write deeper in the tree mints the same way.
+ *
+ * A landing is a whole node of the declared shape, not a root with its branches
+ * cut off — which is what lets `link h -[:founder]-> jane` append rather than
+ * fail on an edge nothing could ever have made.
+ */
+function landingEdges(shape: LocalLandingShape | undefined): Record<string, NodeEdge> {
+  const edges: Record<string, NodeEdge> = {};
+  for (const [name, nested] of Object.entries(shape ?? {})) {
+    edges[name] = {
+      kind: 'landed',
+      landings: [],
+      ...(Object.keys(nested).length > 0 ? { landingShape: nested } : {}),
+    };
+  }
+  return edges;
+}
 
 /** Trim, case fold, collapse whitespace. A multi-valued field folds to its
  *  values in order, so a list and a scalar compare by the same rule. */
@@ -240,7 +261,7 @@ export function localEdgeAdapter(input: {
         kind: 'nodePosition',
         fields: { ...write.fields },
         fieldProvenance: {},
-        edges: {},
+        edges: landingEdges(input.edge.landingShape),
       };
       landings.push(landing);
       return refFor(landings.length - 1, landing, write.recordType);

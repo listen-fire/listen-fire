@@ -51,8 +51,8 @@ const catalog = mockCatalog({
 });
 
 // `Company` and `Person` carry fields and nothing else; `Feed` also carries an
-// EDGE, which a landing the write minted cannot have — and does not need to,
-// since an absent edge is the empty set rather than a missing member.
+// EDGE, which a landing the write minted carries too — empty, and appendable
+// (`nested_declared_edge.unit.test.ts` is where that is pinned).
 const PRELUDE = `import { email, chat } from adapters
 inbox = email()
 sl = chat()
