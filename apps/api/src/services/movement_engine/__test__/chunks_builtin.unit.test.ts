@@ -1,5 +1,5 @@
-// `CHUNKS(<text>, { size, overlap })` — a long text cut into pieces, as a
-// language function.
+// `CHUNKS(<text>, { size | entities, overlap })` — a long text cut into
+// pieces, as a language function.
 //
 // The cut itself is pure and lives in `movement-lang` (`expression/chunk.ts`,
 // where the rule is pinned character by character). What these tests pin is the
@@ -85,8 +85,48 @@ describe('CHUNKS(text, { size, overlap }) — the pieces', () => {
     const trace: MovementTraceEntry[] = [];
     await evaluate('CHUNKS(body, { size: 20, overlap: 5 })', { body: UNBROKEN, trace });
     expect(chunkEntries(trace)).toEqual([
-      { kind: 'chunks', pieces: 3, sizes: [20, 20, 6], unit: 'chars' },
+      { kind: 'chunks', pieces: 3, sizes: [20, 20, 6], unit: 'chars', mode: 'size' },
     ]);
+  });
+});
+
+describe('CHUNKS(text, { entities }) — cut by what a piece is expected to yield', () => {
+  const item = (n: number) => `[Example Ventures · Funding] Company ${n} raised a round`;
+  const feed = Array.from({ length: 6 }, (_, i) => item(i + 1)).join('\n');
+
+  it('cuts on whole lines, by the records in them', async () => {
+    const result = await evaluate('CHUNKS(body, { entities: 2 })', { body: feed });
+    expect(result.value).toEqual([
+      `${item(1)}\n${item(2)}\n`,
+      `${item(3)}\n${item(4)}\n`,
+      `${item(5)}\n${item(6)}`,
+    ]);
+  });
+
+  it('says on the trace which way it was cut, and what each piece is expected to yield', async () => {
+    const trace: MovementTraceEntry[] = [];
+    await evaluate('CHUNKS(body, { entities: 2 })', { body: feed, trace });
+    expect(chunkEntries(trace)).toEqual([
+      {
+        kind: 'chunks',
+        pieces: 3,
+        sizes: [expect.any(Number), expect.any(Number), expect.any(Number)],
+        unit: 'chars',
+        mode: 'entities',
+        expectedEntities: [2, 2, 2],
+      },
+    ]);
+  });
+
+  it('a count the author computed rather than wrote down works out the same', async () => {
+    const result = await evaluate('CHUNKS(body, { entities: 1 + 2 })', { body: feed });
+    expect(result.value).toHaveLength(2);
+  });
+
+  it('a count that works out to nothing fails the run naming the built-in', async () => {
+    await expect(
+      evaluate('CHUNKS(body, { entities: 0 + 0 })', { body: feed }),
+    ).rejects.toThrow(/CHUNKS needs to expect at least 1 record/);
   });
 });
 
@@ -100,7 +140,7 @@ describe('CHUNKS(text, …) — a text that is not there', () => {
     const trace: MovementTraceEntry[] = [];
     await evaluate('CHUNKS(body, { size: 20 })', { body: null, trace });
     expect(chunkEntries(trace)).toEqual([
-      { kind: 'chunks', pieces: 0, sizes: [], unit: 'chars' },
+      { kind: 'chunks', pieces: 0, sizes: [], unit: 'chars', mode: 'size' },
     ]);
   });
 
@@ -126,7 +166,7 @@ describe('CHUNKS(READ(file), …) — the two built-ins compose', () => {
     ]);
     expect(trace).toEqual([
       { kind: 'read', name: 'deck.pdf', contentType: 'application/pdf', chars: 36 },
-      { kind: 'chunks', pieces: 3, sizes: [20, 20, 6], unit: 'chars' },
+      { kind: 'chunks', pieces: 3, sizes: [20, 20, 6], unit: 'chars', mode: 'size' },
     ]);
   });
 
