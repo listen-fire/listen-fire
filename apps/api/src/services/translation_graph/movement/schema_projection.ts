@@ -386,20 +386,30 @@ export function instanceSchemaFromDescriptors(input: {
   const createShapes: Record<string, WritableRootSchema> = {};
   const writableTargets = new Set<string>();
   const shapeByName: Record<string, WritableRootSchema> = {};
-  const seenTypeName = new Set<string>();
+  /** The typeId each natural name has already been claimed by — a name is a
+   *  collision only when a SECOND type wants it. */
+  const typeIdByName = new Map<string, string>();
 
   for (const entry of [...input.entries, ...reached]) {
     // The NATURAL name IS the entry-point displayName — the name the program
     // writes (`crm.Companies`, `<inbox-[:Email]->>`); the resolver maps it back to
     // `entry.typeId` at the boundary.
     const name = entry.displayName;
-    if (seenTypeName.has(name)) {
-      notes.push(
-        `${input.adapterType}: more than one type is named '${name}' — keeping the first; rename one in the source system to address the other`,
-      );
+    const claimedBy = typeIdByName.get(name);
+    if (claimedBy !== undefined) {
+      // One TYPE published twice is the entry surface working as intended: a
+      // readable root collection and an event edge are two promises about the
+      // same node (adapters/CLAUDE.md rule 9), and the first entry already
+      // carries the position. Only a second DESCRIPTOR under one name costs an
+      // author a type they cannot address.
+      if (claimedBy !== entry.typeId) {
+        notes.push(
+          `${input.adapterType}: more than one type is named '${name}' — keeping the first; rename one in the source system to address the other`,
+        );
+      }
       continue;
     }
-    seenTypeName.add(name);
+    typeIdByName.set(name, entry.typeId);
 
     // Every entry point IS a meta edge off the adapter's meta position — the
     // node the cursor starts at. A READABLE entry's edge is a traversable

@@ -547,6 +547,71 @@ describe('instanceSchemaFromDescriptors — colliding display names', () => {
   });
 });
 
+// An adapter publishes ONE type under two entries whenever a readable root
+// collection and an event edge land on the same node (adapters/CLAUDE.md rule
+// 9 — Granola's meetings, Evertrace's and Dealroom's rounds). That is the entry
+// surface working as designed, so the projection keeps quiet; two DIFFERENT
+// types wearing one name still costs the author a type they cannot address, so
+// that one still speaks.
+describe('instanceSchemaFromDescriptors — one name, two entries', () => {
+  const roundDescriptor: SchemaTypeDescriptor = {
+    typeId: 'dealroom:round',
+    displayName: 'Funding Round',
+    fields: [field('amount', 'number')],
+    references: [],
+  };
+
+  it('stays silent when both entries are the SAME type — a collection and an event edge', () => {
+    const projected = instanceSchemaFromDescriptors({
+      supportsInPlaceUpdate: false,
+      adapterType: 'dealroom',
+      entries: [
+        {
+          typeId: 'dealroom:round',
+          displayName: 'Funding Round',
+          writable: false,
+          readable: true,
+          collectionName: 'Funding Rounds',
+        },
+        {
+          typeId: 'dealroom:round',
+          displayName: 'Funding Round',
+          writable: false,
+          readable: false,
+          fires: true,
+          firesOn: ['funding_round'],
+        },
+      ],
+      descriptors: new Map<string, SchemaTypeDescriptor>([['dealroom:round', roundDescriptor]]),
+    });
+    expect(projected.notes).toEqual([]);
+    expect(projected.schema.collections).toEqual({
+      'Funding Rounds': { target: 'Funding Round' },
+    });
+    expect(projected.schema.positions['Funding Round']?.properties.amount).toBe('number');
+  });
+
+  it('warns when two DIFFERENT types want the name — only one is addressable', () => {
+    const projected = instanceSchemaFromDescriptors({
+      supportsInPlaceUpdate: false,
+      adapterType: 'dealroom',
+      entries: [
+        { typeId: 'dealroom:round', displayName: 'Funding Round', writable: false, readable: true },
+        { typeId: 'dealroom:legacy_round', displayName: 'Funding Round', writable: false, readable: true },
+      ],
+      descriptors: new Map<string, SchemaTypeDescriptor>([
+        ['dealroom:round', roundDescriptor],
+        [
+          'dealroom:legacy_round',
+          { ...roundDescriptor, typeId: 'dealroom:legacy_round', fields: [field('size', 'number')] },
+        ],
+      ]),
+    });
+    expect(projected.notes.join()).toContain("more than one type is named 'Funding Round'");
+    expect(projected.schema.positions['Funding Round']?.properties.amount).toBe('number');
+  });
+});
+
 describe('instanceSchemaFromDescriptors', () => {
   const attio = instanceSchemaFromDescriptors({
     supportsInPlaceUpdate: false,

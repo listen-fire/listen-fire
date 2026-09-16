@@ -343,7 +343,8 @@ describe('DealroomAdapter.describe', () => {
     expect(d?.typeId).toBe(DEALROOM_COMPANY_TYPE_ID);
     expect(d?.fields.every((f) => f.writable === false)).toBe(true);
     expect(d?.fields.map((f) => f.displayName)).toEqual([
-      'Name', 'Path', 'Tagline', 'About', 'Website URL', 'LinkedIn URL', 'Twitter URL',
+      'Name', 'Path', 'Tagline', 'About', 'Website', 'Website URL', 'LinkedIn URL',
+      'Twitter URL',
       'Dealroom URL', 'Logo URL', 'Employees', 'Employees Latest', 'Growth Stage',
       'Company Status', 'Total Funding', 'Total Funding Currency', 'Last Funding',
       'Last Funding Date', 'Launch Year', 'Industries', 'Sub Industries', 'Technologies',
@@ -355,6 +356,12 @@ describe('DealroomAdapter.describe', () => {
       filterOperators: ['eq', 'contains'],
       orderable: true,
     });
+    // The domain pushes; the full URL is the engine's to satisfy, so an author
+    // who filters on it is never told a search happened that did not.
+    expect(d?.fields.find((f) => f.displayName === 'Website')?.capability).toEqual({
+      filterOperators: ['eq', 'contains'],
+    });
+    expect(d?.fields.find((f) => f.displayName === 'Website URL')?.capability).toBeUndefined();
     expect(d?.references.map((r) => r.name)).toEqual([
       'Funding Rounds', 'Investors', 'Team', 'Similar Companies',
     ]);
@@ -441,6 +448,18 @@ describe('DealroomAdapter.getFieldValue', () => {
     expect(await adapter.getFieldValue({ position, fieldId: 'Tags' })).toEqual(['saas']);
   });
 
+  it('reads Website as the host alone, whatever spelling the URL carries', async () => {
+    const bare = at('Company', '101', company({ website_url: 'acme.com' }));
+    expect(await adapter.getFieldValue({ position: bare, fieldId: 'Website' })).toBe('acme.com');
+    const full = at('Company', '102', company({ website_url: 'https://www.acme.com/about' }));
+    expect(await adapter.getFieldValue({ position: full, fieldId: 'Website' })).toBe('acme.com');
+    expect(await adapter.getFieldValue({ position: full, fieldId: 'Website URL' })).toBe(
+      'https://www.acme.com/about',
+    );
+    const none = at('Company', '103', company({ website_url: null }));
+    expect(await adapter.getFieldValue({ position: none, fieldId: 'Website' })).toBeNull();
+  });
+
   it('reads the logo off the size map and the page off `url`', async () => {
     const position = at('Company', '101', company());
     expect(await adapter.getFieldValue({ position, fieldId: 'Logo URL' })).toBe(
@@ -502,12 +521,29 @@ describe('the WHERE pushdown', () => {
     });
   });
 
-  it('sends a Website URL as a domain search, and prefers it over a Name in the same WHERE', () => {
+  it('sends a Website as an exact domain search, and prefers it over a Name in the same WHERE', () => {
     const request = companySearchFromWhere(
-      and(cmp(prop('Name'), 'eq', value('Acme')), cmp(prop('Website URL'), 'eq', value('acme.com'))),
+      and(cmp(prop('Name'), 'eq', value('Acme')), cmp(prop('Website'), 'eq', value('acme.com'))),
     );
     expect(request.keyword).toBe('acme.com');
     expect(request.keywordType).toBe('website_domain');
+    expect(request.keywordMatchType).toBe('exact');
+  });
+
+  it('sends a Website contains as a fuzzy domain search', () => {
+    const request = companySearchFromWhere(cmp(prop('Website'), 'contains', value('acme')));
+    expect(request.keyword).toBe('acme');
+    expect(request.keywordType).toBe('website_domain');
+    expect(request.keywordMatchType).toBe('fuzzy');
+  });
+
+  // The full URL and Dealroom's domain keyword can never agree on a spelling —
+  // one side carries the scheme, the other does not — so `Website URL` pushes
+  // nothing and the engine satisfies it over what comes back.
+  it('leaves a Website URL WHERE to the engine', () => {
+    expect(
+      companySearchFromWhere(cmp(prop('Website URL'), 'eq', value('https://acme.com'))),
+    ).toEqual({ must: {} });
   });
 
   it('sends terms filters, range bounds and the location, all under form_data.must', () => {

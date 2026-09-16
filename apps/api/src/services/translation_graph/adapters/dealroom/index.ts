@@ -117,10 +117,10 @@ const DEALROOM_HANDBOOK_CONTENT = `Dealroom is a database of **companies**, **in
 ### looking something up
 
 \`\`\`
-company = FIRST(dealroom-[c:Companies WHERE \`Website URL\` = "acme.com"]->)
+company = FIRST(dealroom-[c:Companies WHERE \`Website\` = "acme.com"]->)
 \`\`\`
 
-A domain is the surest way to land on one company; a \`Name\` equality is an exact-name search and \`contains\` is a fuzzy one. Dealroom takes part of the WHERE itself and the rest is applied to what comes back, so the result is the same either way — only the amount fetched changes. What reaches Dealroom on \`Companies\`: \`Name\`, \`Website URL\`, \`Industries\`, \`Tags\`, \`Growth Stage\`, \`Company Status\`, \`HQ City\`, \`HQ Country\`, \`Total Funding\` and \`Launch Year\` bounds, and lower bounds on \`Last Updated\` and \`Created At\`. \`Investors\` takes \`Name\`, \`Investor Type\`, \`Investment Stages\`, \`Industry Experience\` and the HQ location; \`People\` takes \`Name\`, \`Gender\`, \`Backgrounds\`, the HQ location and the founder-strength flags; \`Funding Rounds\` takes \`Round\`, \`Date\` bounds, \`Amount\` bounds and \`Is Verified\`.
+A domain is the surest way to land on one company; a \`Name\` equality is an exact-name search and \`contains\` is a fuzzy one. Filter on \`Website\`, the domain on its own — \`Website URL\` holds the full URL and is applied after the fetch. Dealroom takes part of the WHERE itself and the rest is applied to what comes back, so the result is the same either way — only the amount fetched changes. What reaches Dealroom on \`Companies\`: \`Name\`, \`Website\`, \`Industries\`, \`Tags\`, \`Growth Stage\`, \`Company Status\`, \`HQ City\`, \`HQ Country\`, \`Total Funding\` and \`Launch Year\` bounds, and lower bounds on \`Last Updated\` and \`Created At\`. \`Investors\` takes \`Name\`, \`Website\`, \`Investor Type\`, \`Investment Stages\`, \`Industry Experience\` and the HQ location; \`People\` takes \`Name\`, \`Website\`, \`Gender\`, \`Backgrounds\`, the HQ location and the founder-strength flags; \`Funding Rounds\` takes \`Round\`, \`Date\` bounds, \`Amount\` bounds and \`Is Verified\`.
 
 An \`ORDER BY\` on \`Name\`, \`Total Funding\`, \`Last Updated\` or \`Created At\` reaches Dealroom's own sort, so \`LIMIT 5\` is one page rather than a scan. An unbounded walk stops at Dealroom's 10,000-result ceiling with an error rather than a short answer — narrow it or bound it.
 
@@ -133,6 +133,12 @@ company-[t:Team WHERE \`Is Founder\` = true]-> { … }
 \`\`\`
 
 Each of these is the FULL list from its own endpoint, not the five that ride the company record. \`Similar Companies\` is Dealroom's own "companies like this one".
+
+Give every fold over a Dealroom walk — \`JOIN\`, \`FIRST\`, \`LAST\`, \`LIMIT\` — an explicit \`ORDER BY\`, since Dealroom hands a walk back in no inherent order:
+
+\`\`\`
+rounds = JOIN(company-[r:\`Funding Rounds\` ORDER BY \`Date\` DESC]->.\`Round\`, ", ")
+\`\`\`
 
 \`Team\` lands on a membership rather than the person: \`Titles\`, \`Is Founder\`, \`Is Executive\`, \`Is Partner\`, \`Past\`, \`Start Year\` and \`End Year\` are facts about the pair. \`Person\` from there is the full profile, and costs a fetch.
 
@@ -172,8 +178,11 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
     'rounds, backers and team, and run when a new round is recorded.',
   authoringHints:
     'Dealroom is read-only — there is no write surface. Land on one company by ' +
-    'Website URL rather than Name. A root walk with no WHERE covers the corpus ' +
-    'and fails at the 10,000-result ceiling, so narrow it or give it a LIMIT. ' +
+    'Website (the domain on its own) rather than Name; Website URL holds the ' +
+    'full URL and filters after the fetch. A root walk with no WHERE covers the ' +
+    'corpus and fails at the 10,000-result ceiling, so narrow it or give it a ' +
+    'LIMIT. Every fold over a Dealroom walk — JOIN, FIRST, LAST, LIMIT — needs ' +
+    'an explicit ORDER BY, as in ORDER BY `Date` DESC. ' +
     'Team memberships and a round’s investors are nodes in their own right ' +
     'because the titles and the lead flag belong to the pair; walk Person or ' +
     'Investor from one for the full record, at the cost of a fetch. A listener ' +
@@ -269,6 +278,22 @@ function isoOf(value: unknown): string | null {
   return ms === undefined ? null : new Date(ms).toISOString();
 }
 
+/**
+ * The host of a URL, scheme and `www.` stripped — what `Website` reads and what
+ * Dealroom's own `website_domain` search matches. `Website URL` keeps the URL
+ * whole, so the two never have to agree on a spelling.
+ */
+function hostOf(value: unknown): string | null {
+  const url = stringAt(value);
+  if (url === null) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`;
+  try {
+    return new URL(withScheme).hostname.replace(/^www\./, '') || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The logo Dealroom serves at the one size worth surfacing. */
 function logoUrl(data: Record<string, unknown>): string | null {
   return stringAt(objectAt(data['images'])?.['100x100']);
@@ -309,6 +334,7 @@ function computedField(
   data: Record<string, unknown>,
 ): unknown | undefined {
   if (fieldId === 'logoUrl') return logoUrl(data);
+  if (fieldId === 'website') return hostOf(data['website_url']);
   if (fieldId === 'hqCity') return headquarters(data, 'city');
   if (fieldId === 'hqCountry') return headquarters(data, 'country');
   if (LABEL_FIELDS.has(fieldId)) return labelsOf(data[fieldId] as DealroomLabelList);

@@ -16,9 +16,9 @@ movement dealroom_query_probe(go: <runs-[:Invocation]->>) {
       }
     }
 
-    dr-[byDomain:Companies WHERE `Website URL` CONTAINS "vaultwise.de"]-> {
+    dr-[byDomain:Companies WHERE `Website` == "vaultwise.de"]-> {
       write ch-[:Messages]-> {
-        Message: "by domain: ${byDomain.`Name`} (${byDomain.`Website URL`}) funding=${byDomain.`Total Funding`}"
+        Message: "by domain: ${byDomain.`Name`} (${byDomain.`Website`} / ${byDomain.`Website URL`}) funding=${byDomain.`Total Funding`}"
       }
     }
 

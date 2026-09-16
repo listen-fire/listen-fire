@@ -178,6 +178,11 @@ function pushSinceDate(must: DealroomMustFilters, key: string, conjunct: Conjunc
  * naming both a domain and a name has to pick: the DOMAIN wins, because it
  * identifies one company where a name may not, and the engine still applies the
  * name to what comes back.
+ *
+ * The domain travels as `Website` — the HOST on its own, which is what
+ * Dealroom's `website_domain` keyword matches. `Website URL` holds the full URL
+ * and pushes nothing: sending it as a domain made an equality that could never
+ * match on one side or the other, whichever spelling the author picked.
  */
 interface KeywordChoice {
   keyword: string;
@@ -192,7 +197,7 @@ function keywordFor(conjuncts: Conjunct[]): KeywordChoice | undefined {
     const value = scalarOf(conjunct.value);
     if (typeof value !== 'string' || value === '') continue;
     const match = conjunct.op === 'eq' ? 'exact' : 'fuzzy';
-    if (has(conjunct, 'website_url', 'Website URL')) {
+    if (has(conjunct, 'website', 'Website')) {
       return { keyword: value, keywordType: 'website_domain', keywordMatchType: match };
     }
     if (name === undefined && has(conjunct, 'name', 'Name')) {

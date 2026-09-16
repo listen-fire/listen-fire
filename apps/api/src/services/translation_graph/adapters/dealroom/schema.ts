@@ -66,20 +66,21 @@ import {
 } from './types';
 
 const COMPANIES_DESCRIPTION =
-  'Companies Dealroom tracks. A `Name` or `Website URL` filter reaches ' +
+  'Companies Dealroom tracks. A `Name` or `Website` filter reaches ' +
   "Dealroom's own search; so do the industry, location, stage, status, tag, " +
   'funding and year filters. Everything else is applied after the fetch. An ' +
   'unbounded walk covers the corpus and stops at the 10,000-result ceiling, so ' +
   'narrow it or give it a LIMIT.';
 
 const INVESTORS_DESCRIPTION =
-  'Investors Dealroom tracks — funds, angels, corporates. `Name`, `Investor ' +
-  'Type`, `Investment Stages`, `Industry Experience` and the HQ location reach ' +
-  "Dealroom's search; everything else is applied after the fetch.";
+  'Investors Dealroom tracks — funds, angels, corporates. `Name`, `Website`, ' +
+  '`Investor Type`, `Investment Stages`, `Industry Experience` and the HQ ' +
+  "location reach Dealroom's search; everything else is applied after the fetch.";
 
 const PEOPLE_DESCRIPTION =
-  'Founders and operators Dealroom tracks. `Name`, `Gender`, `Backgrounds`, ' +
-  'the HQ location and the founder-strength flags reach the search.';
+  'Founders and operators Dealroom tracks. `Name`, `Website`, `Gender`, ' +
+  '`Backgrounds`, the HQ location and the founder-strength flags reach the ' +
+  'search.';
 
 const FUNDING_ROUNDS_DESCRIPTION =
   'Funding rounds Dealroom has recorded. `Round`, `Date` bounds, `Amount` ' +
@@ -256,7 +257,8 @@ const COMPANY_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'path', displayName: 'Path', kind: 'string', writable: false, required: false, description: "Dealroom's own slug for the company — usable in place of the id." },
     { fieldId: 'tagline', displayName: 'Tagline', kind: 'string', writable: false, required: false },
     { fieldId: 'about', displayName: 'About', kind: 'string', writable: false, required: false },
-    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false, description: 'A WHERE on it reaches Dealroom as a domain search, which is the surest way to find one company.', capability: { filterOperators: ['eq', 'contains'] } },
+    { fieldId: 'website', displayName: 'Website', kind: 'string', writable: false, required: false, description: 'The host on its own ("acme.com"), scheme and `www.` stripped. A WHERE reaches Dealroom as a domain search — `=` exactly, `contains` fuzzily — which is the surest way to find one company.', capability: { filterOperators: ['eq', 'contains'] } },
+    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false, description: 'The full URL as Dealroom records it ("https://acme.com"). Filter on `Website` — a WHERE here is applied after the fetch.' },
     { fieldId: 'linkedin_url', displayName: 'LinkedIn URL', kind: 'string', writable: false, required: false },
     { fieldId: 'twitter_url', displayName: 'Twitter URL', kind: 'string', writable: false, required: false },
     { fieldId: 'url', displayName: 'Dealroom URL', kind: 'string', writable: false, required: false, description: 'The company’s page on dealroom.co.' },
@@ -341,7 +343,8 @@ const INVESTOR_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'investor_type', displayName: 'Investor Type', kind: 'string', writable: false, required: false, capability: { filterOperators: ['eq', 'in'] } },
     { fieldId: 'tagline', displayName: 'Tagline', kind: 'string', writable: false, required: false },
     { fieldId: 'about', displayName: 'About', kind: 'string', writable: false, required: false },
-    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false },
+    { fieldId: 'website', displayName: 'Website', kind: 'string', writable: false, required: false, description: 'The host on its own ("acme.com"), scheme and `www.` stripped. A WHERE reaches Dealroom as a domain search — `=` exactly, `contains` fuzzily.', capability: { filterOperators: ['eq', 'contains'] } },
+    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false, description: 'The full URL as Dealroom records it ("https://acme.com"). Filter on `Website` — a WHERE here is applied after the fetch.' },
     { fieldId: 'linkedin_url', displayName: 'LinkedIn URL', kind: 'string', writable: false, required: false },
     { fieldId: 'url', displayName: 'Dealroom URL', kind: 'string', writable: false, required: false },
     { fieldId: 'logoUrl', displayName: 'Logo URL', kind: 'string', writable: false, required: false },
@@ -425,7 +428,8 @@ const PERSON_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'tagline', displayName: 'Tagline', kind: 'string', writable: false, required: false },
     { fieldId: 'linkedin_url', displayName: 'LinkedIn URL', kind: 'string', writable: false, required: false },
     { fieldId: 'twitter_url', displayName: 'Twitter URL', kind: 'string', writable: false, required: false },
-    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false },
+    { fieldId: 'website', displayName: 'Website', kind: 'string', writable: false, required: false, description: 'The host on its own ("acme.com"), scheme and `www.` stripped. A WHERE reaches Dealroom as a domain search — `=` exactly, `contains` fuzzily.', capability: { filterOperators: ['eq', 'contains'] } },
+    { fieldId: 'website_url', displayName: 'Website URL', kind: 'string', writable: false, required: false, description: 'The full URL as Dealroom records it ("https://acme.com"). Filter on `Website` — a WHERE here is applied after the fetch.' },
     { fieldId: 'url', displayName: 'Dealroom URL', kind: 'string', writable: false, required: false },
     { fieldId: 'logoUrl', displayName: 'Logo URL', kind: 'string', writable: false, required: false },
     { fieldId: 'gender', displayName: 'Gender', kind: 'string', writable: false, required: false, capability: { filterOperators: ['eq', 'in'] } },
