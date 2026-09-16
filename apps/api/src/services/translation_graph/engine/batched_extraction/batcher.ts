@@ -81,6 +81,14 @@ export interface LlmCallResult {
    *  wrote nothing. The answer in hand is the cheaper one, and an observer has
    *  to be able to see that rather than infer it from a thin reply. */
   effortSteppedDown?: { from: string; to: string };
+  /**
+   * Continuation turns the client spent: the answer ran past the model's
+   * output ceiling, and the partial text was fed back with "continue where you
+   * left off" until it finished. The stitched answer PARSES, so nothing
+   * downstream can tell it happened — and a continued answer routinely drops
+   * the records at the end of what it read. Present only when one ran.
+   */
+  continuations?: number;
 }
 
 export interface LlmCallInput {

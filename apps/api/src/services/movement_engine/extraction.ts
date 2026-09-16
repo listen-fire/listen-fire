@@ -824,6 +824,7 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
         // slice of it.
         rawText: reply.text,
         ...(reply.steppedDown ? { effortSteppedDown: reply.steppedDown } : {}),
+        ...(reply.continuations > 0 ? { continuations: reply.continuations } : {}),
       };
     },
   };
@@ -1365,7 +1366,7 @@ class Materializer {
       kind: 'extraction',
       ...shape,
       emissions: { [region.spec.name]: entities.length },
-      ...this.outcome(telemetry, why, trace),
+      ...this.outcome(telemetry, { why, trace, shape }),
       ...(Object.keys(empty).length > 0 ? { empty } : {}),
       ...(Object.keys(dropped).length > 0 ? { dropped } : {}),
       ...(coerced ? { coerced } : {}),
@@ -1380,22 +1381,53 @@ class Materializer {
    *  budget still has room, what the model actually replied. */
   private outcome(
     telemetry: CallTelemetry,
-    why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>,
-    trace: TraceSink,
-    focus?: OffendingEntity,
+    opts: {
+      why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>;
+      trace: TraceSink;
+      /** What this call READ — named in the continuation warning, because a
+       *  continued answer is a statement about the size of its input. */
+      shape: { node: string; inputChars: number };
+      focus?: OffendingEntity;
+    },
   ): Partial<Extract<MovementTraceEntry, { kind: 'extraction' }>> {
-    const digest = trace.digestBudgetSpent()
+    const digest = opts.trace.digestBudgetSpent()
       ? undefined
-      : replyDigest(telemetry.lastReply, why, focus);
+      : replyDigest(telemetry.lastReply, opts.why, opts.focus);
+    const continuations = telemetry.lastReply?.continuations ?? 0;
+    if (continuations > 0) this.warnContinued(continuations, opts.shape);
     return {
       model: telemetry.model,
       ...(telemetry.lastReply?.effortSteppedDown
         ? { effortSteppedDown: telemetry.lastReply.effortSteppedDown }
         : {}),
+      // A continued answer is the one boundary fact that used to leave NO mark
+      // on the run: the stitched text parses, every field the model never
+      // reached is optional, and the records at the end of the input go
+      // missing in silence. It is on the entry so that a reader who asks why
+      // the last fifteen items of a transcript are not there can be answered.
+      ...(continuations > 0 ? { continued: true as const, continuations } : {}),
       ...(telemetry.durationMs !== undefined ? { durationMs: telemetry.durationMs } : {}),
       ...(telemetry.retried ? { retried: telemetry.retried } : {}),
       ...(digest ? { reply: digest } : {}),
     };
+  }
+
+  /** The run's own account of a continued answer. The trace reaches whoever
+   *  opens the firing; this reaches whoever is reading the logs when an
+   *  extraction starts losing the end of what it read. */
+  private warnContinued(
+    continuations: number,
+    shape: { node: string; inputChars: number },
+  ): void {
+    logger.warn(
+      '[movement:extract] the answer ran past its output ceiling and was continued — records near the end of the input may be missing; cut the input into pieces',
+      {
+        node: shape.node,
+        inputChars: shape.inputChars,
+        continuations,
+        ...runFields(),
+      },
+    );
   }
 
   /**
@@ -1439,7 +1471,7 @@ class Materializer {
       ...(kept && kept.length > 0
         ? { plugins: kept.map((e) => ({ plugin: e.plugin, outcome: 'dropped' as const })) }
         : {}),
-      ...this.outcome(telemetry, ['failed'], trace, focus),
+      ...this.outcome(telemetry, { why: ['failed'], trace, shape, focus }),
     });
     if (kept) {
       logger.warn(

@@ -844,6 +844,15 @@ export type MovementTraceEntry =
        *  output ceiling thinking and wrote nothing, so it was asked again one
        *  effort lower. The answer on this entry is the cheaper one. */
       effortSteppedDown?: { from: string; to: string };
+      /** Set when the answer ran past the model's output ceiling and the
+       *  client fed the partial text back asking it to continue. Nothing
+       *  downstream can tell: the stitched reply parses, the schema is
+       *  all-optional, and the records the model never got to at the end of
+       *  its input are simply absent. `continuations` counts the turns it
+       *  took. A continued reading is a CHUNKING problem — the input was more
+       *  than one answer's worth. */
+      continued?: true;
+      continuations?: number;
       /** Set when the stage was skipped without an LLM call: the extract had
        *  no source text at all (`empty_source`), or this entity's stage
        *  pipeline contributed nothing to read (`no_enrichment`) so the call

@@ -3579,6 +3579,9 @@ describe('an extraction call describes itself on the run', () => {
       fetchedChars?: number;
       /** The client answered one effort lower than it was asked to. */
       steppedDown?: { from: string; to: string };
+      /** The client stitched the answer together out of this many
+       *  continuation turns after running past its output ceiling. */
+      continuations?: number;
     },
   ): Promise<{
     calls: LlmCallInput[];
@@ -3586,12 +3589,20 @@ describe('an extraction call describes itself on the run', () => {
   }> {
     const queued = queuedMovementLlm(responses);
     const steppedDown = options?.steppedDown;
+    const continuations = options?.continuations;
+    const boundary =
+      steppedDown !== undefined || continuations !== undefined
+        ? {
+            ...(steppedDown ? { effortSteppedDown: steppedDown } : {}),
+            ...(continuations !== undefined ? { continuations } : {}),
+          }
+        : undefined;
     const llm = {
       calls: queued.calls,
-      client: steppedDown
+      client: boundary
         ? {
             async call(input: LlmCallInput): Promise<LlmCallResult> {
-              return { ...(await queued.client.call(input)), effortSteppedDown: steppedDown };
+              return { ...(await queued.client.call(input)), ...boundary };
             },
           }
         : queued.client,
@@ -3652,6 +3663,8 @@ describe('an extraction call describes itself on the run', () => {
     expect(entry).not.toHaveProperty('dropped');
     expect(entry).not.toHaveProperty('failed');
     expect(entry).not.toHaveProperty('effortSteppedDown');
+    expect(entry).not.toHaveProperty('continued');
+    expect(entry).not.toHaveProperty('continuations');
   });
 
   // A call that answered only because it was asked less deeply is not the call
@@ -3668,6 +3681,39 @@ describe('an extraction call describes itself on the run', () => {
       model: expect.any(String),
       effortSteppedDown: { from: 'xhigh', to: 'high' },
     });
+  });
+
+  // The incident this exists for: an answer too long for one ceiling is fed
+  // back with "continue where you left off", the stitched text parses, and the
+  // last fifteen records of a transcript are gone with nothing anywhere saying
+  // so. The entry is the only thing that can say it.
+  it('records that an answer was continued past its output ceiling', async () => {
+    (logger.warn as jest.Mock).mockClear();
+    const { trace } = await intake(
+      ONE_STAGE_FETCH_MOVEMENT,
+      [{ 'x:extract_result#1': [{ company: [{ name: wrap('Gondor') }] }] }],
+      { continuations: 2 },
+    );
+
+    expect(extractions(trace)[0]).toMatchObject({ continued: true, continuations: 2 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('ran past its output ceiling'),
+      expect.objectContaining({
+        node: 'extract result',
+        continuations: 2,
+        inputChars: expect.any(Number),
+      }),
+    );
+  });
+
+  it('a call that never had to continue says nothing about continuing', async () => {
+    const { trace } = await intake(
+      ONE_STAGE_FETCH_MOVEMENT,
+      [{ 'x:extract_result#1': [{ company: [{ name: wrap('Gondor') }] }] }],
+      { continuations: 0 },
+    );
+
+    expect(extractions(trace)[0]).not.toHaveProperty('continued');
   });
 
   it('the input shape adds up to the total, so two sibling calls are comparable', async () => {
