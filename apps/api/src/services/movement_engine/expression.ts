@@ -533,6 +533,20 @@ export type Binding =
   /** Imports. */
   | { kind: 'opaque'; what: string };
 
+/**
+ * The BINDING a runtime value IS, where it is one. A collection op hands each
+ * answer back in the currency it arrived in — a binding where the function
+ * returned a position (`MAP(pieces, (p) => { return extract … })`), a plain
+ * value where it returned one — so a list on the value plane can hold
+ * positions, and this is what tells the two apart. Structural, like every other
+ * test here: a binding is an object whose `kind` is one of the kinds.
+ */
+export function bindingOf(value: unknown): Binding | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const kind = (value as { kind?: unknown }).kind;
+  return typeof kind === 'string' && kind in describeBinding ? (value as Binding) : undefined;
+}
+
 export const describeBinding: Record<Binding['kind'], string> = {
   event: 'the movement parameter (the event position)',
   instance: 'a constructed adapter instance',
@@ -2680,10 +2694,9 @@ async function evaluateSort(
  * there is nothing to read a key off — such a list sorts by its members.
  */
 function memberScope(member: unknown): PositionScope | undefined {
-  if (member === null || typeof member !== 'object' || Array.isArray(member)) return undefined;
-  const kind = (member as { kind?: unknown }).kind;
-  if (typeof kind === 'string' && kind in describeBinding) return scopeOf(member as Binding);
-  if (isDictValue(member)) {
+  const binding = bindingOf(member);
+  if (binding !== undefined) return scopeOf(binding);
+  if (member !== null && typeof member === 'object' && isDictValue(member)) {
     return { kind: 'binding', binding: { kind: 'value', value: member } };
   }
   return undefined;
