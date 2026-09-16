@@ -73,7 +73,7 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - Helper families (deterministic, \`FAMILY.FUNCTION(…)\`): \`CURRENCY.GET_NUMBER_FROM_FIGURE\`, \`CURRENCY.GET_CODE_FROM_FIGURE\`, \`DATE.PARSE\`, \`DATE.ADD_DAYS\`, \`DATE.FORMAT(value, "MMMM D, YYYY")\`, \`DATE.FORMAT_ISO\`, \`DATE.TODAY("Europe/Berlin")\`, \`DATETIME.AT(date, "07:00", "Europe/Berlin")\`, \`TEXT.REGEX_EXTRACT\`, \`TEXT.SLUG\`.
 - Time zones: \`DATE.TODAY(zone)\` is the day it is there (the run's firing moment, one answer per run); \`DATETIME.AT(date, time, zone)\` is the instant a wall-clock time names there. Move days with \`DATE.ADD_DAYS\` on the date and anchor each end of a window separately — daylight saving then takes care of itself. Zone and time are literals, checked when you save.
 - File artifact: \`FILE(content, "pdf" | "text")\`. The other way: \`READ(file)\` → \`text | absent\`.
-- Text pieces: \`CHUNKS(text, { size, overlap })\` → a list of text, each piece at most \`size\` characters; \`unit:\` takes \`"chars"\` and nothing else.
+- Text pieces: \`CHUNKS(text, { size, overlap })\` → a list of text, each piece at most \`size\` characters; \`unit:\` takes \`"chars"\` and nothing else. \`{ entities: 20 }\` in place of \`size\` cuts on whole lines by the records a piece is expected to yield; exactly one of the two is written.
 - Integration functions (e.g. a target's own message builder) run **only as the value of the write field that advertises them**.
 
 ### meta-fields
