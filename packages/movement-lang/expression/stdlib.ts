@@ -46,12 +46,14 @@
 // lives in the engine (apps/api/src/services/movement_engine/file_text.ts,
 // reached through movement_engine/expression.ts).
 //
-// CHUNKS(text, { size, overlap }) is a third flat built-in, and the first
-// to take its arguments as a MAP. What the map may hold is declared here
-// too (`BUILTIN_OPTIONS`) rather than written into the bridge, so the
-// next built-in that wants options declares its keys instead of growing
-// a second copy of the same validation. Its body is pure and lives beside
-// it (./chunk.ts) — only the trace entry belongs to the engine.
+// CHUNKS(text, { size | entities, overlap }) is a third flat built-in,
+// and the first to take its arguments as a MAP. What the map may hold is
+// declared here too (`BUILTIN_OPTIONS`) rather than written into the
+// bridge, so the next built-in that wants options declares its keys
+// instead of growing a second copy of the same validation. Its body is
+// pure and lives beside it (./chunk.ts, and the density estimate its
+// `entities` mode cuts by in ./density.ts) — only the trace entry belongs
+// to the engine.
 
 import { cronTimezoneError } from '@listen-fire/shared/cron';
 import {
@@ -159,7 +161,7 @@ export const READ_SIGNATURE = 'READ(file)';
 /** The `fn` id CHUNKS(text, { … }) parses to (a generic function call). */
 export const CHUNKS_FUNCTION_ID = 'chunks';
 
-export const CHUNKS_SIGNATURE = 'CHUNKS(text, { size, overlap })';
+export const CHUNKS_SIGNATURE = 'CHUNKS(text, { size | entities, overlap })';
 
 /**
  * One key a built-in's options map may carry.
@@ -202,6 +204,14 @@ export interface BuiltinOptionsSpec {
    * refuse the call with.
    */
   agree?: (literals: ReadonlyMap<string, string | number | boolean | null>) => string | undefined;
+  /**
+   * Options that are two answers to ONE question (`size` and `entities` both
+   * say how big a piece is): exactly one of them is written, and neither
+   * `required` nor `agree` can say that — the first is per key and the second
+   * reads values, where this is about which keys are THERE. `what` names the
+   * question, so the sentence reads as a choice rather than a rule.
+   */
+  exactlyOne?: ReadonlyArray<{ keys: ReadonlyArray<string>; what: string }>;
 }
 
 const CHUNKS_OPTIONS: BuiltinOptionsSpec = {
@@ -213,8 +223,14 @@ const CHUNKS_OPTIONS: BuiltinOptionsSpec = {
     {
       key: 'size',
       type: 'number',
-      required: true,
+      required: false,
       summary: 'the most characters a piece may be',
+    },
+    {
+      key: 'entities',
+      type: 'number',
+      required: false,
+      summary: 'the most records a piece is expected to yield, cutting on whole lines',
     },
     {
       key: 'overlap',
@@ -233,6 +249,7 @@ const CHUNKS_OPTIONS: BuiltinOptionsSpec = {
       },
     },
   ],
+  exactlyOne: [{ keys: ['size', 'entities'], what: 'how big a piece is' }],
   agree: (literals) => {
     const size = literals.get('size');
     const overlap = literals.get('overlap');
@@ -253,12 +270,17 @@ export function builtinOptionsFor(fn: string): BuiltinOptionsSpec | undefined {
   return BUILTIN_OPTIONS_BY_FN.get(fn);
 }
 
-/** `size (the most characters a piece may be), overlap (…), unit (…)` — the
- *  inventory a diagnostic prints when a key is wrong or missing. */
+/** `size — the most characters a piece may be; overlap — …; unit — …` — the
+ *  inventory a diagnostic prints when a key is wrong or missing, with the
+ *  choices a call has to make named after it. */
 export function describeBuiltinOptions(spec: BuiltinOptionsSpec): string {
-  return spec.options
+  const options = spec.options
     .map((option) => `${option.key}${option.required ? ' (required)' : ''} — ${option.summary}`)
     .join('; ');
+  const choices = (spec.exactlyOne ?? [])
+    .map((choice) => ` (exactly one of ${choice.keys.map((key) => `'${key}'`).join(' or ')})`)
+    .join('');
+  return `${options}${choices}`;
 }
 
 // ── CURRENCY ─────────────────────────────────────────────────────────────────

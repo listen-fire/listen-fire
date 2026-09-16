@@ -4008,13 +4008,13 @@ describe('READ(file)', () => {
   });
 });
 
-// `CHUNKS(text, { size, overlap })` cuts a long text into pieces. The type is
+// `CHUNKS(text, { size | entities, overlap })` cuts a long text into pieces. The type is
 // `list of text` and never `| absent`: a text that isn't there has no pieces,
 // which is an empty collection rather than an absence, so the result is usable
 // without a guard. The options arrive as a MAP — the first built-in to take
 // one — whose keys the bridge settles (they are written down) and whose values
 // the checker types, since an ordinary expression stands in each.
-describe('CHUNKS(text, { size, overlap })', () => {
+describe('CHUNKS(text, { size | entities, overlap })', () => {
   it('types as a collection of TEXT — a piece added up is the arithmetic error', () => {
     expect(
       codes(inMovement([
@@ -4085,10 +4085,23 @@ describe('CHUNKS(text, { size, overlap })', () => {
     expect(found.map(d => d.message).join('\n')).toContain("has no option 'stride'");
   });
 
-  it('a missing size reaches the author too', () => {
+  it('a call that says neither how many characters nor how many records reaches the author too', () => {
     expect(
       check(inMovement('  pieces = CHUNKS(msg.`text`, { overlap: 10 })'))
         .map(d => d.message).join('\n'),
-    ).toContain("needs 'size'");
+    ).toContain("needs one of 'size' or 'entities'");
+  });
+
+  it('a count of expected records types the same way a size does', () => {
+    expectClean(inMovement([
+      '  pieces = CHUNKS(msg.`text`, { entities: 20 })',
+      '  loud = MAP(pieces, (p) => { return UPPER(p) })',
+    ].join('\n')));
+  });
+
+  it('a count of records that is not a number names the option and the type it got', () => {
+    const found = check(inMovement('  pieces = CHUNKS(msg.`text`, { entities: msg.`subject` })'));
+    expect(found.map(d => d.code)).toContain(C.OPTION_INVALID);
+    expect(found.find(d => d.code === C.OPTION_INVALID)?.message).toContain("'entities'");
   });
 });

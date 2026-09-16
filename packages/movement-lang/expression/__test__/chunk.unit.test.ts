@@ -1,11 +1,18 @@
-// The cutter behind `CHUNKS(text, { size, overlap })`. Pure, so it is pinned
+// The cutter behind `CHUNKS(text, { size | entities, overlap })`. Pure, so it is pinned
 // here rather than through a run: the same text and the same options always
 // yield the same pieces, which is the property the whole built-in rests on.
 
 import { chunkText, readChunkSpec, type ChunkSpec } from '../chunk';
 
 const spec = (size: number, overlap = 0): ChunkSpec => {
-  const read = readChunkSpec(size, overlap);
+  const read = readChunkSpec({ size, overlap });
+  if ('error' in read) throw new Error(read.error);
+  return read.spec;
+};
+
+/** The same, cutting by what a piece is expected to yield. */
+const byEntities = (entities: number, overlap = 0): ChunkSpec => {
+  const read = readChunkSpec({ entities, overlap });
   if ('error' in read) throw new Error(read.error);
   return read.spec;
 };
@@ -145,31 +152,138 @@ describe('unicode', () => {
 
 describe('the options a run is handed', () => {
   it('rounds a fractional size down — LENGTH(t) / 3 is a normal thing to write', () => {
-    expect(readChunkSpec(10.9, 2)).toEqual({ spec: { size: 10, overlap: 2 } });
+    expect(readChunkSpec({ size: 10.9, overlap: 2 })).toEqual({
+      spec: { mode: 'size', size: 10, overlap: 2 },
+    });
   });
 
   it('treats a missing overlap as none', () => {
-    expect(readChunkSpec(10, null)).toEqual({ spec: { size: 10, overlap: 0 } });
+    expect(readChunkSpec({ size: 10, overlap: null })).toEqual({
+      spec: { mode: 'size', size: 10, overlap: 0 },
+    });
   });
 
   it('refuses a size below one character', () => {
-    expect(readChunkSpec(0, 0)).toEqual({
+    expect(readChunkSpec({ size: 0, overlap: 0 })).toEqual({
       error: expect.stringContaining('at least 1 character'),
     });
   });
 
   it('refuses a size that is not a number at all', () => {
-    expect(readChunkSpec('big', 0)).toEqual({
+    expect(readChunkSpec({ size: 'big', overlap: 0 })).toEqual({
       error: expect.stringContaining('the text "big"'),
     });
   });
 
   it('refuses an overlap that is not smaller than the size, and says why', () => {
-    const read = readChunkSpec(100, 100);
+    const read = readChunkSpec({ size: 100, overlap: 100 });
     expect('error' in read && read.error).toContain('has to be smaller than the size');
   });
 
   it('refuses a negative overlap', () => {
-    expect(readChunkSpec(100, -1)).toEqual({ error: expect.any(String) });
+    expect(readChunkSpec({ size: 100, overlap: -1 })).toEqual({ error: expect.any(String) });
+  });
+});
+
+// ── Cutting by what a piece is expected to YIELD ─────────────────────────────
+//
+// The other mode: pieces are sized by the records in them rather than by their
+// characters, because what runs a reading past its output ceiling is how much
+// answer it has to write. A line is never split for this.
+
+describe('cutting by expected records', () => {
+  const item = (n: number) => `[Example Ventures · Funding] Company ${n} raised a round`;
+  const feed = Array.from({ length: 15 }, (_, i) => item(i + 1)).join('\n');
+
+  it('cuts every time the running estimate reaches the number asked for', () => {
+    const pieces = chunkText(feed, byEntities(5));
+    expect(pieces).toHaveLength(3);
+    expect(pieces.map(p => p.split('\n').filter(Boolean).length)).toEqual([5, 5, 5]);
+  });
+
+  it('the pieces concatenate back into the text when nothing overlaps', () => {
+    expect(chunkText(feed, byEntities(4)).join('')).toBe(feed);
+  });
+
+  it('a text that expects fewer records than the number asked for is one piece', () => {
+    expect(chunkText(feed, byEntities(100))).toEqual([feed]);
+  });
+
+  it('an empty text has no pieces', () => {
+    expect(chunkText('', byEntities(5))).toEqual([]);
+    expect(chunkText('  \n\n ', byEntities(5))).toEqual([]);
+  });
+
+  it('a line expecting more on its own than a whole piece becomes its own piece', () => {
+    const crowded =
+      'Intros: linkedin.com/in/a-one, linkedin.com/in/b-two, linkedin.com/in/c-three, ' +
+      'linkedin.com/in/d-four, linkedin.com/in/e-five';
+    const pieces = chunkText(`${item(1)}\n${crowded}\n${item(2)}`, byEntities(2));
+    expect(pieces[1]).toBe(`${crowded}\n`);
+  });
+
+  it('never splits a line', () => {
+    for (const piece of chunkText(feed, byEntities(2))) {
+      for (const line of piece.split('\n').filter(Boolean)) {
+        expect(feed.split('\n')).toContain(line);
+      }
+    }
+  });
+
+  it('prefers a paragraph break just past the cut over the line the count landed on', () => {
+    // Eight items, a blank line, then a short one. The ninth record fits, so
+    // the cut lands after it — one short line past the paragraph, which is
+    // well inside the final tenth of the piece, so the paragraph wins.
+    const head = Array.from({ length: 8 }, (_, i) => item(i + 1)).join('\n');
+    const text = `${head}\n\n• Acme\n${item(10)}\n${item(11)}`;
+    expect(chunkText(text, byEntities(9))[0]).toBe(`${head}\n\n`);
+  });
+
+  it('repeats whole lines when an overlap is asked for', () => {
+    const pieces = chunkText(feed, byEntities(5, item(1).length + 1));
+    expect(pieces[0].split('\n').filter(Boolean)).toHaveLength(5);
+    expect(pieces[1].split('\n')[0]).toBe(item(5));
+  });
+
+  it('an overlap wider than the pieces still advances', () => {
+    const pieces = chunkText(feed, byEntities(3, 10_000));
+    expect(pieces.length).toBeLessThanOrEqual(15);
+    expect(pieces.length).toBeGreaterThan(1);
+  });
+});
+
+describe('the options a run is handed, cutting by records', () => {
+  it('reads a number of expected records', () => {
+    expect(readChunkSpec({ entities: 20 })).toEqual({
+      spec: { mode: 'entities', entities: 20, overlap: 0 },
+    });
+  });
+
+  it('rounds a fractional count down', () => {
+    expect(readChunkSpec({ entities: 20.8, overlap: 100 })).toEqual({
+      spec: { mode: 'entities', entities: 20, overlap: 100 },
+    });
+  });
+
+  it('refuses a count below one record', () => {
+    expect(readChunkSpec({ entities: 0 })).toEqual({
+      error: expect.stringContaining('at least 1 record'),
+    });
+  });
+
+  it('refuses both ways of saying how big a piece is', () => {
+    const read = readChunkSpec({ size: 100, entities: 5 });
+    expect('error' in read && read.error).toContain('two ways of saying how big a piece is');
+  });
+
+  it('refuses neither', () => {
+    const read = readChunkSpec({ overlap: 10 });
+    expect('error' in read && read.error).toContain('worked out neither');
+  });
+
+  it('lets an overlap stand beside a count — there is no size for it to exceed', () => {
+    expect(readChunkSpec({ entities: 2, overlap: 5_000 })).toEqual({
+      spec: { mode: 'entities', entities: 2, overlap: 5_000 },
+    });
   });
 });

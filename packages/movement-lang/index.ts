@@ -5,6 +5,7 @@ export * from './parser/duration';
 export * from './expression/bridge';
 export * from './expression/stdlib';
 export * from './expression/chunk';
+export * from './expression/density';
 export * from './checker/catalog';
 export * from './checker/scopes';
 export * from './checker/meta';
