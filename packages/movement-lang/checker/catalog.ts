@@ -1245,6 +1245,23 @@ export interface InstanceSchema {
   eventNarrowingValues?: Record<string, Record<string, string[]>>;
 }
 
+/** Whether a write may land on this edge. The two promises default OPPOSITE
+ *  ways — `readable` absent means readable, `writable` absent means read-only
+ *  (layer 13) — which is exactly the asymmetry a second reader gets wrong. So
+ *  everyone who asks asks HERE: the checker's gate, the diagnostics that list
+ *  the writable spellings, and the agent-facing describe surface. They cannot
+ *  answer differently if there is only one answer. */
+export function edgeIsWritable(edge: EdgeSchema): boolean {
+  return edge.writable === true;
+}
+
+/** Whether a read traversal may walk this edge — the other half of the pair
+ *  above, and the one that defaults TRUE (only `readable: false` withdraws it,
+ *  marking a write-only edge). */
+export function edgeIsReadable(edge: EdgeSchema): boolean {
+  return edge.readable !== false;
+}
+
 /** Every WRITABLE edge an instance offers, for diagnostics: the spellings a
  *  write can land on (`channel-[:messages]->`, `message-[:replies]->`). Keys
  *  off the one explicit `writable` promise (layer 13). */
@@ -1254,7 +1271,7 @@ export function writableEdgesOf(
   const out: Array<{ parent: string; edge: string; target: string }> = [];
   for (const [parent, position] of Object.entries(schema.positions)) {
     for (const [edge, edgeSchema] of Object.entries(position.edges)) {
-      if (edgeSchema.writable === true) out.push({ parent, edge, target: edgeSchema.target });
+      if (edgeIsWritable(edgeSchema)) out.push({ parent, edge, target: edgeSchema.target });
     }
   }
   return out;

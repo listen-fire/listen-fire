@@ -59,6 +59,11 @@ and `plans/2026-07-10-adapter-entry-positions/` layers 6–9 (the model).
       sibling of `awaitable`, not a consequence of it: whether an edge resolves
       and whether anyone is told are two facts, and an adapter usually gains the
       second long after the first.
+    - `writable: true` is the same kind of promise and the same kind of
+      default. Absent means READ-ONLY — the checker refuses a write along the
+      edge, and `describe` tells the authoring agent so. An edge your write
+      path really does serve must SAY `writable: true`; leaving it off is not a
+      weaker claim, it is the absence of one.
 
 **Rule 0, over all of these (ruling 2026-07-17): conform to the most NATURAL
 graph — not to the shape of the underlying API.** The API's affordances are

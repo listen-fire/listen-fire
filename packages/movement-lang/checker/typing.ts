@@ -44,6 +44,8 @@ import { Span } from '../parser/ast';
 import {
   describeFieldType,
   EdgeSchema,
+  edgeIsReadable,
+  edgeIsWritable,
   EVENT_ACTION_FIELD,
   FieldType,
   InstanceSchema,
@@ -3307,7 +3309,7 @@ export class ExpressionTyping {
             }
             return positionRefIn(from.instance, landing);
           }
-          if (edgeSchema.readable === false) {
+          if (!edgeIsReadable(edgeSchema)) {
             this.report(
               TypedDiagnosticCodes.AWAIT_REQUIRED,
               `'-[:${edge}]->' on ${describePosition(from)} resolves only when it is answered — read it with 'await' (\`await …-[:${edge}]->\`). A bare traversal reads now and would yield nothing until then.`,
@@ -3318,7 +3320,7 @@ export class ExpressionTyping {
           // `until` checker) decides whether that is worth saying.
           if (edgeSchema.watchable === true) this.options.onWatchableRead?.(edge);
         }
-        if (edgeSchema.readable === false) {
+        if (!edgeIsReadable(edgeSchema)) {
           this.reportWriteOnlyEdge(from, edge, edgeSchema);
           return undefined;
         }
@@ -3344,7 +3346,7 @@ export class ExpressionTyping {
         );
         if (
           carrying.length > 0 &&
-          carrying.every(v => from.instance.schema.positions[v]?.edges[edge]?.readable === false)
+          carrying.every(v => !edgeIsReadable(from.instance.schema.positions[v]!.edges[edge]!))
         ) {
           this.reportWriteOnlyEdge(
             from,
@@ -3512,7 +3514,7 @@ export class ExpressionTyping {
     this.report(
       TypedDiagnosticCodes.WRITE_ONLY_EDGE,
       `'-[:${edge}]->' on ${describePosition(from)} is write-only — ${
-        edgeSchema.writable === true
+        edgeIsWritable(edgeSchema)
           ? `it writes (write …-[:${edge}]-> { … }); the system offers nothing to read back along it`
           : 'the system offers nothing to read along it'
       }`,

@@ -1,12 +1,19 @@
+import { edgeIsReadable, edgeIsWritable } from 'movement-lang';
 import type { EdgeSchema, InstanceSchema, WritableRootSchema } from 'movement-lang';
 
-// An `EdgeSchema`'s `readable` / `writable` follow the projection's authoring
-// convention: absent ⇒ true; only an explicit opt-out is stored (a write-only
-// or read-only edge). That convention is ergonomic for adapter authors but
-// leaves an agent reading a described instance to APPLY the default itself —
-// and the default isn't even uniform across the schema's slots. So at the
-// describe boundary we fill the two booleans explicitly: the agent reads truth,
-// never a rule it has to know.
+// An `EdgeSchema`'s two promises are stored sparsely, and they default OPPOSITE
+// ways: `readable` absent means readable (only a write-only edge opts out),
+// while `writable` absent means READ-ONLY — the write promise is explicit, so
+// silence is the safe answer, never an affirmative claim. That is ergonomic for
+// adapter authors but leaves an agent reading a described instance to apply a
+// rule it has to know. So at the describe boundary we fill the two booleans
+// explicitly: the agent reads truth.
+//
+// Both answers come from the SAME predicates the checker's write gate and read
+// traversal ask (`edgeIsWritable` / `edgeIsReadable`), because describe saying
+// an edge is writable and the checker then refusing the write is the worst of
+// the two failures: the authoring agent writes the movement, and only the run
+// finds out. They cannot disagree if there is only one answer.
 //
 // This is a WIRE-level pass, deliberately kept off the shared projection: the
 // `InstanceSchema` handed to `describeMovementInstance` is the SAME TTL-cached
@@ -18,7 +25,7 @@ function withEdgeDefaults(edges: Record<string, EdgeSchema>): Record<string, Edg
   return Object.fromEntries(
     Object.entries(edges).map(([name, edge]) => [
       name,
-      { ...edge, readable: edge.readable ?? true, writable: edge.writable ?? true },
+      { ...edge, readable: edgeIsReadable(edge), writable: edgeIsWritable(edge) },
     ]),
   );
 }

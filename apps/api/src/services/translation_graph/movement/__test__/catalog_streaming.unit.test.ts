@@ -354,7 +354,7 @@ describe('describeMovementInstance', () => {
     );
   });
 
-  it('a described edge carries EXPLICIT readable/writable — the agent never applies the absent-⇒-true default', async () => {
+  it('a described edge carries EXPLICIT readable/writable — absent ⇒ readable, and NOT writable', async () => {
     // An adapter whose reference leaves both flags absent (the common case).
     resolveAdapterMock.mockImplementationOnce(async ({ adapterType }: { adapterType: string }) => ({
       listEntryPoints: async () => [
@@ -374,12 +374,16 @@ describe('describeMovementInstance', () => {
       credentialName: 'Dev Loop Attio',
     });
 
-    // The projection stores absent (its authoring convention); the agent-facing
-    // wire pass fills both, so the described edge states truth, not a default.
+    // The projection stores absent (its sparse convention); the agent-facing
+    // wire pass fills both, so the described edge states truth, not a default
+    // the agent has to know. The two defaults go OPPOSITE ways: `readable`
+    // absent means readable, `writable` absent means READ-ONLY — which is
+    // exactly what the checker's write gate enforces, so describe cannot
+    // promise a write the checker then refuses.
     expect(result.schema?.positions['attio:thing'].edges.related).toEqual({
       target: 'attio:thing',
       readable: true,
-      writable: true,
+      writable: false,
     });
   });
 

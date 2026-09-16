@@ -103,6 +103,7 @@ import {
   borrowableFieldsOf,
   borrowedTypeSegments,
   Catalog,
+  edgeIsWritable,
   writableEdgesOf,
   credentialArgOf,
   describeFieldType,
@@ -5429,7 +5430,7 @@ class Checker {
     // hunting for a missing capability when the real answer was, for a bare
     // Google Sheets tab, that row 1 was blank. The target's own position says
     // which case this is; the message now asks.
-    if (edge.writable !== true) {
+    if (!edgeIsWritable(edge)) {
       const available = writableEdgesOf(instance.schema).map((e) => `${e.parent}-[:${e.edge}]->`);
       const target = edge.target;
       const targetSchema = target !== undefined ? instance.schema.positions[target] : undefined;
