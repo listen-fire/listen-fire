@@ -39,6 +39,8 @@ pnpm dev:whatsapp setup                  # phone_number → team + a whatsapp mo
 pnpm dev:airtable setup                  # AIRTABLE creds + base/table + an airtable-listen movement + webhook_subscription
 pnpm dev:granola setup                   # GRANOLA + SLACK creds + a granola-poll listener movement (reads note.`Title`)
 pnpm dev:telegram setup                  # TELEGRAM + SLACK creds + a movement extracting from message text + attachment files (voice notes transcribe)
+pnpm dev:evertrace setup                 # EVERTRACE + SLACK creds + a signal-poll and a list-entry listener movement
+pnpm dev:dealroom setup                  # DEALROOM + SLACK creds + a dealroom-poll listener movement (round → company + investors)
 
 # 7. Inspect what the system did
 pnpm dev:inspect attio                # fake-channels state
@@ -55,7 +57,7 @@ tail -F .dev-loop/loop.log            # API logs (loop.sh tees them here)
 | Postgres, Redis | **real** | docker compose, ports 9432 / 6379 |
 | S3 | **real** | uses your `AWS_*` env from apps/api/.env |
 | Anthropic, OpenAI (incl. whisper transcription), Google DocumentAI | **real** | hits live APIs; spends real tokens (a voice-note e2e costs well under 1p) |
-| Slack, Attio, Email (Mailgun), WhatsApp (Meta Cloud API — send + inbound media), Telegram (Bot API — send + getFile/media), Affinity, Airtable, Sheets, Granola (meeting-notes poll API) | **fake** | persistent SQLite-backed via `apps/fake-channels` (port 5556 default; 6056 / 6156 / 6256 under agent / agent2 / agent3) |
+| Slack, Attio, Email (Mailgun), WhatsApp (Meta Cloud API — send + inbound media), Telegram (Bot API — send + getFile/media), Affinity, Airtable, Sheets, Granola (meeting-notes poll API), Evertrace (signal poll API), Dealroom (Premium search API) | **fake** | persistent SQLite-backed via `apps/fake-channels` (port 5556 default; 6056 / 6156 / 6256 under agent / agent2 / agent3) |
 | Valuations | **in-process** | Same monorepo — the local API IS the Valuations service (`/api/v1/valuations/...`). Not faked, just self-hosted. |
 | Acme CRM (`acme_crm`) | **fake** | The loop's one REMOTE adapter — a homespun CRM served behind the remote-adapter wire protocol (`pnpm dev:fake-crm`, port 5557 default; 6057 / 6157 / 6257 under agent / agent2 / agent3). `pnpm dev:seed` installs the `remote_adapter` row pointing at it. Writes are in-memory, so they reset with the loop. See `apps/api/src/scripts/dev/REMOTE_ADAPTER_VERIFY.md`. |
 
@@ -296,6 +298,14 @@ pnpm dev:inject kg-mutation --node-type <name|id> \
 pnpm dev:inject granola --title "Series A sync" \
   [--summary "<s>"] [--owner <email>] [--owner-name "<n>"] \
   [--attendee <email[,email]>] [--folder "<f>"] [--id <noteId>]   # seed a note + fire the poll in-process; run `pnpm dev:granola setup` first
+
+pnpm dev:inject evertrace [--first-name <n>] [--last-name <n>] \
+  [--type "New Company"] [--score <n>] [--company "<c>"] [--id <signalId>]   # run `pnpm dev:evertrace setup` first
+pnpm dev:inject evertrace-list-entry   # add a person to a fake Evertrace list + fire the list-entry listener
+
+pnpm dev:inject dealroom [--round "SERIES A"] [--company <id|path|name>] \
+  [--amount <millions>] [--currency EUR] [--investors "<a,b>"] \
+  [--no-seed]   # seed a round + fire the poll in-process; run `pnpm dev:dealroom setup` first
 ```
 
 The **`raw`** primitive is the backbone — every wrapper builds a body and
@@ -415,6 +425,15 @@ provision the credential + the listener movement. The inject surfaces the engine
 error inline on a failing run (test-harness `surfaceErrors`), so a bad field read
 reports its smoking-gun message. Re-injecting always re-delivers (fresh note id +
 now-`updated_at` beats the persisted poll checkpoint).
+
+**Dealroom** under the hood: Dealroom has no webhooks anywhere in its API, so
+this inject mirrors Granola's — it seeds one **new funding round** into the fake
+Dealroom API (`POST …/admin/dealroom/seed`, entity_type `round`) with a
+`created` of now, then fires the team's `dealroom` poll trigger in-process via
+`pollTriggerNow`. `--no-seed` fires the poll with nothing new behind it, which
+is what "the first poll after going live emits nothing" looks like as a command.
+Give `pnpm dev:dealroom setup` a `--round` to narrow the listen, then inject a
+different round label to prove an excluded label stays silent.
 
 **KG mutation** under the hood: resolves a node type (by name or id), picks an
 existing node of that type (or `--node-id`), builds a `RecordMutationEvent`, and
@@ -546,6 +565,32 @@ is no `webhook_subscription` and no events array on the `listen`
 After setup, fire with `pnpm dev:inject granola --title …` and inspect with
 `pnpm dev:inspect slack` / `pnpm dev:inspect granola`.
 
+### `pnpm dev:dealroom setup`
+
+Idempotently provisions everything the Dealroom **poll** source needs for the
+dev-loop team:
+
+  1. a `DEALROOM` credential (a stub API key — for the test-harness team
+     `injectFakeBaseUrl` points the client at the fake Dealroom API),
+  2. a `SLACK` credential (the movement's observable write target), and
+  3. a movement that `listen`s on the `Funding Round` fires edge and walks the
+     delivered round to its `Company` and its `Investors`, writing one line
+     naming both to the fake Slack `dealflow` channel.
+
+```bash
+pnpm dev:dealroom setup [--round "SERIES A"] [--industry Fintech]
+```
+
+`--round` narrows the listen to one Dealroom round label, so an inject of any
+other label must produce nothing. Saving the movement runs the real provision
+path, which derives a `dealroom`-kind trigger row (`poll_last_at` NULL →
+immediately due). Dealroom is polled, so there is no `webhook_subscription`.
+After setup, fire with `pnpm dev:inject dealroom --round …` and inspect with
+`pnpm dev:inspect slack` / `pnpm dev:inspect dealroom`.
+
+Dealroom declares no `sequenced` edge, so the checker asks any fold over one of
+its walks for an explicit `ORDER BY`.
+
 ### `pnpm dev:link <subcommand>`
 
 **`dev:link`** manages `knowledge.linked_object` rows — the **legacy
@@ -578,6 +623,9 @@ pnpm dev:inspect attio       # all objects + record counts
 pnpm dev:inspect attio companies   # records under the companies object
 pnpm dev:inspect airtable    # fake webhooks + per-webhook payload feeds + the real AIRTABLE webhook_subscription rows (with pull checkpoint)
 pnpm dev:inspect granola     # notes seeded into the fake Granola API + the granola poll trigger rows (poll_checkpoint / poll_last_at)
+pnpm dev:inspect evertrace   # signals + lists seeded into the fake Evertrace API + the evertrace poll trigger rows
+pnpm dev:inspect dealroom    # fake Dealroom entity counts + recent rounds + the calls the adapter last made + the dealroom poll trigger rows
+pnpm dev:inspect dealroom --clear-requests   # wipe the Dealroom request log first, to read one run's calls in isolation
 pnpm dev:inspect valuations              # per-entity row counts + last 10 outbox entries
 pnpm dev:inspect valuations legal_entity # full rows for one Valuations entity
 pnpm dev:inspect --reset     # clear all fake state
@@ -630,8 +678,12 @@ Base URL: `http://localhost:5556`
 | Attio | POST | `/attio/v2/objects/:id/records/query` | list/search records |
 | Attio | GET | `/attio/v2/lists` | configured lists |
 | Slack | POST | `/slack/chat.postMessage` | (called by Slack adapter) |
+| Dealroom | POST | `/dealroom/companies` \| `/investors` \| `/founders` \| `/transactions` | keyword + `form_data` search, sorted and paged |
+| Dealroom | GET | `/dealroom/companies/:id` (and `/batch`) | get by Dealroom id or path slug |
+| Dealroom | GET | `/dealroom/companies/:id/fundings` \| `/investors` \| `/team` | the sub-resource walks the adapter's graph uses |
 | Admin | GET | `/admin/:service/state` | dump entities for a service |
 | Admin | DELETE | `/admin/:service/state` | wipe + reseed |
+| Admin | DELETE | `/admin/:service/:entityType/state` | clear ONE entity type without reseeding the service |
 | Admin | DELETE | `/admin/all` | wipe + reseed everything |
 
 See `apps/fake-channels/src/routes/` for the full surface.
