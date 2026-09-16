@@ -190,6 +190,7 @@ import {
   Environment,
   MovementEngineError,
   applyHopOrderLimit,
+  bindingOf,
   closedHopPushdown,
   describeBinding,
   evalMovementExpr,
@@ -867,6 +868,23 @@ function blockValue(returned: Binding[]): Binding {
 
 /** The value a slot holds when its arm handed nothing back — a filled slot and
  *  an empty one are the same shape, so a null check is the only difference. */
+/** What a value that cannot be walked from IS, in the words a reader of the
+ *  movement would use. */
+function describeHeadValue(value: unknown): string {
+  if (value === null || value === undefined) return 'nothing';
+  if (Array.isArray(value)) return 'a list';
+  switch (typeof value) {
+    case 'string':
+      return 'text';
+    case 'number':
+      return 'a number';
+    case 'boolean':
+      return 'true or false';
+    default:
+      return 'a plain value';
+  }
+}
+
 const NULL_SLOT: Binding = { kind: 'value', value: null, provenance: NO_PROVENANCE };
 
 /**
@@ -5417,6 +5435,35 @@ class Interpreter {
         };
       });
     }
+    if (rootBinding.kind === 'value') {
+      // `found = MAP(pieces, (p) => { return extract … })` — a VALUE holding
+      // positions. A collection op hands each answer back in the currency it
+      // arrived in, so the members of that list are the extract roots
+      // themselves; a hop off the list is that hop off each member,
+      // concatenated in list order — exactly the reading a block's returned
+      // records (`positions`) already get, and the one a list of anything gets
+      // everywhere else. A single position held on the value plane (`AT(found,
+      // 0)`) is that position, which is what a list of one means too.
+      //
+      // The head's own bracket (WHERE / ORDER BY / LIMIT) belongs to the hop,
+      // so it applies off EACH root, like every other many-rooted head.
+      const members = Array.isArray(rootBinding.value) ? rootBinding.value : [rootBinding.value];
+      const perMember: BlockIteration[] = [];
+      for (const member of members) {
+        const position = bindingOf(member);
+        if (position === undefined) {
+          throw new MovementEngineError(
+            'MOVENG_RUNTIME',
+            `${Array.isArray(rootBinding.value) ? `one of the values in '${root}' is` : `'${root}' is`} ${describeHeadValue(member)}, and a hop walks from a POSITION — there is nothing here to hop from. A block head starts at a record, an extraction's result, or a list of them ('MAP(pieces, (p) => { return extract … })').`,
+          );
+        }
+        perMember.push(
+          ...(await this.headIterationsFrom({ binding: position, head, root, probe, env })),
+        );
+      }
+      return perMember;
+    }
+
     throw unsupported(`block heads rooted at '${root}' (a ${rootBinding.kind} binding)`);
   }
 
