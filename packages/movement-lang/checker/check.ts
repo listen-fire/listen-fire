@@ -5244,19 +5244,11 @@ class Checker {
     from: Extract<PositionTypeRef, { kind: 'local' }>,
     edgeName: string,
     span: Span,
+    subject?: string,
   ): { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string; local?: true } {
     const edge = from.edges?.[edgeName];
     if (edge === undefined) {
-      const declared = Object.keys(from.edges ?? {});
-      this.report(
-        DiagnosticCodes.NODE_EDGE_UNDECLARED,
-        `${from.label} this run built declares no edge '${edgeName}'${
-          declared.length > 0
-            ? ` — it has: ${declared.join(', ')}`
-            : ` — declare it on the literal ('${edgeName}: <SomeNode>')`
-        }`,
-        span,
-      );
+      this.reportUndeclaredLocalEdge({ from, edgeName, span, ...(subject !== undefined ? { subject } : {}) });
       return { local: true };
     }
     if (edge.deferred === true) {
@@ -5272,7 +5264,8 @@ class Checker {
     const schema = landing !== undefined ? positionSchemaOfRef(landing) : undefined;
     // An edge nobody could type says nothing about the body — the write still
     // happens, and silence is the honest answer for what it may set.
-    if (schema === undefined) return { local: true, description };
+    if (schema === undefined || landing === undefined) return { local: true, description };
+    const nested = edge.structural === true ? this.nestedLocalEdges(landing, schema) : undefined;
     return {
       local: true,
       description,
@@ -5281,12 +5274,75 @@ class Checker {
         resultShape: schema.properties,
         fuzzyResolution: true,
       },
-      // The landing the write appends belongs to no graph and carries no edges
-      // of its own — exactly the fields the body set, and nothing else. So the
-      // handle is a LOCAL node, and every later use of it (a dot read, a `link`
-      // onto another declared edge) is judged by the structure it really has.
-      handle: { kind: 'local', label: `a '${edgeName}' landing`, reads: schema.properties },
+      // The landing the write appends belongs to no graph, so the handle is a
+      // LOCAL node and every later use of it (a dot read, a `link` onto another
+      // edge) is judged by the structure it really has. That structure is the
+      // whole of what the landing type declares: the fields the body set, and
+      // the nested nodes the declaration named, each an empty appendable edge —
+      // a landing IS one of those, so it carries what one carries.
+      handle: {
+        kind: 'local',
+        label: `a '${edgeName}' landing`,
+        reads: schema.properties,
+        ...(nested !== undefined ? { edges: nested } : {}),
+      },
     };
+  }
+
+  /**
+   * The nested declared nodes of a landing type, as the landing's own edges.
+   *
+   * Only for a landing typed by a DECLARED NODE. A declaration is a tree, so
+   * one of its nodes carries its children the same way the root does — and the
+   * run appends a whole node, not a root with its branches cut off. An
+   * ADDRESS-typed edge mints none: its landings are one system's records, and a
+   * record's edges are that system's to offer, not the run's to invent.
+   */
+  private nestedLocalEdges(
+    landing: PositionTypeRef,
+    schema: PositionSchema,
+  ): Record<string, LocalEdge> | undefined {
+    if (!('instance' in landing)) return undefined;
+    const { instance } = landing;
+    const edges: Record<string, LocalEdge> = {};
+    for (const [name, declared] of Object.entries(schema.edges)) {
+      const target = positionRefIn(instance, declared.target);
+      if (target === undefined) continue;
+      edges[name] = {
+        // Same promises every synthesised edge carries — readable, and nothing
+        // else. There is no system behind it to promise more.
+        schema: { target: name, readable: true },
+        target,
+        structural: true,
+      };
+    }
+    return Object.keys(edges).length > 0 ? edges : undefined;
+  }
+
+  /**
+   * `link h -[:founder]-> f` / `write h-[:founder]-> { … }` onto a name the
+   * node does not have. ONE sentence for both, because it is one fact: a local
+   * node's edges are exactly what declared it, so a name that isn't among them
+   * is a typo whichever statement spelled it.
+   */
+  private reportUndeclaredLocalEdge(input: {
+    from: Extract<PositionTypeRef, { kind: 'local' }>;
+    edgeName: string;
+    span: Span;
+    /** The author's own name for the node, where the statement has one. */
+    subject?: string;
+  }): void {
+    const declared = Object.keys(input.from.edges ?? {});
+    const subject = input.subject !== undefined ? `'${input.subject}'` : input.from.label;
+    this.report(
+      DiagnosticCodes.NODE_EDGE_UNDECLARED,
+      `${subject} declares no edge '${input.edgeName}'${
+        declared.length > 0
+          ? ` — it has: ${declared.join(', ')}`
+          : ` — declare it where the node is built ('${input.edgeName}: <SomeNode>' or '${input.edgeName}: <source-[:Edge]->>')`
+      }`,
+      input.span,
+    );
   }
 
   /**
@@ -5354,7 +5410,10 @@ class Checker {
     // writability — has anything to consult. The edge's landing type is the
     // whole answer, and `localWriteTarget` is where it is read.
     if (parent.kind === 'local' && input.purpose === 'write') {
-      return this.localWriteTarget(parent, edgeName, input.span);
+      // The root's NAME is the subject only when the parent IS the root — one
+      // hop further along and the author's name is for a different node.
+      const subject = head.steps.length === 1 ? input.path.root : undefined;
+      return this.localWriteTarget(parent, edgeName, input.span, subject);
     }
 
     // A write handle to a WRITABLE-ONLY type mints no position (an ask family:
@@ -5877,12 +5936,12 @@ class Checker {
     const toSymbol = this.resolveName(link.target.name, link.span, scope);
     const edge = from.edges?.[link.edge];
     if (edge === undefined) {
-      const declared = Object.keys(from.edges ?? {});
-      this.report(
-        DiagnosticCodes.NODE_EDGE_UNDECLARED,
-        `'${link.from}' declares no edge '${link.edge}'${declared.length > 0 ? ` — it has: ${declared.join(', ')}` : ` — declare it on the literal ('${link.edge}: <source-[:Edge]->>')`}`,
-        link.span,
-      );
+      this.reportUndeclaredLocalEdge({
+        from,
+        edgeName: link.edge,
+        span: link.span,
+        subject: link.from,
+      });
       return;
     }
     if (edge.deferred === true) {
