@@ -195,8 +195,14 @@ import {
   type ReturnShape,
   PresenceProof,
   presenceProofs,
+  holdsRecords,
+  isRecordType,
   positionRefIn,
+  positionsMatch,
   positionSchemaOfRef,
+  recordHeadPosition,
+  recordOf,
+  recordValueOf,
   stripAbsent,
   TypedDiagnosticCodes,
   WriteTargetRef,
@@ -336,11 +342,6 @@ export const DiagnosticCodes = {
    *  list of them. The value plane holds no positions, so the hop can never
    *  land; a value whose type is not known stays silent and walks. */
   HEAD_NOT_A_POSITION: 'MOV_HEAD_NOT_A_POSITION',
-  /** A list literal holding both records and values — `[one, "label"]`. A list
-   *  holds one kind of thing: a list of records is walked, a list of values is
-   *  read, and nothing reads both. Reported only where both halves are known;
-   *  a member nobody can type keeps the honesty rule and stays silent. */
-  LIST_MIXED: 'MOV_LIST_MIXED',
   /** The listened system has no inbound surface at all — its manifest names
    *  zero trigger types, so nothing it does can ever reach us. A definite
    *  fact, not an unknown: see `AdapterSpec.canFire`. */
@@ -1606,68 +1607,14 @@ function buildExtractGraph(
 }
 
 /**
- * Does an argument's (graph, position) fit a parameter's (check 7)?
- * `undefined` = cannot tell (stay silent).
+ * What a body handed back, as a VALUE type — on either plane, because a record
+ * is a value type and the two planes are one type universe. A body that
+ * returned a record answers `record`; one that returned text answers `text`;
+ * one that returned nothing answers nothing.
  */
-function positionsMatch(arg: PositionTypeRef, param: PositionTypeRef): boolean | undefined {
-  switch (param.kind) {
-    case 'position':
-      if (arg.kind === 'position') {
-        if (arg.instance.token !== param.instance.token) return false;
-        if (arg.position === param.position) return true;
-        return acceptsAnyNarrowing(param, arg.narrowsEvent);
-      }
-      if (arg.kind === 'union') {
-        // A multi-action listen's derived union against a plain-position
-        // param: only the unnarrowed event node itself is wide enough —
-        // "no address on the param accepts any listen".
-        if (arg.instance.token !== param.instance.token) return false;
-        return acceptsAnyNarrowing(param, arg.narrowsEvent);
-      }
-      if (arg.kind === 'handle') {
-        if (arg.instance.token !== param.instance.token) return false;
-        return arg.position === undefined ? undefined : arg.position === param.position;
-      }
-      return false;
-    case 'union':
-      if (arg.kind === 'union') {
-        if (arg.instance.token !== param.instance.token) return false;
-        if (arg.union === param.union) return true;
-        return acceptsAnyNarrowing(param, arg.narrowsEvent);
-      }
-      if (arg.kind === 'position') {
-        if (arg.instance.token !== param.instance.token) return false;
-        if (param.variants.includes(arg.position)) return true;
-        // An unaddressed union accepts any narrowing of the event it names —
-        // wider type, not a mechanism.
-        return acceptsAnyNarrowing(param, arg.narrowsEvent);
-      }
-      if (arg.kind === 'handle') {
-        if (arg.instance.token !== param.instance.token) return false;
-        return arg.position === undefined ? undefined : param.variants.includes(arg.position);
-      }
-      return false;
-    case 'meta':
-      return arg.kind === 'meta' ? arg.instance.token === param.instance.token : false;
-    case 'handle':
-    case 'extract':
-    case 'closure':
-    case 'local':
-    case 'maybeEmpty':
-      // Parameters come from TypeRefs; these kinds cannot be declared.
-      return undefined;
-  }
-}
-
-/**
- * Are these two names the SAME place to start a walk from? Both directions of
- * the fit, so neither stands in for a wider one: a walk off a list of records
- * runs off every member, and one member's type may only speak for the rest
- * where it IS the rest. `undefined` — a handle, an extraction result, a
- * synthesised node, none of which anything can tell apart — is not a yes.
- */
-function sameStartingPoint(a: PositionTypeRef, b: PositionTypeRef): boolean {
-  return positionsMatch(a, b) === true && positionsMatch(b, a) === true;
+function valueOfReturn(shape: ReturnShape): FieldType | undefined {
+  if (shape.fieldType !== undefined) return shape.fieldType;
+  return shape.posType !== undefined ? recordOf(shape.posType) : undefined;
 }
 
 /** Where an argument is written, whatever form it takes. */
@@ -1688,7 +1635,7 @@ function callArgSpan(arg: CallArg): Span {
  * Does a supplied position fit a required one BY STRUCTURE?
  *
  * Asked wherever there is no instance token to compare — the whole point of
- * `positionsMatch` above does not apply. A node literal belongs to no graph; a
+ * `positionsMatch` (typing.ts) does not apply. A node literal belongs to no graph; a
  * declared node (`<Company>`) belongs to no system. Either way the required
  * side is typed by its STRUCTURE, and the supplied side fits when it carries
  * every member that structure declares, recursively through edges. That is TS's
@@ -1785,14 +1732,6 @@ function nodeMisfitAgainst(
  * table a type error rather than a silence.
  *
  */
-function acceptsAnyNarrowing(
-  param: Extract<PositionTypeRef, { kind: 'position' | 'union' }>,
-  argNarrowsEvent: string | undefined,
-): boolean {
-  if (param.narrowsEvent !== undefined) return false; // the signature named an address
-  const name = param.kind === 'position' ? param.position : param.union;
-  return argNarrowsEvent === name;
-}
 
 /**
  * A parameter's ADDRESS (`<at-[:`Record Change` WHERE `action` == "record.created"]->>`)
@@ -2177,10 +2116,26 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: () => {},
       span,
     });
+  }
+
+  /**
+   * A bare NAME's value type, whichever plane it is bound on — the statement
+   * layer's half of the walker's `bareNameType`, and the same answer. One type
+   * universe: a record read where a value goes IS a record, so the write-field
+   * rule, the absence rule and the mixed-list rule all see it without a second
+   * vocabulary for "this is a position".
+   */
+  private bareNameValueType(scope: Scope, name: string): FieldType | undefined {
+    const scalar = this.symbolScalarType(scope, name);
+    if (scalar !== undefined) return scalar;
+    const symbol = this.nodePlaneSymbol(name, scope);
+    if (symbol === undefined) return undefined;
+    return recordValueOf(this.symbolPositionType(symbol)) ?? recordOf(undefined);
   }
 
   /** A bound name's SCALAR (dot-plane) type — the seam that lets a binding's
@@ -2202,6 +2157,7 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
@@ -2221,6 +2177,7 @@ class Checker {
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
+      isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
@@ -3242,18 +3199,6 @@ class Checker {
           };
           break;
         }
-        // `both = [one, two]` — a list literal of RECORDS, which is a position
-        // bound many times over and so an arrow-plane binding, exactly as a
-        // block's returned records are.
-        const recordList = this.positionListPlane(parsed, scope, span);
-        if (recordList !== undefined) {
-          symbol = {
-            ...symbol,
-            ...(recordList.posType !== undefined ? { posType: recordList.posType } : {}),
-            bindingPlane: 'node',
-          };
-          break;
-        }
         // A plain value binding is a SCALAR (F13, dot plane) — capture its type
         // so a race receipt / block meta can type its property read. Bare
         // literals (`done = true`) short-circuit name resolution in
@@ -3442,87 +3387,6 @@ class Checker {
     if (resolution.kind !== 'found') return undefined;
     const { symbol } = resolution;
     return symbol.posType !== undefined || symbol.bindingPlane === 'node' ? symbol : undefined;
-  }
-
-  /**
-   * `both = [one, two]` — a list literal whose members are RECORDS, and what
-   * binding one means.
-   *
-   * A list of records is not a second type. Positions are many-valued already,
-   * so plurality lives in the traversal — which is why a block's returned
-   * records (`docs = x-[d:doc]-> { return d }`) bind on the ARROW plane with
-   * one position type rather than as a list of anything. A list literal of
-   * records is the same fact written by hand, so it binds the same way, and a
-   * block head off the name walks each member in list order.
-   *
-   * The position type rides along only where every member AGREES on one:
-   * walking the head means walking it off each member, so one member's type
-   * cannot stand for the rest. Where they disagree — or where the checker
-   * cannot tell two of them apart, which is every extraction result and every
-   * synthesised node — the name still binds on the arrow plane and the walk
-   * stays silent, exactly as a collection op's answer does.
-   *
-   * Returns undefined when this is not a list of records, so the caller binds
-   * it however it binds any other value.
-   */
-  private positionListPlane(
-    parsed: Expression | undefined,
-    scope: Scope,
-    span: Span,
-  ): { posType?: PositionTypeRef } | undefined {
-    if (parsed?.type !== 'list' || parsed.elements.length === 0) return undefined;
-    const records: Array<{ name: string; symbol: ScopeSymbol }> = [];
-    const values: Array<{ label: string; what: string }> = [];
-    for (const element of parsed.elements) {
-      const name = bareName(element);
-      const symbol = name !== undefined ? this.nodePlaneSymbol(name, scope) : undefined;
-      if (name !== undefined && symbol !== undefined) {
-        records.push({ name, symbol });
-        continue;
-      }
-      const what = this.describeListValue(element, scope);
-      if (what !== undefined) {
-        values.push({ label: name !== undefined ? `'${name}'` : 'another member', what });
-      }
-    }
-    if (records.length === 0) return undefined;
-    if (values.length > 0) {
-      const first = positionTypeOf(records[0].symbol);
-      this.report(
-        DiagnosticCodes.LIST_MIXED,
-        `a list holds one kind of thing, and this one holds both: '${records[0].name}' is ${first !== undefined ? describePosition(first) : 'a record'}, and ${values[0].label} is ${values[0].what}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
-        span,
-      );
-      return undefined;
-    }
-    const types = records.map(r => positionTypeOf(r.symbol));
-    const first = types[0];
-    const shared =
-      first !== undefined && types.every(t => t !== undefined && sameStartingPoint(t, first));
-    return shared && first !== undefined ? { posType: first } : {};
-  }
-
-  /** What a list member IS, where the checker knows — the other half of the
-   *  mixed-list refusal. Undefined means nobody knows, which stays silent. */
-  private describeListValue(element: Expression, scope: Scope): string | undefined {
-    switch (element.type) {
-      case 'static':
-        if (element.value === null) return undefined; // `null` is every type's
-        if (typeof element.value === 'number') return 'a number';
-        if (typeof element.value === 'boolean') return 'true or false';
-        return 'text';
-      case 'concat':
-        return 'text';
-      case 'list':
-        return 'a list';
-      case 'object':
-        return 'a set of named values';
-      default: {
-        const name = bareName(element);
-        const type = name !== undefined ? this.symbolScalarType(scope, name) : undefined;
-        return type !== undefined ? describeFieldType(type) : undefined;
-      }
-    }
   }
 
   /**
@@ -3963,24 +3827,30 @@ class Checker {
 
     const carried = expr.op === 'reduce' ? (init?.valueType) : undefined;
     const shape = this.checkCollectionFunction(expr, spelling, scope, element, carried);
+    // What the function hands back, on whichever plane it handed it back on. A
+    // record is a value type, so a closure that returns one (`(p) => { return
+    // extract … }`, `(t) => { return t }`) answers in the same currency as one
+    // that returns text — there is no second type for "a collection of
+    // records" and no second rule for what an op does with one.
+    const returned = valueOfReturn(shape);
 
     switch (expr.op) {
       case 'map':
-        return shape.fieldType !== undefined ? listOf(shape.fieldType, ordering) : undefined;
+        return returned !== undefined ? listOf(returned, ordering) : undefined;
       case 'filter':
         // What survives is what went in, in the order it was in.
         return element !== undefined ? listOf(element, ordering) : undefined;
       case 'reduce':
         // The carried value's type, which is the function's return where it
         // typed and the starting value's where it did not.
-        return shape.fieldType ?? carried;
+        return returned ?? carried;
       case 'groupby':
-        this.requireDictKeyIn(scope, expr.fn, shape.fieldType, `filed under by '${spelling}'`);
+        this.requireDictKeyIn(scope, expr.fn, returned, `filed under by '${spelling}'`);
         return element !== undefined
           ? { kind: 'dict', of: listOf(element, ordering) }
           : undefined;
       case 'keyby':
-        this.requireDictKeyIn(scope, expr.fn, shape.fieldType, `filed under by '${spelling}'`);
+        this.requireDictKeyIn(scope, expr.fn, returned, `filed under by '${spelling}'`);
         return element !== undefined ? { kind: 'dict', of: element } : undefined;
     }
   }
@@ -4000,7 +3870,7 @@ class Checker {
   private reportNotACollection(spelling: string, what: string, span: Span): void {
     this.report(
       DiagnosticCodes.COLLECTION_OP_NOT_A_COLLECTION,
-      `'${spelling}' reads a collection of values, and this is ${what}. A traversal's landings are POSITIONS and have their own form — the traversal-headed block ('root-[x:edge]-> { … }'); return the values you want out of one and read those.`,
+      `'${spelling}' reads a collection, and this is ${what} — one thing, not several. A hop's landings are a collection ('${spelling}(r-[:edge]->, …)'), and so is a list, a block's returns or another op's answer; walk one record in a traversal-headed block instead ('r-[x:edge]-> { … }').`,
       span,
     );
   }
@@ -4057,6 +3927,42 @@ class Checker {
     this.report(
       DiagnosticCodes.COLLECTION_OP_RETURNS_NOTHING,
       `the function for '${spelling}' hands nothing back, so there is nothing for '${spelling}' to do with each member — 'return' the answer for one.`,
+      span,
+    );
+  }
+
+  /**
+   * A written field's value against what the field holds. One site for both
+   * write forms, so the two cannot drift.
+   *
+   * A RECORD gets its own words. A record is a place in a graph, not data —
+   * there is no spelling of one to put in a field — and the repair is one of
+   * exactly two things: write a field OFF the record, or join the two records
+   * with a link. Saying "produces slack.message" and leaving the author to
+   * infer that is the silence this checker exists to refuse.
+   */
+  private reportFieldValueType(
+    fieldName: string,
+    subject: string,
+    targetType: FieldType | undefined,
+    valueType: FieldType | undefined,
+    span: Span,
+    options?: { relationship?: boolean },
+  ): void {
+    if (targetType === undefined || valueType === undefined) return;
+    if (isRecordType(valueType) && options?.relationship === true) return;
+    if (fieldTypeCompatible(valueType, targetType)) return;
+    if (isRecordType(valueType)) {
+      this.report(
+        DiagnosticCodes.WRITE_FIELD_TYPE,
+        `'${fieldName}' on ${subject} is ${describeFieldType(targetType)}, and this is ${describeFieldType(valueType)} — a record, not a value. Write a field off it ('${fieldName}: r.\`Name\`'), or join the two records with a link ('link … -[:edge]-> r').`,
+        span,
+      );
+      return;
+    }
+    this.report(
+      DiagnosticCodes.WRITE_FIELD_TYPE,
+      `'${fieldName}' on ${subject} is ${describeFieldType(targetType)}, but this expression produces ${describeFieldType(valueType)}`,
       span,
     );
   }
@@ -5246,13 +5152,14 @@ class Checker {
         );
       }
       if (field.semantics === 'fill' && isMaybeAbsent(valueType)) omittableFields += 1;
-      if (targetType !== undefined && valueType !== undefined && !fieldTypeCompatible(valueType, targetType)) {
-        this.report(
-          DiagnosticCodes.WRITE_FIELD_TYPE,
-          `'${field.name}' on ${rootDescription} is ${describeFieldType(targetType)}, but this expression produces ${describeFieldType(valueType)}`,
-          field.value.span,
-        );
-      }
+      this.reportFieldValueType(field.name, rootDescription, targetType, valueType, field.value.span, {
+        // The field NAMES a relationship of the written type, so a record is
+        // what belongs in it — the adapter exposes the reference as a writable
+        // field. The idiomatic spelling is still structural, which the nudge
+        // above already says; refusing it here would be a second, harsher word
+        // about the same line.
+        relationship: writtenSchema?.edges[field.name] !== undefined,
+      });
       this.checkEnumLiteralWrite(field.value, {
         targetType,
         subject: `'${field.name}' on ${rootDescription}`,
@@ -6009,13 +5916,7 @@ class Checker {
         );
       }
       const { valueType } = this.checkExprSlot(field.value, scope);
-      if (targetType !== undefined && valueType !== undefined && !fieldTypeCompatible(valueType, targetType)) {
-        this.report(
-          DiagnosticCodes.WRITE_FIELD_TYPE,
-          `'${field.name}' on ${description} is ${describeFieldType(targetType)}, but this expression produces ${describeFieldType(valueType)}`,
-          field.value.span,
-        );
-      }
+      this.reportFieldValueType(field.name, description, targetType, valueType, field.value.span);
       this.checkEnumLiteralWrite(field.value, {
         targetType,
         subject: `'${field.name}' on ${description}`,
@@ -6163,23 +6064,29 @@ class Checker {
         head.span,
       );
     }
-    const rootType = rootSymbol ? this.symbolPositionType(rootSymbol) : undefined;
-    // A head rooted at a name that is a VALUE. There are no positions on the
-    // value plane — a value type is text, a number, a list or a dict of them,
-    // and never a record — so a hop off a name whose value type is KNOWN can
-    // never land anywhere, and it is said here rather than at run time, after
+    // Where the walk starts. A name bound on the arrow plane says so directly;
+    // a name bound on the VALUE plane says so through its type, because a
+    // record IS a value type — `both = [one, two]`, `first = AT(rows, 0)`,
+    // `found = MAP(pieces, (p) => { return extract … })` all walk, and they all
+    // sit on the dot plane. One record or a list of them is the same walk: a
+    // hop is many-valued either way, so plurality lives in the traversal.
+    const rootType =
+      (rootSymbol ? this.symbolPositionType(rootSymbol) : undefined)
+      ?? recordHeadPosition(rootSymbol?.bindingPlane === 'scalar' ? rootSymbol.fieldType : undefined);
+    // A head rooted at a name that is a VALUE and NOT a record. There are no
+    // positions on the value plane — a value type is text, a number, a list or
+    // a dict of them — so a hop off a name whose value type is KNOWN can never
+    // land anywhere, and it is said here rather than at run time, after
     // everything that produced the value has already been paid for.
     //
     // A value whose type is NOT known stays silent and runs (the honesty rule):
-    // `MAP(pieces, (p) => { return extract … })` hands back a list of
-    // extraction results, which the value plane has no word for — the engine
-    // walks each of them in turn.
+    // a plugin whose output nobody declared, an untyped import.
     if (
       steps !== undefined &&
-      rootType === undefined &&
       head.root !== undefined &&
       rootSymbol?.bindingPlane === 'scalar' &&
-      rootSymbol.fieldType !== undefined
+      rootSymbol.fieldType !== undefined &&
+      !holdsRecords(rootSymbol.fieldType)
     ) {
       this.report(
         DiagnosticCodes.HEAD_NOT_A_POSITION,
@@ -8189,7 +8096,7 @@ class Checker {
       // A bare name short-circuits the parse, but it still HAS a value type —
       // the binding's own. Without this its absence would die here, at the very
       // sites (a plain write field) that require presence.
-      const valueType = this.symbolScalarType(scope, trimmed);
+      const valueType = this.bareNameValueType(scope, trimmed);
       return valueType !== undefined ? { valueType } : {};
     }
     let parsed: Expression;

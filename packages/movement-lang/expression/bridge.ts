@@ -1128,7 +1128,16 @@ export function parseMovementExpression(raw: string): Expression {
 
   const { rewritten: interpRewritten, replacements: interpReplacements } =
     liftInterpolatedStrings(raw);
-  const aggregateRewritten = rewriteAggregateBarePaths(interpRewritten);
+  // A WHOLE expression that is a bare path — `c-[m:Messages]->` written where a
+  // value goes — is its LANDINGS, the same thing it means inside `COUNT(…)`.
+  // The formula parser wants a terminal property, so the sentinel is spliced in
+  // here rather than the expression being refused: a hop is many-valued, so a
+  // bare walk is a list of records, and `MAP` / `FILTER` / `SORT` read it like
+  // any other collection.
+  const wholePath = isBareTraversalPath(interpRewritten)
+    ? `${interpRewritten.trimEnd()}.\`${POSITION_SENTINEL}\``
+    : interpRewritten;
+  const aggregateRewritten = rewriteAggregateBarePaths(wholePath);
   const { rewritten, replacements } = liftExistsCalls(aggregateRewritten);
   for (const [placeholder, expr] of interpReplacements) replacements.set(placeholder, expr);
   const parsed = parseFormula(rewritten);

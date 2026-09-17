@@ -23,6 +23,12 @@ import type {
 } from '@listen-fire/shared/expression/types';
 import type { Program, TypeDeclaration } from '../parser/ast';
 import type { DeclaredEffectRow } from './effects';
+// A record is a value, so `FieldType` names the arrow plane's own type and
+// spells it with the arrow plane's own words. That is a cycle with `typing.ts`
+// and it is the honest one: neither plane is beneath the other, and there is
+// one type universe rather than a copy of position types kept here. Nothing is
+// read at module load, so the two initialise in either order.
+import { describePosition, type PositionTypeRef } from './typing';
 
 /**
  * One argument in an adapter's construction signature. The list is the full
@@ -467,7 +473,28 @@ export type FieldType =
    * the checker's typing layer; it never appears in an adapter/schema surface, so
    * runtime data (the engine, trpc) never carries it. `of` is never itself
    * `maybeAbsent` — construct via the `maybeAbsent()` helper, which flattens. */
-  | { kind: 'maybeAbsent'; of: FieldType };
+  | { kind: 'maybeAbsent'; of: FieldType }
+  /**
+   * A RECORD held as a value — a traversed record, a write handle, a
+   * synthesised node, an extraction result. One type universe: a record is
+   * what `MAP` hands back when its function returns one, what a list literal
+   * of them holds, and what a map's key can carry, so lists and dicts nest
+   * over records exactly as they nest over text.
+   *
+   * It is a value TYPE, not a value shape: nothing reads it as data. A record
+   * written into a field, interpolated into text, added up or compared to a
+   * scalar is refused where it is written; what it CAN do is be walked from
+   * (a block head), read by field (the dot plane), and held in a collection.
+   *
+   * `position` is which record, where the checker can say — the same
+   * `PositionTypeRef` the arrow plane uses, never a parallel one. ABSENT means
+   * "a record, and nobody can name which": members of a list that disagree,
+   * an extraction result, a synthesised node. The distinction is load-bearing
+   * and is the same one `LocalEdge.target` draws — a walk off a record whose
+   * position is unknown stays silent and runs, and one off a named position is
+   * checked.
+   */
+  | { kind: 'record'; position?: PositionTypeRef };
 
 /** Maps a surface type name (shape declarations, extract annotations) to a FieldType. */
 /**
@@ -567,6 +594,12 @@ export function describeFieldType(type: FieldType): string {
     return `[${type.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
   }
   if (type.kind === 'dict') return `dict of ${describeFieldType(type.of)}`;
+  // A record reads as the record it IS, in the arrow plane's own words. A
+  // record nobody can name is still definitely a record, which is what the
+  // absent ref means and what the reader needs to hear.
+  if (type.kind === 'record') {
+    return type.position !== undefined ? describePosition(type.position) : 'a record';
+  }
   if (type.open) return `known values (${type.options.join(' | ')}, …)`;
   // An empty CLOSED option set is the empty union — `enum ()` reads like a
   // rendering bug, so name the fact.

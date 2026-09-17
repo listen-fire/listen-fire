@@ -181,6 +181,16 @@ export const TypedDiagnosticCodes = {
    *  author CAN do — pass the value through unchanged to a json field — and
    *  never suggests a narrowing syntax, because there isn't one. */
   JSON_OPAQUE: 'MOV_JSON_OPAQUE',
+  /** A RECORD where a value is required — interpolated into text, added up,
+   *  compared to a scalar. A record is a place in a graph, not data; it has no
+   *  one spelling as text, and there is no implicit one. Read a field off it,
+   *  or walk it. */
+  RECORD_NOT_A_VALUE: 'MOV_RECORD_NOT_A_VALUE',
+  /** A list literal holding both records and values — `[one, "label"]`. A list
+   *  holds one kind of thing: a list of records is walked, a list of values is
+   *  read, and nothing reads both. Reported only where both halves are known;
+   *  a member nobody can type keeps the honesty rule and stays silent. */
+  LIST_MIXED: 'MOV_LIST_MIXED',
   /** An arithmetic operand (`+ - * /`) whose KNOWN type is not numeric — the
    *  classic being `"a" + b`, since `+` is addition and the language has no
    *  concat overload. The engine coerces through `Number()`, so such an
@@ -906,11 +916,21 @@ function isBareWalk(expr: Expression): boolean {
   );
 }
 
+/** Is this the end of a path the bridge marked "the positions themselves"? The
+ *  one test that tells a walk read for its LANDINGS from one read for a field,
+ *  and it is the shape the bridge already produces — nothing re-parsed. */
+export function isPositionTerminal(expr: Expression): boolean {
+  return expr.type === 'property' && expr.propertyTypeId === POSITION_SENTINEL;
+}
+
 /** A value read BY NAME — a dict. It has parts, so a key can name one, and no
  *  order of its own, so a key must. */
 function isKeyedValue(type: FieldType): boolean {
   const t = stripAbsent(type);
-  return typeof t === 'object' && t.kind === 'dict';
+  // A record is read by name too — its fields are the keys — so ordering a
+  // list of records asks for the key the same way ordering a list of dicts
+  // does, rather than falling to "sorts by its members".
+  return typeof t === 'object' && (t.kind === 'dict' || t.kind === 'record');
 }
 
 /** A PLAIN value — text, a number, a date: something with no fields to key on
@@ -1057,8 +1077,13 @@ function literalIndex(expr: Expression): number | undefined {
 
 function baseKind(
   type: FieldType,
-): 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' {
+): 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' | 'record' {
   const unwrapped = unwrapList(type);
+  // A RECORD is its own base kind and reaches no other. It is not data (so a
+  // `json` field cannot hold one), and it is emphatically not text — the
+  // catch-all below would have made it one, and "everything renders into text"
+  // is the conflation every rule downstream of this function exists to end.
+  if (typeof unwrapped === 'object' && unwrapped.kind === 'record') return 'record';
   // A tuple whose slots disagree survives `unwrapList` — structured data with
   // no element type, which is exactly what `json` means here. A DICT is the
   // same answer for the same reason: it is a keyed structure, and adding one
@@ -1074,7 +1099,10 @@ function baseKind(
  *  `file`, which is a HANDLE (a byte channel the adapter pulls), not a value
  *  that serializes into a JSON document. */
 function isDataShaped(type: FieldType): boolean {
-  return baseKind(type) !== 'file';
+  const base = baseKind(type);
+  // A record is the second handle: it is a place in a graph, not a document,
+  // and nothing serialises one into a json field.
+  return base !== 'file' && base !== 'record';
 }
 
 /**
@@ -1094,6 +1122,11 @@ type ComparisonCategory =
   | 'textual'
   | 'boolean'
   | 'structural'
+  /** A RECORD — comparable to another record and to nothing else. Two
+   *  references to the same record are equal (identity: the same landing, the
+   *  same external id); a record against a scalar is the mismatch this
+   *  category exists to name. */
+  | 'record'
   | 'opaque'
   /** The `null` literal's own category — in no other, so it matches nothing by
    *  the category rule. `== null` never reaches here (it is intercepted as the
@@ -1102,7 +1135,10 @@ type ComparisonCategory =
 
 export function comparisonCategory(type: FieldType): ComparisonCategory {
   type = stripAbsent(type);
-  if (typeof type === 'object') return type.kind === 'enum' ? 'textual' : 'structural';
+  if (typeof type === 'object') {
+    if (type.kind === 'record') return 'record';
+    return type.kind === 'enum' ? 'textual' : 'structural';
+  }
   switch (type) {
     case 'date':
     case 'datetime':
@@ -1232,6 +1268,29 @@ export function checkJsonOpaque(
       `${describeFieldType(stripAbsent(type))} is a structured value and nothing describes `
       + `its shape, so it can't be ${operation} — pass it through unchanged into a json `
       + `field instead`,
+  };
+}
+
+/**
+ * A RECORD where a value is required — interpolated into text, added up,
+ * compared to a scalar, joined. `checkJsonOpaque`'s shape, for the same reason:
+ * one rule, read by every site that needs a value, so the two cannot drift.
+ *
+ * There is no implicit string form and there never will be: a record has no
+ * one spelling, and inventing one is how `[object Object]` reached a CRM. The
+ * message names the record and the repair — read a field off it.
+ */
+export function checkRecordAsValue(
+  type: FieldType | undefined,
+  operation: string,
+): { code: string; message: string } | null {
+  if (type === undefined || baseKind(type) !== 'record') return null;
+  return {
+    code: TypedDiagnosticCodes.RECORD_NOT_A_VALUE,
+    message:
+      `${describeFieldType(stripAbsent(type))} is a record, not a value, so it can't be `
+      + `${operation} — read a field off it ('c.\`Name\`'), or walk it in a block `
+      + `('c-[x:edge]-> { … }')`,
   };
 }
 
@@ -1371,6 +1430,11 @@ export function fieldTypeCompatible(value: FieldType, target: FieldType): boolea
   // the require-present sites police. Saying it twice, in the shape vocabulary,
   // would send the author hunting for a coercer that could never help.
   if (v === 'absent') return true;
+  // A record is a PLACE, not a value — nothing writes one into a field, and
+  // nothing fills a record-typed field from a value. The write sites name it
+  // themselves (`reportFieldValueType`), with the two things an author can do
+  // instead: write one of its fields, or link the two records.
+  if (v === 'record' || t === 'record') return false;
   // `json` is the DATA top type: every data shape flows INTO it (an object
   // literal, a list, a scalar — the field mirrors the target API verbatim), and
   // a `file` does not, being a handle rather than data. Nothing flows OUT of it:
@@ -1384,6 +1448,84 @@ export function fieldTypeCompatible(value: FieldType, target: FieldType): boolea
   if (v === t) return true;
   if (v === 'text' && t === 'date') return true;
   return false;
+}
+
+/**
+ * A record HELD AS A VALUE — the one constructor, so a record type is never
+ * spelled two ways. `position` rides along only where the checker can name
+ * which record; absent is "a record, and nobody can say which", which is what
+ * an extraction result, a synthesised node and a disagreeing list all are.
+ */
+export function recordOf(position: PositionTypeRef | undefined): FieldType {
+  return position !== undefined ? { kind: 'record', position } : { kind: 'record' };
+}
+
+/**
+ * The RECORD a value type holds, where a walk could start from it — the record
+ * itself, or a list of them. Absence is transparent: a walk off a maybe-absent
+ * record runs zero times, which is a gate, not a mistake.
+ *
+ * A DICT is deliberately not one: a dict is looked up, never folded, so the
+ * record comes out of it through `AT(m, "k")` and the walk starts there.
+ */
+function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'record' }> | undefined {
+  if (type === undefined) return undefined;
+  const t = stripAbsent(type);
+  if (typeof t !== 'object') return undefined;
+  if (t.kind === 'record') return t;
+  return t.kind === 'list' ? recordIn(t.of) : undefined;
+}
+
+/** Where a walk off this VALUE starts, when the checker can name it. One record
+ *  and a list of them start the same walk — a hop is many-valued either way, so
+ *  plurality lives in the traversal and not in a second type. */
+export function recordHeadPosition(type: FieldType | undefined): PositionTypeRef | undefined {
+  return recordIn(type)?.position;
+}
+
+/** Does this value type hold records — so a block head off it walks, rather
+ *  than being refused where it is written? */
+export function holdsRecords(type: FieldType | undefined): boolean {
+  return recordIn(type) !== undefined;
+}
+
+/**
+ * A record READ AS A VALUE — the one rule for what a name bound on the arrow
+ * plane is worth on the dot plane, so the walker and the statement layer cannot
+ * answer it differently.
+ *
+ * A maybe-empty landing MAY not be there, and absence is spelled one way
+ * whatever the plane, so the record carries it.
+ */
+export function recordValueOf(position: PositionTypeRef | undefined): FieldType | undefined {
+  if (position === undefined) return undefined;
+  return position.kind === 'maybeEmpty' ? maybeAbsent(recordOf(position)) : recordOf(position);
+}
+
+/** Is this value type a record? Absence is transparent, as it is everywhere. */
+export function isRecordType(type: FieldType | undefined): boolean {
+  if (type === undefined) return false;
+  const t = stripAbsent(type);
+  return typeof t === 'object' && t.kind === 'record';
+}
+
+/**
+ * What a COLLECTION of these types holds, where they agree on anything.
+ *
+ * Values agree by sameness. Records agree by being records: a list of them is
+ * walked the same way whatever they turn out to be, so members that disagree
+ * on WHICH record still make a list of records — with no position, which is
+ * the honest answer and the one that leaves the walk off it silent.
+ *
+ * `undefined` where nothing can be said — an untyped member, or a genuine
+ * mixture — which is the caller's cue to stay silent or to refuse.
+ */
+export function unifyValueTypes(types: Array<FieldType | undefined>): FieldType | undefined {
+  const first = types[0];
+  if (first === undefined || types.length === 0) return undefined;
+  if (types.every(t => t !== undefined && fieldTypeEquals(t, first))) return first;
+  if (types.every(t => isRecordType(t))) return { kind: 'record' };
+  return undefined;
 }
 
 /** Strict sameness (number vs text IS different; enum options compared).
@@ -1409,6 +1551,16 @@ export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
   }
   // Two dicts agree when what they hold agrees — the keys are data, not type.
   if (a.kind === 'dict' && b.kind === 'dict') return fieldTypeEquals(a.of, b.of);
+  // Two records are the same type when they are the same place to start a walk
+  // from — both directions of the fit, so neither stands in for a wider one.
+  // Two records nobody can name agree too: "a record, unknown which" is one
+  // answer, not two.
+  if (a.kind === 'record' && b.kind === 'record') {
+    if (a.position === undefined || b.position === undefined) {
+      return a.position === undefined && b.position === undefined;
+    }
+    return sameStartingPoint(a.position, b.position);
+  }
   if (a.kind === 'enum' && b.kind === 'enum') {
     return a.options.length === b.options.length && a.options.every((o, i) => o === b.options[i]);
   }
@@ -1444,6 +1596,10 @@ export function fieldAssignable(source: FieldType, target: FieldType): boolean {
   // gate — a `list<json>` target is reached through `fieldTypeEquals` above.
   if (target === 'json') return isDataShaped(source);
   if (source === 'json') return false;
+  // A record reaches only an identical record, which `fieldTypeEquals` above
+  // already answered. The category rule at the bottom would otherwise let any
+  // two records stand in for each other.
+  if (baseKind(source) === 'record' || baseKind(target) === 'record') return false;
   if (target === 'text' && (source === 'text' || (typeof source === 'object' && source.kind === 'enum'))) {
     return true;
   }
@@ -1453,6 +1609,80 @@ export function fieldAssignable(source: FieldType, target: FieldType): boolean {
   if (typeof target === 'object' && target.kind === 'enum') return false;
   return comparisonCategory(source) === comparisonCategory(target)
     && comparisonCategory(source) !== 'structural';
+}
+
+function acceptsAnyNarrowing(
+  param: Extract<PositionTypeRef, { kind: 'position' | 'union' }>,
+  argNarrowsEvent: string | undefined,
+): boolean {
+  if (param.narrowsEvent !== undefined) return false; // the signature named an address
+  const name = param.kind === 'position' ? param.position : param.union;
+  return argNarrowsEvent === name;
+}
+
+/**
+ * Does an argument's (graph, position) fit a parameter's (check 7)?
+ * `undefined` = cannot tell (stay silent).
+ */
+export function positionsMatch(arg: PositionTypeRef, param: PositionTypeRef): boolean | undefined {
+  switch (param.kind) {
+    case 'position':
+      if (arg.kind === 'position') {
+        if (arg.instance.token !== param.instance.token) return false;
+        if (arg.position === param.position) return true;
+        return acceptsAnyNarrowing(param, arg.narrowsEvent);
+      }
+      if (arg.kind === 'union') {
+        // A multi-action listen's derived union against a plain-position
+        // param: only the unnarrowed event node itself is wide enough —
+        // "no address on the param accepts any listen".
+        if (arg.instance.token !== param.instance.token) return false;
+        return acceptsAnyNarrowing(param, arg.narrowsEvent);
+      }
+      if (arg.kind === 'handle') {
+        if (arg.instance.token !== param.instance.token) return false;
+        return arg.position === undefined ? undefined : arg.position === param.position;
+      }
+      return false;
+    case 'union':
+      if (arg.kind === 'union') {
+        if (arg.instance.token !== param.instance.token) return false;
+        if (arg.union === param.union) return true;
+        return acceptsAnyNarrowing(param, arg.narrowsEvent);
+      }
+      if (arg.kind === 'position') {
+        if (arg.instance.token !== param.instance.token) return false;
+        if (param.variants.includes(arg.position)) return true;
+        // An unaddressed union accepts any narrowing of the event it names —
+        // wider type, not a mechanism.
+        return acceptsAnyNarrowing(param, arg.narrowsEvent);
+      }
+      if (arg.kind === 'handle') {
+        if (arg.instance.token !== param.instance.token) return false;
+        return arg.position === undefined ? undefined : param.variants.includes(arg.position);
+      }
+      return false;
+    case 'meta':
+      return arg.kind === 'meta' ? arg.instance.token === param.instance.token : false;
+    case 'handle':
+    case 'extract':
+    case 'closure':
+    case 'local':
+    case 'maybeEmpty':
+      // Parameters come from TypeRefs; these kinds cannot be declared.
+      return undefined;
+  }
+}
+
+/**
+ * Are these two names the SAME place to start a walk from? Both directions of
+ * the fit, so neither stands in for a wider one: a walk off a list of records
+ * runs off every member, and one member's type may only speak for the rest
+ * where it IS the rest. `undefined` — a handle, an extraction result, a
+ * synthesised node, none of which anything can tell apart — is not a yes.
+ */
+export function sameStartingPoint(a: PositionTypeRef, b: PositionTypeRef): boolean {
+  return positionsMatch(a, b) === true && positionsMatch(b, a) === true;
 }
 
 // ── Schema lookups ──
@@ -1982,6 +2212,12 @@ export class ExpressionTyping {
        *  bare name there is either a field of the hop target or an outer
        *  binding, and anything that is neither is a mistake. */
       nameInScope?: (name: string) => boolean;
+      /** Is this name bound on the ARROW plane — a record — whether or not a
+       *  position type came with it? `resolveRoot` answers `undefined` both for
+       *  a record nobody could type and for a name that is not a record at all,
+       *  and a record is a VALUE type now, so the difference decides whether
+       *  reading the name yields `record` or nothing. */
+      isRecordName?: (name: string) => boolean;
       report: TypingReporter;
       /** The span diagnostics point at (the slot / head). */
       span: Span;
@@ -2051,6 +2287,36 @@ export class ExpressionTyping {
   }
 
   /** A bound name's SCALAR type, with any expression-local narrowing applied. */
+  /**
+   * A bare NAME read as a value. One type universe: a name bound on the arrow
+   * plane reads as the record it is, so a record can sit in a list, under a
+   * map key, in a call argument or in a `return` with no second spelling —
+   * and every rule that requires a VALUE (interpolation, arithmetic, a write
+   * field) refuses it by type rather than at run time.
+   *
+   * The dot plane wins where a name carries a value type, which is the
+   * precedence every other read here keeps.
+   */
+  private bareNameType(name: string): FieldType | undefined {
+    const scalar = this.scalarType(name);
+    if (scalar !== undefined) return scalar;
+    const record = recordValueOf(this.rootType(name));
+    if (record !== undefined) return record;
+    return this.options.isRecordName?.(name) === true ? recordOf(undefined) : undefined;
+  }
+
+  /**
+   * Where a path rooted at this name STARTS. The arrow plane answers directly;
+   * a name on the VALUE plane answers through its type, because a record is a
+   * value type — `t.\`Text\`` inside a collection op's function, a field off a
+   * list literal's member, a hop off `AT(rows, 0)`. A list of records answers
+   * with the record: a hop is many-valued, so reading off the list reads off
+   * each member, which is what a walk already means.
+   */
+  private walkStart(name: string): PositionTypeRef | undefined {
+    return this.rootType(name) ?? recordHeadPosition(this.scalarType(name));
+  }
+
   private scalarType(name: string): FieldType | undefined {
     const narrowed = this.narrowedScalars.get(name);
     if (narrowed !== undefined) return narrowed;
@@ -2115,7 +2381,7 @@ export class ExpressionTyping {
    */
   infer(expr: Expression, writeTarget?: WriteTargetRef): FieldType | undefined {
     if (writeTarget !== undefined && expr.type === 'traverse' && expr.expression.type === 'property') {
-      const start = expr.aliasRoot !== undefined ? this.rootType(expr.aliasRoot) : undefined;
+      const start = expr.aliasRoot !== undefined ? this.walkStart(expr.aliasRoot) : undefined;
       const position = this.walkSteps(start, expr.steps);
       this.rememberOrdering(expr, position);
       this.recordWalked(expr);
@@ -2138,7 +2404,7 @@ export class ExpressionTyping {
         // the bridge's property resolver is total, so `domain` and `co.Name`
         // arrive in the same shape and only the ambient position tells them
         // apart. The engine resolves it the same way (`scopedBinding`).
-        if (position === undefined) return this.scalarType(expr.propertyTypeId);
+        if (position === undefined) return this.bareNameType(expr.propertyTypeId);
         return this.readProperty(position, expr.propertyTypeId);
       case 'traverse': {
         const exists = existsSubject(expr);
@@ -2146,10 +2412,19 @@ export class ExpressionTyping {
           this.reportConstantPresenceTest(exists, `EXISTS(${exists})`, 'always true');
           return 'boolean';
         }
-        const start = expr.aliasRoot !== undefined ? this.rootType(expr.aliasRoot) : position;
+        const start = expr.aliasRoot !== undefined ? this.walkStart(expr.aliasRoot) : position;
         const destination = this.walkSteps(start, expr.steps);
         this.rememberOrdering(expr, destination);
         this.recordWalked(expr);
+        // `a-[:edge]->` — the LANDINGS themselves, which the bridge marks with
+        // the position sentinel. A hop is many-valued, so that is a list of
+        // records: `MAP` reads it, `COLLECT` keeps it, and a block head walks
+        // it. Read for a FIELD instead (`a-[:edge]->.\`Name\``) it is that
+        // field's own type, unchanged — the walk chooses the value, the field
+        // says what it is.
+        if (expr.steps.length > 0 && isPositionTerminal(expr.expression)) {
+          return listOf(recordOf(destination), this.lastOrdering);
+        }
         return this.inferAt(expr.expression, destination);
       }
       case 'resource_traverse':
@@ -2161,10 +2436,9 @@ export class ExpressionTyping {
         return 'boolean';
       case 'list': {
         const elementTypes = expr.elements.map(e => this.inferAt(e, position));
-        const first = elementTypes[0];
-        if (first === undefined) return undefined;
-        if (!elementTypes.every(t => t !== undefined && fieldTypeEquals(t, first))) return undefined;
-        return { kind: 'list', of: first };
+        this.reportMixedList(elementTypes);
+        const element = unifyValueTypes(elementTypes);
+        return element !== undefined ? { kind: 'list', of: element } : undefined;
       }
       case 'object': {
         // `{ k: v, … }` — a DICT when its values agree on a type, and `json`
@@ -2386,7 +2660,7 @@ export class ExpressionTyping {
       case 'alias_ref':
         // The bridge only emits this where its property resolver is partial;
         // either way a bare name is a scope lookup, same as the `property` case.
-        return this.scalarType(expr.name);
+        return this.bareNameType(expr.name);
       case 'parent_result':
       case 'action_result':
       case 'extract_value':
@@ -2422,6 +2696,25 @@ export class ExpressionTyping {
    * Text and any option set (declared or borrowed) pass — an enum's values ARE
    * strings. Unknown stays silent, like every other rule in this layer.
    */
+  /**
+   * A list literal holding both records and values — `[one, "label"]`. A list
+   * holds one kind of thing: a list of records is walked, a list of values is
+   * read, and nothing reads both.
+   *
+   * By TYPE, so the rule is the same one everywhere and a member nobody could
+   * type keeps the honesty rule: an untyped member says nothing about the list,
+   * and it is the head or the read that names what it turned out to be.
+   */
+  private reportMixedList(elements: Array<FieldType | undefined>): void {
+    const records = elements.filter(t => isRecordType(t));
+    const values = elements.filter(t => t !== undefined && !isRecordType(t) && stripAbsent(t) !== 'absent');
+    if (records.length === 0 || values.length === 0) return;
+    this.report(
+      TypedDiagnosticCodes.LIST_MIXED,
+      `a list holds one kind of thing, and this one holds both: ${describeFieldType(records[0]!)} is a record, and another member is ${describeFieldType(values[0]!)}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
+    );
+  }
+
   requireDictKey(type: FieldType | undefined, where: string): void {
     if (type === undefined) return;
     const key = stripAbsent(type);
@@ -2438,7 +2731,7 @@ export class ExpressionTyping {
   }
 
   private requireTransparent(type: FieldType | undefined, operation: string): boolean {
-    const diagnostic = checkJsonOpaque(type, operation);
+    const diagnostic = checkJsonOpaque(type, operation) ?? checkRecordAsValue(type, operation);
     if (diagnostic === null) return false;
     this.report(diagnostic.code, diagnostic.message);
     return true;
