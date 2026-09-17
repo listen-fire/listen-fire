@@ -128,35 +128,32 @@ Leave it off and the extraction sizes itself from the tree you declared, which i
 
 - Cut the input into pieces when a run says a reading was *continued* — \`MAP(CHUNKS(transcript, { entities: 20 }), (p) => { return extract from [p] { … } })\`. An answer that ran past its output ceiling is missing the records at the end of what it read, and \`entities\` sizes each piece by the records it is expected to hold rather than by its length.
 
-### through
+### through — a block of plain plugin calls, then a second extraction
+
+Enrich what you extracted by walking it, calling plugins as ordinary functions, and extracting again over what they returned:
 
 \`\`\`
-mentions = extract from [msg.\`Body\`] through [vc_url_retrieval] {
-  node company: "each company mentioned" {
-    name:    "the company's name"
-    website: "the company's official website"
+import { fetch_url, research } from plugins
+
+found = extract "careful" from [transcript] {
+  node entry: "each item" { name: "the company's name" website: "its website, if given" }
+}
+
+found-[e:entry]-> {
+  page   = fetch_url(url: e.website)
+  more   = research(name: e.name, website: e.website, questions: "what the company does")
+  detail = extract "careful" from [COALESCE(page, ""), COALESCE(more.dossier, "")] {
+    node d: "the company" { summary: "what the company does" }
   }
+  detail-[x:d]-> { write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: e.name Description ?: x.summary } }
 }
 \`\`\`
 
-\`through [ … ]\` runs plugins over the source data before extraction, or between a node's stages. A stage is an ordinary call — the plugin is a function, and this is where it is called.
-
-- Most plugins are fed the content they work over by the extraction itself, so you just name them — \`vc_url_retrieval\` scans the \`from [ … ]\` text for links, fetches them, and feeds the pages back in. A plugin that needs *other* inputs takes them as named arguments (\`vc_url_retrieval(email: @user_email)\` to get past an email-gated link), and a bare name in an argument resolves against the record's own extracted fields first. A plugin the extraction feeds only makes sense as a stage, and calling it anywhere else is refused, naming the stage to write it in.
-- A stage inherits every field the stage before it declared, so a later stage declares only what it changes — a field you are happy with is not restated. Re-declaring a field is how you transform it: the later description is what runs, and its value is the one you read back.
-- A stage runs only when its plugins bring something back. When every plugin of a stage is skipped for that record, or runs and finds nothing, there is nothing there the earlier stage did not already read: the stage's own fields are left with no value, and a field it re-declares keeps the value it already had.
-- Several plugins in one pipeline cover each other. \`through [fetch_url(url: website, email: @user_email), web_research(name: name, context: description, website: website, linkedin: linkedin)]\` loads the page for a record that arrived with an address, and researches the address for one that arrived with nothing but a name — each plugin is handed the record's link fields so it stands down where another has it covered.
-
-Call a plugin on its own where you want its value rather than a stage's fields:
-
-\`\`\`
-page = fetch_url(url: c.website)
-more = research(name: c.name, questions: "what it does, which sector, where it is based")
-\`\`\`
-
-- Import it the same way — \`import { fetch_url, research } from plugins\` at the top of the file — then call it anywhere a value goes.
-- What a call hands back is what the plugin declared: \`fetch_url\` gives \`text | absent\`, and \`research\` gives a record read by name (\`more.summary\`, \`more.website\`) whose every field may be absent.
-- A plugin the extraction would have fed takes that input explicitly outside a stage — \`vc_url_retrieval(text: t)\`. Inside \`through [ … ]\` the extraction supplies it, and a stage may not write it.
-- A plugin whose only inputs are the enclosing extraction's own fields stays a stage, and a plain call is refused naming the argument it wants.
+- Each plugin is an ordinary call, returning a value: \`fetch_url\` gives \`text | absent\`, and \`research\` gives a record read by name (\`more.summary\`, \`more.dossier\`) whose every field may be absent.
+- The second extraction reads only what the calls returned — not the original source.
+- A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before handing it to the next extraction.
+- Every plugin used this way is imported the same as any other — \`import { fetch_url, research } from plugins\` at the top of the file.
+- \`through [fetch_url(url: website), research(…)]\` after the sources is the short form of the same block, and still runs.
 
 ### source-content-of-an-extracted-node
 
@@ -276,6 +273,42 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
       Name: c.name
+    }
+  }
+}
+`,
+    },
+    {
+      construct: 'enrichment as a block of plain plugin calls, then a second extraction',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+import { fetch_url, research } from plugins
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Enrich\`(m: <inbox-[:Email]->>) {
+  found = extract "careful" from [m.\`Body\`] {
+    node entry: "each item" {
+      name:    "the company's name"
+      website: "its website, if given"
+    }
+  }
+
+  found-[e:entry]-> {
+    page   = fetch_url(url: e.website)
+    more   = research(name: e.name, website: e.website, questions: "what the company does")
+    detail = extract "careful" from [COALESCE(page, ""), COALESCE(more.dossier, "")] {
+      node d: "the company" { summary: "what the company does" }
+    }
+    detail-[x:d]-> {
+      write crm-[:Companies]-> {
+        unique by (FUZZY \`Name\`)
+        Name:      e.name
+        Description ?: x.summary
+      }
     }
   }
 }
