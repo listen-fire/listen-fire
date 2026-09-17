@@ -114,7 +114,8 @@ sent-[m:messages]-> {
 - The entry starts **empty** and its type says what may land on it — every record you add has to be one of those.
 - \`link\` adds one record. Anything already in your hands goes there: one you wrote, one you traversed to, one a block handed back.
 - A \`link\` inside a branch is still there after the branch — what grew is the record \`sent\` names, and that name means the same thing everywhere.
-- The records come back in the order the links ran, and traversing the entry is the ordinary traversal: write off each one exactly as you would off any record.
+- Traversing the entry is the ordinary traversal: write off each one exactly as you would off any record.
+- Say \`order by arrival\` after the type to keep the order the links landed in — \`sent = node { messages: <chat-[:Channels]->-[:Messages]->> order by arrival }\` — and \`FIRST\`, \`LAST\`, \`JOIN\` and \`LIMIT\` then read the entry. Without it the entry is a set, like any relationship with no order of its own (see the traversal chapter's *record-order*); \`document\` and \`chronological\` are the other two words, and all three read back in the order the links landed.
 - An entry nothing was linked to traverses zero times, and \`COUNT\` over it is 0.
 
 Type the entry with a **declaration** rather than an address, and \`write\` into it to gather records before any of them reaches a system:
@@ -276,7 +277,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'a declared edge on a run-local node, grown by `link` from inside a branch and traversed after it',
+      construct: 'a declared edge on a run-local node, ordered by arrival, grown by `link` from inside a branch and traversed after it',
       status: 'runs',
       probe: `
 import { email, slack } from adapters
@@ -286,7 +287,7 @@ inbox = email()
 chat  = slack(credentials: team_workspace)
 
 function \`Post And Confirm\`(msg: <inbox-[:Email]->>) {
-  sent = node { messages: <chat-[:Channels]->-[:Messages]->> }
+  sent = node { messages: <chat-[:Channels]->-[:Messages]->> order by arrival }
 
   chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
     if msg.\`Subject\` == "urgent" {
