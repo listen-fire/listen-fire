@@ -483,3 +483,24 @@ describe('a record is a value, so a collection can hold one', () => {
     expect(creates[0].fields.payload).toEqual({ same: true, different: false });
   });
 });
+
+// …and a block over records whose `return` the checker cannot type is still a
+// collection of VALUES. A saved automation is re-checked on every run, so
+// typing that unknown as the record the block walks refused the whole run
+// (MOVENG_CHECK: MOV_RECORD_NOT_A_VALUE) on a program that had not changed.
+describe("a block's untyped return is a value, not the record it walked", () => {
+  it('an untyped call per iteration collects values the run can join', async () => {
+    const creates = await runBody(
+      [
+        '  lines = graph-[f:finding ORDER BY `headline`]-> {',
+        '    return COALESCE(f.`headline`, "")',
+        '  }',
+        '  write graph-[:note]-> { body: JOIN(lines, " | ") }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual([
+      'Acme raised | Globex hiring | Initech pivot',
+    ]);
+  });
+});

@@ -3074,6 +3074,12 @@ class Checker {
         // list of values on the dot plane, or the returned POSITION on the
         // arrow plane (positions are many-valued already, so plurality lives in
         // the traversal, not in a second type).
+        //
+        // The PLANE is the returned expression's own, and a return nobody
+        // could type has none — unknown is not a plane. Reading that unknown as
+        // the arrow plane says "this is a record" about a block whose head
+        // merely WALKS records, and every value rule downstream then refuses
+        // the binding as one.
         const returned = this.checkTraversalBlock(value.block, scope, name);
         if (!returned.returns) {
           this.report(
@@ -3083,14 +3089,7 @@ class Checker {
           );
           break;
         }
-        symbol =
-          returned.fieldType !== undefined
-            ? {
-                ...symbol,
-                fieldType: listOf(returned.fieldType, returned.headOrdering),
-                bindingPlane: 'scalar',
-              }
-            : { ...symbol, ...(returned.posType ? { posType: returned.posType } : {}), bindingPlane: 'node' };
+        symbol = this.planeOfReturn(symbol, returned, returned.headOrdering);
         break;
       }
       case 'await': {
@@ -3244,9 +3243,36 @@ class Checker {
       }
       return {};
     }
-    return returned.fieldType !== undefined
-      ? { fieldType: returned.fieldType, bindingPlane: 'scalar' }
-      : { ...(returned.posType ? { posType: returned.posType } : {}), bindingPlane: 'node' };
+    // Same rule as a block's: the plane is the RETURNED expression's, and a
+    // callee whose return nobody could type binds a name nobody can type.
+    return this.planeOfReturn({}, returned);
+  }
+
+  /**
+   * What binding a body's value means — the shape a `return` hands back, put on
+   * the plane that `return` was written on.
+   *
+   * A VALUE return collects (a block's per-iteration values are a list of them;
+   * a call's value is the one value). A RECORD return binds the position. A
+   * return the checker could not type binds NEITHER: unknown is not a plane,
+   * and claiming one here is how an untyped answer turns into a record nobody
+   * wrote.
+   */
+  private planeOfReturn(
+    symbol: Partial<ScopeSymbol>,
+    returned: ReturnShape,
+    collectAs?: CollectionOrder,
+  ): Partial<ScopeSymbol> {
+    const { fieldType, posType } = returned;
+    if (fieldType !== undefined) {
+      return {
+        ...symbol,
+        fieldType: collectAs !== undefined ? listOf(fieldType, collectAs) : fieldType,
+        bindingPlane: 'scalar',
+      };
+    }
+    if (posType !== undefined) return { ...symbol, posType, bindingPlane: 'node' };
+    return symbol;
   }
 
   /** Whether we can vouch for what a callee returns — a movement declared (or
