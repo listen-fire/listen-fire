@@ -378,3 +378,61 @@ describe('node literals — declared edge entries', () => {
     expectParseError('d = node { messages: <slack.Messages> }', /Write '<slack-\[:Messages\]->>'/);
   });
 });
+
+// `order by <sequencing>` — the author saying the entry's landings KEEP an
+// order. Trailing and lowercase, like `unique by`, and it takes one of the
+// three words the language already has.
+describe('node literals — a declared entry says its order', () => {
+  it('an ADDRESS marker takes the clause', () => {
+    const node = literal('d = node { messages: <slack-[:Channels]->-[:Messages]->> order by arrival }');
+    const messages = entry(node, 'messages');
+    if (messages.kind !== 'declared') throw new Error('unreachable');
+    expect(messages.type.hopsRaw).toBe('-[:Channels]->-[:Messages]->');
+    expect(messages.sequenced).toBe('arrival');
+  });
+
+  it('a hop-less DECLARED NODE marker takes the same clause', () => {
+    const node = literal('d = node { companies: <Company> order by arrival }');
+    const companies = entry(node, 'companies');
+    if (companies.kind !== 'declared') throw new Error('unreachable');
+    expect(companies.type.hopsRaw).toBeUndefined();
+    expect(companies.sequenced).toBe('arrival');
+  });
+
+  it('the other two words parse too — an author collecting pieces that were already in that order', () => {
+    for (const word of ['document', 'chronological'] as const) {
+      const node = literal(`d = node { pieces: <Company> order by ${word} }`);
+      const pieces = entry(node, 'pieces');
+      if (pieces.kind !== 'declared') throw new Error('unreachable');
+      expect(pieces.sequenced).toBe(word);
+    }
+  });
+
+  it('without the clause the entry claims nothing — a SET, as before', () => {
+    const node = literal('d = node { companies: <Company> }');
+    const companies = entry(node, 'companies');
+    if (companies.kind !== 'declared') throw new Error('unreachable');
+    expect(companies.sequenced).toBeUndefined();
+  });
+
+  it('it sits on one line with the entries around it', () => {
+    const node = literal(
+      'd = node {\n  title: e.`Subject`\n  sent: <slack-[:Messages]->> order by arrival\n  co: node { name: "x" }\n}',
+    );
+    expect(node.entries.map((e) => e.kind)).toEqual(['value', 'declared', 'nodes']);
+    const sent = entry(node, 'sent');
+    if (sent.kind !== 'declared') throw new Error('unreachable');
+    expect(sent.sequenced).toBe('arrival');
+  });
+
+  it('a word that is not one of the three is refused, and the three are named', () => {
+    expectParseError(
+      'd = node { companies: <Company> order by newest }',
+      /'order by' takes one of 'arrival'.*'document'.*'chronological'/s,
+    );
+  });
+
+  it("'order' with no 'by' is refused by name", () => {
+    expectParseError('d = node { companies: <Company> order arrival }', /written 'order by'/);
+  });
+});

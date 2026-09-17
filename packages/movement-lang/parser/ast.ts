@@ -8,6 +8,8 @@
 // movement, listen (the one invoker), write (root + linked + tuple),
 // traversal-headed block, link, if, parallel, call.
 
+import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
+
 export interface Loc {
   line: number; // 1-based
   col: number; // 1-based
@@ -394,8 +396,11 @@ export type NodeEntry =
    * parameter accepts, and it says what the landings will BE; `link` appends
    * them as the run goes.
    *
+   * `order by arrival` after the marker is the author saying the landings keep
+   * an order, so order-sensitive folds over the edge are answering a real
+   * question. Absent ⇒ a SET, exactly as an undeclared adapter edge is.
    */
-  | { kind: 'declared'; name: string; type: TypeRef; span: Span }
+  | { kind: 'declared'; name: string; type: TypeRef; sequenced?: EdgeSequencing; span: Span }
   | {
       kind: 'traversal';
       name: string;
