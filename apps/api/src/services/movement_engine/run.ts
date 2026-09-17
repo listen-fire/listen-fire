@@ -113,7 +113,7 @@ import type {
   CallbackExpression,
   CallbackSubject,
   ExtractExpression,
-  FieldType,
+  SchemaFieldType,
   InstanceSchema,
   LinkExpression,
   LinkedExport,
@@ -1482,7 +1482,7 @@ class Interpreter {
   /** The program's author-declared refinements (`type Thesis = <"A" | "B">`),
    *  by name. File-level, so one map answers everywhere the checker's scope
    *  resolution would. */
-  private declaredTypes: Map<string, FieldType> = new Map();
+  private declaredTypes: Map<string, SchemaFieldType> = new Map();
   private defaultLlm?: LlmClient;
   private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in

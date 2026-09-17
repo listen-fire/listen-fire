@@ -1,4 +1,4 @@
-// The `json` FieldType — the DATA top type (TypeScript's `unknown` for the
+// The `json` SchemaFieldType — the DATA top type (TypeScript's `unknown` for the
 // data plane), and the type an object literal has.
 //
 // Two rules, in both directions:
@@ -15,7 +15,7 @@
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic } from '../check';
 import {
-  FieldType,
+  SchemaFieldType,
   InstanceSchema,
   describeFieldType,
   mockCatalog,
@@ -23,14 +23,14 @@ import {
 } from '../catalog';
 import { fieldAssignable, fieldTypeCompatible, maybeAbsent } from '../typing';
 
-const jsonList: FieldType = { kind: 'list', of: 'json' };
-const textList: FieldType = { kind: 'list', of: 'text' };
-const fileList: FieldType = { kind: 'list', of: 'file' };
-const stageEnum: FieldType = { kind: 'enum', options: ['Seed', 'Series A'] };
+const jsonList: SchemaFieldType = { kind: 'list', of: 'json' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
+const fileList: SchemaFieldType = { kind: 'list', of: 'file' };
+const stageEnum: SchemaFieldType = { kind: 'enum', options: ['Seed', 'Series A'] };
 
 // ── The vocabulary ──
 
-describe('json in the FieldType vocabulary', () => {
+describe('json in the SchemaFieldType vocabulary', () => {
   it('is a surface type name (shape declarations, extract annotations)', () => {
     expect(parseFieldTypeName('json')).toBe('json');
   });
@@ -44,7 +44,7 @@ describe('json in the FieldType vocabulary', () => {
 // ── Assignability, as pure functions ──
 
 describe('everything data-shaped is assignable TO json', () => {
-  const dataShapes: Array<[string, FieldType]> = [
+  const dataShapes: Array<[string, SchemaFieldType]> = [
     ['text', 'text'],
     ['number', 'number'],
     ['boolean', 'boolean'],
@@ -82,7 +82,7 @@ describe('everything data-shaped is assignable TO json', () => {
 });
 
 describe('json is assignable to json only', () => {
-  const others: Array<[string, FieldType]> = [
+  const others: Array<[string, SchemaFieldType]> = [
     ['text', 'text'],
     ['number', 'number'],
     ['boolean', 'boolean'],

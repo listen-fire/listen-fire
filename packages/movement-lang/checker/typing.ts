@@ -51,6 +51,7 @@ import {
   InstanceSchema,
   PositionSchema,
   refinementKey,
+  type SchemaFieldType,
   surfaceNotEnumerated,
 } from './catalog';
 import type { EffectRow } from './effects';
@@ -716,8 +717,10 @@ export interface ExtractFieldInfo {
   /** Explicit annotation — a primitive (`amount: number "…"`) or a
    *  borrowed path (`stage: crm.companies.funding_stage "…"`). The ONLY
    *  thing that types an extract field: backward adoption from write
-   *  targets is demoted to a suggestion (explicit over implicit). */
-  explicit?: FieldType;
+   *  targets is demoted to a suggestion (explicit over implicit). A written
+   *  annotation names a SURFACE type — a primitive, a declared option set, or
+   *  another field's — so it is never a record. */
+  explicit?: SchemaFieldType;
   /** The raw annotation token (`<…>` text) IF the author wrote one — kept
    *  even when it didn't resolve to a type here (missing schema / bad borrow),
    *  so we never suggest annotating a field that's already annotated. */
@@ -817,7 +820,14 @@ const COALESCE_FUNCTION_ID = 'coalesce';
 
 /** Wrap `T` as `T | absent`, flattening (`maybeAbsent(maybeAbsent(T))` is one
  *  level) so callers never nest. `undefined` (untyped) stays untyped — an
- *  unknown type can't be made partial. (asks-as-adapter P20/F13.) */
+ *  unknown type can't be made partial. (asks-as-adapter P20/F13.)
+ *
+ *  A `T | absent` is still a T on whichever union T came from — the absence
+ *  layer nests inside it — so a SURFACE type in is a surface type out.
+ *  Overloads rather than a type parameter, which would infer the one literal
+ *  argument's own type instead. */
+export function maybeAbsent(type: SchemaFieldType | undefined): SchemaFieldType | undefined;
+export function maybeAbsent(type: FieldType | undefined): FieldType | undefined;
 export function maybeAbsent(type: FieldType | undefined): FieldType | undefined {
   if (type === undefined) return undefined;
   if (typeof type === 'object' && type.kind === 'maybeAbsent') return type;
@@ -1794,7 +1804,7 @@ export function lookupPropertyType(
     case 'union': {
       const types = position.variants
         .map(v => position.instance.schema.positions[v]?.properties[propertyId])
-        .filter((t): t is FieldType => t !== undefined);
+        .filter((t): t is SchemaFieldType => t !== undefined);
       if (types.length !== position.variants.length) return undefined;
       return types.every(t => fieldTypeEquals(t, types[0])) ? types[0] : undefined;
     }

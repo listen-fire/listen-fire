@@ -6,10 +6,10 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
-import { FieldType, InstanceSchema, mockCatalog, unionDisplay, unionKey } from '../catalog';
+import { SchemaFieldType, InstanceSchema, mockCatalog, unionDisplay, unionKey } from '../catalog';
 import { fieldAssignable } from '../typing';
 
-const textList: FieldType = { kind: 'list', of: 'text' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
 
 // ── Schemas ──
 
@@ -433,7 +433,7 @@ const inMovement = (body: string) =>
   `${PRELUDE}\nmovement main(msg: <inbox-[:message]->>) {\n${body}\n}`;
 
 describe('fieldAssignable (width-subtype of one field)', () => {
-  const folderEnum: FieldType = { kind: 'enum', options: ['Sales', 'Eng'] };
+  const folderEnum: SchemaFieldType = { kind: 'enum', options: ['Sales', 'Eng'] };
   it('enum source widens to a text target', () => {
     expect(fieldAssignable(folderEnum, 'text')).toBe(true);
   });
@@ -475,7 +475,7 @@ describe('traversal brackets may wrap across lines', () => {
 // position (Name/Stage/Created filterable, Notes NOT), and a `people` edge that
 // is BOUNDED (the adapter filters it in memory, so any field works).
 describe('hop capability gating', () => {
-  const enumStage: FieldType = { kind: 'enum', options: ['Open', 'Won'] };
+  const enumStage: SchemaFieldType = { kind: 'enum', options: ['Open', 'Won'] };
   const capSchema: InstanceSchema = {
     positions: {
       company: {
@@ -832,7 +832,7 @@ describe('comparison category type-check (MOV_COMPARE_TYPE_MISMATCH)', () => {
 describe('enum-literal membership (MOV_ENUM_UNKNOWN_VALUE)', () => {
   // `Status` enum on a writable position, so the same fixture covers compare
   // (hop WHERE) AND write. Options include the spec's worked example values.
-  const enumStatus: FieldType = { kind: 'enum', options: ['Snoozed', 'Open', 'Closed'] };
+  const enumStatus: SchemaFieldType = { kind: 'enum', options: ['Snoozed', 'Open', 'Closed'] };
   const enumSchema: InstanceSchema = {
     positions: {
       ticket: {
@@ -936,7 +936,7 @@ describe('enum-literal membership (MOV_ENUM_UNKNOWN_VALUE)', () => {
 describe('empty enum domain (MOV_ENUM_EMPTY_DOMAIN)', () => {
   // Deliberately NOT Attio-shaped: a fixture that matches the reporting
   // adapter can't tell derived behaviour from hardcoded behaviour.
-  const emptyEnum: FieldType = { kind: 'enum', options: [] };
+  const emptyEnum: SchemaFieldType = { kind: 'enum', options: [] };
   const emptySchema: InstanceSchema = {
     positions: {
       badge: {
@@ -2531,7 +2531,7 @@ describe('borrowed type annotations', () => {
 describe('annotation vs write target (MOV_EXTRACT_TYPE_CONFLICT)', () => {
   // Deliberately NOT shaped like the enum-vs-enum case the rule grew out of —
   // a fixture matching one shape can't tell derived from hardcoded.
-  const priority: FieldType = { kind: 'enum', options: ['P0', 'P1'] };
+  const priority: SchemaFieldType = { kind: 'enum', options: ['P0', 'P1'] };
   const trackerSchema: InstanceSchema = {
     positions: { ticket: { properties: { Title: 'text' }, edges: {} } },
     collections: { tickets: { target: 'ticket' } },
@@ -3687,8 +3687,8 @@ ${body}
 // ── Per-listen shape conformance ──
 
 describe('per-listen shape conformance', () => {
-  const folderEnum: FieldType = { kind: 'enum', options: ['Sales', 'Eng'] };
-  const itemSchema = (props: Record<string, FieldType>): InstanceSchema => ({
+  const folderEnum: SchemaFieldType = { kind: 'enum', options: ['Sales', 'Eng'] };
+  const itemSchema = (props: Record<string, SchemaFieldType>): InstanceSchema => ({
     positions: { item: { properties: props, edges: {} } },
     collections: { items: { target: 'item' } },
     writableRoots: {},
@@ -3751,7 +3751,7 @@ node WithAttendees {
   // Helper: build a two-position InstanceSchema for testing recursive checks.
   const meetingSchema = (opts: {
     meetingEdges?: Record<string, { target: string }>;
-    attendeeProps?: Record<string, FieldType>;
+    attendeeProps?: Record<string, SchemaFieldType>;
   }): InstanceSchema => ({
     positions: {
       meeting: {

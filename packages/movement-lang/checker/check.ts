@@ -107,6 +107,7 @@ import {
   writableEdgesOf,
   credentialArgOf,
   describeFieldType,
+  type SchemaFieldType,
   EVENT_ACTION_FIELD,
   RECORD_DELETED_ACTION,
   FieldType,
@@ -1567,8 +1568,9 @@ function conformsToDeclaredNode(
   return surfaceMisfit(surface, required) === undefined;
 }
 
-/** Resolves one extract field's explicit annotation to a FieldType. */
-type ExtractTypeResolver = (field: ExtractField) => FieldType | undefined;
+/** Resolves one extract field's explicit annotation to the SURFACE type it
+ *  names — a primitive, a declared option set, or another field's. */
+type ExtractTypeResolver = (field: ExtractField) => SchemaFieldType | undefined;
 
 /** Infers an extract result graph from the tree (4_type_system.md "Extract graphs"). */
 function buildExtractGraph(
@@ -2094,11 +2096,13 @@ class Checker {
   /** The refinement a name declares (`type Thesis = <"A" | "B">`), when it
    *  declares one — resolved like every other name, so a type is shadowed,
    *  imported and duplicated by the same rules. */
-  private declaredTypeIn(name: string, scope: Scope): FieldType | undefined {
+  private declaredTypeIn(name: string, scope: Scope): SchemaFieldType | undefined {
     const resolution = scope.resolve(name);
-    return resolution.kind === 'found' && resolution.symbol.kind === 'type'
-      ? resolution.symbol.fieldType
-      : undefined;
+    if (resolution.kind !== 'found' || resolution.symbol.kind !== 'type') return undefined;
+    // A `type` declaration is a closed option set (`declaredTypeOf`), which is
+    // a surface type — the symbol slot it rides in holds any value type.
+    const declared = resolution.symbol.fieldType;
+    return typeof declared === 'object' && declared.kind === 'enum' ? declared : undefined;
   }
 
   /** A bound name's position type, where one is derivable. */
@@ -7734,7 +7738,7 @@ class Checker {
   private resolveExtractFieldType(
     field: Pick<ExtractField, 'type' | 'span'>,
     scope: Scope,
-  ): FieldType | undefined {
+  ): SchemaFieldType | undefined {
     if (field.type === undefined) return undefined;
     return this.resolveNamedType(field.type, field.span, scope);
   }
@@ -7747,7 +7751,7 @@ class Checker {
    * thing, and nothing downstream can tell a written option set from a
    * fetched one.
    */
-  private resolveNamedType(written: string, span: Span, scope: Scope): FieldType | undefined {
+  private resolveNamedType(written: string, span: Span, scope: Scope): SchemaFieldType | undefined {
     const segments = borrowedTypeSegments(written);
     if (segments === undefined) {
       const primitive = parseFieldTypeName(written);

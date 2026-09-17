@@ -20,6 +20,7 @@ import {
   surfaceNotEnumerated,
   type FieldType,
   type InstanceSchema,
+  type SchemaFieldType,
 } from './catalog';
 import { fieldAssignable } from './typing';
 
@@ -39,11 +40,11 @@ export function shapeToSchema(
   /** Resolves an annotation naming an author-declared refinement
    *  (`type Thesis = <"A" | "B">`). Both sides pass it, so the schema stays
    *  the same one on either side of the save. */
-  resolveDeclaredType?: (name: string) => FieldType | undefined,
+  resolveDeclaredType?: (name: string) => SchemaFieldType | undefined,
 ): InstanceSchema {
   const schema: InstanceSchema = { positions: {}, collections: {}, writableRoots: {} };
   const add = (node: ShapeNode, key: string): void => {
-    const properties: Record<string, FieldType> = {};
+    const properties: Record<string, SchemaFieldType> = {};
     for (const field of node.fields) {
       // Unknown surface type names degrade to text rather than dropping the
       // field (a dropped field would false-positive every write to it).

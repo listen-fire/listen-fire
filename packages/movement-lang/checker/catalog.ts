@@ -374,8 +374,8 @@ export interface PluginFedArg {
  *                fields, exactly as `callback(…)` and a node literal do.
  */
 export type PluginOutput =
-  | { kind: 'value'; type: FieldType }
-  | { kind: 'record'; fields: Record<string, FieldType> };
+  | { kind: 'value'; type: SchemaFieldType }
+  | { kind: 'record'; fields: Record<string, SchemaFieldType> };
 
 // ── Field value types ──
 
@@ -496,14 +496,40 @@ export type FieldType =
    */
   | { kind: 'record'; position?: PositionTypeRef };
 
-/** Maps a surface type name (shape declarations, extract annotations) to a FieldType. */
+/**
+ * What an adapter SURFACE can declare — every field type except a record,
+ * nested collections included.
+ *
+ * A record is a place in a graph, and no adapter field is one: a record type
+ * arises only where the checker types an EXPRESSION. Saying so here is what
+ * keeps a schema clear of the position model — and a schema crosses the wire
+ * (`InstanceSchema` is a tRPC response), where a field type that reached into
+ * positions would reach back into schemas again, a cycle no serialiser's type
+ * can follow.
+ *
+ * The collections are spelled a second time because TypeScript cannot subtract
+ * a member from a RECURSIVE union — `Exclude` removes the record at the top
+ * and leaves `list of record` behind, which is the same cycle. The scalars and
+ * every rule about them live on `FieldType` above; this is that union with one
+ * member gone, and every `SchemaFieldType` IS a `FieldType`, so nothing that
+ * reads a schema needs to know which it was handed.
+ */
+export type SchemaFieldType =
+  | Exclude<FieldType, { kind: string }>
+  | { kind: 'list'; of: SchemaFieldType; unordered?: true }
+  | { kind: 'tuple'; of: Array<SchemaFieldType | null> }
+  | { kind: 'dict'; of: SchemaFieldType }
+  | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
+  | { kind: 'maybeAbsent'; of: SchemaFieldType };
+
+/** Maps a surface type name (shape declarations, extract annotations) to a SchemaFieldType. */
 /**
  * The type a `type Thesis = <"A" | "B">` declaration names — a CLOSED enum,
  * identical in shape to an option set borrowed from a live field, so nothing
  * downstream (extraction prompt, literal check, did-you-mean) can tell a
  * written refinement from a fetched one.
  */
-export function declaredTypeOf(decl: TypeDeclaration): FieldType {
+export function declaredTypeOf(decl: TypeDeclaration): SchemaFieldType {
   return { kind: 'enum', options: decl.options };
 }
 
@@ -512,15 +538,15 @@ export function declaredTypeOf(decl: TypeDeclaration): FieldType {
  * declaration, so this flat map and the checker's scope resolution answer the
  * same question — the engine, which has no scopes, asks it this way.
  */
-export function declaredTypesIn(program: Program): Map<string, FieldType> {
-  const declared = new Map<string, FieldType>();
+export function declaredTypesIn(program: Program): Map<string, SchemaFieldType> {
+  const declared = new Map<string, SchemaFieldType>();
   for (const statement of program.statements) {
     if (statement.kind === 'type') declared.set(statement.name, declaredTypeOf(statement));
   }
   return declared;
 }
 
-export function parseFieldTypeName(name: string | undefined): FieldType | undefined {
+export function parseFieldTypeName(name: string | undefined): SchemaFieldType | undefined {
   switch (name) {
     case 'text':
     case 'number':
@@ -560,7 +586,7 @@ export function borrowedTypeSegments(name: string | undefined): string[] | undef
 export function borrowableFieldsOf(
   schema: InstanceSchema,
   rootName: string,
-): Record<string, FieldType> | undefined {
+): Record<string, SchemaFieldType> | undefined {
   const writable = schema.writableRoots[rootName]?.fields;
   const readable = schema.positions[rootName]?.properties;
   if (!writable && !readable) return undefined;
@@ -572,7 +598,7 @@ export function resolveBorrowedField(
   schema: InstanceSchema,
   rootName: string,
   fieldName: string,
-): FieldType | undefined {
+): SchemaFieldType | undefined {
   return borrowableFieldsOf(schema, rootName)?.[fieldName];
 }
 
@@ -777,7 +803,7 @@ export interface EdgeSchema {
 
 /** A readable position type: its properties and outgoing references. */
 export interface PositionSchema {
-  properties: Record<string, FieldType>;
+  properties: Record<string, SchemaFieldType>;
   edges: Record<string, EdgeSchema>;
   /**
    * Author-facing text for a position whose KEY is not author-facing — a
@@ -988,7 +1014,7 @@ export interface WriteUnionShape {
 
 /** A root the instance accepts writes for, and the shape of the resulting handle. */
 export interface WritableRootSchema {
-  fields: Record<string, FieldType>;
+  fields: Record<string, SchemaFieldType>;
   /**
    * When present, this create's body is a DISCRIMINATED UNION: the literal of
    * `discriminated.discriminant` (a required field in `fields`) selects one of
@@ -1009,7 +1035,7 @@ export interface WritableRootSchema {
    */
   writeUnion?: WriteUnionShape;
   /** What a handle from `x = write instance-[:root]-> { … }` carries (`externalId`, `url`, the written fields). */
-  resultShape: Record<string, FieldType>;
+  resultShape: Record<string, SchemaFieldType>;
   /**
    * The POSITION a handle from a write of this shape stands on, when that is
    * more specific than the root the write was addressed through. Set on a

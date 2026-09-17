@@ -16,7 +16,7 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
-import { FieldType, InstanceSchema, mockCatalog } from '../catalog';
+import { SchemaFieldType, InstanceSchema, mockCatalog } from '../catalog';
 
 // ── Schemas ──
 
@@ -28,8 +28,8 @@ const emailSchema: InstanceSchema = {
   writableRoots: {},
 };
 
-const listNameEnum: FieldType = { kind: 'enum', options: ['VC Deal Flow', 'Pipeline'] };
-const stageEnum: FieldType = { kind: 'enum', options: ['Diligence', 'Passed'] };
+const listNameEnum: SchemaFieldType = { kind: 'enum', options: ['VC Deal Flow', 'Pipeline'] };
+const stageEnum: SchemaFieldType = { kind: 'enum', options: ['Diligence', 'Passed'] };
 
 // The proving case: adding a company to a list is a create ALONG the `Lists`
 // edge, and the entry values that are valid depend on WHICH list — `VC Deal
@@ -72,7 +72,7 @@ const attioSchema: InstanceSchema = {
   },
 };
 
-const queueEnum: FieldType = { kind: 'enum', options: ['Billing', 'General'] };
+const queueEnum: SchemaFieldType = { kind: 'enum', options: ['Billing', 'General'] };
 
 // The second, deliberately-different shape: a ROOT write (not a create-edge),
 // discriminant `queue`, and the extra field `refundAmount` is REQUIRED on the

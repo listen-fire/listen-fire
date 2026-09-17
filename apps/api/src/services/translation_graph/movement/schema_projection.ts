@@ -25,7 +25,7 @@ import type {
   CollectionSchema,
   DiscriminatedWriteShape,
   EdgeSchema,
-  FieldType,
+  SchemaFieldType,
   InstanceSchema,
   PositionSchema,
   WritableRootSchema,
@@ -163,15 +163,15 @@ export function importIdentifier(raw: string): string {
   return /^[0-9]/.test(named) ? `_${named}` : named;
 }
 
-/** Map one adapter field descriptor to a movement FieldType. `reference`
+/** Map one adapter field descriptor to a movement SchemaFieldType. `reference`
  *  fields return undefined (they surface as edges, not properties). */
 export function fieldTypeFromDescriptor(
   field: Pick<
     SchemaFieldDescriptor,
     'kind' | 'enumValues' | 'cardinality' | 'knownValues' | 'knownValuePattern'
   >,
-): FieldType | undefined {
-  const scalar = ((): FieldType | undefined => {
+): SchemaFieldType | undefined {
+  const scalar = ((): SchemaFieldType | undefined => {
     switch (field.kind) {
       case 'string':
         // Live known-values project as an OPEN enum: literal misses WARN with
@@ -454,9 +454,9 @@ export function instanceSchemaFromDescriptors(input: {
       continue;
     }
 
-    const properties: Record<string, FieldType> = {};
+    const properties: Record<string, SchemaFieldType> = {};
     const propertyCapabilities: Record<string, FieldCapability> = {};
-    const writableFields: Record<string, FieldType> = {};
+    const writableFields: Record<string, SchemaFieldType> = {};
     const writeOnlyProperties: string[] = [];
     /** Display names carried by more than one of the source's fields. */
     const ambiguousProperties: string[] = [];
