@@ -336,6 +336,11 @@ export const DiagnosticCodes = {
    *  list of them. The value plane holds no positions, so the hop can never
    *  land; a value whose type is not known stays silent and walks. */
   HEAD_NOT_A_POSITION: 'MOV_HEAD_NOT_A_POSITION',
+  /** A list literal holding both records and values — `[one, "label"]`. A list
+   *  holds one kind of thing: a list of records is walked, a list of values is
+   *  read, and nothing reads both. Reported only where both halves are known;
+   *  a member nobody can type keeps the honesty rule and stays silent. */
+  LIST_MIXED: 'MOV_LIST_MIXED',
   /** The listened system has no inbound surface at all — its manifest names
    *  zero trigger types, so nothing it does can ever reach us. A definite
    *  fact, not an unknown: see `AdapterSpec.canFire`. */
@@ -1652,6 +1657,17 @@ function positionsMatch(arg: PositionTypeRef, param: PositionTypeRef): boolean |
       // Parameters come from TypeRefs; these kinds cannot be declared.
       return undefined;
   }
+}
+
+/**
+ * Are these two names the SAME place to start a walk from? Both directions of
+ * the fit, so neither stands in for a wider one: a walk off a list of records
+ * runs off every member, and one member's type may only speak for the rest
+ * where it IS the rest. `undefined` — a handle, an extraction result, a
+ * synthesised node, none of which anything can tell apart — is not a yes.
+ */
+function sameStartingPoint(a: PositionTypeRef, b: PositionTypeRef): boolean {
+  return positionsMatch(a, b) === true && positionsMatch(b, a) === true;
 }
 
 /** Where an argument is written, whatever form it takes. */
@@ -3226,6 +3242,18 @@ class Checker {
           };
           break;
         }
+        // `both = [one, two]` — a list literal of RECORDS, which is a position
+        // bound many times over and so an arrow-plane binding, exactly as a
+        // block's returned records are.
+        const recordList = this.positionListPlane(parsed, scope, span);
+        if (recordList !== undefined) {
+          symbol = {
+            ...symbol,
+            ...(recordList.posType !== undefined ? { posType: recordList.posType } : {}),
+            bindingPlane: 'node',
+          };
+          break;
+        }
         // A plain value binding is a SCALAR (F13, dot plane) — capture its type
         // so a race receipt / block meta can type its property read. Bare
         // literals (`done = true`) short-circuit name resolution in
@@ -3404,10 +3432,97 @@ class Checker {
           ? bareName(parsed)
           : undefined;
     if (name === undefined) return undefined;
+    return this.nodePlaneSymbol(name, scope);
+  }
+
+  /** The symbol `name` is bound to, when it is bound on the NODE plane — a
+   *  record, rather than a value. */
+  private nodePlaneSymbol(name: string, scope: Scope): ScopeSymbol | undefined {
     const resolution = scope.resolve(name);
     if (resolution.kind !== 'found') return undefined;
     const { symbol } = resolution;
     return symbol.posType !== undefined || symbol.bindingPlane === 'node' ? symbol : undefined;
+  }
+
+  /**
+   * `both = [one, two]` — a list literal whose members are RECORDS, and what
+   * binding one means.
+   *
+   * A list of records is not a second type. Positions are many-valued already,
+   * so plurality lives in the traversal — which is why a block's returned
+   * records (`docs = x-[d:doc]-> { return d }`) bind on the ARROW plane with
+   * one position type rather than as a list of anything. A list literal of
+   * records is the same fact written by hand, so it binds the same way, and a
+   * block head off the name walks each member in list order.
+   *
+   * The position type rides along only where every member AGREES on one:
+   * walking the head means walking it off each member, so one member's type
+   * cannot stand for the rest. Where they disagree — or where the checker
+   * cannot tell two of them apart, which is every extraction result and every
+   * synthesised node — the name still binds on the arrow plane and the walk
+   * stays silent, exactly as a collection op's answer does.
+   *
+   * Returns undefined when this is not a list of records, so the caller binds
+   * it however it binds any other value.
+   */
+  private positionListPlane(
+    parsed: Expression | undefined,
+    scope: Scope,
+    span: Span,
+  ): { posType?: PositionTypeRef } | undefined {
+    if (parsed?.type !== 'list' || parsed.elements.length === 0) return undefined;
+    const records: Array<{ name: string; symbol: ScopeSymbol }> = [];
+    const values: Array<{ label: string; what: string }> = [];
+    for (const element of parsed.elements) {
+      const name = bareName(element);
+      const symbol = name !== undefined ? this.nodePlaneSymbol(name, scope) : undefined;
+      if (name !== undefined && symbol !== undefined) {
+        records.push({ name, symbol });
+        continue;
+      }
+      const what = this.describeListValue(element, scope);
+      if (what !== undefined) {
+        values.push({ label: name !== undefined ? `'${name}'` : 'another member', what });
+      }
+    }
+    if (records.length === 0) return undefined;
+    if (values.length > 0) {
+      const first = positionTypeOf(records[0].symbol);
+      this.report(
+        DiagnosticCodes.LIST_MIXED,
+        `a list holds one kind of thing, and this one holds both: '${records[0].name}' is ${first !== undefined ? describePosition(first) : 'a record'}, and ${values[0].label} is ${values[0].what}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
+        span,
+      );
+      return undefined;
+    }
+    const types = records.map(r => positionTypeOf(r.symbol));
+    const first = types[0];
+    const shared =
+      first !== undefined && types.every(t => t !== undefined && sameStartingPoint(t, first));
+    return shared && first !== undefined ? { posType: first } : {};
+  }
+
+  /** What a list member IS, where the checker knows — the other half of the
+   *  mixed-list refusal. Undefined means nobody knows, which stays silent. */
+  private describeListValue(element: Expression, scope: Scope): string | undefined {
+    switch (element.type) {
+      case 'static':
+        if (element.value === null) return undefined; // `null` is every type's
+        if (typeof element.value === 'number') return 'a number';
+        if (typeof element.value === 'boolean') return 'true or false';
+        return 'text';
+      case 'concat':
+        return 'text';
+      case 'list':
+        return 'a list';
+      case 'object':
+        return 'a set of named values';
+      default: {
+        const name = bareName(element);
+        const type = name !== undefined ? this.symbolScalarType(scope, name) : undefined;
+        return type !== undefined ? describeFieldType(type) : undefined;
+      }
+    }
   }
 
   /**

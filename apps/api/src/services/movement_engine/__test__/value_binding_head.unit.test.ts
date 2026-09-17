@@ -7,10 +7,16 @@
 // concatenated in list order, which is what a list of anything means everywhere
 // else in the language and what a block's returned records already do.
 //
+// A list LITERAL is that same list written by hand: `both = [one, two]` holds
+// the two records themselves, so the same head walks it, in list order. That
+// reading belongs to the literal and nowhere else — `"${one}"` still refuses to
+// interpolate a record.
+//
 // What is pinned here: the documented shape runs; the landings come back in
-// piece order; one position held on the value plane behaves as the position;
-// and a member that is not a position fails naming what it is, rather than
-// walking nothing.
+// piece order; one position held on the value plane behaves as the position; a
+// literal of records walks exactly as a collection op's answer does; and a
+// member that is not a position fails naming what it is, rather than walking
+// nothing.
 
 // ── Jest module workarounds (mirrors run.unit.test.ts) ──────────────────────
 
@@ -376,6 +382,29 @@ describe('a block head rooted at a value holding synthesised nodes', () => {
     await run(
       [
         'movement intake(msg: <inbox-[:message]->>) {',
+        '  one = node { label: "A", tag: node { name: "A" } }',
+        '  two = node { label: "B", tag: node { name: "B" } }',
+        '  both = [one, two]',
+        '  both-[t:tag]-> {',
+        '    write crm-[:companies]-> {',
+        '      unique by (`name`)',
+        '      name: t.name',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'),
+      { attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((w) => w.fields.name)).toEqual(['A', 'B']);
+  });
+
+  it('a collection op building the same list walks the same way', async () => {
+    const attio = makeFakeAdapter('attio');
+
+    await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
         '  both = MAP(["A", "B"], (n) => {',
         '    return node { label: n, tag: node { name: n } }',
         '  })',
@@ -391,5 +420,81 @@ describe('a block head rooted at a value holding synthesised nodes', () => {
     );
 
     expect(attio.creates.map((w) => w.fields.name)).toEqual(['A', 'B']);
+  });
+
+  it('a member the checker could not see is not a record fails at the head', async () => {
+    const attio = makeFakeAdapter('attio');
+
+    await expect(
+      run(
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  one = node { label: "A", tag: node { name: "A" } }',
+          '  both = [one, msg.`subject`]',
+          '  both-[t:tag]-> {',
+          '    write crm-[:companies]-> {',
+          '      unique by (`name`)',
+          '      name: t.name',
+          '    }',
+          '  }',
+          '}',
+        ].join('\n'),
+        { attio: attio.adapter },
+      ),
+    ).rejects.toThrow(/one of the values in 'both' is text/);
+  });
+
+  it("interpolating one of them is unchanged — only the list literal reads a record", async () => {
+    const attio = makeFakeAdapter('attio');
+
+    await expect(
+      run(
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  one = node { label: "A" }',
+          '  t = "${one}"',
+          '  write crm-[:companies]-> {',
+          '    unique by (`name`)',
+          '    name: t',
+          '  }',
+          '}',
+        ].join('\n'),
+        { attio: attio.adapter },
+      ),
+    ).rejects.toThrow(/reading 'one' \(a synthesised node\) as a bare value/);
+  });
+});
+
+describe('a list literal of extraction roots', () => {
+  it('walks both roots, in list order', async () => {
+    const attio = makeFakeAdapter('attio');
+    const llm = perPieceLlm(namesInPiece);
+
+    await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  first = extract from [msg.`text`] {',
+        '    node company: "each company named" {',
+        '      name: "the company\'s name"',
+        '    }',
+        '  }',
+        '  second = extract from ["Globex raised an A."] {',
+        '    node company: "each company named" {',
+        '      name: "the company\'s name"',
+        '    }',
+        '  }',
+        '  both = [first, second]',
+        '  both-[c:company]-> {',
+        '    write crm-[:companies]-> {',
+        '      unique by (`name`)',
+        '      name: c.name',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'),
+      { text: 'Acme raised a seed.', llm: llm.client, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((w) => w.fields.name)).toEqual(['Acme', 'Globex']);
   });
 });
