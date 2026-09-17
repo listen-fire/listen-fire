@@ -8,6 +8,8 @@
 // never nodes; a node carries only its name, properties, and edges.
 
 import { useState } from "react";
+import { neverAsAny, variantOf } from "movement-lang";
+import type { FieldType } from "movement-lang";
 import { trpc } from "@/lib/trpc";
 
 type Instance = {
@@ -16,18 +18,6 @@ type Instance = {
   credential: { id: string; name: string; type: string } | null;
   remote: boolean;
 };
-
-type FieldType =
-  | "text"
-  | "number"
-  | "boolean"
-  | "date"
-  | "datetime"
-  | "file"
-  // A structured value, opaque to everything but another json field.
-  | "json"
-  | { kind: "list"; of: FieldType }
-  | { kind: "enum"; options: string[]; open?: { allowPattern?: string } };
 
 type WalkedProperty = {
   type: FieldType;
@@ -91,15 +81,60 @@ function Chip({ kind, label }: { kind: string; label: string }) {
 }
 
 function typeName(t: FieldType): string {
-  if (typeof t === "string") return t;
-  if (t.kind === "list") return `${typeName(t.of)}[]`;
-  return t.open ? "enum (open)" : "enum";
+  const v = variantOf(t);
+  switch (v.kind) {
+    case "text":
+    case "number":
+    case "boolean":
+    case "date":
+    case "datetime":
+    case "file":
+    // A structured value, opaque to everything but another json field.
+    case "json":
+    case "absent":
+      return v.kind;
+    case "list":
+      return `${typeName(v.of)}[]`;
+    case "enum":
+      return v.open ? "enum (open)" : "enum";
+    case "tuple":
+      return `[${v.of.map((slot) => (slot === null ? "?" : typeName(slot))).join(", ")}]`;
+    case "dict":
+      return `{${typeName(v.of)}}`;
+    case "maybeAbsent":
+      return `${typeName(v.of)}?`;
+    case "record":
+      return "record";
+    default:
+      return neverAsAny(v);
+  }
 }
 
 function enumOptions(t: FieldType): string[] {
-  if (typeof t === "string") return [];
-  if (t.kind === "list") return enumOptions(t.of);
-  return t.options;
+  const v = variantOf(t);
+  switch (v.kind) {
+    case "enum":
+      return v.options;
+    // A collection's options are its element's — the chip row lists what a
+    // single value may be, whatever wraps it.
+    case "list":
+    case "dict":
+    case "maybeAbsent":
+      return enumOptions(v.of);
+    case "text":
+    case "number":
+    case "boolean":
+    case "date":
+    case "datetime":
+    case "file":
+    case "json":
+    case "absent":
+    case "tuple":
+    case "record":
+      return [];
+    default:
+      return neverAsAny(v);
+  }
 }
 
 function EdgePromises({ e }: { e: WalkedEdge }) {
