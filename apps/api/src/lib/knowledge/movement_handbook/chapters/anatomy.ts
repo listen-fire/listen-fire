@@ -84,6 +84,7 @@ deal = node {
 - An entry may be a **traversal** instead, and then the records it lands on are handed through exactly as they are — their own field names, their own values, an attached file still the source's own file. Nothing is copied: \`files: msg-[a:Attachments]->\`.
 - Put \`node { … }\` on the end of that traversal to **rename** what it lands on, one record at a time. The reader gets \`Label\` and \`Blob\` and never learns what the source called them, which is what lets one automation serve several sources.
 - \`lazy\` defers the walk until something reads the edge (see the traversal chapter). Without it the walk happens where the literal is written.
+- \`both = [one, two]\` gathers records you already hold into one list, and a block head walks them in the order written: \`both-[c:company]-> { … }\`. A list holds one kind of thing — records or values, never both.
 - Nothing is provisioned: building one is not an effect, and it is checked by its structure — what it carries — not by any name.
 
 ### collect-what-you-wrote

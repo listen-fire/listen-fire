@@ -394,3 +394,102 @@ describe('a parameter with no type, where nothing supplies one', () => {
     ).toContain('MOV_PARAM_NEEDS_TYPE');
   });
 });
+
+describe('a list literal of records', () => {
+  // `both = [one, two]` is a position bound many times over — the same fact a
+  // block's returned records carry — so it binds on the arrow plane and a head
+  // off it walks each member in list order.
+  const TWO = [
+    '  one = node { name: "Acme", founder: node { name: "Jane Doe" } }',
+    '  two = node { name: "Zenith", founder: node { name: "Ada Byron" } }',
+    '  both = [one, two]',
+  ].join('\n');
+
+  it('two records in a list is clean', () => {
+    expect(codes(TWO)).toEqual([]);
+  });
+
+  it('a block head off the list walks it', () => {
+    expect(
+      codes([
+        TWO,
+        '  both-[f:founder]-> {',
+        '    write chat-[:note]-> { Body ?: f.name }',
+        '  }',
+      ].join('\n')),
+    ).toEqual([]);
+  });
+
+  it('a record and a value together are refused — a list holds one kind of thing', () => {
+    const body = [
+      '  one = node { name: "Acme" }',
+      '  label = "hello"',
+      '  both = [one, label]',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_LIST_MIXED');
+    expect(messages(body)).toContain('one kind of thing');
+    expect(messages(body)).toContain('is text');
+  });
+
+  it('a literal member is refused the same way', () => {
+    expect(codes('  one = node { name: "Acme" }\n  both = [one, 3]')).toContain('MOV_LIST_MIXED');
+  });
+
+  it('a nested list is refused — there is no list of lists of records', () => {
+    const body = [
+      '  one = node { name: "Acme" }',
+      '  two = node { name: "Zenith" }',
+      '  both = [one, [two]]',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_LIST_MIXED');
+    expect(messages(body)).toContain('is a list');
+  });
+
+  it('a computed member stays silent — the run names it, where it is read', () => {
+    // The refusal is for what is EVIDENT where it is written: a literal, a
+    // nested collection, a name whose type is known. An expression is read
+    // once, by the walker that already typed this list, and is not asked
+    // again here — a member that turns out not to be a record fails at the
+    // head, naming what it is.
+    expect(
+      codes([
+        '  one = node { name: "Acme" }',
+        '  names = COLLECT(c-[m:Messages]->.`Text`)',
+        '  both = [one, AT(names, 0)]',
+      ].join('\n')),
+    ).toEqual([]);
+  });
+
+  it('interpolating a record is what it was — this changes only the list literal', () => {
+    expect(codes('  one = node { name: "Acme" }\n  t = "${one}"')).toEqual([]);
+  });
+});
+
+describe('a list of records is a record bound many times over', () => {
+  it('it is not a value collection — a collection op over it is refused', () => {
+    // Proof of the PLANE: only an arrow-plane name gets this refusal, and the
+    // answer it names is the one this list is for.
+    const body = [
+      '  one = node { name: "Acme" }',
+      '  two = node { name: "Zenith" }',
+      '  both = [one, two]',
+      '  x = MAP(both, (r) => { return r })',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_COLLECTION_OP_NOT_A_COLLECTION');
+  });
+
+  it('members that agree on a type carry it, so the walk off the list is checked', () => {
+    const body = [
+      '  c-[msg:Messages]-> {',
+      '    a = msg',
+      '    b = msg',
+      '    both = [a, b]',
+      '    both-[n:Nope]-> {',
+      '      write chat-[:note]-> { Body: "x" }',
+      '    }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+});
