@@ -122,6 +122,52 @@ describe('a declared edge is the address, walked', () => {
   });
 });
 
+// `order by <sequencing>` — the author saying the entry's landings keep an
+// order. It is the SAME claim an adapter makes with `EdgeSchema.sequenced`, so
+// the set/list split reads it by the one road, and nothing else changes.
+describe('a declared entry can say its order', () => {
+  const ORDERED = 'sent = node { messages: <sl-[:Channels]->-[:Messages]->> order by arrival }';
+
+  it('without the clause the edge is a SET — an order-sensitive fold is refused', () => {
+    expect(codes(`  ${DECLARED}\n  t = JOIN(sent-[x:messages]->.Text, ", ")`)).toContain(
+      'MOV_FOLD_NEEDS_ORDER',
+    );
+    expect(codes(`  ${DECLARED}\n  f = FIRST(sent-[x:messages]->)`)).toContain(
+      'MOV_FOLD_NEEDS_ORDER',
+    );
+  });
+
+  it('with it, JOIN and FIRST are clean — no ORDER BY anywhere', () => {
+    expect(codes(`  ${ORDERED}\n  t = JOIN(sent-[x:messages]->.Text, ", ")`)).toEqual([]);
+    expect(codes(`  ${ORDERED}\n  f = FIRST(sent-[x:messages]->)`)).toEqual([]);
+    expect(codes(`  ${ORDERED}\n  l = LAST(sent-[x:messages]->.Text)`)).toEqual([]);
+  });
+
+  it('LIMIT with no ORDER BY is the same rule, discharged the same way', () => {
+    expect(codes(`  ${DECLARED}\n  n = COUNT(sent-[x:messages LIMIT 3]->)`)).toContain(
+      'MOV_LIMIT_NEEDS_ORDER',
+    );
+    expect(codes(`  ${ORDERED}\n  n = COUNT(sent-[x:messages LIMIT 3]->)`)).toEqual([]);
+  });
+
+  it('a bare traversal over it is the ordinary traversal, still', () => {
+    expect(codes(`  ${ORDERED}\n  sent-[x:messages]-> {\n    t = x.Text\n  }`)).toEqual([]);
+  });
+
+  it('the DECLARED NODE spelling takes the clause too', () => {
+    const body = `  feeds = node { channels: <Feed> order by arrival }
+  t = JOIN(feeds-[c:channels]->.Name, ", ")`;
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('the clause changes nothing about what may LAND there', () => {
+    const body = `  ${ORDERED}
+  p = write sl-[:People]-> { Email: "a@b.com" }
+  link sent -[:messages]-> p`;
+    expect(codes(body)).toContain(C.NODE_LINK_SHAPE);
+  });
+});
+
 describe('link appends a landing', () => {
   const written = `  ch = write sl-[:Channels]-> { Name: "general" }
   one = write ch-[:Messages]-> { Text: "hi" }`;

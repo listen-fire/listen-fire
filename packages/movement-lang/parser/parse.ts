@@ -69,6 +69,7 @@ import {
   WriteExpression,
   WriteTarget,
 } from './ast';
+import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import { scanBacktickName, scanIdent, scanName } from './scan';
 
 /** The two spellings of a movement declaration — `function` is a pure parser
@@ -79,6 +80,12 @@ type MovementKeyword = 'movement' | 'function';
  *  appear as a node-literal entry — this list exists to say that by name
  *  (a node literal is effect-free) rather than by syntax error. */
 const NODE_ENTRY_EFFECTS = new Set(['write', 'link', 'unlink', 'delete', 'extract', 'await', 'race', 'parallel', 'callback']);
+
+/** The orders a declared entry may claim — the language's existing three
+ *  sequencing words, no new one. `arrival` is what a run-local edge actually
+ *  has; `document` and `chronological` say the author is collecting pieces
+ *  that were already in that order, and read back the same way. */
+const ENTRY_SEQUENCINGS: readonly EdgeSequencing[] = ['arrival', 'document', 'chronological'];
 
 /** `lazy` and `await` are duals in one slot, and composing them is nonsense —
  *  one of them has to happen first, and neither answer is a thing to mean. */
@@ -1684,12 +1691,51 @@ class Parser {
    */
   private parseDeclaredEdgeEntry(name: string, entryStart: number): NodeEntry {
     const marker = this.readTypeMarker(`for the entry '${name}'`, { allowHops: true });
+    const sequenced = this.tryParseEntryOrdering(name);
     return {
       kind: 'declared',
       name,
       type: this.typeRefFromMarker(marker),
+      ...(sequenced !== undefined ? { sequenced } : {}),
       span: this.spanFrom(entryStart),
     };
+  }
+
+  /**
+   * `messages: <…> order by arrival` — the author saying this edge's landings
+   * KEEP an order, so `FIRST` / `JOIN` / `LIMIT` over it answer a real
+   * question instead of picking out of a set. Lowercase and trailing, like
+   * `unique by`; the word is one of the three the language already has, and no
+   * new one enters here.
+   *
+   * Same line only, like every other entry continuation — a newline ends the
+   * entry, so `order` on the next line is the next entry's name and says so.
+   */
+  private tryParseEntryOrdering(name: string): EdgeSequencing | undefined {
+    const save = this.pos;
+    this.skipInlineWs();
+    if (this.peekIdent() !== 'order') {
+      this.pos = save;
+      return undefined;
+    }
+    this.pos += 'order'.length;
+    this.skipInlineWs();
+    if (this.peekIdent() !== 'by') {
+      this.error(
+        `An entry's order is written 'order by' — write '${name}: … order by arrival', found ${this.describeHere()}`,
+      );
+    }
+    this.pos += 'by'.length;
+    this.skipInlineWs();
+    const word = this.peekIdent();
+    const sequencing = ENTRY_SEQUENCINGS.find(known => known === word);
+    if (sequencing === undefined) {
+      this.error(
+        `'order by' takes one of 'arrival' (the order the links landed), 'document' (the order a source document put them in) or 'chronological' (the order they happened) — found ${this.describeHere()}`,
+      );
+    }
+    this.pos += sequencing.length;
+    return sequencing;
   }
 
   /** After an entry whose value was a literal (no expression slot to find the

@@ -301,6 +301,33 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       expect(out).toEqual(binding);
     });
 
+    it("a landed edge keeps its landings' ORDER — what `order by arrival` promises", async () => {
+      const binding: Binding = {
+        kind: 'nodePosition',
+        fields: {},
+        fieldProvenance: {},
+        edges: {
+          companies: {
+            kind: 'landed',
+            landings: [
+              { kind: 'value', value: 'Acme' },
+              { kind: 'value', value: 'Beta' },
+              { kind: 'value', value: 'Gamma' },
+            ],
+          },
+        },
+      };
+      const out = await roundTrip(binding);
+      if (out.kind !== 'nodePosition') throw new Error('unreachable');
+      const edge = out.edges.companies;
+      if (edge.kind !== 'landed') throw new Error('expected a landed edge');
+      expect(edge.landings.map((l) => (l.kind === 'value' ? l.value : undefined))).toEqual([
+        'Acme',
+        'Beta',
+        'Gamma',
+      ]);
+    });
+
     it('a DEFERRED edge serialises the WALK, never landings', async () => {
       const walk = {
         head: { root: 'msg', hopsRaw: '-[a:files]->', span: SPAN },

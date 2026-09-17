@@ -292,6 +292,67 @@ describe('two writes of the same thing are one landing', () => {
   });
 });
 
+// `order by arrival` is the AUTHOR's claim about this edge; what backs it is
+// the runtime's own behaviour — `link`/`write` append, and a merge writes into
+// the record already on the edge rather than moving it to the end.
+describe('an entry that says `order by arrival` reads back in landing order', () => {
+  const ORDERED = '  deduped = node { companies: <Company> order by arrival }';
+
+  it('a merge writes into the record already there — the first written is still first', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    await runWith(
+      ORDERED,
+      [
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Beta"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Gamma"',
+        '  }',
+        // The merge lands on the FIRST landing, filling what was absent.
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '    summary ?: "filled"',
+        '  }',
+        ...READ_BACK,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    expect(attio.creates.map((w) => w.fields)).toEqual([
+      { name: 'Acme', summary: 'filled' },
+      { name: 'Beta', summary: null },
+      { name: 'Gamma', summary: null },
+    ]);
+  });
+
+  it('JOIN over the edge is the landing order, with no ORDER BY anywhere', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    await runWith(
+      ORDERED,
+      [
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Beta"',
+        '  }',
+        '  write deduped-[:companies]-> { unique by (`name`)',
+        '    name: "Gamma"',
+        '  }',
+        '  joined = JOIN(deduped-[c:companies]->.`name`, ", ")',
+        '  write crm-[:companies]-> { name: joined }',
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    expect(attio.creates.map((w) => w.fields.name)).toEqual(['Acme, Beta, Gamma']);
+  });
+});
+
 describe('a FUZZY component blocks on the distinctive word', () => {
   it('two names sharing only the kind word never reach the judge', async () => {
     const email = makeFakeAdapter('email');

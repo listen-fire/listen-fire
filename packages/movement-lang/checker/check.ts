@@ -6423,8 +6423,20 @@ class Checker {
           // The DECLARED edge: no landings yet, and a type that says what the
           // ones `link` appends have to be. Same promises as any other
           // synthesised edge — readable, and nothing else.
+          //
+          // `order by <sequencing>` is the author's own sequencing claim, and
+          // it reaches the set/list split by the one road every other claim
+          // takes (`EdgeSchema.sequenced`, which `hopOrdering` reads). All
+          // three words read back the SAME way here — a run-local edge has
+          // only the order `link` appended in — so `document` and
+          // `chronological` say what the author is collecting, not a second
+          // sort the runtime performs.
           edges[entry.name] = {
-            schema: { target: entry.name, readable: true },
+            schema: {
+              target: entry.name,
+              readable: true,
+              ...(entry.sequenced !== undefined ? { sequenced: entry.sequenced } : {}),
+            },
             ...this.declaredEdgeLanding(entry, scope),
           };
           break;
