@@ -298,6 +298,23 @@ movement intake(m: <inbox-[:message]->>) {
     ]);
   });
 
+  it("a head's EXPRESSION root is an expression slot, and is scanned as one", () => {
+    // The hops carry no interpretability question; the root does, because it
+    // is an expression like any other — and an unscanned one would reach a
+    // firing instead of the save gate.
+    const source = `${PRELUDE}
+movement intake(m: <inbox-[:message]->>) {
+  rows = [m]
+  AT(rows, KG_VALUE("MATCH (n) RETURN n.i", m.\`subject\`))-[c:companies]-> {
+    write crm-[:note]-> { text: c.\`name\` }
+  }
+}
+`;
+    expect(listUnsupportedConstructs(source).filter((c) => c.startsWith('KG_VALUE()'))).toHaveLength(
+      1,
+    );
+  });
+
   it('a non-parsing source returns [] (parse diagnostics own that failure)', () => {
     expect(listUnsupportedConstructs('movement {{{{')).toEqual([]);
   });

@@ -30,6 +30,7 @@ import type {
   ExtractExpression,
   LinkExpression,
   NodeLiteral,
+  PathHead,
   MovementCondition,
   Program,
   ResolveFile,
@@ -277,6 +278,7 @@ class InterpretabilityScan {
               this.scanExtract(statement.value.extract);
               break;
             case 'block':
+              this.scanHead(statement.value.block.head);
               this.scanBody(statement.value.block.body);
               break;
             case 'node':
@@ -286,6 +288,7 @@ class InterpretabilityScan {
               // A deferred traversal is a traversal — the same head every
               // block runs, held rather than walked. Its per-item tail is a
               // node literal, and gets scanned as one.
+              this.scanHead(statement.value.lazy.head);
               if (statement.value.lazy.mapping) this.scanNode(statement.value.lazy.mapping);
               break;
             case 'callback': {
@@ -388,6 +391,7 @@ class InterpretabilityScan {
           // by name, like the link statements above.
           break;
         case 'block':
+          this.scanHead(statement.block.head);
           this.scanBody(statement.block.body);
           break;
         case 'shape':
@@ -418,10 +422,11 @@ class InterpretabilityScan {
   private scanNode(node: NodeLiteral): void {
     for (const entry of node.entries) {
       if (entry.kind === 'value') this.scanSlot(entry.value);
-      // A traversal entry is a hop chain, not an expression slot — heads carry
-      // no interpretability question of their own (every other head is scanned
-      // the same way: not at all). Its per-item tail is a literal, though.
+      // A traversal entry is a hop chain — the hops themselves carry no
+      // interpretability question. Its ROOT can be an expression, though, and
+      // its per-item tail is a literal.
       else if (entry.kind === 'traversal') {
+        this.scanHead(entry.head);
         if (entry.mapping) this.scanNode(entry.mapping);
       }
       // A declared edge is a TYPE and nothing else — no slot, no literal.
@@ -485,6 +490,13 @@ class InterpretabilityScan {
         this.scanExpression(condition.expr);
         return;
     }
+  }
+
+  /** A traversal head. The hops are a hop chain, not an expression slot — but
+   *  the ROOT can be an expression, and an expression written there asks the
+   *  same interpretability question it asks anywhere else. */
+  private scanHead(head: PathHead): void {
+    if (head.root?.kind === 'expression') this.scanSlot(head.root.expr);
   }
 
   private scanSlot(slot: ExprSlot): void {
