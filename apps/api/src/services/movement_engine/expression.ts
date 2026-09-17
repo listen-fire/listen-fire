@@ -571,6 +571,49 @@ export function bindingOf(value: unknown): Binding | undefined {
   return typeof kind === 'string' && kind in describeBinding ? (value as Binding) : undefined;
 }
 
+/**
+ * Two records compared. `undefined` where neither side is a record, which is
+ * every scalar comparison and the shared comparator's business.
+ *
+ * Identity, never a read: the same record reached two ways is one record, so a
+ * stable external record is its address and anything else is the landing
+ * itself (an extraction result and a synthesised node have no address — being
+ * the same object IS being the same node). A record against a scalar is not
+ * equal and not unequal-by-value; it is a different kind of thing, and `==`
+ * says no rather than reading the record to find out.
+ *
+ * Only `==` / `!=`. Ordering records has no meaning and the checker refuses it.
+ */
+function compareRecords(left: unknown, op: FilterOperator, right: unknown): boolean | undefined {
+  const a = bindingOf(left);
+  const b = bindingOf(right);
+  if (a === undefined && b === undefined) return undefined;
+  if (op !== 'eq' && op !== 'neq') return undefined;
+  const same = a !== undefined && b !== undefined && sameRecord(a, b);
+  return op === 'eq' ? same : !same;
+}
+
+function sameRecord(a: Binding, b: Binding): boolean {
+  if (a === b) return true;
+  const address = recordAddress(a);
+  return address !== undefined && address === recordAddress(b);
+}
+
+/** A record's ADDRESS, where it has one — the identity two reads of the same
+ *  stored record share. Absent for a record the run itself built. */
+function recordAddress(binding: Binding): string | undefined {
+  if (binding.kind === 'sourcePosition') {
+    const { position } = binding;
+    return position.identity.kind === 'stable'
+      ? `${position.adapterType}:${position.recordType}:${position.identity.recordId}`
+      : undefined;
+  }
+  if (binding.kind === 'handle') {
+    return `${binding.handle.adapterType}:${binding.handle.externalId}`;
+  }
+  return undefined;
+}
+
 export const describeBinding: Record<Binding['kind'], string> = {
   event: 'the movement parameter (the event position)',
   instance: 'a constructed adapter instance',
@@ -1227,7 +1270,7 @@ export async function evalMovementExpr(
 
     case 'list': {
       const elements: MovementEvalResult[] = [];
-      for (const e of expr.elements) elements.push(await evalListElement(e, ctx));
+      for (const e of expr.elements) elements.push(await evalValueMember(e, ctx));
       return {
         value: elements.map((e) => e.value),
         provenance: unionProvenance(elements.map((e) => e.provenance)),
@@ -1239,7 +1282,7 @@ export async function evalMovementExpr(
       // laziness: every value is evaluated, exactly as a list literal
       // evaluates every element.
       const values: MovementEvalResult[] = [];
-      for (const entry of expr.entries) values.push(await evalMovementExpr(entry.value, ctx));
+      for (const entry of expr.entries) values.push(await evalValueMember(entry.value, ctx));
       return {
         value: Object.fromEntries(expr.entries.map((entry, i) => [entry.key, values[i].value])),
         provenance: unionProvenance(values.map((v) => v.provenance)),
@@ -1273,8 +1316,13 @@ export async function evalMovementExpr(
       if (isNullLiteral(expr.left)) return presenceCompare(expr.right, expr.op, ctx);
       const left = await evalMovementExpr(expr.left, ctx);
       const right = await evalMovementExpr(expr.right, ctx);
+      // A RECORD is compared by IDENTITY, not by reading it — two names for the
+      // same landing are equal, and a record is never equal to a scalar.
+      // Answered before `compareValues`, which is the shared SCALAR comparator
+      // and would compare two object references.
+      const asRecords = compareRecords(left.value, expr.op, right.value);
       return {
-        value: compareValues(left.value, expr.op, right.value),
+        value: asRecords ?? compareValues(left.value, expr.op, right.value),
         provenance: unionProvenance([left.provenance, right.provenance]),
       };
     }
@@ -1639,32 +1687,32 @@ function readBareName(name: string, ctx: MovementExprContext): MovementEvalResul
 }
 
 /**
- * One member of a list LITERAL. A bare name bound to a RECORD reads as that
- * record here — `both = [one, two]` is the two records themselves, the same
- * currency `MAP(pieces, (p) => { return extract … })` already hands back — so a
- * block walks a literal exactly as it walks a collection op's answer, in list
- * order.
+ * One member of a value a LITERAL builds — a list's element, a map's entry. A
+ * bare name bound to a RECORD reads as that record here: `[one, two]` is the
+ * two records themselves and `{ who: t }` is a map holding one, the same
+ * currency `MAP(pieces, (p) => { return extract … })` already hands back, so a
+ * block walks either of them exactly as it walks a collection op's answer.
  *
  * Only here. Everywhere else a bare name is the value read it has always been:
  * `"${one}"` still refuses to interpolate a record, and inside a hop WHERE
  * (`ctx.scope`) the name is still the landed record's own field, which is the
  * precedence every other read in this file keeps.
  */
-async function evalListElement(
+async function evalValueMember(
   expr: Expression,
   ctx: MovementExprContext,
 ): Promise<MovementEvalResult> {
-  const position = ctx.scope === undefined ? listElementPosition(expr, ctx) : undefined;
+  const position = ctx.scope === undefined ? memberPosition(expr, ctx) : undefined;
   if (position !== undefined) {
     return { value: position, provenance: { origins: bindingEntityOrigins(position) } };
   }
   return evalMovementExpr(expr, ctx);
 }
 
-/** The record a list member NAMES, where it names one: a bare identifier bound
- *  to a position. Anything else — a literal, a call, a field read — is data and
+/** The record a member NAMES, where it names one: a bare identifier bound to a
+ *  position. Anything else — a literal, a call, a field read — is data and
  *  evaluates as data. */
-function listElementPosition(
+function memberPosition(
   expr: Expression,
   ctx: MovementExprContext,
 ): Binding | undefined {
@@ -2480,9 +2528,12 @@ async function readAdapterTraverse(
     throw unsupported(`this read shape on ${what} ('${name}')`);
   }
   if (field === POSITION_SENTINEL) {
-    // "The positions themselves" — counting-style aggregates consume the
-    // landed set; a fan-out has no single origin to cite.
-    return { value: landed.map((b) => b.position), provenance: NO_PROVENANCE };
+    // "The positions themselves" — the landed RECORDS, in the currency every
+    // other many-valued read hands back (a block's landings, a collection op's
+    // answer). A hop is many-valued, so a bare walk written as a value is a
+    // list of records: `COUNT` counts them, `MAP` reads them, and a block head
+    // walks them. A fan-out has no single origin to cite.
+    return { value: landed, provenance: NO_PROVENANCE };
   }
   const results: MovementEvalResult[] = [];
   for (const b of landed) {

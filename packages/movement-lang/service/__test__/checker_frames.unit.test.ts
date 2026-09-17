@@ -9,10 +9,10 @@
 // resolved against the LAST arm's frame.
 
 import type { CatalogSnapshot } from '../snapshot';
-import type { FieldType, InstanceSchema } from '../../checker/catalog';
+import type { SchemaFieldType, InstanceSchema } from '../../checker/catalog';
 import { getHoverInfo, getMovementCompletions } from '../service';
 
-const queue: FieldType = { kind: 'enum', options: ['Billing', 'General'] };
+const queue: SchemaFieldType = { kind: 'enum', options: ['Billing', 'General'] };
 
 const OPS: InstanceSchema = {
   positions: {

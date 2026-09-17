@@ -14,9 +14,9 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, checkProgramWithLink, Diagnostic } from '../check';
-import { mockCatalog, type FieldType, type InstanceSchema } from '../catalog';
+import { mockCatalog, type SchemaFieldType, type InstanceSchema } from '../catalog';
 
-const textList: FieldType = { kind: 'list', of: 'text' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
 
 const chatSchema: InstanceSchema = {
   positions: {

@@ -113,7 +113,7 @@ import type {
   CallbackExpression,
   CallbackSubject,
   ExtractExpression,
-  FieldType,
+  SchemaFieldType,
   InstanceSchema,
   LinkExpression,
   LinkedExport,
@@ -1482,7 +1482,7 @@ class Interpreter {
   /** The program's author-declared refinements (`type Thesis = <"A" | "B">`),
    *  by name. File-level, so one map answers everywhere the checker's scope
    *  resolution would. */
-  private declaredTypes: Map<string, FieldType> = new Map();
+  private declaredTypes: Map<string, SchemaFieldType> = new Map();
   private defaultLlm?: LlmClient;
   private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in
@@ -4424,11 +4424,19 @@ class Interpreter {
     for (const [name, captured] of binding.captured) env.declare(name, captured);
     const child = env.child();
     for (const param of binding.closure.params) {
-      child.declare(param.name, {
-        kind: 'value',
-        value: values[param.name] ?? null,
-        provenance: NO_PROVENANCE,
-      });
+      const supplied = values[param.name] ?? null;
+      // A RECORD arrives as the record it is. A collection op hands each member
+      // back in the currency it arrived in, so a member may BE a binding — and
+      // declaring it as one is what makes the parameter behave like every other
+      // name bound to a record: its fields read, a block head walks it, a list
+      // literal holds it, and interpolating it is refused. Wrapping it in a
+      // value binding made it a record only the places that unwrap by hand
+      // could see.
+      const record = bindingOf(supplied);
+      child.declare(
+        param.name,
+        record ?? { kind: 'value', value: supplied, provenance: NO_PROVENANCE },
+      );
     }
     return this.interpretBody(binding.closure.body, child, body);
   }

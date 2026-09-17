@@ -22,7 +22,7 @@ import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
 import {
   mockCatalog,
-  type FieldType,
+  type SchemaFieldType,
   type InstanceSchema,
   type PositionSchema,
 } from '../catalog';
@@ -38,10 +38,10 @@ function eventSurface(input: {
   actions: string[];
   hop: string;
   /** hop value → the properties the address lands on. */
-  landings: Record<string, Record<string, FieldType>>;
+  landings: Record<string, Record<string, SchemaFieldType>>;
 }): InstanceSchema {
   const { event, actions, hop, landings } = input;
-  const action: FieldType = { kind: 'enum', options: actions };
+  const action: SchemaFieldType = { kind: 'enum', options: actions };
   const positions: Record<string, PositionSchema> = {
     [event]: { properties: { action, [hop]: 'text' }, edges: {} },
   };
@@ -81,7 +81,7 @@ function eventSurface(input: {
   };
 }
 
-const textList: FieldType = { kind: 'list', of: 'text' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
 
 const KG_ACTIONS = ['record.created', 'record.updated', 'record.deleted'];
 const KG_SCHEMA = eventSurface({

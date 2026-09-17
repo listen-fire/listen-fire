@@ -492,3 +492,67 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
     });
   });
 });
+
+// ── Bucket 3 — a VALUE that holds records ──
+//
+// A record is a value, so a value can hold one: a `MAP` whose function returned
+// the member, a list literal of records, a `GROUPBY` dict. Those records do NOT
+// survive `JSON.stringify` — an extraction result's children are a `Map`, a file
+// ref is a closure — so the value travels record by record, each through its own
+// descriptor, and a resumed run holds positions again.
+describe('a value that holds records', () => {
+  function emissionNamed(name: string): ExtractEmission {
+    return {
+      nodeName: 'extract result',
+      fields: { headline: name },
+      provenance: {},
+      resources: [],
+      children: new Map([
+        [
+          'company',
+          [{ nodeName: 'company', fields: { name }, provenance: {}, resources: [], children: new Map() }],
+        ],
+      ]),
+    };
+  }
+
+  it("a MAP's answer of extract roots comes back as extract roots, children and all", async () => {
+    const binding: Binding = {
+      kind: 'value',
+      value: [
+        { kind: 'extractRoot', emission: emissionNamed('Acme') },
+        { kind: 'extractRoot', emission: emissionNamed('Globex') },
+      ],
+    };
+    const out = await roundTrip(binding);
+    if (out.kind !== 'value' || !Array.isArray(out.value)) throw new Error('unreachable');
+    expect(out.value).toHaveLength(2);
+    for (const [index, name] of ['Acme', 'Globex'].entries()) {
+      const member = out.value[index] as Binding;
+      expect(member.kind).toBe('extractRoot');
+      if (member.kind !== 'extractRoot') throw new Error('unreachable');
+      // The `Map` children are the proof: a blind JSON round-trip leaves `{}`,
+      // and a block walking the resumed value would find nothing there.
+      expect(member.emission.children.get('company')?.[0].fields).toEqual({ name });
+    }
+  });
+
+  it("a GROUPBY's dict of records keeps each group's records", async () => {
+    const binding: Binding = {
+      kind: 'value',
+      value: { Infra: [{ kind: 'extractRoot', emission: emissionNamed('Acme') }] },
+    };
+    const out = await roundTrip(binding);
+    if (out.kind !== 'value') throw new Error('unreachable');
+    const group = (out.value as Record<string, unknown[]>).Infra[0] as Binding;
+    expect(group.kind).toBe('extractRoot');
+    if (group.kind !== 'extractRoot') throw new Error('unreachable');
+    expect(group.emission.children.get('company')?.[0].fields).toEqual({ name: 'Acme' });
+  });
+
+  it('a value holding no records travels as it always did — data, with the JSON guard', async () => {
+    const binding: Binding = { kind: 'value', value: { rows: [1, 2], name: 'hi' } };
+    expect(serializeBinding(binding).kind).toBe('value');
+    expect(await roundTrip(binding)).toEqual(binding);
+  });
+});

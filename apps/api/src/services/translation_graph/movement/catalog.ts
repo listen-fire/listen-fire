@@ -47,7 +47,7 @@ import {
   type ConnectAction,
   type ConstructionArg,
   type CredentialSpec,
-  type FieldType,
+  type SchemaFieldType,
   type InstanceSchema,
   type PluginOutput,
   type PluginSpec,
@@ -96,7 +96,7 @@ import {
 } from './schema_projection';
 import { closeDemandOverChains, closeDemandOverWriteVariants, demandSeed } from './demand';
 
-const textList: FieldType = { kind: 'list', of: 'text' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
 
 /**
  * The listen-config keys that ADDRESS this adapter's events, published onto the
@@ -266,7 +266,7 @@ function pluginSpecOf(signature: TransformSignature): PluginSpec {
 
 /**
  * A declared plugin output as the checker's own type vocabulary. The signature
- * speaks `ExpressionType` + `optional`; the checker speaks `FieldType` +
+ * speaks `ExpressionType` + `optional`; the checker speaks `SchemaFieldType` +
  * `maybeAbsent`, which is the same two facts under the names the rest of the
  * language already uses. ONE projection, so what the engine hands back and what
  * the checker typed cannot disagree.
@@ -275,14 +275,14 @@ function pluginOutputOf(output: NonNullable<TransformSignature['output']>): Plug
   if (output.kind === 'value') {
     return { kind: 'value', type: outputFieldType(output) };
   }
-  const fields: Record<string, FieldType> = {};
+  const fields: Record<string, SchemaFieldType> = {};
   for (const [name, field] of Object.entries(output.fields)) {
     fields[name] = outputFieldType(field);
   }
   return { kind: 'record', fields };
 }
 
-function outputFieldType(field: { type: ExpressionType; optional?: boolean }): FieldType {
+function outputFieldType(field: { type: ExpressionType; optional?: boolean }): SchemaFieldType {
   const base = fieldTypeOfExpressionType(field.type);
   if (field.optional !== true) return base;
   // `maybeAbsent` widens to undefined only for an undefined input, which a
@@ -291,12 +291,12 @@ function outputFieldType(field: { type: ExpressionType; optional?: boolean }): F
 }
 
 /**
- * `ExpressionType` → `FieldType`. Deliberately narrow: a plugin output is
+ * `ExpressionType` → `SchemaFieldType`. Deliberately narrow: a plugin output is
  * scalars, lists of them, and nothing else. A `record` inside one would be a
  * node, and a node needs a graph to belong to — a plugin output that wants one
  * is a `record` output at the top, whose fields are these.
  */
-function fieldTypeOfExpressionType(type: ExpressionType): FieldType {
+function fieldTypeOfExpressionType(type: ExpressionType): SchemaFieldType {
   switch (type.kind) {
     case 'string':
       return 'text';

@@ -12,7 +12,7 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, diagnosticSeverity } from '../check';
-import { mockCatalog, type FieldType, type InstanceSchema, type PositionSchema } from '../catalog';
+import { mockCatalog, type SchemaFieldType, type InstanceSchema, type PositionSchema } from '../catalog';
 import { eventAddressDisplay, eventAddressKey } from '../event_address';
 
 // ── The chat shape: a selectable collection with a writable child ────────────
@@ -52,7 +52,7 @@ const boardSchema: InstanceSchema = {
 
 const EVENT = 'Webhook Event';
 const ACTIONS = ['record.created', 'record.updated'];
-const EVENT_PROPS: Record<string, FieldType> = { action: { kind: 'enum', options: ACTIONS } };
+const EVENT_PROPS: Record<string, SchemaFieldType> = { action: { kind: 'enum', options: ACTIONS } };
 const addressKey = (action: string) => eventAddressKey({ event: EVENT, narrowing: { action } });
 
 const eventPositions = (): { positions: Record<string, PositionSchema>; union: string[] } => {

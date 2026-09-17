@@ -23,6 +23,12 @@ import type {
 } from '@listen-fire/shared/expression/types';
 import type { Program, TypeDeclaration } from '../parser/ast';
 import type { DeclaredEffectRow } from './effects';
+// A record is a value, so `FieldType` names the arrow plane's own type and
+// spells it with the arrow plane's own words. That is a cycle with `typing.ts`
+// and it is the honest one: neither plane is beneath the other, and there is
+// one type universe rather than a copy of position types kept here. Nothing is
+// read at module load, so the two initialise in either order.
+import { describePosition, type PositionTypeRef } from './typing';
 
 /**
  * One argument in an adapter's construction signature. The list is the full
@@ -368,8 +374,8 @@ export interface PluginFedArg {
  *                fields, exactly as `callback(…)` and a node literal do.
  */
 export type PluginOutput =
-  | { kind: 'value'; type: FieldType }
-  | { kind: 'record'; fields: Record<string, FieldType> };
+  | { kind: 'value'; type: SchemaFieldType }
+  | { kind: 'record'; fields: Record<string, SchemaFieldType> };
 
 // ── Field value types ──
 
@@ -467,16 +473,63 @@ export type FieldType =
    * the checker's typing layer; it never appears in an adapter/schema surface, so
    * runtime data (the engine, trpc) never carries it. `of` is never itself
    * `maybeAbsent` — construct via the `maybeAbsent()` helper, which flattens. */
-  | { kind: 'maybeAbsent'; of: FieldType };
+  | { kind: 'maybeAbsent'; of: FieldType }
+  /**
+   * A RECORD held as a value — a traversed record, a write handle, a
+   * synthesised node, an extraction result. One type universe: a record is
+   * what `MAP` hands back when its function returns one, what a list literal
+   * of them holds, and what a map's key can carry, so lists and dicts nest
+   * over records exactly as they nest over text.
+   *
+   * It is a value TYPE, not a value shape: nothing reads it as data. A record
+   * written into a field, interpolated into text, added up or compared to a
+   * scalar is refused where it is written; what it CAN do is be walked from
+   * (a block head), read by field (the dot plane), and held in a collection.
+   *
+   * `position` is which record, where the checker can say — the same
+   * `PositionTypeRef` the arrow plane uses, never a parallel one. ABSENT means
+   * "a record, and nobody can name which": members of a list that disagree,
+   * an extraction result, a synthesised node. The distinction is load-bearing
+   * and is the same one `LocalEdge.target` draws — a walk off a record whose
+   * position is unknown stays silent and runs, and one off a named position is
+   * checked.
+   */
+  | { kind: 'record'; position?: PositionTypeRef };
 
-/** Maps a surface type name (shape declarations, extract annotations) to a FieldType. */
+/**
+ * What an adapter SURFACE can declare — every field type except a record,
+ * nested collections included.
+ *
+ * A record is a place in a graph, and no adapter field is one: a record type
+ * arises only where the checker types an EXPRESSION. Saying so here is what
+ * keeps a schema clear of the position model — and a schema crosses the wire
+ * (`InstanceSchema` is a tRPC response), where a field type that reached into
+ * positions would reach back into schemas again, a cycle no serialiser's type
+ * can follow.
+ *
+ * The collections are spelled a second time because TypeScript cannot subtract
+ * a member from a RECURSIVE union — `Exclude` removes the record at the top
+ * and leaves `list of record` behind, which is the same cycle. The scalars and
+ * every rule about them live on `FieldType` above; this is that union with one
+ * member gone, and every `SchemaFieldType` IS a `FieldType`, so nothing that
+ * reads a schema needs to know which it was handed.
+ */
+export type SchemaFieldType =
+  | Exclude<FieldType, { kind: string }>
+  | { kind: 'list'; of: SchemaFieldType; unordered?: true }
+  | { kind: 'tuple'; of: Array<SchemaFieldType | null> }
+  | { kind: 'dict'; of: SchemaFieldType }
+  | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
+  | { kind: 'maybeAbsent'; of: SchemaFieldType };
+
+/** Maps a surface type name (shape declarations, extract annotations) to a SchemaFieldType. */
 /**
  * The type a `type Thesis = <"A" | "B">` declaration names — a CLOSED enum,
  * identical in shape to an option set borrowed from a live field, so nothing
  * downstream (extraction prompt, literal check, did-you-mean) can tell a
  * written refinement from a fetched one.
  */
-export function declaredTypeOf(decl: TypeDeclaration): FieldType {
+export function declaredTypeOf(decl: TypeDeclaration): SchemaFieldType {
   return { kind: 'enum', options: decl.options };
 }
 
@@ -485,15 +538,15 @@ export function declaredTypeOf(decl: TypeDeclaration): FieldType {
  * declaration, so this flat map and the checker's scope resolution answer the
  * same question — the engine, which has no scopes, asks it this way.
  */
-export function declaredTypesIn(program: Program): Map<string, FieldType> {
-  const declared = new Map<string, FieldType>();
+export function declaredTypesIn(program: Program): Map<string, SchemaFieldType> {
+  const declared = new Map<string, SchemaFieldType>();
   for (const statement of program.statements) {
     if (statement.kind === 'type') declared.set(statement.name, declaredTypeOf(statement));
   }
   return declared;
 }
 
-export function parseFieldTypeName(name: string | undefined): FieldType | undefined {
+export function parseFieldTypeName(name: string | undefined): SchemaFieldType | undefined {
   switch (name) {
     case 'text':
     case 'number':
@@ -533,7 +586,7 @@ export function borrowedTypeSegments(name: string | undefined): string[] | undef
 export function borrowableFieldsOf(
   schema: InstanceSchema,
   rootName: string,
-): Record<string, FieldType> | undefined {
+): Record<string, SchemaFieldType> | undefined {
   const writable = schema.writableRoots[rootName]?.fields;
   const readable = schema.positions[rootName]?.properties;
   if (!writable && !readable) return undefined;
@@ -545,7 +598,7 @@ export function resolveBorrowedField(
   schema: InstanceSchema,
   rootName: string,
   fieldName: string,
-): FieldType | undefined {
+): SchemaFieldType | undefined {
   return borrowableFieldsOf(schema, rootName)?.[fieldName];
 }
 
@@ -567,6 +620,12 @@ export function describeFieldType(type: FieldType): string {
     return `[${type.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
   }
   if (type.kind === 'dict') return `dict of ${describeFieldType(type.of)}`;
+  // A record reads as the record it IS, in the arrow plane's own words. A
+  // record nobody can name is still definitely a record, which is what the
+  // absent ref means and what the reader needs to hear.
+  if (type.kind === 'record') {
+    return type.position !== undefined ? describePosition(type.position) : 'a record';
+  }
   if (type.open) return `known values (${type.options.join(' | ')}, …)`;
   // An empty CLOSED option set is the empty union — `enum ()` reads like a
   // rendering bug, so name the fact.
@@ -744,7 +803,7 @@ export interface EdgeSchema {
 
 /** A readable position type: its properties and outgoing references. */
 export interface PositionSchema {
-  properties: Record<string, FieldType>;
+  properties: Record<string, SchemaFieldType>;
   edges: Record<string, EdgeSchema>;
   /**
    * Author-facing text for a position whose KEY is not author-facing — a
@@ -955,7 +1014,7 @@ export interface WriteUnionShape {
 
 /** A root the instance accepts writes for, and the shape of the resulting handle. */
 export interface WritableRootSchema {
-  fields: Record<string, FieldType>;
+  fields: Record<string, SchemaFieldType>;
   /**
    * When present, this create's body is a DISCRIMINATED UNION: the literal of
    * `discriminated.discriminant` (a required field in `fields`) selects one of
@@ -976,7 +1035,7 @@ export interface WritableRootSchema {
    */
   writeUnion?: WriteUnionShape;
   /** What a handle from `x = write instance-[:root]-> { … }` carries (`externalId`, `url`, the written fields). */
-  resultShape: Record<string, FieldType>;
+  resultShape: Record<string, SchemaFieldType>;
   /**
    * The POSITION a handle from a write of this shape stands on, when that is
    * more specific than the root the write was addressed through. Set on a

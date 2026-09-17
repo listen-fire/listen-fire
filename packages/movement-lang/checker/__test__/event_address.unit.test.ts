@@ -22,7 +22,7 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
-import { mockCatalog, type FieldType, type InstanceSchema, type PositionSchema } from '../catalog';
+import { mockCatalog, type SchemaFieldType, type InstanceSchema, type PositionSchema } from '../catalog';
 import { eventAddressDisplay, eventAddressKey, narrowingPrefixKey } from '../event_address';
 
 const EVENT = 'Record Change';
@@ -31,7 +31,7 @@ const ACTIONS = ['record.created', 'record.deleted'];
 const deals = { base: 'appDevLoop', table: 'tblDeals' };
 const contacts = { base: 'appDevLoop', table: 'tblContacts' };
 
-const EVENT_PROPS: Record<string, FieldType> = {
+const EVENT_PROPS: Record<string, SchemaFieldType> = {
   action: { kind: 'enum', options: ACTIONS },
   base: 'text',
   table: 'text',

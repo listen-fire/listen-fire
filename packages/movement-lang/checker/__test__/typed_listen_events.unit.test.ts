@@ -10,13 +10,13 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
-import { mockCatalog, type FieldType, type InstanceSchema, type PositionSchema } from '../catalog';
+import { mockCatalog, type SchemaFieldType, type InstanceSchema, type PositionSchema } from '../catalog';
 import { eventAddressDisplay, eventAddressKey } from '../event_address';
 
 const EVENT = 'Webhook Event';
 const ACTIONS = ['record.created', 'record.updated', 'record.deleted'];
 
-const EVENT_PROPS: Record<string, FieldType> = {
+const EVENT_PROPS: Record<string, SchemaFieldType> = {
   action: { kind: 'enum', options: ACTIONS },
 };
 

@@ -396,9 +396,9 @@ describe('a parameter with no type, where nothing supplies one', () => {
 });
 
 describe('a list literal of records', () => {
-  // `both = [one, two]` is a position bound many times over — the same fact a
-  // block's returned records carry — so it binds on the arrow plane and a head
-  // off it walks each member in list order.
+  // `both = [one, two]` is a list of records — one type universe, so the list
+  // holds records the way any list holds its members, and a head off it walks
+  // each member in list order.
   const TWO = [
     '  one = node { name: "Acme", founder: node { name: "Jane Doe" } }',
     '  two = node { name: "Zenith", founder: node { name: "Ada Byron" } }',
@@ -435,47 +435,65 @@ describe('a list literal of records', () => {
     expect(codes('  one = node { name: "Acme" }\n  both = [one, 3]')).toContain('MOV_LIST_MIXED');
   });
 
-  it('a nested list is refused — there is no list of lists of records', () => {
+  it('a nested list is refused — a record and a list of them are not one kind', () => {
     const body = [
       '  one = node { name: "Acme" }',
       '  two = node { name: "Zenith" }',
       '  both = [one, [two]]',
     ].join('\n');
     expect(codes(body)).toContain('MOV_LIST_MIXED');
-    expect(messages(body)).toContain('is a list');
+    expect(messages(body)).toContain('list of');
   });
 
-  it('a computed member stays silent — the run names it, where it is read', () => {
-    // The refusal is for what is EVIDENT where it is written: a literal, a
-    // nested collection, a name whose type is known. An expression is read
-    // once, by the walker that already typed this list, and is not asked
-    // again here — a member that turns out not to be a record fails at the
-    // head, naming what it is.
+  it('a computed member is judged by its TYPE, like every other member', () => {
+    // The rule is one rule, read off the types: a text read out of a list of
+    // text is text wherever it was written, so mixing it with a record is the
+    // same mistake as writing the text inline.
     expect(
       codes([
         '  one = node { name: "Acme" }',
         '  names = COLLECT(c-[m:Messages]->.`Text`)',
         '  both = [one, AT(names, 0)]',
       ].join('\n')),
-    ).toEqual([]);
+    ).toContain('MOV_LIST_MIXED');
   });
 
-  it('interpolating a record is what it was — this changes only the list literal', () => {
-    expect(codes('  one = node { name: "Acme" }\n  t = "${one}"')).toEqual([]);
+  it('a member nobody can type stays silent — the honesty rule', () => {
+    // `KG_VALUE` answers a value nothing here describes. An untyped member says
+    // nothing about the list, so the list says nothing either, and it is the
+    // head or the read that names what it turned out to be.
+    expect(
+      codes([
+        '  one = node { name: "Acme" }',
+        '  both = [one, KG_VALUE("x")]',
+      ].join('\n')),
+    ).not.toContain('MOV_LIST_MIXED');
+  });
+
+  it('interpolating a record is refused where it is written, naming the record', () => {
+    // A record has no one spelling as text and there is no implicit one — the
+    // run refused this already; the type says so at the '=' instead.
+    const body = '  one = node { name: "Acme" }\n  t = "${one}"';
+    expect(codes(body)).toContain('MOV_RECORD_NOT_A_VALUE');
+    expect(messages(body)).toContain('a record, not a value');
   });
 });
 
-describe('a list of records is a record bound many times over', () => {
-  it('it is not a value collection — a collection op over it is refused', () => {
-    // Proof of the PLANE: only an arrow-plane name gets this refusal, and the
-    // answer it names is the one this list is for.
+describe('a list of records is an ordinary collection', () => {
+  it('a collection op reads it — a record is a value, so a list of them is a list', () => {
     const body = [
       '  one = node { name: "Acme" }',
       '  two = node { name: "Zenith" }',
       '  both = [one, two]',
       '  x = MAP(both, (r) => { return r })',
     ].join('\n');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('ONE record is still not a collection — the message names the block', () => {
+    const body = '  one = node { name: "Acme" }\n  x = MAP(one, (r) => { return r })';
     expect(codes(body)).toContain('MOV_COLLECTION_OP_NOT_A_COLLECTION');
+    expect(messages(body)).toContain('traversal-headed block');
   });
 
   it('members that agree on a type carry it, so the walk off the list is checked', () => {
@@ -491,5 +509,115 @@ describe('a list of records is a record bound many times over', () => {
     ].join('\n');
     expect(codes(body)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
     expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+});
+
+describe('a record is a value, so the collection ops carry records', () => {
+  // One type universe: what a collection op hands back is what its function
+  // returned, and a record is one of the things a function can return. The
+  // proofs are what the checker says about a LATER read — a bad edge off a
+  // member names the position, so the element type is visible from outside.
+
+  it('MAP returning the member is a list of that record', () => {
+    const body = [
+      '  rows = MAP(c-[m:Messages]->, (t) => { return t })',
+      '  rows-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(codes(body)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+
+  it('a hop is a collection — MAP over one needs no block first', () => {
+    expect(codes('  rows = MAP(c-[m:Messages]->, (t) => { return t.`Text` })')).toEqual([]);
+  });
+
+  it('MAP returning a map literal is a list of maps, and the key keeps its type', () => {
+    // `a` holds a number, so writing it into a text field is the number-into-
+    // text mistake and nothing else — which is only sayable if the map's value
+    // type survived the MAP.
+    const body = [
+      '  rows = MAP(c-[m:Messages]->, (t) => { return { a: 1 } })',
+      '  first = AT(rows, 0)',
+      '  write chat-[:note]-> { Body ?: AT(first, "a") }',
+    ].join('\n');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('MAP returning a map whose key holds a record is a list of those maps', () => {
+    const body = [
+      '  rows = MAP(c-[m:Messages]->, (t) => { return { a: t } })',
+      '  first = AT(rows, 0)',
+      '  write chat-[:note]-> { Body ?: AT(first, "a") }',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_WRITE_FIELD_TYPE');
+    expect(messages(body)).toContain('a record, not a value');
+  });
+
+  it('FILTER over records hands the records back', () => {
+    const body = [
+      '  rows = FILTER(c-[m:Messages]->, (t) => { return t.`Text` == "hi" })',
+      '  rows-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+
+  it('GROUPBY over records files lists of records under each key', () => {
+    const body = [
+      '  groups = GROUPBY(c-[m:Messages]->, (t) => { return t.`Text` })',
+      '  one = AT(groups, "hi")',
+      '  one-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+
+  it('KEYBY over records files one record under each key', () => {
+    const body = [
+      '  byText = KEYBY(c-[m:Messages]->, (t) => { return t.`Text` })',
+      '  one = AT(byText, "hi")',
+      '  one-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+
+  it('REDUCE hands back whatever the reducer returns', () => {
+    expect(
+      codes([
+        '  total = REDUCE(c-[m:Messages]->, 0, (acc, t) => { return acc + 1 })',
+        '  write chat-[:note]-> { Body ?: "${total}" }',
+      ].join('\n')),
+    ).toEqual([]);
+  });
+
+  it('a head off one member of the list walks that record', () => {
+    const body = [
+      '  rows = MAP(c-[m:Messages]->, (t) => { return t })',
+      '  first = AT(rows, 0)',
+      '  first-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(messages(body)).toContain("chat.message has no edge 'Nope'");
+  });
+
+  it('interpolating a member inside the function is refused, naming the record', () => {
+    const body = '  rows = MAP(c-[m:Messages]->, (t) => { return "${t}" })';
+    expect(codes(body)).toContain('MOV_RECORD_NOT_A_VALUE');
+  });
+
+  it('writing a member into a field is refused, naming the record', () => {
+    const body = [
+      '  c-[msg:Messages]-> {',
+      '    write chat-[:note]-> { Body: msg }',
+      '  }',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_WRITE_FIELD_TYPE');
+    expect(messages(body)).toContain('a record, not a value');
+  });
+
+  it('a hop off a name bound to text is still refused where it is written', () => {
+    const body = [
+      '  names = MAP(c-[m:Messages]->, (t) => { return t.`Text` })',
+      '  first = AT(names, 0)',
+      '  first-[n:Nope]-> { write chat-[:note]-> { Body: "x" } }',
+    ].join('\n');
+    expect(codes(body)).toContain('MOV_HEAD_NOT_A_POSITION');
   });
 });

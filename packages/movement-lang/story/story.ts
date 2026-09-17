@@ -44,7 +44,7 @@ import {
 import { constructionAsCall, spellPathHead } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { parseMovementExpression } from '../expression/bridge';
-import { parseFieldTypeName, type Catalog, type FieldType } from '../checker/catalog';
+import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
 import { EMPTY_ROW, instanceNames, type EffectRow } from '../checker/effects';
 import { terminates } from '../checker/flow';
 import type { ResolveFile } from '../checker/link';
@@ -372,7 +372,7 @@ export interface StoryEdge {
 export interface StoryExtractNode {
   name: string;
   description?: string;
-  fields: Array<{ name: string; description: string; type?: FieldType; at: Span }>;
+  fields: Array<{ name: string; description: string; type?: SchemaFieldType; at: Span }>;
   children: StoryExtractNode[];
 }
 
@@ -462,7 +462,7 @@ export interface StoryShapeNode {
   position: string;
   /** `type` is absent where the annotation is not one of the language's own
    *  field types — nothing is guessed about what such a field holds. */
-  fields: Array<{ name: string; type?: FieldType }>;
+  fields: Array<{ name: string; type?: SchemaFieldType }>;
   children: StoryShapeNode[];
 }
 

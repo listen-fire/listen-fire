@@ -16,7 +16,7 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
-import { mockCatalog, type FieldType, type InstanceSchema, type PositionSchema } from '../catalog';
+import { mockCatalog, type SchemaFieldType, type InstanceSchema, type PositionSchema } from '../catalog';
 import { eventAddressDisplay, eventAddressKey, narrowingPrefixKey } from '../event_address';
 
 const ACTIONS = ['record.created', 'record.updated', 'record.deleted'];
@@ -31,9 +31,9 @@ function eventShaped(spec: {
   narrowKey: string;
   meta: string;
   record: string;
-  recordProps: Record<string, FieldType>;
+  recordProps: Record<string, SchemaFieldType>;
 }): InstanceSchema {
-  const eventProps: Record<string, FieldType> = {
+  const eventProps: Record<string, SchemaFieldType> = {
     action: { kind: 'enum', options: ACTIONS },
     [spec.narrowKey]: 'text',
   };

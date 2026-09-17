@@ -13,14 +13,14 @@
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic } from '../check';
-import { FieldType, InstanceSchema, mockCatalog } from '../catalog';
+import { FieldType, SchemaFieldType, InstanceSchema, mockCatalog } from '../catalog';
 import { checkArithmeticOperands, maybeAbsent } from '../typing';
 
 const CODE = 'MOV_ARITH_NON_NUMERIC';
 
-const numberList: FieldType = { kind: 'list', of: 'number' };
-const textList: FieldType = { kind: 'list', of: 'text' };
-const stageEnum: FieldType = { kind: 'enum', options: ['Seed', 'Series A'] };
+const numberList: SchemaFieldType = { kind: 'list', of: 'number' };
+const textList: SchemaFieldType = { kind: 'list', of: 'text' };
+const stageEnum: SchemaFieldType = { kind: 'enum', options: ['Seed', 'Series A'] };
 
 // ── The rule, as a pure function ──
 //

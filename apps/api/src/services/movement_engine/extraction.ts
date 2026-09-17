@@ -2309,6 +2309,11 @@ function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.Z
   // (`GROUPBY`, a `{ k: v }` literal), never a shape an annotation asks a
   // model for. Opaque rather than guessed at.
   if (type.kind === 'dict') return z.unknown().nullable();
+  // A RECORD is a place in a graph, not something a model can answer with:
+  // no annotation names one and no adapter surface declares one, so this is
+  // unreachable — a field whose type is a record was refused where it was
+  // written. Opaque, like the other two program-only shapes.
+  if (type.kind === 'record') return z.unknown().nullable();
   if (type.options.length === 0) return z.string().nullable();
   // A single select coerces to its canonical option. Open (known-values)
   // fields keep a genuine non-member as its raw string — other values remain
@@ -2511,6 +2516,9 @@ function describeGuideType(type: FieldType | undefined): string {
   if (type.kind === 'maybeAbsent') return describeGuideType(type.of);
   if (type.kind === 'tuple') return 'a list of values';
   if (type.kind === 'dict') return 'a set of named values';
+  // Unreachable for the same reason `zodForFieldType`'s record case is — a
+  // model is never asked for a record. Described rather than crashed on.
+  if (type.kind === 'record') return 'a record';
   // `open` (known-values, not a closed enum): the model must learn other
   // values are legal too, so this reads distinguishably from a closed enum.
   if (type.open) return `text, known values: ${type.options.join(' | ')}`;
