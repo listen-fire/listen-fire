@@ -63,6 +63,15 @@ function makeKgFake(rows: NodeRow[]) {
       return (id !== undefined ? byId.get(id)?.fields[fieldId] : undefined) ?? null;
     },
     async getRelated(read: GetRelatedInput): Promise<RelatedResult[]> {
+      // Every finding's `similar` edge lands on the finding itself — enough for
+      // a block to have somewhere to walk, and the landing is a record whose
+      // identity a test can read back.
+      if (read.position.recordType === 'finding' && read.fieldId === 'similar') {
+        const id = positionRecordId(read.position);
+        return id === undefined
+          ? []
+          : [{ position: makeStablePosition({ adapterType: KG, recordType: 'finding', recordId: id }) }];
+      }
       if (read.position.recordType !== META_RECORD_TYPE || read.fieldId !== 'finding') return [];
       return rows.map((row) => ({
         position: makeStablePosition({ adapterType: KG, recordType: 'finding', recordId: row.id }),
@@ -86,7 +95,7 @@ const kgSchema: InstanceSchema = {
   positions: {
     finding: {
       properties: { headline: 'text', thesis: 'text', score: 'number' },
-      edges: {},
+      edges: { similar: { target: 'finding', readable: true } },
     },
     note: { properties: { body: 'text', payload: 'json' }, edges: {} },
   },
@@ -360,5 +369,117 @@ describe('SORT orders a collection already in hand', () => {
         { headline: 'Initech pivot', score: 2 },
       ],
     });
+  });
+});
+
+describe('a record is a value, so a collection can hold one', () => {
+  // One type universe, proved by what reaches the adapter. A hop written as a
+  // value is its landings; a collection op hands each answer back in the
+  // currency it arrived in; and the records that come out the other end are
+  // the records that went in — walkable, readable, comparable by identity.
+
+  it('MAP returning the member hands back the records themselves', async () => {
+    const creates = await runBody(
+      [
+        '  rows = MAP(graph-[f:finding]->, (t) => { return t })',
+        '  rows-[s:similar]-> {',
+        '    write graph-[:note]-> { body: s.`headline` }',
+        '  }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual([
+      'Acme raised',
+      'Globex hiring',
+      'Initech pivot',
+    ]);
+  });
+
+  it('MAP returning a map literal hands back maps, and the key keeps its value', async () => {
+    const creates = await runBody(
+      [
+        '  rows = MAP(graph-[f:finding]->, (t) => { return { headline: t.`headline` } })',
+        '  write graph-[:note]-> { payload: { rows: rows } }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates[0].fields.payload).toEqual({
+      rows: [
+        { headline: 'Acme raised' },
+        { headline: 'Globex hiring' },
+        { headline: 'Initech pivot' },
+      ],
+    });
+  });
+
+  it('MAP returning a map whose key holds a record keeps the record walkable', async () => {
+    const creates = await runBody(
+      [
+        '  rows = MAP(graph-[f:finding ORDER BY `headline`]->, (t) => { return { it: t } })',
+        '  first = AT(rows, 0)',
+        '  one = AT(first, "it")',
+        '  one-[s:similar]-> {',
+        '    write graph-[:note]-> { body: s.`headline` }',
+        '  }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual(['Acme raised']);
+  });
+
+  it('FILTER keeps the records that answered, and a block walks them', async () => {
+    const creates = await runBody(
+      [
+        '  loud = FILTER(graph-[f:finding]->, (t) => { return t.`score` > 2 })',
+        '  loud-[s:similar]-> {',
+        '    write graph-[:note]-> { body: s.`headline` }',
+        '  }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual(['Acme raised', 'Globex hiring']);
+  });
+
+  it('GROUPBY files records under each key, and a block walks one group', async () => {
+    const creates = await runBody(
+      [
+        '  byThesis = GROUPBY(graph-[f:finding]->, (t) => { return t.`thesis` })',
+        '  infra = AT(byThesis, "Infra")',
+        '  infra-[s:similar]-> {',
+        '    write graph-[:note]-> { body: s.`headline` }',
+        '  }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual(['Acme raised', 'Initech pivot']);
+  });
+
+  it('KEYBY files one record under each key', async () => {
+    const creates = await runBody(
+      [
+        '  byHeadline = KEYBY(graph-[f:finding]->, (t) => { return t.`headline` })',
+        '  one = AT(byHeadline, "Globex hiring")',
+        '  one-[s:similar]-> {',
+        '    write graph-[:note]-> { body: s.`headline` }',
+        '  }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual(['Globex hiring']);
+  });
+
+  it('the same record reached two ways is one record; a different one is not', async () => {
+    const creates = await runBody(
+      [
+        '  rows = MAP(graph-[f:finding ORDER BY `headline`]->, (t) => { return t })',
+        '  again = FILTER(rows, (t) => { return t.`score` > 0 })',
+        '  a = AT(rows, 0)',
+        '  b = AT(again, 0)',
+        '  other = AT(rows, 1)',
+        '  write graph-[:note]-> { payload: { same: a == b, different: a == other } }',
+      ].join('\n'),
+      ROWS,
+    );
+    expect(creates[0].fields.payload).toEqual({ same: true, different: false });
   });
 });

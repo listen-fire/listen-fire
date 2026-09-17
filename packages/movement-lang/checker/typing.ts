@@ -2756,6 +2756,14 @@ export class ExpressionTyping {
     right: FieldType | undefined,
   ): void {
     if (left === undefined || right === undefined) return;
+    // A RECORD is compared by IDENTITY: the same landing reached two ways is
+    // one record, so `==` is the question it can answer, and reading it — which
+    // is what every other rule here does — is not what was asked. A record
+    // against anything else is a mismatch: a record is never equal to a scalar.
+    if (isRecordType(left) || isRecordType(right)) {
+      if (!isRecordType(left) || !isRecordType(right)) this.reportCompareMismatch(left, right);
+      return;
+    }
     // A structured value is comparable to nothing, itself included — reported
     // ahead of the category rule so the author gets the pass-it-through
     // guidance instead of a coercer hint that couldn't help.
@@ -2846,6 +2854,15 @@ export class ExpressionTyping {
         return;
       }
       case 'same-category':
+        // Ordering RECORDS has no meaning — there is nothing about a place in a
+        // graph that is before or after another place. Equality is identity and
+        // is fine; this is the other half.
+        if (
+          this.requireTransparent(leftType, 'ordered')
+          || this.requireTransparent(rightType, 'ordered')
+        ) {
+          return;
+        }
         // Checked BEFORE `checkComparable`, whose `stripAbsent` erases the very
         // thing this reports.
         if (isMaybeAbsent(leftType)) this.reportAbsentInComparison(leftType!);
