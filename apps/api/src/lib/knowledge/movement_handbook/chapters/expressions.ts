@@ -113,11 +113,13 @@ kept     = FILTER(lines, (t) => { return LENGTH(t) > 0 })
 total    = REDUCE(lines, 0, (carried, t) => { return carried + LENGTH(t) })
 \`\`\`
 
-Records are walked with a traversal-headed block; **values** are iterated with these five, each given a function that runs once per member.
+Iterate a collection with these five, each given a function that runs once per member. A record is a value too, so a hop written on its own — \`ch-[m:Messages]->\` — is a collection of records, and these read it like any other.
 
 - \`MAP(list, f)\` answers what \`f\` returned, member by member. \`FILTER(list, f)\` keeps the members \`f\` answered \`TRUE\` for. Both hand back a list in the order they were given one.
 - \`REDUCE(list, <start>, f)\` carries a value forward — \`f\` is given what it has so far and the next member. It reads the members one after another, so it needs a list with an order, exactly as \`JOIN\` does.
 - \`GROUPBY(list, key)\` files each member under the key its function answers, and hands back a dict of **lists**. \`KEYBY(list, key)\` does the same where each key names one member, and hands back a dict of members — a repeated key fails the run, naming it.
+- \`rows = MAP(ch-[m:Messages]->, (t) => { return t })\` hands the records back as records, so a block head walks the answer: \`rows-[a:Author]-> { … }\`. Return a map instead — \`{ who: t }\` — and the answer is a list of maps, one key of each holding a record.
+- Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
 A function written in place takes its parameter's type from the collection, so there is nothing to annotate. It must \`return\` something, and it may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`).
 
