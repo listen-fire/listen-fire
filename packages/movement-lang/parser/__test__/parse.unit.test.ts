@@ -900,6 +900,90 @@ describe('§G node declarations and composition', () => {
   });
 });
 
+// `order by <sequencing>` after a NESTED node's closing `}` — the same clause
+// (and the same three words) an entry's type marker takes, since a nested node
+// has no marker of its own for the clause to trail.
+describe('§G nested declared node can say its order', () => {
+  it('a nested node followed by `order by arrival` carries it on the ShapeNode', () => {
+    const program = parseProgram(
+      ['node Entry {', '  name: <text>', '  node founder {', '    first: <text>', '  } order by arrival', '}'].join(
+        '\n',
+      ),
+    );
+    const shape = as(program.statements[0], 'shape');
+    expect(shape.root.children).toHaveLength(1);
+    expect(shape.root.children[0].name).toBe('founder');
+    expect(shape.root.children[0].sequenced).toBe('arrival');
+  });
+
+  it('without the clause the nested node claims nothing — a SET, as before', () => {
+    const program = parseProgram(
+      ['node Entry {', '  name: <text>', '  node founder {', '    first: <text>', '  }', '}'].join('\n'),
+    );
+    const shape = as(program.statements[0], 'shape');
+    expect(shape.root.children[0].sequenced).toBeUndefined();
+  });
+
+  it('the other two words parse too — an author collecting pieces already in that order', () => {
+    for (const word of ['document', 'chronological'] as const) {
+      const program = parseProgram(
+        ['node Entry {', '  node founder {', `    first: <text>`, `  } order by ${word}`, '}'].join('\n'),
+      );
+      const shape = as(program.statements[0], 'shape');
+      expect(shape.root.children[0].sequenced).toBe(word);
+    }
+  });
+
+  it('nesting recurses — a doubly-nested node takes the clause on its own `}` too', () => {
+    const program = parseProgram(
+      [
+        'node Deep {',
+        '  name: <text>',
+        '  node founder {',
+        '    first: <text>',
+        '    node profile {',
+        '      url: <text>',
+        '    } order by arrival',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    const shape = as(program.statements[0], 'shape');
+    const founder = shape.root.children[0];
+    expect(founder.sequenced).toBeUndefined();
+    expect(founder.children[0].name).toBe('profile');
+    expect(founder.children[0].sequenced).toBe('arrival');
+  });
+
+  it('a word that is not one of the three is refused, and the three are named', () => {
+    expectParseError(
+      ['node Entry {', '  node founder {', '    first: <text>', '  } order by newest', '}'].join('\n'),
+      /'order by' takes one of 'arrival'.*'document'.*'chronological'/s,
+    );
+  });
+
+  it("'order' with no 'by' is refused by name", () => {
+    expectParseError(
+      ['node Entry {', '  node founder {', '    first: <text>', '  } order arrival', '}'].join('\n'),
+      /written 'order by'/,
+    );
+  });
+
+  it('the clause is same-line only — on the next line it starts the next entry, and a bare name errors as one', () => {
+    expectParseError(
+      [
+        'node Entry {',
+        '  node founder {',
+        '    first: <text>',
+        '  }',
+        '  order by arrival',
+        '}',
+      ].join('\n'),
+      /the field name 'order'/,
+    );
+  });
+});
+
 // One keyword, two positions, and each refuses the other's spelling: NAMED with
 // type annotations DECLARES a structure; ANONYMOUS with values BUILDS a record.
 describe('declaration vs literal — the two positions of `node`', () => {

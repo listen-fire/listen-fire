@@ -867,6 +867,15 @@ export interface ShapeNode {
   name: string;
   fields: Array<{ name: string; type: string; span: Span }>;
   children: ShapeNode[];
+  /**
+   * `order by arrival` after this node's closing `}` — the author saying the
+   * edge that reaches it (this node's `name`, from its parent) keeps an
+   * order. The same clause and the same three words `tryParseEntryOrdering`
+   * already parses for an entry's type marker; a nested node has no marker of
+   * its own, so the clause sits after its brace instead. Absent ⇒ a SET,
+   * exactly as an undeclared adapter edge is.
+   */
+  sequenced?: EdgeSequencing;
   span: Span;
 }
 

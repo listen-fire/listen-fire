@@ -54,7 +54,14 @@ export function shapeToSchema(
     const edges: PositionSchema['edges'] = {};
     for (const child of node.children) {
       // The nesting IS the edge, and the nested node's name IS the edge name.
-      edges[child.name] = { target: `${key}.${child.name}`, writable: true };
+      // `order by <sequencing>` after the child's `}` is the author's own
+      // sequencing claim, reaching the set/list split by the one road every
+      // other claim takes (`EdgeSchema.sequenced`, which `hopOrdering` reads).
+      edges[child.name] = {
+        target: `${key}.${child.name}`,
+        writable: true,
+        ...(child.sequenced !== undefined ? { sequenced: child.sequenced } : {}),
+      };
     }
     schema.positions[key] = { properties, edges };
     schema.writableRoots[key] = { fields: properties, resultShape: properties };

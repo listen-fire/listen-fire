@@ -2838,7 +2838,14 @@ class Parser {
         this.pos += 'node'.length;
         this.skipInlineWs();
         const childName = this.readName("a name after 'node'");
-        children.push(this.parseDeclaredNode(childName, childStart));
+        const child = this.parseDeclaredNode(childName, childStart);
+        // `order by arrival` after the child's closing `}` — the same clause
+        // an entry's type marker takes, since a nested node has no marker of
+        // its own for the clause to trail.
+        const sequenced = this.tryParseEntryOrdering(childName);
+        if (sequenced !== undefined) child.sequenced = sequenced;
+        this.expectStatementEnd();
+        children.push(child);
         continue;
       }
       const fieldStart = this.pos;

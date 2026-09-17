@@ -184,6 +184,16 @@ const PRELUDE = [
   '  }',
   '}',
   '',
+  // Same tree, but `founder` says its order — the nested form of `order by
+  // arrival`, read back by FIRST/JOIN exactly as a top-level entry is.
+  'node OrderedEntry {',
+  '  name: <text>',
+  '  node founder {',
+  '    first: <text>',
+  '    last: <text>',
+  '  } order by arrival',
+  '}',
+  '',
 ].join('\n');
 
 function webhookEvent(payload: Record<string, unknown>): TriggerEvent {
@@ -601,5 +611,68 @@ describe('the nested edges a written landing carries', () => {
       { email: email.adapter, attio: attio.adapter },
     );
     expect(attio.creates.map((w) => w.fields)).toEqual([{ name: 'Jane', summary: 'Doe' }]);
+  });
+});
+
+// `node founder { … } order by arrival` — the same claim a top-level entry
+// makes, said about a NESTED edge instead. What backs it is unchanged: `link`
+// and `write` append to the edge's landings, and a merge fills the record
+// already there rather than moving it to the end — so FIRST and a full
+// traversal agree on the order without either statement changing.
+describe('a nested entry that says `order by arrival` reads back founders in landing order', () => {
+  const NESTED = '  deduped = node { entries: <OrderedEntry> }';
+  // The ruling's own idiom: collect the founder names by a traversal-headed
+  // block (a MAP over the edge, which preserves the hop's ordering), then fold
+  // that value list — FIRST for the lead, JOIN to see every name in order.
+  const READ_BACK = [
+    '  deduped-[x:entries]-> {',
+    '    names = x-[f:founder]-> { return f.`first` }',
+    '    lead = FIRST(names)',
+    // FIRST answers `T | absent` (an empty list has no first) — discharge it
+    // the way the checker offers, same as any other maybe-absent read.
+    '    write crm-[:companies]-> { name: "lead", summary: COALESCE(lead, "none") }',
+    '    write crm-[:companies]-> { name: JOIN(names, ", "), summary: "all" }',
+    '  }',
+  ];
+
+  it('FIRST is the first founder written; a merged write appends a fourth to the end', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    await runWith(
+      NESTED,
+      [
+        '  h = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  write h-[:founder]-> { unique by (`first`)',
+        '    first: "Jane"',
+        '    last: "Doe"',
+        '  }',
+        '  write h-[:founder]-> { unique by (`first`)',
+        '    first: "John"',
+        '    last: "Roe"',
+        '  }',
+        '  write h-[:founder]-> { unique by (`first`)',
+        '    first: "Jo"',
+        '    last: "Bloggs"',
+        '  }',
+        // A merge onto the same entry — `again` is the same landing `h` is.
+        '  again = write deduped-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  write again-[:founder]-> { unique by (`first`)',
+        '    first: "Meg"',
+        '    last: "Fourth"',
+        '  }',
+        ...READ_BACK,
+      ],
+      { email: email.adapter, attio: attio.adapter },
+    );
+    // FIRST is still the first founder ever written, after the merge and the
+    // fourth write; JOIN shows the fourth appended last.
+    expect(attio.creates.map((w) => w.fields)).toEqual([
+      { name: 'lead', summary: 'Jane' },
+      { name: 'Jane, John, Jo, Meg', summary: 'all' },
+    ]);
   });
 });
