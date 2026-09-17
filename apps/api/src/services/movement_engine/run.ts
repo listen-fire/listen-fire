@@ -79,6 +79,7 @@ import {
   EVENT_ACTION_FIELD,
   eventAddressKey,
   eventAddressOfHops,
+  isEnumType,
   parseMovementCondition,
   parseMovementExpression,
   parseProgram,
@@ -3288,7 +3289,7 @@ class Interpreter {
           return schema ? resolveBorrowedField(schema, segments[1], segments[2]) : undefined;
         })()
       : this.declaredTypes.get(expr.type);
-    if (resolved === undefined || typeof resolved !== 'object' || resolved.kind !== 'enum') {
+    if (!isEnumType(resolved)) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
         `'MEMBERS(<${expr.type}>)' names no closed set of values — the checker should have caught this`,
@@ -8451,7 +8452,7 @@ function eventSeedAddress(input: {
     if (typeof value === 'string' && value.length > 0) narrowing[key] = value;
   }
   const actionType = schema.positions[node]?.properties[EVENT_ACTION_FIELD];
-  if (typeof actionType === 'object' && 'kind' in actionType && actionType.kind === 'enum') {
+  if (isEnumType(actionType)) {
     const value = payload?.[EVENT_ACTION_FIELD];
     if (typeof value === 'string' && value.length > 0) narrowing[EVENT_ACTION_FIELD] = value;
   }
