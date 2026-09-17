@@ -594,6 +594,38 @@ export const describeBinding: Record<Binding['kind'], string> = {
   opaque: 'an import',
 };
 
+/**
+ * Which bindings are RECORDS rather than data — the ones a hop can walk from,
+ * and so the ones a list literal may hold as its members (`both = [one, two]`).
+ * A Record over every kind, like `describeBinding`, so a new binding has to be
+ * classified rather than falling silently to one side.
+ *
+ * A graph (`instance`) is a whole system, not a record; a receipt (`tuple`) is
+ * positional data; a declaration, a closure and an import are neither.
+ */
+const BINDING_IS_POSITION: Record<Binding['kind'], boolean> = {
+  event: true,
+  instance: false,
+  handle: true,
+  extractRoot: true,
+  extractPosition: true,
+  sourcePosition: true,
+  resource: true,
+  blockMeta: true,
+  positions: true,
+  tuple: false,
+  closure: false,
+  value: false,
+  shape: false,
+  movement: false,
+  shapePosition: true,
+  nodePosition: true,
+  lazyWalk: true,
+  callback: true,
+  plugin: false,
+  opaque: false,
+};
+
 /** The dot plane of a callback binding — the two reads the construct declares
  *  (`CALLBACK_READS` in the checker says the same thing, statically). */
 export function readCallbackField(
@@ -1195,7 +1227,7 @@ export async function evalMovementExpr(
 
     case 'list': {
       const elements: MovementEvalResult[] = [];
-      for (const e of expr.elements) elements.push(await evalMovementExpr(e, ctx));
+      for (const e of expr.elements) elements.push(await evalListElement(e, ctx));
       return {
         value: elements.map((e) => e.value),
         provenance: unionProvenance(elements.map((e) => e.provenance)),
@@ -1604,6 +1636,47 @@ function readBareName(name: string, ctx: MovementExprContext): MovementEvalResul
       ? 'handle-as-value record snapshots are a later increment — read a field instead'
       : undefined,
   );
+}
+
+/**
+ * One member of a list LITERAL. A bare name bound to a RECORD reads as that
+ * record here — `both = [one, two]` is the two records themselves, the same
+ * currency `MAP(pieces, (p) => { return extract … })` already hands back — so a
+ * block walks a literal exactly as it walks a collection op's answer, in list
+ * order.
+ *
+ * Only here. Everywhere else a bare name is the value read it has always been:
+ * `"${one}"` still refuses to interpolate a record, and inside a hop WHERE
+ * (`ctx.scope`) the name is still the landed record's own field, which is the
+ * precedence every other read in this file keeps.
+ */
+async function evalListElement(
+  expr: Expression,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
+  const position = ctx.scope === undefined ? listElementPosition(expr, ctx) : undefined;
+  if (position !== undefined) {
+    return { value: position, provenance: { origins: bindingEntityOrigins(position) } };
+  }
+  return evalMovementExpr(expr, ctx);
+}
+
+/** The record a list member NAMES, where it names one: a bare identifier bound
+ *  to a position. Anything else — a literal, a call, a field read — is data and
+ *  evaluates as data. */
+function listElementPosition(
+  expr: Expression,
+  ctx: MovementExprContext,
+): Binding | undefined {
+  const name =
+    expr.type === 'alias_ref'
+      ? expr.name
+      : expr.type === 'property'
+        ? expr.propertyTypeId
+        : undefined;
+  if (name === undefined) return undefined;
+  const binding = ctx.env.resolve(name);
+  return binding !== undefined && BINDING_IS_POSITION[binding.kind] ? binding : undefined;
 }
 
 /** One combinator slot as DATA: a value binding's value, and null for anything
