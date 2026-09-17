@@ -75,7 +75,10 @@ import {
   credentialArgOf,
   aggregatedBarePath,
   bareName,
+  pathRootName,
+  probePathHead,
   spellPathHead,
+  spellPathRoot,
   EVENT_ACTION_FIELD,
   eventAddressKey,
   eventAddressOfHops,
@@ -1100,7 +1103,7 @@ function awaitEdgeName(hopsRaw: string): string {
  *  carries no WHERE or doesn't parse to a traversal. */
 function awaitHopFilter(head: PathHead): Expression | undefined {
   const traverse = parseMovementExpression(
-    `${spellPathHead(head)}.\`__await_where_probe__\``,
+    `${probePathHead(head)}.\`__await_where_probe__\``,
   );
   if (traverse.type !== 'traverse') return undefined;
   const last = traverse.steps[traverse.steps.length - 1];
@@ -3023,25 +3026,9 @@ class Interpreter {
       case 'write':
         await this.executeWrite(value.write, name, env, body);
         break;
-      case 'expr': {
-        const aliased = this.aliasedNodeBinding(value.expr, env);
-        if (aliased !== undefined) {
-          env.declare(name, aliased);
-          break;
-        }
-        const selected = await this.selectedPositionBinding(value.expr, env);
-        if (selected !== undefined) {
-          env.declare(name, selected);
-          break;
-        }
-        const evaluated = await this.evaluateSlot(value.expr, { env });
-        env.declare(name, {
-          kind: 'value',
-          value: evaluated.value,
-          provenance: evaluated.provenance,
-        });
+      case 'expr':
+        env.declare(name, await this.bindSlotValue(value.expr, env));
         break;
-      }
       case 'extract': {
         const emission = await this.runExtraction(
           name,
@@ -4001,7 +3988,7 @@ class Interpreter {
     // Resolve the awaited head to a record identity. The head is a bound handle
     // whose adapter carries the awaitable capability (the checker guaranteed the
     // edge is awaitable, hence the adapter advertises it).
-    const headBinding = env.resolve(source.head.root ?? '');
+    const headBinding = env.resolve(pathRootName(source.head) ?? '');
     if (headBinding?.kind === 'callback') {
       await this.interpretCallbackAwait({
         binding: headBinding,
@@ -4015,7 +4002,7 @@ class Interpreter {
     }
     if (headBinding === undefined || headBinding.kind !== 'handle') {
       throw unsupported(
-        `await '${source.head.root ?? ''}-[:${edge}]->'`,
+        `await '${pathRootName(source.head) ?? ''}-[:${edge}]->'`,
         'await needs a written record handle as its head (e.g. an ask written with `write asks-[:Check]->`)',
       );
     }
@@ -5192,20 +5179,35 @@ class Interpreter {
     if (extraSteps.length > 0 && probe?.type !== 'traverse') {
       throw unsupported('continuing a walk past a head that is not a traversal');
     }
-    if (head.root === undefined) {
+    const root = head.root;
+    if (root === undefined) {
       throw unsupported(
         'rootless block heads (relative traversal)',
         'root the head at a named binding',
       );
     }
-    const rootBinding = env.resolve(head.root);
+    // Where the walk starts. A NAME is a binding already in scope; an
+    // EXPRESSION is evaluated HERE, once, through the same reading a binding
+    // gets — `bindSlotValue` is literally the code behind `first = AT(rows, 0)`
+    // — so `AT(rows, 0)-[c:company]->` and binding it first are one walk. A
+    // deferred head evaluates its root at the READ, which is the moment the
+    // rest of the walk happens too; the scope it reads is the one the walk
+    // captured, so the answer is the same either way.
+    const rootBinding =
+      root.kind === 'name' ? env.resolve(root.name) : await this.bindSlotValue(root.expr, env);
     if (!rootBinding) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'${head.root}' is not in scope — the checker should have caught this`,
+        `'${spellPathRoot(root)}' is not in scope — the checker should have caught this`,
       );
     }
-    return this.headIterationsFrom({ binding: rootBinding, head, root: head.root, probe, env });
+    return this.headIterationsFrom({
+      binding: rootBinding,
+      head,
+      root: spellPathRoot(root),
+      probe,
+      env,
+    });
   }
 
   /**
@@ -5216,7 +5218,8 @@ class Interpreter {
   private async headIterationsFrom(opts: {
     binding: Binding;
     head: PathHead;
-    /** The name the head is rooted at — for the messages, and narrowed here. */
+    /** The head's root as the author WROTE it — a name, or an expression's
+     *  source text. Identity for the messages only; the value is `binding`. */
     root: string;
     probe: Expression | undefined;
     env: Environment;
@@ -5774,7 +5777,7 @@ class Interpreter {
   private probeHead(head: TraversalBlock['head']): Expression | undefined {
     try {
       return parseMovementExpression(
-        `${spellPathHead(head)}.\`__movement_engine_probe__\``,
+        `${probePathHead(head)}.\`__movement_engine_probe__\``,
       );
     } catch (e) {
       if (e instanceof BridgeError) {
@@ -5800,7 +5803,9 @@ class Interpreter {
   ): Promise<Binding> {
     if (write.target.kind === 'linked') {
       const rootBinding =
-        write.target.path.root !== undefined ? env.resolve(write.target.path.root) : undefined;
+        pathRootName(write.target.path) !== undefined
+          ? env.resolve(pathRootName(write.target.path)!)
+          : undefined;
       if (rootBinding?.kind === 'shape') {
         return this.materializeShapeWrite(write, rootBinding, bindingName, env);
       }
@@ -6522,7 +6527,7 @@ class Interpreter {
     body: BodyContext,
   ): Promise<Binding> {
     const edgeName = this.singleWriteEdge(target.path);
-    const at = `write ${target.path.root ?? ''}-[:${edgeName}]->`;
+    const at = `write ${pathRootName(target.path) ?? ''}-[:${edgeName}]->`;
     if (write.bind !== undefined) {
       throw unsupported(
         `'bind' on a write into a node this run built (${at})`,
@@ -6533,7 +6538,7 @@ class Interpreter {
     if (edge === undefined || edge.kind !== 'landed') {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `${at}: '${target.path.root}' has no appendable edge '${edgeName}' — the checker should have caught this`,
+        `${at}: '${pathRootName(target.path)}' has no appendable edge '${edgeName}' — the checker should have caught this`,
       );
     }
     const store = localEdgeAdapter({ edge, edgeName });
@@ -7378,7 +7383,9 @@ class Interpreter {
     // Linked write: `write h-[:edge]-> { … }`.
     const target = write.target;
     const rootBinding =
-      target.path.root !== undefined ? env.resolve(target.path.root) : undefined;
+      pathRootName(target.path) !== undefined
+        ? env.resolve(pathRootName(target.path)!)
+        : undefined;
     // A META-rooted linked write (`write crm-[:companies]-> { … }`) — the root
     // is a bare constructed instance, so this is a top-level create with no
     // parent; the written type is the collection the edge names.
@@ -7443,7 +7450,7 @@ class Interpreter {
   /** The handle graph a linked/tuple path's root lives in — peeked before
    *  resolving the parent so the graph's resolver can be fetched once. */
   private linkedPathGraph(path: PathHead, env: Environment): HandleGraph {
-    const rootName = path.root;
+    const rootName = pathRootName(path);
     const binding = rootName !== undefined ? env.resolve(rootName) : undefined;
     if (binding?.kind === 'handle') return binding.graph;
     // A traversal-bound SOURCE position parents a write too (the
@@ -7541,7 +7548,7 @@ class Interpreter {
     rootName: string;
     parent: ResolvedWriteTarget['parents'][number];
   } {
-    const rootName = input.path.root;
+    const rootName = pathRootName(input.path);
     const binding = rootName !== undefined ? input.env.resolve(rootName) : undefined;
     if (binding?.kind === 'shapePosition') {
       throw unsupported(
@@ -8257,6 +8264,22 @@ class Interpreter {
       position: landed.position,
       ...(bindingRead !== undefined ? { read: bindingRead } : {}),
     };
+  }
+
+  /**
+   * The BINDING an expression slot is — the one reading of a value expression,
+   * shared by `x = <expr>` and by a traversal head rooted at one, so the bound
+   * and unbound forms cannot drift apart. A synthesised node's edge and a
+   * selected position bind as the records they are; everything else binds as
+   * the value it evaluated to, records included.
+   */
+  private async bindSlotValue(slot: ExprSlot, env: Environment): Promise<Binding> {
+    const aliased = this.aliasedNodeBinding(slot, env);
+    if (aliased !== undefined) return aliased;
+    const selected = await this.selectedPositionBinding(slot, env);
+    if (selected !== undefined) return selected;
+    const evaluated = await this.evaluateSlot(slot, { env });
+    return { kind: 'value', value: evaluated.value, provenance: evaluated.provenance };
   }
 
   private async evaluateSlot(

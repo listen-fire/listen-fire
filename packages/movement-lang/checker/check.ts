@@ -36,7 +36,14 @@
 
 import type { Expression, TraversalStep } from '@listen-fire/shared/expression/types';
 import { quoteName } from '@listen-fire/shared/expression/formula';
-import { constructionAsCall, spellPathHead } from '../parser/ast';
+import {
+  constructionAsCall,
+  EXPRESSION_ROOT_PROBE,
+  pathRootName,
+  probePathHead,
+  spellPathHead,
+  spellPathRoot,
+} from '../parser/ast';
 import {
   AwaitExpression,
   AwaitSource,
@@ -342,9 +349,14 @@ export const DiagnosticCodes = {
    *  first (`go = manual()`), then reference it by name. */
   ADAPTER_NOT_CONSTRUCTED: 'MOV_ADAPTER_NOT_CONSTRUCTED',
   /** A block head rooted at a name bound on the VALUE plane — text, a number, a
-   *  list of them. The value plane holds no positions, so the hop can never
-   *  land; a value whose type is not known stays silent and walks. */
+   *  list of them — or at an EXPRESSION whose value type is one of those. The
+   *  value plane holds no positions, so the hop can never land; a value whose
+   *  type is not known stays silent and walks. */
   HEAD_NOT_A_POSITION: 'MOV_HEAD_NOT_A_POSITION',
+  /** A head written at a position that needs a NAMED root — an `await`, which
+   *  parks on the record it waits at and has to name it again on resume. The
+   *  walk itself is fine; bind the expression first. */
+  HEAD_NEEDS_A_NAME: 'MOV_HEAD_NEEDS_A_NAME',
   /** The listened system has no inbound surface at all — its manifest names
    *  zero trigger types, so nothing it does can ever reach us. A definite
    *  fact, not an unknown: see `AdapterSpec.canFire`. */
@@ -3564,11 +3576,22 @@ class Checker {
         source.span,
       );
     }
+    // `await` parks ON the record it waits at: the run stops, and what resumes
+    // it has to find that record again by name. An expression root has no name
+    // to resume against, so the walk is fine and the park is not — refused
+    // here, with the repair, rather than left to fail on resume.
+    if (source.head.root?.kind === 'expression') {
+      this.report(
+        DiagnosticCodes.HEAD_NEEDS_A_NAME,
+        `'await' parks on the record it waits at, and a parked run finds that record again by NAME — so this one is bound first: 'waiting = ${source.head.root.expr.raw}', then 'await FIRST(waiting${source.head.hopsRaw})'.`,
+        source.head.span,
+      );
+    }
     const head = this.checkPathHead(source.head, scope);
     if (!head.steps || head.rootType === undefined) {
       record({
         kind: 'traversal',
-        ...(source.head.root !== undefined ? { root: source.head.root } : {}),
+        ...(pathRootName(source.head) !== undefined ? { root: pathRootName(source.head) } : {}),
       });
       return {};
     }
@@ -3578,7 +3601,7 @@ class Checker {
     const lastStep = head.steps[head.steps.length - 1];
     record({
       kind: 'traversal',
-      ...(source.head.root !== undefined ? { root: source.head.root } : {}),
+      ...(pathRootName(source.head) !== undefined ? { root: pathRootName(source.head) } : {}),
       ...(lastStep?.type === 'edge' ? { edge: lastStep.edgeTypeId } : {}),
       // An undescribed edge claims nothing — the flags stay ABSENT rather than
       // defaulting to false, so "we didn't look" reads differently from "no".
@@ -4902,9 +4925,9 @@ class Checker {
   private refuseShapeWrite(write: WriteExpression, scope: Scope): boolean {
     const roots =
       write.target.kind === 'linked'
-        ? [write.target.path.root]
+        ? [pathRootName(write.target.path)]
         : write.target.kind === 'tuple'
-          ? write.target.paths.map((path) => path.root)
+          ? write.target.paths.map((path) => pathRootName(path))
           : [];
     const shapeRoot = roots.find((root) => {
       if (root === undefined) return false;
@@ -5447,10 +5470,11 @@ class Checker {
     // block: nothing about the statement says it might not happen, and the
     // engine has no record to parent it to. This is the require-present site for
     // the node plane, mirroring a plain write FIELD on the scalar plane.
-    if (head.rootType.kind === 'maybeEmpty' && input.path.root !== undefined) {
+    const rootName = pathRootName(input.path);
+    if (head.rootType.kind === 'maybeEmpty' && rootName !== undefined) {
       this.report(
         DiagnosticCodes.ABSENT_REQUIRED,
-        `'${input.path.root}' is ${describePosition(head.rootType.of)} that may not be there, so a ${input.purpose} off it can't be guaranteed to happen — and nothing in this statement says it might be skipped. Test it first ('if ${input.path.root} == null { ERROR("…") }', or 'if EXISTS(${input.path.root})'), or gate on it with a traversal block ('${input.path.root}-[x:…]-> { … }'), which runs zero times when it's empty.`,
+        `'${rootName}' is ${describePosition(head.rootType.of)} that may not be there, so a ${input.purpose} off it can't be guaranteed to happen — and nothing in this statement says it might be skipped. Test it first ('if ${rootName} == null { ERROR("…") }', or 'if EXISTS(${rootName})'), or gate on it with a traversal block ('${rootName}-[x:…]-> { … }'), which runs zero times when it's empty.`,
         input.span,
       );
       return {};
@@ -5470,7 +5494,7 @@ class Checker {
     if (parent.kind === 'local' && input.purpose === 'write') {
       // The root's NAME is the subject only when the parent IS the root — one
       // hop further along and the author's name is for a different node.
-      const subject = head.steps.length === 1 ? input.path.root : undefined;
+      const subject = head.steps.length === 1 ? rootName : undefined;
       return this.localWriteTarget(parent, edgeName, input.span, subject);
     }
 
@@ -5493,7 +5517,7 @@ class Checker {
       // for a whole system (an instance-typed PARAMETER, not a constructed
       // instance) — schemas are per-credential, so instances don't travel
       // between movements; error rather than resolve.
-      const root = input.path.root;
+      const root = rootName;
       if (root !== undefined) {
         const resolution = scope.resolve(root);
         if (resolution.kind === 'found' && !isGraphSymbol(resolution.symbol)) {
@@ -5571,7 +5595,7 @@ class Checker {
         edgeName,
         parent,
         instanceName: instance.name,
-        root: input.path.root,
+        root: rootName,
         span: input.span,
       });
       return {};
@@ -5921,7 +5945,11 @@ class Checker {
       });
       return undefined;
     }
-    const path: PathHead = { root: link.from, hopsRaw: `-[:${link.edge}]->`, span: link.span };
+    const path: PathHead = {
+      root: { kind: 'name', name: link.from },
+      hopsRaw: `-[:${link.edge}]->`,
+      span: link.span,
+    };
     const linked = this.checkLinkedPath(
       { path, explicitType: link.target.explicitType, span: link.span, purpose: 'link' },
       scope,
@@ -6050,11 +6078,27 @@ class Checker {
   /** Validates the head path, resolves its references, returns its hop aliases and probe steps. */
   private checkPathHead(head: PathHead, scope: Scope): HeadInfo {
     const aliases = extractHopAliases(head.hopsRaw);
+    const root = head.root;
+    const rootName = pathRootName(head);
     let rootSymbol: ScopeSymbol | undefined;
-    if (head.root !== undefined) {
-      rootSymbol = this.resolveName(head.root, head.span, scope);
+    if (rootName !== undefined) {
+      rootSymbol = this.resolveName(rootName, head.span, scope);
     }
-    const probeText = `${spellPathHead(head)}.\`__movement_head_probe__\``;
+    // An EXPRESSION root is checked as the expression it is — name-resolved,
+    // parsed, and read for its value type — before a single hop is walked. A
+    // record IS a value type, so ONE rule decides both roots: the head starts
+    // at whatever record the root holds, whether a name holds it or an
+    // expression does.
+    const rootValueType =
+      root?.kind === 'expression'
+        ? this.checkExprSlot(root.expr, scope).valueType
+        : rootSymbol?.bindingPlane === 'scalar'
+          ? rootSymbol.fieldType
+          : undefined;
+    // The hops are the same hops whatever the root is, so the probe roots them
+    // at a NAME the formula grammar accepts — the author's, or the stand-in an
+    // expression root probes as.
+    const probeText = `${probePathHead(head)}.\`__movement_head_probe__\``;
     let parsed: Expression | undefined;
     try {
       parsed = parseMovementExpression(probeText);
@@ -6070,7 +6114,10 @@ class Checker {
     if (parsed) {
       const names = collectExpressionNames(parsed);
       const local = new Set([...aliases, ...names.aliases]);
-      if (head.root !== undefined) local.add(head.root); // already resolved above
+      // Already resolved above — the name by `resolveName`, the expression by
+      // `checkExprSlot`, which resolved every name inside it.
+      if (rootName !== undefined) local.add(rootName);
+      if (root?.kind === 'expression') local.add(EXPRESSION_ROOT_PROBE);
       for (const ref of new Set(names.refs)) {
         if (!local.has(ref)) this.resolveName(ref, head.span, scope);
       }
@@ -6088,11 +6135,11 @@ class Checker {
     // is reported at the root the author wrote — the same diagnosis a parameter
     // type and a `listen to` already give, now at the third place an instance
     // name can appear.
-    if (rootSymbol?.kind === 'adapter' && head.root !== undefined) {
+    if (rootSymbol?.kind === 'adapter' && rootName !== undefined) {
       const adapterName = rootSymbol.importedName ?? rootSymbol.name;
       this.report(
         DiagnosticCodes.ADAPTER_NOT_CONSTRUCTED,
-        `'${head.root}' is an adapter, not an instance — construct and name an instance first, then walk or write from the name: 'go = ${this.constructionCall(adapterName)}' … 'go${head.hopsRaw ?? ''}'`,
+        `'${rootName}' is an adapter, not an instance — construct and name an instance first, then walk or write from the name: 'go = ${this.constructionCall(adapterName)}' … 'go${head.hopsRaw ?? ''}'`,
         head.span,
       );
     }
@@ -6104,25 +6151,25 @@ class Checker {
     // hop is many-valued either way, so plurality lives in the traversal.
     const rootType =
       (rootSymbol ? this.symbolPositionType(rootSymbol) : undefined)
-      ?? recordHeadPosition(rootSymbol?.bindingPlane === 'scalar' ? rootSymbol.fieldType : undefined);
-    // A head rooted at a name that is a VALUE and NOT a record. There are no
-    // positions on the value plane — a value type is text, a number, a list or
-    // a dict of them — so a hop off a name whose value type is KNOWN can never
-    // land anywhere, and it is said here rather than at run time, after
-    // everything that produced the value has already been paid for.
+      ?? recordHeadPosition(rootValueType);
+    // A root that is a VALUE and NOT a record — a name bound to one, or an
+    // expression that computes one. There are no positions on the value plane —
+    // a value type is text, a number, a list or a dict of them — so a hop off a
+    // root whose value type is KNOWN can never land anywhere, and it is said
+    // here rather than at run time, after everything that produced the value
+    // has already been paid for.
     //
     // A value whose type is NOT known stays silent and runs (the honesty rule):
     // a plugin whose output nobody declared, an untyped import.
     if (
       steps !== undefined &&
-      head.root !== undefined &&
-      rootSymbol?.bindingPlane === 'scalar' &&
-      rootSymbol.fieldType !== undefined &&
-      !holdsRecords(rootSymbol.fieldType)
+      root !== undefined &&
+      rootValueType !== undefined &&
+      !holdsRecords(rootValueType)
     ) {
       this.report(
         DiagnosticCodes.HEAD_NOT_A_POSITION,
-        `'${head.root}' is ${describeFieldType(rootSymbol.fieldType)}, and a hop walks from a POSITION — there is nothing here to hop from. A head starts at a record, an extraction's result, or a list of them ('found = MAP(pieces, (p) => { return extract … })'); read a value with the value functions instead.`,
+        `'${spellPathRoot(root)}' is ${describeFieldType(rootValueType)}, and a hop walks from a POSITION — there is nothing here to hop from. A head starts at a record, an extraction's result, or a list of them ('found = MAP(pieces, (p) => { return extract … })'); read a value with the value functions instead.`,
         head.span,
       );
     }
@@ -6133,7 +6180,7 @@ class Checker {
       kind: 'traversal',
       span: head.span,
       scope,
-      ...(head.root !== undefined ? { root: head.root } : {}),
+      ...(rootName !== undefined ? { root: rootName } : {}),
       ...(traversalFrom(rootType) !== undefined ? { from: traversalFrom(rootType) } : {}),
       steps: steps ?? [],
       landings: [],

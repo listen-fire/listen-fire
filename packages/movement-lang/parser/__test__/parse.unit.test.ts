@@ -12,6 +12,7 @@ import {
   WriteExpression,
   WriteTarget,
 } from '../ast';
+import { pathRootName } from '../ast';
 
 function as<K extends Statement['kind']>(
   s: Statement | undefined,
@@ -156,7 +157,7 @@ describe('§B writes, handles, identity', () => {
     expect(assign.name).toBe('company');
     const write = rv(assign.value, 'write').write;
     const t = target(write, 'linked');
-    expect(t.path.root).toBe('crm');
+    expect(t.path.root).toEqual({ kind: 'name', name: 'crm' });
     expect(t.path.hopsRaw).toBe('-[:company]->');
     expect(write.uniqueBy).toHaveLength(1);
     expect(pred(write.uniqueBy[0])).toBe('`domains`');
@@ -169,7 +170,7 @@ describe('§B writes, handles, identity', () => {
     const program = parseProgram(B2);
     const write = rv(as(program.statements[0], 'assign').value, 'write').write;
     const t = target(write, 'linked');
-    expect(t.path.root).toBe('fr');
+    expect(t.path.root).toEqual({ kind: 'name', name: 'fr' });
     expect(t.path.hopsRaw).toBe('-[:participants]->');
     expect(t.explicitType).toBeUndefined();
     expect(pred(write.uniqueBy[0])).toBe('fr AND `investor_name`');
@@ -232,7 +233,7 @@ describe('§B writes, handles, identity', () => {
     );
     const write = rv(as(program.statements[0], 'assign').value, 'write').write;
     const t = target(write, 'tuple');
-    expect(t.paths.map((p) => [p.root, p.hopsRaw])).toEqual([
+    expect(t.paths.map((p) => [pathRootName(p), p.hopsRaw])).toEqual([
       ['company', '-[:investments]->'],
       ['investor', '-[:investments]->'],
     ]);
@@ -270,7 +271,7 @@ describe('§B writes, handles, identity', () => {
     const program = parseProgram('write fr-[:related]-><company> { name: "x" }');
     const write = as(program.statements[0], 'write').write;
     const t = target(write, 'linked');
-    expect(t.path.root).toBe('fr');
+    expect(t.path.root).toEqual({ kind: 'name', name: 'fr' });
     expect(t.explicitType).toBe('company');
   });
 
@@ -339,7 +340,7 @@ describe('§B writes, handles, identity', () => {
   it('parses bind on a linked write target', () => {
     const program = parseProgram('write fr-[:participants]-> bind src { investor_name: "x" }');
     const write = as(program.statements[0], 'write').write;
-    expect(target(write, 'linked').path.root).toBe('fr');
+    expect(target(write, 'linked').path.root).toEqual({ kind: 'name', name: 'fr' });
     expect(write.bind?.name).toBe('src');
   });
 
@@ -409,7 +410,7 @@ describe('§C traversal-headed blocks', () => {
     expect(program.statements).toHaveLength(2);
     rv(as(program.statements[0], 'assign').value, 'construct');
     const block = as(program.statements[1], 'block').block;
-    expect(block.head.root).toBe('msg');
+    expect(block.head.root).toEqual({ kind: 'name', name: 'msg' });
     expect(block.head.hopsRaw).toBe(
       '-[file:_resources WHERE `contentType` == "application/pdf"]->',
     );
@@ -446,14 +447,14 @@ describe('§C traversal-headed blocks', () => {
     const orgsAssign = as(program.statements[1], 'assign');
     expect(orgsAssign.name).toBe('orgs');
     const block = rv(orgsAssign.value, 'block').block;
-    expect(block.head.root).toBe('mentioned');
+    expect(block.head.root).toEqual({ kind: 'name', name: 'mentioned' });
     expect(block.head.hopsRaw).toBe('-[c:company]->');
     const coAssign = as(block.body[0], 'assign');
     expect(coAssign.name).toBe('co');
     rv(coAssign.value, 'write');
 
     const write = as(program.statements[2], 'write').write;
-    expect(target(write, 'linked').path).toMatchObject({ root: 'team', hopsRaw: '-[:message]->' });
+    expect(target(write, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'team' }, hopsRaw: '-[:message]->' });
     expect(write.fields[1].value.raw).toBe(
       '"Logged ${COUNT(orgs-[:co]->)} companies. First: ${FIRST(orgs-[:co]->).`url`}"',
     );
@@ -609,13 +610,13 @@ describe('§E ordering and parallel', () => {
     expect(movement.body).toHaveLength(2);
 
     const first = as(movement.body[0], 'block').block;
-    expect(first.head).toMatchObject({ root: 'root', hopsRaw: '-[c:companies]->' });
+    expect(first.head).toMatchObject({ root: { kind: 'name', name: 'root' }, hopsRaw: '-[c:companies]->' });
     const firstWrite = as(first.body[0], 'write').write;
     expect(pred(firstWrite.uniqueBy[0])).toBe('`domains`');
     expect(firstWrite.fields.map((f) => f.name)).toEqual(['name', 'domains']);
 
     const second = as(movement.body[1], 'block').block;
-    expect(second.head).toMatchObject({ root: 'root', hopsRaw: '-[d:deals]->' });
+    expect(second.head).toMatchObject({ root: { kind: 'name', name: 'root' }, hopsRaw: '-[d:deals]->' });
     const secondWrite = as(second.body[0], 'write').write;
     expect(secondWrite.fields[1].value.raw).toBe('FIRST(d-[:Company]->.`Domains`)');
   });
@@ -634,7 +635,7 @@ describe('§E ordering and parallel', () => {
       return arm.closure.body;
     };
     const w1 = as(armBody(0)[0], 'write').write;
-    expect(target(w1, 'linked').path).toMatchObject({ root: 'team', hopsRaw: '-[:message]->' });
+    expect(target(w1, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'team' }, hopsRaw: '-[:message]->' });
     expect(w1.fields[0].value.raw).toBe('"#deals"');
     const w2 = as(armBody(1)[0], 'write').write;
     expect(pred(w2.uniqueBy[0])).toBe('`name`');
@@ -828,11 +829,11 @@ describe('§G node declarations and composition', () => {
   it('parses declaration writes: root write + linked write', () => {
     const program = parseProgram(G2);
     const d = rv(as(program.statements[0], 'assign').value, 'write').write;
-    expect(target(d, 'linked').path).toMatchObject({ root: 'Deal', hopsRaw: '-[:round]->' });
+    expect(target(d, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'Deal' }, hopsRaw: '-[:round]->' });
     expect(d.fields.map((f) => f.value.raw)).toEqual(['"Series A"', '5000000']);
     const linked = as(program.statements[1], 'write').write;
     expect(target(linked, 'linked').path).toMatchObject({
-      root: 'd',
+      root: { kind: 'name', name: 'd' },
       hopsRaw: '-[:participants]->',
     });
   });
@@ -862,12 +863,12 @@ describe('§G node declarations and composition', () => {
 
     const movement = as(program.statements[4], 'movement');
     const block = as(movement.body[0], 'block').block;
-    expect(block.head).toMatchObject({ root: 'msg', hopsRaw: '-[f:#resources]->' });
+    expect(block.head).toMatchObject({ root: { kind: 'name', name: 'msg' }, hopsRaw: '-[f:#resources]->' });
     const call = as(block.body[0], 'call');
     expect(call.callee).toBe('files_to_dropbox');
     expect(call.args).toHaveLength(1);
     const writeArg = arg(call.args[0], 'write').write;
-    expect(target(writeArg, 'linked').path).toMatchObject({ root: 'Files', hopsRaw: '-[:file]->' });
+    expect(target(writeArg, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'Files' }, hopsRaw: '-[:file]->' });
     expect(writeArg.fields.map((f) => f.name)).toEqual(['name', 'data']);
   });
 
@@ -1211,7 +1212,7 @@ describe('§I worked examples', () => {
     const companyAssign = as(movement.body[0], 'assign');
     expect(companyAssign.name).toBe('company');
     const companyWrite = rv(companyAssign.value, 'write').write;
-    expect(target(companyWrite, 'linked').path).toMatchObject({ root: 'crm', hopsRaw: '-[:company]->' });
+    expect(target(companyWrite, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'crm' }, hopsRaw: '-[:company]->' });
     expect(pred(companyWrite.uniqueBy[0])).toBe('`domains`');
 
     const source = as(movement.body[1], 'await').await.source;
@@ -1225,12 +1226,12 @@ describe('§I worked examples', () => {
       return arm.closure.body;
     };
     const slackWrite = as(armBody(0)[0], 'write').write;
-    expect(target(slackWrite, 'linked').path).toMatchObject({ root: 'team', hopsRaw: '-[:message]->' });
+    expect(target(slackWrite, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'team' }, hopsRaw: '-[:message]->' });
     expect(slackWrite.fields[1].value.raw).toBe(
       '"New deal from ${msg-[:sender]->.`name`}: ${company.`url`}"',
     );
     const affWrite = as(armBody(1)[0], 'write').write;
-    expect(target(affWrite, 'linked').path).toMatchObject({ root: 'aff', hopsRaw: '-[:organization]->' });
+    expect(target(affWrite, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'aff' }, hopsRaw: '-[:organization]->' });
     expect(affWrite.fields.map((f) => f.name)).toEqual(['name', 'attio_url']);
   });
 
@@ -1261,20 +1262,20 @@ describe('§I worked examples', () => {
 
     // write mapping mirrors the nesting
     const companyBlock = as(movement.body[1], 'block').block;
-    expect(companyBlock.head).toMatchObject({ root: 'deals', hopsRaw: '-[c:company]->' });
+    expect(companyBlock.head).toMatchObject({ root: { kind: 'name', name: 'deals' }, hopsRaw: '-[c:company]->' });
     const coAssign = as(companyBlock.body[0], 'assign');
     expect(coAssign.name).toBe('co');
 
     const roundBlock = as(companyBlock.body[1], 'block').block;
-    expect(roundBlock.head).toMatchObject({ root: 'c', hopsRaw: '-[r:round]->' });
+    expect(roundBlock.head).toMatchObject({ root: { kind: 'name', name: 'c' }, hopsRaw: '-[r:round]->' });
     const frWrite = rv(as(roundBlock.body[0], 'assign').value, 'write').write;
-    expect(target(frWrite, 'linked').path).toMatchObject({ root: 'co', hopsRaw: '-[:rounds]->' });
+    expect(target(frWrite, 'linked').path).toMatchObject({ root: { kind: 'name', name: 'co' }, hopsRaw: '-[:rounds]->' });
     expect(pred(frWrite.uniqueBy[0])).toBe('co AND `stage`');
 
     const investorBlock = as(roundBlock.body[1], 'block').block;
-    expect(investorBlock.head).toMatchObject({ root: 'r', hopsRaw: '-[i:investor]->' });
+    expect(investorBlock.head).toMatchObject({ root: { kind: 'name', name: 'r' }, hopsRaw: '-[i:investor]->' });
     const partWrite = as(investorBlock.body[0], 'write').write;
-    expect(target(partWrite, 'linked').path.root).toBe('fr');
+    expect(target(partWrite, 'linked').path.root).toEqual({ kind: 'name', name: 'fr' });
     expect(pred(partWrite.uniqueBy[0])).toBe('fr AND `investor_name`');
     expect(partWrite.fields.map((f) => f.name)).toEqual(['investor_name', 'lead']);
   });
@@ -1772,7 +1773,7 @@ describe('backtick-quoted names — the general rule', () => {
     expect(as(program.statements[0], 'assign').name).toBe('my thing');
     expect(as(program.statements[1], 'call').callee).toBe('my call');
     expect(as(program.statements[2], 'block').block.head).toMatchObject({
-      root: 'my root',
+      root: { kind: 'name', name: 'my root' },
       hopsRaw: '-[:edge]->',
     });
   });
@@ -1825,7 +1826,7 @@ describe('backtick-quoted names — the general rule', () => {
       ].join('\n'),
     );
     const assignWrite = rv(as(program.statements[0], 'assign').value, 'write').write;
-    expect(target(assignWrite, 'linked').path.root).toBe('crm');
+    expect(target(assignWrite, 'linked').path.root).toEqual({ kind: 'name', name: 'crm' });
     const positionWrite = as(program.statements[1], 'write').write;
     expect(target(positionWrite, 'position').alias).toBe('my deal');
     expect(as(program.statements[2], 'refresh').name).toBe('my deal');

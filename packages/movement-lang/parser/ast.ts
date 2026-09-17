@@ -62,12 +62,39 @@ export interface TypeRef {
   span: Span;
 }
 
-/** A traversal head: optional in-scope root name + raw hop chain (existing grammar). */
+/**
+ * Where a traversal head starts.
+ *
+ * A NAME is the common case — a binding the hops walk off. An EXPRESSION is any
+ * value expression that ends at a record or a list of them (`AT(rows, 0)`,
+ * `ONLY(found-[c:company]->)`, `r.a`): it is evaluated once at the head and
+ * hopped off exactly as a name bound to the same value is, so
+ * `first = AT(rows, 0)` … `first-[c:company]->` and `AT(rows, 0)-[c:company]->`
+ * are ONE walk with one meaning.
+ *
+ * The expression is captured as a RAW SLOT, like every other expression
+ * position in this tree — the statement layer parses no expressions.
+ */
+export type PathRoot =
+  | { kind: 'name'; name: string }
+  | { kind: 'expression'; expr: ExprSlot };
+
+/** A traversal head: optional root (a name or an expression) + raw hop chain. */
 export interface PathHead {
-  root?: string;
+  root?: PathRoot;
   /** e.g. `-[c:companies]->` or `-[c:companies]->-[d:deals]->`; empty string is invalid. */
   hopsRaw: string;
   span: Span;
+}
+
+/**
+ * The head's root as a NAME, where it IS one. An expression root has no name,
+ * and every site that resolves the root in scope or keys an identity on it
+ * reads `undefined` here rather than a name the head cannot have — the reason
+ * the root is a union and not a string.
+ */
+export function pathRootName(head: Pick<PathHead, 'root'>): string | undefined {
+  return head.root?.kind === 'name' ? head.root.name : undefined;
 }
 
 // ── Top-level program ──
@@ -411,7 +438,7 @@ export type NodeEntry =
     };
 
 /** A name re-spelled as SOURCE TEXT: bare when it scans as an identifier,
- *  backtick-quoted otherwise. The scanner STRIPS backticks (`PathHead.root`
+ *  backtick-quoted otherwise. The scanner STRIPS backticks (a name root
  *  holds the unquoted name), so anything that recomposes source text from a
  *  parsed name must put them back — recomposing bare is how a backticked
  *  traversal root failed to re-parse (layer 13). */
@@ -419,10 +446,36 @@ export function spellName(name: string): string {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `\`${name}\``;
 }
 
+/** A path ROOT re-spelled as source text: a name puts its backticks back, an
+ *  expression is already source. */
+export function spellPathRoot(root: PathRoot): string {
+  return root.kind === 'name' ? spellName(root.name) : root.expr.raw;
+}
+
 /** A path head re-spelled as source text — the one sanctioned way to rebuild
- *  `root-[…]->` text from a parsed head. */
+ *  `root-[…]->` text from a parsed head. This is the DISPLAY spelling (stories,
+ *  diagnostics, descriptions); to parse the hop chain back, use
+ *  {@link probePathHead}, which an expression root can survive. */
 export function spellPathHead(head: Pick<PathHead, 'root' | 'hopsRaw'>): string {
-  return `${head.root === undefined ? '' : spellName(head.root)}${head.hopsRaw}`;
+  return `${head.root === undefined ? '' : spellPathRoot(head.root)}${head.hopsRaw}`;
+}
+
+/**
+ * The name an EXPRESSION root stands in as while the hop chain is probe-parsed.
+ * The hops are the same hops whatever the root is, and the formula grammar
+ * roots a traversal at a name — so the probe substitutes one, and nothing reads
+ * it back: the root's TYPE comes from the expression, its VALUE from evaluating
+ * it, and its IDENTITY from the source text.
+ */
+export const EXPRESSION_ROOT_PROBE = '__movement_expression_root__';
+
+/** A path head re-spelled for PROBE PARSING — the hop chain rooted at a name
+ *  the formula grammar accepts. */
+export function probePathHead(head: Pick<PathHead, 'root' | 'hopsRaw'>): string {
+  if (head.root === undefined) return head.hopsRaw;
+  const root =
+    head.root.kind === 'name' ? spellName(head.root.name) : EXPRESSION_ROOT_PROBE;
+  return `${root}${head.hopsRaw}`;
 }
 
 // ── Traversal-headed blocks ──

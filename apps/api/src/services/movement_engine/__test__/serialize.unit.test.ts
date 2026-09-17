@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 
 import type { FileRef, Resource } from '../../translation_graph/adapter';
 import type { SourcePosition } from '../../translation_graph/types';
-import type { Binding, SourceRead, WriteRecord } from '../expression';
+import type { Binding, DeferredWalk, SourceRead, WriteRecord } from '../expression';
 import { Environment } from '../expression';
 import type { ExtractEmission } from '../extraction';
 import {
@@ -329,8 +329,8 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
     });
 
     it('a DEFERRED edge serialises the WALK, never landings', async () => {
-      const walk = {
-        head: { root: 'msg', hopsRaw: '-[a:files]->', span: SPAN },
+      const walk: DeferredWalk = {
+        head: { root: { kind: 'name', name: 'msg' }, hopsRaw: '-[a:files]->', span: SPAN },
         captured: new Map<string, Binding>([['msg', { kind: 'event' }]]),
       };
       const binding: Binding = {
@@ -361,7 +361,7 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       const binding: Binding = {
         kind: 'lazyWalk',
         walk: {
-          head: { root: 'crm', hopsRaw: '-[c:Companies WHERE c.`Name` == "x"]->', span: SPAN },
+          head: { root: { kind: 'name', name: 'crm' }, hopsRaw: '-[c:Companies WHERE c.`Name` == "x"]->', span: SPAN },
           captured: new Map<string, Binding>([
             ['crm', { kind: 'instance', name: 'crm', adapterSlug: 'attio' }],
             ['target', { kind: 'value', value: 'x' }],
@@ -394,7 +394,7 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       const binding: Binding = {
         kind: 'lazyWalk',
         walk: {
-          head: { root: 'msg', hopsRaw: '-[a:files]->', span: SPAN },
+          head: { root: { kind: 'name', name: 'msg' }, hopsRaw: '-[a:files]->', span: SPAN },
           captured: new Map<string, Binding>([['msg', { kind: 'event' }]]),
           mapping,
         },
@@ -409,11 +409,36 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       expect(out.walk.mapping).toEqual(mapping);
     });
 
+    it('an EXPRESSION-rooted walk parks as its recipe — the expression, and what it reads', async () => {
+      // A parked lazy walk stores the WALK, never its answer, and a head rooted
+      // at an expression is no different: the expression rides across as the
+      // slot the parser captured, and the names it reads ride in the capture.
+      // The run that resumes evaluates it again, against the scope it kept.
+      const binding: Binding = {
+        kind: 'lazyWalk',
+        walk: {
+          head: {
+            root: { kind: 'expression', expr: { raw: 'AT(rows, 0)', span: SPAN } },
+            hopsRaw: '-[a:files]->',
+            span: SPAN,
+          },
+          captured: new Map<string, Binding>([['rows', { kind: 'value', value: [] }]]),
+        },
+      };
+      const out = await roundTrip(binding);
+      if (out.kind !== 'lazyWalk') throw new Error('unreachable');
+      expect(out.walk.head.root).toEqual({
+        kind: 'expression',
+        expr: { raw: 'AT(rows, 0)', span: SPAN },
+      });
+      expect([...out.walk.captured.keys()]).toEqual(['rows']);
+    });
+
     it('an UNMAPPED walk carries no mapping key at all', async () => {
       const binding: Binding = {
         kind: 'lazyWalk',
         walk: {
-          head: { root: 'msg', hopsRaw: '-[a:files]->', span: SPAN },
+          head: { root: { kind: 'name', name: 'msg' }, hopsRaw: '-[a:files]->', span: SPAN },
           captured: new Map<string, Binding>([['msg', { kind: 'event' }]]),
         },
       };

@@ -849,12 +849,22 @@ class Parser {
       this.expectStatementEnd();
       return { kind: 'assign', name: word, value, span: this.spanFrom(start) };
     }
-    if (this.peekCh() === '(') {
-      return this.parseCallStatement(word, start);
-    }
     if (this.peekCh() === '-' && this.peekCh(1) === '[') {
       this.pos = start;
       return this.parseTraversalBlockStatement();
+    }
+    // A head whose root is an EXPRESSION leads with the same identifier a call
+    // or a read does (`AT(rows, 0)-[c:company]-> { … }`, `r.a-[x:edge]-> { … }`),
+    // so the block is tried from the statement's start before the forms that
+    // would claim the identifier. It claims nothing a call could be: a block
+    // needs a hop and a body, and restores the cursor when it finds neither.
+    const afterWord = this.pos;
+    this.pos = start;
+    const block = this.tryParseTraversalBlock();
+    if (block) return { kind: 'block', block, span: block.span };
+    this.pos = afterWord;
+    if (this.peekCh() === '(') {
+      return this.parseCallStatement(word, start);
     }
     if (this.peekCh() === '?' && this.peekCh(1) === ':') {
       this.error(ELVIS_MISUSE);
@@ -1178,20 +1188,50 @@ class Parser {
 
   // ── Traversal heads and blocks ──
 
-  /** `root-[a:edge]->-[b:other]->` — non-throwing on shape mismatch (restores position). */
+  /** `root-[a:edge]->-[b:other]->` — non-throwing on shape mismatch (restores position).
+   *  The root is a NAME where one is written, an EXPRESSION where what precedes
+   *  the first hop is anything else (`AT(rows, 0)-[c:company]->`). */
   private tryParsePathHead(): PathHead | undefined {
     const start = this.pos;
-    let root: string | undefined;
+    // The NAME root, and the rootless head — unchanged, and tried first, so a
+    // head that reads as a name can never be read as an expression instead.
     const scanned = scanName(this.src, this.pos);
     if (scanned) {
-      root = scanned.name;
       this.pos = scanned.end;
       this.skipInlineWs();
+      if (this.peekCh() === '-' && this.peekCh(1) === '[') {
+        const hopsRaw = this.scanHopChain();
+        return {
+          root: { kind: 'name', name: scanned.name },
+          hopsRaw,
+          span: this.spanFrom(start),
+        };
+      }
+      this.pos = start;
+    } else if (this.peekCh() === '-' && this.peekCh(1) === '[') {
+      const hopsRaw = this.scanHopChain();
+      return { hopsRaw, span: this.spanFrom(start) };
     }
-    if (!(this.peekCh() === '-' && this.peekCh(1) === '[')) {
+    // An EXPRESSION root: everything up to the first hop that is not inside a
+    // bracket or a literal, so a hop written INSIDE the expression
+    // (`ONLY(found-[c:company]->)`) belongs to the expression.
+    const exprEnd = this.scanExpressionRootEnd();
+    if (exprEnd === undefined) {
       this.pos = start;
       return undefined;
     }
+    const expr: ExprSlot = {
+      raw: this.src.slice(start, exprEnd),
+      span: this.spanFrom(start, exprEnd),
+    };
+    this.pos = exprEnd;
+    this.skipInlineWs();
+    const hopsRaw = this.scanHopChain();
+    return { root: { kind: 'expression', expr }, hopsRaw, span: this.spanFrom(start) };
+  }
+
+  /** One or more `-[…]->` hops, with `-[` already under the cursor. */
+  private scanHopChain(): string {
     const hopsStart = this.pos;
     for (;;) {
       this.scanHop();
@@ -1202,7 +1242,79 @@ class Parser {
         break;
       }
     }
-    return { root, hopsRaw: this.src.slice(hopsStart, this.pos), span: this.spanFrom(start) };
+    return this.src.slice(hopsStart, this.pos);
+  }
+
+  /**
+   * Where an EXPRESSION root ends — the offset of the first `-[` that is not
+   * inside a bracket or a literal, or `undefined` when there is none before the
+   * line ends. Peeks only: the cursor is left where it was.
+   *
+   * Non-throwing by construction (an unbalanced bracket is simply "not a head"),
+   * because every caller is a `try` that has another grammar to fall back to.
+   */
+  private scanExpressionRootEnd(): number | undefined {
+    const src = this.src;
+    let depth = 0;
+    let i = this.pos;
+    while (i < src.length) {
+      const c = src[i];
+      // A head is written on one line, and a comment ends the line's code.
+      if (c === '\n' || (c === '#' && depth === 0)) return undefined;
+      // A top-level separator ends whatever is being written and starts the
+      // next one — a node literal's entries, a tuple's paths, an inline
+      // statement — so nothing across it is one expression.
+      if (depth === 0 && (c === ',' || c === ';')) return undefined;
+      if (c === '"') {
+        i++;
+        while (i < src.length && src[i] !== '"') i += src[i] === '\\' ? 2 : 1;
+        if (i >= src.length) return undefined;
+        i++;
+        continue;
+      }
+      if (c === '`') {
+        const quoted = scanBacktickName(src, i);
+        if (quoted === null) return undefined;
+        i = quoted.end + 1;
+        continue;
+      }
+      if (depth === 0 && c === '-' && src[i + 1] === '[') {
+        const end = this.pos + src.slice(this.pos, i).trimEnd().length;
+        return this.isExpressionRoot(end) ? end : undefined;
+      }
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') {
+        // A closer with nothing open belongs to whoever opened it (an
+        // `await FIRST(…)`, a call's argument list) — the expression stops
+        // short of it, and there is no hop before it, so this is not a head.
+        if (depth === 0) return undefined;
+        depth--;
+      }
+      i++;
+    }
+    return undefined;
+  }
+
+  /**
+   * Is `[this.pos, end)` a head's EXPRESSION root? It is exactly one expression
+   * that READS something: a parenthesised expression, or a name immediately
+   * followed by a call, a property, or an index — `AT(rows, 0)`, `ONLY(…)`,
+   * `r.a`, `(x)`.
+   *
+   * The SPACE is what decides it. The formula grammar has no juxtaposition, so
+   * two tokens with whitespace between them are never one expression — which is
+   * also what keeps a keyword-led statement out (`write crm-[:companies]-> { … }`
+   * is a write, not a head rooted at `write crm`). A bare name is not here
+   * either: that is the NAME root, already taken above.
+   */
+  private isExpressionRoot(end: number): boolean {
+    const src = this.src;
+    if (end <= this.pos) return false;
+    if (src[this.pos] === '(') return true;
+    const name = scanName(src, this.pos);
+    if (name === null || name.end >= end) return false;
+    const next = src[name.end];
+    return next === '(' || next === '.' || next === '[';
   }
 
   /** Consumes one `-[…]->` hop. Comments are off inside the brackets (so `#`-prefixed
@@ -1247,6 +1359,18 @@ class Parser {
       const { uniqueBy, fields } = this.parseWriteBody();
       return { target, uniqueBy, fields, ...(bind ? { bind } : {}), span: this.spanFrom(start) };
     }
+    // A traversal head may start at an EXPRESSION; a write's parent may not. A
+    // write attaches to ONE record whose identity it has to carry — the graph
+    // it lands in, a `bind` counterpart, who it is attributed to — and an
+    // expression has no name to carry that, so the parent is named first.
+    // Refused HERE, with the repair, rather than parsed into a target nothing
+    // downstream can resolve.
+    const exprParentEnd = this.scanExpressionRootEnd();
+    if (exprParentEnd !== undefined) {
+      this.error(
+        `A write's parent is a NAMED record — bind it first ('parent = ${this.src.slice(this.pos, exprParentEnd)}', then 'write parent-[:edge]-> { … }'). A write attaches to one record whose identity it carries (the graph it lands in, its 'bind' counterpart, who it is attributed to), and an expression has no name to carry.`,
+      );
+    }
     const scannedFirst = scanName(this.src, this.pos);
     if (!scannedFirst) {
       this.error(
@@ -1275,7 +1399,11 @@ class Parser {
       } while (this.peekCh() === '-' && this.peekCh(1) === '[');
       const hopsRaw = this.src.slice(hopsStart, this.pos);
       const explicitType = this.tryReadExplicitWriteType();
-      const path: PathHead = { root: first, hopsRaw, span: this.spanFrom(targetStart) };
+      const path: PathHead = {
+        root: { kind: 'name', name: first },
+        hopsRaw,
+        span: this.spanFrom(targetStart),
+      };
       target = { kind: 'linked', path, explicitType, span: this.spanFrom(targetStart) };
     } else {
       // A bare name → update the record at the bound position `first` in
@@ -1326,7 +1454,7 @@ class Parser {
           `Expected a linked path like 'parent-[:edge]->' in the tuple write target, found ${this.describeHere()}`,
         );
       }
-      if (path.root === undefined) {
+      if (path.root === undefined || path.root.kind === 'expression') {
         this.error('Every tuple path starts at a bound handle — name the parent', targetStart);
       }
       paths.push(path);

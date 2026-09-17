@@ -11,7 +11,12 @@
 // written-to instance was constructed `dry_run: true`. Mixed dry/live
 // instances surface as 'mixed' with the offending write's span.
 
-import { extractHopAliases } from 'movement-lang';
+import {
+  collectExpressionNames,
+  extractHopAliases,
+  parseMovementExpression,
+  pathRootName,
+} from 'movement-lang';
 import type {
   ConstructionCall,
   MovementDeclaration,
@@ -28,14 +33,41 @@ import type {
  * `slackbot`. Registered before the block body is walked so an
  * edge-anchored write off the alias resolves to the right instance. A
  * rootless head (`_resources`-style) leaves its aliases owner-unknown.
+ *
+ * A head rooted at an EXPRESSION (`AT(rows, 0)-[c:company]->`) has no name to
+ * inherit from, so the owner is read off the names the expression READS: the
+ * records it hands back came from those. One agreed owner is the answer; two
+ * that disagree, or none that is known, leaves the aliases owner-unknown,
+ * exactly as a rootless head does — this scan claims an owner only where the
+ * text says one.
  */
+function headOwner(
+  head: PathHead,
+  handleOwner: Map<string, string>,
+  resolveOwner: (name: string) => string,
+): string | undefined {
+  const root = head.root;
+  if (root === undefined) return undefined;
+  if (root.kind === 'name') return resolveOwner(root.name);
+  let names: Set<string>;
+  try {
+    names = new Set(collectExpressionNames(parseMovementExpression(root.expr.raw)).refs);
+  } catch {
+    return undefined; // unparseable — the checker owns that diagnostic
+  }
+  const owners = new Set(
+    [...names].filter((name) => handleOwner.has(name)).map((name) => resolveOwner(name)),
+  );
+  return owners.size === 1 ? [...owners][0] : undefined;
+}
+
 function registerHeadAliases(
   head: PathHead,
   handleOwner: Map<string, string>,
   resolveOwner: (name: string) => string,
 ): void {
-  if (head.root === undefined) return;
-  const owner = resolveOwner(head.root);
+  const owner = headOwner(head, handleOwner, resolveOwner);
+  if (owner === undefined) return;
   for (const alias of extractHopAliases(head.hopsRaw)) {
     handleOwner.set(alias, owner);
   }
@@ -97,8 +129,8 @@ export function movementWriteRunMode(
 
     const ownerOf = (write: WriteExpression): string | undefined => {
       if (write.target.kind === 'position') return resolveOwner(write.target.alias);
-      const root =
-        write.target.kind === 'linked' ? write.target.path.root : write.target.paths[0]?.root;
+      const first = write.target.kind === 'linked' ? write.target.path : write.target.paths[0];
+      const root = first !== undefined ? pathRootName(first) : undefined;
       return root !== undefined ? resolveOwner(root) : undefined;
     };
 

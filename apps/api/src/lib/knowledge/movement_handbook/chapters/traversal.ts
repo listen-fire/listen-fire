@@ -19,6 +19,7 @@ msg-[a:Attachments]-> {
 \`\`\`
 
 - The head is a traversal: \`-[:edge]->\` relative to the enclosing position, or rooted at any in-scope name (\`deals-[c:Companies]->\`, chaining hops as usual).
+- Head the block at an EXPRESSION that ends in a record, and skip the binding: \`AT(rows, 0)-[c:company]-> { … }\` walks exactly as naming the call first and hopping off the name does. The expression ends at the first \`-[\` outside its own brackets, so a hop written inside it belongs to it (\`ONLY(found-[c:company]->)-[f:founder]->\`).
 - The bracket-alias (\`a\`, \`c\`) names *this iteration's* position inside the block. Aliases are lexically scoped to their block.
 - A \`WHERE\` filter on the hop narrows which positions the block sees: \`msg-[f:attachments WHERE \`Content Type\` == "application/pdf"]-> { … }\`.
 - Blocks nest: a block over companies can contain a block over each company's rounds. With nesting, write the inner record as a **linked write** from the enclosing handle so the structure lands connected (see the writes chapter).

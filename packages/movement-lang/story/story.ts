@@ -41,7 +41,7 @@ import {
   type TypeRef,
   type WriteExpression,
 } from '../parser/ast';
-import { constructionAsCall, spellPathHead } from '../parser/ast';
+import { constructionAsCall, pathRootName, spellPathHead } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { parseMovementExpression } from '../expression/bridge';
 import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
@@ -248,8 +248,14 @@ export interface StoryTraversal {
    *  its display vocabulary on, exactly as a record's id does. */
   id: string;
   source: string;
-  /** The name the walk starts from, resolved. */
+  /** The name the walk starts from, resolved. Absent when the walk starts at
+   *  an EXPRESSION — there is no binding to resolve, and `rootExpression`
+   *  carries what the author wrote instead. */
   root?: StoryRef;
+  /** The EXPRESSION the walk starts from (`AT(rows, 0)-[c:company]->`), as its
+   *  own chip: the text the author wrote, plus the bindings it reads. Set
+   *  instead of `root`, never alongside it. */
+  rootExpression?: Chip;
   /**
    * What it starts FROM, as the checker typed it: `graph` fans out over records
    * that live in a system; `result` continues from what an earlier step produced
@@ -1019,11 +1025,17 @@ class Projection {
       walked.root !== undefined
       && walked.hops.length > 0
       && !walked.hops.some((hop) => hop.filter !== undefined);
-    const origin = head.root !== undefined ? this.origin(head.root, scope) : undefined;
+    const rootName = pathRootName(head);
+    const origin = rootName !== undefined ? this.origin(rootName, scope) : undefined;
     return {
       source,
       role: 'reference',
-      refs: head.root !== undefined ? [this.ref(head.root, scope)] : [],
+      // An expression root reads whatever names ARE inside it — its own chip
+      // already resolved them, so the head refers to exactly those.
+      refs:
+        rootName !== undefined
+          ? [this.ref(rootName, scope)]
+          : (walked.rootExpression?.refs ?? []),
       parts:
         composable && walked.root !== undefined
           ? [
@@ -1412,7 +1424,10 @@ class Projection {
     return {
       id: traversalId(head.span),
       source: rawPath(head),
-      ...(head.root !== undefined ? { root: this.ref(head.root, scope) } : {}),
+      ...(head.root?.kind === 'name' ? { root: this.ref(head.root.name, scope) } : {}),
+      ...(head.root?.kind === 'expression'
+        ? { rootExpression: this.chip(head.root.expr, scope) }
+        : {}),
       ...(node?.from !== undefined ? { from: node.from } : {}),
       hops: (node?.steps ?? []).flatMap((step, index) =>
         this.hop(step, node?.landings[index], scope),
@@ -1503,9 +1518,10 @@ class Projection {
         : [];
       paths.forEach((path, index) => {
         const edge = recorded?.parents[index]?.edge;
-        if (edge === undefined || path.root === undefined) return;
+        const from = pathRootName(path);
+        if (edge === undefined || from === undefined) return;
         this.edges.push({
-          from: this.endpoint(path.root, scope),
+          from: this.endpoint(from, scope),
           to: { kind: 'record', id },
           edge,
           kind: 'parent',
