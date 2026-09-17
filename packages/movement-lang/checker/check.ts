@@ -197,6 +197,8 @@ import {
   PresenceProof,
   presenceProofs,
   holdsRecords,
+  isEnumType,
+  isListType,
   isRecordType,
   positionRefIn,
   positionsMatch,
@@ -1352,7 +1354,7 @@ function staticStringLiteralOf(slot: ExprSlot): string | undefined {
  *  field rejects. Empty when the field isn't enum-typed: a made-up example for
  *  a free-text parameter would be a guess dressed as guidance. */
 function literalExampleFor(field: string, type: FieldType | undefined): string {
-  if (typeof type !== 'object' || type.kind !== 'enum' || type.options.length === 0) return '';
+  if (!isEnumType(type) || type.options.length === 0) return '';
   return ` (e.g. ${field}: "${type.options[0]}")`;
 }
 
@@ -2102,7 +2104,7 @@ class Checker {
     // A `type` declaration is a closed option set (`declaredTypeOf`), which is
     // a surface type — the symbol slot it rides in holds any value type.
     const declared = resolution.symbol.fieldType;
-    return typeof declared === 'object' && declared.kind === 'enum' ? declared : undefined;
+    return isEnumType(declared) ? declared : undefined;
   }
 
   /** A bound name's position type, where one is derivable. */
@@ -2302,11 +2304,7 @@ class Checker {
     // in the enum"` like any other. Independent of the hop pins below.
     const actionPin = address.narrowing[EVENT_ACTION_FIELD];
     const actionType = instance.schema.positions[address.event]?.properties[EVENT_ACTION_FIELD];
-    if (
-      actionPin !== undefined
-      && typeof actionType === 'object'
-      && actionType.kind === 'enum'
-    ) {
+    if (actionPin !== undefined && isEnumType(actionType)) {
       const diagnostic = checkEnumLiteral(actionPin, actionType);
       if (diagnostic) {
         if (diagnostic.severity === 'warning') {
@@ -4020,7 +4018,7 @@ class Checker {
     const type = this.resolveNamedType(expr.type, expr.typeSpan, scope);
     if (type === undefined) return undefined;
     const named = stripAbsent(type);
-    if (typeof named !== 'object' || named.kind !== 'enum') {
+    if (!isEnumType(named)) {
       this.report(
         DiagnosticCodes.MEMBERS_NOT_CLOSED,
         `'MEMBERS' lists the values of a closed set, and '${expr.type}' is ${describeFieldType(named)} — there is nothing to list. Declare the set ('type ${expr.type} = <"A" | "B">'), or name a field whose options the system holds.`,
@@ -5135,7 +5133,7 @@ class Checker {
       if (
         (field.semantics === 'append' || field.semantics === 'append-missing') &&
         targetType !== undefined &&
-        !(typeof targetType === 'object' && targetType.kind === 'list')
+        !isListType(targetType)
       ) {
         const op = field.semantics === 'append' ? '+:' : '+?:';
         this.report(
@@ -5218,9 +5216,7 @@ class Checker {
     options: { targetType: FieldType | undefined; subject?: string },
   ): void {
     const { targetType, subject } = options;
-    if (targetType === undefined || typeof targetType !== 'object' || targetType.kind !== 'enum') {
-      return;
-    }
+    if (!isEnumType(targetType)) return;
     const literal = staticStringLiteralOf(value);
     const diagnostic =
       checkEnumDomain(targetType, subject)
@@ -7498,8 +7494,7 @@ class Checker {
       const position = schema.positions[eventName];
       if (position === undefined) continue;
       const actionType = position.properties[EVENT_ACTION_FIELD];
-      const actions =
-        typeof actionType === 'object' && actionType.kind === 'enum' ? actionType.options : [];
+      const actions = isEnumType(actionType) ? actionType.options : [];
       const action = actions.find((a) => a !== RECORD_DELETED_ACTION);
       if (action === undefined) continue; // no change-kind axis — nothing to narrow by
       const edge = Object.keys(position.edges).find(
@@ -7583,10 +7578,7 @@ class Checker {
       if (deliveredHere !== undefined && deliveredHere.length === 0) continue;
 
       const actionType = instance.schema.positions[event]?.properties[EVENT_ACTION_FIELD];
-      const actionEnum =
-        typeof actionType === 'object' && actionType.kind === 'enum'
-          ? actionType.options
-          : undefined;
+      const actionEnum = isEnumType(actionType) ? actionType.options : undefined;
 
       if (actionEnum === undefined || deliveredHere === undefined) {
         derived.push(refFor(event, narrowing));

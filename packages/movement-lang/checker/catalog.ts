@@ -21,6 +21,7 @@ import type {
   Expression,
   FieldCapability,
 } from '@listen-fire/shared/expression/types';
+import { neverAsAny } from '../never';
 import type { Program, TypeDeclaration } from '../parser/ast';
 import type { DeclaredEffectRow } from './effects';
 // A record is a value, so `FieldType` names the arrow plane's own type and
@@ -522,6 +523,56 @@ export type SchemaFieldType =
   | { kind: 'enum'; options: string[]; open?: { allowPattern?: string } }
   | { kind: 'maybeAbsent'; of: SchemaFieldType };
 
+/**
+ * A field type spelled as ONE tagged variant — the scalars given the `kind`
+ * the collections already carry.
+ *
+ * `FieldType` is half bare names and half objects, so a `switch` could never
+ * see it whole: every branch over it was a `typeof === 'object'` if-chain, the
+ * compiler enumerated nothing, and a new variant silently took whichever
+ * fallthrough happened to come last. Both halves here are DERIVED from the
+ * type parameter, so this is not a second list to keep in step — add a variant
+ * to `FieldType` and every `switch` over a variant stops compiling at once.
+ *
+ * Generic in the type it normalises so a `SchemaFieldType` stays one: its
+ * `list` still holds a `SchemaFieldType`, and its switch still has no `record`
+ * case to answer.
+ */
+export type FieldTypeVariant<T extends FieldType = FieldType> =
+  | { kind: Extract<T, string> }
+  | Extract<T, { kind: string }>;
+
+/**
+ * The tag for each bare name, shared rather than built per call: `stripAbsent`
+ * and `fieldTypeEquals` run over every expression the checker walks, and a
+ * normaliser that allocated would put that cost on a path that had none.
+ *
+ * The mapped type is the third place a new bare name has to be answered — add
+ * one to `FieldType` and this table is missing a key.
+ */
+const SCALAR_VARIANTS: { [K in Extract<FieldType, string>]: { kind: K } } = {
+  text: { kind: 'text' },
+  number: { kind: 'number' },
+  boolean: { kind: 'boolean' },
+  date: { kind: 'date' },
+  datetime: { kind: 'datetime' },
+  file: { kind: 'file' },
+  json: { kind: 'json' },
+  absent: { kind: 'absent' },
+};
+
+/**
+ * Normalise a field type for an exhaustive `switch (variantOf(t).kind)`.
+ *
+ * The one assertion is the boundary the whole scheme rests on: `typeof` cannot
+ * prove to TypeScript that a GENERIC `T`'s string half is `Extract<T, string>`,
+ * though it is, by construction of the union.
+ */
+export function variantOf<T extends FieldType>(type: T): FieldTypeVariant<T> {
+  const wide: FieldType = type;
+  return (typeof wide === 'string' ? SCALAR_VARIANTS[wide] : wide) as FieldTypeVariant<T>;
+}
+
 /** Maps a surface type name (shape declarations, extract annotations) to a SchemaFieldType. */
 /**
  * The type a `type Thesis = <"A" | "B">` declaration names — a CLOSED enum,
@@ -603,34 +654,49 @@ export function resolveBorrowedField(
 }
 
 export function describeFieldType(type: FieldType): string {
-  // `absent` is the one bare name that is NOT its surface spelling — the author
-  // writes `null`, and there is no annotation to paste back (no field is
-  // declared this type).
-  if (type === 'absent') return 'null';
-  // A bare type name IS its surface spelling — `json` included — and the
-  // annotation suggestions paste this text back into a program, so it must
-  // stay the word `parseFieldTypeName` reads.
-  if (typeof type === 'string') return type;
-  if (type.kind === 'maybeAbsent') return `${describeFieldType(type.of)} (or absent)`;
-  if (type.kind === 'list') return `list of ${describeFieldType(type.of)}`;
-  // A tuple IS its slots, in order — the surface spelling, so a diagnostic can
-  // paste it back. An untyped slot reads as `?`, which is what the checker
-  // knows, not a type it is claiming.
-  if (type.kind === 'tuple') {
-    return `[${type.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    // `absent` is the one bare name that is NOT its surface spelling — the
+    // author writes `null`, and there is no annotation to paste back (no field
+    // is declared this type).
+    case 'absent':
+      return 'null';
+    // A bare type name IS its surface spelling — `json` included — and the
+    // annotation suggestions paste this text back into a program, so it must
+    // stay the word `parseFieldTypeName` reads.
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+      return variant.kind;
+    case 'maybeAbsent':
+      return `${describeFieldType(variant.of)} (or absent)`;
+    case 'list':
+      return `list of ${describeFieldType(variant.of)}`;
+    // A tuple IS its slots, in order — the surface spelling, so a diagnostic
+    // can paste it back. An untyped slot reads as `?`, which is what the
+    // checker knows, not a type it is claiming.
+    case 'tuple':
+      return `[${variant.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
+    case 'dict':
+      return `dict of ${describeFieldType(variant.of)}`;
+    // A record reads as the record it IS, in the arrow plane's own words. A
+    // record nobody can name is still definitely a record, which is what the
+    // absent ref means and what the reader needs to hear.
+    case 'record':
+      return variant.position !== undefined ? describePosition(variant.position) : 'a record';
+    case 'enum':
+      if (variant.open) return `known values (${variant.options.join(' | ')}, …)`;
+      // An empty CLOSED option set is the empty union — `enum ()` reads like a
+      // rendering bug, so name the fact.
+      if (variant.options.length === 0) return 'enum (no available values)';
+      return `enum (${variant.options.join(' | ')})`;
+    default:
+      return neverAsAny(variant);
   }
-  if (type.kind === 'dict') return `dict of ${describeFieldType(type.of)}`;
-  // A record reads as the record it IS, in the arrow plane's own words. A
-  // record nobody can name is still definitely a record, which is what the
-  // absent ref means and what the reader needs to hear.
-  if (type.kind === 'record') {
-    return type.position !== undefined ? describePosition(type.position) : 'a record';
-  }
-  if (type.open) return `known values (${type.options.join(' | ')}, …)`;
-  // An empty CLOSED option set is the empty union — `enum ()` reads like a
-  // rendering bug, so name the fact.
-  if (type.options.length === 0) return 'enum (no available values)';
-  return `enum (${type.options.join(' | ')})`;
 }
 
 // ── Per-instance schema ──
