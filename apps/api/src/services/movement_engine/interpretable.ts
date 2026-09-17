@@ -21,6 +21,7 @@ import {
   parseMovementCondition,
   parseMovementExpression,
   parseProgram,
+  pathRootName,
 } from 'movement-lang';
 import type {
   CallArg,
@@ -435,11 +436,9 @@ class InterpretabilityScan {
     // depends on the live descriptor — not statically decidable here
     // (an unadvertised name still fails the run loud, per name). Shape
     // writes have no adapter; their fields stay flagged.
-    const functionBearing = !(
-      write.target.kind === 'linked' &&
-      write.target.path.root !== undefined &&
-      this.shapeNames.has(write.target.path.root)
-    );
+    const linkedRoot =
+      write.target.kind === 'linked' ? pathRootName(write.target.path) : undefined;
+    const functionBearing = !(linkedRoot !== undefined && this.shapeNames.has(linkedRoot));
     if (functionBearing) this.writeFieldDepth++;
     for (const field of write.fields) this.scanSlot(field.value);
     if (functionBearing) this.writeFieldDepth--;
