@@ -148,3 +148,65 @@ describe('the retired read-back names its replacement', () => {
     expect(codes(BLOCK + '  x-[v:n]-> {\n    q = 1\n  }')).toContain(C.BLOCK_READ_BACK_RETIRED);
   });
 });
+
+// A block's value is what its `return` hands back — and the PLANE is that
+// expression's too. A return nobody could type says nothing about either, so
+// the binding stays untyped and every rule downstream keeps its silence.
+// Reading "untyped" as "the arrow plane" minted a record out of an unknown,
+// and every value rule then refused the binding as a record
+// (MOV_RECORD_NOT_A_VALUE) — including for a return that touches no record at
+// all.
+describe("a return the checker cannot type leaves the block's value untyped", () => {
+  // The extraction root, a block over it, and a use of what the block returned.
+  const overExtraction = (ret: string, use = ''): string =>
+    '  digest = extract "quick" from [e.`Subject`] {\n'
+    + '    node doc: "this one document, exactly one record" { items: "…" }\n'
+    + '  }\n'
+    + `  items = digest-[md:doc]-> { return ${ret} }\n`
+    + use;
+
+  it('an untyped call over an extracted field is not a record', () => {
+    const body = overExtraction('COALESCE(md.`items`, "")');
+    expect(codes(body)).toEqual([]);
+    expect(bindingType(body, 'items')?.bindingPlane).toBeUndefined();
+    expect(codes(overExtraction('COALESCE(md.`items`, "")', '  t = JOIN(items, "\\n")'))).toEqual(
+      [],
+    );
+  });
+
+  it('an untyped call that touches nothing extracted is not a record either', () => {
+    const body = overExtraction('COALESCE("x", "")', '  t = JOIN(items, "\\n")');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a bare read of an unannotated extracted field is not a record', () => {
+    const body = overExtraction('md.`items`', '  t = JOIN(items, "\\n")');
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('the same over a TRAVERSED position', () => {
+    const body =
+      '  names = e-[a:Parts]-> { return COALESCE(a.`Name`, "") }\n'
+      + '  t = JOIN(names, ", ")';
+    expect(codes(body)).toEqual([]);
+  });
+
+  it("the same over a local node's entries", () => {
+    const body =
+      '  bundle = node { files: lazy e-[a:Parts]-> }\n'
+      + '  names = bundle-[f:files]-> { return COALESCE(f.`Name`, "") }\n'
+      + '  t = JOIN(names, ", ")';
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a return that IS the record still binds the record', () => {
+    const body = overExtraction('md');
+    expect(codes(body)).toEqual([]);
+    expect(bindingType(body, 'items')?.bindingPlane).toBe('node');
+    expect(bindingType(body, 'items')?.posType).toMatchObject({ kind: 'extract' });
+    // …and it is still refused where a VALUE is wanted.
+    expect(codes(overExtraction('md', '  t = JOIN(items, "\\n")'))).toContain(
+      'MOV_RECORD_NOT_A_VALUE',
+    );
+  });
+});
