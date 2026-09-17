@@ -1279,8 +1279,6 @@ class Parser {
         continue;
       }
       if (depth === 0 && c === '-' && src[i + 1] === '[') {
-        // Nothing before the hop is not an expression root — that is the
-        // rootless head, already taken above.
         const end = this.pos + src.slice(this.pos, i).trimEnd().length;
         return this.isExpressionRoot(end) ? end : undefined;
       }
@@ -1368,12 +1366,12 @@ class Parser {
     // Refused HERE, with the repair, rather than parsed into a target nothing
     // downstream can resolve.
     const exprParentEnd = this.scanExpressionRootEnd();
-    const scannedFirst = scanName(this.src, this.pos);
     if (exprParentEnd !== undefined) {
       this.error(
         `A write's parent is a NAMED record — bind it first ('parent = ${this.src.slice(this.pos, exprParentEnd)}', then 'write parent-[:edge]-> { … }'). A write attaches to one record whose identity it carries (the graph it lands in, its 'bind' counterpart, who it is attributed to), and an expression has no name to carry.`,
       );
     }
+    const scannedFirst = scanName(this.src, this.pos);
     if (!scannedFirst) {
       this.error(
         `Expected a write target after 'write' — a linked path like '<instance>-[:edge]->' or 'parent-[:edge]->', or a tuple '(a-[:e]->, b-[:f]->)' — found ${this.describeHere()}`,
