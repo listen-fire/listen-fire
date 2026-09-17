@@ -11,7 +11,12 @@
 // written-to instance was constructed `dry_run: true`. Mixed dry/live
 // instances surface as 'mixed' with the offending write's span.
 
-import { collectExpressionNames, extractHopAliases, parseMovementExpression, pathRootName } from 'movement-lang';
+import {
+  collectExpressionNames,
+  extractHopAliases,
+  parseMovementExpression,
+  pathRootName,
+} from 'movement-lang';
 import type {
   ConstructionCall,
   MovementDeclaration,
