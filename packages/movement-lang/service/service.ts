@@ -38,6 +38,7 @@ import {
 import {
   describePosition,
   describeReturnShape,
+  isEnumType,
   positionSchemaOfRef,
   type PositionTypeRef,
   ExpressionTyping,
@@ -754,7 +755,7 @@ export function getMovementCompletions(
   if (fieldValue) {
     const fieldName = fieldValue.name;
     const fieldType = analysis.writeAt(loc)?.root?.fields?.[fieldName];
-    if (typeof fieldType === 'object' && fieldType.kind === 'enum') {
+    if (isEnumType(fieldType)) {
       const inString = (fieldValue.value.match(/"/g)?.length ?? 0) % 2 === 1;
       const enumItems: MovementCompletionItem[] = fieldType.options.map((option): MovementCompletionItem => ({
         label: option,
@@ -1727,8 +1728,7 @@ function hoverContents(symbol: ScopeSymbol, snapshot: CatalogSnapshot): string[]
     }
     case 'type': {
       const type = symbol.fieldType;
-      const values =
-        typeof type === 'object' && type.kind === 'enum' ? type.options.join(' | ') : '';
+      const values = isEnumType(type) ? type.options.join(' | ') : '';
       return [`${symbol.name} — declared type (one of: ${values})`];
     }
     case 'instance':

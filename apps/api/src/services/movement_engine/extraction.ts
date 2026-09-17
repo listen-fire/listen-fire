@@ -46,10 +46,13 @@ import { z } from 'zod';
 import {
   BridgeError,
   borrowedTypeSegments,
+  isEnumType,
   parseFieldTypeName,
   parseMovementExpression,
+  variantOf,
 } from 'movement-lang';
 import type {
+  EnumType,
   ExprSlot,
   ExtractExpression,
   ExtractField,
@@ -57,6 +60,7 @@ import type {
   FieldType,
   PluginCall,
 } from 'movement-lang';
+import { neverAsAny } from '../../lib/utils/types';
 import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS, type ChatReply } from '../../lib/anthropic';
 import { currentLlmUsageContext, runFields } from '../../lib/llm_usage';
 import { RunCancelledSignal } from './cancel_gate';
@@ -2246,74 +2250,84 @@ function pushCoercion(into: Record<string, string[]>, key: string, rendered: str
 
 function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.ZodTypeAny {
   if (type === undefined) return z.unknown();
-  if (typeof type === 'string') {
-    switch (type) {
-      case 'text':
-      case 'date':
-      case 'datetime':
-      case 'file':
-        return z.string().nullable();
-      case 'number':
-        return z.number().nullable();
-      case 'boolean':
-        return z.boolean().nullable();
-      case 'json':
-        // A structured value — whatever shape the description asks for. Nothing
-        // describes it, so nothing validates it either; it rides through to the
-        // json field verbatim.
-        return z.unknown();
-      case 'absent':
-        // The `null` literal's type. Checker-only (no field is ever declared
-        // it), so this never reaches an extraction schema; listed to keep the
-        // switch total.
-        return z.null();
-    }
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'text':
+    case 'date':
+    case 'datetime':
+    case 'file':
+      return z.string().nullable();
+    case 'number':
+      return z.number().nullable();
+    case 'boolean':
+      return z.boolean().nullable();
+    case 'json':
+      // A structured value — whatever shape the description asks for. Nothing
+      // describes it, so nothing validates it either; it rides through to the
+      // json field verbatim.
+      return z.unknown();
+    case 'absent':
+      // The `null` literal's type. Checker-only (no field is ever declared
+      // it), so this never reaches an extraction schema; listed to keep the
+      // switch total.
+      return z.null();
+    // `maybeAbsent` is a checker-only type (a race receipt read); it never
+    // reaches extraction, but keep the switch total against its present shape.
+    case 'maybeAbsent':
+      return zodForFieldType(variant.of, ctx);
+    case 'list':
+      return zodForListOfFieldType(variant.of, ctx);
+    // A TUPLE never reaches an extraction: nothing declares one on an adapter
+    // surface and no annotation names one — it is the shape a combinator's
+    // receipt has, inside the program. Describe it as opaque rather than guess.
+    case 'tuple':
+    // A DICT is the same story as a tuple: a value the PROGRAM builds
+    // (`GROUPBY`, a `{ k: v }` literal), never a shape an annotation asks a
+    // model for. Opaque rather than guessed at.
+    case 'dict':
+    // A RECORD is a place in a graph, not something a model can answer with:
+    // no annotation names one and no adapter surface declares one, so this is
+    // unreachable — a field whose type is a record was refused where it was
+    // written. Opaque, like the other two program-only shapes.
+    case 'record':
+      return z.unknown().nullable();
+    case 'enum':
+      return zodForEnumFieldType(variant, ctx);
+    default:
+      return neverAsAny(variant);
   }
-  // `maybeAbsent` is a checker-only type (a race receipt read); it never reaches
-  // extraction, but keep the switch total against its present shape.
-  if (type.kind === 'maybeAbsent') return zodForFieldType(type.of, ctx);
-  if (type.kind === 'list') {
-    const element = type.of;
-    // A multiselect (list of enum) coerces each entry to its canonical option.
-    // Open (known-values) fields KEEP an unmatched string entry as-is — the
-    // adapter's live listing just hadn't seen it. Closed fields DROP it (one
-    // near-miss must not fail the whole extraction — mirrors the Attio
-    // select/status write path's `matchOption`) and record the loss.
-    if (typeof element === 'object' && element.kind === 'enum' && element.options.length > 0) {
-      const { options, open } = element;
-      return z
-        .array(z.unknown())
-        .nullable()
-        .transform((values) =>
-          values === null
-            ? null
-            : values.flatMap((v): string[] => {
-                // A blank entry is nothing extracted, not a discarded value —
-                // it drops out without being reported as a loss.
-                if (typeof v === 'string' && v.trim() === '') return [];
-                const matched = matchOption(v, options);
-                if (matched !== undefined) return [matched];
-                if (open) return typeof v === 'string' ? [v] : [];
-                if (v != null) ctx?.sink.record(ctx.key, v);
-                return [];
-              }),
-        );
-    }
-    return z.array(zodForFieldType(type.of, ctx)).nullable();
+}
+
+/** A multiselect (list of enum) coerces each entry to its canonical option.
+ *  Open (known-values) fields KEEP an unmatched string entry as-is — the
+ *  adapter's live listing just hadn't seen it. Closed fields DROP it (one
+ *  near-miss must not fail the whole extraction — mirrors the Attio
+ *  select/status write path's `matchOption`) and record the loss. */
+function zodForListOfFieldType(element: FieldType, ctx?: FieldCoercions): z.ZodTypeAny {
+  if (!isEnumType(element) || element.options.length === 0) {
+    return z.array(zodForFieldType(element, ctx)).nullable();
   }
-  // A TUPLE never reaches an extraction: nothing declares one on an adapter
-  // surface and no annotation names one — it is the shape a combinator's
-  // receipt has, inside the program. Describe it as opaque rather than guess.
-  if (type.kind === 'tuple') return z.unknown().nullable();
-  // A DICT is the same story as a tuple: a value the PROGRAM builds
-  // (`GROUPBY`, a `{ k: v }` literal), never a shape an annotation asks a
-  // model for. Opaque rather than guessed at.
-  if (type.kind === 'dict') return z.unknown().nullable();
-  // A RECORD is a place in a graph, not something a model can answer with:
-  // no annotation names one and no adapter surface declares one, so this is
-  // unreachable — a field whose type is a record was refused where it was
-  // written. Opaque, like the other two program-only shapes.
-  if (type.kind === 'record') return z.unknown().nullable();
+  const { options, open } = element;
+  return z
+    .array(z.unknown())
+    .nullable()
+    .transform((values) =>
+      values === null
+        ? null
+        : values.flatMap((v): string[] => {
+            // A blank entry is nothing extracted, not a discarded value —
+            // it drops out without being reported as a loss.
+            if (typeof v === 'string' && v.trim() === '') return [];
+            const matched = matchOption(v, options);
+            if (matched !== undefined) return [matched];
+            if (open) return typeof v === 'string' ? [v] : [];
+            if (v != null) ctx?.sink.record(ctx.key, v);
+            return [];
+          }),
+    );
+}
+
+function zodForEnumFieldType(type: EnumType, ctx?: FieldCoercions): z.ZodTypeAny {
   if (type.options.length === 0) return z.string().nullable();
   // A single select coerces to its canonical option. Open (known-values)
   // fields keep a genuine non-member as its raw string — other values remain
@@ -2509,20 +2523,41 @@ function countSites(site: CallSite): number {
 
 function describeGuideType(type: FieldType | undefined): string {
   if (type === undefined) return 'text';
-  if (typeof type === 'string') return type;
-  if (type.kind === 'list') return `list of ${describeGuideType(type.of)}`;
-  // `maybeAbsent` is a checker-only type (a race receipt read) and never reaches
-  // extraction guides; describe its present shape defensively rather than crash.
-  if (type.kind === 'maybeAbsent') return describeGuideType(type.of);
-  if (type.kind === 'tuple') return 'a list of values';
-  if (type.kind === 'dict') return 'a set of named values';
-  // Unreachable for the same reason `zodForFieldType`'s record case is — a
-  // model is never asked for a record. Described rather than crashed on.
-  if (type.kind === 'record') return 'a record';
-  // `open` (known-values, not a closed enum): the model must learn other
-  // values are legal too, so this reads distinguishably from a closed enum.
-  if (type.open) return `text, known values: ${type.options.join(' | ')}`;
-  return `enum: ${type.options.join(' | ')}`;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+      return variant.kind;
+    case 'list':
+      return `list of ${describeGuideType(variant.of)}`;
+    // `maybeAbsent` is a checker-only type (a race receipt read) and never
+    // reaches extraction guides; describe its present shape defensively
+    // rather than crash.
+    case 'maybeAbsent':
+      return describeGuideType(variant.of);
+    case 'tuple':
+      return 'a list of values';
+    case 'dict':
+      return 'a set of named values';
+    // Unreachable for the same reason `zodForFieldType`'s record case is — a
+    // model is never asked for a record. Described rather than crashed on.
+    case 'record':
+      return 'a record';
+    case 'enum':
+      // `open` (known-values, not a closed enum): the model must learn other
+      // values are legal too, so this reads distinguishably from a closed enum.
+      return variant.open
+        ? `text, known values: ${variant.options.join(' | ')}`
+        : `enum: ${variant.options.join(' | ')}`;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 function guideSection(site: CallSite, parent: CallSite | undefined): string[] {

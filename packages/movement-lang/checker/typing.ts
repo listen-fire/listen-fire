@@ -40,6 +40,7 @@ import {
   type BuiltinOptionsSpec,
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
+import { neverAsAny } from '../never';
 import { Span } from '../parser/ast';
 import {
   describeFieldType,
@@ -53,6 +54,7 @@ import {
   refinementKey,
   type SchemaFieldType,
   surfaceNotEnumerated,
+  variantOf,
 } from './catalog';
 import type { EffectRow } from './effects';
 import { eventAddressKey, type EventAddress } from './event_address';
@@ -830,19 +832,80 @@ export function maybeAbsent(type: SchemaFieldType | undefined): SchemaFieldType 
 export function maybeAbsent(type: FieldType | undefined): FieldType | undefined;
 export function maybeAbsent(type: FieldType | undefined): FieldType | undefined {
   if (type === undefined) return undefined;
-  if (typeof type === 'object' && type.kind === 'maybeAbsent') return type;
-  return { kind: 'maybeAbsent', of: type };
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    // Already partial — flatten rather than nest a second layer.
+    case 'maybeAbsent':
+      return type;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'record':
+      return { kind: 'maybeAbsent', of: type };
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** The present component of a possibly-absent type — `T | absent → T`, `T → T`. */
 export function stripAbsent(type: FieldType): FieldType {
-  return typeof type === 'object' && type.kind === 'maybeAbsent' ? type.of : type;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'maybeAbsent':
+      return variant.of;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'record':
+      return type;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** Whether reading this type may yield NO value — the checker's require-present
  *  sites (a plain write field, a comparison) fire on it unless discharged. */
 export function isMaybeAbsent(type: FieldType | undefined): boolean {
-  return typeof type === 'object' && type.kind === 'maybeAbsent';
+  if (type === undefined) return false;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'maybeAbsent':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'record':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /**
@@ -878,18 +941,38 @@ function coalesceAbsence(args: Array<FieldType | undefined>): FieldType | undefi
 
 function unwrapList(type: FieldType): FieldType {
   const t = stripAbsent(type);
-  if (typeof t === 'object' && t.kind === 'list') return unwrapList(t.of);
-  // A tuple behaves as the list it is wherever the slots agree — one element
-  // type, so every list rule applies unchanged. Slots that DISAGREE have no
-  // element type, and the tuple stays itself (`baseKind` calls that `json`:
-  // structured data whose shape nothing here describes).
-  if (typeof t === 'object' && t.kind === 'tuple') {
-    const slots = t.of;
-    if (slots.length === 0 || slots.some(slot => slot === null)) return t;
-    const first = slots[0]!;
-    return slots.every(slot => fieldTypeEquals(slot!, first)) ? unwrapList(first) : t;
+  const variant = variantOf(t);
+  switch (variant.kind) {
+    case 'list':
+      return unwrapList(variant.of);
+    // A tuple behaves as the list it is wherever the slots agree — one element
+    // type, so every list rule applies unchanged. Slots that DISAGREE have no
+    // element type, and the tuple stays itself (`baseKind` calls that `json`:
+    // structured data whose shape nothing here describes).
+    case 'tuple': {
+      const slots = variant.of;
+      if (slots.length === 0 || slots.some(slot => slot === null)) return t;
+      const first = slots[0]!;
+      return slots.every(slot => fieldTypeEquals(slot!, first)) ? unwrapList(first) : t;
+    }
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    // `stripAbsent` already peeled this, so it cannot arrive — but the case is
+    // what keeps the switch total.
+    case 'maybeAbsent':
+      return t;
+    default:
+      return neverAsAny(variant);
   }
-  return t;
 }
 
 // ── The order discipline (set vs list) ──────────────────────────────────────
@@ -936,19 +1019,57 @@ export function isPositionTerminal(expr: Expression): boolean {
 /** A value read BY NAME — a dict. It has parts, so a key can name one, and no
  *  order of its own, so a key must. */
 function isKeyedValue(type: FieldType): boolean {
-  const t = stripAbsent(type);
-  // A record is read by name too — its fields are the keys — so ordering a
-  // list of records asks for the key the same way ordering a list of dicts
-  // does, rather than falling to "sorts by its members".
-  return typeof t === 'object' && (t.kind === 'dict' || t.kind === 'record');
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    // A record is read by name too — its fields are the keys — so ordering a
+    // list of records asks for the key the same way ordering a list of dicts
+    // does, rather than falling to "sorts by its members".
+    case 'dict':
+    case 'record':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'enum':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** A PLAIN value — text, a number, a date: something with no fields to key on
  *  and a natural order of its own. `json` and `file` are neither. */
 function isPlainValue(type: FieldType): boolean {
-  const t = stripAbsent(type);
-  if (typeof t === 'object') return t.kind === 'enum';
-  return t === 'text' || t === 'number' || t === 'boolean' || t === 'date' || t === 'datetime';
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    // An enum's values ARE text, so it orders as text does.
+    case 'enum':
+      return true;
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /**
@@ -1017,15 +1138,32 @@ function subExpressions(expr: Expression): Expression[] {
  */
 export function collectionElementOf(type: FieldType): FieldType | undefined {
   const t = stripAbsent(type);
-  if (typeof t !== 'object') return undefined;
-  if (t.kind === 'list') return t.of;
-  if (t.kind === 'tuple') {
-    const shared = unwrapList(t);
-    // Slots that disagree leave a tuple with no element type — the collection
-    // is real, but nothing here can say what one member is.
-    return typeof shared === 'object' && shared.kind === 'tuple' ? undefined : shared;
+  const variant = variantOf(t);
+  switch (variant.kind) {
+    case 'list':
+      return variant.of;
+    case 'tuple': {
+      const shared = unwrapList(t);
+      // Slots that disagree leave a tuple with no element type — the collection
+      // is real, but nothing here can say what one member is.
+      return isTupleType(shared) ? undefined : shared;
+    }
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return undefined;
+    default:
+      return neverAsAny(variant);
   }
-  return undefined;
 }
 
 /** The ordering a value collection carries — the public half of the order
@@ -1038,12 +1176,29 @@ export function collectionOrderOf(type: FieldType | undefined): CollectionOrder 
  *  say nothing — a fold over one is not this rule's business. */
 function valueOrdering(type: FieldType | undefined): CollectionOrder {
   if (type === undefined) return 'unknown';
-  const t = stripAbsent(type);
-  if (typeof t !== 'object') return 'unknown';
-  // A tuple is a fixed sequence of slots — order is what it IS.
-  if (t.kind === 'tuple') return 'ordered';
-  if (t.kind === 'list') return t.unordered === true ? 'unordered' : 'ordered';
-  return 'unknown';
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    // A tuple is a fixed sequence of slots — order is what it IS.
+    case 'tuple':
+      return 'ordered';
+    case 'list':
+      return variant.unordered === true ? 'unordered' : 'ordered';
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return 'unknown';
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** The list type `of` collected under `ordering` — the one place the value
@@ -1070,9 +1225,7 @@ function tupleSlotType(
 ): FieldType | undefined {
   if (index === undefined) {
     const element = unwrapList(tuple);
-    return typeof element === 'object' && element.kind === 'tuple'
-      ? undefined
-      : maybeAbsent(element);
+    return isTupleType(element) ? undefined : maybeAbsent(element);
   }
   const resolved = index < 0 ? tuple.of.length + index : index;
   if (resolved < 0 || resolved >= tuple.of.length) return 'absent';
@@ -1088,21 +1241,45 @@ function literalIndex(expr: Expression): number | undefined {
 function baseKind(
   type: FieldType,
 ): 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' | 'record' {
-  const unwrapped = unwrapList(type);
-  // A RECORD is its own base kind and reaches no other. It is not data (so a
-  // `json` field cannot hold one), and it is emphatically not text — the
-  // catch-all below would have made it one, and "everything renders into text"
-  // is the conflation every rule downstream of this function exists to end.
-  if (typeof unwrapped === 'object' && unwrapped.kind === 'record') return 'record';
-  // A tuple whose slots disagree survives `unwrapList` — structured data with
-  // no element type, which is exactly what `json` means here. A DICT is the
-  // same answer for the same reason: it is a keyed structure, and adding one
-  // up or joining it into text reads nothing meaningful.
-  if (typeof unwrapped === 'object' && (unwrapped.kind === 'tuple' || unwrapped.kind === 'dict')) {
-    return 'json';
+  const variant = variantOf(unwrapList(type));
+  switch (variant.kind) {
+    // A RECORD is its own base kind and reaches no other. It is not data (so a
+    // `json` field cannot hold one), and it is emphatically not text — the
+    // catch-all this switch replaced would have made it one, and "everything
+    // renders into text" is the conflation every rule downstream of this
+    // function exists to end.
+    case 'record':
+      return 'record';
+    // A tuple whose slots disagree survives `unwrapList` — structured data with
+    // no element type, which is exactly what `json` means here. A DICT is the
+    // same answer for the same reason: it is a keyed structure, and adding one
+    // up or joining it into text reads nothing meaningful.
+    case 'tuple':
+    case 'dict':
+      return 'json';
+    // Enum values are text.
+    case 'enum':
+      return 'text';
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+      return variant.kind;
+    // `unwrapList` strips absence, so this cannot arrive; text is the answer
+    // the catch-all gave it.
+    case 'maybeAbsent':
+      return 'text';
+    // A list survives `unwrapList` only as the empty/disagreeing tuple case
+    // above; a plain list is already unwrapped to its element.
+    case 'list':
+      return 'text';
+    default:
+      return neverAsAny(variant);
   }
-  if (typeof unwrapped === 'object') return 'text'; // enum values are text
-  return unwrapped;
 }
 
 /** Is this a DATA shape — something a `json` field can hold? Everything but a
@@ -1144,12 +1321,20 @@ type ComparisonCategory =
   | 'absent';
 
 export function comparisonCategory(type: FieldType): ComparisonCategory {
-  type = stripAbsent(type);
-  if (typeof type === 'object') {
-    if (type.kind === 'record') return 'record';
-    return type.kind === 'enum' ? 'textual' : 'structural';
-  }
-  switch (type) {
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'record':
+      return 'record';
+    case 'enum':
+      return 'textual';
+    // A collection compares only to an identical type, which is what
+    // `structural` means — and what every non-enum object spelling answered
+    // before this switch enumerated them.
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'maybeAbsent':
+      return 'structural';
     case 'date':
     case 'datetime':
       return 'temporal';
@@ -1165,14 +1350,114 @@ export function comparisonCategory(type: FieldType): ComparisonCategory {
       return 'opaque';
     case 'absent':
       return 'absent';
+    default:
+      return neverAsAny(variant);
   }
 }
 
 /** A type-only enum shape — the membership check's subject. */
-type EnumType = Extract<FieldType, { kind: 'enum' }>;
+export type EnumType = Extract<FieldType, { kind: 'enum' }>;
 
-function isEnumType(type: FieldType | undefined): type is EnumType {
-  return typeof type === 'object' && type.kind === 'enum';
+export function isEnumType(type: FieldType | undefined): type is EnumType {
+  if (type === undefined) return false;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'enum':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
+}
+
+/** A tuple — and, asked of a type that has already been unwrapped, the shape
+ *  that says `unwrapList` found no shared element. */
+function isTupleType(type: FieldType): type is Extract<FieldType, { kind: 'tuple' }> {
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'tuple':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
+}
+
+/** A list — the multi-valued shape an append writes into. */
+export function isListType(type: FieldType | undefined): type is Extract<FieldType, { kind: 'list' }> {
+  if (type === undefined) return false;
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'list':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
+}
+
+/** A dict — a value looked up by key rather than indexed. */
+function isDictType(type: FieldType): type is Extract<FieldType, { kind: 'dict' }> {
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'dict':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** What an enum check reports: a code, a message, and (open known-values only)
@@ -1480,10 +1765,30 @@ export function recordOf(position: PositionTypeRef | undefined): FieldType {
  */
 function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'record' }> | undefined {
   if (type === undefined) return undefined;
-  const t = stripAbsent(type);
-  if (typeof t !== 'object') return undefined;
-  if (t.kind === 'record') return t;
-  return t.kind === 'list' ? recordIn(t.of) : undefined;
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'record':
+      return variant;
+    case 'list':
+      return recordIn(variant.of);
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    // A DICT is deliberately not one, per the note above; a tuple of records
+    // is not a walk head either, and an enum is a value.
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'maybeAbsent':
+      return undefined;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** Where a walk off this VALUE starts, when the checker can name it. One record
@@ -1515,8 +1820,27 @@ export function recordValueOf(position: PositionTypeRef | undefined): FieldType 
 /** Is this value type a record? Absence is transparent, as it is everywhere. */
 export function isRecordType(type: FieldType | undefined): boolean {
   if (type === undefined) return false;
-  const t = stripAbsent(type);
-  return typeof t === 'object' && t.kind === 'record';
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'record':
+      return true;
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'enum':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /**
@@ -1542,39 +1866,61 @@ export function unifyValueTypes(types: Array<FieldType | undefined>): FieldType 
  *  Absence is transparent to sameness — `T | absent` equals `T` here (the
  *  require-present sites police absence, not the shape checks). */
 export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
-  a = stripAbsent(a);
-  b = stripAbsent(b);
-  if (typeof a === 'string' || typeof b === 'string') return a === b;
-  if (a.kind === 'list' && b.kind === 'list') return fieldTypeEquals(a.of, b.of);
-  // Two tuples are the same type iff they are the same LENGTH and agree slot by
-  // slot — an untyped slot matches only another untyped one, because "we could
-  // not see" is not a type two tuples can agree on.
-  if (a.kind === 'tuple' && b.kind === 'tuple') {
-    return (
-      a.of.length === b.of.length
-      && a.of.every((slot, i) => {
-        const other = b.of[i];
-        if (slot === null || other === null) return slot === other;
-        return fieldTypeEquals(slot, other);
-      })
-    );
+  const left = variantOf(stripAbsent(a));
+  const right = variantOf(stripAbsent(b));
+  switch (left.kind) {
+    // A bare name carries nothing but itself, so the two kinds agreeing IS the
+    // two types agreeing.
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'json':
+    case 'absent':
+      return right.kind === left.kind;
+    case 'list':
+      return right.kind === 'list' && fieldTypeEquals(left.of, right.of);
+    // Two tuples are the same type iff they are the same LENGTH and agree slot
+    // by slot — an untyped slot matches only another untyped one, because "we
+    // could not see" is not a type two tuples can agree on.
+    case 'tuple':
+      return (
+        right.kind === 'tuple'
+        && left.of.length === right.of.length
+        && left.of.every((slot, i) => {
+          const other = right.of[i];
+          if (slot === null || other === null) return slot === other;
+          return fieldTypeEquals(slot, other);
+        })
+      );
+    // Two dicts agree when what they hold agrees — the keys are data, not type.
+    case 'dict':
+      return right.kind === 'dict' && fieldTypeEquals(left.of, right.of);
+    // Two records are the same type when they are the same place to start a
+    // walk from — both directions of the fit, so neither stands in for a wider
+    // one. Two records nobody can name agree too: "a record, unknown which" is
+    // one answer, not two.
+    case 'record':
+      if (right.kind !== 'record') return false;
+      if (left.position === undefined || right.position === undefined) {
+        return left.position === undefined && right.position === undefined;
+      }
+      return sameStartingPoint(left.position, right.position);
+    case 'enum':
+      return (
+        right.kind === 'enum'
+        && left.options.length === right.options.length
+        && left.options.every((o, i) => o === right.options[i])
+      );
+    // `stripAbsent` peeled this and `maybeAbsent` never nests, so it cannot
+    // arrive; absence is transparent to sameness either way.
+    case 'maybeAbsent':
+      return right.kind === 'maybeAbsent' && fieldTypeEquals(left.of, right.of);
+    default:
+      return neverAsAny(left);
   }
-  // Two dicts agree when what they hold agrees — the keys are data, not type.
-  if (a.kind === 'dict' && b.kind === 'dict') return fieldTypeEquals(a.of, b.of);
-  // Two records are the same type when they are the same place to start a walk
-  // from — both directions of the fit, so neither stands in for a wider one.
-  // Two records nobody can name agree too: "a record, unknown which" is one
-  // answer, not two.
-  if (a.kind === 'record' && b.kind === 'record') {
-    if (a.position === undefined || b.position === undefined) {
-      return a.position === undefined && b.position === undefined;
-    }
-    return sameStartingPoint(a.position, b.position);
-  }
-  if (a.kind === 'enum' && b.kind === 'enum') {
-    return a.options.length === b.options.length && a.options.every((o, i) => o === b.options[i]);
-  }
-  return false;
 }
 
 /**
@@ -1585,11 +1931,33 @@ export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
  * known-values field, where an unlisted value is only a warning.
  */
 function targetConstrainsExtraction(target: FieldType): boolean {
-  const t = unwrapList(target);
-  if (typeof t === 'object') return t.kind === 'enum' && t.open === undefined;
-  // `json` constrains nothing, for the same reason `text` doesn't: it accepts
-  // every data shape, so no annotation on the extraction can be the wrong one.
-  return t !== 'text' && t !== 'json';
+  const variant = variantOf(unwrapList(target));
+  switch (variant.kind) {
+    case 'enum':
+      return variant.open === undefined;
+    // `json` constrains nothing, for the same reason `text` doesn't: it accepts
+    // every data shape, so no annotation on the extraction can be the wrong one.
+    case 'text':
+    case 'json':
+      return false;
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'absent':
+      return true;
+    // Every other object spelling answered `false` before this switch
+    // enumerated them: only a closed enum constrained.
+    case 'list':
+    case 'tuple':
+    case 'dict':
+    case 'record':
+    case 'maybeAbsent':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
 }
 
 /** Can a value of `source` be read where `target` is expected (width-subtype
@@ -1610,13 +1978,13 @@ export function fieldAssignable(source: FieldType, target: FieldType): boolean {
   // already answered. The category rule at the bottom would otherwise let any
   // two records stand in for each other.
   if (baseKind(source) === 'record' || baseKind(target) === 'record') return false;
-  if (target === 'text' && (source === 'text' || (typeof source === 'object' && source.kind === 'enum'))) {
+  if (target === 'text' && (source === 'text' || isEnumType(source))) {
     return true;
   }
   // text → enum is the disallowed reverse of the enum→text widening: a
   // plain-text source can hold any string, so it does NOT satisfy a target
   // constrained to an enum's options.
-  if (typeof target === 'object' && target.kind === 'enum') return false;
+  if (isEnumType(target)) return false;
   return comparisonCategory(source) === comparisonCategory(target)
     && comparisonCategory(source) !== 'structural';
 }
@@ -2515,24 +2883,42 @@ export class ExpressionTyping {
         // the second argument is a KEY, checked as one. What comes back is
         // `T | absent` under the ordinary absence discipline — a key that is
         // not there is the everyday case, not an error.
-        if (typeof innerShape === 'object' && innerShape.kind === 'dict') {
+        if (innerShape !== undefined && isDictType(innerShape)) {
           this.requireDictKey(indexType, 'looked up in a dict');
           return maybeAbsent(innerShape.of);
         }
         this.checkFoldOrder('at', expr.expression, position);
         if (inner === undefined) return undefined;
         const element = stripAbsent(inner);
-        // A TUPLE has a slot per position, so a LITERAL index reads that slot
-        // and nothing else — present, because a fixed-length list always has
-        // it. That exactness is the whole reason the tuple type exists.
-        if (typeof element === 'object' && element.kind === 'tuple') {
-          return tupleSlotType(element, literalIndex(expr.index));
+        const variant = variantOf(element);
+        switch (variant.kind) {
+          // A TUPLE has a slot per position, so a LITERAL index reads that slot
+          // and nothing else — present, because a fixed-length list always has
+          // it. That exactness is the whole reason the tuple type exists.
+          case 'tuple':
+            return tupleSlotType(variant, literalIndex(expr.index));
+          // Indexing can miss — an out-of-range index reads null at run time,
+          // so the element is `T | absent`, exactly as FIRST/LAST are.
+          case 'list':
+            return maybeAbsent(variant.of);
+          // Indexing something that is not a collection reads the thing itself,
+          // maybe-absent — including a dict, which the guard above already took.
+          case 'text':
+          case 'number':
+          case 'boolean':
+          case 'date':
+          case 'datetime':
+          case 'file':
+          case 'json':
+          case 'absent':
+          case 'dict':
+          case 'enum':
+          case 'record':
+          case 'maybeAbsent':
+            return maybeAbsent(element);
+          default:
+            return neverAsAny(variant);
         }
-        // Indexing can miss — an out-of-range index reads null at run time, so
-        // the element is `T | absent`, exactly as FIRST/LAST are.
-        return maybeAbsent(
-          typeof element === 'object' && element.kind === 'list' ? element.of : element,
-        );
       }
       case 'aggregate': {
         const inner = this.inferAt(expr.expression, position);
@@ -2728,8 +3114,28 @@ export class ExpressionTyping {
   requireDictKey(type: FieldType | undefined, where: string): void {
     if (type === undefined) return;
     const key = stripAbsent(type);
-    if (key === 'text') return;
-    if (typeof key === 'object' && key.kind === 'enum') return;
+    const variant = variantOf(key);
+    switch (variant.kind) {
+      // An enum's values ARE text, so one spells a key with no coercion.
+      case 'text':
+      case 'enum':
+        return;
+      case 'number':
+      case 'boolean':
+      case 'date':
+      case 'datetime':
+      case 'file':
+      case 'json':
+      case 'absent':
+      case 'list':
+      case 'tuple':
+      case 'dict':
+      case 'record':
+      case 'maybeAbsent':
+        break;
+      default:
+        return neverAsAny(variant);
+    }
     const repair =
       key === 'date' || key === 'datetime'
         ? "write the spelling down — `DATE.FORMAT(d, \"YYYY-MM-DD\")`"
@@ -3699,12 +4105,7 @@ export class ExpressionTyping {
             address !== undefined
               ? from.instance.schema.positions[address.event]?.properties[EVENT_ACTION_FIELD]
               : undefined;
-          if (
-            address !== undefined
-            && typeof actionType === 'object'
-            && 'kind' in actionType
-            && actionType.kind === 'enum'
-          ) {
+          if (address !== undefined && actionType !== undefined && isEnumType(actionType)) {
             for (const option of actionType.options) {
               const key = eventAddressKey({
                 event: address.event,

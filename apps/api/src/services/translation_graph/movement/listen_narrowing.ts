@@ -49,6 +49,7 @@ import {
   RECORD_DELETED_ACTION,
   eventAddressDisplay,
   eventAddressKey,
+  isEnumType,
   narrowingPrefixKey,
   type EdgeSchema,
   type EventAddressRef,
@@ -161,9 +162,7 @@ export async function narrowEventPositions(
 
     const actionType = source.properties[EVENT_ACTION_FIELD];
     const actionEnum =
-      typeof actionType === 'object' && !Array.isArray(actionType) && actionType.kind === 'enum'
-        ? actionType.options
-        : undefined;
+      !Array.isArray(actionType) && isEnumType(actionType) ? actionType.options : undefined;
 
     // Split the pins: the declared address hops walk; an `action` pin narrows
     // the node's own axis. A pin on anything else addresses nothing this

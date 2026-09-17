@@ -1,3 +1,4 @@
+export * from './never';
 export * from './parser/ast';
 export * from './parser/scan';
 export * from './parser/parse';
