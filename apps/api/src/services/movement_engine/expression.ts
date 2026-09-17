@@ -2480,9 +2480,12 @@ async function readAdapterTraverse(
     throw unsupported(`this read shape on ${what} ('${name}')`);
   }
   if (field === POSITION_SENTINEL) {
-    // "The positions themselves" — counting-style aggregates consume the
-    // landed set; a fan-out has no single origin to cite.
-    return { value: landed.map((b) => b.position), provenance: NO_PROVENANCE };
+    // "The positions themselves" — the landed RECORDS, in the currency every
+    // other many-valued read hands back (a block's landings, a collection op's
+    // answer). A hop is many-valued, so a bare walk written as a value is a
+    // list of records: `COUNT` counts them, `MAP` reads them, and a block head
+    // walks them. A fan-out has no single origin to cite.
+    return { value: landed, provenance: NO_PROVENANCE };
   }
   const results: MovementEvalResult[] = [];
   for (const b of landed) {

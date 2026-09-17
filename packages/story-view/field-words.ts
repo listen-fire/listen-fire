@@ -23,6 +23,8 @@ export function typeWord(type: FieldType): string {
         .join(", then ");
     case "dict":
       return `${typeWord(type.of)}, looked up by name`;
+    case "record":
+      return "a record";
     default: {
       const exhaustive: never = type;
       return exhaustive;

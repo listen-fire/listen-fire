@@ -48,6 +48,7 @@ import type {
   SourceRead,
   WriteRecord,
 } from './expression';
+import { bindingOf, isDictValue } from './expression';
 import type { Provenance } from './provenance';
 import { MovementEngineError } from './errors';
 
@@ -120,6 +121,18 @@ export type BindingDescriptor =
    */
   | { kind: 'closure'; closure: ClosureExpression; captured: Record<string, BindingDescriptor> }
   | { kind: 'value'; value: unknown; provenance?: Provenance }
+  /**
+   * Bucket 3 (recursive) — a VALUE that holds records: a `MAP` answer whose
+   * function returned the member, a list literal of them, a `GROUPBY` dict.
+   * A record is a value, so a value can hold one; and a record does NOT
+   * survive `JSON.stringify` (an extract emission's children are a `Map`, a
+   * file ref is a closure), so it travels by its own descriptor, exactly as a
+   * block's returned landings do.
+   *
+   * Its own descriptor kind rather than a richer `value`: a parked run written
+   * before this existed still reads as `value`, and one written after says so.
+   */
+  | { kind: 'recordValue'; value: ValueDescriptor; provenance?: Provenance }
   /** Bucket 1 — a minted callback is pure data: its id, its link, its fire-time
    *  signature. The CALLS are deliberately NOT here (they arrive after the park
    *  and are read live from the store), and neither is the body (it is code, at
@@ -147,6 +160,18 @@ export type BindingDescriptor =
   /** Bucket 3 (recursive) — a stored, unrun traversal. */
   | { kind: 'lazyWalk'; walk: DeferredWalkDescriptor }
   | { kind: 'opaque'; what: string; name: string };
+
+/**
+ * A value, serialised with its records intact. Data is data; a record is the
+ * binding it is; a list and a map are themselves, member by member. The shape
+ * mirrors the value rather than tagging it, so nothing has to recognise a
+ * magic key inside somebody's data.
+ */
+export type ValueDescriptor =
+  | { kind: 'data'; value: unknown }
+  | { kind: 'record'; binding: BindingDescriptor }
+  | { kind: 'list'; of: ValueDescriptor[] }
+  | { kind: 'map'; of: Record<string, ValueDescriptor> };
 
 export type NodeEdgeDescriptor =
   /** `landingShape` rides across because it is what a write AFTER the resume
@@ -372,8 +397,15 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       return { kind: 'instance', instance: serializeInstanceIdentity(binding) };
     case 'resource':
       return { kind: 'resource', resource: serializeResource(binding.resource) };
-    // ── Bucket 1 (value) — with the JSON guard ──
+    // ── Bucket 1 (value) — with the JSON guard, unless it holds records ──
     case 'value':
+      if (holdsRecords(binding.value)) {
+        return {
+          kind: 'recordValue',
+          value: serializeValue(binding.value),
+          ...(binding.provenance !== undefined ? { provenance: binding.provenance } : {}),
+        };
+      }
       return {
         kind: 'value',
         value: assertJsonSerializable(binding.value, 'value binding'),
@@ -550,6 +582,12 @@ export async function rehydrateBinding(
         value: descriptor.value,
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
       };
+    case 'recordValue':
+      return {
+        kind: 'value',
+        value: await rehydrateValue(descriptor.value, ctx),
+        ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
+      };
     case 'callback':
       return {
         kind: 'callback',
@@ -677,6 +715,53 @@ export function serializeScope(env: Environment): SerializedScope {
  */
 export function serializeScopeChain(chain: Environment[]): SerializedScope[] {
   return chain.map(serializeScope);
+}
+
+// ── Values that hold records ──────────────────────────────────────────────────
+
+/**
+ * Does this value hold a RECORD anywhere inside it? Only then does the value
+ * need the recursive descriptor: everything else is data and travels as data,
+ * which is what every parked run before this one carries.
+ */
+function holdsRecords(value: unknown): boolean {
+  if (bindingOf(value) !== undefined) return true;
+  if (Array.isArray(value)) return value.some(holdsRecords);
+  if (isDictValue(value)) return Object.values(value).some(holdsRecords);
+  return false;
+}
+
+function serializeValue(value: unknown): ValueDescriptor {
+  const record = bindingOf(value);
+  if (record !== undefined) return { kind: 'record', binding: serializeBinding(record) };
+  if (Array.isArray(value)) return { kind: 'list', of: value.map(serializeValue) };
+  if (isDictValue(value)) {
+    const of: Record<string, ValueDescriptor> = {};
+    for (const [key, entry] of Object.entries(value)) of[key] = serializeValue(entry);
+    return { kind: 'map', of };
+  }
+  return { kind: 'data', value: assertJsonSerializable(value, 'value binding') };
+}
+
+async function rehydrateValue(
+  descriptor: ValueDescriptor,
+  ctx: RehydrationContext,
+): Promise<unknown> {
+  switch (descriptor.kind) {
+    case 'data':
+      return descriptor.value;
+    case 'record':
+      return rehydrateBinding(descriptor.binding, ctx);
+    case 'list':
+      return Promise.all(descriptor.of.map((entry) => rehydrateValue(entry, ctx)));
+    case 'map': {
+      const out: Record<string, unknown> = {};
+      for (const [key, entry] of Object.entries(descriptor.of)) {
+        out[key] = await rehydrateValue(entry, ctx);
+      }
+      return out;
+    }
+  }
 }
 
 // ── Exhaustiveness ────────────────────────────────────────────────────────────

@@ -352,7 +352,7 @@ describe('a block head rooted at a value holding extraction roots', () => {
     expect(attio.creates.map((w) => w.fields.name)).toEqual(['Globex']);
   });
 
-  it('a member that is not a position fails naming what it is', async () => {
+  it('a member that is not a position is refused where it is WRITTEN, naming both', async () => {
     const attio = makeFakeAdapter('attio');
     const llm = perPieceLlm(namesInPiece);
 
@@ -371,7 +371,7 @@ describe('a block head rooted at a value holding extraction roots', () => {
           ].join('\n'),
         { text: THREE_PIECES, llm: llm.client, attio: attio.adapter },
       ),
-    ).rejects.toThrow(/one of the values in 'mixed' is text/);
+    ).rejects.toThrow(/a list holds one kind of thing/);
   });
 });
 
@@ -422,7 +422,7 @@ describe('a block head rooted at a value holding synthesised nodes', () => {
     expect(attio.creates.map((w) => w.fields.name)).toEqual(['A', 'B']);
   });
 
-  it('a member the checker could not see is not a record fails at the head', async () => {
+  it('a member that is text is refused where the list is written, naming both', async () => {
     const attio = makeFakeAdapter('attio');
 
     await expect(
@@ -441,10 +441,10 @@ describe('a block head rooted at a value holding synthesised nodes', () => {
         ].join('\n'),
         { attio: attio.adapter },
       ),
-    ).rejects.toThrow(/one of the values in 'both' is text/);
+    ).rejects.toThrow(/a list holds one kind of thing/);
   });
 
-  it("interpolating one of them is unchanged — only the list literal reads a record", async () => {
+  it('interpolating one of them is refused where it is written, naming the record', async () => {
     const attio = makeFakeAdapter('attio');
 
     await expect(
@@ -461,7 +461,7 @@ describe('a block head rooted at a value holding synthesised nodes', () => {
         ].join('\n'),
         { attio: attio.adapter },
       ),
-    ).rejects.toThrow(/reading 'one' \(a synthesised node\) as a bare value/);
+    ).rejects.toThrow(/a node is a record, not a value/);
   });
 });
 

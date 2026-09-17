@@ -2711,7 +2711,7 @@ export class ExpressionTyping {
     if (records.length === 0 || values.length === 0) return;
     this.report(
       TypedDiagnosticCodes.LIST_MIXED,
-      `a list holds one kind of thing, and this one holds both: ${describeFieldType(records[0]!)} is a record, and another member is ${describeFieldType(values[0]!)}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
+      `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(records[0]!))} is a record, and another member is ${describeFieldType(values[0]!)}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
     );
   }
 
