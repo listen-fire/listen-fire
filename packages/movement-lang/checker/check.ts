@@ -6152,11 +6152,12 @@ class Checker {
     const rootType =
       (rootSymbol ? this.symbolPositionType(rootSymbol) : undefined)
       ?? recordHeadPosition(rootValueType);
-    // A head rooted at a name that is a VALUE and NOT a record. There are no
-    // positions on the value plane — a value type is text, a number, a list or
-    // a dict of them — so a hop off a name whose value type is KNOWN can never
-    // land anywhere, and it is said here rather than at run time, after
-    // everything that produced the value has already been paid for.
+    // A root that is a VALUE and NOT a record — a name bound to one, or an
+    // expression that computes one. There are no positions on the value plane —
+    // a value type is text, a number, a list or a dict of them — so a hop off a
+    // root whose value type is KNOWN can never land anywhere, and it is said
+    // here rather than at run time, after everything that produced the value
+    // has already been paid for.
     //
     // A value whose type is NOT known stays silent and runs (the honesty rule):
     // a plugin whose output nobody declared, an untyped import.
