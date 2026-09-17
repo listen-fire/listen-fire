@@ -121,7 +121,7 @@ describe('pass-through edges — traversal entries (wave 2)', () => {
     const files = entry(literal('d = node { files: e-[a:Attachments]-> }'), 'files');
     if (files.kind !== 'traversal') throw new Error('expected a traversal entry');
     expect(files.lazy).toBe(false);
-    expect(files.head.root).toBe('e');
+    expect(files.head.root).toEqual({ kind: 'name', name: 'e' });
     expect(files.head.hopsRaw).toBe('-[a:Attachments]->');
   });
 
@@ -198,7 +198,7 @@ describe('per-item synthesis — the `-> node { … }` tail (wave 3)', () => {
     if (files.kind !== 'traversal') throw new Error('expected a traversal entry');
     const versions = files.mapping?.entries.find((e) => e.name === 'versions');
     if (versions?.kind !== 'traversal') throw new Error('expected a nested traversal entry');
-    expect(versions.head.root).toBe('a');
+    expect(versions.head.root).toEqual({ kind: 'name', name: 'a' });
     expect(versions.mapping?.entries.map((e) => e.name)).toEqual(['label']);
   });
 
@@ -228,7 +228,7 @@ describe('`lazy` on an ordinary binding (wave 2)', () => {
   it('binds the deferred traversal, in the `await` slot', () => {
     const value = assign('files = lazy e-[a:Attachments]->').value;
     if (value.kind !== 'lazy') throw new Error(`expected a lazy traversal, got ${value.kind}`);
-    expect(value.lazy.head.root).toBe('e');
+    expect(value.lazy.head.root).toEqual({ kind: 'name', name: 'e' });
     expect(value.lazy.head.hopsRaw).toBe('-[a:Attachments]->');
   });
 

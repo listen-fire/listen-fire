@@ -32,6 +32,7 @@ import type {
   WriteExpression,
   WriteTarget,
 } from '../parser/ast';
+import { pathRootName, probePathHead } from '../parser/ast';
 import { parseProgram } from '../parser/parse';
 import { unwrapCredentialArg } from '../parser/scan';
 import { parseMovementExpression } from '../expression/bridge';
@@ -110,7 +111,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     if (head.root === undefined || head.hopsRaw.length === 0) return undefined;
     try {
       const parsed = parseMovementExpression(
-        `${head.root}${head.hopsRaw}.\`__movement_selector_probe__\``,
+        `${probePathHead(head)}.\`__movement_selector_probe__\``,
       );
       return parsed.type === 'traverse' ? parsed.steps : undefined;
     } catch {
@@ -126,12 +127,18 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     head: PathHead,
     aliasScope: Map<string, AliasGrounding>,
   ): { binding: ConstructionBinding; steps: TraversalStep[]; startPosition?: string } | undefined => {
-    if (head.root === undefined) return undefined;
+    // Grounding is by NAME: the walk starts at a construction this scan can
+    // follow back to its credential. An EXPRESSION root has no name to follow
+    // — the instance it reads from is inside the expression — so it grounds
+    // nothing, and the scan loses a narrowing rather than claiming a wrong one.
+    // Losing one only widens what the save fetches; it never hides a position.
+    const rootName = pathRootName(head);
+    if (rootName === undefined) return undefined;
     const steps = parseSteps(head);
     if (steps === undefined || steps.length === 0) return undefined;
-    const direct = bindings.get(head.root);
+    const direct = bindings.get(rootName);
     if (direct) return { binding: direct, steps };
-    const viaAlias = aliasScope.get(head.root);
+    const viaAlias = aliasScope.get(rootName);
     if (viaAlias) {
       return {
         binding: viaAlias.binding,
