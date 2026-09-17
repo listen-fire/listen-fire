@@ -68,6 +68,14 @@ node Deep {
     }
   }
 }
+
+node Ordered {
+  name: <text>
+  node founder {
+    first: <text>
+    last: <text>
+  } order by arrival
+}
 `;
 
 const SHAPED = 'deduped = node { entries: <Entry> }';
@@ -186,5 +194,63 @@ describe('a write into the nested edge', () => {
   g = write h-[:founder]-> { first: "Jane", last: "Doe" }
   n = g.\`first\``;
     expect(codes(body)).toEqual([]);
+  });
+});
+
+// `node founder { … } order by arrival` — the author saying THIS nested edge's
+// landings keep an order. It reaches the set/list split the same road every
+// other sequencing claim takes (`EdgeSchema.sequenced`), on both paths a
+// declared type reaches a position from: a written local landing, and a bare
+// PARAMETER typed by the declaration.
+describe('a nested declared node can say its order', () => {
+  const ORDERED_SHAPED = 'deduped = node { entries: <Ordered> }';
+  const ORDERED_WRITTEN =
+    '  h = write deduped-[:entries]-> { unique by (FUZZY `name`)\n    name: "Acme"\n  }';
+
+  function checkOrdered(body: string): Diagnostic[] {
+    const source = `${PRELUDE}
+movement m(e: <inbox-[:message]->>) {
+  ${ORDERED_SHAPED}
+${body}
+}`;
+    return checkProgram(parseProgram(source), catalog).filter(
+      (d) => (d.severity ?? 'error') === 'error',
+    );
+  }
+  const orderedCodes = (body: string): string[] => checkOrdered(body).map((d) => d.code);
+
+  it('without the clause, FIRST over a written landing’s nested edge is refused', () => {
+    const body = `${WRITTEN}
+  f1 = write h-[:founder]-> { first: "Jane", last: "Doe" }
+  x = FIRST(h-[g:founder]->)`;
+    expect(codes(body)).toContain('MOV_FOLD_NEEDS_ORDER');
+  });
+
+  it('with it, FIRST reads the first founder written onto the landing — clean, no ORDER BY anywhere', () => {
+    const body = `${ORDERED_WRITTEN}
+  f1 = write h-[:founder]-> { first: "Jane", last: "Doe" }
+  f2 = write h-[:founder]-> { first: "Jo", last: "Bloggs" }
+  x = FIRST(h-[g:founder]->)`;
+    expect(orderedCodes(body)).toEqual([]);
+  });
+
+  it('the declaration is the same fact off a bare PARAMETER typed by it, with no write in sight', () => {
+    const source = `${PRELUDE}
+function f(e: <Entry>) {
+  x = FIRST(e-[g:founder]->)
+}`;
+    const unordered = checkProgram(parseProgram(source), catalog).filter(
+      (d) => (d.severity ?? 'error') === 'error',
+    );
+    expect(unordered.map((d) => d.code)).toContain('MOV_FOLD_NEEDS_ORDER');
+
+    const orderedSource = `${PRELUDE}
+function g(e: <Ordered>) {
+  x = FIRST(e-[f:founder]->)
+}`;
+    const ordered = checkProgram(parseProgram(orderedSource), catalog).filter(
+      (d) => (d.severity ?? 'error') === 'error',
+    );
+    expect(ordered).toEqual([]);
   });
 });

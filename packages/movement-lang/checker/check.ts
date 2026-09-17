@@ -5366,8 +5366,14 @@ class Checker {
       if (target === undefined) continue;
       edges[name] = {
         // Same promises every synthesised edge carries — readable, and nothing
-        // else. There is no system behind it to promise more.
-        schema: { target: name, readable: true },
+        // else — plus the declaration's own sequencing claim (`order by
+        // arrival`), copied through so a written landing's nested edge reads
+        // back ordered exactly as the declared type says it should.
+        schema: {
+          target: name,
+          readable: true,
+          ...(declared.sequenced !== undefined ? { sequenced: declared.sequenced } : {}),
+        },
         target,
         structural: true,
       };
