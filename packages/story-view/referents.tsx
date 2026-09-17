@@ -181,6 +181,11 @@ function leakedNames(view: StoryView): Set<string> {
           if (part.traversal.hops.length === 0 && part.traversal.root) {
             leaked.add(part.traversal.root.name);
           }
+          // A walk that starts at an EXPRESSION shows that expression as
+          // written, hops or no hops — so every name it reads is on screen.
+          for (const ref of part.traversal.rootExpression?.refs ?? []) {
+            leaked.add(ref.name);
+          }
           break;
         case "text":
           break;
