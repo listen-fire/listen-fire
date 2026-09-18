@@ -76,3 +76,23 @@ export function candidateIsAllExact(
       ),
   );
 }
+
+/**
+ * Does ANY branch of these constraints carry a FUZZY entry? A search that
+ * accepted an approximate match on some branch can turn up a lone candidate
+ * that is a different real-world entity merely sharing the fuzzy field (the
+ * OriqX/Pavo AI incident) — that lone hit stays doubtful no matter what
+ * `candidateIsAllExact` says.
+ *
+ * Constraints with NO fuzzy entry anywhere mean every branch's search was
+ * exact, so a lone candidate needs no arbitration even when the engine
+ * itself can't re-verify it field-by-field — e.g. a constraint naming a
+ * parent EDGE, which is folded into the adapter's search record but never
+ * into the write's own asserted fields, so `candidateIsAllExact` can never
+ * see it. `{ any: [] }` (no constraints at all) has no branch to carry a
+ * fuzzy entry, so it reads as "no fuzzy entry" too — preserving the
+ * pre-existing unconstrained-write behaviour of matching a lone candidate.
+ */
+export function constraintsHaveFuzzyEntry(constraints: UniquenessConstraints): boolean {
+  return constraints.any.some((branch) => branch.all.some((entry) => entry.fuzzy === true));
+}

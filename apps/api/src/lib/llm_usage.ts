@@ -128,7 +128,9 @@ function calculateCostMicrodollars(options: {
 // -- Recording --
 
 interface RecordUsageOptions {
-  provider: 'openai' | 'anthropic';
+  /** `jev` is Typesafe AI's non-generative judge (`lib/jev/client.ts`) — a
+   *  distinct vendor, not a dialect of either LLM provider. */
+  provider: 'openai' | 'anthropic' | 'jev';
   model: string;
   callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'responses';
   label?: string;

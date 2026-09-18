@@ -67,6 +67,26 @@ describe('the distinctive-token key', () => {
   it('a multi-valued field compares by its values', () => {
     expect(sharesDistinctiveToken(['Acme Robotics'], 'acme')).toBe(true);
   });
+
+  describe('a bare domain fallback name', () => {
+    // Prod incident: `name` falls back to a bare domain for several
+    // unrelated companies, and punctuation stripping alone turns every one
+    // of them into the shared, non-generic token "com".
+    it('two different domains under the same TLD share no token', () => {
+      expect(distinctiveTokens('oriqx.com')).toEqual(['oriqx']);
+      expect(distinctiveTokens('pavoai.com')).toEqual(['pavoai']);
+      expect(sharesDistinctiveToken('oriqx.com', 'pavoai.com')).toBe(false);
+    });
+
+    it('the same domain with a scheme, a `www.` subdomain and a path still matches', () => {
+      expect(sharesDistinctiveToken('oriqx.com', 'https://www.oriqx.com/about')).toBe(true);
+    });
+
+    it('a multi-label TLD (`co.uk`) also drops only its final label', () => {
+      expect(distinctiveTokens('foo.co.uk')).toEqual(['foo']);
+      expect(sharesDistinctiveToken('foo.co.uk', 'bar.co.uk')).toBe(false);
+    });
+  });
 });
 
 describe('the store over an edge’s landings', () => {
