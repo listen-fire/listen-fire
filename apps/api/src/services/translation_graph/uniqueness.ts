@@ -55,11 +55,12 @@ function fieldValuesMatch(asserted: unknown, candidate: unknown): boolean {
 }
 
 /**
- * Engine-side exactness arbitration (3b §3.1/§3.2): does *some* branch with no
- * fuzzy entries match the candidate's `data` exactly against the asserted
+ * Engine-side exactness arbitration (3b §3.1/§3.2): does *some* branch match
+ * the candidate's `data` exactly, field for field, against the asserted
  * record? The engine treats exactly one all-exact candidate among many as an
- * auto-match without invoking the LLM judge. A branch carrying any fuzzy entry
- * never counts as all-exact.
+ * auto-match without invoking the LLM judge. A FUZZY entry counts when its
+ * values are equal outright — "Pavo AI" against "Pavo AI" is an identity, not
+ * a resemblance, and spending a judge call on it buys nothing.
  */
 export function candidateIsAllExact(
   constraints: UniquenessConstraints,
@@ -69,10 +70,8 @@ export function candidateIsAllExact(
   return constraints.any.some(
     (branch) =>
       branch.all.length > 0 &&
-      branch.all.every(
-        (entry) =>
-          !entry.fuzzy &&
-          fieldValuesMatch(asserted[entry.field], candidateData[entry.field]),
+      branch.all.every((entry) =>
+        fieldValuesMatch(asserted[entry.field], candidateData[entry.field]),
       ),
   );
 }

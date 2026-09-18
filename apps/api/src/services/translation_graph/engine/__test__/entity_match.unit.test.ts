@@ -313,13 +313,35 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     expect(out).toBe(1);
   });
 
-  it('treats a fuzzy-only constraint branch as never all-exact (always judges)', async () => {
+  it('a FUZZY field whose values are equal outright is exact — the one exact candidate wins without the judge', async () => {
+    const out = await arbitrateEntityCandidates({
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'pavo ai' }, 'a'), ref({ name: 'Pavo AI Labs' }, 'b')],
+      recordType: 'co',
+      constraints: constraintsOn('name', true),
+    });
+    expect(out).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('a lone FUZZY candidate with the identical name matches without the judge', async () => {
+    const out = await arbitrateEntityCandidates({
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'Pavo AI' }, 'a')],
+      recordType: 'co',
+      constraints: constraintsOn('name', true),
+    });
+    expect(out).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('two FUZZY candidates both equal outright are ambiguous — the judge decides', async () => {
     mockExecute.mockResolvedValue(judged(null, 0.9));
     const out = await arbitrateEntityCandidates({
-      asserted: { domain: 'acme.com' },
-      candidates: [ref({ domain: 'acme.com' }, 'a'), ref({ domain: 'zzz.com' }, 'b')],
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'Pavo AI' }, 'a'), ref({ name: 'PAVO AI' }, 'b')],
       recordType: 'co',
-      constraints: constraintsOn('domain', true),
+      constraints: constraintsOn('name', true),
     });
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(out).toBeNull();
