@@ -55,11 +55,12 @@ function fieldValuesMatch(asserted: unknown, candidate: unknown): boolean {
 }
 
 /**
- * Engine-side exactness arbitration (3b §3.1/§3.2): does *some* branch with no
- * fuzzy entries match the candidate's `data` exactly against the asserted
+ * Engine-side exactness arbitration (3b §3.1/§3.2): does *some* branch match
+ * the candidate's `data` exactly, field for field, against the asserted
  * record? The engine treats exactly one all-exact candidate among many as an
- * auto-match without invoking the LLM judge. A branch carrying any fuzzy entry
- * never counts as all-exact.
+ * auto-match without invoking the LLM judge. A FUZZY entry counts when its
+ * values are equal outright — "Pavo AI" against "Pavo AI" is an identity, not
+ * a resemblance, and spending a judge call on it buys nothing.
  */
 export function candidateIsAllExact(
   constraints: UniquenessConstraints,
@@ -69,10 +70,28 @@ export function candidateIsAllExact(
   return constraints.any.some(
     (branch) =>
       branch.all.length > 0 &&
-      branch.all.every(
-        (entry) =>
-          !entry.fuzzy &&
-          fieldValuesMatch(asserted[entry.field], candidateData[entry.field]),
+      branch.all.every((entry) =>
+        fieldValuesMatch(asserted[entry.field], candidateData[entry.field]),
       ),
   );
+}
+
+/**
+ * Does ANY branch of these constraints carry a FUZZY entry? A search that
+ * accepted an approximate match on some branch can turn up a lone candidate
+ * that is a different real-world entity merely sharing the fuzzy field (the
+ * OriqX/Pavo AI incident) — that lone hit stays doubtful no matter what
+ * `candidateIsAllExact` says.
+ *
+ * Constraints with NO fuzzy entry anywhere mean every branch's search was
+ * exact, so a lone candidate needs no arbitration even when the engine
+ * itself can't re-verify it field-by-field — e.g. a constraint naming a
+ * parent EDGE, which is folded into the adapter's search record but never
+ * into the write's own asserted fields, so `candidateIsAllExact` can never
+ * see it. `{ any: [] }` (no constraints at all) has no branch to carry a
+ * fuzzy entry, so it reads as "no fuzzy entry" too — preserving the
+ * pre-existing unconstrained-write behaviour of matching a lone candidate.
+ */
+export function constraintsHaveFuzzyEntry(constraints: UniquenessConstraints): boolean {
+  return constraints.any.some((branch) => branch.all.some((entry) => entry.fuzzy === true));
 }

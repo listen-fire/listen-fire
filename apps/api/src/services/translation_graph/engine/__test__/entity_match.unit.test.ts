@@ -8,6 +8,7 @@
 // and using the REAL exactness arbitration (`candidateIsAllExact`).
 
 import { execute } from '../../../../lib/prompts/execute';
+import { askJev } from '../../../../lib/jev/client';
 import type { ExternalRecordRef } from '../../adapter';
 import type { UniquenessConstraints } from '../../uniqueness';
 import { arbitrateEntityCandidates, judgeEntityMatch, JUDGE_MODEL } from '../entity_match';
@@ -17,7 +18,15 @@ jest.mock('../../../../lib/prompts/execute', () => ({
   execute: jest.fn(),
 }));
 
+// Mock ONLY the network call — `assertJevConfigured`/`jevEntityResolutionEnabled`
+// stay real so the loud-misconfiguration path is exercised, not stubbed away.
+jest.mock('../../../../lib/jev/client', () => {
+  const actual = jest.requireActual('../../../../lib/jev/client');
+  return { ...actual, askJev: jest.fn() };
+});
+
 const mockExecute = execute as jest.MockedFunction<typeof execute>;
+const mockAskJev = askJev as jest.MockedFunction<typeof askJev>;
 
 /** Build a candidate with a flat field bag. */
 function ref(data: Record<string, unknown>, externalId = 'rec'): ExternalRecordRef {
@@ -29,8 +38,26 @@ function judged(match_index: number | null, confidence: number) {
   return { match_index, confidence, reasoning: 'test' } as never;
 }
 
+/** Shape `askJev` returns for the per-candidate `same_cI`/`evid_cI` noul
+ *  questions the Jev judge asks — one entry per candidate option (e.g. `c0`). */
+function jevScores(scores: Record<string, { same: number; evidence: number }>) {
+  const answers: Record<string, { type: 'noul'; noul: number }> = {};
+  for (const [option, { same, evidence }] of Object.entries(scores)) {
+    answers[`same_${option}`] = { type: 'noul', noul: same };
+    answers[`evid_${option}`] = { type: 'noul', noul: evidence };
+  }
+  return answers;
+}
+
+const ORIGINAL_ENV = { ...process.env };
+
 beforeEach(() => {
   mockExecute.mockReset();
+  mockAskJev.mockReset();
+});
+
+afterEach(() => {
+  process.env = { ...ORIGINAL_ENV };
 });
 
 describe('the judge runs on a Claude model', () => {
@@ -51,14 +78,18 @@ describe('judgeEntityMatch — structural short-circuits (no LLM)', () => {
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it('returns 0 for exactly 1 candidate without calling the LLM', async () => {
+  it('calls the LLM for exactly 1 candidate — a lone candidate is not unambiguous by definition', async () => {
+    // The 2026-09 incident this guards: two different companies ("OriqX" and
+    // "Pavo AI") each surfaced exactly one FUZZY candidate and were merged
+    // without ever reaching a judge.
+    mockExecute.mockResolvedValue(judged(0, 0.9));
     const out = await judgeEntityMatch({
       asserted: { name: 'A' },
       candidates: [ref({ name: 'A' })],
       recordType: 'co',
     });
     expect(out).toBe(0);
-    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -166,7 +197,7 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it('returns 0 for a single candidate without the LLM', async () => {
+  it('returns 0 for a single ALL-EXACT candidate without the LLM', async () => {
     const out = await arbitrateEntityCandidates({
       asserted: { domain: 'acme.com' },
       candidates: [ref({ domain: 'acme.com' })],
@@ -175,6 +206,75 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     });
     expect(out).toBe(0);
     expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('sends a single FUZZY candidate to the judge — a lone fuzzy candidate is not unambiguous', async () => {
+    // The prod incident this guards: "OriqX"/oriqx.com and "Pavo AI"/pavoai.com
+    // each turned up exactly one FUZZY candidate and got merged, because the
+    // old shortcut treated "1 candidate" as "unambiguous" regardless of
+    // exactness. A decline here is the safe outcome — a create, not a merge.
+    mockExecute.mockResolvedValue(judged(null, 0.99));
+    const out = await arbitrateEntityCandidates({
+      asserted: { domain: 'acme.com' },
+      candidates: [ref({ domain: 'other.com' }, 'a')],
+      recordType: 'co',
+      constraints: constraintsOn('domain', true),
+    });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(out).toBeNull();
+  });
+
+  it('matches a single candidate without the judge when there are NO uniqueness constraints at all', async () => {
+    // `candidateIsAllExact` over `{ any: [] }` is `[].some(...)` — vacuously
+    // false — but `{ any: [] }` also has no branch to carry a fuzzy entry,
+    // so an unconstrained write with exactly one candidate matches it
+    // directly (the pre-existing unconstrained-write behaviour), same as
+    // before the May-2026 split ever added a judge call here.
+    mockExecute.mockRejectedValue(new Error('LLM must not be called'));
+    const out = await arbitrateEntityCandidates({
+      asserted: { domain: 'acme.com' },
+      candidates: [ref({ domain: 'acme.com' }, 'a')],
+      recordType: 'co',
+      constraints: { any: [] },
+    });
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(out).toBe(0);
+  });
+
+  it('matches a lone candidate under an EXACT-only constraint the engine cannot verify — an edge-named identity', async () => {
+    // The 2026-09-17 regression this guards: a constraint naming a parent
+    // EDGE (e.g. Affinity's list-entry identity, `unique by (company)`) is
+    // folded into the adapter's SEARCH record but never into the write's
+    // own asserted fields, so `candidateIsAllExact` can never confirm it —
+    // yet the constraint has no fuzzy entry, so the adapter's search was
+    // exact. Routing this to the judge on every such write would burn an
+    // LLM call the judge can't even answer correctly (it never sees the
+    // parent) and risks a declined judge minting a duplicate.
+    mockExecute.mockRejectedValue(new Error('LLM must not be called'));
+    const out = await arbitrateEntityCandidates({
+      asserted: { name: 'U123' },
+      candidates: [ref({ company: { id: 'ext-attio-1' } }, 'a')],
+      recordType: 'co',
+      constraints: constraintsOn('company'),
+    });
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(out).toBe(0);
+  });
+
+  it('sends a lone candidate under a FUZZY constraint to the judge even though nothing is exact', async () => {
+    // Same case as "sends a single FUZZY candidate to the judge" above,
+    // named to match the brief's new-behaviour checklist: a fuzzy branch
+    // never counts as "no fuzzy entry", so the exact-only bypass never
+    // applies and the lone candidate still reaches the judge.
+    mockExecute.mockResolvedValue(judged(null, 0.99));
+    const out = await arbitrateEntityCandidates({
+      asserted: { domain: 'acme.com' },
+      candidates: [ref({ domain: 'other.com' }, 'a')],
+      recordType: 'co',
+      constraints: constraintsOn('domain', true),
+    });
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(out).toBeNull();
   });
 
   it('auto-matches the single all-exact candidate WITHOUT calling the LLM', async () => {
@@ -213,13 +313,35 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     expect(out).toBe(1);
   });
 
-  it('treats a fuzzy-only constraint branch as never all-exact (always judges)', async () => {
+  it('a FUZZY field whose values are equal outright is exact — the one exact candidate wins without the judge', async () => {
+    const out = await arbitrateEntityCandidates({
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'pavo ai' }, 'a'), ref({ name: 'Pavo AI Labs' }, 'b')],
+      recordType: 'co',
+      constraints: constraintsOn('name', true),
+    });
+    expect(out).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('a lone FUZZY candidate with the identical name matches without the judge', async () => {
+    const out = await arbitrateEntityCandidates({
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'Pavo AI' }, 'a')],
+      recordType: 'co',
+      constraints: constraintsOn('name', true),
+    });
+    expect(out).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('two FUZZY candidates both equal outright are ambiguous — the judge decides', async () => {
     mockExecute.mockResolvedValue(judged(null, 0.9));
     const out = await arbitrateEntityCandidates({
-      asserted: { domain: 'acme.com' },
-      candidates: [ref({ domain: 'acme.com' }, 'a'), ref({ domain: 'zzz.com' }, 'b')],
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'Pavo AI' }, 'a'), ref({ name: 'PAVO AI' }, 'b')],
       recordType: 'co',
-      constraints: constraintsOn('domain', true),
+      constraints: constraintsOn('name', true),
     });
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(out).toBeNull();
@@ -237,5 +359,72 @@ describe('arbitrateEntityCandidates — exactness before the LLM', () => {
     });
     expect(out).toBeNull();
     expect(onJudgeUnavailable).toHaveBeenCalledWith('anthropic 529');
+  });
+});
+
+describe('judgeEntityMatch — routed through Jev when JEV_ENTITY_RESOLUTION=true', () => {
+  const oneCandidate = [ref({ name: 'Acme Inc' }, 'a')];
+  const twoCandidates = [ref({ name: 'Acme Inc' }, 'a'), ref({ name: 'Acme Corp' }, 'b')];
+
+  it('picks the candidate when both `same` and `evidence` clear their thresholds', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    process.env.JEV_KEY = 'jev-test-key';
+    mockAskJev.mockResolvedValue(jevScores({ c0: { same: 0.9, evidence: 0.8 } }));
+    const out = await judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: oneCandidate, recordType: 'co' });
+    expect(out).toBe(0);
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('declines when `same` is below the bar even with strong evidence', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    process.env.JEV_KEY = 'jev-test-key';
+    mockAskJev.mockResolvedValue(jevScores({ c0: { same: 0.6, evidence: 0.9 } }));
+    const out = await judgeEntityMatch({
+      asserted: { name: 'Pavo AI' },
+      candidates: [ref({ name: 'OriqX' }, 'a')],
+      recordType: 'co',
+    });
+    expect(out).toBeNull();
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('declines when `same` clears the bar but `evidence` is below 0.5 — a name-only match', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    process.env.JEV_KEY = 'jev-test-key';
+    mockAskJev.mockResolvedValue(jevScores({ c0: { same: 0.9, evidence: 0.3 } }));
+    const out = await judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: oneCandidate, recordType: 'co' });
+    expect(out).toBeNull();
+  });
+
+  it('picks the candidate with the higher `same` among two', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    process.env.JEV_KEY = 'jev-test-key';
+    mockAskJev.mockResolvedValue(
+      jevScores({ c0: { same: 0.7, evidence: 0.9 }, c1: { same: 0.85, evidence: 0.9 } }),
+    );
+    const out = await judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: twoCandidates, recordType: 'co' });
+    expect(out).toBe(1);
+  });
+
+  it('falls back to the generative judge when Jev fails', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    process.env.JEV_KEY = 'jev-test-key';
+    mockAskJev.mockRejectedValue(new Error('jev 529'));
+    mockExecute.mockResolvedValue(judged(0, 0.9));
+    const out = await judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: oneCandidate, recordType: 'co' });
+    expect(out).toBe(0);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('is loud when the flag is on with no key — never reads as a decline', async () => {
+    process.env.JEV_ENTITY_RESOLUTION = 'true';
+    delete process.env.JEV_KEY;
+    const onJudgeUnavailable = jest.fn();
+    await expect(
+      judgeEntityMatch({ asserted: { name: 'Acme' }, candidates: oneCandidate, recordType: 'co', onJudgeUnavailable }),
+    ).rejects.toThrow(/JEV_KEY/);
+    expect(onJudgeUnavailable).not.toHaveBeenCalled();
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockAskJev).not.toHaveBeenCalled();
   });
 });

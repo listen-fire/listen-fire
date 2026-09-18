@@ -126,10 +126,40 @@ export function identityValuesEqual(a: unknown, b: unknown): boolean {
   return left !== '' && left === normaliseIdentityValue(b);
 }
 
+// A bare domain used as a name (`oriqx.com`, `pavoai.com` — a real prod
+// shape when the display name falls back to the site) shares the word "com"
+// with every other bare domain under plain punctuation stripping, and so
+// blocked as a fuzzy candidate of all of them. Listing TLDs in
+// `GENERIC_TOKENS` would fight that battle forever; the suffix is a label
+// POSITION, not a word, so the final label is dropped by position. (`co` in
+// `foo.co.uk` still goes through `GENERIC_TOKENS`, where it already is.)
+const HOSTNAME_LABEL = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+const HOSTNAME_TLD = '[a-z]{2,}';
+const HOSTNAME_SHAPE = new RegExp(
+  `^(?:[a-z][a-z0-9+.-]*://)?(?:www\\.)?(${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})*)\\.(${HOSTNAME_TLD})(?:/.*)?$`,
+  'i',
+);
+
+/** The registrable-domain labels of a hostname-shaped value (scheme and a
+ *  leading `www` stripped, the final TLD-shaped label dropped), or `null`
+ *  when the value isn't hostname-shaped — the caller then tokenises it as
+ *  plain text. The TLD test (letters only, 2+ of them) keeps this from
+ *  firing on an ordinary dotted token such as a version number. */
+function hostnameLabels(normalisedValue: string): string[] | null {
+  const match = HOSTNAME_SHAPE.exec(normalisedValue);
+  return match ? match[1].split('.') : null;
+}
+
 /** The distinctive words of a value: case folded, punctuation stripped, the
- *  kind-naming ones dropped. */
+ *  kind-naming ones dropped. A hostname-shaped value tokenises from its
+ *  registrable-domain labels instead of the whole string (see
+ *  `hostnameLabels`), so a bare domain fallback name doesn't block every
+ *  other domain under the same TLD. */
 export function distinctiveTokens(value: unknown): string[] {
-  return normaliseIdentityValue(value)
+  const normalised = normaliseIdentityValue(value);
+  const labels = hostnameLabels(normalised);
+  const source = labels !== null ? labels.join(' ') : normalised;
+  return source
     .split(/[^\p{L}\p{N}]+/u)
     .filter((word) => word.length > 0 && !GENERIC_TOKENS.has(word));
 }
