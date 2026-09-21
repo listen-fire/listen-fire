@@ -1,4 +1,5 @@
 import { openAiTranscribe } from '../../lib/openai';
+import { sniffContainer } from './audio_format';
 import { TranscriptionAdapter, TranscriptionResult } from './interface';
 
 // OpenAI's transcription endpoint infers the audio FORMAT from the uploaded
@@ -6,25 +7,6 @@ import { TranscriptionAdapter, TranscriptionResult } from './interface';
 // delivers nameless audio (a WhatsApp voice note's name falls back to the
 // message id) needs the extension derived, not trusted.
 const SUPPORTED_EXTENSIONS = ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm'];
-
-/** Sniff the container format from its magic bytes — the bytes are the truth
- *  the filename and content type only gesture at. */
-function sniffExtension(audio: Buffer): string | undefined {
-  if (audio.length < 12) return undefined;
-  if (audio.subarray(0, 4).toString('latin1') === 'OggS') return 'ogg';
-  if (audio.subarray(0, 4).toString('latin1') === 'fLaC') return 'flac';
-  if (
-    audio.subarray(0, 4).toString('latin1') === 'RIFF' &&
-    audio.subarray(8, 12).toString('latin1') === 'WAVE'
-  ) {
-    return 'wav';
-  }
-  if (audio.subarray(4, 8).toString('latin1') === 'ftyp') return 'm4a';
-  if (audio.readUInt32BE(0) === 0x1a45dfa3) return 'webm'; // EBML (webm/mkv)
-  if (audio.subarray(0, 3).toString('latin1') === 'ID3') return 'mp3';
-  if (audio[0] === 0xff && (audio[1] & 0xe0) === 0xe0) return 'mp3'; // MPEG frame sync
-  return undefined;
-}
 
 const EXTENSION_BY_CONTENT_TYPE: Array<[string, string]> = [
   ['audio/ogg', 'ogg'],
@@ -56,7 +38,7 @@ function uploadName(audio: Buffer, options: { name?: string; contentType?: strin
   const name = options.name ?? 'audio';
   const lower = name.toLowerCase();
   if (SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(`.${ext}`))) return name;
-  const extension = sniffExtension(audio) ?? extensionFromContentType(options.contentType) ?? 'ogg';
+  const extension = sniffContainer(audio) ?? extensionFromContentType(options.contentType) ?? 'ogg';
   return `${name}.${extension}`;
 }
 

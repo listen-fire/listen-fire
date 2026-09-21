@@ -1,29 +1,13 @@
 import OpenAI, { toFile } from 'openai';
 import { backOff } from 'exponential-backoff';
 
-import { getEnvVar } from '../utils/environment';
 import { Queue } from '../utils/queue';
 import { logger } from '../../services/logger';
-import { SECOND, isProd } from '../../constants';
+import { SECOND } from '../../constants';
 import { RequestOptions } from 'openai/internal/request-options';
 import { recordLlmUsage } from '../llm_usage';
-
-const organizationFallbackOrDev = 'org-8dLfRZxrZST5fjBfvwxP0fU5';
-const organization = isProd ? 'org-8BBSblaUkeNcT0htEr4sOoed' : organizationFallbackOrDev;
-
-// Read at first USE, not at module load. `getEnvVar` throws in production when
-// the key is unset, so an eager read made merely IMPORTING this module enough
-// to stop the process booting — including for a deployment that runs entirely
-// on per-team keys (BYOT) or uses no LLM at all. Memoized: still one read and
-// one client, just on first call rather than on import.
-let client: OpenAI | undefined;
-const openai = () =>
-  (client ??= new OpenAI({
-    apiKey: isProd
-      ? getEnvVar('OPENAI_API_KEY', { devDefault: 'test', because: 'OpenAI calls need a key' })
-      : getEnvVar('OPENAI_API_KEY_FALLBACK_OR_DEV', { devDefault: 'test' }),
-    organization,
-  }));
+import { modelRoute } from '../model_route';
+import { assertSchemaIsNotRecursive, platformOpenAI } from './client';
 
 const rateLimitQueue = new Queue<any>({ concurrency: 8 });
 
@@ -76,13 +60,20 @@ const defaultOptions: Options = {
   n: 1,
 };
 
-// gpt-5 and o-series reasoning models reject any temperature other than the default (1).
-function modelSupportsTemperature(model: string) {
-  return !/^(gpt-5|o\d)/.test(model);
+// gpt-5 and o-series reasoning models reject any temperature other than the
+// default (1). The rule belongs to those OPENAI models, so it keys on the name
+// actually being sent — a Gemini answering for `gpt-5-nano` on the Google route
+// accepts temperature perfectly well, and stripping it because the name the
+// caller reached for looked o-series would quietly throw away the determinism
+// every one of those callers asked for.
+function modelSupportsTemperature(wireModel: string) {
+  return !/^(gpt-5|o\d)/.test(wireModel);
 }
 
-function stripUnsupportedParams<T extends { model?: string; temperature?: number | null }>(opts: T): T {
-  if (opts.model && !modelSupportsTemperature(opts.model) && opts.temperature !== undefined) {
+function stripUnsupportedParams<T extends { model: string; temperature?: number | null }>(
+  opts: T,
+): T {
+  if (!modelSupportsTemperature(opts.model) && opts.temperature !== undefined) {
     const { temperature: _temperature, ...rest } = opts;
     return rest as T;
   }
@@ -90,23 +81,26 @@ function stripUnsupportedParams<T extends { model?: string; temperature?: number
 }
 
 async function openAiChat(messages: Messages, options?: Partial<Options>, label?: string) {
-  const mergedOptions = stripUnsupportedParams(
-    options ? { ...defaultOptions, ...options } : defaultOptions,
-  );
+  const { client, wireModel, provider } = platformOpenAI();
+  const merged = options ? { ...defaultOptions, ...options } : defaultOptions;
+  // The wire name is also the billed name: on Google this really is a different
+  // model at a different price, so the ledger follows the request rather than
+  // the caller's wish.
+  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel(merged.model) });
   try {
     const text = await enqueueQuery(async () => {
-      logger.info(`OpenAI chat submitted ${label ? `(${label})` : ''}`, mergedOptions);
+      logger.info(`OpenAI chat submitted ${label ? `(${label})` : ''}`, sendOptions);
 
       const startMs = Date.now();
-      const completion = await openai().chat.completions.create({
+      const completion = await client.chat.completions.create({
         messages,
-        ...mergedOptions,
+        ...sendOptions,
       });
       const durationMs = Date.now() - startMs;
 
       recordLlmUsage({
-        provider: 'openai',
-        model: mergedOptions.model,
+        provider,
+        model: sendOptions.model,
         callType: 'chat',
         label: label ?? undefined,
         inputTokens: completion.usage?.prompt_tokens ?? 0,
@@ -131,23 +125,34 @@ async function openAiChatStructured(
   options?: Partial<Options>,
   label?: string,
 ) {
-  const mergedOptions = stripUnsupportedParams(
-    options ? { model: 'o3', ...options } : { model: 'o3' },
-  );
+  const { client, wireModel, provider } = platformOpenAI();
+  const merged = options ? { model: 'o3', ...options } : { model: 'o3' };
+  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel(merged.model) });
+
+  if (provider === 'google') {
+    const responseFormat = sendOptions.response_format;
+    if (responseFormat?.type === 'json_schema') {
+      assertSchemaIsNotRecursive(
+        responseFormat.json_schema.schema,
+        responseFormat.json_schema.name,
+      );
+    }
+  }
+
   try {
     const text = await enqueueQuery(async () => {
-      logger.info(`OpenAI chat submitted ${label ? `(${label})` : ''}`, mergedOptions);
+      logger.info(`OpenAI chat submitted ${label ? `(${label})` : ''}`, sendOptions);
 
       const startMs = Date.now();
-      const completion = await openai().chat.completions.parse({
+      const completion = await client.chat.completions.parse({
         messages,
-        ...mergedOptions,
+        ...sendOptions,
       });
       const durationMs = Date.now() - startMs;
 
       recordLlmUsage({
-        provider: 'openai',
-        model: mergedOptions.model,
+        provider,
+        model: sendOptions.model,
         callType: 'structured',
         label: label ?? undefined,
         inputTokens: completion.usage?.prompt_tokens ?? 0,
@@ -188,7 +193,7 @@ async function openAiTranscribe(
         { model: TRANSCRIPTION_MODEL, name: options.name, bytes: audio.length },
       );
       const file = await toFile(audio, options.name);
-      const transcription = await openai().audio.transcriptions.create({
+      const transcription = await platformOpenAI().client.audio.transcriptions.create({
         file,
         model: TRANSCRIPTION_MODEL,
         // verbose_json carries `duration` — the honest per-minute metering unit.
@@ -209,6 +214,19 @@ async function openAIResponses(
   tools: Record<string, (args: any) => Promise<any>> = {},
   options?: RequestOptions & { label?: string; signal?: AbortSignal },
 ) {
+  // Google's endpoint serves chat completions and nothing else — there is no
+  // Responses API behind it to fall back to, and no sensible translation from a
+  // stateful `previous_response_id` loop into a stateless one. Boot validation
+  // already refuses this combination; this is the second wall, for a caller that
+  // reached the tool loop some other way.
+  if (modelRoute() === 'google') {
+    throw new Error(
+      "MODEL_ROUTE is google, and Google serves no OpenAI Responses API. The knowledge agents' " +
+        'Claude path does work on this route — set KNOWLEDGE_AGENT_PROVIDER=anthropic.',
+    );
+  }
+
+  const { client } = platformOpenAI();
   try {
     let currentParams: any = {
       model: 'gpt-5',
@@ -220,7 +238,7 @@ async function openAIResponses(
 
       const startMs = Date.now();
       const response = await enqueueQuery(async () => {
-        return openai().responses.create(currentParams, options);
+        return client.responses.create(currentParams, options);
       }, options?.signal);
       const durationMs = Date.now() - startMs;
 

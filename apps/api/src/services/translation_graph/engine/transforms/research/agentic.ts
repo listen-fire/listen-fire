@@ -17,9 +17,12 @@
 // a confident wrong answer rather than a missing one.
 //
 // One host is not the model's to decide about. Anthropic's server fetcher
-// refuses linkedin.com outright, so a turn handed a profile address is blind
-// to the page that anchors identity — and, told to read the addresses it was
-// given, wastes a read discovering that. The profile is therefore read HERE,
+// refuses linkedin.com outright — and so does the page reader this engine
+// supplies where there is no hosted one, because a scrape of that host returns
+// its login wall, which reads as a real page and is not one. So a turn handed a
+// profile address is blind to the page that anchors identity — and, told to
+// read the addresses it was given, wastes a read discovering that. The profile
+// is therefore read HERE,
 // with the constrained engine's own primitives and caps, and handed into the
 // prompt as material the turn already has. This engine is agentic about the
 // web, not about LinkedIn.
@@ -30,12 +33,20 @@
 
 import { z } from 'zod';
 
-import { anthropicChatStructured, anthropicWebChat, meterAnthropicUsage } from '../../../../../lib/anthropic';
+import {
+  anthropicChatStructured,
+  anthropicWebChat,
+  defaultPageReader,
+  meterAnthropicUsage,
+} from '../../../../../lib/anthropic';
 import { runFields } from '../../../../../lib/llm_usage';
+import { modelRoute } from '../../../../../lib/model_route';
 import { logger } from '../../../../logger';
+import { missingBrightDataVars, ScraperService } from '../../../../scraper';
 import { describeError } from '../fetch_resource';
 import { profileSlug } from '../linkedin_identity';
 import { runSearch } from '../search_hygiene';
+import { isLinkedInUrl } from '../url-fetch';
 import {
   budgetOf,
   DEFAULT_RESEARCH_MODEL,
@@ -50,7 +61,7 @@ import {
   USAGE_NOT_MEASURED,
 } from './contract';
 import { describeProfile, readProfile } from './profile_read';
-import type { WebToolEvent } from '../../../../../lib/anthropic';
+import type { PageFetchResult, WebToolEvent } from '../../../../../lib/anthropic';
 import type { SearchHit } from '../search_hygiene';
 import type { ProfileRead } from './profile_read';
 import type {
@@ -246,6 +257,55 @@ function timedOut(args: {
   });
 }
 
+// ── The page reader ───────────────────────────────────────────────────────
+//
+// Where Anthropic's hosted fetcher exists, the turn reads pages inside its own
+// request and nothing here runs. Where it does not — Google serves no hosted
+// web fetch — the model gets a client-side `web_fetch` tool with the same name,
+// and this is what answers it: the same scraper the rest of the engine uses,
+// with its own byte and character ceilings already applied.
+
+/** Reads one page for the turn. A failure is returned rather than thrown, so
+ *  the model is told the page would not open and can try another address —
+ *  which is the whole difference between a dead end and a silent blank. */
+async function scrapePage(url: string): Promise<PageFetchResult> {
+  // The one host this engine does not read, on either reader. A scrape of
+  // LinkedIn returns its login wall, which reads as a real page and is not
+  // one; the profile the entry carried has already been read above.
+  if (isLinkedInUrl(url)) return { error: 'linkedin.com cannot be read' };
+  try {
+    const text = await ScraperService.getWebsite(url, { provider: 'brightdata' });
+    return text.trim() ? { text } : { error: 'the page had no readable text' };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** An entry that cannot be researched because this deployment's page fetcher
+ *  is not configured. Named on the record rather than discovered one failed
+ *  read at a time, and refused before anything is spent. */
+function pageFetcherUnconfigured(args: {
+  missing: string[];
+  usage: ResearchUsage;
+  name: string;
+  run: Record<string, unknown>;
+}): ResearchResult {
+  const { missing, usage, name, run } = args;
+  logger.warn(`${LOG} no page fetcher is configured on this route`, {
+    name,
+    outcome: 'fetch_failed',
+    missing,
+    ...run,
+  });
+  return nothingFound('fetch_failed', {
+    ...usage,
+    notes: [
+      ...(usage.notes ?? []),
+      `this route reads pages with our own fetcher, which is not configured — set ${missing.join(', ')}`,
+    ],
+  });
+}
+
 // ── The engine ────────────────────────────────────────────────────────────
 
 export const agenticEngine: ResearchEngine = async (input, options) => {
@@ -292,6 +352,15 @@ async function researchWithin(
   const model = options?.model ?? DEFAULT_RESEARCH_MODEL;
   const usage: ResearchUsage = emptyUsage();
   const name = input.name.trim();
+
+  // Before any spend: a turn told it has a page reader, on a deployment where
+  // nothing can answer one, would discover that one failed read at a time and
+  // report it as a subject with no signal.
+  const pageReader = defaultPageReader(modelRoute());
+  const missingFetcher = pageReader === 'own' ? missingBrightDataVars() : [];
+  if (missingFetcher.length > 0) {
+    return pageFetcherUnconfigured({ missing: missingFetcher, usage, name, run });
+  }
 
   // `web_fetch` opens only an address already in the conversation, so the
   // entry's own links have to be in the prompt to be readable at all.
@@ -345,6 +414,7 @@ async function researchWithin(
     name,
     maxSearches,
     maxFetches,
+    pageReader,
     effort,
     wallClockMs: budget.wallClockMs,
     ...run,
@@ -358,6 +428,8 @@ async function researchWithin(
       effort,
       maxSearches,
       maxFetches,
+      pageReader,
+      fetchPage: scrapePage,
       signal: deadline.signal,
       label: 'plugin_research_agentic',
     }),

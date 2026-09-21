@@ -1,10 +1,8 @@
-import OpenAI from 'openai';
 
 import { getKnowledgeQb } from '../../lib/kysely';
 import { anthropicChat } from '../../lib/anthropic';
 import { parseJson } from '../../lib/utils/parse_json';
-import { getEnvVar } from '../../lib/utils/environment';
-import { recordLlmUsage } from '../../lib/llm_usage';
+import { embedTexts } from '../embedding';
 import { logger } from '../logger';
 import type { NodeId } from '../../generated/kysely/knowledge/Node';
 import type { TeamId } from '../../generated/kysely/core/Team';
@@ -207,36 +205,19 @@ function resetChunkContexts(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Batch embedding (text-embedding-3-small at 256 dims)
+// Batch embedding (into extraction_fact's 256-wide vector column)
 // ---------------------------------------------------------------------------
 
-// Read at first USE: an eager read made importing the knowledge pipeline
-// enough to stop a production deployment with no OpenAI key from booting.
-const openAIApiKey = () =>
-  getEnvVar('OPENAI_API_KEY', { devDefault: 'test', because: 'fact embeddings are computed by OpenAI' });
-
-async function batchEmbed(
-  texts: string[],
-): Promise<number[][]> {
-  if (texts.length === 0) return [];
-
-  const client = new OpenAI({ apiKey: openAIApiKey() });
-  const response = await client.embeddings.create({
-    model: 'text-embedding-3-small',
-    input: texts,
-    dimensions: 256,
-  });
-
-  recordLlmUsage({
-    provider: 'openai',
-    model: 'text-embedding-3-small',
-    callType: 'embedding',
+// Which model embeds these, how wide the vector is and who bills for it all
+// belong to the destination column, so they live with the embedding service
+// rather than being restated here. This function is now just the name the
+// pipeline calls that by.
+async function batchEmbed(texts: string[]): Promise<number[][]> {
+  return embedTexts({
+    texts,
+    destination: 'extraction_fact',
     label: 'knowledge_fact_embedding',
-    inputTokens: response.usage.total_tokens,
-    outputTokens: 0,
-  }).catch(() => {});
-
-  return response.data.map((d) => d.embedding);
+  });
 }
 
 // ---------------------------------------------------------------------------

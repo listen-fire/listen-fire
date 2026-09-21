@@ -5,47 +5,29 @@ import Anthropic from '@anthropic-ai/sdk';
 import { backOff } from 'exponential-backoff';
 import { z } from 'zod';
 
+import { clientFor, platformAnthropic } from './client';
 import { buildStructuredTool, extractStructuredResult } from './structured';
 import {
+  defaultPageReader,
+  FETCH_BUDGET_SPENT,
+  pageFetchOutcome,
+  pageTextCeiling,
   readAnswerText,
+  readPageRequests,
   readServerToolCounts,
   readWebToolEvents,
+  webChatTools,
   WEB_FETCH_MAX_CONTENT_TOKENS,
-  WEB_FETCH_TOOL_TYPE,
-  WEB_SEARCH_TOOL_TYPE,
 } from './web_tools';
-import type { WebToolEvent } from './web_tools';
+import type { PageFetchResult, PageFetcher, PageReader, PageRequest, WebToolEvent } from './web_tools';
 
-import { getEnvVar } from '../utils/environment';
+import { modelRoute } from '../model_route';
+import type { ModelRoute } from '../model_route';
 import { Queue } from '../utils/queue';
+import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 import { SECOND } from '../../constants';
 import { recordLlmUsage, runFields } from '../llm_usage';
-
-// Read at first USE, not at module load. `getEnvVar` throws in production when
-// the key is unset, so an eager read made merely IMPORTING this module enough
-// to stop the process booting — including for a deployment that runs entirely
-// on per-team keys (BYOT) or uses no LLM at all. Memoized: still one read and
-// one client, just on first call rather than on import.
-let platformClient: Anthropic | undefined;
-function platformAnthropic(): Anthropic {
-  return (platformClient ??= new Anthropic({
-    apiKey: getEnvVar('ANTHROPIC_API_KEY', {
-      devDefault: 'test',
-      because: 'it is the platform key for any Anthropic call that does not carry a team key',
-    }),
-  }));
-}
-
-/**
- * The Anthropic client for a call: the team's own key (BYOT — pricing-v2 §B.2)
- * when supplied, else the platform singleton. A per-call client is cheap and
- * keeps the request server-side (no endpoint override — prompts never leave our
- * backend). The key is NEVER part of any recording hash.
- */
-function clientFor(byotApiKey?: string): Anthropic {
-  return byotApiKey ? new Anthropic({ apiKey: byotApiKey }) : platformAnthropic();
-}
 
 const rateLimitQueue = new Queue<any>({ concurrency: 8 });
 
@@ -100,8 +82,10 @@ interface AnthropicUsageTally {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
-  /** Server-side web tool requests, when the call declared them. */
+  /** Hosted searches Anthropic billed, when the call declared the tool. */
   searches: number;
+  /** Pages read, whoever read them — Anthropic's hosted fetcher or our own.
+   *  "Nothing billed" is not "nothing read". */
   fetches: number;
 }
 
@@ -380,6 +364,7 @@ async function anthropicToolLoop(
   } = params;
 
   const anthropicTools = convertToolDefinitions(openaiTools);
+  const { client, wireModel } = platformAnthropic();
 
   const resolvedThinking = resolveThinkingConfig({
     model,
@@ -438,9 +423,9 @@ async function anthropicToolLoop(
     const llmStart = Date.now();
 
     const response = await enqueueQuery(async () => {
-      return platformAnthropic().messages.create(
+      return client.messages.create(
         {
-          model,
+          model: wireModel(model),
           max_tokens: max_output_tokens,
           system: systemMessages,
           tools: anthropicTools,
@@ -449,7 +434,7 @@ async function anthropicToolLoop(
           ...(resolvedThinking.output_config
             ? { output_config: resolvedThinking.output_config }
             : {}),
-        } as Anthropic.MessageCreateParams,
+        },
         { signal },
       );
     }, signal);
@@ -804,7 +789,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     maxContinuations = MAX_CHAT_CONTINUATIONS,
     apiKey: byotApiKey,
   } = options;
-  const client = clientFor(byotApiKey);
+  const { client, wireModel } = clientFor(byotApiKey);
 
   // Adaptive thinking is ON by default on these models; the only lever a chat
   // caller has over its depth is `effort`, and it only lands if `thinking` is
@@ -859,16 +844,13 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
       // reassembles the same `Message`, so nothing downstream changes.
       response = await enqueueQuery(async () => {
         const stream = client.messages.stream({
-          model,
+          model: wireModel(model),
           max_tokens: maxTokens,
           system: systemBlock,
           messages,
           ...thinkingConfigFor(currentEffort),
           ...(temperature != null && { temperature }),
-          // `effort: 'xhigh'` is a real value this SDK's pinned types predate
-          // (its `OutputConfig.effort` union stops at `'max'`) — same
-          // stale-type crossing `anthropicToolLoop` already does above.
-        } as Anthropic.MessageCreateParamsStreaming);
+        });
         return stream.finalMessage();
       });
     } catch (error) {
@@ -1032,13 +1014,13 @@ async function anthropicChatStructured<T>(
     apiKey: byotApiKey,
   } = options;
 
-  const client = clientFor(byotApiKey);
+  const { client, wireModel } = clientFor(byotApiKey);
   const tool = buildStructuredTool({ name: toolName, description: toolDescription, schema });
 
   const startMs = Date.now();
   const response: Anthropic.Message = await enqueueQuery(async () =>
     client.messages.create({
-      model,
+      model: wireModel(model),
       max_tokens: maxTokens,
       system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }],
       messages: [{ role: 'user', content: userMessage }],
@@ -1098,6 +1080,21 @@ interface AnthropicWebChatOptions {
   /** How much of any one fetched page reaches the model's context. Defaults to
    *  {@link WEB_FETCH_MAX_CONTENT_TOKENS}. */
   maxFetchContentTokens?: number;
+  /**
+   * Who reads a page: Anthropic's hosted fetcher, or ours through
+   * {@link fetchPage}. Defaults to whichever the route serves — but it is a
+   * real choice on either, because our fetcher renders JavaScript-heavy pages
+   * the hosted one returns empty. Asking for `hosted` where the route has none
+   * is refused rather than quietly downgraded.
+   */
+  pageReader?: PageReader;
+  /** Reads one page for the `own` reader. Required by it: a missing handler is
+   *  a wiring mistake, and throws at the call rather than turning every page
+   *  read into a failure the model has to work around. */
+  fetchPage?: PageFetcher;
+  /** Every request this conversation may make, counting resumes and page-read
+   *  answers. Defaults below; hitting it returns the partial answer. */
+  maxTurns?: number;
   /** Cancels the request in flight. A caller with its own deadline needs the
    *  streaming call ABORTED rather than abandoned — an abandoned turn keeps
    *  searching, reading and billing after the caller has stopped waiting for
@@ -1110,20 +1107,147 @@ interface AnthropicWebChatOptions {
 interface AnthropicWebChatReply {
   /** The prose the model wrote, across every turn of the paused loop. */
   text: string;
-  /** Every search and page read it made, in order, failures included. */
+  /** Every search and page read it made, in order, failures included. A page
+   *  read by our own fetcher is the same `fetch` / `fetch_failed` event a
+   *  hosted one is, so a trace reads the same whichever reader ran. */
   events: WebToolEvent[];
   stopReason: Anthropic.StopReason | null;
   /** How many times the paused loop was resumed. At the ceiling the answer is
    *  whatever the model had written by then. */
   resumes: number;
+  /** Every request made, including resumes and page-read answers. */
+  turns: number;
+  /** Which reader actually ran — on the record rather than re-derived from the
+   *  route, so a trace never has to guess why a fetch is not billed. */
+  pageReader: PageReader;
   usage: {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
     cacheCreationTokens: number;
+    /** Hosted searches, as Anthropic billed them. */
     searches: number;
+    /** Pages read, whoever read them: Anthropic's billed fetches on the hosted
+     *  reader, our own fetcher's reads otherwise. "Nothing billed" is not
+     *  "nothing read", and this field answers the second question. */
     fetches: number;
   };
+}
+
+/** How many pages this loop opens at once when the model asks for several in
+ *  one turn. Small on purpose: the fetcher behind the handler has its own queue
+ *  and its own third party, and a turn asking for more than a handful of pages
+ *  at once is not a turn that is converging. */
+const MAX_CONCURRENT_PAGE_FETCHES = 3;
+
+/** The page reader in force, with everything answering it needs. The handler
+ *  travels WITH the mode so no later code has to re-check that it exists. */
+type ResolvedPageReader = { mode: 'hosted' } | { mode: 'own'; fetchPage: PageFetcher };
+
+function resolvePageReader(options: {
+  requested: PageReader | undefined;
+  route: ModelRoute;
+  fetchPage: PageFetcher | undefined;
+}): ResolvedPageReader {
+  const { requested, route, fetchPage } = options;
+  const mode = requested ?? defaultPageReader(route);
+  switch (mode) {
+    case 'hosted':
+      return { mode };
+    case 'own':
+      // A wiring mistake, not a runtime condition: raised at the call rather
+      // than turned into a failure the model has to work around on every page.
+      if (!fetchPage) {
+        throw new Error(
+          'anthropicWebChat was asked to read pages with its own fetcher, but no `fetchPage` ' +
+            'handler was supplied.',
+        );
+      }
+      return { mode, fetchPage };
+    default:
+      return neverAsAny(mode);
+  }
+}
+
+/** What the turn that just came back asks the loop to do next. The hosted
+ *  reader never stops a turn for an answer, so a `tool_use` stop is always the
+ *  client-side page reader's. */
+type WebChatStep =
+  | { kind: 'done' }
+  | { kind: 'resume' }
+  | { kind: 'pages'; requests: PageRequest[]; fetchPage: PageFetcher };
+
+function nextWebChatStep(response: Anthropic.Message, pages: ResolvedPageReader): WebChatStep {
+  if (response.stop_reason === 'pause_turn') return { kind: 'resume' };
+  if (response.stop_reason !== 'tool_use' || pages.mode !== 'own') return { kind: 'done' };
+  const requests = readPageRequests(response.content);
+  return requests.length > 0
+    ? { kind: 'pages', requests, fetchPage: pages.fetchPage }
+    : { kind: 'done' };
+}
+
+/**
+ * Every page the model asked for in one turn, answered in one user turn.
+ *
+ * The budget is spent in the order the model asked, BEFORE anything runs, so
+ * which reads are refused does not depend on which came back first. The reads
+ * themselves run together, a few at a time.
+ */
+async function answerPageRequests(options: {
+  requests: readonly PageRequest[];
+  fetchPage: PageFetcher;
+  /** Reads still inside the caller's ceiling. */
+  remaining: number;
+  maxContentChars: number;
+}): Promise<{ results: Anthropic.ToolResultBlockParam[]; events: WebToolEvent[]; read: number }> {
+  const { requests, fetchPage, remaining, maxContentChars } = options;
+
+  let budget = remaining;
+  const planned = requests.map((request) => {
+    if (!request.url) return { request, url: null };
+    if (budget <= 0) return { request, url: null, spent: true };
+    budget -= 1;
+    return { request, url: request.url };
+  });
+
+  const outcomes = new Array<{ event: WebToolEvent; told: string; isError: boolean }>(
+    planned.length,
+  );
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = cursor++; i < planned.length; i = cursor++) {
+      const step = planned[i];
+      const result: PageFetchResult = step.url
+        ? await fetchPage(step.url).catch((error: unknown) => ({ error: describeThrown(error) }))
+        : { error: 'spent' in step ? FETCH_BUDGET_SPENT : 'no_url' };
+      outcomes[i] = pageFetchOutcome({
+        url: step.request.url,
+        result,
+        maxContentChars,
+        retrievedAt: new Date().toISOString(),
+      });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(MAX_CONCURRENT_PAGE_FETCHES, planned.length) }, worker),
+  );
+
+  return {
+    results: outcomes.map((outcome, i) => ({
+      type: 'tool_result' as const,
+      tool_use_id: planned[i].request.id,
+      content: outcome.told,
+      ...(outcome.isError ? { is_error: true } : {}),
+    })),
+    events: outcomes.map((outcome) => outcome.event),
+    read: planned.filter((step) => step.url != null).length,
+  };
+}
+
+/** A handler that rejected is a failed read, not a failed call: the model is
+ *  told the page would not open and gets to try another one. */
+function describeThrown(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -1148,26 +1272,30 @@ async function anthropicWebChat(
     maxFetchContentTokens = WEB_FETCH_MAX_CONTENT_TOKENS,
     signal,
     apiKey: byotApiKey,
+    fetchPage,
   } = options;
-  const client = clientFor(byotApiKey);
+  const { client, wireModel } = clientFor(byotApiKey);
 
   const thinkingConfig =
     effort && usesAdaptiveThinking(model)
       ? { thinking: { type: 'adaptive' as const }, output_config: { effort } }
       : {};
 
-  // These tool versions postdate the pinned SDK's types (it stops at
-  // `web_search_20250305` and a beta `web_fetch`), so the definitions cross
-  // into the request the same way `effort: 'xhigh'` does below.
-  const tools = [
-    { type: WEB_SEARCH_TOOL_TYPE, name: 'web_search', max_uses: maxSearches },
-    {
-      type: WEB_FETCH_TOOL_TYPE,
-      name: 'web_fetch',
-      max_uses: maxFetches,
-      max_content_tokens: maxFetchContentTokens,
-    },
-  ];
+  const route = modelRoute();
+  const pages = resolvePageReader({ requested: options.pageReader, route, fetchPage });
+  const pageReader = pages.mode;
+  const tools = webChatTools({
+    route,
+    pageReader,
+    maxSearches,
+    maxFetches,
+    maxFetchContentTokens,
+  });
+  // Every request this conversation may make: the one that answers, one per
+  // resume of a paused server-side loop, one per page read, and two spare for
+  // a model that asks again after its page budget is spent. Without it, a model
+  // that keeps asking for pages it cannot have never stops.
+  const maxTurns = options.maxTurns ?? 1 + maxResumes + maxFetches + 2;
 
   const requestId = randomUUID().slice(0, 8);
   const callFields = { label, model, requestId, ...runFields() };
@@ -1178,6 +1306,7 @@ async function anthropicWebChat(
   let text = '';
   let stopReason: Anthropic.StopReason | null = null;
   let resumes = 0;
+  let turns = 0;
   const usage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -1187,12 +1316,13 @@ async function anthropicWebChat(
     fetches: 0,
   };
 
-  for (let turn = 0; turn <= maxResumes; turn++) {
+  for (let turn = 0; ; turn++) {
     logger.info('[anthropic] web chat starting', {
       ...callFields,
       turn,
       maxSearches,
       maxFetches,
+      pageReader,
       effort,
     });
 
@@ -1202,15 +1332,21 @@ async function anthropicWebChat(
       response = await enqueueQuery(async () => {
         const stream = client.messages.stream(
           {
-            model,
+            model: wireModel(model),
             max_tokens: maxTokens,
             system: [
               { type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } },
             ],
-            messages,
+            // The system block's breakpoint already caches the tools that
+            // precede it. The second one is for a conversation that GROWS —
+            // resumed turns, and page text coming back as tool results — so
+            // each request can read the previous one's history from cache
+            // instead of paying for it again. The first request has nothing
+            // behind it to cache, so it is left exactly as it was.
+            messages: turn === 0 ? messages : withFinalCacheBreakpoint(messages),
             tools,
             ...thinkingConfig,
-          } as unknown as Anthropic.MessageCreateParamsStreaming,
+          },
           { signal },
         );
         return stream.finalMessage();
@@ -1220,6 +1356,7 @@ async function anthropicWebChat(
       throw error;
     }
     settleWatch('ok');
+    turns += 1;
 
     text += readAnswerText(response.content);
     events.push(...readWebToolEvents(response.content));
@@ -1232,18 +1369,44 @@ async function anthropicWebChat(
     usage.fetches += counts.fetches;
     stopReason = response.stop_reason;
 
-    if (response.stop_reason !== 'pause_turn') break;
-    if (turn === maxResumes) {
-      logger.warn('[anthropic] web chat still paused at the resume ceiling', {
+    const next = nextWebChatStep(response, pages);
+    if (next.kind === 'done') break;
+
+    if (turns >= maxTurns) {
+      logger.warn('[anthropic] web chat hit its turn ceiling', {
         ...callFields,
-        resumes,
+        turns,
+        maxTurns,
+        stopReason,
       });
       break;
     }
-    // The API resumes on the trailing `server_tool_use` block alone — an
-    // added "continue" turn is the one thing that stops it working.
+
+    if (next.kind === 'resume') {
+      if (resumes >= maxResumes) {
+        logger.warn('[anthropic] web chat still paused at the resume ceiling', {
+          ...callFields,
+          resumes,
+        });
+        break;
+      }
+      // The API resumes on the trailing `server_tool_use` block alone — an
+      // added "continue" turn is the one thing that stops it working.
+      messages.push({ role: 'assistant', content: response.content });
+      resumes += 1;
+      continue;
+    }
+
+    const answered = await answerPageRequests({
+      requests: next.requests,
+      fetchPage: next.fetchPage,
+      remaining: Math.max(0, maxFetches - usage.fetches),
+      maxContentChars: pageTextCeiling(maxFetchContentTokens),
+    });
+    events.push(...answered.events);
+    usage.fetches += answered.read;
     messages.push({ role: 'assistant', content: response.content });
-    resumes += 1;
+    messages.push({ role: 'user', content: answered.results });
   }
 
   const durationMs = Date.now() - callStartMs;
@@ -1252,12 +1415,14 @@ async function anthropicWebChat(
     stopReason,
     durationMs,
     resumes,
+    turns,
+    pageReader,
     ...usage,
     failedTools: events.filter((e) => e.kind.endsWith('_failed')).length,
   });
 
   tallyUsage({
-    calls: resumes + 1,
+    calls: turns,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadTokens,
@@ -1278,7 +1443,7 @@ async function anthropicWebChat(
     durationMs,
   }).catch(() => {});
 
-  return { text, events, stopReason, resumes, usage };
+  return { text, events, stopReason, resumes, turns, pageReader, usage };
 }
 
 export {
@@ -1301,4 +1466,5 @@ export type {
   AnthropicWebChatReply,
   ChatReply,
 };
-export type { WebToolEvent } from './web_tools';
+export { defaultPageReader } from './web_tools';
+export type { PageFetcher, PageFetchResult, PageReader, WebToolEvent } from './web_tools';

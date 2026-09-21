@@ -12,9 +12,17 @@
 // call that fails at the vendor. The arbitration worker reads that and lets its
 // queue grow visibly rather than burning attempts on a call that cannot succeed.
 
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 
+import { clientFor, platformAnthropic } from '../anthropic/client';
+import type { AnthropicCall } from '../anthropic/client';
+import {
+  isGoogleServiceAccountConfigured,
+  missingGoogleServiceAccountVars,
+} from '../google_cloud';
+import { modelRoute } from '../model_route';
+import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 
 /**
@@ -23,6 +31,10 @@ import { logger } from '../../services/logger';
  * key that both products use. Deliberately NOT `getEnvVar` with a dev default —
  * "no key" has to be expressible, because a store without one is a supported
  * deployment, not a misconfiguration.
+ *
+ * A key answers only for the direct route. Where the deployment routes its
+ * model calls through Google Cloud there is no key at all, and the question
+ * "can knowledge call a model" is {@link isKnowledgeLlmConfigured}'s.
  */
 export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | null {
   const key = env.KNOWLEDGE_LLM_API_KEY ?? env.ANTHROPIC_API_KEY;
@@ -30,7 +42,47 @@ export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return knowledgeLlmKey(env) !== null;
+  const route = modelRoute(env);
+  switch (route) {
+    case 'direct':
+      return knowledgeLlmKey(env) !== null;
+    case 'google':
+      return isGoogleServiceAccountConfigured(env);
+    default:
+      return neverAsAny(route);
+  }
+}
+
+/**
+ * Knowledge's own client, built the way this deployment's route says. Its key
+ * override is the operator's choice of who pays for arbitration, so it survives
+ * on the direct route — but a key on the Google route is a contradiction rather
+ * than an override, and says so instead of being quietly ignored.
+ */
+function knowledgeLlmClient(env: NodeJS.ProcessEnv): AnthropicCall {
+  const route = modelRoute(env);
+  switch (route) {
+    case 'direct': {
+      const apiKey = knowledgeLlmKey(env);
+      if (!apiKey) throw new KnowledgeLlmUnavailable();
+      return clientFor(apiKey, env);
+    }
+    case 'google': {
+      if (env.KNOWLEDGE_LLM_API_KEY) {
+        throw new Error(
+          'KNOWLEDGE_LLM_API_KEY is set while MODEL_ROUTE is google. Knowledge calls its model ' +
+            'through Google Cloud on that route and no key is used — remove it, or set ' +
+            'MODEL_ROUTE=direct.',
+        );
+      }
+      if (!isGoogleServiceAccountConfigured(env)) {
+        throw new KnowledgeLlmUnavailable(missingGoogleServiceAccountVars(env).join(', '));
+      }
+      return platformAnthropic(env);
+    }
+    default:
+      return neverAsAny(route);
+  }
 }
 
 /** Overridable because the operator paying for the calls should get to choose. */
@@ -60,10 +112,12 @@ export function registerKnowledgeLlmUsageSink(sink: KnowledgeLlmUsageSink): void
 }
 
 export class KnowledgeLlmUnavailable extends Error {
-  constructor() {
+  /** What the operator has to set, which differs by route: a key on the direct
+   *  route, a Google service account where the calls go through Google Cloud. */
+  constructor(setThis = 'KNOWLEDGE_LLM_API_KEY or ANTHROPIC_API_KEY') {
     super(
-      'No LLM key is configured for knowledge (set KNOWLEDGE_LLM_API_KEY or ANTHROPIC_API_KEY). ' +
-        'Model-backed knowledge behaviour is disabled until one is.',
+      `No LLM credentials are configured for knowledge (set ${setThis}). ` +
+        'Model-backed knowledge behaviour is disabled until they are.',
     );
     this.name = 'KnowledgeLlmUnavailable';
   }
@@ -90,14 +144,11 @@ export async function knowledgeLlmStructured<T extends z.ZodType>(input: {
   env?: NodeJS.ProcessEnv;
 }): Promise<z.infer<T>> {
   const env = input.env ?? process.env;
-  const apiKey = knowledgeLlmKey(env);
-  if (!apiKey) throw new KnowledgeLlmUnavailable();
-
+  const { client, wireModel } = knowledgeLlmClient(env);
   const model = knowledgeLlmModel(env);
-  const client = new Anthropic({ apiKey });
 
   const response = await client.messages.create({
-    model,
+    model: wireModel(model),
     max_tokens: MAX_TOKENS,
     system: input.system,
     messages: [{ role: 'user', content: input.user }],

@@ -82,6 +82,12 @@ function runFields(): { runId?: string } {
 //   OpenAI: https://pricepertoken.com/pricing-page/provider/openai (Feb 2026)
 //   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing (Feb 2026)
 //   Embeddings: https://platform.openai.com/docs/models/text-embedding-3-large
+//   Google: https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing (2026-09-17)
+//
+// The Gemini chat entries carry the `google/` prefix because that IS the model
+// string sent on Google's OpenAI-shaped endpoint — the ledger names what was
+// called, not what the caller asked for. Google's own prices are the GLOBAL
+// endpoint's and its base (<=200K input) tier.
 const MODEL_PRICING: Record<
   string,
   { input: number; output: number; cacheRead?: number; cacheCreation?: number }
@@ -105,7 +111,30 @@ const MODEL_PRICING: Record<
   'mercury-2': { input: 0.25, output: 0.75 },
   'text-embedding-3-large': { input: 0.13, output: 0 },
   'text-embedding-3-small': { input: 0.02, output: 0 },
+  // Above 200K input tokens this becomes $4.00/$18.00 — a tier this table has
+  // no way to express, so a very long prompt is under-priced rather than
+  // unpriced. Global-endpoint only, which is where the route sends it.
+  'google/gemini-3.1-pro-preview': { input: 2.0, output: 12.0, cacheRead: 0.2 },
+  // Standard rates; introductory $0.75/$3.75 applies through 2026-12-31, then
+  // reverts to these.
+  'google/gemini-3.8-flash': { input: 1.5, output: 7.5, cacheRead: 0.15 },
+  // Transcription calls Gemini directly rather than through the OpenAI-shaped
+  // endpoint, so it bills under the bare model id.
+  'gemini-3.8-flash': { input: 1.5, output: 7.5, cacheRead: 0.15 },
+  // Google prices this at $0.00015 per 1,000 "count" (= $0.15 per million) and
+  // hands back its own `token_count`, which is what we record — so this entry
+  // takes one count as one token.
+  'gemini-embedding-001': { input: 0.15, output: 0 },
 };
+
+/**
+ * Models already complained about. An unpriced model records a real token count
+ * at zero cost — usage that reads as free rather than as missing — and the only
+ * thing that distinguishes the two is somebody being told. Once per name per
+ * process: the same unpriced model is called thousands of times a day, and a
+ * warning per call is a warning nobody reads.
+ */
+const unpricedModelsWarned = new Set<string>();
 
 function calculateCostMicrodollars(options: {
   model: string;
@@ -115,7 +144,16 @@ function calculateCostMicrodollars(options: {
   cacheCreationTokens: number;
 }): number {
   const pricing = MODEL_PRICING[options.model];
-  if (!pricing) return 0;
+  if (!pricing) {
+    if (!unpricedModelsWarned.has(options.model)) {
+      unpricedModelsWarned.add(options.model);
+      logger.warn(
+        `[llm_usage] no price for model "${options.model}" — its usage is recorded at zero cost. ` +
+          'Add it to MODEL_PRICING.',
+      );
+    }
+    return 0;
+  }
 
   const inputCost = options.inputTokens * pricing.input;
   const outputCost = options.outputTokens * pricing.output;
@@ -128,9 +166,12 @@ function calculateCostMicrodollars(options: {
 // -- Recording --
 
 interface RecordUsageOptions {
-  /** `jev` is Typesafe AI's non-generative judge (`lib/jev/client.ts`) — a
-   *  distinct vendor, not a dialect of either LLM provider. */
-  provider: 'openai' | 'anthropic' | 'jev';
+  /** Who actually served the call, not whose dialect it was spoken in: a chat
+   *  built with OpenAI's request shape and answered by Gemini on Google Cloud
+   *  is `google`, because that is who priced it. `jev` is Typesafe AI's
+   *  non-generative judge (`lib/jev/client.ts`) — a distinct vendor, not a
+   *  dialect of either LLM provider. */
+  provider: 'openai' | 'anthropic' | 'google' | 'jev';
   model: string;
   callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'responses';
   label?: string;

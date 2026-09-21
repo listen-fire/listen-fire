@@ -36,6 +36,7 @@ describe('extractStructuredResult', () => {
         id: 'toolu_1',
         name: 'extract_row',
         input: { fields: [{ name: 'ARR', value: '1.2M' }] },
+        caller: { type: 'direct' },
       },
     ]);
 
@@ -54,7 +55,13 @@ describe('extractStructuredResult', () => {
 
   it('rejects tool input that violates the schema', () => {
     const response = messageWith([
-      { type: 'tool_use', id: 'toolu_2', name: 'extract_row', input: { fields: [{ name: 'ARR' }] } },
+      {
+        type: 'tool_use',
+        id: 'toolu_2',
+        name: 'extract_row',
+        input: { fields: [{ name: 'ARR' }] },
+        caller: { type: 'direct' },
+      },
     ]);
 
     expect(() =>
@@ -68,7 +75,15 @@ describe('extractStructuredResult', () => {
     // emit, it is where it was severed. Trusting it would let data loss pass as a
     // real value. Must be a loud, retryable failure, not a silent partial.
     const response = messageWith(
-      [{ type: 'tool_use', id: 'toolu_3', name: 'extract_row', input: { fields: [] } }],
+      [
+        {
+          type: 'tool_use',
+          id: 'toolu_3',
+          name: 'extract_row',
+          input: { fields: [] },
+          caller: { type: 'direct' },
+        },
+      ],
       'max_tokens',
     );
 

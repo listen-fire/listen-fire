@@ -52,6 +52,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import type { ExtractNode } from 'movement-lang';
+
 import { anthropicChatDetailed } from '../../lib/anthropic';
 import { parseJsonReply } from '../../lib/prompts/execute';
 import { logger } from '../../services/logger';
@@ -63,6 +65,11 @@ import {
   type MovementTransformInvoker,
 } from '../../services/movement_engine/extraction';
 import { NO_PROVENANCE } from '../../services/movement_engine/provenance';
+import {
+  claudeModelId,
+  extractionSettings,
+  type TierCallSettings,
+} from '../../services/movement_engine/ai_tiers';
 import type { MovementTraceEntry } from '../../services/movement_engine/expression';
 import type {
   LlmCallInput,
@@ -159,6 +166,63 @@ type Condition = keyof typeof CONDITIONS;
 
 const ALL_CONDITIONS: Condition[] = ['A', 'B', 'C'];
 
+// ── Round 3: the tiers, as the product actually computes them ──────────────
+//
+// Round 2 hand-wrote its settings, and hand-written settings go stale: the
+// output ceiling and the continuation cap both moved under it when the
+// proportional budget guard became opt-in. Round 3 therefore does not spell
+// any setting out. Each arm ASKS `extractionSettings` — the one function the
+// live extraction asks — for a row, and hands the answer to production's own
+// client, so an arm is by construction whatever that call site sends today.
+//
+// The question of this round: what does the no-tier heavy-schema path buy by
+// landing on Opus 4.7? That path is the only one in the product that still
+// reaches an Opus 4 model, and it is reached by a density check on the SHAPE
+// of the schema (30 or more nested extraction sites), never by a word an
+// author wrote.
+const TIERS = {
+  /** The baseline: no tier named, density check chose Opus. This is byte for
+   *  byte what a heavy-schema extraction sends today. */
+  base: {
+    label: 'baseline — no tier, dense schema (opus-4-7 / low)',
+    settings: (): TierCallSettings => extractionSettings(undefined, 'opus'),
+  },
+  /** The same row with the model swapped, which is the whole proposal for this
+   *  site: nothing about the request changes but which Opus answers. */
+  opus5: {
+    label: 'opus-5, baseline settings (opus-5 / low)',
+    settings: (): TierCallSettings => ({ ...extractionSettings(undefined, 'opus'), model: 'opus5' }),
+  },
+  /** What every extraction below the density threshold already gets. If this
+   *  matches the baseline, the density check is buying nothing. */
+  sonnetLow: {
+    label: 'below-threshold default (sonnet-5 / low)',
+    settings: (): TierCallSettings => extractionSettings(undefined, 'sonnet'),
+  },
+  /** What an author who writes `careful` gets — the same model asked to think,
+   *  with the room that asking costs. The ceiling arrives from the product, so
+   *  this arm cannot drift from the tier it is named after. */
+  sonnetHigh: {
+    label: 'careful tier (sonnet-5 / high / 64k)',
+    settings: (): TierCallSettings => extractionSettings('careful', 'sonnet'),
+  },
+} as const;
+
+type Tier = keyof typeof TIERS;
+
+const ALL_TIERS: Tier[] = ['base', 'opus5', 'sonnetLow', 'sonnetHigh'];
+
+/** Dollars per million tokens for the models the tier map can name, from
+ *  `lib/llm_usage.ts`'s `MODEL_PRICING` — the same table round 1 copied. Every
+ *  Opus is priced alike, so the baseline and its replacement differ only in
+ *  how many tokens they spend. */
+const TIER_PRICING: Record<TierCallSettings['model'], { input: number; output: number }> = {
+  opus: { input: 5.0, output: 25.0 },
+  opus5: { input: 5.0, output: 25.0 },
+  sonnet: { input: 3.0, output: 15.0 },
+  haiku: { input: 0.8, output: 4.0 },
+};
+
 // ── Arms ───────────────────────────────────────────────────────────────────
 
 /**
@@ -213,6 +277,40 @@ function conditionArm(condition: Condition): Arm {
       },
     },
     price: { input: settings.input, output: settings.output },
+  };
+}
+
+/**
+ * A round-3 arm: production's client, asked for one tier row.
+ *
+ * Nothing is mirrored here. `makeAnthropicLlmClient` resolves the model alias,
+ * the output ceiling, the continuation cap and the thinking config exactly as
+ * the live extraction does, so the only thing this arm decides is WHICH row of
+ * the tier table the call carries.
+ *
+ * The overwrite has to delete as well as set: a fixture arrives carrying the
+ * settings its own extract asked for, and an arm defined by naming no effort
+ * would silently measure a different depth if the fixture's effort were left
+ * standing.
+ */
+function tierArm(tier: Tier): Arm {
+  const production = makeAnthropicLlmClient();
+  const settings = TIERS[tier].settings();
+  return {
+    id: tier,
+    label: `${TIERS[tier].label} → ${claudeModelId(settings.model)}`,
+    client: {
+      call: (input) => {
+        const { effort: _fixtureEffort, maxTokens: _fixtureMaxTokens, ...rest } = input;
+        return production.call({
+          ...rest,
+          model: settings.model,
+          ...(settings.effort ? { effort: settings.effort } : {}),
+          ...(settings.maxTokens ? { maxTokens: settings.maxTokens } : {}),
+        });
+      },
+    },
+    price: TIER_PRICING[settings.model],
   };
 }
 
@@ -384,6 +482,27 @@ interface FixtureRun {
   durations: number[];
   stopReasons: string[];
   shape: ShapeObservation;
+}
+
+/**
+ * How many nested extraction sites the ROOT call carries — the same tally the
+ * engine's density check takes, computed from the fixture's own tree so it can
+ * be read without spending a call.
+ *
+ * It matters because the density check is the only route in the product to an
+ * Opus 4 model: 30 or more sites in one call and the model changes. Counting
+ * follows the engine's two rules — a site is a NODE, not a field, and a child
+ * whose first stage is fenced behind a plugin leaves the call rather than
+ * joining it.
+ */
+function declaredSites(nodes: readonly ExtractNode[]): number {
+  return nodes
+    .filter((child) => (child.stages[0]?.through ?? []).length === 0)
+    .reduce((total, child) => total + 1 + declaredSites(child.stages[0]?.children ?? []), 0);
+}
+
+function rootSites(fixture: Fixture): number {
+  return 1 + declaredSites(fixture.extract.stages[0]?.children ?? []);
 }
 
 function stubInvoker(fixture: Fixture): MovementTransformInvoker {
@@ -817,9 +936,14 @@ function renderReport(runs: FixtureRun[], fixtures: Fixture[], arms: Arm[]): str
 
 // ── Entry ──────────────────────────────────────────────────────────────────
 
+/** A named value, where several of the names double as bare mode switches
+ *  (`--tiers` alone means the whole round, `--tiers base,opus5` a slice of it).
+ *  So a following token that is itself a switch is not this one's value. */
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+  if (index === -1) return undefined;
+  const value = process.argv[index + 1];
+  return value === undefined || value.startsWith('--') ? undefined : value;
 }
 
 async function main(): Promise<void> {
@@ -828,15 +952,21 @@ async function main(): Promise<void> {
   // 1's table. `--conditions` is round 2: whole tier SETTINGS, one of which
   // names a model production cannot reach.
   const roundTwo = process.argv.includes('--conditions');
-  const arms: Arm[] = roundTwo
-    ? (flag('conditions')?.split(',') ?? ALL_CONDITIONS).map((id) => {
-        if (!(id in CONDITIONS)) throw new Error(`unknown condition '${id}'`);
-        return conditionArm(id as Condition);
+  const roundThree = process.argv.includes('--tiers');
+  const arms: Arm[] = roundThree
+    ? (flag('tiers')?.split(',') ?? ALL_TIERS).map((id) => {
+        if (!(id in TIERS)) throw new Error(`unknown tier arm '${id}'`);
+        return tierArm(id as Tier);
       })
-    : ((flag('models')?.split(',') as Candidate[] | undefined) ?? ALL_CANDIDATES).map((model) => {
-        if (!(model in CANDIDATES)) throw new Error(`unknown model '${model}'`);
-        return candidateArm(model);
-      });
+    : roundTwo
+      ? (flag('conditions')?.split(',') ?? ALL_CONDITIONS).map((id) => {
+          if (!(id in CONDITIONS)) throw new Error(`unknown condition '${id}'`);
+          return conditionArm(id as Condition);
+        })
+      : ((flag('models')?.split(',') as Candidate[] | undefined) ?? ALL_CANDIDATES).map((model) => {
+          if (!(model in CANDIDATES)) throw new Error(`unknown model '${model}'`);
+          return candidateArm(model);
+        });
   const reps = Number(flag('reps') ?? 2);
   const only = flag('fixtures')?.split(',');
   const fixtures = only ? FIXTURES.filter((f) => only.includes(f.id)) : FIXTURES;
@@ -855,10 +985,14 @@ async function main(): Promise<void> {
   if (dryRun) {
     for (const fixture of fixtures) {
       console.log(`── ${fixture.id} — ${fixture.title}\n   ${fixture.asks}`);
+      const sites = rootSites(fixture);
       console.log(`   source ${fixture.source.length} chars, expects `
         + Object.entries(fixture.expected)
             .map(([n, e]) => `${e.entities.length} ${n}`)
             .join(', '));
+      console.log(
+        `   root call carries ${sites} extraction site${sites === 1 ? '' : 's'} — the density check would send it to ${sites >= 30 ? 'OPUS' : 'sonnet'}`,
+      );
     }
     return;
   }

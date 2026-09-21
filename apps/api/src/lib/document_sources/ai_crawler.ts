@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
 
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { Page } from 'playwright';
 import { z } from 'zod';
 
-import { getEnvVar } from '../utils/environment';
+import { platformAnthropic } from '../anthropic/client';
 import { logger } from '../../services/logger';
 import { recordLlmUsage } from '../llm_usage';
 import { Screenshot } from '../../services/crawler';
@@ -108,19 +108,10 @@ type AICrawlResult =
 
 // ── Anthropic client ───────────────────────────────────────────────────────
 
-// Read at first USE, not at module load. `getEnvVar` throws in production when
-// the key is unset, so an eager read made merely IMPORTING this module enough
-// to stop the process booting — including for a deployment that runs entirely
-// on per-team keys (BYOT) or uses no LLM at all. Memoized: still one read and
-// one client, just on first call rather than on import.
-let client: Anthropic | undefined;
-const anthropic = () =>
-  (client ??= new Anthropic({
-    apiKey: getEnvVar('ANTHROPIC_API_KEY', {
-      devDefault: 'test',
-      because: 'the crawler asks Claude what kind of page it has landed on',
-    }),
-  }));
+// The crawler asks Claude what kind of page it has landed on, over whichever
+// route this deployment runs. The factory reads its credentials at first USE,
+// not at module load, so merely importing this file cannot stop the process
+// booting.
 
 const VISION_MODEL = 'claude-sonnet-5' as const;
 
@@ -131,8 +122,9 @@ async function visionCall(opts: {
   label: string;
 }): Promise<string> {
   const startMs = Date.now();
-  const response = await anthropic().messages.create({
-    model: VISION_MODEL,
+  const { client, wireModel } = platformAnthropic();
+  const response = await client.messages.create({
+    model: wireModel(VISION_MODEL),
     max_tokens: 4096,
     system: opts.system,
     messages: [

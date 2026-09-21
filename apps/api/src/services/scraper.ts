@@ -341,6 +341,14 @@ function jsRenderDecision({
   return { retry: true, reason: thin };
 }
 
+/** The Web Unlocker variables a Bright Data scrape needs. Empty when it is
+ *  configured. Answered rather than thrown, so a caller whose whole step
+ *  depends on scraping can refuse honestly before spending anything — the
+ *  scrape itself still raises at call time if it is reached unconfigured. */
+function missingBrightDataVars(env: NodeJS.ProcessEnv = process.env): string[] {
+  return ['BRIGHT_DATA_ACCESS_TOKEN', 'BRIGHT_DATA_UNLOCKER_ZONE'].filter((name) => !env[name]);
+}
+
 class Scraper {
   async getWebsite(url: string, { provider }: { provider: ScrapeProvider }) {
     if (looksLikeNonHtmlAddress(url)) {
@@ -412,4 +420,4 @@ class Scraper {
 
 const ScraperService = new Scraper();
 
-export { ScraperService, looksLikeSpaShell };
+export { ScraperService, looksLikeSpaShell, missingBrightDataVars };

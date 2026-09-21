@@ -37,6 +37,23 @@ jest.mock('@anthropic-ai/sdk', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({ messages: { stream } })),
 }));
+// The same double on the Google route, where the engine reads pages with our
+// own fetcher instead of Anthropic's.
+jest.mock('@anthropic-ai/vertex-sdk', () => ({
+  __esModule: true,
+  AnthropicVertex: jest.fn().mockImplementation(() => ({ messages: { stream } })),
+}));
+
+// The page fetcher behind the client-side page reader. The real one reaches
+// Bright Data; all the engine wants back is the page's text — or the news that
+// it has none.
+const mockGetWebsite = jest.fn(async (_url: string, _options: unknown) => 'Canteen ordering.');
+const mockMissingBrightData = jest.fn((): string[] => []);
+jest.mock('../../scraper', () => ({
+  ScraperService: { getWebsite: (...args: unknown[]) => mockGetWebsite(...(args as [string, unknown])) },
+  missingBrightDataVars: () => mockMissingBrightData(),
+  looksLikeSpaShell: () => false,
+}));
 
 jest.mock('../../../lib/llm_usage', () => ({
   recordLlmUsage: jest.fn().mockResolvedValue(undefined),
@@ -246,6 +263,8 @@ beforeEach(() => {
   delete process.env.RESEARCH_AGENTIC_EFFORT;
   delete process.env.RESEARCH_AGENTIC_SEARCHES;
   delete process.env.RESEARCH_AGENTIC_FETCHES;
+  mockGetWebsite.mockResolvedValue('Canteen ordering.');
+  mockMissingBrightData.mockReturnValue([]);
 });
 
 // ── The gate, before either engine ────────────────────────────────────────
@@ -1169,6 +1188,87 @@ describe('the agentic engine’s allowance', () => {
     finalMessage.mockResolvedValueOnce(webReply({ text: 'ok', blocks: FETCHED }));
     await research({ name: 'Larkfield', urls: ['https://larkfield.example'] }, { engine: 'agentic' });
     expect(stream.mock.calls[0][0].output_config).toEqual({ effort: 'medium' });
+  });
+});
+
+// ── The page reader, where Anthropic has none ────────────────────────────
+//
+// On the Google route there is no hosted page reader, so the turn gets a
+// client-side `web_fetch` tool answered by the same scraper the rest of the
+// engine uses. A run must read the same either way: the same events, the same
+// counts, the same outcomes — and, where the scraper is not configured, a
+// refusal that names the setting instead of a subject with no signal.
+
+describe('the page reader on a route with no hosted one', () => {
+  async function onGoogle<T>(fn: () => Promise<T>): Promise<T> {
+    const restore = { ...process.env };
+    Object.assign(process.env, {
+      MODEL_ROUTE: 'google',
+      GOOGLE_PRIVATE_KEY: 'pk',
+      GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
+      GOOGLE_PROJECT_ID: 'a-project',
+    });
+    try {
+      return await fn();
+    } finally {
+      process.env = restore;
+    }
+  }
+
+  it('reads the page with the scraper and files the dossier as usual', async () => {
+    finalMessage
+      .mockResolvedValueOnce(
+        webReply({
+          text: '',
+          stopReason: 'tool_use',
+          blocks: [
+            {
+              type: 'tool_use',
+              id: 'toolu_1',
+              name: 'web_fetch',
+              input: { url: 'https://larkfield.example' },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(webReply({ text: 'It sells canteen software. [1]' }));
+
+    const result = await onGoogle(() =>
+      research({ name: 'Larkfield', urls: ['https://larkfield.example'] }, { engine: 'agentic' }),
+    );
+
+    expect(mockGetWebsite).toHaveBeenCalledWith('https://larkfield.example', {
+      provider: 'brightdata',
+    });
+    expect(result.outcome).toBe('resolved');
+    // The page the turn opened is on the record, exactly as a hosted read is.
+    expect(result.sources).toEqual(['https://larkfield.example']);
+    expect(result.usage.fetches).toBe(1);
+  });
+
+  it('refuses the entry before any spend when the scraper is not configured', async () => {
+    mockMissingBrightData.mockReturnValue(['BRIGHT_DATA_ACCESS_TOKEN']);
+
+    const result = await onGoogle(() =>
+      research({ name: 'Larkfield', urls: ['https://larkfield.example'] }, { engine: 'agentic' }),
+    );
+
+    expect(result.outcome).toBe('fetch_failed');
+    expect(result.usage.notes?.join(' ')).toContain('BRIGHT_DATA_ACCESS_TOKEN');
+    expect(stream).not.toHaveBeenCalled();
+    expect(mockGetWebsite).not.toHaveBeenCalled();
+  });
+
+  it('leaves the hosted reader alone on the direct route', async () => {
+    finalMessage.mockResolvedValueOnce(webReply({ text: 'ok', blocks: FETCHED, fetches: 1 }));
+
+    const result = await research(
+      { name: 'Larkfield', urls: ['https://larkfield.example'] },
+      { engine: 'agentic' },
+    );
+
+    expect(mockGetWebsite).not.toHaveBeenCalled();
+    expect(result.usage.fetches).toBe(1);
   });
 });
 

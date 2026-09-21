@@ -1312,6 +1312,38 @@ async function checkResponseGrounding(
 // quality.
 const UNIFIED_AGENT_MODEL = 'claude-opus-4-8';
 
+/** The room one turn's answer gets. Thinking, where a model does any, is paid
+ *  for out of this same allowance. */
+const UNIFIED_AGENT_OUTPUT_TOKENS = 16384;
+
+/** Which model answers a turn, how hard it is asked to think, and how much it
+ *  may write. A bake-off names one; nothing in the product does, and silence is
+ *  the row above — including the silence about thinking, which is what the two
+ *  call sites below have always sent. */
+export interface UnifiedAgentCall {
+  model: string;
+  /** Adaptive-thinking depth. Absent leaves the model to its own default,
+   *  which differs by generation and is the reason this is nameable at all. */
+  effort?: 'low' | 'medium' | 'high';
+  maxOutputTokens?: number;
+}
+
+function unifiedAgentCall(override: UnifiedAgentCall | undefined): {
+  model: string;
+  max_output_tokens: number;
+  thinking?: { type: 'adaptive' };
+  output_config?: { effort: 'low' | 'medium' | 'high' };
+} {
+  const call = override ?? { model: UNIFIED_AGENT_MODEL };
+  return {
+    model: call.model,
+    max_output_tokens: call.maxOutputTokens ?? UNIFIED_AGENT_OUTPUT_TOKENS,
+    ...(call.effort
+      ? { thinking: { type: 'adaptive' as const }, output_config: { effort: call.effort } }
+      : {}),
+  };
+}
+
 /** What the onboarding funnel learned before the conversation started —
  *  primes the universal agent so setup lands here, not on a split agent. */
 export interface UnifiedFunnelContext {
@@ -1337,6 +1369,9 @@ export interface UnifiedAgentOptions {
   showMode?: boolean;
   additionalToolDefs?: any[];
   additionalToolImpls?: Record<string, (args: any) => Promise<any>>;
+  /** Benchmark seam: answer this turn on a named model at a named depth
+   *  instead of the agent's own. No product caller sets it. */
+  modelUnderTest?: UnifiedAgentCall;
 }
 
 export async function runUnifiedAgent(
@@ -1411,8 +1446,7 @@ export async function runUnifiedAgent(
         provider === 'anthropic'
           ? await anthropicToolLoop(
               {
-                model: UNIFIED_AGENT_MODEL,
-                max_output_tokens: 16384,
+                ...unifiedAgentCall(options.modelUnderTest),
                 maxTurns: 50,
                 system: systemBlocks,
                 userMessage: message,
@@ -1469,8 +1503,7 @@ export async function runUnifiedAgent(
           provider === 'anthropic'
             ? await anthropicToolLoop(
                 {
-                  model: UNIFIED_AGENT_MODEL,
-                  max_output_tokens: 16384,
+                  ...unifiedAgentCall(options.modelUnderTest),
                   system: systemBlocks,
                   userMessage: correctionMessage,
                   conversationHistory: [

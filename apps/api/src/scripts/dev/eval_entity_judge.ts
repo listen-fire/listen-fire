@@ -26,8 +26,6 @@
  * spend). `--limit N` runs only the first N cases, for a cheap smoke pass.
  * `--fixture <path>` evaluates a different labelled JSONL file instead of
  * the repo fixture (same shape as `caseSchema` below).
- *
- * @decision plans/jev-evaluation-2026-09-17/
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

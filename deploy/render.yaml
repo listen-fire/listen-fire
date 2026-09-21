@@ -255,6 +255,54 @@ services:
       # ---- the model.
       - key: ANTHROPIC_API_KEY
         sync: false
+      # This blueprint stays on the direct route; `google` is for a
+      # deployment whose model calls all go through one Google Cloud
+      # project. Declared explicitly so the choice is visible here rather
+      # than assumed from MODEL_ROUTE's absence.
+      - key: MODEL_ROUTE
+        value: direct
+      # Voice notes are transcribed by Whisper on the direct route; unset, a
+      # voice note fails naming the key.
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # ---- reading the web. Optional, each feature fails naming what it
+      # wanted: page reads (`fetch_url`, the research steps) go through Bright
+      # Data's Web Unlocker; the research steps search through Google's
+      # Programmable Search (an API key plus a search engine id, NOT the
+      # service account below).
+      - key: BRIGHT_DATA_ACCESS_TOKEN
+        sync: false
+      - key: BRIGHT_DATA_UNLOCKER_ZONE
+        sync: false
+      - key: GOOGLE_CUSTOM_SEARCH_API_KEY
+        sync: false
+      - key: GOOGLE_CX
+        sync: false
+      # A second, optional web search provider (WEB_SEARCH_PROVIDER=brightdata
+      # switches to it; unset here, so this deployment stays on Google). Own
+      # zone — separate product from BRIGHT_DATA_UNLOCKER_ZONE above.
+      - key: BRIGHT_DATA_SERP_ZONE
+        sync: false
+
+      # ---- scanned documents (Google Document AI). Optional: all seven
+      # together or OCR boots unconfigured, and a PDF with no text layer of
+      # its own fails naming what it wanted. The first four are the same
+      # service account the `google` model route uses.
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_EMAIL
+        sync: false
+      - key: GOOGLE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_PROJECT_LOCATION
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OCR_PROCESSOR_ID
+        sync: false
+      - key: GOOGLE_STORAGE_BUCKET_NAME
+        sync: false
 
       # ---- sign-in buttons. Optional: an unset id means the button is not
       # offered. These are the ONLY place the client ids go — the login page

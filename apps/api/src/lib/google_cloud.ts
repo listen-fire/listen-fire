@@ -1,0 +1,138 @@
+// The one Google service account this deployment has, and the four variables
+// that describe it.
+//
+// Read straight from the environment rather than through `getEnvVar`, because
+// "no Google credentials" has to be expressible without throwing: image
+// generation falls back to another vendor when they are absent, and the model
+// route asks whether they are there before deciding anything. A helper that
+// throws in production on an unset variable cannot answer that question.
+
+import { GoogleAuth } from 'google-auth-library';
+
+const CLOUD_PLATFORM_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
+
+/** Where image generation and OCR address Google. Claude's endpoint is chosen
+ *  separately (`GOOGLE_MODEL_REGION`) — it wants the global one, not a region. */
+const DEFAULT_PROJECT_LOCATION = 'europe-west1';
+
+export interface GoogleServiceAccount {
+  privateKey: string;
+  clientEmail: string;
+  projectId: string;
+  projectLocation: string;
+}
+
+/** The variables that must carry a value for the account to exist at all.
+ *  `GOOGLE_PROJECT_LOCATION` is not among them: it has a default. */
+const REQUIRED_VARS = ['GOOGLE_PRIVATE_KEY', 'GOOGLE_CLIENT_EMAIL', 'GOOGLE_PROJECT_ID'] as const;
+
+/**
+ * A PEM private key carried in an environment variable usually arrives with its
+ * line breaks escaped — one `\n` per line, as two characters. Unescaping is a
+ * no-op for a key that already has real newlines, so it is safe either way.
+ */
+function unescapeNewlines(key: string): string {
+  return key.replace(/\\n/g, '\n');
+}
+
+export function isGoogleServiceAccountConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return REQUIRED_VARS.every((name) => Boolean(env[name]));
+}
+
+/** The variables a caller still has to set. Empty when the account is complete. */
+export function missingGoogleServiceAccountVars(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return REQUIRED_VARS.filter((name) => !env[name]);
+}
+
+export function googleServiceAccount(env: NodeJS.ProcessEnv = process.env): GoogleServiceAccount {
+  const missing = missingGoogleServiceAccountVars(env);
+  if (missing.length > 0) {
+    throw new Error(
+      `Google Cloud credentials are not configured — set ${missing.join(', ')}.`,
+    );
+  }
+  return {
+    privateKey: unescapeNewlines(env.GOOGLE_PRIVATE_KEY ?? ''),
+    clientEmail: env.GOOGLE_CLIENT_EMAIL ?? '',
+    projectId: env.GOOGLE_PROJECT_ID ?? '',
+    projectLocation: env.GOOGLE_PROJECT_LOCATION || DEFAULT_PROJECT_LOCATION,
+  };
+}
+
+/** The service account as `google-auth-library` wants it, scoped for every
+ *  Google Cloud API this deployment reaches. */
+export function googleAuth(env: NodeJS.ProcessEnv = process.env): GoogleAuth {
+  const { privateKey, clientEmail } = googleServiceAccount(env);
+  return new GoogleAuth({
+    credentials: {
+      type: 'service_account',
+      private_key: privateKey,
+      client_email: clientEmail,
+    },
+    scopes: [CLOUD_PLATFORM_SCOPE],
+  });
+}
+
+/** A bearer token for a hand-rolled call to a Google endpoint. The SDK-backed
+ *  callers hand {@link googleAuth} over instead and let it refresh itself. */
+export async function googleAccessToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const client = await googleAuth(env).getClient();
+  const { token } = await client.getAccessToken();
+  if (!token) throw new Error('Google Cloud refused an access token for the service account.');
+  return token;
+}
+
+/**
+ * A bearer token source for a long-lived client that must ask again on every
+ * request — a Google access token lasts about an hour, and a process that runs
+ * longer than that outlives the one it was built with.
+ *
+ * Bound to ONE `GoogleAuth`, deliberately: the library caches the token on its
+ * client and mints a new one only as the old one expires, so asking per request
+ * costs a property read rather than a round trip. {@link googleAccessToken}
+ * builds a fresh `GoogleAuth` per call and therefore has no such cache — fine
+ * for a one-off call, wrong for every request a server makes.
+ */
+export function googleBearerTokens(env: NodeJS.ProcessEnv = process.env): () => Promise<string> {
+  const auth = googleAuth(env);
+  return async () => {
+    const client = await auth.getClient();
+    const { token } = await client.getAccessToken();
+    if (!token) throw new Error('Google Cloud refused an access token for the service account.');
+    return token;
+  };
+}
+
+/**
+ * Where this deployment addresses Google's MODELS. The global endpoint is the
+ * recommended one and the only one without a regional price premium —
+ * deliberately NOT {@link GoogleServiceAccount.projectLocation}, which is a real
+ * region that OCR and image generation need.
+ */
+export function googleModelRegion(env: NodeJS.ProcessEnv = process.env): string {
+  return env.GOOGLE_MODEL_REGION || 'global';
+}
+
+/**
+ * A published Google model's own REST address, for the calls that have no SDK
+ * here — `:generateContent`, `:predict`. The global endpoint drops the region
+ * from the HOST and keeps it in the path; every other one carries it in both.
+ * https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations
+ */
+export function googleModelUrl(options: {
+  model: string;
+  method: 'generateContent' | 'predict';
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const env = options.env ?? process.env;
+  const { projectId } = googleServiceAccount(env);
+  const region = googleModelRegion(env);
+  const host =
+    region === 'global' ? 'aiplatform.googleapis.com' : `${region}-aiplatform.googleapis.com`;
+  return (
+    `https://${host}/v1/projects/${projectId}/locations/${region}` +
+    `/publishers/google/models/${options.model}:${options.method}`
+  );
+}

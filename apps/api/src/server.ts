@@ -34,6 +34,7 @@ process.on('unhandledRejection', (reason, promise) => {
   });
 });
 import { requireEnv } from './lib/utils/environment';
+import { assertModelRouteConfigured } from './lib/model_route';
 import { assertJevConfigured } from './lib/jev/client';
 import { healthCheck, workersHealthCheck } from './lib/middleware/health_check';
 import { rootHandler } from './lib/middleware/root_handler';
@@ -77,9 +78,15 @@ registerAllRoutes();
 
 requireEnv('NODE_ENV');
 
-// A deployment that turns on the Jev entity judge without its key believes
-// duplicate merges are getting a second opinion when they are not — fail
-// boot, not the first fuzzy write.
+// Which vendor route this deployment's model calls take, and whether it is
+// configured for that route. Checked here rather than at the first model call:
+// a key that cannot be used is the sign that the deployment believes it is on
+// the other route, and a run is the wrong place to find that out.
+assertModelRouteConfigured();
+
+// Same posture, one env var over: a deployment that turns on the Jev entity
+// judge without its key believes duplicate merges are getting a second
+// opinion when they are not.
 assertJevConfigured();
 
 // A blocked event loop is the one failure this process cannot narrate: the

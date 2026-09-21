@@ -1,23 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { Resvg } from '@resvg/resvg-js';
-import { getEnvVar } from '../utils/environment';
+import { platformAnthropic } from '../anthropic/client';
 import { logger } from '../../services/logger';
 
-// Read at first USE, not at module load. `getEnvVar` throws in production when
-// the key is unset, so an eager read made merely IMPORTING this module enough
-// to stop the process booting — including for a deployment that runs entirely
-// on per-team keys (BYOT) or uses no LLM at all. Memoized: still one read and
-// one client, just on first call rather than on import.
-let client: Anthropic | undefined;
-const anthropic = () =>
-  (client ??= new Anthropic({
-    apiKey: getEnvVar('ANTHROPIC_API_KEY', {
-      devDefault: 'test',
-      because: 'icons for knowledge types are drawn by Claude',
-    }),
-  }));
-
 const MAX_REFINEMENTS = 3;
+
+const ICON_MODEL = 'claude-opus-4-7';
 
 const SYSTEM_PROMPT = `You are an expert icon designer creating minimal SVG icons for a sidebar navigation UI. These icons are displayed at 16x16 pixels — every design decision must serve legibility at that size.
 
@@ -158,8 +146,9 @@ export async function generateIconSvg({ name, description, existingIcons }: {
   }
 
   // Step 1: Opus reasons about the metaphor and generates the initial SVG
-  const initialResponse = await anthropic().messages.create({
-    model: 'claude-opus-4-7',
+  const { client, wireModel } = platformAnthropic();
+  const initialResponse = await client.messages.create({
+    model: wireModel(ICON_MODEL),
     max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: conceptMessage }],
@@ -191,8 +180,8 @@ export async function generateIconSvg({ name, description, existingIcons }: {
       break;
     }
 
-    const refineResponse = await anthropic().messages.create({
-      model: 'claude-opus-4-7',
+    const refineResponse = await client.messages.create({
+      model: wireModel(ICON_MODEL),
       max_tokens: 2048,
       system: REFINE_SYSTEM_PROMPT,
       messages: [{

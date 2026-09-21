@@ -17,7 +17,7 @@ import { S3Adapter } from './adapters/document/s3';
 import { UnconfiguredDocumentProvider } from './adapters/document/unconfigured';
 import { GoogleDocumentAIAdapter } from './adapters/ocr/google';
 import { UnconfiguredOcrAdapter } from './adapters/ocr/unconfigured';
-import { OpenAiTranscriptionAdapter } from './adapters/transcription/openai';
+import { chooseTranscriptionAdapter } from './adapters/transcription/choose';
 import { BrightDataAdapter } from './adapters/linkedin/brightData';
 import { AirtableAppAdapter } from './adapters/airtable/connector';
 import { SlackWebApiConnector } from './adapters/slack/webApi/connector';
@@ -237,9 +237,10 @@ if (
   services.ocr = new UnconfiguredOcrAdapter();
 }
 
-// Speech-to-text for audio attachments (voice notes). Key handling lives in
-// lib/openai, so registration is unconditional like the OpenAI chat helpers.
-services.transcription = new OpenAiTranscriptionAdapter();
+// Speech-to-text for audio attachments (voice notes). Registration is
+// unconditional on either route — credentials are handled where the call is
+// made, not here — but WHO transcribes follows the model route.
+services.transcription = chooseTranscriptionAdapter();
 
 if (BRIGHT_DATA_ACCESS_TOKEN) {
   services.linkedin = new BrightDataAdapter({ accessToken: BRIGHT_DATA_ACCESS_TOKEN });
