@@ -26,8 +26,6 @@ import { AttioAppAdapter } from './adapters/attio/connector';
 import { AttioAuthClient } from './adapters/attio/authClient';
 import { GoogleAppAdapter } from './adapters/google/connector';
 import { GoogleAuthClient } from './adapters/google/authClient';
-import { GmailAppAdapter } from './adapters/gmail/connector';
-import { GmailAuthClient } from './adapters/gmail/authClient';
 import { DropboxAppAdapter } from './adapters/dropbox/connector';
 import { DropboxAuthClient } from './adapters/dropbox/authClient';
 import { SlackMonitoring } from './lib/slack';
@@ -100,9 +98,6 @@ const ATTIO_CLIENT_SECRET = process.env.ATTIO_CLIENT_SECRET;
 
 const GOOGLE_INTEGRATIONS_CLIENT_ID = process.env.GOOGLE_INTEGRATIONS_CLIENT_ID;
 const GOOGLE_INTEGRATIONS_CLIENT_SECRET = process.env.GOOGLE_INTEGRATIONS_CLIENT_SECRET;
-
-const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID;
-const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
 
 const DROPBOX_CLIENT_ID = process.env.DROPBOX_CLIENT_ID;
 const DROPBOX_CLIENT_SECRET = process.env.DROPBOX_CLIENT_SECRET;
@@ -328,16 +323,6 @@ if (GOOGLE_INTEGRATIONS_CLIENT_ID && GOOGLE_INTEGRATIONS_CLIENT_SECRET) {
     authClient: new GoogleAuthClient({
       clientId: GOOGLE_INTEGRATIONS_CLIENT_ID,
       clientSecret: GOOGLE_INTEGRATIONS_CLIENT_SECRET,
-      redirectBaseUrl: oauthRedirectBaseUrl(),
-    }),
-  });
-}
-
-if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET) {
-  services.gmail = new GmailAppAdapter({
-    authClient: new GmailAuthClient({
-      clientId: GMAIL_CLIENT_ID,
-      clientSecret: GMAIL_CLIENT_SECRET,
       redirectBaseUrl: oauthRedirectBaseUrl(),
     }),
   });

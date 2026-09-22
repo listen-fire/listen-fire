@@ -17,7 +17,7 @@ import {
 } from '../../../adapters/airtable/apiClient';
 import { attioCredsParser, getAttioClient } from '../../../adapters/attio/apiClient';
 import { googleCredsParser } from '../../../adapters/google/authClient';
-import { gmailCredsParser } from '../../../adapters/gmail/authClient';
+import { gmailCredsParser } from '../../../adapters/gmail/apiClient';
 import { dropboxCredsParser } from '../../../adapters/dropbox/authClient';
 import { nativeValuationsCredsParser } from '../../../services/translation_graph/adapters/native_valuations';
 import { granolaCredsParser } from '../../../services/credentials/connect_form_spec';
@@ -328,16 +328,10 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           .select(['id', 'type', 'credentials'])
           .executeTakeFirstOrThrow();
 
-        if (credential.type === ExternalServiceType.GOOGLE_GMAIL) {
-          try {
-            const decrypted = await decryptToken(credential.credentials as Buffer, credential.id);
-            const creds = gmailCredsParser.parse(JSON.parse(decrypted));
-            await services.gmail?.authClient.revokeToken(creds);
-          } catch {
-            // Best-effort revocation — continue with local deletion
-          }
-          services.gmail?.authClient.removeClient(credential.id);
-        } else if (credential.type === ExternalServiceType.GOOGLE) {
+        // GOOGLE_GMAIL has nothing to revoke: a connected mailbox stores only
+        // its own address, and the authority behind it is the deployment's
+        // service account, which no team's delete may touch.
+        if (credential.type === ExternalServiceType.GOOGLE) {
           services.google?.authClient.removeClient(credential.id);
         } else if (credential.type === ExternalServiceType.AIRTABLE) {
           clearClientByCredentialsId(credential.id);
@@ -455,16 +449,6 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
     googleConnectUrl: userProcedure.mutation(async () => {
       const ctx = currentContext();
       const installUrl = await services.google?.generateInstallUrl();
-      if (installUrl) {
-        const state = extractStateFromUrl(installUrl);
-        if (state) bindFlowToUser(state, ctx.user.id);
-      }
-      return installUrl;
-    }),
-
-    gmailConnectUrl: userProcedure.mutation(async () => {
-      const ctx = currentContext();
-      const installUrl = await services.gmail?.generateInstallUrl();
       if (installUrl) {
         const state = extractStateFromUrl(installUrl);
         if (state) bindFlowToUser(state, ctx.user.id);

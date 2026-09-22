@@ -341,7 +341,7 @@ describe('instanceSchemaFromDescriptors — identity naming the edge a record ha
                 fieldId: 'listName',
                 displayName: 'listName',
                 kind: 'enum' as const,
-                enumValues: ['Master Deals List'],
+                enumValues: ['Deal Pipeline'],
                 writable: true,
                 required: true,
               },

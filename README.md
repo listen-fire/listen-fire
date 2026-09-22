@@ -35,6 +35,7 @@ Each system is reached through an adapter, which presents it as a graph. The ada
 |---|---|
 | `slack` | Slack |
 | `email` | inbound and outbound email |
+| `gmail` | one Gmail mailbox, read and written as itself |
 | `whatsapp` | WhatsApp, via the Meta Cloud API |
 | `telegram` | Telegram, via the Bot API |
 | `attio` | Attio |

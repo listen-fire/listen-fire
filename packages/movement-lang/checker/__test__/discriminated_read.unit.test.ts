@@ -1,5 +1,5 @@
 // Discriminated READS (plan layer 1b): a hop whose WHERE names the list —
-// `` -[le:`List Entries` WHERE `listName` == "Master Deals List"]-> `` — is
+// `` -[le:`List Entries` WHERE `listName` == "Deal Pipeline"]-> `` — is
 // checked against THAT list's type, not against the union of every list. The
 // read-side dual of the discriminated write, and the same mechanism as every
 // other narrowing: the HOST resolves the selection and registers a refined
@@ -23,7 +23,7 @@ import { InstanceSchema, mockCatalog, refinementKey } from '../catalog';
 import { parseTraversalPath } from '../../service/selectors';
 
 const ENTRIES = 'List Entry';
-const MASTER = 'List Entry "Master Deals List"';
+const MASTER = 'List Entry "Deal Pipeline"';
 const TICKETS = 'Ticket';
 const BILLING = 'Ticket "Billing"';
 
@@ -56,13 +56,13 @@ const crmSchema: InstanceSchema = {
   collections: { Organization: { target: 'Organization' } },
   writableRoots: {},
   refinements: {
-    [keyFor(ENTRIES, '`listName` == "Master Deals List"')]: MASTER,
-    [keyFor(ENTRIES, '`listName` == "Master Deals List" AND `Deal Created` >= cutoff')]: MASTER,
-    [keyFor(ENTRIES, '`listName` == "Master Deals List" AND `Deal Created` >= cutof')]: MASTER,
-    [keyFor(ENTRIES, '`listName` == "Master Deals List" AND `Made Up Field` >= cutoff')]: MASTER,
+    [keyFor(ENTRIES, '`listName` == "Deal Pipeline"')]: MASTER,
+    [keyFor(ENTRIES, '`listName` == "Deal Pipeline" AND `Deal Created` >= cutoff')]: MASTER,
+    [keyFor(ENTRIES, '`listName` == "Deal Pipeline" AND `Deal Created` >= cutof')]: MASTER,
+    [keyFor(ENTRIES, '`listName` == "Deal Pipeline" AND `Made Up Field` >= cutoff')]: MASTER,
     [keyFor(
       ENTRIES,
-      '`listName` == "Master Deals List" AND `[Master Deals List] Deal Created` >= cutoff',
+      '`listName` == "Deal Pipeline" AND `[Deal Pipeline] Deal Created` >= cutoff',
     )]: MASTER,
   },
 };
@@ -147,14 +147,14 @@ ${inner}
 
 describe('a hop narrowed by its discriminant is checked against the variant', () => {
   it('a bare field of the named list is fine', () => {
-    expect(codes(onMasterDeals('`listName` == "Master Deals List" AND `Deal Created` >= cutoff'))).toEqual(
+    expect(codes(onMasterDeals('`listName` == "Deal Pipeline" AND `Deal Created` >= cutoff'))).toEqual(
       [],
     );
   });
 
   it('a made-up field in the same WHERE is an unknown field naming the list', () => {
     const [diagnostic, ...rest] = diagnose(
-      onMasterDeals('`listName` == "Master Deals List" AND `Made Up Field` >= cutoff'),
+      onMasterDeals('`listName` == "Deal Pipeline" AND `Made Up Field` >= cutoff'),
     );
     expect(rest).toEqual([]);
     expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
@@ -172,7 +172,7 @@ describe('a hop narrowed by its discriminant is checked against the variant', ()
   it('the list-prefixed spelling is the same error, with the bare name suggested', () => {
     const [diagnostic] = diagnose(
       onMasterDeals(
-        '`listName` == "Master Deals List" AND `[Master Deals List] Deal Created` >= cutoff',
+        '`listName` == "Deal Pipeline" AND `[Deal Pipeline] Deal Created` >= cutoff',
       ),
     );
     expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
@@ -181,10 +181,10 @@ describe('a hop narrowed by its discriminant is checked against the variant', ()
 
   it('the alias binds to the variant — its own field reads, a made-up one does not', () => {
     expect(
-      codes(onMasterDeals('`listName` == "Master Deals List"', '      n = le.`Stage Order`')),
+      codes(onMasterDeals('`listName` == "Deal Pipeline"', '      n = le.`Stage Order`')),
     ).toEqual([]);
     const [diagnostic] = diagnose(
-      onMasterDeals('`listName` == "Master Deals List"', '      n = le.`Made Up Field`'),
+      onMasterDeals('`listName` == "Deal Pipeline"', '      n = le.`Made Up Field`'),
     );
     expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
     expect(diagnostic.message).toContain(MASTER);
@@ -198,7 +198,7 @@ describe('a hop narrowed by its discriminant is checked against the variant', ()
     const [diagnostic] = diagnose(onMasterDeals('`listName` == cutoff AND `Deal Created` >= cutoff'));
     expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
     expect(diagnostic.message).toContain(ENTRIES);
-    expect(diagnostic.message).not.toContain('Master Deals List');
+    expect(diagnostic.message).not.toContain('Deal Pipeline');
   });
 
   // A bare name in a WHERE has two surfaces, and that is exactly why this
@@ -209,7 +209,7 @@ describe('a hop narrowed by its discriminant is checked against the variant', ()
     // stays silent. Drop a letter and it is neither, which is the whole of what
     // scope presence buys.
     expect(
-      codes(onMasterDeals('`listName` == "Master Deals List" AND `Deal Created` >= cutof')),
+      codes(onMasterDeals('`listName` == "Deal Pipeline" AND `Deal Created` >= cutof')),
     ).toEqual(['MOV_UNKNOWN_PROPERTY']);
   });
 });

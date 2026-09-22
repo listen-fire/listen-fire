@@ -193,6 +193,7 @@ export interface SeedResult {
     airtableCredentials: boolean;
     evertraceCredentials: boolean;
     dealroomCredentials: boolean;
+    gmailCredentials: boolean;
     knowledgeCredential: boolean;
     remoteAdapter: boolean;
     currencies: boolean;
@@ -237,6 +238,7 @@ export async function ensureDevLoopTeam(): Promise<SeedResult> {
     airtableCredentials: false,
     evertraceCredentials: false,
     dealroomCredentials: false,
+    gmailCredentials: false,
     knowledgeCredential: false,
     remoteAdapter: false,
     currencies: false,
@@ -498,6 +500,38 @@ export async function ensureDevLoopTeam(): Promise<SeedResult> {
       } as any)
       .execute();
     created.dealroomCredentials = true;
+  }
+
+  // 6b-iii. The Gmail mailbox. There is no key to paste — a connected mailbox
+  // is just its address, and the deployment's service account is the authority
+  // — so the seeded row stores the dev-loop address and carries the delegated
+  // `app_id`, which is what tells it apart from the retired per-user sign-in.
+  // `injectFakeBaseUrl` points the client at the fake Gmail for this team.
+  const existingGmailCreds = await getAutomationsQb(['external_service_credentials'])
+    .selectFrom('external_service_credentials')
+    .where('team_id', '=', teamId as TeamId)
+    .where('type', '=', ExternalServiceType.GOOGLE_GMAIL)
+    .where('name', '=', 'Dev Loop Gmail')
+    .select('id')
+    .executeTakeFirst();
+  if (!existingGmailCreds) {
+    const credId = randomUUID() as ExternalServiceCredentialsId;
+    const encrypted = await encryptToken(
+      JSON.stringify({ mailbox: 'dev-loop@listen-fire.local' }),
+      credId,
+    );
+    await getAutomationsQb(['external_service_credentials'])
+      .insertInto('external_service_credentials')
+      .values({
+        id: credId,
+        name: 'Dev Loop Gmail',
+        type: ExternalServiceType.GOOGLE_GMAIL,
+        credentials: encrypted,
+        app_id: defaultAppIdForType(ExternalServiceType.GOOGLE_GMAIL),
+        team_id: teamId,
+      } as any)
+      .execute();
+    created.gmailCredentials = true;
   }
 
   // 6c. The knowledge-graph connection. Unconditional: the helper is

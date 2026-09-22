@@ -184,6 +184,23 @@ const submitHandler: RequestHandler = async (req, res) => {
     return;
   }
 
+  // The adapter's own live check, before anything is stored and before the
+  // token is spent — a credential that cannot reach its system is not a
+  // credential, and the user is still on the form to fix it.
+  if (spec.validate) {
+    let verdict: Awaited<ReturnType<NonNullable<typeof spec.validate>>>;
+    try {
+      verdict = await spec.validate(credentials);
+    } catch (e) {
+      logger.error('[CONNECT] credential validation threw', e);
+      verdict = { ok: false, message: 'That could not be checked just now — try again shortly.' };
+    }
+    if (!verdict.ok) {
+      res.status(400).type('html').send(keyEntryPage(row, token, { error: verdict.message }));
+      return;
+    }
+  }
+
   // Consume FIRST (single-use, atomic) so a replayed submit can't double-persist.
   const consumed = await consumeConnectToken(row.id);
   if (!consumed) {

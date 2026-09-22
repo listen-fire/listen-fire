@@ -51,6 +51,8 @@ import {
   createDealroomAdapter,
 } from './dealroom';
 import { createDealroomPollSource } from './dealroom/poll';
+import { GMAIL_ADAPTER_TYPE, GMAIL_MANIFEST, createGmailAdapter } from './gmail';
+import { createGmailPollSource } from './gmail/poll';
 import { ASK_ADAPTER_TYPE, ASK_MANIFEST, createAskAdapter } from './ask';
 
 /**
@@ -154,6 +156,13 @@ const ADAPTER_FACTORIES: Record<string, AdapterFactory> = {
   // Ask adapter — the awaitable "ask a person" intrinsic (asks-as-adapter).
   // Credential-free, team-scoped; families (Check/Provide/Select/Review) are
   // its writable positions. Runs alongside the legacy `ask` statement.
+  // Gmail — one connected Workspace mailbox, polled, read and written: a
+  // movement can search it, run when mail arrives, and send or reply as the
+  // mailbox. Event production lives on its PollSource (POLL_SOURCE_FACTORIES
+  // below). Distinct from the `email` adapter, which only ever sees mail
+  // FORWARDED to the deployment's inbound address.
+  [GMAIL_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
+    createGmailAdapter({ teamId, credentialsId }),
   [ASK_ADAPTER_TYPE]: ({ teamId }) => createAskAdapter({ teamId }),
 };
 
@@ -171,6 +180,8 @@ const POLL_SOURCE_FACTORIES: Record<string, PollSourceFactory> = {
     createEvertracePollSource({ teamId, credentialsId }),
   [DEALROOM_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
     createDealroomPollSource({ teamId, credentialsId }),
+  [GMAIL_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
+    createGmailPollSource({ teamId, credentialsId }),
 };
 
 /** Whether a slug (or trigger-kind alias) has a registered PollSource. */
@@ -220,6 +231,7 @@ const ADAPTER_MANIFESTS: Record<string, AdapterManifest> = {
   [GRANOLA_ADAPTER_TYPE]: GRANOLA_MANIFEST,
   [EVERTRACE_ADAPTER_TYPE]: EVERTRACE_MANIFEST,
   [DEALROOM_ADAPTER_TYPE]: DEALROOM_MANIFEST,
+  [GMAIL_ADAPTER_TYPE]: GMAIL_MANIFEST,
   [ASK_ADAPTER_TYPE]: ASK_MANIFEST,
 };
 

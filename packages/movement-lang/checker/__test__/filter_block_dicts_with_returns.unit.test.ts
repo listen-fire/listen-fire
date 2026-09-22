@@ -20,7 +20,7 @@ const affinitySchema: InstanceSchema = {
     },
     organization: { properties: { Name: 'text' }, edges: {} },
   },
-  collections: { 'List Entry — Master Deals List': { target: 'listEntry' } },
+  collections: { 'List Entry — Deal Pipeline': { target: 'listEntry' } },
   writableRoots: {
     Organization: { fields: { Name: 'text' }, resultShape: { Name: 'text' }, edges: {} },
   },
@@ -60,7 +60,7 @@ export function \`Check Deal\`(d: <Deal>) {
 // dicts returned by a traversal block — the exact shape from the bug report.
 const IN_FILTER = `${HEADER}
 export function \`Upsert Deal\`(d: <Deal>) {
-  recent = crm-[x:\`List Entry — Master Deals List\`]-> {
+  recent = crm-[x:\`List Entry — Deal Pipeline\`]-> {
     org = ONLY(x-[:\`Organization\`]->)
     nm  = IF org == null THEN "" ELSE COALESCE(org.\`Name\`, "") END
     return { nm: nm }

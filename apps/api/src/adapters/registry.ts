@@ -10,7 +10,6 @@ import { SlackConnector } from './slack/interface';
 import { AirtableConnector } from './airtable/interface';
 import { AttioConnector } from './attio/interface';
 import { GoogleConnector } from './google/interface';
-import { GmailAppAdapter } from './gmail/connector';
 import { DropboxAppAdapter } from './dropbox/connector';
 import { SlackMonitoring } from '../lib/slack';
 
@@ -129,15 +128,6 @@ class Registry {
 
   get google() {
     return this._google;
-  }
-
-  private _gmail?: GmailAppAdapter | undefined;
-  set gmail(gmailApp: GmailAppAdapter | undefined) {
-    this._gmail = gmailApp;
-  }
-
-  get gmail() {
-    return this._gmail;
   }
 
   private _dropbox?: DropboxAppAdapter | undefined;

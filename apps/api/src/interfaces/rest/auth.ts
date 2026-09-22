@@ -325,15 +325,6 @@ const authGoogleIntegrationsCallbackHandler: RequestHandler = async (req, res) =
   }
 };
 
-const authGmailCallbackHandler: RequestHandler = async (req, res) => {
-  if (services.gmail) {
-    await services.gmail?.handleCallback(req, res);
-    return;
-  } else {
-    return res.status(400).send('Gmail not configured');
-  }
-};
-
 const authSlackCallbackHandler: RequestHandler = async (req, res) => {
   if (services.slack) {
     await services.slack?.handleCallback(req, res);
@@ -528,7 +519,6 @@ export {
   authGoogleAuthHandler,
   authMicrosoftAuthHandler,
   authGoogleIntegrationsCallbackHandler,
-  authGmailCallbackHandler,
   requestMagicLinkHandler,
   verifyMagicLinkHandler,
   authPasswordLoginHandler,

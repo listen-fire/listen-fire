@@ -21,6 +21,7 @@ import { affinityCredsParser } from '../../adapters/affinity/apiClient';
 import { attioCredsParser } from '../../adapters/attio/apiClient';
 import { evertraceCredsParser } from '../../adapters/evertrace/apiClient';
 import { dealroomCredsParser } from '../../adapters/dealroom/apiClient';
+import { gmailCredsParser, validateGmailMailbox } from '../../adapters/gmail/apiClient';
 import { RemoteAdapterCredentialPayload } from '../translation_graph/adapters/remote/manifest';
 
 /** Stored Granola credential — the API key the user pastes. */
@@ -60,12 +61,28 @@ export interface ConnectFormSpec {
   /** A caveat worth surfacing alongside the guide (plan requirements etc.). */
   note?: string;
   parse(values: Record<string, string>): unknown;
+  /**
+   * A LIVE check of the parsed envelope, before anything is stored.
+   *
+   * `parse` only says the values are the right shape; for a credential whose
+   * failure modes are about the other end's configuration — a delegation a
+   * Workspace admin never granted — shape is not the question. The submit route
+   * re-renders the form with `message`, so the user corrects the thing that is
+   * actually wrong rather than discovering it in a run a week later.
+   *
+   * Omitted ⇒ nothing is called and a parsed envelope is stored as-is.
+   */
+  validate?(credentials: unknown): Promise<{ ok: true } | { ok: false; message: string }>;
 }
 
 function specFor(
   parser: z.ZodType,
   fields: ConnectFormField[],
-  extras: { guide?: string[]; note?: string } = {},
+  extras: {
+    guide?: string[];
+    note?: string;
+    validate?: ConnectFormSpec['validate'];
+  } = {},
 ): ConnectFormSpec {
   return {
     fields,
@@ -206,6 +223,42 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
         'Copy the API key and paste it below.',
       ],
       note: 'API access is part of a Dealroom Premium plan \u2014 ask your account manager if the API section is missing.',
+    },
+  ),
+  // Gmail is connected by NAMING a mailbox, not by signing into one: the
+  // deployment's Google service account acts as the address through domain wide
+  // delegation, which a Workspace admin grants once. There is no secret to
+  // paste, which is why the form has one plain field and why the real check is
+  // the live `validate` below rather than anything the parser can see.
+  [ExternalServiceType.GOOGLE_GMAIL]: specFor(
+    gmailCredsParser,
+    [
+      {
+        name: 'mailbox',
+        label: 'Mailbox address',
+        secret: false,
+        optional: false,
+        kind: 'text',
+        placeholder: 'deals@yourcompany.com',
+        help:
+          'The Google Workspace address automations should read and send as. A ' +
+          'real user or shared mailbox — a group address has no inbox.',
+      },
+    ],
+    {
+      guide: [
+        'Decide which Workspace mailbox automations should act as.',
+        'Ask a Workspace admin to open Security, then API controls, then Domain wide delegation.',
+        'Have them add this deployment’s service account client id with the scopes ' +
+          'https://www.googleapis.com/auth/gmail.readonly and ' +
+          'https://www.googleapis.com/auth/gmail.send.',
+        'Enter the mailbox address below.',
+      ],
+      note:
+        'Nothing is stored until the mailbox answers, so a failure here means the ' +
+        'delegation or the address is wrong — not that anything was lost.',
+      validate: async (credentials) =>
+        validateGmailMailbox(gmailCredsParser.parse(credentials)),
     },
   ),
   // A user-installed remote adapter authenticates with a single secret (the

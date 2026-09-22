@@ -226,7 +226,7 @@ services:
       API_BASE_URL: ${API_BASE_URL:-http://localhost:8081}
       WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
       # Where an OAuth consent screen returns the person. Those callback pages
-      # (`/attio`, `/airtable`, `/dropbox`, `/gmail`, `/google-integrations`)
+      # (`/attio`, `/airtable`, `/dropbox`, `/google-integrations`)
       # are served by the WEB app, so this defaults to the web origin.
       OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-${WEB_BASE_URL:-http://localhost:8080}}
       # The origin a third party fetches an exposed file's bytes from. That

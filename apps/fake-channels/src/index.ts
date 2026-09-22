@@ -15,6 +15,7 @@ import { whatsappRoutes } from './routes/whatsapp';
 import { telegramRoutes } from './routes/telegram';
 import { webhookRoutes } from './routes/webhook';
 import { gdriveRoutes } from './routes/gdrive';
+import { gmailRoutes } from './routes/gmail';
 import { dropboxRoutes } from './routes/dropbox';
 import { adminRoutes } from './routes/admin';
 
@@ -46,10 +47,13 @@ app.use('/webhook', webhookRoutes(store));
 // host root (/drive/v3/*, /upload/drive/v3/*) — no collision with the
 // service-prefixed routes above.
 app.use('/', gdriveRoutes(store));
+// Gmail mounts at the host root for the same reason (/gmail/v1/*), plus its
+// own /fake-gmail/* control surface.
+app.use('/', gmailRoutes(store));
 app.use('/dropbox', dropboxRoutes(store));
 app.use('/admin', adminRoutes(store));
 
 app.listen(PORT, () => {
   console.log(`Fake channel server running on http://localhost:${PORT}`);
-  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /dealroom, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /dropbox, /admin');
+  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /dealroom, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /gmail, /dropbox, /admin');
 });

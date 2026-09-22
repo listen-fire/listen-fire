@@ -4768,7 +4768,7 @@ class Checker {
   /**
    * The handle a DISCRIMINATED write hands back stands on the VARIANT, not on
    * the collection the write was addressed through. `entry = write org-[:List
-   * Entries]-> { listName: "Master Deals List", … }` is addressed at the
+   * Entries]-> { listName: "Deal Pipeline", … }` is addressed at the
    * membership collection — which publishes nothing but the discriminant,
    * because it is the intersection of every list — while the record it created
    * is a row of one named list, and that type is the one carrying `Owners`. So

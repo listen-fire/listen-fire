@@ -62,7 +62,7 @@ function readableData(data: unknown): Record<string, unknown> | undefined {
  * Dropping the undecidable rest is SOUND rather than a best effort: a
  * conjunction only ever selects a subset of what one of its conjuncts selects,
  * so the rows the hop yields are still that member's rows. This is what lets
- * `` `listName` == "Master Deals List" AND `Stage Order` >= cutoff `` narrow —
+ * `` `listName` == "Deal Pipeline" AND `Stage Order` >= cutoff `` narrow —
  * the list is named right there, and the cutoff is a runtime value that could
  * never have chosen a different list.
  */

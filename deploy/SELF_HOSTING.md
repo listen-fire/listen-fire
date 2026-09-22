@@ -296,6 +296,8 @@ An automation is a small program over your real systems: something happens — a
 | **Your users paste a credential** | nothing to register | Affinity, Granola, Attio, and a remote adapter server you host yourself |
 | **You register your own app** | see below | Slack, Attio, Airtable, Google Sheets and Drive, Gmail, Dropbox, Telegram, WhatsApp, Mailgun or Resend |
 
+Gmail sits in that last tier without an OAuth app: its cost is a Workspace admin granting this deployment delegated access to one mailbox, which takes minutes and no review.
+
 Airtable is in the third tier only: it is OAuth-only in this build, with no key-entry form. Attio is in both, and the app you register decides which: with `ATTIO_CLIENT_ID` / `ATTIO_CLIENT_SECRET` set your users sign in through Attio, and without them they paste a workspace access token instead.
 
 Redis holds the runaway-loop guard's counters. The guard fails **open** if Redis is unreachable — automations keep running unguarded rather than stopping — but a production process with the two Redis settings unset throws the first time it reaches for the pool. Compose always runs Redis, so this matters only off compose.
@@ -364,13 +366,23 @@ Attio's pair is optional. Leave it unset and the connect form asks for a workspa
 
 Record-change subscriptions register themselves. When an automation that listens to one of these is saved, Listen-Fire subscribes with the team's own credential at `<API_BASE_URL>/api/public/webhook-sync/<system>/<subscription id>` — nothing to paste, and re-saving after a hostname change re-registers everything.
 
-### Google Sheets and Drive, and Gmail
+### Google Sheets and Drive
 
-A Google Cloud project, a consent screen, and a web-application OAuth client. `GOOGLE_INTEGRATIONS_CLIENT_ID` / `_CLIENT_SECRET` for Sheets and Drive; `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` for Gmail, which reads its own pair and is therefore a separate client even inside one project. Redirects are `<OAUTH_REDIRECT_BASE_URL>/google-integrations/callback` and `<OAUTH_REDIRECT_BASE_URL>/gmail/callback`.
+A Google Cloud project, a consent screen, and a web-application OAuth client. Set `GOOGLE_INTEGRATIONS_CLIENT_ID` / `_CLIENT_SECRET`; the redirect is `<OAUTH_REDIRECT_BASE_URL>/google-integrations/callback`.
 
-Days to weeks, and the longest of it is Gmail. Drive scopes are sensitive or restricted depending on what your automations do, and Gmail's are restricted outright — which means Google's verification review and, depending on scope and user count, an independent security assessment. Until you are verified the consent screen warns people and the app is capped at a handful of test accounts you enumerate by hand.
+Days to weeks. Drive scopes are sensitive or restricted depending on what your automations do, which means Google's verification review and, depending on scope and user count, an independent security assessment. Until you are verified the consent screen warns people and the app is capped at a handful of test accounts you enumerate by hand.
 
-Neither pushes anything: Sheets and Drive are read on a schedule or on demand, and inbound mail arrives through whichever mail provider is configured. Beyond re-authorising, each person also re-grants the specific files and folders an automation may touch, which is one of the four person-bound surfaces above.
+Neither pushes anything: both are read on a schedule or on demand. Beyond re-authorising, each person also re-grants the specific files and folders an automation may touch, which is one of the four person-bound surfaces above.
+
+### Gmail
+
+One mailbox, not a sign-in. Nobody authorises anything and there is no consent screen, so Google's verification review does not apply: enable the Gmail API in the same Google Cloud project as the runtime service account, then have a Workspace admin add that account's client id under Security, then API controls, then Domain wide delegation, with exactly two scopes — `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.send`.
+
+Minutes, once the admin is in the room. After that a team connects Gmail by typing the mailbox address, which must be a real user or shared mailbox (a group address has no inbox to read); the form calls Google as that mailbox before saving, so a delegation that was never granted is corrected on the form rather than in a run a week later.
+
+The two scopes are the whole of what the mailbox has granted. Automations can search it, run when mail arrives, and send or reply as it — and can never label, archive, delete or draft. Mail is POLLED about once a minute, so there is no Pub/Sub topic, no push endpoint and no weekly watch to renew.
+
+This is separate from the inbound email address, which keeps arriving through whichever mail provider is configured, and from sign-in links and product email, which keep going out through Resend or Mailgun.
 
 ### Dropbox
 
@@ -546,7 +558,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `ALLOW_UNSIGNED_WEBHOOKS` | no | inbound doors stay fail-closed. `true` only on a machine nothing else can reach; ignored in production |
 | `SENTRY_DSN` | no | no error reporting |
 
-The per-system credentials for Slack, Attio, Airtable, Google, Gmail, Dropbox, Telegram, WhatsApp and Twilio are listed with what they do in "Registering your own third-party apps". Every one is optional, and an unset OAuth pair means that system is simply not offered — except Attio's, where it means Attio connects with a pasted access token instead.
+The per-system credentials for Slack, Attio, Airtable, Google, Dropbox, Telegram, WhatsApp and Twilio are listed with what they do in "Registering your own third-party apps". Every one is optional, and an unset OAuth pair means that system is simply not offered — except Attio's, where it means Attio connects with a pasted access token instead. Gmail takes no variables at all: it rides the same service account as the rest of the deployment's Google access.
 
 Generated on first boot and read from the config volume, never from this file: the database URLs, the session-signing secret and its audience, both encryption keys, the outbound-webhook and document-link signing secrets, the team id and name, the user id, the API key, the first account's email, and the bundled object store's root password.
 

@@ -3,7 +3,7 @@
  * counted per request class, run against a live fake Affinity.
  *
  * The shape here is the production `Upsert Deal`: a company written by name and
- * domain, added to the Master Deals List with that list's own fields, two
+ * domain, added to the Deal Pipeline with that list's own fields, two
  * owners linked onto the entry by address, two founders written onto the
  * company's own person-reference field — preceded by the two dedup reads that
  * ask whether the company and the contact are already in the CRM. It runs
@@ -57,7 +57,7 @@ const TEAM_ID = '00000000-0000-0000-0000-000000000011' as TeamId;
 const AUTH = 'Basic ' + Buffer.from(':fake').toString('base64');
 
 const LIST_ID = 90;
-const LIST_NAME = 'Master Deals List';
+const LIST_NAME = 'Deal Pipeline';
 const PER_LIST_TYPE = `List Entry — ${LIST_NAME}`;
 
 const DOMAIN = 'veltha-profile.test';
@@ -199,7 +199,7 @@ const field = (
   },
 });
 
-/** The production shape: the Master Deals List with its own entry fields, and
+/** The production shape: the Deal Pipeline with its own entry fields, and
  *  the company-level `Founders` person field the deal's people hang off. Every
  *  person the run touches already exists — an owner is a colleague, and the
  *  matcher only reaches a model for a person it cannot find by address. */

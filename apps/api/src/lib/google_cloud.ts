@@ -75,6 +75,42 @@ export function googleAuth(env: NodeJS.ProcessEnv = process.env): GoogleAuth {
   });
 }
 
+/** The two Gmail scopes a connected mailbox is reached through. Read and send,
+ *  and nothing else: the account can never label, move or delete mail. A
+ *  Workspace admin grants exactly these against the service account's client id
+ *  under domain wide delegation. */
+export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+
+/**
+ * The service account acting AS a mailbox, rather than as itself.
+ *
+ * {@link googleAuth} authenticates the account for its own cloud resources;
+ * this one impersonates a Workspace user, which is what reading someone's inbox
+ * requires. The impersonation is granted once by a Workspace admin against the
+ * account's client id, so nothing here can widen it — an ungranted subject or
+ * scope fails at the token exchange with `unauthorized_client`.
+ *
+ * Proven shape: `interfaces/cli/commands/watch-gmail.ts` has called Gmail this
+ * way since long before the connector existed.
+ */
+export function delegatedGoogleAuth(input: {
+  subject: string;
+  scopes: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}): GoogleAuth {
+  const { privateKey, clientEmail } = googleServiceAccount(input.env ?? process.env);
+  return new GoogleAuth({
+    credentials: {
+      type: 'service_account',
+      private_key: privateKey,
+      client_email: clientEmail,
+    },
+    scopes: [...input.scopes],
+    clientOptions: { subject: input.subject },
+  });
+}
+
 /** A bearer token for a hand-rolled call to a Google endpoint. The SDK-backed
  *  callers hand {@link googleAuth} over instead and let it refresh itself. */
 export async function googleAccessToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {

@@ -12,6 +12,7 @@
  *   pnpm dev:inspect evertrace             → seeded signals/lists/searches + the evertrace poll trigger
  *   pnpm dev:inspect dealroom              → fake Dealroom entity counts, recent API requests + the dealroom poll trigger
  *   pnpm dev:inspect dealroom --clear-requests → wipe the Dealroom request log first (isolate one run's calls)
+ *   pnpm dev:inspect gmail                 → the fake mailbox's change marker, its outbox, + the gmail poll trigger's checkpoint
  *   pnpm dev:inspect callbacks             → minted callbacks + their call ledgers
  *   pnpm dev:inspect callbacks <runId>     → one run's callbacks
  *   pnpm dev:inspect tg-runs               → recent translation-graph runs
@@ -50,6 +51,7 @@ type Domain =
   | 'granola'
   | 'evertrace'
   | 'dealroom'
+  | 'gmail'
   | 'affinity'
   | 'valuations'
   | 'asks'
@@ -68,6 +70,7 @@ const ALL_DOMAINS: Exclude<Domain, 'all'>[] = [
   'granola',
   'evertrace',
   'dealroom',
+  'gmail',
   'affinity',
   'valuations',
   'asks',
@@ -563,6 +566,61 @@ async function inspectDealroom(options: { clearRequests?: boolean } = {}) {
   return { service: 'dealroom', teamId: seed.teamId, counts, recentRounds, requests, triggers };
 }
 
+/**
+ * Gmail-specific view: what the fake mailbox holds (its change marker and how
+ * far back history still reaches), what it has SENT, and the dev-loop team's
+ * gmail POLL trigger rows with their `poll_checkpoint` / `poll_last_at`.
+ *
+ * The checkpoint is the evidence for a read. `historyId` advancing across a
+ * poll is a normal tick; `historyId` jumping while `lastSeenAt` carried the
+ * window is a resync after Gmail dropped the marker. The OUTBOX is the evidence
+ * for a write: a reply shows the thread it joined and the `In-Reply-To` it
+ * carried, which is the whole of what makes it a reply rather than new mail.
+ */
+async function inspectGmail() {
+  const seed = await ensureDevLoopTeam();
+
+  let mailbox: unknown = null;
+  let messages: unknown[] = [];
+  let outbox: unknown[] = [];
+  try {
+    const state = await http<{ mailbox: unknown; messages: unknown[]; outbox?: unknown[] }>(
+      '/fake-gmail/state',
+    );
+    mailbox = state.mailbox;
+    messages = state.messages.slice(-5);
+    outbox = (state.outbox ?? []).slice(-5);
+  } catch {
+    // fake-channels not up — surface an empty view rather than throwing.
+  }
+
+  const triggers = await getAutomationsQb(['trigger'])
+    .selectFrom('trigger')
+    .where('team_id', '=', seed.teamId as TeamId)
+    .where('kind', '=', 'gmail')
+    .select([
+      'id',
+      'kind',
+      'run_mode',
+      'config',
+      'credentials_id',
+      'movement_id',
+      'fired_movement_name',
+      'poll_checkpoint',
+      'poll_last_at',
+    ])
+    .execute();
+
+  return {
+    service: 'gmail',
+    teamId: seed.teamId,
+    mailbox,
+    recentMessages: messages,
+    outbox,
+    triggers,
+  };
+}
+
 async function inspectGeneric(svc: 'sheets' | 'affinity') {
   // Dump the service's entities via the admin state route. The route is
   // `/admin/:service/state` and returns entities grouped by entity_type
@@ -653,6 +711,8 @@ async function main() {
     results.push(await inspectEvertrace());
   } else if (domain === 'dealroom') {
     results.push(await inspectDealroom({ clearRequests: CLEAR_REQUESTS }));
+  } else if (domain === 'gmail') {
+    results.push(await inspectGmail());
   } else if (['sheets', 'affinity'].includes(domain)) {
     results.push(await inspectGeneric(domain as any));
   } else {

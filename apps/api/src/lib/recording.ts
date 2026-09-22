@@ -21,6 +21,9 @@ const fakeBaseUrlByService: Record<string, string> = {
   // googleapis resolves request paths against the rootUrl ORIGIN (any path
   // prefix is dropped), so the fake serves /drive/v3/* from its root.
   GOOGLE_DRIVE: FAKE_CHANNELS_URL,
+  // Same reason as Drive: googleapis drops any path prefix on the rootUrl, so
+  // the fake serves /gmail/v1/* from its root.
+  GOOGLE_GMAIL: FAKE_CHANNELS_URL,
   DROPBOX: `${FAKE_CHANNELS_URL}/dropbox`,
   AIRTABLE: `${FAKE_CHANNELS_URL}/airtable`,
   GRANOLA: `${FAKE_CHANNELS_URL}/granola`,

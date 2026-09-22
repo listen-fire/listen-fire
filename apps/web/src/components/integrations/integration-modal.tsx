@@ -35,7 +35,6 @@ const OAUTH_TYPES = new Set([
   ExternalServiceType.AIRTABLE,
   ExternalServiceType.ATTIO,
   ExternalServiceType.GOOGLE,
-  ExternalServiceType.GOOGLE_GMAIL,
   ExternalServiceType.DROPBOX,
 ]);
 
@@ -44,7 +43,6 @@ const OAUTH_LABELS: Partial<Record<ExternalServiceType, string>> = {
   [ExternalServiceType.AIRTABLE]: "Airtable",
   [ExternalServiceType.ATTIO]: "Attio",
   [ExternalServiceType.GOOGLE]: "Google Drive",
-  [ExternalServiceType.GOOGLE_GMAIL]: "Gmail",
   [ExternalServiceType.DROPBOX]: "Dropbox",
 };
 
@@ -60,20 +58,17 @@ function useOAuthConnect(options: {
     trpc.views.credentials.attioConnectUrl.useMutation();
   const { mutateAsync: getGoogleUrl, isLoading: googleLoading } =
     trpc.views.credentials.googleConnectUrl.useMutation();
-  const { mutateAsync: getGmailUrl, isLoading: gmailLoading } =
-    trpc.views.credentials.gmailConnectUrl.useMutation();
   const { mutateAsync: getDropboxUrl, isLoading: dropboxLoading } =
     trpc.views.credentials.dropboxConnectUrl.useMutation();
 
   const isLoading =
-    slackLoading || airtableLoading || attioLoading || googleLoading || gmailLoading || dropboxLoading;
+    slackLoading || airtableLoading || attioLoading || googleLoading || dropboxLoading;
 
   const urlGetters: Partial<Record<ExternalServiceType, () => Promise<string | undefined>>> = {
     [ExternalServiceType.SLACK]: getSlackUrl,
     [ExternalServiceType.AIRTABLE]: getAirtableUrl,
     [ExternalServiceType.ATTIO]: getAttioUrl,
     [ExternalServiceType.GOOGLE]: getGoogleUrl,
-    [ExternalServiceType.GOOGLE_GMAIL]: getGmailUrl,
     [ExternalServiceType.DROPBOX]: getDropboxUrl,
   };
 
@@ -235,6 +230,10 @@ export function IntegrationModal({
   const [evertraceApiKey, setEvertraceApiKey] = useState("");
   const [dealroomApiKey, setDealroomApiKey] = useState("");
   const [attioAccessToken, setAttioAccessToken] = useState("");
+  // Gmail is named, not signed into: the deployment's service account acts
+  // as the mailbox through domain wide delegation, so the address is the
+  // whole credential.
+  const [gmailMailbox, setGmailMailbox] = useState("");
   // Listen-Fire Valuations auto-mints its api-key server-side. The user only
   // provides an optional Base URL override (empty = use env default).
   const [valuationsBaseUrl, setValuationsBaseUrl] = useState("");
@@ -268,6 +267,7 @@ export function IntegrationModal({
     setEvertraceApiKey("");
     setDealroomApiKey("");
     setAttioAccessToken("");
+    setGmailMailbox("");
     setValuationsBaseUrl("");
     setClaimToken(null);
   }, [isOpen, existing, initialType]);
@@ -289,6 +289,7 @@ export function IntegrationModal({
     (type === ExternalServiceType.EVERTRACE && !!evertraceApiKey) ||
     (type === ExternalServiceType.DEALROOM && !!dealroomApiKey) ||
     (attioKeyEntry && !!attioAccessToken) ||
+    (type === ExternalServiceType.GOOGLE_GMAIL && !!gmailMailbox.trim()) ||
     // Valuations needs no user-supplied credential — clicking save mints one.
     type === ExternalServiceType.NATIVE_VALUATIONS ||
     oauthConnected;
@@ -325,6 +326,14 @@ export function IntegrationModal({
           await updateCredential({ id: existing.id, name: name.trim(), type, credentials: { apiKey: dealroomApiKey } });
         } else {
           await addCredential({ name: name.trim(), type, credentials: { apiKey: dealroomApiKey } });
+        }
+      } else if (type === ExternalServiceType.GOOGLE_GMAIL) {
+        const mailbox = gmailMailbox.trim();
+        if (!mailbox) return;
+        if (existing) {
+          await updateCredential({ id: existing.id, name: name.trim(), type, credentials: { mailbox } });
+        } else {
+          await addCredential({ name: name.trim(), type, credentials: { mailbox } });
         }
       } else if (attioKeyEntry) {
         if (!attioAccessToken) return;
@@ -500,6 +509,27 @@ export function IntegrationModal({
               record_permission:read-write, object_configuration:read, list_entry:read-write,
               list_configuration:read, note:read-write, task:read-write, comment:read-write,
               file:read-write, webhook:read-write and user_management:read.
+            </p>
+          </div>
+        )}
+
+        {type === ExternalServiceType.GOOGLE_GMAIL && (
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-gray-600">
+              Mailbox address
+            </label>
+            <input
+              type="email"
+              value={gmailMailbox}
+              onChange={(e) => setGmailMailbox(e.target.value)}
+              placeholder="deals@yourcompany.com"
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-gray-400">
+              A real user or shared mailbox in your Google Workspace — a group
+              address has no inbox to read. Nobody signs in: a Workspace admin
+              grants this deployment access to the mailbox once, and it can then
+              read and send as that address and nothing else.
             </p>
           </div>
         )}

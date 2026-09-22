@@ -15,6 +15,7 @@
  *                          slack-event     - Slack Events API payloads
  *                          mailgun-email   - Mailgun inbound email payload
  *                          resend-email    - Resend inbound email (seed + signed webhook)
+ *                          gmail-message   - a message into the fake Gmail mailbox, then its poll
  *
  * The wrappers are intentionally thin so it's obvious how to add a new
  * one (`affinity-webhook`, `intercom-event`, etc.) — each is ~30 lines
@@ -1366,6 +1367,97 @@ async function injectDealroom(args: DealroomInjectArgs) {
 }
 
 /**
+ * Drop a message into the fake mailbox and fire the team's gmail POLL trigger
+ * IN-PROCESS — Gmail has no inbound HTTP route here (the connector polls), so
+ * this mirrors `dealroom`: it runs the real poll path (`pollTriggerNow` →
+ * `getEvents` → discriminate → dispatch → run).
+ *
+ * `--expire-history` first walks the fake's change-marker floor past the stored
+ * checkpoint, so the next poll meets the 404 Gmail gives after a quiet week and
+ * has to resync from the last seen time. That is the one behaviour a real
+ * mailbox will not produce on demand.
+ *
+ * Run `pnpm dev:gmail setup` first to provision the listener.
+ */
+async function injectGmailMessage(args: {
+  subject?: string;
+  from?: string;
+  to?: string;
+  cc?: string;
+  body?: string;
+  bodyHtml?: string;
+  labels?: string[];
+  attachment?: string;
+  expireHistory?: boolean;
+  noSeed?: boolean;
+}) {
+  const seed = await ensureDevLoopTeam();
+
+  if (args.expireHistory) {
+    const res = await fetch(`${FAKE_CHANNELS_URL}/fake-gmail/expire-history`, { method: 'POST' });
+    if (!res.ok) {
+      throw new Error(`fake-channels gmail expire-history failed: ${res.status} ${await res.text()}`);
+    }
+  }
+
+  let seeded: unknown = null;
+  if (!args.noSeed) {
+    const attachments = args.attachment
+      ? [{ filename: args.attachment, contentType: 'text/plain', content: `Contents of ${args.attachment}.` }]
+      : [];
+    const res = await fetch(`${FAKE_CHANNELS_URL}/fake-gmail/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subject: args.subject ?? 'Seeded via dev:inject gmail-message',
+        from: args.from ?? 'ops@northwind.example',
+        ...(args.to !== undefined ? { to: args.to } : {}),
+        ...(args.cc !== undefined ? { cc: args.cc } : {}),
+        bodyText: args.body ?? 'Seeded body.',
+        ...(args.bodyHtml !== undefined ? { bodyHtml: args.bodyHtml } : {}),
+        ...(args.labels !== undefined ? { labelIds: args.labels } : {}),
+        attachments,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`fake-channels gmail seed failed: ${res.status} ${await res.text()}`);
+    }
+    seeded = await res.json();
+  }
+
+  const triggers = (await findTriggersByKind({ teamId: seed.teamId, kinds: ['gmail'] })).filter(
+    (t) => t.movementId != null && t.runMode !== 'off',
+  );
+  if (triggers.length === 0) {
+    return {
+      seeded,
+      error:
+        'No gmail movement trigger on the dev-loop team. Run `pnpm dev:gmail setup` first ' +
+        '(it saves a movement with `listen to mail {} fire …`).',
+    };
+  }
+
+  // Forced — bypasses the interval gate. `eventCount: 0` is the honest answer
+  // when the listen's `query` excludes the message just seeded, and on the very
+  // first poll, which only sets the mark.
+  const results: unknown[] = [];
+  for (const t of triggers) {
+    try {
+      const out = await pollTriggerNow({ triggerId: t.id });
+      results.push({ triggerId: t.id, movement: t.name, ...out });
+    } catch (err) {
+      results.push({
+        triggerId: t.id,
+        movement: t.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { seeded, expiredHistory: args.expireHistory === true, results };
+}
+
+/**
  * Fire a synthetic KG mutation so a `listen to <graph> { type: "…" }` movement
  * dispatches. Resolves the node type by name (or id), picks an existing node of
  * that type (or `--node-id`), builds a `RecordMutationEvent`, and dispatches it
@@ -2594,6 +2686,23 @@ async function main() {
     return;
   }
 
+  if (subcommand === 'gmail-message') {
+    const out = await injectGmailMessage({
+      subject: flags.subject,
+      from: flags.from,
+      to: flags.to,
+      cc: flags.cc,
+      body: flags.body,
+      bodyHtml: flags['body-html'],
+      labels: flags.labels ? flags.labels.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+      attachment: flags.attachment,
+      expireHistory: flags['expire-history'] === 'true',
+      noSeed: flags['no-seed'] === 'true',
+    });
+    printResult(out, PRETTY);
+    return;
+  }
+
   if (subcommand === 'callback' || subcommand === 'cb') {
     if (!flags['cb-id']) {
       console.error(
@@ -2638,7 +2747,7 @@ async function main() {
 
   console.error(`Unknown subcommand: ${subcommand}`);
   console.error(
-    'Available: raw, attio-webhook, airtable-webhook, slack-event, slack-interactivity, mailgun-email, resend-email, telegram-event, telegram-builtin, telegram-callback, telegram-start, whatsapp, cron, granola, evertrace, evertrace-list-entry, dealroom, kg-mutation, callback',
+    'Available: raw, attio-webhook, airtable-webhook, slack-event, slack-interactivity, mailgun-email, resend-email, telegram-event, telegram-builtin, telegram-callback, telegram-start, whatsapp, cron, granola, evertrace, evertrace-list-entry, dealroom, gmail-message, kg-mutation, callback',
   );
   process.exit(2);
 }

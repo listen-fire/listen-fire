@@ -14,7 +14,6 @@ import {
   authGoogleAuthHandler,
   authMicrosoftAuthHandler,
   authGoogleIntegrationsCallbackHandler,
-  authGmailCallbackHandler,
   authSlackCallbackHandler,
   authAirtableCallbackHandler,
   authAttioCallbackHandler,
@@ -84,7 +83,6 @@ if (mounts('core')) {
 
 if (mounts('automations')) {
   authRouter.get('/google_integrations/callback', authGoogleIntegrationsCallbackHandler);
-  authRouter.get('/gmail/callback', authGmailCallbackHandler);
   authRouter.get('/slack/callback', authSlackCallbackHandler);
   authRouter.get('/airtable/callback', authAirtableCallbackHandler);
   authRouter.get('/attio/callback', authAttioCallbackHandler);

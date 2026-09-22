@@ -33,7 +33,6 @@ export function selectConnectUrlMutation(
     AIRTABLE: () => pc.airtableConnectUrl.mutate(),
     ATTIO: () => pc.attioConnectUrl.mutate(),
     GOOGLE: () => pc.googleConnectUrl.mutate(),
-    GOOGLE_GMAIL: () => pc.gmailConnectUrl.mutate(),
     DROPBOX: () => pc.dropboxConnectUrl.mutate(),
   };
   return map[serviceType];

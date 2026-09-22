@@ -3907,9 +3907,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 } | {
                     type: ExternalServiceType.GOOGLE_GMAIL;
                     credentials: {
-                        accessToken: string;
-                        refreshToken: string;
-                        expiresAt: number;
+                        mailbox: string;
+                        baseUrl?: string | undefined;
                     };
                 } | {
                     type: ExternalServiceType.DROPBOX;
@@ -3985,9 +3984,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 } | {
                     type: ExternalServiceType.GOOGLE_GMAIL;
                     credentials: {
-                        accessToken: string;
-                        refreshToken: string;
-                        expiresAt: number;
+                        mailbox: string;
+                        baseUrl?: string | undefined;
                     };
                 } | {
                     type: ExternalServiceType.DROPBOX;
@@ -4084,9 +4082,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 } | {
                     type: ExternalServiceType.GOOGLE_GMAIL;
                     credentials: {
-                        accessToken: string;
-                        refreshToken: string;
-                        expiresAt: number;
+                        mailbox: string;
+                        baseUrl?: string | undefined;
                     };
                 } | {
                     type: ExternalServiceType.DROPBOX;
@@ -4163,9 +4160,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 } | {
                     type: ExternalServiceType.GOOGLE_GMAIL;
                     credentials: {
-                        accessToken: string;
-                        refreshToken: string;
-                        expiresAt: number;
+                        mailbox: string;
+                        baseUrl?: string | undefined;
                     };
                 } | {
                     type: ExternalServiceType.DROPBOX;
@@ -4316,28 +4312,6 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_out: typeof _trpc_server.unsetMarker;
             }, string | undefined>;
             googleConnectUrl: _trpc_server.BuildProcedure<"mutation", {
-                _config: _trpc_server.RootConfig<{
-                    ctx: {
-                        authorise: () => Promise<void>;
-                    };
-                    meta: object;
-                    errorShape: {
-                        message: string;
-                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
-                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
-                    };
-                    transformer: _trpc_server.DefaultDataTransformer;
-                }>;
-                _meta: object;
-                _ctx_out: {
-                    authorise: () => Promise<void>;
-                };
-                _input_in: typeof _trpc_server.unsetMarker;
-                _input_out: typeof _trpc_server.unsetMarker;
-                _output_in: typeof _trpc_server.unsetMarker;
-                _output_out: typeof _trpc_server.unsetMarker;
-            }, string | undefined>;
-            gmailConnectUrl: _trpc_server.BuildProcedure<"mutation", {
                 _config: _trpc_server.RootConfig<{
                     ctx: {
                         authorise: () => Promise<void>;
