@@ -199,3 +199,42 @@ describe('calling a name with nothing behind it', () => {
     expect(() => assertCallable(resolveModel('dall-e-3', env), env)).not.toThrow();
   });
 });
+
+describe('boot validation of embedding widths', () => {
+  it('accepts a Gemini-only map for both embedding columns', () => {
+    expect(() =>
+      assertModelMapConfigured({
+        ...GOOGLE,
+        MODEL_MAP: mapOf({
+          'text-embedding-3-large': 'gemini/gemini-embedding-001',
+          'text-embedding-3-small': 'gemini/gemini-embedding-001',
+        }),
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses a model too narrow for the column its name fills, naming the column and both numbers', () => {
+    // raw_text stores 3072; text-embedding-3-small tops out at 1536. Refused,
+    // never shortened or padded into the index.
+    expect(() =>
+      assertModelMapConfigured({
+        OPENAI_API_KEY: 'k',
+        MODEL_MAP: mapOf({ 'text-embedding-3-large': 'openai/text-embedding-3-small' }),
+      }),
+    ).toThrow(
+      /MODEL_MAP\["text-embedding-3-large"\].*1 to 1536 dimensions.*knowledge\.raw_text\.embedding.*stores 3072/,
+    );
+  });
+
+  it('refuses a wire model its provider file does not list, since nothing knows its width', () => {
+    // text-embedding-005 yields 768: a 3072 column pointed at it must be
+    // refused at boot, and an unlisted model is refused before its width is
+    // even guessed at.
+    expect(() =>
+      assertModelMapConfigured({
+        ...GOOGLE,
+        MODEL_MAP: mapOf({ 'text-embedding-3-large': 'gemini/text-embedding-005' }),
+      }),
+    ).toThrow(/MODEL_MAP\["text-embedding-3-large"\] is "gemini\/text-embedding-005", an embedding model the gemini provider does not list/);
+  });
+});
