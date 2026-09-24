@@ -20,6 +20,7 @@ import {
   GMAIL_READONLY_SCOPE,
   GMAIL_SEND_SCOPE,
   delegatedGoogleAuth,
+  gmailMailboxAllowlist,
   isGoogleServiceAccountConfigured,
 } from '../../lib/google_cloud';
 import { neverAsAny } from '../../lib/utils/types';
@@ -27,6 +28,16 @@ import { neverAsAny } from '../../lib/utils/types';
 /** The scopes a connected mailbox is reached through — read and send, nothing
  *  else. Exported so `describe` can name them without a second spelling. */
 export const GMAIL_SCOPES = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE] as const;
+
+/**
+ * Each Gmail call asks for exactly the ONE scope it needs, never both
+ * together — so a delegation grant that covers reads but not sends (or the
+ * reverse) fails only the calls that actually need the missing scope. A
+ * single combined-scope token would fail every call the moment either scope
+ * were absent, reads included.
+ */
+const GMAIL_READ_SCOPES = [GMAIL_READONLY_SCOPE] as const;
+const GMAIL_SEND_SCOPES = [GMAIL_SEND_SCOPE] as const;
 
 /** The mailbox the delegated client addresses. Gmail's own alias for "the
  *  authenticated user", which under delegation IS the impersonated mailbox. */
@@ -153,6 +164,9 @@ export type GmailSentMessage = z.infer<typeof sentMessageSchema>;
 export type GmailFailure =
   /** The mailbox refused the impersonation — delegation is not granted. */
   | 'delegation'
+  /** The token request for `gmail.send` was refused — reads still work, only
+   *  the send scope is missing from the delegation grant. */
+  | 'missing_send_scope'
   /** Google accepted the impersonation but the address is not a mailbox. */
   | 'no_such_mailbox'
   /** `history.list` was given a marker Gmail has since dropped. */
@@ -207,6 +221,13 @@ function messageOf(err: unknown): string {
  * to impersonate but that owns no mailbox reaches Gmail and comes back 400/404.
  * That difference is the whole diagnostic a user needs, so it is decided once,
  * here.
+ *
+ * A token refusal on `users.messages.send` is reported separately
+ * (`missing_send_scope`) rather than as `delegation`: each Gmail call now asks
+ * for exactly the one scope it needs, so a refused SEND token means the grant
+ * covers reads but not sends — Google reports it the same way it reports "no
+ * delegation at all", and which scope set was being requested is the only
+ * signal that tells the two apart.
  */
 export function classifyGmailError(err: unknown, operation: string): GmailApiError {
   if (err instanceof GmailApiError) return err;
@@ -214,11 +235,15 @@ export function classifyGmailError(err: unknown, operation: string): GmailApiErr
   const detail = messageOf(err) || String(err);
   const lower = detail.toLowerCase();
 
-  if (lower.includes('unauthorized_client') || lower.includes('invalid_grant')) {
-    return new GmailApiError('delegation', status, operation, detail);
-  }
-  if (status === 401 || status === 403) {
-    return new GmailApiError('delegation', status, operation, detail);
+  const tokenRefused =
+    lower.includes('unauthorized_client') ||
+    lower.includes('invalid_grant') ||
+    status === 401 ||
+    status === 403;
+  if (tokenRefused) {
+    return operation === 'users.messages.send'
+      ? new GmailApiError('missing_send_scope', status, operation, detail)
+      : new GmailApiError('delegation', status, operation, detail);
   }
   if (operation === 'history.list' && status === 404) {
     return new GmailApiError('history_expired', status, operation, detail);
@@ -227,6 +252,18 @@ export function classifyGmailError(err: unknown, operation: string): GmailApiErr
     return new GmailApiError('no_such_mailbox', status, operation, detail);
   }
   return new GmailApiError('other', status, operation, detail);
+}
+
+/** What a deployment reads when a send fails because its delegation grant
+ *  covers `gmail.readonly` but not `gmail.send`. Names the mailbox and the
+ *  scope, and says reads are unaffected — the one thing a "send failed"
+ *  message must not do here is suggest the mailbox is disconnected. */
+export function gmailMissingSendScopeMessage(mailbox: string): string {
+  return (
+    `Google's domain wide delegation for ${mailbox} does not include ` +
+    `${GMAIL_SEND_SCOPE}, so this mailbox cannot send mail. Reads still work — ` +
+    'ask a Workspace admin to add the send scope alongside the read one.'
+  );
 }
 
 // ── The client ──────────────────────────────────────────────────────────────
@@ -242,15 +279,26 @@ export function classifyGmailError(err: unknown, operation: string): GmailApiErr
  * stub key and never leaves the machine.
  */
 export class GmailApiClient {
-  private readonly api: gmail_v1.Gmail;
+  /** Scoped to `gmail.readonly` — every call except the send. */
+  private readonly readApi: gmail_v1.Gmail;
+  /** Scoped to `gmail.send` — the send call ONLY, so it never depends on the
+   *  read scope having been granted, nor grants read access itself. */
+  private readonly sendApi: gmail_v1.Gmail;
 
   constructor(readonly credentials: GmailCredentials) {
     const fake = credentials.baseUrl;
-    this.api = google.gmail({
+    this.readApi = GmailApiClient.buildApi(credentials, fake, GMAIL_READ_SCOPES);
+    this.sendApi = GmailApiClient.buildApi(credentials, fake, GMAIL_SEND_SCOPES);
+  }
+
+  private static buildApi(
+    credentials: GmailCredentials,
+    fake: string | undefined,
+    scopes: readonly string[],
+  ): gmail_v1.Gmail {
+    return google.gmail({
       version: 'v1',
-      auth: fake
-        ? 'dev-loop-gmail-key'
-        : delegatedGoogleAuth({ subject: credentials.mailbox, scopes: GMAIL_SCOPES }),
+      auth: fake ? 'dev-loop-gmail-key' : delegatedGoogleAuth({ subject: credentials.mailbox, scopes }),
       ...(fake ? { rootUrl: fake } : {}),
     });
   }
@@ -273,7 +321,7 @@ export class GmailApiClient {
    *  works AND the source of the first poll's change marker. */
   async getProfile(): Promise<GmailProfile> {
     return this.call('users.getProfile', gmailProfileSchema, () =>
-      this.api.users.getProfile({ userId: SELF }),
+      this.readApi.users.getProfile({ userId: SELF }),
     );
   }
 
@@ -285,7 +333,7 @@ export class GmailApiClient {
     pageToken?: string;
   }): Promise<{ messages: GmailMessageRef[]; nextPageToken?: string }> {
     const page = await this.call('users.messages.list', messageListSchema, () =>
-      this.api.users.messages.list({
+      this.readApi.users.messages.list({
         userId: SELF,
         ...(input.query !== undefined ? { q: input.query } : {}),
         ...(input.labelIds !== undefined ? { labelIds: [...input.labelIds] } : {}),
@@ -304,7 +352,7 @@ export class GmailApiClient {
   /** One message, with its MIME tree. */
   async getMessage(id: string): Promise<GmailMessage> {
     return this.call('users.messages.get', gmailMessageSchema, () =>
-      this.api.users.messages.get({ userId: SELF, id, format: 'full' }),
+      this.readApi.users.messages.get({ userId: SELF, id, format: 'full' }),
     );
   }
 
@@ -312,7 +360,7 @@ export class GmailApiClient {
    *  archive wants, and what the fake serves under `format=raw`. */
   async getRawMessage(id: string): Promise<GmailMessage> {
     return this.call('users.messages.get(raw)', gmailMessageSchema, () =>
-      this.api.users.messages.get({ userId: SELF, id, format: 'raw' }),
+      this.readApi.users.messages.get({ userId: SELF, id, format: 'raw' }),
     );
   }
 
@@ -329,7 +377,7 @@ export class GmailApiClient {
     pageToken?: string;
   }): Promise<{ added: GmailMessageRef[]; nextPageToken?: string; historyId?: string }> {
     const page = await this.call('history.list', historyListSchema, () =>
-      this.api.users.history.list({
+      this.readApi.users.history.list({
         userId: SELF,
         startHistoryId: input.startHistoryId,
         historyTypes: ['messageAdded'],
@@ -361,7 +409,7 @@ export class GmailApiClient {
    */
   async sendMessage(input: { raw: string; threadId?: string }): Promise<GmailSentMessage> {
     return this.call('users.messages.send', sentMessageSchema, () =>
-      this.api.users.messages.send({
+      this.sendApi.users.messages.send({
         userId: SELF,
         requestBody: {
           raw: input.raw,
@@ -376,7 +424,7 @@ export class GmailApiClient {
    *  pays for one. */
   async getAttachment(input: { messageId: string; attachmentId: string }): Promise<Buffer> {
     const part = await this.call('users.messages.attachments.get', attachmentSchema, () =>
-      this.api.users.messages.attachments.get({
+      this.readApi.users.messages.attachments.get({
         userId: SELF,
         messageId: input.messageId,
         id: input.attachmentId,
@@ -402,14 +450,50 @@ export const GMAIL_UNCONFIGURED_MESSAGE =
   'This server has no Google service account configured, so it cannot act as a ' +
   'mailbox at all.';
 
+/** The env var naming this installation's ONE authority over which mailboxes
+ *  the Gmail connector may touch. */
+const ALLOWLIST_VAR = 'GMAIL_MAILBOX_ALLOWLIST';
+
 /**
- * Prove a mailbox before storing it. One call, as the mailbox: either Google
- * refuses the impersonation, or it does not and Gmail says whether the address
- * owns an inbox. Anything else is reported as itself rather than guessed at.
+ * The ONE check every enforcement site shares: connect-time validation, the
+ * in-app modal's save path, and the delegated client built at use time
+ * (`resolveGmailClient`). Google's own delegation has no per-mailbox limit —
+ * this installation's list is the whole of it — so all three read the same
+ * verdict rather than each re-deriving it.
+ */
+export function checkGmailMailboxAllowed(
+  mailbox: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true } | { ok: false; message: string } {
+  const allowlist = gmailMailboxAllowlist(env);
+  if (allowlist.has(mailbox.trim().toLowerCase())) return { ok: true };
+  if (allowlist.size === 0) {
+    return {
+      ok: false,
+      message:
+        `${ALLOWLIST_VAR} is not set, so this installation cannot connect or use ` +
+        'any Gmail mailbox. Set it to a comma separated list of the addresses ' +
+        'automations may act as, for example ops@example.com,deals@example.com.',
+    };
+  }
+  return {
+    ok: false,
+    message: `${mailbox} is not on this installation's ${ALLOWLIST_VAR}. Add it there before connecting or using this mailbox.`,
+  };
+}
+
+/**
+ * Prove a mailbox before storing it. First the allowlist — a mailbox this
+ * installation has not named is refused before anything asks Google — then
+ * one call as the mailbox: either Google refuses the impersonation, or it
+ * does not and Gmail says whether the address owns an inbox. Anything else is
+ * reported as itself rather than guessed at.
  */
 export async function validateGmailMailbox(
   credentials: GmailCredentials,
 ): Promise<{ ok: true; profile: GmailProfile } | { ok: false; message: string }> {
+  const allowed = checkGmailMailboxAllowed(credentials.mailbox);
+  if (!allowed.ok) return allowed;
   if (credentials.baseUrl === undefined && !isGoogleServiceAccountConfigured()) {
     return { ok: false, message: GMAIL_UNCONFIGURED_MESSAGE };
   }
@@ -423,6 +507,11 @@ export async function validateGmailMailbox(
         return { ok: false, message: GMAIL_DELEGATION_MESSAGE };
       case 'no_such_mailbox':
         return { ok: false, message: GMAIL_NO_MAILBOX_MESSAGE };
+      // `users.getProfile` only ever asks for the readonly scope, so a
+      // send-scope failure can never actually classify this way — kept
+      // explicit rather than folded into `other` so the switch stays
+      // exhaustive against `GmailFailure` without an `as`.
+      case 'missing_send_scope':
       case 'history_expired':
       case 'other':
         return { ok: false, message: `Google could not be reached: ${failure.message}` };

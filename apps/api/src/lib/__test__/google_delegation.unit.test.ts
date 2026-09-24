@@ -19,6 +19,7 @@ import {
   GMAIL_READONLY_SCOPE,
   GMAIL_SEND_SCOPE,
   delegatedGoogleAuth,
+  gmailMailboxAllowlist,
   googleAuth,
 } from '../google_cloud';
 
@@ -79,5 +80,34 @@ describe('delegatedGoogleAuth', () => {
       delegatedGoogleAuth({ subject: 'deals@example.com', scopes: [GMAIL_READONLY_SCOPE], env: {} }),
     ).toThrow(/not configured/);
     expect(constructed).toHaveLength(0);
+  });
+});
+
+describe('gmailMailboxAllowlist', () => {
+  it('parses to an empty set when unset', () => {
+    expect(gmailMailboxAllowlist({})).toEqual(new Set());
+  });
+
+  it('parses to an empty set when set to the empty string', () => {
+    expect(gmailMailboxAllowlist({ GMAIL_MAILBOX_ALLOWLIST: '' })).toEqual(new Set());
+  });
+
+  it('splits on commas, trims whitespace, and lower-cases each address', () => {
+    expect(
+      gmailMailboxAllowlist({
+        GMAIL_MAILBOX_ALLOWLIST: ' Ops@Example.com ,deals@example.com,, ',
+      }),
+    ).toEqual(new Set(['ops@example.com', 'deals@example.com']));
+  });
+
+  it('reads process.env by default', () => {
+    const prior = process.env.GMAIL_MAILBOX_ALLOWLIST;
+    process.env.GMAIL_MAILBOX_ALLOWLIST = 'deals@example.com';
+    try {
+      expect(gmailMailboxAllowlist()).toEqual(new Set(['deals@example.com']));
+    } finally {
+      if (prior === undefined) delete process.env.GMAIL_MAILBOX_ALLOWLIST;
+      else process.env.GMAIL_MAILBOX_ALLOWLIST = prior;
+    }
   });
 });

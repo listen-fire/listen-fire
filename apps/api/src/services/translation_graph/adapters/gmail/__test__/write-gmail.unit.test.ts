@@ -184,10 +184,10 @@ describe('sending a new message', () => {
     ).rejects.toThrow('needs a `Body` (plain text) or an `HTML Body`');
   });
 
-  it('passes on Google’s own refusal when the send scope was never granted', async () => {
+  it('names the send scope, the mailbox, and that reads still work when the send scope was never granted', async () => {
     const { client } = fakeClient({
       fail: new GmailApiError(
-        'delegation',
+        'missing_send_scope',
         403,
         'users.messages.send',
         'Request had insufficient authentication scopes.',
@@ -197,8 +197,9 @@ describe('sending a new message', () => {
     const send = adapter.createRecord(
       write({ fields: { To: ['rita@northwind.example'], Body: 'Hello' } }),
     );
-    await expect(send).rejects.toThrow('Request had insufficient authentication scopes.');
-    await expect(send).rejects.toThrow('domain wide delegation');
+    await expect(send).rejects.toThrow(MAILBOX);
+    await expect(send).rejects.toThrow('gmail.send');
+    await expect(send).rejects.toThrow('Reads still work');
   });
 });
 

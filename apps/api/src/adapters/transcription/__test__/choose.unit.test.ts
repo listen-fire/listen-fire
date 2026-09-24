@@ -23,6 +23,18 @@ it('transcribes through Gemini on the google route', () => {
   expect(chooseTranscriptionAdapter(GOOGLE_ENV)).toBeInstanceOf(GoogleTranscriptionAdapter);
 });
 
+it("follows the OpenAI route rather than Claude's", () => {
+  // Whisper is an OpenAI model, so a deployment that has moved only its Claude
+  // calls to Google still transcribes through OpenAI, and one that has moved
+  // only its OpenAI-shaped calls transcribes through Gemini.
+  expect(
+    chooseTranscriptionAdapter({ MODEL_ROUTE: 'google', ANTHROPIC_MODEL_ROUTE: 'google', OPENAI_MODEL_ROUTE: 'direct' }),
+  ).toBeInstanceOf(OpenAiTranscriptionAdapter);
+  expect(chooseTranscriptionAdapter({ OPENAI_MODEL_ROUTE: 'google' })).toBeInstanceOf(
+    GoogleTranscriptionAdapter,
+  );
+});
+
 it('refuses a route nobody serves rather than picking one', () => {
   expect(() => chooseTranscriptionAdapter({ MODEL_ROUTE: 'whisper' })).toThrow(
     /must be "direct" or "google"/,

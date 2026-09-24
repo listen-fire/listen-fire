@@ -21,7 +21,7 @@ import {
   isGoogleServiceAccountConfigured,
   missingGoogleServiceAccountVars,
 } from '../google_cloud';
-import { modelRoute } from '../model_route';
+import { anthropicRoute } from '../model_route';
 import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 
@@ -42,7 +42,7 @@ export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  const route = modelRoute(env);
+  const route = anthropicRoute(env);
   switch (route) {
     case 'direct':
       return knowledgeLlmKey(env) !== null;
@@ -60,7 +60,7 @@ export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): 
  * than an override, and says so instead of being quietly ignored.
  */
 function knowledgeLlmClient(env: NodeJS.ProcessEnv): AnthropicCall {
-  const route = modelRoute(env);
+  const route = anthropicRoute(env);
   switch (route) {
     case 'direct': {
       const apiKey = knowledgeLlmKey(env);
@@ -70,9 +70,9 @@ function knowledgeLlmClient(env: NodeJS.ProcessEnv): AnthropicCall {
     case 'google': {
       if (env.KNOWLEDGE_LLM_API_KEY) {
         throw new Error(
-          'KNOWLEDGE_LLM_API_KEY is set while MODEL_ROUTE is google. Knowledge calls its model ' +
-            'through Google Cloud on that route and no key is used — remove it, or set ' +
-            'MODEL_ROUTE=direct.',
+          'KNOWLEDGE_LLM_API_KEY is set while the Anthropic route is google. Knowledge calls ' +
+            'its model through Google Cloud on that route and no key is used — remove it, or ' +
+            'set ANTHROPIC_MODEL_ROUTE=direct.',
         );
       }
       if (!isGoogleServiceAccountConfigured(env)) {

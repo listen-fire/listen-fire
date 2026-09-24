@@ -242,7 +242,8 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
         placeholder: 'deals@yourcompany.com',
         help:
           'The Google Workspace address automations should read and send as. A ' +
-          'real user or shared mailbox — a group address has no inbox.',
+          'real user or shared mailbox — a group address has no inbox. Only a ' +
+          'mailbox this installation lists in GMAIL_MAILBOX_ALLOWLIST can be connected.',
       },
     ],
     {

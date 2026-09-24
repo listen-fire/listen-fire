@@ -13,7 +13,7 @@ jest.mock('openai', () => ({
 }));
 
 let route: 'direct' | 'google' = 'direct';
-jest.mock('../model_route', () => ({ modelRoute: () => route }));
+jest.mock('../model_route', () => ({ openAiRoute: () => route }));
 
 jest.mock('../../adapters/registry', () => ({ services: {} }));
 jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));

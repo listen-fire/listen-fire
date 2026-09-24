@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 
 import { googleAuth, googleServiceAccount } from '../google_cloud';
-import { modelRoute } from '../model_route';
+import { anthropicRoute } from '../model_route';
 import { getEnvVar } from '../utils/environment';
 import { neverAsAny } from '../utils/types';
 
@@ -86,8 +86,9 @@ function googleWireModel(model: string): string {
   const googleName = GOOGLE_MODEL_NAMES[model];
   if (!googleName) {
     throw new Error(
-      `Claude model "${model}" has no known name on Google Cloud, and MODEL_ROUTE is google. ` +
-        'Send a model Google serves, or set MODEL_ROUTE=direct.',
+      `Claude model "${model}" has no known name on Google Cloud, and this deployment's ` +
+        'Anthropic route is google. Send a model Google serves, or set ' +
+        'ANTHROPIC_MODEL_ROUTE=direct.',
     );
   }
   return googleName;
@@ -111,7 +112,7 @@ function googleModelRegion(env: NodeJS.ProcessEnv): string {
 
 /** The client for a call that has no team key of its own, with its naming. */
 export function platformAnthropic(env: NodeJS.ProcessEnv = process.env): AnthropicCall {
-  const route = modelRoute(env);
+  const route = anthropicRoute(env);
   switch (route) {
     case 'direct':
       return {

@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 import { isProd } from '../../constants';
 import { googleBearerTokens, googleModelRegion, googleServiceAccount } from '../google_cloud';
-import { modelRoute } from '../model_route';
+import { openAiRoute } from '../model_route';
 import { getEnvVar } from '../utils/environment';
 import { neverAsAny } from '../utils/types';
 
@@ -128,8 +128,8 @@ function geminiWireModel(model: string): string {
   const geminiName = GEMINI_FOR_OPENAI_MODEL[model];
   if (!geminiName) {
     throw new Error(
-      `OpenAI model "${model}" has no Gemini equivalent, and MODEL_ROUTE is google. ` +
-        'Send a model this deployment maps, or set MODEL_ROUTE=direct.',
+      `OpenAI model "${model}" has no Gemini equivalent, and this deployment's OpenAI route is ` +
+        'google. Send a model this deployment maps, or set OPENAI_MODEL_ROUTE=direct.',
     );
   }
   return geminiName;
@@ -157,27 +157,33 @@ function googleOpenAiBaseUrl(env: NodeJS.ProcessEnv): string {
 let directClient: OpenAI | undefined;
 let googleClient: OpenAI | undefined;
 
-/** The organisation each key belongs to. Google has no such concept, and sending
- *  one there would be an OpenAI account id travelling to a vendor that has never
- *  heard of it. */
-const ORGANIZATION_FALLBACK_OR_DEV = 'org-8dLfRZxrZST5fjBfvwxP0fU5';
-const ORGANIZATION = isProd ? 'org-8BBSblaUkeNcT0htEr4sOoed' : ORGANIZATION_FALLBACK_OR_DEV;
+/** The organisation the key belongs to, when this deployment has declared one.
+ *  Optional: a self-hoster's key belongs to whatever organisation OpenAI has on
+ *  file for it, and the SDK sends the key's own default organisation when none
+ *  is named here — so an unset value is correct, not a hole to fall back from.
+ *  Google has no such concept, and sending one there would be an OpenAI
+ *  account id travelling to a vendor that has never heard of it. */
+function directOrganization(env: NodeJS.ProcessEnv): string | undefined {
+  return env.OPENAI_ORGANIZATION || undefined;
+}
 
 /** The client for an OpenAI-shaped call on this deployment's route. */
 export function platformOpenAI(env: NodeJS.ProcessEnv = process.env): OpenAiCall {
-  const route = modelRoute(env);
+  const route = openAiRoute(env);
   switch (route) {
-    case 'direct':
+    case 'direct': {
+      const organization = directOrganization(env);
       return {
         client: (directClient ??= new OpenAI({
           apiKey: isProd
             ? getEnvVar('OPENAI_API_KEY', { devDefault: 'test', because: 'OpenAI calls need a key' })
             : getEnvVar('OPENAI_API_KEY_FALLBACK_OR_DEV', { devDefault: 'test' }),
-          organization: ORGANIZATION,
+          ...(organization ? { organization } : {}),
         })),
         wireModel: openAiWireModel,
         provider: 'openai',
       };
+    }
     case 'google':
       return {
         client: (googleClient ??= new OpenAI({
@@ -251,9 +257,9 @@ export function assertSchemaIsNotRecursive(schema: unknown, name: string): void 
   for (const root of edges.keys()) {
     if (reachesItself(root)) {
       throw new Error(
-        `The JSON schema for "${name}" is recursive, and MODEL_ROUTE is google — Google's ` +
+        `The JSON schema for "${name}" is recursive, and the OpenAI route is google — Google's ` +
           'OpenAI-shaped endpoint does not support fully recursive schemas and would ignore it ' +
-          'rather than refuse it. Flatten the schema, or set MODEL_ROUTE=direct.',
+          'rather than refuse it. Flatten the schema, or set OPENAI_MODEL_ROUTE=direct.',
       );
     }
   }

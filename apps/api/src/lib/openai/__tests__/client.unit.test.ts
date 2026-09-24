@@ -82,8 +82,8 @@ describe('the model name on the wire', () => {
 });
 
 describe('the platform client', () => {
-  it('builds a keyed, organisation-bearing client on the direct route', () => {
-    const { provider } = load().platformOpenAI(DIRECT_ENV);
+  it('sends the configured organisation on the direct route', () => {
+    const { provider } = load().platformOpenAI({ ...DIRECT_ENV, OPENAI_ORGANIZATION: 'org-a-customer-owns' });
     expect(provider).toBe('openai');
     // The key is read from the PROCESS environment through `getEnvVar`, not from
     // the environment handed in — unchanged from before this file existed, and
@@ -91,9 +91,14 @@ describe('the platform client', () => {
     // production error, and no caller threads an environment here.
     expect(openAiCtor).toHaveBeenCalledWith({
       apiKey: expect.any(String),
-      organization: expect.stringMatching(/^org-/),
+      organization: 'org-a-customer-owns',
     });
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('baseURL');
+  });
+
+  it('sends no organisation on the direct route when none is configured', () => {
+    load().platformOpenAI(DIRECT_ENV);
+    expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('organization');
   });
 
   it('points at Google’s global OpenAI-shaped endpoint on the google route', () => {

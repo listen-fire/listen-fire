@@ -261,6 +261,13 @@ services:
       # than assumed from MODEL_ROUTE's absence.
       - key: MODEL_ROUTE
         value: direct
+      # Per-vendor overrides of the line above, because Google grants Claude
+      # and Gemini quota separately. Left unset here (`sync: false`, so the
+      # dashboard owns them), and unset means MODEL_ROUTE decides.
+      - key: ANTHROPIC_MODEL_ROUTE
+        sync: false
+      - key: OPENAI_MODEL_ROUTE
+        sync: false
       # Voice notes are transcribed by Whisper on the direct route; unset, a
       # voice note fails naming the key.
       - key: OPENAI_API_KEY

@@ -21,7 +21,7 @@ jest.mock('../../lib/google_cloud', () => ({
 }));
 
 let route: 'direct' | 'google' = 'direct';
-jest.mock('../../lib/model_route', () => ({ modelRoute: () => route }));
+jest.mock('../../lib/model_route', () => ({ openAiRoute: () => route }));
 
 // The knowledge query builder is only reached by `embedAndStore`, which these
 // tests do not exercise — but the module builds one at import.

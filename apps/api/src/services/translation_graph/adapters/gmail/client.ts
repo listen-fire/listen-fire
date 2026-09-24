@@ -8,7 +8,11 @@ import { isTestHarnessTeam, injectFakeBaseUrl } from '../../../../lib/recording'
 import { isDelegatedGmail } from '../../../credentials/app_id';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { ExternalServiceCredentialsId } from '../../../../generated/kysely/automations/ExternalServiceCredentials';
-import { GmailApiClient, gmailCredsParser } from '../../../../adapters/gmail/apiClient';
+import {
+  GmailApiClient,
+  checkGmailMailboxAllowed,
+  gmailCredsParser,
+} from '../../../../adapters/gmail/apiClient';
 
 export type { GmailApiClient };
 
@@ -18,6 +22,12 @@ export type { GmailApiClient };
  * (`app_id` says so without anything being decrypted), or when the stored
  * payload doesn't parse — the caller turns that into a clear "connect Gmail"
  * error, which is a better diagnostic than an impersonation failure.
+ *
+ * THROWS, rather than returning null, when the credential is real but its
+ * mailbox is not (or no longer) on this installation's allowlist — a
+ * credential connected under a wider list must stop working the moment the
+ * list narrows, and the run's trace should say why, not just that Gmail
+ * needs reconnecting.
  */
 export async function resolveGmailClient(input: {
   teamId: TeamId;
@@ -50,5 +60,10 @@ export async function resolveGmailClient(input: {
 
   const parsed = gmailCredsParser.safeParse(rawPayload);
   if (!parsed.success) return null;
+
+  const allowed = checkGmailMailboxAllowed(parsed.data.mailbox);
+  if (!allowed.ok) {
+    throw new Error(`GmailAdapter: ${allowed.message}`);
+  }
   return new GmailApiClient(parsed.data);
 }

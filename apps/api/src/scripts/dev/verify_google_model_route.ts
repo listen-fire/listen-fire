@@ -31,7 +31,7 @@ import {
 } from '../../lib/anthropic';
 import type { PageFetchResult } from '../../lib/anthropic';
 import { ScraperService } from '../../services/scraper';
-import { modelRoute } from '../../lib/model_route';
+import { routeChoice } from '../../lib/model_route';
 // Side-effect import: it is what registers the adapters, and on this route it is
 // also what CHOOSES the transcription one — so the surface below proves the
 // switch, not just the call.
@@ -92,11 +92,17 @@ async function fetchPage(url: string): Promise<PageFetchResult> {
 }
 
 async function main() {
-  const route = modelRoute();
-  if (route !== 'google') {
+  // The all-Google state is what this proves, so BOTH vendors have to be on
+  // Google: a run with Claude still on Anthropic's own key would pass its Claude
+  // surfaces without Google having served a single one of them.
+  const anthropic = routeChoice('anthropic');
+  const openAi = routeChoice('openai');
+  if (anthropic.route !== 'google' || openAi.route !== 'google') {
     console.error(
-      `This proof only means anything on the google route — MODEL_ROUTE is "${process.env.MODEL_ROUTE ?? 'unset'}". ` +
-        'Run it with MODEL_ROUTE=google and no vendor keys in the environment.',
+      `This proof only means anything when every model call goes through Google — Claude is ` +
+        `"${anthropic.route}" (per ${anthropic.decidedBy}) and OpenAI-shaped calls are ` +
+        `"${openAi.route}" (per ${openAi.decidedBy}). Run it with MODEL_ROUTE=google and no ` +
+        'vendor keys in the environment.',
     );
     process.exit(1);
   }
@@ -113,7 +119,11 @@ async function main() {
 
   const audioPath = process.argv[2] ?? (fs.existsSync(BUNDLED_AUDIO) ? BUNDLED_AUDIO : undefined);
 
-  console.log(`route: google · project: ${process.env.GOOGLE_PROJECT_ID ?? '(unset)'} · region: ${process.env.GOOGLE_MODEL_REGION ?? 'global'}\n`);
+  console.log(
+    `route: google for Claude (per ${anthropic.decidedBy}) and for OpenAI-shaped calls ` +
+      `(per ${openAi.decidedBy}) · project: ${process.env.GOOGLE_PROJECT_ID ?? '(unset)'} · ` +
+      `region: ${process.env.GOOGLE_MODEL_REGION ?? 'global'}\n`,
+  );
 
   // (a) Claude, plain.
   await surface('claude chat', async () => {

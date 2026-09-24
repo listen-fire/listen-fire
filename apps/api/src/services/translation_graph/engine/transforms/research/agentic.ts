@@ -40,7 +40,7 @@ import {
   meterAnthropicUsage,
 } from '../../../../../lib/anthropic';
 import { runFields } from '../../../../../lib/llm_usage';
-import { modelRoute } from '../../../../../lib/model_route';
+import { anthropicRoute } from '../../../../../lib/model_route';
 import { logger } from '../../../../logger';
 import { missingBrightDataVars, ScraperService } from '../../../../scraper';
 import { describeError } from '../fetch_resource';
@@ -356,7 +356,7 @@ async function researchWithin(
   // Before any spend: a turn told it has a page reader, on a deployment where
   // nothing can answer one, would discover that one failed read at a time and
   // report it as a subject with no signal.
-  const pageReader = defaultPageReader(modelRoute());
+  const pageReader = defaultPageReader(anthropicRoute());
   const missingFetcher = pageReader === 'own' ? missingBrightDataVars() : [];
   if (missingFetcher.length > 0) {
     return pageFetcherUnconfigured({ missing: missingFetcher, usage, name, run });

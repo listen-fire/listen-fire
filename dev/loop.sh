@@ -178,6 +178,12 @@ export WHATSAPP_GRAPH_BASE_URL="${WHATSAPP_GRAPH_BASE_URL:-$FAKE_CHANNELS_URL/wh
 # app on an https port the API doesn't serve, so it can't be used here.
 export EXPOSED_FILE_PUBLIC_BASE_URL="${EXPOSED_FILE_PUBLIC_BASE_URL:-$API_BASE_URL}"
 
+# The dev-loop Gmail credential (_lib.ts's ensureDevLoopTeam) stores this
+# exact address. GMAIL_MAILBOX_ALLOWLIST refuses every mailbox when unset — a
+# deliberate default the dev loop must satisfy like any other deployment, so
+# `pnpm dev:gmail setup` stays connectable without special-casing the loop.
+export GMAIL_MAILBOX_ALLOWLIST="${GMAIL_MAILBOX_ALLOWLIST:-dev-loop@listen-fire.local}"
+
 # The address inbound mail is routed on. It has no default anywhere in the
 # code — a default would have every other deployment tell its authors to
 # forward mail to Listen-Fire — so the dev loop names Listen-Fire's, which is what every
@@ -243,7 +249,8 @@ cat > "$PROFILE_FILE" <<EOF
     "ADMIN_BASE_URL": "$ADMIN_BASE_URL",
     "FAKE_CHANNELS_URL": "$FAKE_CHANNELS_URL",
     "VITE_API_BASE_URL": "$VITE_API_BASE_URL",
-    "NEXT_PUBLIC_API_URL": "$NEXT_PUBLIC_API_URL"
+    "NEXT_PUBLIC_API_URL": "$NEXT_PUBLIC_API_URL",
+    "GMAIL_MAILBOX_ALLOWLIST": "$GMAIL_MAILBOX_ALLOWLIST"
   }
 }
 EOF

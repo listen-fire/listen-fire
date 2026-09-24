@@ -24,7 +24,7 @@ jest.mock('../client', () => {
 });
 
 jest.mock('../../llm_usage', () => ({ recordLlmUsage: (...args: unknown[]) => recordLlmUsage(...args) }));
-jest.mock('../../model_route', () => ({ modelRoute: () => 'google' }));
+jest.mock('../../model_route', () => ({ openAiRoute: () => 'google' }));
 jest.mock('../../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 const { GOOGLE_SUPPORTED_CHAT_PARAMS } = jest.requireActual('../client');

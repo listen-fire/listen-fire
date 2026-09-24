@@ -21,7 +21,7 @@ import {
 } from './web_tools';
 import type { PageFetchResult, PageFetcher, PageReader, PageRequest, WebToolEvent } from './web_tools';
 
-import { modelRoute } from '../model_route';
+import { anthropicRoute } from '../model_route';
 import type { ModelRoute } from '../model_route';
 import { Queue } from '../utils/queue';
 import { neverAsAny } from '../utils/types';
@@ -1281,7 +1281,7 @@ async function anthropicWebChat(
       ? { thinking: { type: 'adaptive' as const }, output_config: { effort } }
       : {};
 
-  const route = modelRoute();
+  const route = anthropicRoute();
   const pages = resolvePageReader({ requested: options.pageReader, route, fetchPage });
   const pageReader = pages.mode;
   const tools = webChatTools({

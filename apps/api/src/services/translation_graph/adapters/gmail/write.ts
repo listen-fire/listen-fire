@@ -17,7 +17,7 @@
 import { logger } from '../../../logger';
 import type { FileRef, ParentLink, WriteResult } from '../../adapter';
 import { streamFileRef } from '../../engine/files/retrieve';
-import { GmailApiError } from '../../../../adapters/gmail/apiClient';
+import { GmailApiError, gmailMissingSendScopeMessage } from '../../../../adapters/gmail/apiClient';
 import {
   buildRfc2822,
   toGmailRaw,
@@ -194,17 +194,15 @@ function referenceChain(replyTo: GmailReplyTarget): string[] {
  *
  * The one refusal a deployment will actually meet is the scope: delegation
  * granted for reading and not for sending is a mailbox that lists mail all day
- * and fails the first time a movement answers any of it. Google says exactly
- * that; a generic "the write failed" would throw the answer away.
+ * and fails the first time a movement answers any of it. The send call asks
+ * for ONLY the send scope (apiClient.ts), so a token refusal here can only
+ * ever mean that scope is missing — `classifyGmailError` reports it as
+ * `missing_send_scope`, never the general `delegation` failure, because the
+ * operation that failed already says which scope was being requested.
  */
 function sendFailure(error: unknown, mailbox: string): Error {
-  if (error instanceof GmailApiError && error.failure === 'delegation') {
-    return new Error(
-      `Google refused to send as ${mailbox}. ${error.message} — sending needs the ` +
-        'Gmail send scope on this deployment’s domain wide delegation, which a ' +
-        'Workspace admin grants against the service account’s client id alongside ' +
-        'the read scope.',
-    );
+  if (error instanceof GmailApiError && error.failure === 'missing_send_scope') {
+    return new Error(gmailMissingSendScopeMessage(mailbox));
   }
   return error instanceof Error ? error : new Error(String(error));
 }

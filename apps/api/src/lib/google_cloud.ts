@@ -111,6 +111,29 @@ export function delegatedGoogleAuth(input: {
   });
 }
 
+/**
+ * The mailboxes THIS installation will act as. Google's domain wide delegation
+ * has no per-mailbox limit of its own — once granted, the service account can
+ * impersonate ANY address in the Workspace — so this list is the only thing
+ * standing between "the delegation is granted" and "anyone can connect anyone
+ * else's mailbox". Comma separated, compared case insensitively after
+ * trimming.
+ *
+ * Unset (or empty) parses to an empty set, which every caller reads as "no
+ * mailbox may be connected or used" — never as "every mailbox is allowed". An
+ * unset list defaulting to "everything" would be a guarantee that silently is
+ * not one.
+ */
+export function gmailMailboxAllowlist(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const raw = env.GMAIL_MAILBOX_ALLOWLIST ?? '';
+  return new Set(
+    raw
+      .split(',')
+      .map((address) => address.trim().toLowerCase())
+      .filter((address) => address !== ''),
+  );
+}
+
 /** A bearer token for a hand-rolled call to a Google endpoint. The SDK-backed
  *  callers hand {@link googleAuth} over instead and let it refresh itself. */
 export async function googleAccessToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {

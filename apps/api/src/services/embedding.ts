@@ -13,7 +13,7 @@ import {
   truncateToTokenLimit,
 } from '../lib/chunking';
 import { googleBearerTokens, googleModelUrl } from '../lib/google_cloud';
-import { modelRoute } from '../lib/model_route';
+import { openAiRoute } from '../lib/model_route';
 import { neverAsAny } from '../lib/utils/types';
 import { UserService } from '../services/user';
 import { currentContext } from './context';
@@ -32,9 +32,9 @@ const openAIApiKey = () =>
  * embedded for `extraction_fact` is 256 numbers wide because that column is, and
  * asking the provider for anything else writes a row Postgres refuses.
  *
- * Henry ruled (2026-09-17) that vectors written on one route need not be
- * comparable with vectors written on the other — the system is fresh of data —
- * so nothing here tries to reconcile the two models' spaces.
+ * Vectors written on one route are deliberately NOT required to be comparable
+ * with vectors written on the other, so nothing here tries to reconcile the two
+ * models' spaces.
  */
 const EMBEDDING_DESTINATIONS = {
   /** knowledge.raw_text.embedding and knowledge.raw_text_part.embedding */
@@ -200,7 +200,7 @@ export async function embedTexts(options: {
   label?: string;
 }): Promise<number[][]> {
   if (options.texts.length === 0) return [];
-  const route = modelRoute();
+  const route = openAiRoute();
   switch (route) {
     case 'direct': {
       const { openAi } = EMBEDDING_DESTINATIONS[options.destination];

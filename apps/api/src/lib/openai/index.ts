@@ -6,7 +6,7 @@ import { logger } from '../../services/logger';
 import { SECOND } from '../../constants';
 import { RequestOptions } from 'openai/internal/request-options';
 import { recordLlmUsage } from '../llm_usage';
-import { modelRoute } from '../model_route';
+import { openAiRoute } from '../model_route';
 import { assertSchemaIsNotRecursive, platformOpenAI } from './client';
 
 const rateLimitQueue = new Queue<any>({ concurrency: 8 });
@@ -219,9 +219,9 @@ async function openAIResponses(
   // stateful `previous_response_id` loop into a stateless one. Boot validation
   // already refuses this combination; this is the second wall, for a caller that
   // reached the tool loop some other way.
-  if (modelRoute() === 'google') {
+  if (openAiRoute() === 'google') {
     throw new Error(
-      "MODEL_ROUTE is google, and Google serves no OpenAI Responses API. The knowledge agents' " +
+      "The OpenAI route is google, and Google serves no OpenAI Responses API. The knowledge agents' " +
         'Claude path does work on this route — set KNOWLEDGE_AGENT_PROVIDER=anthropic.',
     );
   }

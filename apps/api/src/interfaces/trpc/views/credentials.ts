@@ -17,7 +17,7 @@ import {
 } from '../../../adapters/airtable/apiClient';
 import { attioCredsParser, getAttioClient } from '../../../adapters/attio/apiClient';
 import { googleCredsParser } from '../../../adapters/google/authClient';
-import { gmailCredsParser } from '../../../adapters/gmail/apiClient';
+import { gmailCredsParser, validateGmailMailbox } from '../../../adapters/gmail/apiClient';
 import { dropboxCredsParser } from '../../../adapters/dropbox/authClient';
 import { nativeValuationsCredsParser } from '../../../services/translation_graph/adapters/native_valuations';
 import { granolaCredsParser } from '../../../services/credentials/connect_form_spec';
@@ -50,6 +50,22 @@ function maybeFakeCreds<T extends Record<string, unknown>>(creds: T, serviceType
   const ctx = currentContext();
   if (!isTestHarnessTeam(ctx.user.teamId)) return creds;
   return injectFakeBaseUrl(creds, serviceType) as T;
+}
+
+/**
+ * The connect-LINK form (connect_form_spec.ts) runs `validateGmailMailbox`
+ * before storing anything; the in-app modal skipped it, so a wrong address
+ * — or one this installation's GMAIL_MAILBOX_ALLOWLIST does not name — only
+ * failed the first time a run tried to use it. Run the SAME function here,
+ * so the two save paths can never drift.
+ */
+async function assertGmailMailboxSavable(credentials: unknown): Promise<void> {
+  const verdict = await validateGmailMailbox(
+    maybeFakeCreds(gmailCredsParser.parse(credentials), 'GOOGLE_GMAIL'),
+  );
+  if (!verdict.ok) {
+    throw new Error(verdict.message);
+  }
 }
 
 /**
@@ -176,6 +192,10 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           credentials = input.credentials;
         }
 
+        if (input.type === ExternalServiceType.GOOGLE_GMAIL) {
+          await assertGmailMailboxSavable(credentials);
+        }
+
         await persistCredential({
           teamId: ctx.user.teamId as TeamId,
           userId: ctx.user.id as UserId,
@@ -275,6 +295,10 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           };
         } else {
           credentials = input.credentials;
+        }
+
+        if (input.type === ExternalServiceType.GOOGLE_GMAIL) {
+          await assertGmailMailboxSavable(credentials);
         }
 
         const updateLifecycle = credentialLifecycle(input.type);
