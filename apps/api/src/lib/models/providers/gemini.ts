@@ -62,17 +62,36 @@ export function geminiChatProvider(env: NodeJS.ProcessEnv = process.env): ChatPr
   return (provider ??= buildProvider(geminiClient(env)));
 }
 
-function geminiClient(env: NodeJS.ProcessEnv): GoogleGenAI {
+const clients = new Map<string, GoogleGenAI>();
+
+/**
+ * The `@google/genai` client every Gemini capability shares, one per location.
+ *
+ * Models are addressed where Claude on Vertex is (`GOOGLE_MODEL_REGION`,
+ * default the global endpoint): new Gemini models often launch there first,
+ * and it carries no regional premium. A capability that needs a real region
+ * (image generation, which has always run in the project location) names it.
+ */
+export function geminiClient(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { location?: string } = {},
+): GoogleGenAI {
+  const location = options.location ?? googleModelRegion(env);
+  let client = clients.get(location);
+  if (!client) {
+    client = buildClient(env, location);
+    clients.set(location, client);
+  }
+  return client;
+}
+
+function buildClient(env: NodeJS.ProcessEnv, location: string): GoogleGenAI {
   const { projectId, privateKey, clientEmail } = googleServiceAccount(env);
   const baseUrl = env.GEMINI_BASE_URL;
   return new GoogleGenAI({
     vertexai: true,
     project: projectId,
-    // Models are addressed where Claude on Vertex is (`GOOGLE_MODEL_REGION`,
-    // default the global endpoint): new Gemini models often launch there
-    // first, and it carries no regional premium. The project location stays
-    // the real region OCR and image generation need.
-    location: googleModelRegion(env),
+    location,
     // Pinned rather than the SDK's `v1beta1` default: the GA surface is the one
     // the fake mirrors, and a beta default can move under a package upgrade.
     apiVersion: 'v1',

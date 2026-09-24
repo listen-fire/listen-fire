@@ -19,7 +19,7 @@
 // itself (plans/2026-06-18-fileref-resolution-rework).
 //
 // Audio (voice notes / audio attachments) is the fourth kind: the bytes are
-// transcribed (`services.transcription`) and the TRANSCRIPT is the file's
+// transcribed (Whisper's registry name, wherever the model map sends it) and the TRANSCRIPT is the file's
 // text — so spoken words flow into `extract from [ … ]` exactly where a
 // deck's slides do. The audio's duration is metered as its own ledger line.
 //
@@ -37,6 +37,7 @@ import { Readable } from 'node:stream';
 
 import { services } from '../../adapters/registry';
 import { MB } from '../../constants';
+import { transcribe } from '../../lib/models/transcription';
 import { getXlsxContent } from '../../lib/utils/excel';
 import { getPptxText } from '../../lib/utils/powerpoint';
 import { logger } from '../logger';
@@ -135,12 +136,14 @@ async function transcribeAudio(
     });
     return tooLarge();
   }
-  const result = await services.transcription.transcribe(audio, {
+  const { text } = await transcribe('whisper-1', {
+    audio,
     name: ref.name,
     contentType: ref.contentType,
+    label: 'file_transcription',
   });
-  if (!result) return null;
-  return result.text;
+  // Nothing said is unreadable, not an empty transcript.
+  return text.trim().length === 0 ? null : text;
 }
 
 /** A born-digital PDF's text is judged PER PAGE, not in total: a flat total

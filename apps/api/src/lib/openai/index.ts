@@ -1,4 +1,4 @@
-import OpenAI, { toFile } from 'openai';
+import OpenAI from 'openai';
 import { backOff } from 'exponential-backoff';
 
 import { Queue } from '../utils/queue';
@@ -178,42 +178,6 @@ async function openAiChatStructured(
   }
 }
 
-const TRANSCRIPTION_MODEL = 'whisper-1';
-
-interface TranscribeOutput {
-  text: string;
-  /** Source audio length in seconds, as reported by the verbose_json response. */
-  duration: number;
-}
-
-async function openAiTranscribe(
-  audio: Buffer,
-  options: { name: string; label?: string },
-): Promise<TranscribeOutput> {
-  const { client, wireModel } = platformOpenAI(TRANSCRIPTION_MODEL);
-  try {
-    return await enqueueQuery(async () => {
-      logger.info(
-        `OpenAI transcription submitted ${options.label ? `(${options.label})` : ''}`,
-        { model: wireModel, name: options.name, bytes: audio.length },
-      );
-      const file = await toFile(audio, options.name);
-      const transcription = await client.audio.transcriptions.create({
-        file,
-        model: wireModel,
-        // verbose_json carries `duration` — the honest per-minute metering unit.
-        response_format: 'verbose_json',
-      });
-      return { text: transcription.text ?? '', duration: transcription.duration ?? 0 };
-    });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('401')) {
-      throw new Error('Invalid OpenAI API key');
-    }
-    throw err;
-  }
-}
-
 async function openAIResponses(
   body: OpenAI.Responses.ResponseCreateParamsNonStreaming,
   tools: Record<string, (args: any) => Promise<any>> = {},
@@ -323,4 +287,4 @@ async function openAIResponses(
   }
 }
 
-export { openAiChat, openAiChatStructured, openAIResponses, openAiTranscribe };
+export { openAiChat, openAiChatStructured, openAIResponses };

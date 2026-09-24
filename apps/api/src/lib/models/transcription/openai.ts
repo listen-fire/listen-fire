@@ -1,9 +1,14 @@
-import { openAiTranscribe } from '../../lib/openai';
-import { sniffContainer } from './audio_format';
-import { TranscriptionAdapter, TranscriptionResult } from './interface';
+// Speech to text on OpenAI: the audio travels as a multipart upload, and the
+// endpoint reads its FORMAT from the uploaded filename's extension.
 
-// OpenAI's transcription endpoint infers the audio FORMAT from the uploaded
-// filename's extension and 400s on anything outside this set — a channel that
+import { toFile } from 'openai';
+
+import { logger } from '../../../services/logger';
+import { openAiClient } from '../providers/openai';
+import { sniffContainer } from './audio_format';
+import type { TranscriptionRequest, TranscriptionResult } from './index';
+
+// The endpoint 400s on any extension outside this set, and a channel that
 // delivers nameless audio (a WhatsApp voice note's name falls back to the
 // message id) needs the extension derived, not trusted.
 const SUPPORTED_EXTENSIONS = ['flac', 'm4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'oga', 'ogg', 'wav', 'webm'];
@@ -34,7 +39,7 @@ function extensionFromContentType(contentType?: string): string | undefined {
  *  already ends in a supported extension; otherwise append one derived from
  *  the bytes, then the content type, then the ogg default (voice notes are
  *  the overwhelmingly common nameless case). */
-function uploadName(audio: Buffer, options: { name?: string; contentType?: string }): string {
+export function uploadName(audio: Buffer, options: { name?: string; contentType?: string }): string {
   const name = options.name ?? 'audio';
   const lower = name.toLowerCase();
   if (SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(`.${ext}`))) return name;
@@ -42,16 +47,30 @@ function uploadName(audio: Buffer, options: { name?: string; contentType?: strin
   return `${name}.${extension}`;
 }
 
-export class OpenAiTranscriptionAdapter implements TranscriptionAdapter {
-  async transcribe(
-    audio: Buffer,
-    options: { name?: string; contentType?: string },
-  ): Promise<TranscriptionResult | null> {
-    const result = await openAiTranscribe(audio, {
-      name: uploadName(audio, options),
-      label: 'file_transcription',
-    });
-    if (!result || result.text.trim().length === 0) return null;
-    return { text: result.text, durationSeconds: result.duration };
-  }
+/** Four attempts in all, as the queue this replaced made: a voice note is
+ *  worth waiting out a rate limit for, and the SDK's backoff honours
+ *  `retry-after`. */
+const MAX_RETRIES = 3;
+
+export async function openAiTranscribe(
+  wireModel: string,
+  req: TranscriptionRequest,
+  env: NodeJS.ProcessEnv,
+): Promise<TranscriptionResult> {
+  const name = uploadName(req.audio, req);
+  logger.info(`OpenAI transcription submitted ${req.label ? `(${req.label})` : ''}`, {
+    model: wireModel,
+    name,
+    bytes: req.audio.length,
+  });
+  const transcription = await openAiClient(env).audio.transcriptions.create(
+    {
+      file: await toFile(req.audio, name),
+      model: wireModel,
+      // verbose_json is the format that carries the audio's duration.
+      response_format: 'verbose_json',
+    },
+    { maxRetries: MAX_RETRIES },
+  );
+  return { text: transcription.text ?? '', durationSeconds: transcription.duration };
 }

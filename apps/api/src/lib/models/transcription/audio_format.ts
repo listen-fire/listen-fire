@@ -2,7 +2,7 @@
 //
 // A channel that delivers nameless audio is the normal case, not the edge one —
 // a WhatsApp voice note's name falls back to the message id, and a Slack one
-// arrives as `audio/ogg; codecs=opus`. Both transcription adapters need the same
+// arrives as `audio/ogg; codecs=opus`. Both transcription providers need the same
 // answer to the same question, so the sniffing lives here rather than twice.
 
 /** Sniff the container format from its magic bytes — the bytes are the truth

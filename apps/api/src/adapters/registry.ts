@@ -2,7 +2,6 @@ import * as db from '@prisma/client';
 
 import { DocumentProvider } from './document/interface';
 import { OcrAdapter } from './ocr/interface';
-import { TranscriptionAdapter } from './transcription/interface';
 import { OutboundEmailMessager } from './email/interface';
 import { OutboundWhatsAppMessager } from './whatsapp/interface';
 import { LinkedinAdapter } from './linkedin/interface';
@@ -71,18 +70,6 @@ class Registry {
       throw new Error('OCR adapter not registered');
     }
     return this._ocr;
-  }
-
-  private _transcription?: TranscriptionAdapter;
-  set transcription(transcriptionAdapter: TranscriptionAdapter) {
-    this._transcription = transcriptionAdapter;
-  }
-
-  get transcription() {
-    if (!this._transcription) {
-      throw new Error('Transcription adapter not registered');
-    }
-    return this._transcription;
   }
 
   private _linkedin?: LinkedinAdapter | undefined;

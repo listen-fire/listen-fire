@@ -834,8 +834,8 @@ pnpm dev:inspect slack       # → "Telegram update: … quarterly numbers look 
 Under the hood: the Update's `voice` parses to an attachment (`parseTelegramEvents`
 → `normalizeMessage`), the attachment's `File` field mints a self-retrieving
 FileRef (two-leg Bot API download against fake-channels), `file_text.ts`
-classifies `audio/ogg` → buffers (24MB cap) → `services.transcription`
-(whisper-1, verbose_json) → the transcript joins the extraction source text and
+classifies `audio/ogg` → buffers (24MB cap) → `transcribe('whisper-1', …)`
+(wherever `MODEL_MAP` sends it; on OpenAI, verbose_json) → the transcript joins the extraction source text and
 the duration is metered off the ambient cost meter. `--voice-file <path>`
 substitutes your own audio.
 

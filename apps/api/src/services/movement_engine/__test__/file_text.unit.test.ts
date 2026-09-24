@@ -1,7 +1,12 @@
 // The FileRef → text seam's AUDIO kind: classification, transcription via
-// services.transcription, the duration-based meter report, and the size guard.
+// the transcription capability, the duration-based meter report, and the size guard.
 // streamFileRef + RawTextService are mocked — this suite proves file_text.ts
 // itself (the other kinds are covered one level up in extraction-file tests).
+
+const transcribeMock = jest.fn();
+jest.mock('../../../lib/models/transcription', () => ({
+  transcribe: (...args: unknown[]) => transcribeMock(...args),
+}));
 
 const streamFileRefMock = jest.fn();
 jest.mock('../../translation_graph/engine/files/retrieve', () => ({
@@ -35,9 +40,7 @@ import { services } from '../../../adapters/registry';
 import { LlmUsageContext } from '../../../lib/llm_usage';
 import { logger } from '../../logger';
 import type { FileRef } from '../../translation_graph/adapter';
-import type { TranscriptionAdapter } from '../../../adapters/transcription/interface';
 
-const transcribeMock = jest.fn();
 const ocrMock = jest.fn();
 
 function audioRef(overrides: Partial<{ name: string; contentType: string; size: number }> = {}): FileRef {
@@ -57,7 +60,6 @@ function resolvedAudio(bytes = 'fake-audio-bytes') {
 beforeEach(() => {
   jest.clearAllMocks();
   delete process.env.MAX_TRANSCRIPTION_BYTES;
-  services.transcription = { transcribe: transcribeMock } as TranscriptionAdapter;
   services.ocr = { extractPdf: ocrMock };
   streamFileRefMock.mockResolvedValue(resolvedAudio());
   transcribeMock.mockResolvedValue({ text: 'hello from the voice note', durationSeconds: 2.4 });
@@ -77,9 +79,11 @@ describe('audio classification → transcription → raw text', () => {
   ])('transcribes when classified by %s', async (_label, over) => {
     const resolve = makeFileTextResolver();
     const result = await resolve(audioRef(over));
-    expect(transcribeMock).toHaveBeenCalledWith(expect.any(Buffer), {
+    expect(transcribeMock).toHaveBeenCalledWith('whisper-1', {
+      audio: expect.any(Buffer),
       name: over.name,
       contentType: over.contentType || undefined,
+      label: 'file_transcription',
     });
     expect(getOrCreateRawTextIdMock).toHaveBeenCalledWith('hello from the voice note');
     expect(result).toEqual({ text: 'hello from the voice note', rawTextId: 'rt-audio-1' });
@@ -88,12 +92,12 @@ describe('audio classification → transcription → raw text', () => {
   it('hands the resolved bytes to the transcriber', async () => {
     const resolve = makeFileTextResolver();
     await resolve(audioRef());
-    const buffer = transcribeMock.mock.calls[0][0] as Buffer;
-    expect(buffer.toString()).toBe('fake-audio-bytes');
+    const [, { audio }] = transcribeMock.mock.calls[0];
+    expect(String(audio)).toBe('fake-audio-bytes');
   });
 
   it('reports an empty transcript as unreadable rather than as nothing at all', async () => {
-    transcribeMock.mockResolvedValue(null);
+    transcribeMock.mockResolvedValue({ text: '   ' });
     const resolve = makeFileTextResolver();
     const result = await new LlmUsageContext({ teamId: 'team-1' }).runAsync(async () =>
       resolve(audioRef()),
