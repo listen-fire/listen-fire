@@ -3,11 +3,11 @@
 // `findLinkedIn`/`findTwitter` aren't under test here (they're the same
 // regardless of provider); only `.search()`, which is where the provider
 // switch and the Bright Data request/response live. `lib/prompts` and
-// `lib/openai` are mocked purely to keep the module import cheap — nothing
+// `lib/anthropic` are mocked purely to keep the module import cheap — nothing
 // under test touches them.
 
 jest.mock('../../lib/prompts', () => ({ Prompt: { matchSearchResult: jest.fn() } }));
-jest.mock('../../lib/openai', () => ({ openAiChat: jest.fn() }));
+jest.mock('../../lib/anthropic', () => ({ anthropicChat: jest.fn() }));
 jest.mock('../../lib/web_search', () => ({
   webSearch: jest.fn(),
   isAvailable: () => false,

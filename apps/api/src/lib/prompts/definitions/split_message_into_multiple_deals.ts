@@ -32,7 +32,7 @@ const splitMessageIntoMultipleDealsDef = promptDef({
     },
   ],
   validator: z.array(z.string()),
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 
 export { splitMessageIntoMultipleDealsDef };

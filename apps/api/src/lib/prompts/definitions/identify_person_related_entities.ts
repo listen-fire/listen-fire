@@ -45,7 +45,7 @@ Your response will be parsed as JSON, so the entire response must be valid JSON 
       range: z.array(z.number()),
     }),
   ),
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 
 export { identifyPersonRelatedEntitiesDef };

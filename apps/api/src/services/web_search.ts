@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { SECOND } from '../constants';
 import { Prompt } from '../lib/prompts';
-import { openAiChat } from '../lib/openai';
+import { anthropicChat } from '../lib/anthropic';
 import { getEnvVar } from '../lib/utils/environment';
 import { neverAsAny } from '../lib/utils/types';
 // Tavily is a legacy-only supplementary search (no DPA) — gated per-caller via
@@ -211,25 +211,16 @@ class WebSearch {
     const query = `site:linkedin.com/in ${name}`;
 
     const oldCompanies = description
-      ? await openAiChat(
-          [
-            {
-              role: 'system',
-              content: `Your function is to output a company that someone used to work at.
+      ? await anthropicChat({
+          model: 'claude-haiku-4-5-20251001',
+          label: 'linkedin_previous_companies',
+          system: `Your function is to output a company that someone used to work at.
       The input is a terse summary of someone's experience.
       Output a vbar-separated list of companies this person has worked at (e.g. "ex Facebook" -> "Facebook"). If there is one company, output just that company.
       Another example might be "ex Facebook, used to work at Google" -> "Facebook | Google".
       If you are not sure or there's not enough information, respond with "not sure".`,
-            },
-            {
-              role: 'user',
-              content: description,
-            },
-          ],
-          {
-            model: 'gpt-5-nano',
-          },
-        ).then((response) =>
+          userMessage: description,
+        }).then((response) =>
           response.toLowerCase().replace(/"/g, '') === 'not sure' ? null : response,
         )
       : null;

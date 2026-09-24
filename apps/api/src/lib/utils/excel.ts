@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import ExcelJS from 'exceljs';
 import { Parser as FormulaParser } from 'hot-formula-parser';
 
-import { openAiChat } from '../openai';
+import { anthropicChat } from '../anthropic';
 
 // Raw cell value type
 type CellValue = string | number | boolean | null;
@@ -640,14 +640,13 @@ async function identifySemanticBlocks(grid: Grid): Promise<SemanticBlock[]> {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const temperature = TEMPERATURES[attempt] ?? 0.5;
-      const response = await openAiChat(
-        [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
-        ],
-        { model: 'gpt-4.1', temperature },
-        'excel-semantic-analysis',
-      );
+      const response = await anthropicChat({
+        model: 'claude-sonnet-5',
+        temperature,
+        system: SYSTEM_PROMPT,
+        userMessage: userPrompt,
+        label: 'excel-semantic-analysis',
+      });
 
       const blocks = parseJsonResponse(response);
 

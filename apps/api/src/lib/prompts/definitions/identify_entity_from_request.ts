@@ -78,7 +78,7 @@ Bad description:
   ],
   fallback: null,
   validator: identifiedEntity,
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 
 export { identifyEntityFromRequestDef };

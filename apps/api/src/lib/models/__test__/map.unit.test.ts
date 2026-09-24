@@ -28,8 +28,8 @@ describe('parsing MODEL_MAP', () => {
   });
 
   it('keeps everything after the first slash as the wire model', () => {
-    const map = parseModelMap(mapOf({ 'gpt-4.1': 'gemini/publishers/google/gemini-3.8-flash' }));
-    expect(map.get('gpt-4.1')).toEqual({
+    const map = parseModelMap(mapOf({ 'claude-haiku-4-5': 'gemini/publishers/google/gemini-3.8-flash' }));
+    expect(map.get('claude-haiku-4-5')).toEqual({
       provider: 'gemini',
       wireModel: 'publishers/google/gemini-3.8-flash',
     });
@@ -57,20 +57,20 @@ describe('parsing MODEL_MAP', () => {
   });
 
   it('refuses an uppercase provider rather than quietly not matching it', () => {
-    expect(() => parseModelMap(mapOf({ 'gpt-4.1': 'Gemini/gemini-3.8-flash' }))).toThrow(
-      /MODEL_MAP\["gpt-4.1"\]/,
+    expect(() => parseModelMap(mapOf({ 'claude-haiku-4-5': 'Gemini/gemini-3.8-flash' }))).toThrow(
+      /MODEL_MAP\["claude-haiku-4-5"\]/,
     );
   });
 
   it('refuses whitespace anywhere in the value', () => {
     for (const value of ['gemini/gemini-3.8-flash ', ' gemini/gemini-3.8-flash', 'gemini/ x']) {
-      expect(() => parseModelMap(mapOf({ 'gpt-4.1': value }))).toThrow(/MODEL_MAP\["gpt-4.1"\]/);
+      expect(() => parseModelMap(mapOf({ 'claude-haiku-4-5': value }))).toThrow(/MODEL_MAP\["claude-haiku-4-5"\]/);
     }
   });
 
   it('refuses a value with no wire model', () => {
-    expect(() => parseModelMap(mapOf({ 'gpt-4.1': 'gemini/' }))).toThrow(/MODEL_MAP\["gpt-4.1"\]/);
-    expect(() => parseModelMap(mapOf({ 'gpt-4.1': 'gemini' }))).toThrow(/MODEL_MAP\["gpt-4.1"\]/);
+    expect(() => parseModelMap(mapOf({ 'claude-haiku-4-5': 'gemini/' }))).toThrow(/MODEL_MAP\["claude-haiku-4-5"\]/);
+    expect(() => parseModelMap(mapOf({ 'claude-haiku-4-5': 'gemini' }))).toThrow(/MODEL_MAP\["claude-haiku-4-5"\]/);
   });
 });
 
@@ -95,10 +95,12 @@ describe('resolving a name', () => {
   });
 
   it('reads a changed map rather than a remembered one', () => {
-    expect(resolveModel('gpt-4.1', { MODEL_MAP: mapOf({ 'gpt-4.1': 'gemini/g' }) }).provider).toBe(
-      'gemini',
-    );
-    expect(resolveModel('gpt-4.1', {}).provider).toBe('openai');
+    expect(
+      resolveModel('text-embedding-3-small', {
+        MODEL_MAP: mapOf({ 'text-embedding-3-small': 'gemini/g' }),
+      }).provider,
+    ).toBe('gemini');
+    expect(resolveModel('text-embedding-3-small', {}).provider).toBe('openai');
   });
 });
 
@@ -156,8 +158,8 @@ describe('boot validation', () => {
 
   it('refuses an unknown provider', () => {
     expect(() =>
-      assertModelMapConfigured({ MODEL_MAP: mapOf({ 'gpt-5': 'azure/gpt-5' }) }),
-    ).toThrow(/MODEL_MAP\["gpt-5"\]/);
+      assertModelMapConfigured({ MODEL_MAP: mapOf({ 'claude-opus-5': 'azure/claude-opus-5' }) }),
+    ).toThrow(/MODEL_MAP\["claude-opus-5"\]/);
   });
 
   it('refuses a provider that does not serve the capability', () => {
@@ -177,7 +179,7 @@ describe('boot validation', () => {
       assertModelMapConfigured({ MODEL_MAP: mapOf({ 'claude-sonnet-5': 'openai/gpt-5' }) }),
     ).toThrow(/set OPENAI_API_KEY/);
     expect(() =>
-      assertModelMapConfigured({ MODEL_MAP: mapOf({ 'gpt-5': 'anthropic/claude-sonnet-5' }) }),
+      assertModelMapConfigured({ MODEL_MAP: mapOf({ 'claude-opus-5': 'anthropic/claude-opus-5' }) }),
     ).toThrow(/set ANTHROPIC_API_KEY/);
   });
 });

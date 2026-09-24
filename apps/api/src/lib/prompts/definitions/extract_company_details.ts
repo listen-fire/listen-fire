@@ -53,6 +53,6 @@ Your response will be parsed as JSON, so the entire response must be valid JSON 
     city: null,
     themes: null,
   },
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 export { extractCompanyDetailsDef };

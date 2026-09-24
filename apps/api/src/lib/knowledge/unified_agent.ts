@@ -33,8 +33,6 @@ import {
   type TurnEvent,
 } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
-import { openAIResponses } from '../openai';
-import { resolveModel } from '../models/map';
 import type { ModelName } from '../models/registry';
 import { currentContext } from '../../services/context';
 import { logger } from '../../services/logger';
@@ -1414,9 +1412,6 @@ export async function runUnifiedAgent(
       const offers: CredentialConnectOffer[] = [];
       const { defs, impls } = buildScopedTools({ scopes, teamId, conversationId, pageContext, emitUpdate, trace, offers, showMode });
       const systemBlocks = await buildSystemBlocks({ teamId, scopes, funnelContext, showMode });
-      // Flattened form for the OpenAI path (no block-level cache
-      // markers there) — same content, same order.
-      const systemPrompt = systemBlocks.map((b) => b.text).join('\n\n');
 
       const allToolDefs: any[] = [...defs, ...additionalToolDefs];
       const allToolImpls = wrapMutatingTools(
@@ -1430,50 +1425,24 @@ export async function runUnifiedAgent(
         }
       };
 
-      const historyInput = (conversationHistory ?? []).map((msg) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      }));
-
       // Opus, deliberately. This agent reads and mutates the user's real
       // data and authors automations off it — the cost of a wrong query or a
       // fabricated answer is high, so we don't hand the reasoning loop to a
       // cheaper model. (Supersedes the 2026-06-11 "Sonnet composes Cypher
       // unaided" call: capability was never the question here; trust is.)
-      // The Responses loop stays reachable only for a deployment whose model map
-      // sends this agent's model to OpenAI; every other provider answers through
-      // the Claude tool loop.
-      const agentModel = resolveModel(unifiedAgentCall(options.modelUnderTest).model);
-      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
-
-      const rawResult =
-        provider === 'anthropic'
-          ? await anthropicToolLoop(
-              {
-                ...unifiedAgentCall(options.modelUnderTest),
-                maxTurns: 50,
-                system: systemBlocks,
-                userMessage: message,
-                conversationHistory,
-                tools: allToolDefs,
-                onTurn,
-                label: 'unified_agent',
-              },
-              allToolImpls,
-            )
-          : await openAIResponses(
-              {
-                model: agentModel.wireModel,
-                input: [
-                  { role: 'system', content: systemPrompt },
-                  ...historyInput,
-                  ...(message ? [{ role: 'user' as const, content: message }] : []),
-                ],
-                tools: allToolDefs,
-              },
-              allToolImpls,
-              { label: 'unified_agent' },
-            );
+      const rawResult = await anthropicToolLoop(
+        {
+          ...unifiedAgentCall(options.modelUnderTest),
+          maxTurns: 50,
+          system: systemBlocks,
+          userMessage: message,
+          conversationHistory,
+          tools: allToolDefs,
+          onTurn,
+          label: 'unified_agent',
+        },
+        allToolImpls,
+      );
 
       const validated = AgentResponseSchema.parse(rawResult);
       let text =
@@ -1503,39 +1472,22 @@ export async function runUnifiedAgent(
         // A capped, truncated, or otherwise failed correction loop must never
         // replace a good reply with an error — the uncorrected text stands.
         try {
-        const correctedResult =
-          provider === 'anthropic'
-            ? await anthropicToolLoop(
-                {
-                  ...unifiedAgentCall(options.modelUnderTest),
-                  system: systemBlocks,
-                  userMessage: correctionMessage,
-                  conversationHistory: [
-                    ...(conversationHistory ?? []),
-                    { role: 'user', content: message },
-                    { role: 'assistant', content: text },
-                  ],
-                  tools: allToolDefs,
-                  maxTurns: 6,
-                  label: 'unified_agent_correction',
-                },
-                allToolImpls,
-              )
-            : await openAIResponses(
-                {
-                  model: agentModel.wireModel,
-                  input: [
-                    { role: 'system', content: systemPrompt },
-                    ...historyInput,
-                    ...(message ? [{ role: 'user' as const, content: message }] : []),
-                    { role: 'assistant', content: text },
-                    { role: 'user', content: correctionMessage },
-                  ],
-                  tools: allToolDefs,
-                },
-                allToolImpls,
-                { label: 'unified_agent_correction' },
-              );
+        const correctedResult = await anthropicToolLoop(
+          {
+            ...unifiedAgentCall(options.modelUnderTest),
+            system: systemBlocks,
+            userMessage: correctionMessage,
+            conversationHistory: [
+              ...(conversationHistory ?? []),
+              { role: 'user', content: message },
+              { role: 'assistant', content: text },
+            ],
+            tools: allToolDefs,
+            maxTurns: 6,
+            label: 'unified_agent_correction',
+          },
+          allToolImpls,
+        );
 
         const correctedText = AgentResponseSchema.parse(correctedResult)
           .map((item) => item.text || item.content)

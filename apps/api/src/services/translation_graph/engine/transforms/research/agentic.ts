@@ -44,6 +44,7 @@ import { runFields } from '../../../../../lib/llm_usage';
 import { resolveModel } from '../../../../../lib/models/map';
 import { logger } from '../../../../logger';
 import { missingBrightDataVars, ScraperService } from '../../../../scraper';
+import { WebSearchService } from '../../../../web_search';
 import { describeError } from '../fetch_resource';
 import { profileSlug } from '../linkedin_identity';
 import { runSearch } from '../search_hygiene';
@@ -62,7 +63,7 @@ import {
   USAGE_NOT_MEASURED,
 } from './contract';
 import { describeProfile, readProfile } from './profile_read';
-import type { PageFetchResult, WebToolEvent } from '../../../../../lib/anthropic';
+import type { PageFetchResult, WebSearchResult, WebToolEvent } from '../../../../../lib/anthropic';
 import type { SearchHit } from '../search_hygiene';
 import type { ProfileRead } from './profile_read';
 import type {
@@ -282,6 +283,22 @@ async function scrapePage(url: string): Promise<PageFetchResult> {
   }
 }
 
+/** The model's own searches, where the provider hosts none: the deployment's
+ *  web search service, the same index the constrained engine searches. A
+ *  failure is reported to the model rather than read as no results. */
+async function searchWeb(query: string): Promise<WebSearchResult> {
+  try {
+    const found = await WebSearchService.search(query);
+    return {
+      hits: (found.items ?? []).flatMap((item) =>
+        item.link ? [{ url: item.link, title: item.title ?? '', snippet: item.snippet ?? '' }] : [],
+      ),
+    };
+  } catch (error) {
+    return { error: describeError(error) };
+  }
+}
+
 /** An entry that cannot be researched because this deployment's page fetcher
  *  is not configured. Named on the record rather than discovered one failed
  *  read at a time, and refused before anything is spent. */
@@ -431,6 +448,7 @@ async function researchWithin(
       maxFetches,
       pageReader,
       fetchPage: scrapePage,
+      searchWeb,
       signal: deadline.signal,
       label: 'plugin_research_agentic',
     }),

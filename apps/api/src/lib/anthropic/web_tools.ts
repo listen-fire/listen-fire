@@ -1,10 +1,11 @@
 // The model's web tools: what a request declares, and how the reply reads back.
 //
-// Search always runs on Anthropic's infrastructure: the request declares it,
-// the model uses it inside one turn, and the reply carries a `server_tool_use`
-// block per request plus a result block per answer. A page read runs there too
-// where the provider serves it, and otherwise is an ordinary client tool the web
-// chat loop answers with a fetcher the caller supplied. Nothing here executes
+// On the two Claude doors search runs on the vendor's infrastructure: the
+// request declares it, the model uses it inside one turn, and the reply carries
+// a `server_tool_use` block per request plus a result block per answer. A page
+// read runs there too where the provider serves it. Whatever the provider does
+// not run itself is an ordinary client tool of the same name, which the web
+// chat loop answers with a handler the caller supplied. Nothing here executes
 // anything — this file declares the tools and reads the blocks; the loop next
 // door does the work.
 //
@@ -84,22 +85,61 @@ export function defaultPageReader(provider: Provider): PageReader {
  *  for one reads the same to the other. */
 export const WEB_FETCH_TOOL_NAME = 'web_fetch';
 
-/** Hosted search, in whichever version this provider serves. Both read back
- *  through identical blocks, so only the declaration differs. Only the two
+/** One name for web search whichever side runs it, so a prompt written for
+ *  one reads the same to the other. */
+export const WEB_SEARCH_TOOL_NAME = 'web_search';
+
+/** Whether the model can search the web itself on this provider. Only the two
  *  Claude doors run server tools at all; a translator has nothing to run one
- *  on, and is refused here rather than handed a tool it would silently drop. */
-function hostedSearchTool(provider: Provider, maxSearches: number): Anthropic.ToolUnion {
+ *  on, and would drop a server tool silently rather than refuse it. */
+export function hasHostedWebSearch(provider: Provider): boolean {
   switch (provider) {
     case 'anthropic':
-      return { type: WEB_SEARCH_TOOL_TYPE, name: 'web_search', max_uses: maxSearches };
     case 'vertex':
-      return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: 'web_search', max_uses: maxSearches };
+      return true;
     case 'openai':
     case 'gemini':
-      throw new Error(`Hosted web search does not exist on the ${provider} provider.`);
+      return false;
     default:
       return neverAsAny(provider);
   }
+}
+
+/** Search as this provider can run it: hosted, in whichever version the
+ *  provider serves (both read back through identical blocks, so only the
+ *  declaration differs), or the client-side tool the loop answers. */
+function searchTool(provider: Provider, maxSearches: number): Anthropic.ToolUnion {
+  switch (provider) {
+    case 'anthropic':
+      return { type: WEB_SEARCH_TOOL_TYPE, name: WEB_SEARCH_TOOL_NAME, max_uses: maxSearches };
+    case 'vertex':
+      return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: WEB_SEARCH_TOOL_NAME, max_uses: maxSearches };
+    case 'openai':
+    case 'gemini':
+      return clientWebSearchTool({ maxSearches });
+    default:
+      return neverAsAny(provider);
+  }
+}
+
+/** The client-side search, declared as an ordinary tool. Its budget is said out
+ *  loud for the same reason the client page reader's is: nothing on the server
+ *  enforces a `max_uses` for it. */
+function clientWebSearchTool(options: { maxSearches: number }): Anthropic.ToolUnion {
+  return {
+    name: WEB_SEARCH_TOOL_NAME,
+    description:
+      'Search the web and get back a list of results, each with its title, address and a short ' +
+      `excerpt. Search at most ${options.maxSearches} time(s) in this conversation. A search ` +
+      'that fails comes back as an error; rephrase rather than repeat it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to search for, as you would type it.' },
+      },
+      required: ['query'],
+    },
+  };
 }
 
 /** The client-side page reader, declared as an ordinary tool: the model asks,
@@ -126,8 +166,9 @@ function clientWebFetchTool(options: { maxFetches: number }): Anthropic.ToolUnio
 }
 
 /**
- * The tools one web chat request declares: hosted search, plus whichever page
- * reader the caller asked for. Both kinds travel in the same array.
+ * The tools one web chat request declares: search as the provider can run it,
+ * plus whichever page reader the caller asked for. Server and client tools
+ * travel in the same array.
  *
  * Vertex runs web search in its first version and does not run hosted web fetch
  * at all — a request that declares one is rejected — so asking for the hosted
@@ -141,7 +182,7 @@ export function webChatTools(options: {
   maxFetchContentTokens: number;
 }): Anthropic.ToolUnion[] {
   const { provider, pageReader, maxSearches, maxFetches, maxFetchContentTokens } = options;
-  const search = hostedSearchTool(provider, maxSearches);
+  const search = searchTool(provider, maxSearches);
   switch (pageReader) {
     case 'hosted':
       if (!hasHostedWebFetch(provider)) {
@@ -328,9 +369,9 @@ export type PageFetchResult = { text: string } | { error: string };
  *  what a scraper is. */
 export type PageFetcher = (url: string) => Promise<PageFetchResult>;
 
-/** The error code a read refused for want of budget carries. Anthropic's own
- *  hosted reader uses this exact code when a turn exceeds `max_uses`, so a
- *  trace reads the same either way. */
+/** The error code a read or search refused for want of budget carries.
+ *  Anthropic's own hosted tools use this exact code when a turn exceeds
+ *  `max_uses`, so a trace reads the same either way. */
 export const FETCH_BUDGET_SPENT = 'max_uses_exceeded';
 
 /** How much of a page reaches the model, in characters, for a ceiling the
@@ -402,13 +443,101 @@ export function pageFetchOutcome(options: {
   return { event: { kind: 'fetch_failed', url, errorCode }, told: toldAbout(errorCode), isError: true };
 }
 
+// ── The client-side search ────────────────────────────────────────────────
+//
+// The same arrangement as the page reader above: the model asks through an
+// ordinary tool, the loop answers with a handler the caller supplied, and the
+// trace records the same `search` / `search_failed` events a hosted search
+// produces.
+
+/** One result of our own search. */
+export interface SearchHit {
+  url: string;
+  title: string;
+  snippet: string;
+}
+
+/** What our own search came back with. A failure is a value for the same
+ *  reason a page read's is: "the search broke" and "the search found nothing"
+ *  are different answers, and the model has to be told which. */
+export type WebSearchResult = { hits: SearchHit[] } | { error: string };
+
+/** Runs one search. The caller supplies it, so `lib/anthropic` never learns
+ *  which search service a deployment has. */
+export type WebSearcher = (query: string) => Promise<WebSearchResult>;
+
+/** How many results one search hands the model. A results page is ten; more
+ *  than that is scrolling, and the context pays for every line. */
+const SEARCH_RESULTS_TOLD = 10;
+
+/** One client-side search the model asked for. `query` is null when it sent
+ *  none, and is answered rather than dropped, as a page read is. */
+export interface SearchRequest {
+  id: string;
+  query: string | null;
+}
+
+/** The client-side searches in one assistant turn, in the order asked. */
+export function readSearchRequests(content: readonly unknown[]): SearchRequest[] {
+  return content.flatMap((block) => {
+    if (!isRecord(block) || block.type !== 'tool_use') return [];
+    if (block.name !== WEB_SEARCH_TOOL_NAME) return [];
+    const id = str(block.id);
+    if (!id) return [];
+    const input = isRecord(block.input) ? block.input : {};
+    return [{ id, query: str(input.query) }];
+  });
+}
+
+/** A failed search the model can act on. */
+function toldAboutSearch(errorCode: string): string {
+  return errorCode === FETCH_BUDGET_SPENT
+    ? 'Not searched: this conversation has spent its whole search budget. Answer with what you already have.'
+    : `Search failed: ${errorCode}. Rephrase it, or answer with what you have.`;
+}
+
+/**
+ * One client-side search, as the model is told it and as the trace records it
+ * — built together for the same reason a page read's are.
+ */
+export function searchOutcome(options: {
+  query: string | null;
+  result: WebSearchResult;
+}): { event: WebToolEvent; told: string; isError: boolean } {
+  const { query, result } = options;
+
+  if (query && 'hits' in result) {
+    const hits = result.hits.slice(0, SEARCH_RESULTS_TOLD);
+    const told = hits.length
+      ? hits.map((hit, i) => `${i + 1}. ${hit.title}\n   ${hit.url}\n   ${hit.snippet}`).join('\n')
+      : 'No results.';
+    return {
+      event: {
+        kind: 'search',
+        query,
+        results: hits.map((hit) => ({ url: hit.url, title: hit.title, pageAge: null })),
+      },
+      told,
+      isError: false,
+    };
+  }
+
+  const errorCode = 'error' in result ? shortReason(result.error) : 'no_query';
+  return {
+    event: { kind: 'search_failed', query, errorCode },
+    told: toldAboutSearch(errorCode),
+    isError: true,
+  };
+}
+
 /** How many server-tool requests Anthropic billed, as the reply reports them.
  *  Counted from the usage row rather than from the blocks: a request that
  *  produced no readable block was still made.
  *
- *  Only Anthropic's own tools appear here. A page read by our own fetcher is
- *  not a server tool use and is counted by the loop instead — so this number
- *  answers "what was billed", never "was a page read". */
+ *  Only Anthropic's own tools appear here. A page read or search answered by
+ *  our own handlers is not a server tool use and is counted by the loop
+ *  instead — so this number answers "what was billed", never "was a page
+ *  read" or "was the web searched". */
 export function readServerToolCounts(usage: unknown): { searches: number; fetches: number } {
   const server = isRecord(usage) ? usage.server_tool_use : null;
   const count = (value: unknown) => (typeof value === 'number' ? value : 0);

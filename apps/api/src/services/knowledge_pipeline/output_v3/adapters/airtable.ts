@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { AirtableAPIClient } from '../../../../adapters/airtable/apiClient';
-import { openAiChat } from '../../../../lib/openai';
+import { anthropicChat } from '../../../../lib/anthropic';
 import { logger } from '../../../logger';
 import type { V3Adapter, V3AdapterExecuteInput, AdapterResult } from './types';
 import { StaleLinkedObjectError } from './types';
@@ -120,18 +120,15 @@ async function fuzzySearchRecord(
 
   if (candidateEntries.length === 0) return null;
 
-  const response = await openAiChat([
-    {
-      role: 'system',
-      content: `You match a query name against a list of candidate record names. Return the matching record's id ONLY if you are confident it refers to the same entity. Common variations to accept: abbreviations, suffixes like "Inc"/"Ltd"/"Networks", minor spelling differences. Prefer returning null over a wrong match.
+  const response = await anthropicChat({
+    model: 'claude-sonnet-5',
+    temperature: 0,
+    label: 'airtable_linked_record_match',
+    system: `You match a query name against a list of candidate record names. Return the matching record's id ONLY if you are confident it refers to the same entity. Common variations to accept: abbreviations, suffixes like "Inc"/"Ltd"/"Networks", minor spelling differences. Prefer returning null over a wrong match.
 
 Output: Strictly JSON: either a string (the id) or null. No extra text.`,
-    },
-    {
-      role: 'user',
-      content: JSON.stringify({ query, candidates: candidateEntries }),
-    },
-  ]);
+    userMessage: JSON.stringify({ query, candidates: candidateEntries }),
+  });
 
   const matchedId = z.string().nullable().parse(JSON.parse(response));
   if (!matchedId) return null;

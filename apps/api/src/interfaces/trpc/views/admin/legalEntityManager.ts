@@ -4,7 +4,7 @@ import { getQb, jsonbAgg, getValuationsQb } from '../../../../lib/kysely';
 import { trpc } from '../../trpc';
 import { currentContext } from '../../../../services/context';
 import { ensureAdmin } from '../../../../lib/utils/admin';
-import { openAiChatStructured } from '../../../../lib/openai';
+import { anthropicChatStructured } from '../../../../lib/anthropic';
 import { TeamId } from '../../../../generated/kysely/core/Team';
 import { LegalEntityId } from '../../../../generated/kysely/valuations/LegalEntity';
 
@@ -230,11 +230,10 @@ const legalEntityManagerRouter = (procedure: typeof trpc.procedure) => {
 };
 
 async function getNameVariants(entityName: string): Promise<string[]> {
-  const response = await openAiChatStructured(
-    [
-      {
-        role: 'system',
-        content: `Given the an entity name , generate a list of variations that could be used to refer to the entity in an informal or colloquial context. 
+  const { variations } = await anthropicChatStructured({
+    model: 'claude-haiku-4-5-20251001',
+    label: 'legal_entity_name_variants',
+    system: `Given the an entity name , generate a list of variations that could be used to refer to the entity in an informal or colloquial context. 
         Avoid variations that are too generic or unrelated to the entity's name. Try variations without the numbering, such as "II" or "2", and focus on the core name.
 
         EXAMPLE: 
@@ -251,25 +250,13 @@ async function getNameVariants(entityName: string): Promise<string[]> {
           "468 Capital II KG",
           "468 Capital II GmbH",
           "468CapitalII",
-          "468Cap2",
-
-        CRITICAL: Return the results as a JSON object the following structure:
-        {
-          "variations": [
-            "Variation 1",
-            "Variation 2",
-            "Variation 3",
-            ...
-          ]
-        }`,
-      },
-      { role: 'user', content: entityName },
-    ],
-    { model: 'gpt-5-mini' },
-  );
-
-  // Parse the JSON array from OpenAI's response
-  return JSON.parse(response).variations || [];
+          "468Cap2",`,
+    userMessage: entityName,
+    schema: z.object({ variations: z.array(z.string()) }),
+    toolName: 'name_variations',
+    toolDescription: 'The informal names the entity might go by.',
+  });
+  return variations;
 }
 
 export { legalEntityManagerRouter };

@@ -4,16 +4,15 @@
  * Lets a test drive an agent runner (runSetupAgent, runTranslationAgent,
  * etc.) deterministically by:
  *
- *  1. Mocking the underlying LLM call (`anthropicToolLoop` or
- *     `openAIResponses`) with a scripted sequence of turns.
+ *  1. Mocking the underlying LLM call (`anthropicToolLoop`) with a
+ *     scripted sequence of turns.
  *  2. Capturing every tool the LLM "calls" during the loop, with the
  *     args, in order.
  *  3. Asserting both the final assistant text and the tool-call
  *     sequence after the runner returns.
  *
- * The harness is provider-agnostic — tests script "turns" at a high
- * level and the harness installs the appropriate fake for whichever
- * provider the agent is running under.
+ * Tests script "turns" at a high level; the model map decides which
+ * vendor answers below the tool loop, so the loop is the one fake needed.
  *
  * Usage (see setup_agent.unit.test.ts for the full pattern):
  *
@@ -51,7 +50,7 @@ export interface ScriptedTurn {
    * provider's `onTurn` callback with this content as the
    * `extendedThinking` field so the runner accumulates it the same
    * way it would from a real Anthropic response with `thinking:
-   * { type: 'enabled' }`. No effect on the OpenAI path.
+   * { type: 'enabled' }`.
    *
    * Added by M2 (agent-memory-persistence) so the runner's thoughts-
    * persistence path can be tested deterministically.
@@ -138,8 +137,7 @@ export function createAgentHarness(): AgentHarness {
 }
 
 /**
- * The fake `anthropicToolLoop` / `openAIResponses` implementations. Both
- * walk the scripted turn list, invoke any tool implementations the
+ * The fake `anthropicToolLoop`. It walks the scripted turn list, invoke any tool implementations the
  * runner passed in (so handoff signals propagate naturally), and
  * return the final text turn's content.
  *
@@ -170,7 +168,6 @@ export function makeFakeProvider(harness: AgentHarness) {
    * thinking + tool names). The fake fires it once per scripted turn
    * with a minimal synthetic event so tests of the runner's thoughts-
    * persistence path see the same shape they would in production.
-   * Pass null on the OpenAI path (no equivalent callback).
    */
   const drive = async (
     toolImpls: Record<string, (args: any) => Promise<unknown>>,
@@ -240,9 +237,5 @@ export function makeFakeProvider(harness: AgentHarness) {
       params: { onTurn?: (event: any) => void } | unknown,
       toolImpls: Record<string, (args: any) => Promise<unknown>> = {},
     ) => drive(toolImpls, (params as { onTurn?: (event: any) => void })?.onTurn ?? null),
-    openAIResponses: async (
-      _body: unknown,
-      toolImpls: Record<string, (args: any) => Promise<unknown>> = {},
-    ) => drive(toolImpls, null),
   };
 }

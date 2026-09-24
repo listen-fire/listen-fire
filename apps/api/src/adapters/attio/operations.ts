@@ -3,7 +3,7 @@ import { formatISO, sub } from 'date-fns';
 
 import { AttioAPIClient, AttioRecord } from './apiClient';
 import { AttioAttribute, attributeConfigValidator } from './interface';
-import { openAiChat } from '../../lib/openai';
+import { anthropicChat } from '../../lib/anthropic';
 import { parseJson } from '../../lib/utils/parse_json';
 import { logger } from '../../services/logger';
 import { nullishBoolean } from '../../lib/utils/nullish_boolean';
@@ -144,10 +144,10 @@ export class AttioOperations {
       }
     }
 
-    const chatResponse = await openAiChat([
-      {
-        role: 'system',
-        content: `You are an intelligent function in a data extraction system.
+    const chatResponse = await anthropicChat({
+      model: 'claude-sonnet-5',
+      temperature: 0,
+      system: `You are an intelligent function in a data extraction system.
 
 You are given a list of fields. The user will send a document to extract data from.
 
@@ -173,12 +173,8 @@ For fields marked with multi=true, output an array of values instead of a single
 If you output a value for a field with options, the value must match one of the options exactly.
 
 Only return the JSON, nothing else. If you cannot evaluate a field, set its value to an empty string.`,
-      },
-      {
-        role: 'user',
-        content: userText,
-      },
-    ]);
+      userMessage: userText,
+    });
 
     const singleValue = z.union([z.number().transform(String), z.string()]);
     const fieldValidator = z.object({

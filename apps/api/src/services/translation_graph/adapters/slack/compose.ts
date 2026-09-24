@@ -83,15 +83,16 @@ export async function composeSlackMessage(args: {
   instructions: string;
   data: unknown[];
 }): Promise<string> {
-  // Lazy-require to dodge openai/index.ts's transitive Prisma dependency in
+  // Lazy-require to dodge the chat wrapper's transitive Prisma dependency in
   // unit tests (same reason as engine/expression.ts:callLLM).
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-  const { openAiChat } = require('../../../../lib/openai') as {
-    openAiChat: (messages: unknown) => Promise<string>;
-  };
-  const text = await openAiChat([
-    { role: 'system', content: SLACK_SYSTEM_PROMPT },
-    { role: 'user', content: buildUserMessage(args.instructions, args.data) },
-  ]);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { anthropicChat }: typeof import('../../../../lib/anthropic') = require('../../../../lib/anthropic');
+  const text = await anthropicChat({
+    model: 'claude-sonnet-5',
+    temperature: 0,
+    label: 'slack_message_compose',
+    system: SLACK_SYSTEM_PROMPT,
+    userMessage: buildUserMessage(args.instructions, args.data),
+  });
   return text.trim();
 }

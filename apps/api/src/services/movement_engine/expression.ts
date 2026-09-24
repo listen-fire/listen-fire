@@ -30,7 +30,7 @@
 // `llm` semantics (the author's prompt, or `String(promptExpression)`,
 // as ONE user message; the reply string is the value), routed through
 // the E2 `LlmClient` seam instead of the frozen path's hardwired
-// `openAiChat` — plus bare-name value-binding reads (`AI(company_prompt)`
+// chat call — plus bare-name value-binding reads (`AI(company_prompt)`
 // — the bridge parses a bare name as a `property` node) and in-memory
 // shape positions (the composition argument currency, see run.ts).
 // Everything still outside the slice raises a loud MOVENG_UNSUPPORTED

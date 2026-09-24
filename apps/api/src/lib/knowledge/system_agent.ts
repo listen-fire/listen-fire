@@ -2,8 +2,6 @@ import { z } from 'zod';
 
 import { anthropicToolLoop, type TurnEvent } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
-import { openAIResponses } from '../openai';
-import { resolveModel } from '../models/map';
 import { currentContext } from '../../services/context';
 import { mq } from '../message_queue';
 import type { AgentUpdate } from '../openai/types';
@@ -171,11 +169,6 @@ async function runSystemAgent(
         systemPrompt += `\n\n## MCP session constraints\n\nThis request is being served via MCP with a tight time budget. Be direct and concise — short answers, minimal formatting, no preamble. Prefer a single tool call over chained lookups when possible.`;
       }
 
-      // The Responses loop stays reachable only for a deployment whose model map
-      // sends this agent's model to OpenAI; every other provider answers through
-      // the Claude tool loop.
-      const agentModel = resolveModel('claude-sonnet-5');
-      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
       const wrappedTools = createWrappedTools(emitUpdate, teamId as TeamId);
 
       const allToolDefs: any[] = [...(toolDefinitions as any[]), ...additionalToolDefs];
@@ -187,40 +180,20 @@ async function runSystemAgent(
         }
       };
 
-      const historyInput = (conversationHistory ?? []).map((msg) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      }));
-
-      const rawResult =
-        provider === 'anthropic'
-          ? await anthropicToolLoop(
-              {
-                model: 'claude-sonnet-5',
-                max_output_tokens: 4096,
-                maxTurns: 50,
-                system: systemPrompt,
-                userMessage: message,
-                conversationHistory,
-                tools: allToolDefs,
-                onTurn,
-                label: 'system_agent',
-              },
-              allToolImpls,
-            )
-          : await openAIResponses(
-              {
-                model: agentModel.wireModel,
-                input: [
-                  { role: 'system', content: systemPrompt },
-                  ...historyInput,
-                  ...(message ? [{ role: 'user' as const, content: message }] : []),
-                ],
-                tools: allToolDefs,
-              },
-              allToolImpls,
-              { label: 'system_agent' },
-            );
+      const rawResult = await anthropicToolLoop(
+        {
+          model: 'claude-sonnet-5',
+          max_output_tokens: 4096,
+          maxTurns: 50,
+          system: systemPrompt,
+          userMessage: message,
+          conversationHistory,
+          tools: allToolDefs,
+          onTurn,
+          label: 'system_agent',
+        },
+        allToolImpls,
+      );
 
       const validated = AgentResponseSchema.parse(rawResult);
       const text =

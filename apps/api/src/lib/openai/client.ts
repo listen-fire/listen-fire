@@ -1,17 +1,16 @@
-// Which OpenAI-shaped client a call gets, and what Google will actually listen
-// to when the model map sends an OpenAI-shaped call to Gemini.
+// Which OpenAI-shaped client a call gets when the model map sends it to OpenAI
+// or to Gemini.
 //
 // Deliberately its own file rather than part of the wrapper next door:
 // everything here imports the environment, the vendor SDK and nothing else, so
-// the supported-parameter list can be asserted without dragging the queue, the
-// meter and the recording context in with them.
+// the client choice can be asserted without dragging the queue and the
+// recording context in with them.
 //
 // The Gemini branch here is Google's OpenAI-shaped endpoint, kept until the
 // native Gemini provider replaces it; which branch a call takes is the model
 // map's answer for the caller's registry name.
 
 import OpenAI from 'openai';
-import { z } from 'zod';
 
 import { isProd } from '../../constants';
 import { googleBearerTokens, googleModelRegion, googleServiceAccount } from '../google_cloud';
@@ -22,7 +21,7 @@ import { neverAsAny } from '../utils/types';
 
 /**
  * A client and the name to put on its wire, handed out together: the map
- * decides both, and `gpt-4.1` is a 404 at Google's door just as
+ * decides both, and `dall-e-3` is a 404 at Google's door just as
  * `google/gemini-3.8-flash` is at OpenAI's.
  */
 export interface OpenAiCall {
@@ -32,45 +31,6 @@ export interface OpenAiCall {
   /** Who served the call, for the usage ledger. */
   provider: 'openai' | 'google';
 }
-
-/**
- * The request parameters Google's OpenAI-shaped endpoint DOCUMENTS as supported
- * for Google models. Everything else it silently ignores rather than rejecting —
- * "If you pass any unsupported parameter, it is ignored" — which is why this list
- * exists at all: a request that quietly loses half its options looks exactly like
- * one that worked. The test beside this file is what checks our requests against
- * it; nothing at runtime reads it, because a parameter we send is a decision made
- * when the code was written, not when it runs.
- *
- * Verified 2026-09-17 against the "Supported parameters" table at
- * https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/migrate/openai/overview
- */
-export const GOOGLE_SUPPORTED_CHAT_PARAMS: ReadonlySet<string> = new Set([
-  'messages',
-  'model',
-  'detail',
-  'max_completion_tokens',
-  'modalities',
-  'max_tokens',
-  'n',
-  'frequency_penalty',
-  'presence_penalty',
-  'reasoning_effort',
-  'response_format',
-  'seed',
-  'stop',
-  'stream',
-  'temperature',
-  'top_p',
-  'tools',
-  'tool_choice',
-  'web_search_options',
-  'function_call',
-  'functions',
-  // The escape hatches for Gemini-only options. Documented on the same page.
-  'extra_body',
-  'extra_content',
-]);
 
 /**
  * Google's OpenAI-shaped endpoint. The `openapi` endpoint id is what Google
@@ -104,8 +64,7 @@ function directOrganization(env: NodeJS.ProcessEnv): string | undefined {
   return env.OPENAI_ORGANIZATION || undefined;
 }
 
-/** OpenAI's own API, for the calls that have no other door (the Responses
- *  API) as well as for every name the map leaves at home. */
+/** OpenAI's own API, for every name the map sends to openai or leaves at home. */
 export function directOpenAI(env: NodeJS.ProcessEnv = process.env): OpenAI {
   const organization = directOrganization(env);
   return (directClient ??= new OpenAI({
@@ -146,67 +105,5 @@ export function platformOpenAI(model: ModelName, env: NodeJS.ProcessEnv = proces
       );
     default:
       return neverAsAny(provider);
-  }
-}
-
-/**
- * Refuse a JSON schema Google cannot honour: "Fully recursive schemas are not
- * supported" on its `json_schema` response format, and an unsupported schema is
- * ignored rather than rejected — so the alternative to raising here is a reply
- * shaped by nothing at all.
- *
- * Detection is a cycle walk over the `$defs` graph the schema generator emits. A
- * plain `$ref` is not enough on its own: zod names a merely REUSED subschema the
- * same way, and refusing those would refuse schemas Google is happy with.
- */
-export function assertSchemaIsNotRecursive(schema: unknown, name: string): void {
-  const withDefs = z.object({ $defs: z.record(z.string(), z.unknown()) }).safeParse(schema);
-  if (!withDefs.success) return;
-
-  /** Every `#/$defs/X` this subtree points at, at any depth. */
-  const refsWithin = (node: unknown, found: Set<string>): Set<string> => {
-    if (Array.isArray(node)) {
-      for (const item of node) refsWithin(item, found);
-      return found;
-    }
-    if (typeof node !== 'object' || node === null) return found;
-    for (const [key, value] of Object.entries(node)) {
-      const target = key === '$ref' && typeof value === 'string' ? /^#\/\$defs\/(.+)$/.exec(value) : null;
-      if (target) found.add(target[1]);
-      else refsWithin(value, found);
-    }
-    return found;
-  };
-
-  const edges = new Map<string, Set<string>>();
-  for (const [defName, defSchema] of Object.entries(withDefs.data.$defs)) {
-    edges.set(defName, refsWithin(defSchema, new Set()));
-  }
-
-  const visiting = new Set<string>();
-  const settled = new Set<string>();
-  const reachesItself = (from: string): boolean => {
-    if (visiting.has(from)) return true;
-    if (settled.has(from)) return false;
-    visiting.add(from);
-    for (const next of edges.get(from) ?? []) {
-      if (reachesItself(next)) return true;
-    }
-    visiting.delete(from);
-    settled.add(from);
-    return false;
-  };
-
-  // Only the definitions can take part in a cycle — the root is not a `$defs`
-  // entry, so nothing can point back at it — but the cycle is only REACHED if
-  // something the request actually sends points into it.
-  for (const root of edges.keys()) {
-    if (reachesItself(root)) {
-      throw new Error(
-        `The JSON schema for "${name}" is recursive, and MODEL_MAP sends this call to gemini — ` +
-          "Google's OpenAI-shaped endpoint does not support fully recursive schemas and would " +
-          'ignore it rather than refuse it. Flatten the schema, or map the model to openai.',
-      );
-    }
   }
 }

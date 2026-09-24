@@ -3,8 +3,8 @@
 // with the same name in another test file at project typecheck time.
 export {};
 
-// Which OpenAI-shaped client a call gets, what the model is called once the map
-// sends it to Gemini, and which JSON schemas that endpoint can honour.
+// Which OpenAI-shaped client a call gets, and what the model is called once the
+// map sends it to Gemini.
 //
 // The vendor constructor is mocked: this is about which client is built, with
 // what, and nothing here reaches a network.
@@ -26,13 +26,10 @@ jest.mock('../../google_cloud', () => ({
   googleBearerTokens: (...args: unknown[]) => googleBearerTokens(...args),
 }));
 
-/** The OpenAI-shaped names sent to Gemini, as the retired Google route renamed
- *  them — now a worked example of the map rather than a table in code. */
+/** OpenAI-shaped names the map sends to Gemini. */
 const GEMINI_MAP = {
-  o3: 'gemini/gemini-3.1-pro-preview',
-  'gpt-5': 'gemini/gemini-3.1-pro-preview',
-  'gpt-4.1': 'gemini/gemini-3.8-flash',
-  'gpt-5-nano': 'gemini/gemini-3.8-flash',
+  'dall-e-3': 'gemini/gemini-3.8-flash-image',
+  'text-embedding-3-large': 'gemini/gemini-embedding-001',
 };
 
 const GOOGLE_ENV = {
@@ -63,19 +60,25 @@ beforeEach(() => {
 
 describe('the model name on the wire', () => {
   it('leaves every model alone where the map is silent', () => {
-    expect(load().platformOpenAI('gpt-4.1', DIRECT_ENV).wireModel).toBe('gpt-4.1');
+    expect(load().platformOpenAI('text-embedding-3-large', DIRECT_ENV).wireModel).toBe(
+      'text-embedding-3-large',
+    );
     expect(load().platformOpenAI('whisper-1', GOOGLE_ENV).wireModel).toBe('whisper-1');
   });
 
   it("sends a mapped name to Gemini under Google's prefixed spelling", () => {
-    expect(load().platformOpenAI('o3', GOOGLE_ENV).wireModel).toBe('google/gemini-3.1-pro-preview');
-    expect(load().platformOpenAI('gpt-4.1', GOOGLE_ENV).wireModel).toBe('google/gemini-3.8-flash');
+    expect(load().platformOpenAI('dall-e-3', GOOGLE_ENV).wireModel).toBe(
+      'google/gemini-3.8-flash-image',
+    );
+    expect(load().platformOpenAI('text-embedding-3-large', GOOGLE_ENV).wireModel).toBe(
+      'google/gemini-embedding-001',
+    );
   });
 
   it('refuses a name the map sends to a Claude door', () => {
     expect(() =>
-      load().platformOpenAI('gpt-4.1', {
-        MODEL_MAP: JSON.stringify({ 'gpt-4.1': 'anthropic/claude-sonnet-5' }),
+      load().platformOpenAI('whisper-1', {
+        MODEL_MAP: JSON.stringify({ 'whisper-1': 'anthropic/claude-sonnet-5' }),
       }),
     ).toThrow(/only openai and gemini serve/);
   });
@@ -83,7 +86,7 @@ describe('the model name on the wire', () => {
 
 describe('the platform client', () => {
   it('sends the configured organisation to OpenAI', () => {
-    const { provider } = load().platformOpenAI('gpt-4.1', {
+    const { provider } = load().platformOpenAI('text-embedding-3-large', {
       ...DIRECT_ENV,
       OPENAI_ORGANIZATION: 'org-a-customer-owns',
     });
@@ -99,12 +102,12 @@ describe('the platform client', () => {
   });
 
   it('sends no organisation to OpenAI when none is configured', () => {
-    load().platformOpenAI('gpt-4.1', DIRECT_ENV);
+    load().platformOpenAI('text-embedding-3-large', DIRECT_ENV);
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('organization');
   });
 
   it('points at Google’s global OpenAI-shaped endpoint for a name mapped to gemini', () => {
-    const { provider } = load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
+    const { provider } = load().platformOpenAI('text-embedding-3-large', GOOGLE_ENV);
     expect(provider).toBe('google');
     expect(openAiCtor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -115,7 +118,7 @@ describe('the platform client', () => {
   });
 
   it('keeps the region in host AND path when one is named', () => {
-    load().platformOpenAI('gpt-4.1', { ...GOOGLE_ENV, GOOGLE_MODEL_REGION: 'europe-west1' });
+    load().platformOpenAI('text-embedding-3-large', { ...GOOGLE_ENV, GOOGLE_MODEL_REGION: 'europe-west1' });
     expect(openAiCtor).toHaveBeenCalledWith(
       expect.objectContaining({
         baseURL:
@@ -125,12 +128,12 @@ describe('the platform client', () => {
   });
 
   it('sends no organisation header to Google', () => {
-    load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
+    load().platformOpenAI('text-embedding-3-large', GOOGLE_ENV);
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('organization');
   });
 
   it('asks for a fresh token per request rather than pinning one', async () => {
-    load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
+    load().platformOpenAI('text-embedding-3-large', GOOGLE_ENV);
     const { apiKey } = openAiCtor.mock.calls[0][0];
     // A string here would be a token frozen at construction, and Google's expire
     // inside the hour — a server that ran longer would start 401ing.
@@ -144,79 +147,8 @@ describe('the platform client', () => {
 
   it('builds one client per process, not one per call', () => {
     const { platformOpenAI } = load();
-    platformOpenAI('gpt-4.1', GOOGLE_ENV);
-    platformOpenAI('o3', GOOGLE_ENV);
+    platformOpenAI('text-embedding-3-large', GOOGLE_ENV);
+    platformOpenAI('dall-e-3', GOOGLE_ENV);
     expect(openAiCtor).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('the supported-parameter list', () => {
-  it('names what Google documents and nothing it does not', () => {
-    const { GOOGLE_SUPPORTED_CHAT_PARAMS } = load();
-    for (const documented of ['messages', 'model', 'temperature', 'n', 'response_format', 'tools']) {
-      expect(GOOGLE_SUPPORTED_CHAT_PARAMS.has(documented)).toBe(true);
-    }
-    // Undocumented, and therefore SILENTLY ignored rather than refused — which
-    // is the whole reason this list is written down.
-    for (const undocumented of ['parallel_tool_calls', 'logprobs', 'stream_options', 'store', 'logit_bias']) {
-      expect(GOOGLE_SUPPORTED_CHAT_PARAMS.has(undocumented)).toBe(false);
-    }
-  });
-});
-
-describe('refusing a schema Google would ignore', () => {
-  const { assertSchemaIsNotRecursive } = load();
-
-  it('accepts a flat schema', () => {
-    expect(() =>
-      assertSchemaIsNotRecursive(
-        { type: 'object', properties: { name: { type: 'string' } } },
-        'person',
-      ),
-    ).not.toThrow();
-  });
-
-  it('accepts a schema that merely REUSES a definition', () => {
-    expect(() =>
-      assertSchemaIsNotRecursive(
-        {
-          type: 'object',
-          properties: { from: { $ref: '#/$defs/Addr' }, to: { $ref: '#/$defs/Addr' } },
-          $defs: { Addr: { type: 'object', properties: { city: { type: 'string' } } } },
-        },
-        'journey',
-      ),
-    ).not.toThrow();
-  });
-
-  it('refuses a self-referential definition', () => {
-    expect(() =>
-      assertSchemaIsNotRecursive(
-        {
-          $ref: '#/$defs/Node',
-          $defs: {
-            Node: {
-              type: 'object',
-              properties: { children: { type: 'array', items: { $ref: '#/$defs/Node' } } },
-            },
-          },
-        },
-        'tree',
-      ),
-    ).toThrow(/recursive/);
-  });
-
-  it('refuses a cycle that goes the long way round', () => {
-    expect(() =>
-      assertSchemaIsNotRecursive(
-        {
-          $defs: {
-            A: { type: 'object', properties: { b: { $ref: '#/$defs/B' } } },
-            B: { type: 'object', properties: { a: { $ref: '#/$defs/A' } } },
-          },
-        },
-        'pair',
-      ),
-    ).toThrow(/recursive/);
   });
 });

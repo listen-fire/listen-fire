@@ -1,4 +1,4 @@
-jest.mock('../../openai', () => ({}));
+jest.mock('../../anthropic', () => ({}));
 jest.mock('../../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 import { parseJson } from '../../utils/parse_json';

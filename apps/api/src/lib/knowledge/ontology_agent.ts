@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
 import { getKnowledgeQb } from '../kysely';
-import { openAIResponses } from '../openai';
-import { resolveModel } from '../models/map';
 import { anthropicToolLoop, type TurnEvent } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
 import { currentContext } from '../../services/context';
@@ -1328,11 +1326,6 @@ Your role right now is to act like a brilliant Field Data Engineer meeting a new
 Be conversational and curious. Ask one or two questions at a time — don't overwhelm with a long list. Spend real time understanding before jumping to solutions. The user's first message is just them saying hello — start the discovery conversation.`;
       }
 
-      // The Responses loop stays reachable only for a deployment whose model map
-      // sends this agent's model to OpenAI; every other provider answers through
-      // the Claude tool loop.
-      const agentModel = resolveModel('claude-sonnet-5');
-      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
       const wrappedTools = createWrappedTools(emitUpdate, teamId);
 
       // Inject additional tools from orchestrator (e.g., handoff tools)
@@ -1345,41 +1338,20 @@ Be conversational and curious. Ask one or two questions at a time — don't over
         }
       };
 
-      const historyInput = (conversationHistory ?? []).map((msg) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      }));
-
-      const rawResult =
-        provider === 'anthropic'
-          ? await anthropicToolLoop(
-              {
-                model: 'claude-sonnet-5',
-                max_output_tokens: 4096,
-                maxTurns: 75,
-                system: systemPrompt,
-                userMessage: message,
-                conversationHistory,
-                tools: allToolDefs,
-                onTurn,
-                label: 'ontology_agent',
-              },
-              allToolImpls,
-            )
-          : await openAIResponses(
-              {
-                model: agentModel.wireModel,
-                input: [
-                  { role: 'system', content: systemPrompt },
-                  ...historyInput,
-                  // Skip empty user message (e.g. handoff re-entry where referral is already in history)
-                  ...(message ? [{ role: 'user' as const, content: message }] : []),
-                ],
-                tools: allToolDefs,
-              },
-              allToolImpls,
-              { label: 'ontology_agent' },
-            );
+      const rawResult = await anthropicToolLoop(
+        {
+          model: 'claude-sonnet-5',
+          max_output_tokens: 4096,
+          maxTurns: 75,
+          system: systemPrompt,
+          userMessage: message,
+          conversationHistory,
+          tools: allToolDefs,
+          onTurn,
+          label: 'ontology_agent',
+        },
+        allToolImpls,
+      );
 
       const validated = AgentResponseSchema.parse(rawResult);
       const text =

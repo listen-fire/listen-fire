@@ -93,7 +93,7 @@ Your response will be parsed as JSON, so the entire response must be valid JSON 
   ],
   validator: z.array(filterSchema),
   fallback: [],
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
   temperature: 0,
 } as const);
 
