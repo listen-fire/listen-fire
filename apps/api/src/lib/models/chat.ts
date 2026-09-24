@@ -11,6 +11,7 @@ import { neverAsAny } from '../utils/types';
 import { assertCallable, resolveModel } from './map';
 import type { Provider, Resolved } from './map';
 import { anthropicChatProvider } from './providers/anthropic';
+import { geminiChatProvider } from './providers/gemini';
 import { openAiChatProvider } from './providers/openai';
 import { vertexChatProvider } from './providers/vertex';
 import { models } from './registry';
@@ -44,7 +45,7 @@ function chatProviderFor(provider: Provider, env: NodeJS.ProcessEnv): ChatProvid
     case 'openai':
       return openAiChatProvider(env);
     case 'gemini':
-      throw new Error(`Provider "${provider}" is not available yet`);
+      return geminiChatProvider(env);
     default:
       return neverAsAny(provider);
   }

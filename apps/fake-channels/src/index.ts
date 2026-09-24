@@ -19,6 +19,7 @@ import { gmailRoutes } from './routes/gmail';
 import { dropboxRoutes } from './routes/dropbox';
 import { adminRoutes } from './routes/admin';
 import { openAiRoutes } from './routes/openai';
+import { geminiRoutes } from './routes/gemini';
 
 const PORT = Number(process.env.FAKE_CHANNELS_PORT || 5556);
 
@@ -54,8 +55,9 @@ app.use('/', gmailRoutes(store));
 app.use('/dropbox', dropboxRoutes(store));
 app.use('/admin', adminRoutes(store));
 app.use('/openai/v1', openAiRoutes());
+app.use('/gemini', geminiRoutes());
 
 app.listen(PORT, () => {
   console.log(`Fake channel server running on http://localhost:${PORT}`);
-  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /dealroom, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /gmail, /dropbox, /admin');
+  console.log('Routes: /affinity, /attio, /slack, /sheets, /airtable, /granola, /evertrace, /dealroom, /email, /resend, /whatsapp, /telegram, /webhook, /gdrive, /gmail, /dropbox, /admin, /openai/v1, /gemini');
 });

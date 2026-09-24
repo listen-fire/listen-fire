@@ -115,6 +115,7 @@
     "@aws-sdk/s3-request-presigner": "3.649.0",
     "@google-cloud/documentai": "9.4.0",
     "@google-cloud/storage": "7.12.1",
+    "@google/genai": "^2.24.0",
     "@langchain/core": "0.3.43",
     "@langchain/openai": "0.5.2",
     "@modelcontextprotocol/sdk": "^1.27.1",

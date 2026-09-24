@@ -85,6 +85,18 @@ describe('chatCallFor', () => {
     expect(vertexCtor).toHaveBeenCalledWith(expect.objectContaining({ region: 'global' }));
   });
 
+  it('sends a mapped name to Gemini under the map’s spelling', () => {
+    const call = load().chatCallFor('claude-sonnet-5', {
+      ...GOOGLE,
+      MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'gemini/gemini-3-pro' }),
+    });
+    expect(call.wireModel).toBe('gemini-3-pro');
+    expect(call.resolved.provider).toBe('gemini');
+    expect(typeof call.client.messages.create).toBe('function');
+    expect(anthropicCtor).not.toHaveBeenCalled();
+    expect(vertexCtor).not.toHaveBeenCalled();
+  });
+
   it('builds each provider client once', () => {
     const { chatCallFor } = load();
     chatCallFor('claude-sonnet-5', { ANTHROPIC_API_KEY: 'sk' });
