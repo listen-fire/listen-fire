@@ -26,7 +26,6 @@ import { usageRouter } from './usage';
 import { valuationsRouter } from './valuations';
 import { userSettingsRouter } from './userSettings';
 import { webhookSubscriptionsRouter } from './webhookSubscriptions';
-import { workflowIdeasRouter } from './workflowIdeas';
 import { teamMembersRouter } from './teamMembers';
 import { testHarnessRouter } from './testHarness';
 
@@ -64,7 +63,6 @@ const viewsRouter = trpc.router({
   valuations: valuationsRouter(gatedProcedure),
   userSettings: userSettingsRouter(gatedProcedure),
   webhookSubscriptions: webhookSubscriptionsRouter(gatedProcedure),
-  workflowIdeas: workflowIdeasRouter(gatedProcedure),
   testHarness: testHarnessRouter(gatedProcedure),
 });
 

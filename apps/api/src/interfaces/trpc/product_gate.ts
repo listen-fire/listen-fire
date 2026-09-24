@@ -47,7 +47,6 @@ const VIEW_ROUTER_UNITS: Readonly<Record<string, Unit | readonly Unit[]>> = {
   usage: 'residual',
   userSettings: 'core',
   webhookSubscriptions: 'automations',
-  workflowIdeas: 'automations',
 };
 
 /**

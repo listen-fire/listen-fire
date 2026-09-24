@@ -43,6 +43,8 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       { source: '/ontology', destination: '/model', permanent: true },
+      // The onboarding lobby is gone; the home page is the front door.
+      { source: '/home', destination: '/dashboard', permanent: true },
       { source: '/inputs', destination: '/sources', permanent: true },
       { source: '/inputs/:id', destination: '/sources/:id', permanent: true },
       { source: '/outputs', destination: '/destinations', permanent: true },

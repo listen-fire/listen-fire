@@ -200,7 +200,7 @@ function LoginForm({
       leaveLogin(
         router,
         returnUrl,
-        data.email ? `/home?email=${encodeURIComponent(data.email)}` : "/home",
+        data.email ? `/dashboard?email=${encodeURIComponent(data.email)}` : "/dashboard",
       );
     } catch {
       setError("Failed to sign in. Is the API running?");
@@ -330,7 +330,7 @@ function LoginForm({
 
           const data = await res.json();
           if (data.email) {
-            leaveLogin(router, returnUrl, `/home?email=${encodeURIComponent(data.email)}`);
+            leaveLogin(router, returnUrl, `/dashboard?email=${encodeURIComponent(data.email)}`);
           } else {
             setError("Unexpected response from server.");
             setLoading(false);
@@ -346,7 +346,7 @@ function LoginForm({
   }, [router, returnUrl, microsoftEndpoint]);
 
   if (isAuthenticated) {
-    leaveLogin(router, returnUrl, "/home");
+    leaveLogin(router, returnUrl, "/dashboard");
     return null;
   }
 
@@ -576,7 +576,7 @@ function LoginForm({
                       leaveLogin(
                         router,
                         returnUrl,
-                        `/home?email=${encodeURIComponent(data.email)}`,
+                        `/dashboard?email=${encodeURIComponent(data.email)}`,
                       );
                     } else {
                       setError("Unexpected response from server.");

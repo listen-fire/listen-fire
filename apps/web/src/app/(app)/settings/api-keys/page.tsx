@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 
+import { Card } from "../card";
+
 const AVAILABLE_SCOPES = ["ingest", "automation", "knowledge", "valuations"] as const;
 const DEFAULT_SCOPES = ["ingest", "knowledge"];
 
@@ -58,7 +60,7 @@ export default function ApiKeysPage() {
   };
 
   return (
-    <>
+    <Card>
       <p className="text-[12px] text-gray-400">
         API keys allow external applications to authenticate with the Listen-Fire API.
         Keep your keys secure and never share them publicly.
@@ -229,6 +231,6 @@ export default function ApiKeysPage() {
           </div>
         ))}
       </div>
-    </>
+    </Card>
   );
 }

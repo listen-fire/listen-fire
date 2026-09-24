@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+
+import { Button, buttonClass } from "@/components/ui";
+import { useCapabilities, useCapabilitiesSettled } from "@/lib/capabilities-provider";
 import { trpc } from "@/lib/trpc";
+
+import { Card } from "./card";
 
 const inputClass =
   "w-full rounded-md border border-gray-200 px-3 py-2 text-[13px] focus:border-gray-400 focus:outline-none";
@@ -14,7 +19,8 @@ const btnSecondary =
 
 export default function SettingsPage() {
   return (
-    <>
+    <div className="space-y-4">
+      <ConnectClaudeSection />
       <UsageSection />
       <BillingContactsSection />
       <WhatsAppSection />
@@ -22,7 +28,136 @@ export default function SettingsPage() {
       <RecipesSection />
       <PasswordSection />
       <VersionSection />
-    </>
+    </div>
+  );
+}
+
+/**
+ * `NEXT_PUBLIC_CLAUDE_DIRECTORY_URL` is a build-time flag: set it only for the
+ * one deployment Anthropic lists in Claude's connector directory, and this
+ * offers the one-click "add from the directory" link. Every other deployment,
+ * every self-host included, has no listing of its own, so it falls back to the
+ * custom-connector steps pointed at THIS install's own automation MCP URL (read
+ * from capabilities, never guessed from the browser's origin: a reverse proxy
+ * or a different public hostname would make that guess wrong).
+ */
+const CLAUDE_DIRECTORY_URL = process.env.NEXT_PUBLIC_CLAUDE_DIRECTORY_URL;
+const CLAUDE_CONNECTORS_URL = "https://claude.ai/settings/connectors";
+const SKILL_FILE = "/listen-fire-builder.skill";
+const CLAUDE_SKILLS_SETTINGS_URL = "https://claude.ai/new#settings/customize-skills";
+const externalLinkClass =
+  "underline decoration-gray-200 underline-offset-2 hover:text-gray-600";
+
+/** Automations are built in Claude: the connector gives Claude the tools, the
+ *  skill teaches it how to use them. */
+function ConnectClaudeSection() {
+  return (
+    <Card id="connect" testId="settings-connect-section">
+      <h2 className="text-[13px] font-semibold text-gray-900">Connect Claude</h2>
+      <p className="mt-1 text-[12px] text-gray-400">
+        You build automations by talking to Claude. Add Listen-Fire to Claude, then
+        teach it the skill.
+      </p>
+
+      <h3 className="mt-5 text-[13px] font-medium text-gray-900">
+        Add Listen-Fire to Claude
+      </h3>
+      <div className="mt-2">
+        {CLAUDE_DIRECTORY_URL ? (
+          <a
+            href={CLAUDE_DIRECTORY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonClass({ variant: "primary" })}
+            data-testid="add-to-claude"
+          >
+            Add Listen-Fire to Claude
+          </a>
+        ) : (
+          <ConnectorUrlSteps />
+        )}
+      </div>
+      <p className="mt-2 text-[12px] text-gray-400">
+        Team plan? Your Claude admin may need to add it.
+      </p>
+
+      <h3 className="mt-5 text-[13px] font-medium text-gray-900">
+        Teach Claude the skill
+      </h3>
+      <div className="mt-2">
+        <a
+          href={SKILL_FILE}
+          download="listen-fire-builder.skill"
+          className={buttonClass({ variant: "secondary" })}
+          data-testid="download-skill"
+        >
+          Download the skill
+        </a>
+      </div>
+      <p className="mt-2 text-[12px] text-gray-400">
+        Then upload it in{" "}
+        <a
+          href={CLAUDE_SKILLS_SETTINGS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={externalLinkClass}
+        >
+          Claude&apos;s skill settings
+        </a>
+        .
+      </p>
+    </Card>
+  );
+}
+
+/** The self-hosted flow: copy this install's own connector URL, then walk
+ *  through Claude's custom-connector dialog by hand. */
+function ConnectorUrlSteps() {
+  const [copied, setCopied] = useState(false);
+  const capabilities = useCapabilities();
+  const settled = useCapabilitiesSettled();
+  const url = capabilities?.mcp?.automation;
+
+  // A deployment that does not run automations has nothing to connect Claude
+  // to: say so rather than offering to copy a URL that doesn't exist.
+  if (settled && !url) {
+    return (
+      <p className="text-[12px] text-gray-500" data-testid="connect-unavailable">
+        This deployment doesn&apos;t run automations, so there&apos;s no connector to add.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <Button
+        variant="primary"
+        disabled={!url}
+        onClick={() => {
+          if (!url) return;
+          void navigator.clipboard.writeText(url).then(() => setCopied(true));
+        }}
+        data-testid="copy-connector-url"
+      >
+        {copied ? "Copied" : "Copy the link"}
+      </Button>
+      <ol className="list-decimal space-y-1 pl-4 text-[12px] text-gray-500">
+        <li>
+          Open Claude, then{" "}
+          <a
+            href={CLAUDE_CONNECTORS_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={externalLinkClass}
+          >
+            Settings → Connectors
+          </a>
+        </li>
+        <li>Choose &quot;Add custom connector&quot;</li>
+        <li>Paste the link you just copied</li>
+        <li>Claude sends you back here to sign in</li>
+      </ol>
+    </div>
   );
 }
 
@@ -35,13 +170,13 @@ function VersionSection() {
   if (!data) return null;
 
   return (
-    <section className="mt-10" data-testid="settings-version-section">
+    <Card testId="settings-version-section">
       <h2 className="text-[13px] font-semibold text-gray-900">About</h2>
       <p className="mt-1 text-[12px] text-gray-400">
         Running Listen-Fire{" "}
         <span className="font-mono text-gray-600">{data.version}</span>.
       </p>
-    </section>
+    </Card>
   );
 }
 
@@ -129,7 +264,7 @@ function WhatsAppSection() {
   if (isLoadingNumber || !deployment?.whatsappNumber) return null;
 
   return (
-    <section className="mt-10" data-testid="settings-whatsapp-section">
+    <Card testId="settings-whatsapp-section">
       <h2 className="text-[13px] font-semibold text-gray-900">WhatsApp</h2>
       <p className="mt-1 text-[12px] text-gray-400">
         Verify your WhatsApp number so messages you send to{" "}
@@ -209,7 +344,7 @@ function WhatsAppSection() {
           </div>
         </>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -306,7 +441,7 @@ function PasswordSection() {
   };
 
   return (
-    <section className="mt-10" data-testid="settings-password-section">
+    <Card testId="settings-password-section">
       <h2 className="text-[13px] font-semibold text-gray-900">Password</h2>
 
       {isLoading || !data ? (
@@ -436,7 +571,7 @@ function PasswordSection() {
           </div>
         </>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -460,7 +595,7 @@ function StylePreferencesSection() {
   }, [update, value]);
 
   return (
-    <section className="mt-8">
+    <Card>
       <h2 className="text-[13px] font-semibold text-gray-900">
         Agent Style Preferences
       </h2>
@@ -484,7 +619,7 @@ function StylePreferencesSection() {
           <span className="text-[12px] text-gray-400">Saved</span>
         )}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -546,7 +681,7 @@ function RecipesSection() {
   const canSave = editing && editing.name.trim() && editing.instructions.trim();
 
   return (
-    <section className="mt-10">
+    <Card>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[13px] font-semibold text-gray-900">Recipes</h2>
@@ -671,7 +806,7 @@ function RecipesSection() {
           </div>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -729,9 +864,9 @@ function UsageSection() {
 
   if (isLoading) {
     return (
-      <section className="mt-8">
+      <Card>
         <div className="h-24 animate-pulse rounded-md bg-gray-100" />
-      </section>
+      </Card>
     );
   }
 
@@ -740,7 +875,7 @@ function UsageSection() {
   const resetDay = DAY_NAMES[data.weekStartsOn] ?? "Monday";
 
   return (
-    <section className="mt-8">
+    <Card>
       <h2 className="text-[13px] font-semibold text-gray-900">Usage</h2>
       <p className="mt-1 text-[12px] text-gray-400">
         Weekly usage for your team. Resets every {resetDay}.
@@ -770,7 +905,7 @@ function UsageSection() {
           Top up (coming soon)
         </button>
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -788,16 +923,16 @@ function BillingContactsSection() {
 
   if (isLoading) {
     return (
-      <section className="mt-10">
+      <Card>
         <div className="h-16 animate-pulse rounded-md bg-gray-100" />
-      </section>
+      </Card>
     );
   }
 
   if (!contacts || contacts.length === 0) return null;
 
   return (
-    <section className="mt-10">
+    <Card>
       <h2 className="text-[13px] font-semibold text-gray-900">
         Billing Contacts
       </h2>
@@ -821,6 +956,6 @@ function BillingContactsSection() {
           </label>
         ))}
       </div>
-    </section>
+    </Card>
   );
 }

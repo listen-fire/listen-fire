@@ -82,7 +82,7 @@ function MagicLanding() {
           window.location.replace(withEmail(redirect, data.email));
           return;
         }
-        router.replace(withEmail("/home", data.email));
+        router.replace(withEmail("/dashboard", data.email));
       } catch {
         if (!cancelled) setPhase("error");
       }

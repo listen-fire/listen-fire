@@ -14401,50 +14401,6 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_out: typeof _trpc_server.unsetMarker;
             }, void>;
         }>;
-        workflowIdeas: _trpc_server.CreateRouterInner<_trpc_server.RootConfig<{
-            ctx: {
-                authorise: () => Promise<void>;
-            };
-            meta: object;
-            errorShape: {
-                message: string;
-                code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
-                data: _trpc_server_dist_error_formatter.DefaultErrorData;
-            };
-            transformer: _trpc_server.DefaultDataTransformer;
-        }>, {
-            generate: _trpc_server.BuildProcedure<"mutation", {
-                _config: _trpc_server.RootConfig<{
-                    ctx: {
-                        authorise: () => Promise<void>;
-                    };
-                    meta: object;
-                    errorShape: {
-                        message: string;
-                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
-                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
-                    };
-                    transformer: _trpc_server.DefaultDataTransformer;
-                }>;
-                _meta: object;
-                _ctx_out: {
-                    authorise: () => Promise<void>;
-                };
-                _input_in: {
-                    services: string[];
-                };
-                _input_out: {
-                    services: string[];
-                };
-                _output_in: typeof _trpc_server.unsetMarker;
-                _output_out: typeof _trpc_server.unsetMarker;
-            }, {
-                ideas: {
-                    tag: string;
-                    text: string;
-                }[];
-            }>;
-        }>;
         testHarness: _trpc_server.CreateRouterInner<_trpc_server.RootConfig<{
             ctx: {
                 authorise: () => Promise<void>;

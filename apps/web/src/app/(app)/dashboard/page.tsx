@@ -1,15 +1,13 @@
 "use client";
 
 /**
- * `/dashboard` — the platform home (inside the sidebar shell).
- *
- * Reached by the deliberate "Enter the platform →" click from the lobby
- * (`/home`). Three states, picked by the server-side `kind` discriminator on
- * the `home.getDashboard` payload:
+ * `/dashboard` — the platform home and the front door every sign in lands on.
+ * Three states, picked by the server-side `kind` discriminator on the
+ * `home.getDashboard` payload:
  *
  *   1. `empty`        — no triggers and no knowledge nodes. A plain empty
- *                       state that points back to the lobby's Connect-Claude
- *                       card (you build automations in Claude, not here).
+ *                       state that points at the Connect-Claude steps in
+ *                       settings (you build automations in Claude, not here).
  *
  *   2. `needs_setup`  — at least one trigger exists but nothing is live.
  *                       Hero card pointing at the first incomplete automation.
@@ -23,9 +21,7 @@
  * click lands on the page where you'd act. Nothing here is decorative.
  *
  * Building happens in Claude over MCP; this page is the viewer/manager of what
- * you've built. The old onboarding funnel and the in-app assistant's
- * onboarding role were removed here.
- *
+ * you've built.
  */
 
 import Link from "next/link";
@@ -126,14 +122,14 @@ function StatusPill({
 }
 
 /**
- * A quiet reminder that automations are built in Claude — a text link back to
- * the lobby's Connect-Claude card. Shown where the user likely hasn't built
+ * A quiet reminder that automations are built in Claude — a text link to the
+ * Connect-Claude steps in settings. Shown where the user likely hasn't built
  * anything yet; a `live` account is already connected, so it's omitted there.
  */
 function ConnectReminder() {
   return (
     <Link
-      href="/home"
+      href="/settings#connect"
       className="flex items-center gap-2 rounded-lg border border-primary/15 bg-primary/[0.04] px-4 py-2.5 text-[13px] text-gray-600 transition-colors hover:border-primary/30"
       data-testid="dashboard-connect-reminder"
     >
@@ -180,8 +176,8 @@ export default function DashboardPage() {
 }
 
 /**
- * Empty team — nothing built yet. No onboarding funnel: the story is "build in
- * Claude." Point them at the lobby's Connect card.
+ * Empty team — nothing built yet. The story is "build in Claude": point them
+ * at the Connect-Claude steps in settings.
  */
 function EmptyDashboardView() {
   return (
@@ -194,7 +190,7 @@ function EmptyDashboardView() {
             title="Nothing here yet — build your first automation in Claude."
             action={
               <Link
-                href="/home"
+                href="/settings#connect"
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-primary-600"
               >
                 Connect your Claude →
@@ -534,7 +530,7 @@ function QuickActionsPanel() {
   const actions = [
     { href: "/movements/new", icon: Plus, label: "New automation" },
     { href: "/asks", icon: HelpCircle, label: "Answer questions" },
-    { href: "/home", icon: BookOpen, label: "Setup guide" },
+    { href: "/settings#connect", icon: BookOpen, label: "Setup guide" },
   ];
   return (
     <Panel title="Quick actions" testId="dashboard-quick-actions">

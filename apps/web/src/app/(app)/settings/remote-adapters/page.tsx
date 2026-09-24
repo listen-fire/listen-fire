@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { trpc, type RouterInputs } from "@/lib/trpc";
 
+import { Card } from "../card";
+
 type RuntimeCapabilitiesInput =
   RouterInputs["views"]["remoteAdapter"]["upsertFromManifest"]["runtimeCapabilities"];
 
@@ -259,7 +261,7 @@ export default function RemoteAdaptersPage() {
   const rows = adapters.data ?? [];
 
   return (
-    <>
+    <Card>
       <p className="text-[12px] text-gray-400">
         Remote adapters let Listen-Fire talk to a system we don&rsquo;t host
         ourselves — you point Listen-Fire at the adapter&rsquo;s address and it
@@ -549,6 +551,6 @@ export default function RemoteAdaptersPage() {
             ))}
         </div>
       )}
-    </>
+    </Card>
   );
 }

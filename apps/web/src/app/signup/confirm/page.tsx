@@ -39,7 +39,7 @@ function ConfirmForm() {
         }
         const data = await res.json().catch(() => ({}));
         router.replace(
-          data.email ? `/home?email=${encodeURIComponent(data.email)}` : "/home",
+          data.email ? `/dashboard?email=${encodeURIComponent(data.email)}` : "/dashboard",
         );
       } catch {
         if (!cancelled) setPhase("error");

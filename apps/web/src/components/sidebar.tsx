@@ -371,13 +371,13 @@ export function Sidebar({
         }`}
       >
         <Link
-          href="/home"
-          title="Back to the lobby"
+          href="/dashboard"
+          title="Home"
           className={`flex items-center gap-2 ${iconOnly ? "" : "min-w-0"}`}
         >
           <img
             src="/logo.svg"
-            alt="Listen-Fire — back to the lobby"
+            alt="Listen-Fire — home"
             className="h-[24px] w-[24px] flex-shrink-0"
           />
           {!iconOnly && (

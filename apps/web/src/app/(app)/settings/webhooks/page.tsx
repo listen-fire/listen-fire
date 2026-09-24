@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 
+import { Card } from "../card";
+
 const btnPrimary =
   "rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-primary-600 disabled:opacity-50";
 const btnSecondary =
@@ -87,7 +89,7 @@ export default function WebhooksPage() {
   const rows = subs.data ?? [];
 
   return (
-    <>
+    <Card>
       <p className="text-[12px] text-gray-400">
         Inbound webhook subscriptions. Each row tells an integration where to deliver change events. Listen-Fire auto-registers
         with providers that support it (Attio, Valuations); manual providers (Affinity) need the secret pasted into the
@@ -248,6 +250,6 @@ export default function WebhooksPage() {
           );
         })}
       </div>
-    </>
+    </Card>
   );
 }
