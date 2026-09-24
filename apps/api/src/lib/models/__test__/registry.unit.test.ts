@@ -27,6 +27,6 @@ describe('the model registry', () => {
     expect(hasCapability('whisper-1', 'transcription')).toBe(true);
     expect(hasCapability('whisper-1', 'chat')).toBe(false);
     expect(parseChatModelName('claude-sonnet-5', 'X')).toBe('claude-sonnet-5');
-    expect(() => parseChatModelName('dall-e-3', 'X')).toThrow(/X is "dall-e-3", which is not a chat model \(it serves image\)/);
+    expect(() => parseChatModelName('gpt-image-1', 'X')).toThrow(/X is "gpt-image-1", which is not a chat model \(it serves image\)/);
   });
 });

@@ -156,11 +156,11 @@ docker compose run --rm --no-deps --entrypoint /usr/local/bin/with-generated-env
 
 **A model key is what buys you agents**, and `ANTHROPIC_API_KEY` or `KNOWLEDGE_LLM_API_KEY` is enough. Every chat call names a Claude model, so `OPENAI_API_KEY` alone buys agents only with a `MODEL_MAP` that sends the Claude names to `openai`. Without one the stack starts and serves — the graph, the CRM writes, the query surfaces and the whole of core need no model — and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for, each naming the key it wanted. `init` warns at every boot and so does the API, so it is not something you find out from a user. Nothing in this file is a hard requirement for starting.
 
-**`MODEL_MAP` decides which vendor answers each model name.** Every model call in the product names a model from a fixed list (Claude names such as `claude-sonnet-5`, OpenAI names such as `whisper-1`, `text-embedding-3-large`, `dall-e-3`). Left unset, each name goes to its own vendor under its own name, with the keys above. `MODEL_MAP` is a JSON object that sends a name somewhere else: the key is the model name, the value is `provider/wire-model`, where the provider is one of `anthropic`, `vertex` (Claude on Google Cloud), `openai` or `gemini` (Gemini on Google Cloud) and the wire model is that vendor's own spelling. Boot refuses a map with a name the product does not use, a provider outside those four, a provider that cannot do what the name is for (Claude cannot transcribe), a mapped provider with no credentials, or an embedding line whose model cannot produce the vector width its database column stores. It does not refuse a vendor key that nothing uses any more.
+**`MODEL_MAP` decides which vendor answers each model name.** Every model call in the product names a model from a fixed list (Claude names such as `claude-sonnet-5`, OpenAI names such as `whisper-1`, `text-embedding-3-large`, `gpt-image-1`). Left unset, each name goes to its own vendor under its own name, with the keys above. `MODEL_MAP` is a JSON object that sends a name somewhere else: the key is the model name, the value is `provider/wire-model`, where the provider is one of `anthropic`, `vertex` (Claude on Google Cloud), `openai` or `gemini` (Gemini on Google Cloud) and the wire model is that vendor's own spelling. Boot refuses a map with a name the product does not use, a provider outside those four, a provider that cannot do what the name is for (Claude cannot transcribe), a mapped provider with no credentials, or an embedding line whose model cannot produce the vector width its database column stores. It does not refuse a vendor key that nothing uses any more.
 
 Three maps cover most deployments. Each is written on one line in `deploy/.env`; they are spread out here to read.
 
-**1. Vendor keys: no map.** Leave `MODEL_MAP` unset. Claude names go to Anthropic on `ANTHROPIC_API_KEY`; `whisper-1`, the two embedding models and `dall-e-3` go to OpenAI on `OPENAI_API_KEY`. Either key can be missing: the stack boots, and each call that needs the missing one fails naming it.
+**1. Vendor keys: no map.** Leave `MODEL_MAP` unset. Claude names go to Anthropic on `ANTHROPIC_API_KEY`; `whisper-1`, the two embedding models and `gpt-image-1` go to OpenAI on `OPENAI_API_KEY`. Either key can be missing: the stack boots, and each call that needs the missing one fails naming it.
 
 **2. Everything on OpenAI.** Set `OPENAI_API_KEY`, leave `ANTHROPIC_API_KEY` unset, and send every Claude name to a GPT model. Transcription, embeddings and image generation are OpenAI's own names already, so they need no line.
 
@@ -177,8 +177,6 @@ Three maps cover most deployments. Each is written on one line in `deploy/.env`;
 }
 ```
 
-OpenAI removed DALL·E 3 from its API on 2026-05-12, and this release still asks OpenAI for `dall-e-3` by that name. On OpenAI, image generation therefore fails naming the model. To generate images, send `dall-e-3` to `gemini` as in the third map.
-
 **3. Everything on Gemini, through the Google service account.** Set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`) and no vendor key. Every capability moves: chat, transcription, embeddings and image generation.
 
 ```json
@@ -194,7 +192,7 @@ OpenAI removed DALL·E 3 from its API on 2026-05-12, and this release still asks
   "whisper-1": "gemini/gemini-3.8-flash",
   "text-embedding-3-large": "gemini/gemini-embedding-001",
   "text-embedding-3-small": "gemini/gemini-embedding-001",
-  "dall-e-3": "gemini/gemini-3.1-flash-image-preview"
+  "gpt-image-1": "gemini/gemini-3.1-flash-image-preview"
 }
 ```
 
@@ -215,7 +213,7 @@ The Google project needs the Agent Platform API (`aiplatform.googleapis.com`) en
   "whisper-1": "gemini/gemini-3.8-flash",
   "text-embedding-3-large": "gemini/gemini-embedding-001",
   "text-embedding-3-small": "gemini/gemini-embedding-001",
-  "dall-e-3": "gemini/gemini-3.1-flash-image-preview"
+  "gpt-image-1": "gemini/gemini-3.1-flash-image-preview"
 }
 ```
 
@@ -228,14 +226,14 @@ Google spells a Claude model whose name carries a date with the date behind an `
 | transcription (voice notes and audio attachments) | `whisper-1` | Whisper; the audio is uploaded as a file | a Gemini model given the audio inline, up to 7 MB per file, in the formats Gemini lists (Ogg, MP3, M4A, WAV, WebM, FLAC, AAC, PCM) |
 | embeddings, 3072 wide (`knowledge.raw_text.embedding`, `knowledge.raw_text_part.embedding`) | `text-embedding-3-large` | `text-embedding-3-large` (up to 3072) | `gemini-embedding-001` (128 to 3072), one text per request, 2048 tokens each at most |
 | embeddings, 256 wide (`knowledge.extraction_fact.embedding`) | `text-embedding-3-small` | `text-embedding-3-small` (up to 1536) | `gemini-embedding-001` |
-| image generation | `dall-e-3` | DALL·E 3 | a Gemini image model, called in `GOOGLE_PROJECT_LOCATION` rather than `GOOGLE_MODEL_REGION` |
+| image generation | `gpt-image-1` | GPT Image 1, at the size and quality asked for | a Gemini image model, called in `GOOGLE_PROJECT_LOCATION` rather than `GOOGLE_MODEL_REGION`; always square, and a request that sets a size or quality is refused rather than drawn some other way |
 
 An embedding line must name a model the product knows the widths of, and one wide enough for the column: `"text-embedding-3-large": "openai/text-embedding-3-small"` is refused at boot, because that model tops out at 1536 and the column stores 3072. Vectors written by one vendor are not comparable with vectors written by another, so moving an embedding line on a deployment that already has vectors means re-embedding what is stored.
 
 **Upgrading a deployment from before `MODEL_MAP`.** Three things behave differently with no map set:
 
 - The system, movement and ontology agents used to run on GPT 5 when `KNOWLEDGE_AGENT_PROVIDER` was unset. They now run on Claude (`claude-sonnet-5`). To keep them on GPT, map `claude-sonnet-5` to `openai/gpt-5`.
-- Image generation used to go to Gemini whenever the Google service account was set. It now goes to OpenAI as `dall-e-3`, which OpenAI no longer serves. To keep Gemini images, add `"dall-e-3": "gemini/gemini-3.1-flash-image-preview"`.
+- Image generation used to go to Gemini whenever the Google service account was set, and to DALL·E 3 otherwise. OpenAI shut DALL·E 3 down on 2026-05-12, so the image model is now `gpt-image-1`, which goes to OpenAI. To keep Gemini images, add `"gpt-image-1": "gemini/gemini-3.1-flash-image-preview"`. A map that names `dall-e-3` is refused at boot, because that name is no longer in the product's list.
 - `MODEL_ROUTE`, `ANTHROPIC_MODEL_ROUTE`, `OPENAI_MODEL_ROUTE` and `KNOWLEDGE_AGENT_PROVIDER` are no longer read. A deployment that set `MODEL_ROUTE=google` needs the Claude on Google Cloud map above, or the third map for Gemini.
 
 Usage rows now name the provider that served each call (`anthropic`, `vertex`, `openai`, `gemini` or `jev`) rather than `google`, the wire model in `model`, and the model name the product asked for in `preferred_model`.

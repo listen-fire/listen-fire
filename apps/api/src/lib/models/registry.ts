@@ -31,7 +31,7 @@ export const models = {
   'whisper-1': { capability: 'transcription', home: 'openai' },
   'text-embedding-3-large': { capability: 'embedding', home: 'openai' },
   'text-embedding-3-small': { capability: 'embedding', home: 'openai' },
-  'dall-e-3': { capability: 'image', home: 'openai' },
+  'gpt-image-1': { capability: 'image', home: 'openai' },
 } as const satisfies Record<string, RegistryEntry>;
 
 export type ModelName = keyof typeof models;

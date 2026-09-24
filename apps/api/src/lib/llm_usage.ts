@@ -203,7 +203,7 @@ interface RecordUsageOptions {
   /** What the model map resolved the call to — the `Resolved` the caller
    *  already holds from `chatCallFor` or `resolveModel`, never rebuilt. */
   resolved: Served;
-  callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'responses';
+  callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'image' | 'responses';
   label?: string;
   inputTokens: number;
   outputTokens: number;

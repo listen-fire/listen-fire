@@ -38,7 +38,7 @@
  *       "whisper-1":"gemini/gemini-3.8-flash",
  *       "text-embedding-3-large":"gemini/gemini-embedding-001",
  *       "text-embedding-3-small":"gemini/gemini-embedding-001",
- *       "dall-e-3":"gemini/gemini-3.1-flash-image-preview"}' \
+ *       "gpt-image-1":"gemini/gemini-3.1-flash-image-preview"}' \
  *     GEMINI_BASE_URL=http://localhost:6056/gemini \
  *     GOOGLE_PRIVATE_KEY=unused GOOGLE_CLIENT_EMAIL=fake@example.com GOOGLE_PROJECT_ID=fake-project \
  *     GOOGLE_MODEL_REGION=global pnpm dev:verify-model-map
@@ -56,7 +56,7 @@
  * `--model <registry name>` picks the chat model (default claude-sonnet-5);
  * the map line has to name that model for the call to leave Anthropic. The
  * other capabilities call the names the product calls: whisper-1, each
- * embedding column's model, dall-e-3.
+ * embedding column's model, gpt-image-1.
  */
 import './_profile_loader';
 
@@ -203,9 +203,10 @@ const legs: Leg[] = [
     name: 'image',
     models: (t) => [t.image],
     run: async ({ image }) => {
+      // Only the prompt: every image provider takes one, and a size or quality
+      // is gpt-image-1's vocabulary, which Gemini refuses rather than guesses at.
       const { bytes, mimeType } = await generateImage(image, {
         prompt: 'A single green leaf on a white background.',
-        size: '1024x1024',
         label: LABEL,
       });
       if (bytes.length === 0) throw new Error('no image bytes');
@@ -274,7 +275,7 @@ async function main(): Promise<void> {
     chat: parseChatModelName(flag('model') ?? 'claude-sonnet-5', '--model'),
     transcription: 'whisper-1',
     embedding: [...new Set(Object.values(embeddingDestinations).map((d) => d.model))],
-    image: 'dall-e-3',
+    image: 'gpt-image-1',
   };
 
   // The same refusals the server makes at boot, so a bad map fails here with

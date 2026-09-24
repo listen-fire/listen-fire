@@ -187,18 +187,18 @@ describe('boot validation', () => {
 describe('calling a name with nothing behind it', () => {
   it('names the map line to add when silence sent it to a vendor with no key', () => {
     const env = { NODE_ENV: 'production' };
-    expect(() => assertCallable(resolveModel('dall-e-3', env), env)).toThrow(
-      /"dall-e-3" is not in MODEL_MAP.*OPENAI_API_KEY.*"dall-e-3": "<provider>\/<wire model>"/,
+    expect(() => assertCallable(resolveModel('gpt-image-1', env), env)).toThrow(
+      /"gpt-image-1" is not in MODEL_MAP.*OPENAI_API_KEY.*"gpt-image-1": "<provider>\/<wire model>"/,
     );
   });
 
   it('leaves development to the vendor clients and their defaults', () => {
-    expect(() => assertCallable(resolveModel('dall-e-3', {}), {})).not.toThrow();
+    expect(() => assertCallable(resolveModel('gpt-image-1', {}), {})).not.toThrow();
   });
 
   it('passes a vendor that has its key', () => {
     const env = { NODE_ENV: 'production', OPENAI_API_KEY: 'k' };
-    expect(() => assertCallable(resolveModel('dall-e-3', env), env)).not.toThrow();
+    expect(() => assertCallable(resolveModel('gpt-image-1', env), env)).not.toThrow();
   });
 });
 

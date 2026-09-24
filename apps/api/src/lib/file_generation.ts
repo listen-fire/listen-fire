@@ -45,18 +45,16 @@ async function uploadAndSign(buffer: Buffer, filename: string, mimeType: string)
 async function generateImage(args: {
   prompt: string;
   title: string;
-  size?: '1024x1024' | '1792x1024' | '1024x1792';
-  quality?: 'standard' | 'hd';
-  style?: 'vivid' | 'natural';
+  size?: '1024x1024' | '1536x1024' | '1024x1536';
+  quality?: 'low' | 'medium' | 'high';
 }): Promise<GeneratedFile> {
-  const { bytes, mimeType } = await drawImage('dall-e-3', {
+  const { bytes, mimeType } = await drawImage('gpt-image-1', {
     prompt: args.prompt,
     size: args.size,
     quality: args.quality,
-    style: args.style,
     label: 'file_generation',
   });
-  const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png';
+  const ext = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
   return uploadAndSign(bytes, `${slugify(args.title)}.${ext}`, mimeType);
 }
 

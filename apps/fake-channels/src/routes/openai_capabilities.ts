@@ -198,33 +198,67 @@ function embeddingsRoute(req: Request, res: Response): void {
 }
 
 // ── images ───────────────────────────────────────────────────────────────
-// https://platform.openai.com/docs/api-reference/images/create (DALL·E 3)
+// gpt-image-1's parameters, from
+// https://developers.openai.com/api/reference/python/resources/images/methods/generate
+// (checked 2026-09-24). A GPT image model always answers in base64, and the
+// real endpoint refuses DALL·E's `style` and `response_format` as unknown
+// parameters — in exactly these words (probed 2026-09-24):
+//   {"message":"Unknown parameter: 'style'.","type":"invalid_request_error","param":"style","code":"unknown_parameter"}
 
-const imageBody = z
-  .object({
-    prompt: z.string().min(1).max(4000),
-    model: z.literal('dall-e-3').optional(),
-    n: z.literal(1).optional(),
-    size: z.enum(['1024x1024', '1792x1024', '1024x1792']).optional(),
-    quality: z.enum(['standard', 'hd']).optional(),
-    style: z.enum(['vivid', 'natural']).optional(),
-    response_format: z.enum(['url', 'b64_json']).optional(),
-    user: z.string().optional(),
-  })
-  .strict();
+const imageParams = {
+  prompt: z.string().min(1).max(32000),
+  model: z.literal('gpt-image-1').optional(),
+  n: z.number().int().min(1).max(10).optional(),
+  size: z.enum(['auto', '1024x1024', '1536x1024', '1024x1536']).optional(),
+  quality: z.enum(['auto', 'low', 'medium', 'high']).optional(),
+  background: z.enum(['transparent', 'opaque', 'auto']).optional(),
+  moderation: z.enum(['low', 'auto']).optional(),
+  output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+  output_compression: z.number().int().min(0).max(100).optional(),
+  stream: z.literal(false).optional(),
+  partial_images: z.number().int().min(0).max(3).optional(),
+  user: z.string().optional(),
+};
+
+const imageBody = z.object(imageParams);
 
 function imagesRoute(req: Request, res: Response): void {
   if (!authorised(req, res)) return;
+  const unknown = Object.keys(req.body ?? {}).find((key) => !Object.hasOwn(imageParams, key));
+  if (unknown !== undefined) {
+    res.status(400).json({
+      error: { message: `Unknown parameter: '${unknown}'.`, type: 'invalid_request_error', param: unknown, code: 'unknown_parameter' },
+    });
+    return;
+  }
+  const model: unknown = req.body.model;
+  if (model !== undefined && model !== 'gpt-image-1') {
+    // The words the real endpoint answers `dall-e-3` with since its shutdown.
+    res.status(400).json({
+      error: { message: `The model '${String(model)}' does not exist.`, type: 'image_generation_user_error', param: 'model', code: 'invalid_value' },
+    });
+    return;
+  }
   const parsed = imageBody.safeParse(req.body);
   if (!parsed.success) {
     const { message, param } = firstIssue(parsed.error);
     return invalid(res, 400, message, param);
   }
-  const image =
-    parsed.data.response_format === 'b64_json'
-      ? { b64_json: FAKE_PNG_BASE64 }
-      : { url: 'https://fake-openai.invalid/image.png' };
-  res.json({ created: Math.floor(Date.now() / 1000), data: [{ ...image, revised_prompt: parsed.data.prompt }] });
+  const n = parsed.data.n ?? 1;
+  res.json({
+    created: Math.floor(Date.now() / 1000),
+    background: 'opaque',
+    output_format: parsed.data.output_format ?? 'png',
+    quality: 'low',
+    size: '1024x1024',
+    data: Array.from({ length: n }, () => ({ b64_json: FAKE_PNG_BASE64 })),
+    usage: {
+      input_tokens: 12,
+      input_tokens_details: { text_tokens: 12, image_tokens: 0 },
+      output_tokens: 272,
+      total_tokens: 284,
+    },
+  });
 }
 
 export function openAiCapabilityRoutes(): Router {
