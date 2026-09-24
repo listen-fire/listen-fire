@@ -51,6 +51,7 @@
     "dev:eval-research": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/eval_research.ts",
     "dev:eval-entity-judge": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/eval_entity_judge.ts",
     "dev:probe-thinking": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/probe_thinking_default.ts",
+    "dev:verify-model-map": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/verify_model_map.ts",
     "dev:eval-system-agent": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/eval_system_agent_models.ts",
     "dev:answer": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/answer.ts",
     "dev:_test_kv": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/_test_kv.ts",
