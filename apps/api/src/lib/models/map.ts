@@ -13,6 +13,8 @@ import { z } from 'zod';
 
 import { isGoogleServiceAccountConfigured, missingGoogleServiceAccountVars } from '../google_cloud';
 import { neverAsAny } from '../utils/types';
+import { embeddingDestinations } from './embedding/destinations';
+import { embeddingRange } from './embedding/range';
 import { isModelName, modelNames, models } from './registry';
 import type { Capability, ModelName } from './registry';
 
@@ -166,6 +168,34 @@ export function assertModelMapConfigured(env: NodeJS.ProcessEnv = process.env): 
       throw new Error(
         `MODEL_MAP["${name}"] sends it to ${provider}, but ${provider} has no credentials here — ` +
           `set ${credentialsFor(provider, env)}.`,
+      );
+    }
+    if (capability === 'embedding') assertEmbeddingWidths(name, provider, wireModel);
+  }
+}
+
+/**
+ * A map line that sends an embedding model to a wire model that cannot produce
+ * the width of a column that model fills. Refused rather than resized: a
+ * vector of the wrong width is a row Postgres refuses, and a truncated one is
+ * a different vector, not a smaller copy of the right one.
+ */
+function assertEmbeddingWidths(name: ModelName, provider: Provider, wireModel: string): void {
+  const range = embeddingRange(provider, wireModel);
+  if (!range) {
+    throw new Error(
+      `MODEL_MAP["${name}"] is "${provider}/${wireModel}", an embedding model the ${provider} ` +
+        'provider does not list, so nothing here knows what width of vector it produces. ' +
+        'Map it to a listed embedding model, or add this one to its provider file with the widths it supports.',
+    );
+  }
+  for (const { column, model, dimensions } of Object.values(embeddingDestinations)) {
+    if (model !== name) continue;
+    if (dimensions < range.min || dimensions > range.max) {
+      throw new Error(
+        `MODEL_MAP["${name}"] is "${provider}/${wireModel}", which produces vectors of ` +
+          `${range.min} to ${range.max} dimensions, but ${name} fills ${column}, which stores ` +
+          `${dimensions}. Map it to a model that can produce ${dimensions}.`,
       );
     }
   }

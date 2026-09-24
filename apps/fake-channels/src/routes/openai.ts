@@ -2,7 +2,10 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 
-// A stand-in for OpenAI's chat completions, enough to run the model map's
+import { openAiCapabilityRoutes } from './openai_capabilities';
+
+// A stand-in for OpenAI's chat completions (and, through
+// `openai_capabilities.ts`, transcription, embeddings and images), enough to run the model map's
 // OpenAI translator end to end: every request is checked against OpenAI's
 // documented body the way OpenAI checks it (unknown top-level fields and
 // orphaned tool messages are 400s there too), and the reply is a canned
@@ -381,6 +384,8 @@ export function openAiRoutes(): Router {
     if (body.stream) streamReply(res, body, reply);
     else wholeReply(res, body, reply);
   });
+
+  r.use(openAiCapabilityRoutes());
 
   return r;
 }

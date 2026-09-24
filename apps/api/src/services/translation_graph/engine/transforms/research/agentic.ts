@@ -33,7 +33,7 @@
 
 import { z } from 'zod';
 
-import type { ModelName } from '../../../../../lib/models/registry';
+import type { ChatModelName } from '../../../../../lib/models/registry';
 import {
   anthropicChatStructured,
   anthropicWebChat,
@@ -619,7 +619,7 @@ async function preReadProfile(args: {
  *  discard it. */
 async function shape(args: {
   writeUp: string;
-  model: ModelName;
+  model: ChatModelName;
   name: string;
   run: Record<string, unknown>;
 }): Promise<{ value: z.infer<typeof shapeSchema> } | { failure: string }> {

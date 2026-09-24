@@ -26,15 +26,23 @@ import { z } from 'zod';
 // through here ends. That default is what lets the unmodified wrapper run its
 // plain, structured and tool loop calls against this fake.
 //
+// A request that asks for an IMAGE response modality gets the `image`
+// scenario: a line of text and a 1×1 PNG as an inline part. `:predict` answers
+// embeddings for `gemini-embedding-001` (see below).
+//
 // `thought_signature` is the one scenario that checks the CONVERSATION as
 // well as the shape: a follow-up turn must carry back, on the first function
 // call of each model turn, the signature this fake issued — which is the rule
 // real Gemini enforces with a 400.
 
-const SCENARIOS = ['text', 'function_call', 'text_and_function_call', 'max_tokens', 'thought_signature'] as const;
+const SCENARIOS = ['text', 'function_call', 'text_and_function_call', 'max_tokens', 'thought_signature', 'image'] as const;
 type Scenario = (typeof SCENARIOS)[number];
 
 export const FAKE_THOUGHT_SIGNATURE = 'ZmFrZS10aG91Z2h0LXNpZ25hdHVyZQ==';
+
+/** A 1×1 transparent PNG, the `image` scenario's picture. */
+export const FAKE_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 // The documented request schema, strict where the translator writes: a field
 // it should not have sent is a failure here, not a silently ignored extra.
@@ -110,6 +118,14 @@ const GenerateContentRequest = z
             message: 'thinkingBudget and thinkingLevel cannot both be set',
           })
           .optional(),
+        responseModalities: z.array(z.enum(['TEXT', 'IMAGE', 'AUDIO'])).min(1).optional(),
+        imageConfig: z
+          .object({
+            aspectRatio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']).optional(),
+            imageSize: z.enum(['1K', '2K', '4K']).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -143,6 +159,7 @@ function scenarioOf(req: Request, model: string, body: GenerateContentRequest): 
 }
 
 function inferScenario(body: GenerateContentRequest): Scenario {
+  if (body.generationConfig?.responseModalities?.includes('IMAGE')) return 'image';
   const offered = (body.tools ?? []).some((t) => t.functionDeclarations.length > 0);
   const mode = body.toolConfig?.functionCallingConfig.mode;
   if (!offered || mode === 'NONE') return 'text';
@@ -245,6 +262,11 @@ function replyFor(scenario: Scenario, body: GenerateContentRequest): Reply {
       return { chunks: [[{ text: 'Let me check.' }, { functionCall: call }]], finishReason: 'STOP' };
     case 'max_tokens':
       return { chunks: [[{ text: 'This answer is cut o' }]], finishReason: 'MAX_TOKENS' };
+    case 'image':
+      return {
+        chunks: [[{ text: 'Here is the image.' }, { inlineData: { mimeType: 'image/png', data: FAKE_PNG_BASE64 } }]],
+        finishReason: 'STOP',
+      };
     case 'thought_signature':
       return {
         chunks: [
@@ -267,6 +289,46 @@ function responseChunk(parts: WirePart[], final: { finishReason: Reply['finishRe
 
 const MODEL_PATH =
   /^\/(v1|v1beta1)\/projects\/([^/]+)\/locations\/([^/]+)\/publishers\/google\/models\/([^/:]+):(generateContent|streamGenerateContent)$/;
+
+// Embeddings. `@google/genai` sends `gemini-embedding-001` on Vertex to the
+// model's `:predict` method with one instance per text; the model page allows
+// one text per request and widths 128 to 3072.
+// https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/embeddings/get-text-embeddings
+const PREDICT_PATH =
+  /^\/(v1|v1beta1)\/projects\/([^/]+)\/locations\/([^/]+)\/publishers\/google\/models\/([^/:]+):predict$/;
+
+const EMBEDDING_MODELS: Record<string, { min: number; max: number; textsPerRequest: number }> = {
+  'gemini-embedding-001': { min: 128, max: 3072, textsPerRequest: 1 },
+};
+
+const PredictRequest = z
+  .object({
+    instances: z
+      .array(
+        z
+          .object({
+            content: z.string().min(1),
+            task_type: z.string().optional(),
+            title: z.string().optional(),
+          })
+          .strict(),
+      )
+      .min(1),
+    parameters: z
+      .object({ outputDimensionality: z.number().int().positive().optional(), autoTruncate: z.boolean().optional() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+/** A unit vector that depends only on the text and the width. */
+function fakeEmbedding(text: string, width: number): number[] {
+  let seed = 0;
+  for (const ch of text) seed = (seed * 31 + ch.charCodeAt(0)) % 1_000_003;
+  const values = Array.from({ length: width }, (_, i) => Math.cos(seed + i + 1));
+  const magnitude = Math.sqrt(values.reduce((sum, v) => sum + v * v, 0));
+  return values.map((v) => v / magnitude);
+}
 
 export function geminiRoutes(): Router {
   const r = Router();
@@ -301,6 +363,36 @@ export function geminiRoutes(): Router {
     res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     for (const body of bodies) res.write(`data: ${JSON.stringify(body)}\n\n`);
     res.end();
+  });
+
+  r.post(PREDICT_PATH, (req, res) => {
+    const match = PREDICT_PATH.exec(req.path);
+    if (!match) return googleError(res, 404, 'unknown path');
+    const model = EMBEDDING_MODELS[match[4]];
+    if (!model) return googleError(res, 404, `Publisher model ${match[4]} is not an embedding model this fake serves.`);
+
+    const parsed = PredictRequest.safeParse(req.body);
+    if (!parsed.success) return googleError(res, 400, `Invalid predict request: ${parsed.error.message}`);
+    const { instances, parameters } = parsed.data;
+    if (instances.length > model.textsPerRequest) {
+      return googleError(res, 400, `${match[4]} takes ${model.textsPerRequest} instance per request, got ${instances.length}.`);
+    }
+    const width = parameters?.outputDimensionality ?? model.max;
+    if (width < model.min || width > model.max) {
+      return googleError(res, 400, `outputDimensionality must be between ${model.min} and ${model.max}, got ${width}.`);
+    }
+
+    res.json({
+      predictions: instances.map(({ content }) => ({
+        embeddings: {
+          // Like the real model, a shortened vector comes back NOT renormalised:
+          // the unit vector's prefix, which is the caller's to normalise.
+          values: fakeEmbedding(content, model.max).slice(0, width),
+          statistics: { truncated: false, token_count: Math.max(1, Math.ceil(content.length / 4)) },
+        },
+      })),
+      metadata: { billableCharacterCount: instances.reduce((sum, i) => sum + i.content.length, 0) },
+    });
   });
 
   return r;

@@ -33,7 +33,7 @@ import {
   type TurnEvent,
 } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
-import type { ModelName } from '../models/registry';
+import type { ChatModelName } from '../models/registry';
 import { currentContext } from '../../services/context';
 import { logger } from '../../services/logger';
 import { mq } from '../message_queue';
@@ -1310,7 +1310,7 @@ async function checkResponseGrounding(
 // Sonnet: this agent acts on the user's real data, so the floor on judgement
 // matters more than the per-turn cost. 4.8 — same price as 4.7, better
 // quality.
-const UNIFIED_AGENT_MODEL: ModelName = 'claude-opus-4-8';
+const UNIFIED_AGENT_MODEL: ChatModelName = 'claude-opus-4-8';
 
 /** The room one turn's answer gets. Thinking, where a model does any, is paid
  *  for out of this same allowance. */
@@ -1321,7 +1321,7 @@ const UNIFIED_AGENT_OUTPUT_TOKENS = 16384;
  *  the row above — including the silence about thinking, which is what the two
  *  call sites below have always sent. */
 export interface UnifiedAgentCall {
-  model: ModelName;
+  model: ChatModelName;
   /** Adaptive-thinking depth. Absent leaves the model to its own default,
    *  which differs by generation and is the reason this is nameable at all. */
   effort?: 'low' | 'medium' | 'high';
@@ -1329,7 +1329,7 @@ export interface UnifiedAgentCall {
 }
 
 function unifiedAgentCall(override: UnifiedAgentCall | undefined): {
-  model: ModelName;
+  model: ChatModelName;
   max_output_tokens: number;
   thinking?: { type: 'adaptive' };
   output_config?: { effort: 'low' | 'medium' | 'high' };

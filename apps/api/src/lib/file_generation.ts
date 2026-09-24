@@ -1,40 +1,10 @@
 import { Readable } from 'node:stream';
 
-import OpenAI from 'openai';
 import { jsPDF } from 'jspdf';
 import ExcelJS from 'exceljs';
 
 import { services } from '../adapters/registry';
-import {
-  googleAccessToken,
-  googleServiceAccount,
-  isGoogleServiceAccountConfigured,
-  missingGoogleServiceAccountVars,
-} from './google_cloud';
-import { resolveModel } from './models/map';
-import { getEnvVar } from './utils/environment';
-import { isProd } from '../constants';
-import { logger } from '../services/logger';
-
-// Optional: sent as the client's `organization` when the deployment has
-// declared one. Unset, OpenAI falls back to the key's own default
-// organisation — the right behaviour for a self-hoster whose key was never a
-// member of ours.
-const organization = process.env.OPENAI_ORGANIZATION || undefined;
-
-// Read at first USE, not at module load. `getEnvVar` throws in production when
-// the key is unset, so an eager read made merely IMPORTING this module enough
-// to stop the process booting — including for a deployment that runs entirely
-// on per-team keys (BYOT) or uses no LLM at all. Memoized: still one read and
-// one client, just on first call rather than on import.
-let openaiClient: OpenAI | undefined;
-const openai = () =>
-  (openaiClient ??= new OpenAI({
-    apiKey: isProd
-      ? getEnvVar('OPENAI_API_KEY', { devDefault: 'test', because: 'generated images come from OpenAI' })
-      : getEnvVar('OPENAI_API_KEY_FALLBACK_OR_DEV', { devDefault: 'test' }),
-    ...(organization ? { organization } : {}),
-  }));
+import { generateImage as drawImage } from './models/image';
 
 function slugify(text: string): string {
   return text
@@ -72,59 +42,6 @@ async function uploadAndSign(buffer: Buffer, filename: string, mimeType: string)
 
 // -- Image generation --
 
-// -- Image generation (Nano Banana 2 via Vertex AI) --
-
-// The Google service account is read lazily for the same reason as the OpenAI
-// key: image generation is optional, and a deployment that never generates one
-// should not have to carry Google credentials to boot.
-
-function dalleToNanoBanana(size?: string): { aspectRatio: string; imageSize: string } {
-  if (size === '1792x1024') return { aspectRatio: '16:9', imageSize: '2K' };
-  if (size === '1024x1792') return { aspectRatio: '9:16', imageSize: '2K' };
-  return { aspectRatio: '1:1', imageSize: '1K' };
-}
-
-async function generateImageNanoBanana(args: {
-  prompt: string;
-  title: string;
-  size?: string;
-}): Promise<GeneratedFile> {
-  const { aspectRatio, imageSize } = dalleToNanoBanana(args.size);
-  const accessToken = await googleAccessToken();
-  const { projectId, projectLocation } = googleServiceAccount();
-  const endpoint = `https://${projectLocation}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${projectLocation}/publishers/google/models/gemini-3.1-flash-image-preview:generateContent`;
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: args.prompt }] }],
-      generationConfig: {
-        responseModalities: ['TEXT', 'IMAGE'],
-        imageConfig: { aspectRatio, imageSize },
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Nano Banana 2 error ${res.status}: ${body}`);
-  }
-
-  const json = await res.json();
-  const parts = json.candidates?.[0]?.content?.parts;
-  const imagePart = parts?.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
-  if (!imagePart?.inlineData?.data) throw new Error('No image data returned from Nano Banana 2');
-
-  const mimeType = imagePart.inlineData.mimeType ?? 'image/png';
-  const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png';
-  const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
-  return uploadAndSign(buffer, `${slugify(args.title)}.${ext}`, mimeType);
-}
-
 async function generateImage(args: {
   prompt: string;
   title: string;
@@ -132,37 +49,15 @@ async function generateImage(args: {
   quality?: 'standard' | 'hd';
   style?: 'vivid' | 'natural';
 }): Promise<GeneratedFile> {
-  if (isGoogleServiceAccountConfigured()) {
-    return generateImageNanoBanana(args);
-  }
-
-  // Where the map sends image generation to Gemini there IS no other vendor:
-  // reaching for OpenAI would build a client around a key that is deliberately
-  // absent and fail on the key rather than on the real problem, which is that
-  // this deployment's Google credentials have gone missing.
-  if (resolveModel('dall-e-3').provider === 'gemini') {
-    throw new Error(
-      `MODEL_MAP sends dall-e-3 to gemini, but the Google service account is not configured ` +
-        `(set ${missingGoogleServiceAccountVars().join(', ')}).`,
-    );
-  }
-
-  // Fallback to DALL-E 3
-  const response = await openai().images.generate({
-    model: 'dall-e-3',
+  const { bytes, mimeType } = await drawImage('dall-e-3', {
     prompt: args.prompt,
-    n: 1,
-    size: args.size ?? '1024x1024',
-    quality: args.quality ?? 'standard',
-    style: args.style ?? 'vivid',
-    response_format: 'b64_json',
+    size: args.size,
+    quality: args.quality,
+    style: args.style,
+    label: 'file_generation',
   });
-
-  const b64 = response.data?.[0]?.b64_json;
-  if (!b64) throw new Error('No image data returned from DALL-E');
-
-  const buffer = Buffer.from(b64, 'base64');
-  return uploadAndSign(buffer, `${slugify(args.title)}.png`, 'image/png');
+  const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png';
+  return uploadAndSign(bytes, `${slugify(args.title)}.${ext}`, mimeType);
 }
 
 // -- PDF generation (jsPDF + markdown text) --

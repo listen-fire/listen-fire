@@ -420,23 +420,28 @@ export function openAiChatProviderOver(client: OpenAI): ChatProvider {
 // Built at first use, not at import: `getEnvVar` throws in production on an
 // unset key, and merely importing this must not stop a deployment that never
 // maps a model to openai from booting.
+let client: OpenAI | undefined;
 let provider: ChatProvider | undefined;
 
+/** The one OpenAI client every capability shares: chat here, and the
+ *  transcription, embedding and image providers beside their capabilities. */
+export function openAiClient(env: NodeJS.ProcessEnv = process.env): OpenAI {
+  return (client ??= new OpenAI({
+    apiKey:
+      env.OPENAI_API_KEY ??
+      env.OPENAI_API_KEY_FALLBACK_OR_DEV ??
+      getEnvVar('OPENAI_API_KEY', {
+        devDefault: 'test',
+        because: 'it is the key for every model name that resolves to the openai provider',
+      }),
+    // Read from the passed environment rather than left to the SDK's own
+    // `process.env` read, so a caller that threads one is not overruled.
+    // Unset means OpenAI itself; the fake OpenAI in the dev loop sets it.
+    ...(env.OPENAI_BASE_URL ? { baseURL: env.OPENAI_BASE_URL } : {}),
+    ...(env.OPENAI_ORGANIZATION ? { organization: env.OPENAI_ORGANIZATION } : {}),
+  }));
+}
+
 export function openAiChatProvider(env: NodeJS.ProcessEnv = process.env): ChatProvider {
-  return (provider ??= openAiChatProviderOver(
-    new OpenAI({
-      apiKey:
-        env.OPENAI_API_KEY ??
-        env.OPENAI_API_KEY_FALLBACK_OR_DEV ??
-        getEnvVar('OPENAI_API_KEY', {
-          devDefault: 'test',
-          because: 'it is the key for every model name that resolves to the openai provider',
-        }),
-      // Read from the passed environment rather than left to the SDK's own
-      // `process.env` read, so a caller that threads one is not overruled.
-      // Unset means OpenAI itself; the fake OpenAI in the dev loop sets it.
-      ...(env.OPENAI_BASE_URL ? { baseURL: env.OPENAI_BASE_URL } : {}),
-      ...(env.OPENAI_ORGANIZATION ? { organization: env.OPENAI_ORGANIZATION } : {}),
-    }),
-  ));
+  return (provider ??= openAiChatProviderOver(openAiClient(env)));
 }

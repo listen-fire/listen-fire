@@ -27,32 +27,68 @@
  *   cd apps/api && MODEL_MAP='{"claude-sonnet-5":"openai/gpt-5"}' OPENAI_API_KEY=fake \
  *     OPENAI_BASE_URL=http://localhost:6056/openai/v1 pnpm dev:verify-model-map
  *
+ * Everything on the fake Gemini, mounted at `/gemini`. The Gemini provider
+ * talks to GEMINI_BASE_URL with a stub key instead of minting a token, but
+ * still needs the Google service account variables present (any values) to
+ * build the Vertex path, and GOOGLE_MODEL_REGION=global so the path matches
+ * the one the chat translator uses:
+ *
+ *   FAKE_CHANNELS_PORT=6056 pnpm --filter fake-channels start
+ *   cd apps/api && MODEL_MAP='{"claude-sonnet-5":"gemini/gemini-3-pro",
+ *       "whisper-1":"gemini/gemini-3.8-flash",
+ *       "text-embedding-3-large":"gemini/gemini-embedding-001",
+ *       "text-embedding-3-small":"gemini/gemini-embedding-001",
+ *       "dall-e-3":"gemini/gemini-3.1-flash-image-preview"}' \
+ *     GEMINI_BASE_URL=http://localhost:6056/gemini \
+ *     GOOGLE_PRIVATE_KEY=unused GOOGLE_CLIENT_EMAIL=fake@example.com GOOGLE_PROJECT_ID=fake-project \
+ *     GOOGLE_MODEL_REGION=global pnpm dev:verify-model-map
+ *
+ * Every capability runs one leg: chat (three), transcription of a tiny WAV,
+ * embedding for each destination column at its own width, and one image. The
+ * route column shows where the map sent each; the fake OpenAI serves all four
+ * capabilities, the fake Gemini all four too.
+ *
  * Like every dev CLI it reads `apps/api/.env`. A checkout without one (a fresh
  * worktree) also needs NODE_ENV=development and placeholder DATABASE_URL and
  * DATABASE_URL_READONLY: the wrapper's imports demand them, though with no
  * team in context the usage ledger never writes.
  *
  * `--model <registry name>` picks the chat model (default claude-sonnet-5);
- * the map line has to name that model for the call to leave Anthropic.
+ * the map line has to name that model for the call to leave Anthropic. The
+ * other capabilities call the names the product calls: whisper-1, each
+ * embedding column's model, dall-e-3.
  */
 import './_profile_loader';
 
 import { z } from 'zod';
 
 import { anthropicChat, anthropicChatStructured, anthropicToolLoop } from '../../lib/anthropic';
+import { embed } from '../../lib/models/embedding';
+import { embeddingDestinations } from '../../lib/models/embedding/destinations';
+import { generateImage } from '../../lib/models/image';
 import { assertModelMapConfigured, resolveModel } from '../../lib/models/map';
-import { parseModelName } from '../../lib/models/registry';
-import type { ModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
+import type {
+  ChatModelName,
+  EmbeddingModelName,
+  ImageModelName,
+  ModelName,
+  TranscriptionModelName,
+} from '../../lib/models/registry';
+import { transcribe } from '../../lib/models/transcription';
 
 /** The model each capability's legs call. */
 interface Target {
-  chat: ModelName;
+  chat: ChatModelName;
+  transcription: TranscriptionModelName;
+  embedding: readonly EmbeddingModelName[];
+  image: ImageModelName;
 }
 
 interface Leg {
   name: string;
   /** Which of the target's models this leg calls, for the route column. */
-  model: (target: Target) => ModelName;
+  models: (target: Target) => readonly ModelName[];
   /** Resolves with a one-line detail on a pass; throws on a fail. */
   run: (target: Target) => Promise<string>;
 }
@@ -62,7 +98,7 @@ const LABEL = 'verify_model_map';
 const legs: Leg[] = [
   {
     name: 'chat',
-    model: (t) => t.chat,
+    models: (t) => [t.chat],
     run: async ({ chat }) => {
       const text = await anthropicChat({
         system: 'You are a terse assistant.',
@@ -77,7 +113,7 @@ const legs: Leg[] = [
   },
   {
     name: 'chat, structured',
-    model: (t) => t.chat,
+    models: (t) => [t.chat],
     run: async ({ chat }) => {
       const city = await anthropicChatStructured({
         system: 'You answer with the tool, never in prose.',
@@ -94,7 +130,7 @@ const legs: Leg[] = [
   },
   {
     name: 'chat, tool loop',
-    model: (t) => t.chat,
+    models: (t) => [t.chat],
     run: async ({ chat }) => {
       const asked: string[] = [];
       const blocks = await anthropicToolLoop(
@@ -134,7 +170,70 @@ const legs: Leg[] = [
       return `tool called for ${asked.join(', ')}; then ${JSON.stringify(text.slice(0, 40))}`;
     },
   },
+  {
+    name: 'transcription',
+    models: (t) => [t.transcription],
+    run: async ({ transcription }) => {
+      const { text, durationSeconds } = await transcribe(transcription, {
+        audio: tinyWav(),
+        name: 'verify.wav',
+        contentType: 'audio/wav',
+        label: LABEL,
+      });
+      if (!text.trim()) throw new Error('empty transcript');
+      return `${JSON.stringify(text.slice(0, 50))}${durationSeconds === undefined ? '' : `, ${durationSeconds}s`}`;
+    },
+  },
+  {
+    name: 'embedding',
+    models: (t) => t.embedding,
+    run: async () => {
+      const widths: string[] = [];
+      for (const [destination, { model, dimensions }] of Object.entries(embeddingDestinations)) {
+        const { embeddings } = await embed(model, { input: ['The quick brown fox.'], dimensions, label: LABEL });
+        const [vector] = embeddings;
+        const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
+        if (Math.abs(magnitude - 1) > 1e-3) throw new Error(`${destination} vector has magnitude ${magnitude}`);
+        widths.push(`${destination} ${vector.length}`);
+      }
+      return `unit vectors: ${widths.join(', ')}`;
+    },
+  },
+  {
+    name: 'image',
+    models: (t) => [t.image],
+    run: async ({ image }) => {
+      const { bytes, mimeType } = await generateImage(image, {
+        prompt: 'A single green leaf on a white background.',
+        size: '1024x1024',
+        label: LABEL,
+      });
+      if (bytes.length === 0) throw new Error('no image bytes');
+      return `${mimeType}, ${bytes.length} bytes`;
+    },
+  },
 ];
+
+/** A tenth of a second of 8 kHz silence as a WAV file: the smallest audio every
+ *  transcriber takes as audio. */
+function tinyWav(): Buffer {
+  const samples = 800;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + samples * 2, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(8000, 24);
+  header.writeUInt32LE(16000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(samples * 2, 40);
+  return Buffer.concat([header, Buffer.alloc(samples * 2)]);
+}
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -171,25 +270,34 @@ async function main(): Promise<void> {
     process.env.OPENAI_API_KEY ??= 'fake';
   }
 
-  const target: Target = { chat: parseModelName(flag('model') ?? 'claude-sonnet-5', '--model') };
+  const target: Target = {
+    chat: parseChatModelName(flag('model') ?? 'claude-sonnet-5', '--model'),
+    transcription: 'whisper-1',
+    embedding: [...new Set(Object.values(embeddingDestinations).map((d) => d.model))],
+    image: 'dall-e-3',
+  };
 
   // The same refusals the server makes at boot, so a bad map fails here with
   // the server's own words rather than as a confusing first-leg error.
   assertModelMapConfigured();
   console.log(`MODEL_MAP        ${process.env.MODEL_MAP || '(empty)'}`);
-  console.log(`OPENAI_BASE_URL  ${process.env.OPENAI_BASE_URL || '(OpenAI itself)'}\n`);
+  console.log(`OPENAI_BASE_URL  ${process.env.OPENAI_BASE_URL || '(OpenAI itself)'}`);
+  console.log(`GEMINI_BASE_URL  ${process.env.GEMINI_BASE_URL || '(Vertex itself)'}\n`);
 
   const rows: Row[] = [];
   for (const leg of legs) {
-    const { provider, wireModel } = resolveModel(leg.model(target));
+    const route = [...new Set(leg.models(target).map((m) => {
+      const { provider, wireModel } = resolveModel(m);
+      return `${provider}/${wireModel}`;
+    }))].join(', ');
     const started = Date.now();
     try {
       const detail = await leg.run(target);
-      rows.push({ leg: leg.name, route: `${provider}/${wireModel}`, outcome: 'PASS', ms: Date.now() - started, detail });
+      rows.push({ leg: leg.name, route, outcome: 'PASS', ms: Date.now() - started, detail });
     } catch (error) {
       rows.push({
         leg: leg.name,
-        route: `${provider}/${wireModel}`,
+        route,
         outcome: 'FAIL',
         ms: Date.now() - started,
         detail: (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 160),

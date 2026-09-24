@@ -1,7 +1,7 @@
 import { ChatCompletionMessageParam } from 'openai/resources';
 import { z } from 'zod';
 
-import type { ModelName } from '../models/registry';
+import type { ChatModelName } from '../models/registry';
 
 type PromptDefinition<T extends readonly string[], V extends z.ZodType> = {
   description: string;
@@ -9,7 +9,7 @@ type PromptDefinition<T extends readonly string[], V extends z.ZodType> = {
   messages: readonly ChatCompletionMessageParam[];
   validator?: V;
   fallback?: unknown;
-  model?: ModelName;
+  model?: ChatModelName;
   response?: z.ZodTypeAny;
   requestId?: string;
   temperature?: number;

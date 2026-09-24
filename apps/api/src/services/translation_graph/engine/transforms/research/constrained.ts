@@ -22,7 +22,7 @@
 
 import { z } from 'zod';
 
-import type { ModelName } from '../../../../../lib/models/registry';
+import type { ChatModelName } from '../../../../../lib/models/registry';
 import { SECOND } from '../../../../../constants';
 import { anthropicChatStructured, meterAnthropicUsage } from '../../../../../lib/anthropic';
 import { DocumentSourceService } from '../../../../../lib/document_sources';
@@ -487,7 +487,7 @@ async function resolveWebsite(args: {
   name: string;
   context: string;
   questions: string;
-  model: ModelName;
+  model: ChatModelName;
   evidence: Evidence;
   search: (query: string) => Promise<SearchHit[]>;
   run: Record<string, unknown>;
@@ -558,7 +558,7 @@ async function planQueries(args: {
   name: string;
   context: string;
   questions: string;
-  model: ModelName;
+  model: ChatModelName;
   run: Record<string, unknown>;
 }): Promise<z.infer<typeof planSchema>> {
   const { name, context, questions, model, run } = args;
@@ -586,7 +586,7 @@ async function confirmCandidate(args: {
   name: string;
   context: string;
   shortlist: SearchHit[];
-  model: ModelName;
+  model: ChatModelName;
   run: Record<string, unknown>;
 }): Promise<z.infer<typeof confirmSchema>> {
   const { name, context, shortlist, model, run } = args;
@@ -618,7 +618,7 @@ async function synthesise(args: {
   context: string;
   questions: string;
   evidence: Evidence;
-  model: ModelName;
+  model: ChatModelName;
   run: Record<string, unknown>;
 }): Promise<{ value: z.infer<typeof synthesisSchema> } | { failure: string }> {
   const { name, context, questions, evidence, model, run } = args;

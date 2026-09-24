@@ -34,7 +34,7 @@ import type {
 
 import { chatCallFor } from '../models/chat';
 import type { Provider } from '../models/map';
-import type { ModelName } from '../models/registry';
+import type { ChatModelName } from '../models/registry';
 import { Queue } from '../utils/queue';
 import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
@@ -318,7 +318,7 @@ export interface AnthropicSystemBlock {
 }
 
 interface AnthropicToolLoopParams {
-  model?: ModelName;
+  model?: ChatModelName;
   max_output_tokens?: number;
   maxTurns?: number;
   /**
@@ -669,7 +669,7 @@ const SLOW_CALL_WARN_MS = 60 * SECOND;
 interface AnthropicChatOptions {
   system: string;
   userMessage: string;
-  model?: ModelName;
+  model?: ChatModelName;
   maxTokens?: number;
   label?: string;
   noContinue?: boolean;
@@ -993,7 +993,7 @@ interface AnthropicChatStructuredOptions<T> {
   /** Tool name the model is forced to call. */
   toolName: string;
   toolDescription: string;
-  model?: ModelName;
+  model?: ChatModelName;
   maxTokens?: number;
   label?: string;
 }
@@ -1066,7 +1066,7 @@ const MAX_WEB_CHAT_RESUMES = 3;
 interface AnthropicWebChatOptions {
   system: string;
   userMessage: string;
-  model?: ModelName;
+  model?: ChatModelName;
   maxTokens?: number;
   /** Reasoning depth, on the models that read it (see {@link AnthropicChatOptions}). */
   effort?: 'low' | 'medium' | 'high' | 'xhigh';

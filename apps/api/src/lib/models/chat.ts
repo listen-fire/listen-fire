@@ -14,8 +14,7 @@ import { anthropicChatProvider } from './providers/anthropic';
 import { geminiChatProvider } from './providers/gemini';
 import { openAiChatProvider } from './providers/openai';
 import { vertexChatProvider } from './providers/vertex';
-import { models } from './registry';
-import type { ModelName } from './registry';
+import type { ChatModelName } from './registry';
 
 export type ChatProvider = {
   messages: {
@@ -51,11 +50,7 @@ function chatProviderFor(provider: Provider, env: NodeJS.ProcessEnv): ChatProvid
   }
 }
 
-export function chatCallFor(name: ModelName, env: NodeJS.ProcessEnv = process.env): ChatCall {
-  const { capability } = models[name];
-  if (capability !== 'chat') {
-    throw new Error(`"${name}" is a ${capability} model, and was asked for a chat reply.`);
-  }
+export function chatCallFor(name: ChatModelName, env: NodeJS.ProcessEnv = process.env): ChatCall {
   const resolved = resolveModel(name, env);
   assertCallable(resolved, env);
   return { client: chatProviderFor(resolved.provider, env), wireModel: resolved.wireModel, resolved };

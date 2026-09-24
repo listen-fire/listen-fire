@@ -42,9 +42,32 @@ export function isModelName(s: string): s is ModelName {
 
 export const modelNames: readonly ModelName[] = Object.keys(models).filter(isModelName);
 
+/** The names that serve one capability. Each capability's entry point takes
+ *  its own, so asking the transcriber for a chat model is a type error rather
+ *  than a request some vendor refuses at run time. */
+export type ModelNameFor<C extends Capability> = {
+  [K in ModelName]: (typeof models)[K]['capability'] extends C ? K : never;
+}[ModelName];
+
+export type ChatModelName = ModelNameFor<'chat'>;
+export type TranscriptionModelName = ModelNameFor<'transcription'>;
+export type EmbeddingModelName = ModelNameFor<'embedding'>;
+export type ImageModelName = ModelNameFor<'image'>;
+
+export function hasCapability<C extends Capability>(name: ModelName, capability: C): name is ModelNameFor<C> {
+  return models[name].capability === capability;
+}
+
 /** A model name from outside the code — an env var, a CLI flag — refused with
  *  its source named when it is not one the registry knows. */
 export function parseModelName(value: string, source: string): ModelName {
   if (isModelName(value)) return value;
   throw new Error(`${source} is "${value}", which is not a model name this code uses. Known names: ${modelNames.join(', ')}.`);
+}
+
+/** {@link parseModelName}, and refused too when the name is not a chat model. */
+export function parseChatModelName(value: string, source: string): ChatModelName {
+  const name = parseModelName(value, source);
+  if (hasCapability(name, 'chat')) return name;
+  throw new Error(`${source} is "${value}", which is not a chat model (it serves ${models[name].capability}).`);
 }

@@ -17,7 +17,6 @@ import { S3Adapter } from './adapters/document/s3';
 import { UnconfiguredDocumentProvider } from './adapters/document/unconfigured';
 import { GoogleDocumentAIAdapter } from './adapters/ocr/google';
 import { UnconfiguredOcrAdapter } from './adapters/ocr/unconfigured';
-import { chooseTranscriptionAdapter } from './adapters/transcription/choose';
 import { BrightDataAdapter } from './adapters/linkedin/brightData';
 import { AirtableAppAdapter } from './adapters/airtable/connector';
 import { SlackWebApiConnector } from './adapters/slack/webApi/connector';
@@ -231,11 +230,6 @@ if (
   // PDF should boot without Google Document AI credentials.
   services.ocr = new UnconfiguredOcrAdapter();
 }
-
-// Speech-to-text for audio attachments (voice notes). Registration is
-// unconditional on either route — credentials are handled where the call is
-// made, not here — but WHO transcribes follows the model route.
-services.transcription = chooseTranscriptionAdapter();
 
 if (BRIGHT_DATA_ACCESS_TOKEN) {
   services.linkedin = new BrightDataAdapter({ accessToken: BRIGHT_DATA_ACCESS_TOKEN });

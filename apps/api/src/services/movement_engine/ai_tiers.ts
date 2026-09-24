@@ -19,7 +19,7 @@
 
 import { aiTier } from '#shared/expression/types';
 
-import type { ModelName } from '../../lib/models/registry';
+import type { ChatModelName } from '../../lib/models/registry';
 
 /**
  * Reasoning depth for extraction, on its OWN calls rather than on the client
@@ -90,7 +90,7 @@ export interface TierCallSettings {
  * "whatever model a tier means today" (rather than the frozen chat/extraction
  * seam) should call it too, instead of copying the string.
  */
-export function claudeModelId(model: TierCallSettings['model']): ModelName {
+export function claudeModelId(model: TierCallSettings['model']): ChatModelName {
   switch (model) {
     case 'opus':
       return 'claude-opus-4-7';
