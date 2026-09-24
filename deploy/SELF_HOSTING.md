@@ -156,41 +156,28 @@ docker compose run --rm --no-deps --entrypoint /usr/local/bin/with-generated-env
 
 **A model key is what buys you agents**, and `ANTHROPIC_API_KEY` or `KNOWLEDGE_LLM_API_KEY` is enough. Every chat call names a Claude model, so `OPENAI_API_KEY` alone buys agents only with a `MODEL_MAP` that sends the Claude names to `openai`. Without one the stack starts and serves — the graph, the CRM writes, the query surfaces and the whole of core need no model — and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for, each naming the key it wanted. `init` warns at every boot and so does the API, so it is not something you find out from a user. Nothing in this file is a hard requirement for starting.
 
-**`MODEL_MAP` decides which vendor answers each model name.** Every model call in the product names a model from a fixed list (Claude names such as `claude-sonnet-5`, OpenAI names such as `whisper-1`, `text-embedding-3-large`, `dall-e-3`). Left unset, each name goes to its own vendor under its own name, with the keys above. `MODEL_MAP` is a JSON object that sends a name somewhere else: the key is the model name, the value is `provider/wire-model`, where the provider is one of `anthropic`, `vertex` (Claude on Google Cloud), `openai` or `gemini` (Gemini on Google Cloud) and the wire model is that vendor's own spelling. Boot refuses a map with a name the product does not use, a provider outside those four, a provider that cannot do what the name is for (Claude cannot transcribe), a mapped provider with no credentials, or an embedding line whose model cannot produce the vector width its database column stores. It does not refuse a vendor key that nothing uses any more.
+**`MODEL_MAP` decides which vendor answers each model name.** Every model call in the product names a model from a fixed list (Claude names such as `claude-sonnet-5`, OpenAI names such as `whisper-1`, `text-embedding-3-large`, `gpt-image-1`). Left unset, each name goes to its own vendor under its own name, with the keys above. `MODEL_MAP` is a JSON object that sends a name somewhere else: the key is the model name, the value is `provider/wire-model`, where the provider is one of `anthropic`, `vertex` (Claude on Google Cloud), `openai` or `gemini` (Gemini on Google Cloud) and the wire model is that vendor's own spelling. Boot refuses a map with a name the product does not use, a provider outside those four, a provider that cannot do what the name is for (Claude cannot transcribe), a mapped provider with no credentials, or an embedding line whose model cannot produce the vector width its database column stores. It does not refuse a vendor key that nothing uses any more.
 
-To run every model call through Google Cloud instead of a vendor key, set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`), optionally `GOOGLE_MODEL_REGION` (default `global`, where both Claude on Vertex and Gemini are addressed), and this map, written on one line in `deploy/.env`:
+Three maps cover most deployments. Each is written on one line in `deploy/.env`; they are spread out here to read.
+
+**1. Vendor keys: no map.** Leave `MODEL_MAP` unset. Claude names go to Anthropic on `ANTHROPIC_API_KEY`; `whisper-1`, the two embedding models and `gpt-image-1` go to OpenAI on `OPENAI_API_KEY`. Either key can be missing: the stack boots, and each call that needs the missing one fails naming it.
+
+**2. Everything on OpenAI.** Set `OPENAI_API_KEY`, leave `ANTHROPIC_API_KEY` unset, and send every Claude name to a GPT model. Transcription, embeddings and image generation are OpenAI's own names already, so they need no line.
 
 ```json
 {
-  "claude-fable-5-1": "vertex/claude-fable-5-1",
-  "claude-opus-5": "vertex/claude-opus-5",
-  "claude-opus-4-8": "vertex/claude-opus-4-8",
-  "claude-opus-4-7": "vertex/claude-opus-4-7",
-  "claude-opus-4-6": "vertex/claude-opus-4-6",
-  "claude-sonnet-5": "vertex/claude-sonnet-5",
-  "claude-haiku-4-5": "vertex/claude-haiku-4-5@20251001",
-  "claude-haiku-4-5-20251001": "vertex/claude-haiku-4-5@20251001",
-  "whisper-1": "gemini/gemini-3.8-flash",
-  "text-embedding-3-large": "gemini/gemini-embedding-001",
-  "text-embedding-3-small": "gemini/gemini-embedding-001",
-  "dall-e-3": "gemini/gemini-3.1-flash-image-preview"
+  "claude-fable-5-1": "openai/gpt-5",
+  "claude-opus-5": "openai/gpt-5",
+  "claude-opus-4-8": "openai/gpt-5",
+  "claude-opus-4-7": "openai/gpt-5",
+  "claude-opus-4-6": "openai/gpt-5",
+  "claude-sonnet-5": "openai/gpt-5",
+  "claude-haiku-4-5": "openai/gpt-5-mini",
+  "claude-haiku-4-5-20251001": "openai/gpt-5-mini"
 }
 ```
 
-Google spells a Claude model whose name carries a date with the date behind an `@`, which is why the Haiku lines differ. Before switching, in the Google project: enable the Agent Platform API (`aiplatform.googleapis.com`), and switch on each Claude model you use, in Model Garden. Vertex has no hosted page fetching, so the web research step falls back to its own page reader, which needs `BRIGHT_DATA_ACCESS_TOKEN` and `BRIGHT_DATA_UNLOCKER_ZONE`.
-
-**Transcription, embeddings and image generation follow the map too**, one name each. OpenAI serves all three under their own names; Gemini serves all three under the wire model the line names.
-
-| capability | model name | on `openai` | on `gemini` |
-|---|---|---|---|
-| transcription (voice notes and audio attachments) | `whisper-1` | Whisper; the audio is uploaded as a file | a Gemini model given the audio inline, up to 7 MB per file, in the formats Gemini lists (Ogg, MP3, M4A, WAV, WebM, FLAC, AAC, PCM) |
-| embeddings, 3072 wide (`knowledge.raw_text.embedding`, `knowledge.raw_text_part.embedding`) | `text-embedding-3-large` | `text-embedding-3-large` (up to 3072) | `gemini-embedding-001` (128 to 3072), one text per request, 2048 tokens each at most |
-| embeddings, 256 wide (`knowledge.extraction_fact.embedding`) | `text-embedding-3-small` | `text-embedding-3-small` (up to 1536) | `gemini-embedding-001` |
-| image generation | `dall-e-3` | DALL·E 3 | a Gemini image model, called in `GOOGLE_PROJECT_LOCATION` rather than `GOOGLE_MODEL_REGION` |
-
-An embedding line must name a model the product knows the widths of, and one wide enough for the column: `"text-embedding-3-large": "openai/text-embedding-3-small"` is refused at boot, because that model tops out at 1536 and the column stores 3072. Vectors written by one vendor are not comparable with vectors written by another, so moving an embedding line on a deployment that already has vectors means re-embedding what is stored.
-
-A Google-only deployment with no Claude on Vertex sends every capability to Gemini: set the Google service account variables and a map like this one.
+**3. Everything on Gemini, through the Google service account.** Set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`) and no vendor key. Every capability moves: chat, transcription, embeddings and image generation.
 
 ```json
 {
@@ -205,11 +192,51 @@ A Google-only deployment with no Claude on Vertex sends every capability to Gemi
   "whisper-1": "gemini/gemini-3.8-flash",
   "text-embedding-3-large": "gemini/gemini-embedding-001",
   "text-embedding-3-small": "gemini/gemini-embedding-001",
-  "dall-e-3": "gemini/gemini-3.1-flash-image-preview"
+  "gpt-image-1": "gemini/gemini-3.1-flash-image-preview"
 }
 ```
 
-Add a line for each OpenAI chat name the product still uses (`gpt-5` and the others in the Google Cloud example above), or those calls go to OpenAI and fail without a key. The Google project needs the Agent Platform API (`aiplatform.googleapis.com`) enabled.
+The Google project needs the Agent Platform API (`aiplatform.googleapis.com`) enabled. Chat on Gemini is addressed in `GOOGLE_MODEL_REGION` (default `global`); image generation runs in `GOOGLE_PROJECT_LOCATION`.
+
+**Claude on Google Cloud** keeps Claude and moves it off the Anthropic key: set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`), optionally `GOOGLE_MODEL_REGION` (default `global`, where both Claude on Vertex and Gemini are addressed), and this map, written on one line in `deploy/.env`:
+
+```json
+{
+  "claude-fable-5-1": "vertex/claude-fable-5-1",
+  "claude-opus-5": "vertex/claude-opus-5",
+  "claude-opus-4-8": "vertex/claude-opus-4-8",
+  "claude-opus-4-7": "vertex/claude-opus-4-7",
+  "claude-opus-4-6": "vertex/claude-opus-4-6",
+  "claude-sonnet-5": "vertex/claude-sonnet-5",
+  "claude-haiku-4-5": "vertex/claude-haiku-4-5@20251001",
+  "claude-haiku-4-5-20251001": "vertex/claude-haiku-4-5@20251001",
+  "whisper-1": "gemini/gemini-3.8-flash",
+  "text-embedding-3-large": "gemini/gemini-embedding-001",
+  "text-embedding-3-small": "gemini/gemini-embedding-001",
+  "gpt-image-1": "gemini/gemini-3.1-flash-image-preview"
+}
+```
+
+Google spells a Claude model whose name carries a date with the date behind an `@`, which is why the Haiku lines differ. Before switching, in the Google project: enable the Agent Platform API (`aiplatform.googleapis.com`), and switch on each Claude model you use, in Model Garden. Vertex has no hosted page fetching, so the web research step falls back to its own page reader, which needs `BRIGHT_DATA_ACCESS_TOKEN` and `BRIGHT_DATA_UNLOCKER_ZONE`.
+
+**Transcription, embeddings and image generation follow the map too**, one name each. OpenAI serves all three under their own names; Gemini serves all three under the wire model the line names.
+
+| capability | model name | on `openai` | on `gemini` |
+|---|---|---|---|
+| transcription (voice notes and audio attachments) | `whisper-1` | Whisper; the audio is uploaded as a file | a Gemini model given the audio inline, up to 7 MB per file, in the formats Gemini lists (Ogg, MP3, M4A, WAV, WebM, FLAC, AAC, PCM) |
+| embeddings, 3072 wide (`knowledge.raw_text.embedding`, `knowledge.raw_text_part.embedding`) | `text-embedding-3-large` | `text-embedding-3-large` (up to 3072) | `gemini-embedding-001` (128 to 3072), one text per request, 2048 tokens each at most |
+| embeddings, 256 wide (`knowledge.extraction_fact.embedding`) | `text-embedding-3-small` | `text-embedding-3-small` (up to 1536) | `gemini-embedding-001` |
+| image generation | `gpt-image-1` | GPT Image 1, at the size and quality asked for | a Gemini image model, called in `GOOGLE_PROJECT_LOCATION` rather than `GOOGLE_MODEL_REGION`; always square, and a request that sets a size or quality is refused rather than drawn some other way |
+
+An embedding line must name a model the product knows the widths of, and one wide enough for the column: `"text-embedding-3-large": "openai/text-embedding-3-small"` is refused at boot, because that model tops out at 1536 and the column stores 3072. Vectors written by one vendor are not comparable with vectors written by another, so moving an embedding line on a deployment that already has vectors means re-embedding what is stored.
+
+**Upgrading a deployment from before `MODEL_MAP`.** Three things behave differently with no map set:
+
+- The system, movement and ontology agents used to run on GPT 5 when `KNOWLEDGE_AGENT_PROVIDER` was unset. They now run on Claude (`claude-sonnet-5`). To keep them on GPT, map `claude-sonnet-5` to `openai/gpt-5`.
+- Image generation used to go to Gemini whenever the Google service account was set, and to DALL·E 3 otherwise. OpenAI shut DALL·E 3 down on 2026-05-12, so the image model is now `gpt-image-1`, which goes to OpenAI. To keep Gemini images, add `"gpt-image-1": "gemini/gemini-3.1-flash-image-preview"`. A map that names `dall-e-3` is refused at boot, because that name is no longer in the product's list.
+- `MODEL_ROUTE`, `ANTHROPIC_MODEL_ROUTE`, `OPENAI_MODEL_ROUTE` and `KNOWLEDGE_AGENT_PROVIDER` are no longer read. A deployment that set `MODEL_ROUTE=google` needs the Claude on Google Cloud map above, or the third map for Gemini.
+
+Usage rows now name the provider that served each call (`anthropic`, `vertex`, `openai`, `gemini` or `jev`) rather than `google`, the wire model in `model`, and the model name the product asked for in `preferred_model`.
 
 **The map moves one name at a time**, so a deployment can keep Claude on its own Anthropic key while sending only the OpenAI names to Gemini: map just those names, keep `ANTHROPIC_API_KEY`, and set the Google service account. The knowledge agents are no exception: they name `claude-sonnet-5` (the unified agent an Opus name), and run wherever the map sends that name.
 
@@ -573,7 +600,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `KNOWLEDGE_LLM_MODEL` | no | `claude-opus-5`. Must be a model name the product uses; boot refuses any other. Where it goes follows `MODEL_MAP`, and `KNOWLEDGE_LLM_API_KEY` applies only when that is Anthropic's own API |
 | `OPENAI_API_KEY` | only for names the map leaves at OpenAI | the key for OpenAI's own names: transcription, embeddings and image generation, plus any chat name the map sends to `openai`. Absent, each fails naming it when asked for |
 | `OPENAI_ORGANIZATION` | no | none — no `organization` is sent, and OpenAI uses the key's own default org |
-| `MODEL_MAP` | no | empty — every model name goes to its own vendor under its own name. A JSON object from model name to `provider/wire-model` sends names elsewhere; see "What you configure" for the Google Cloud example. Boot refuses a map it cannot serve |
+| `MODEL_MAP` | no | empty — every model name goes to its own vendor under its own name. A JSON object from model name to `provider/wire-model` sends names elsewhere; see "What you configure" for three worked maps (vendor keys, everything on OpenAI, everything on Gemini) and the Claude on Google Cloud one. Boot refuses a map it cannot serve |
 | `GOOGLE_MODEL_REGION` | no | `global` — where models are addressed on Google Cloud, for both the `vertex` (Claude) and `gemini` providers. `GOOGLE_PROJECT_LOCATION` is separate and stays the region OCR and image generation use |
 | `GEMINI_BASE_URL` | no | unset — every call the map sends to `gemini` (chat, transcription, embeddings, images) goes to Google Cloud, signed with the service account. Set it only to point those calls at a stand-in such as the dev loop's fake Gemini (`http://localhost:<fake channels port>/gemini`); a redirected client sends a placeholder key instead of a Google token |
 | `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | when the map names `vertex` or `gemini`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR and image generation |

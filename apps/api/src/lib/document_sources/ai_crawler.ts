@@ -122,7 +122,7 @@ async function visionCall(opts: {
   label: string;
 }): Promise<string> {
   const startMs = Date.now();
-  const { client, wireModel } = chatCallFor(VISION_MODEL);
+  const { client, wireModel, resolved } = chatCallFor(VISION_MODEL);
   const response = await client.messages.create({
     model: wireModel,
     max_tokens: 4096,
@@ -147,8 +147,7 @@ async function visionCall(opts: {
   const durationMs = Date.now() - startMs;
 
   recordLlmUsage({
-    provider: 'anthropic',
-    model: VISION_MODEL,
+    resolved,
     callType: 'chat',
     label: opts.label,
     inputTokens: response.usage.input_tokens,

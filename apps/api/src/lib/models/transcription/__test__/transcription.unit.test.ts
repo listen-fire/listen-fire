@@ -120,10 +120,14 @@ describe('Gemini', () => {
     await expect(transcribe('whisper-1', { audio: OGG }, GEMINI_ENV)).resolves.toEqual({ text: '' });
   });
 
-  it('bills Google under the wire model', async () => {
+  it('bills Gemini under the wire model, keeping the name the caller asked for', async () => {
     await transcribe('whisper-1', { audio: OGG, label: 'l' }, GEMINI_ENV);
     expect(recordLlmUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: 'google', model: 'gemini-3.8-flash', inputTokens: 30, outputTokens: 5 }),
+      expect.objectContaining({
+        resolved: { preferred: 'whisper-1', provider: 'gemini', wireModel: 'gemini-3.8-flash' },
+        inputTokens: 30,
+        outputTokens: 5,
+      }),
     );
   });
 

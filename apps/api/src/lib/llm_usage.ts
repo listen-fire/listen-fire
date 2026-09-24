@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { getQb } from './kysely';
 import { logger } from '../services/logger';
+import type { Resolved } from './models/map';
+import { models } from './models/registry';
 import type { TeamId } from '../generated/kysely/core/Team';
 import type { DealflowPipelineId } from '../generated/kysely/public/DealflowPipeline';
 import type { AgentConversationId } from '../generated/kysely/public/AgentConversation';
@@ -84,21 +86,19 @@ function runFields(): { runId?: string } {
 //   Embeddings: https://platform.openai.com/docs/models/text-embedding-3-large
 //   Google: https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing (2026-09-17)
 //
-// The Gemini chat entries carry the `google/` prefix because that IS the model
-// string sent on Google's OpenAI-shaped endpoint — the ledger names what was
-// called, not what the caller asked for. Google's own prices are the GLOBAL
-// endpoint's and its base (<=200K input) tier.
-const MODEL_PRICING: Record<
-  string,
-  { input: number; output: number; cacheRead?: number; cacheCreation?: number }
-> = {
-  'gpt-4.1': { input: 2.0, output: 8.0 },
-  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
-  'gpt-4.1-nano': { input: 0.1, output: 0.4 }, // deprecated 2026-10-23
-  'gpt-5': { input: 1.25, output: 10.0 },
-  'gpt-5-mini': { input: 0.25, output: 2.0 },
-  'gpt-5-nano': { input: 0.05, output: 0.4 },
-  o3: { input: 2.0, output: 8.0 },
+// Keyed on `provider/wire-model` — who served the call and what it was called
+// on their wire — because that pair, not the name the caller asked for, is what
+// a vendor bills. Claude on Vertex is priced as on Anthropic's own API. Google's
+// own prices are the GLOBAL endpoint's and its base (<=200K input) tier.
+type Price = { input: number; output: number; cacheRead?: number; cacheCreation?: number };
+
+const CLAUDE_PRICING: Record<string, Price> = {
+  // https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-24):
+  // base input, output, cache hits, 5m cache writes. Fable 5.1's cache hits are
+  // 0.025x its input price, not the usual 0.1x.
+  'claude-fable-5-1': { input: 10.0, output: 50.0, cacheRead: 0.25, cacheCreation: 12.5 },
+  'claude-opus-4-6': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
+  'claude-haiku-4-5': { input: 1.0, output: 5.0, cacheRead: 0.1, cacheCreation: 1.25 },
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0, cacheRead: 0.08, cacheCreation: 1.0 },
   'claude-sonnet-4-5-20250929': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
@@ -108,48 +108,83 @@ const MODEL_PRICING: Record<
   'claude-opus-4-7': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
   'claude-opus-4-8': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
   'claude-opus-5': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
-  'mercury-2': { input: 0.25, output: 0.75 },
-  'text-embedding-3-large': { input: 0.13, output: 0 },
-  'text-embedding-3-small': { input: 0.02, output: 0 },
+};
+
+const MODEL_PRICING: Record<string, Price> = {
+  ...Object.fromEntries(
+    Object.entries(CLAUDE_PRICING).flatMap(([name, price]) => [
+      [`anthropic/${name}`, price],
+      [`vertex/${name}`, price],
+    ]),
+  ),
+  // Chat on OpenAI is still reachable: the model map can send a Claude name to
+  // `openai/gpt-5`.
+  'openai/gpt-4.1': { input: 2.0, output: 8.0 },
+  'openai/gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'openai/gpt-4.1-nano': { input: 0.1, output: 0.4 }, // deprecated 2026-10-23
+  'openai/gpt-5': { input: 1.25, output: 10.0 },
+  'openai/gpt-5-mini': { input: 0.25, output: 2.0 },
+  'openai/gpt-5-nano': { input: 0.05, output: 0.4 },
+  'openai/o3': { input: 2.0, output: 8.0 },
+  'openai/text-embedding-3-large': { input: 0.13, output: 0 },
+  'openai/text-embedding-3-small': { input: 0.02, output: 0 },
+  // https://developers.openai.com/api/docs/pricing (checked 2026-09-24), per
+  // million tokens: text input $5, cached text input $1.25, image output $40.
+  // OpenAI also prices image INPUT tokens at $10, which this table cannot tell
+  // apart from text input; generation sends only a text prompt, so none arise.
+  'openai/gpt-image-1': { input: 5.0, output: 40.0, cacheRead: 1.25 },
   // Above 200K input tokens this becomes $4.00/$18.00 — a tier this table has
   // no way to express, so a very long prompt is under-priced rather than
-  // unpriced. Global-endpoint only, which is where the route sends it.
-  'google/gemini-3.1-pro-preview': { input: 2.0, output: 12.0, cacheRead: 0.2 },
+  // unpriced.
+  'gemini/gemini-3.1-pro-preview': { input: 2.0, output: 12.0, cacheRead: 0.2 },
   // Standard rates; introductory $0.75/$3.75 applies through 2026-12-31, then
   // reverts to these.
-  'google/gemini-3.8-flash': { input: 1.5, output: 7.5, cacheRead: 0.15 },
-  // Transcription calls Gemini directly rather than through the OpenAI-shaped
-  // endpoint, so it bills under the bare model id.
-  'gemini-3.8-flash': { input: 1.5, output: 7.5, cacheRead: 0.15 },
+  'gemini/gemini-3.8-flash': { input: 1.5, output: 7.5, cacheRead: 0.15 },
   // Google prices this at $0.00015 per 1,000 "count" (= $0.15 per million) and
   // hands back its own `token_count`, which is what we record — so this entry
   // takes one count as one token.
-  'gemini-embedding-001': { input: 0.15, output: 0 },
+  'gemini/gemini-embedding-001': { input: 0.15, output: 0 },
 };
 
 /**
- * Models already complained about. An unpriced model records a real token count
- * at zero cost — usage that reads as free rather than as missing — and the only
- * thing that distinguishes the two is somebody being told. Once per name per
- * process: the same unpriced model is called thousands of times a day, and a
+ * Keys already complained about. An unpriced key records a real token count at
+ * zero cost — usage that reads as free rather than as missing — and the only
+ * thing that distinguishes the two is somebody being told. Once per key per
+ * process: the same unpriced key is called thousands of times a day, and a
  * warning per call is a warning nobody reads.
  */
-const unpricedModelsWarned = new Set<string>();
+const unpricedKeysWarned = new Set<string>();
+
+function pricingKey(served: Served): string {
+  return `${served.provider}/${served.wireModel}`;
+}
+
+/** Where an unpriced key came from, in the terms an operator changes: the map
+ *  line that produced it, or the map's silence about that name. */
+function originOf(served: Served): string {
+  if (served.provider === 'jev') return 'Jev, which no MODEL_MAP line routes';
+  const key = pricingKey(served);
+  const { home } = models[served.preferred];
+  return served.provider === home && served.wireModel === served.preferred
+    ? `"${served.preferred}", which MODEL_MAP does not mention, so it went to its home vendor as ${key}`
+    : `the MODEL_MAP line "${served.preferred}": "${key}"`;
+}
 
 function calculateCostMicrodollars(options: {
-  model: string;
+  served: Served;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
 }): number {
-  const pricing = MODEL_PRICING[options.model];
+  const key = pricingKey(options.served);
+  const pricing = MODEL_PRICING[key];
   if (!pricing) {
-    if (!unpricedModelsWarned.has(options.model)) {
-      unpricedModelsWarned.add(options.model);
+    if (!unpricedKeysWarned.has(key)) {
+      unpricedKeysWarned.add(key);
       logger.warn(
-        `[llm_usage] no price for model "${options.model}" — its usage is recorded at zero cost. ` +
-          'Add it to MODEL_PRICING.',
+        `[llm_usage] no price for "${key}" (from ${originOf(options.served)}) — its usage is recorded ` +
+          'at zero cost. Add it to MODEL_PRICING.',
       );
     }
     return 0;
@@ -165,15 +200,21 @@ function calculateCostMicrodollars(options: {
 
 // -- Recording --
 
+/** Jev is Typesafe AI's non-generative judge (`lib/jev/client.ts`): a vendor
+ *  of its own that the model map never routes, so it has no preferred name. */
+interface JevCall {
+  provider: 'jev';
+  wireModel: string;
+}
+
+/** Who answered a call and under what name. */
+type Served = Resolved | JevCall;
+
 interface RecordUsageOptions {
-  /** Who actually served the call, not whose dialect it was spoken in: a chat
-   *  built with OpenAI's request shape and answered by Gemini on Google Cloud
-   *  is `google`, because that is who priced it. `jev` is Typesafe AI's
-   *  non-generative judge (`lib/jev/client.ts`) — a distinct vendor, not a
-   *  dialect of either LLM provider. */
-  provider: 'openai' | 'anthropic' | 'google' | 'jev';
-  model: string;
-  callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'responses';
+  /** What the model map resolved the call to — the `Resolved` the caller
+   *  already holds from `chatCallFor` or `resolveModel`, never rebuilt. */
+  resolved: Served;
+  callType: 'chat' | 'structured' | 'tool_loop' | 'embedding' | 'image' | 'responses';
   label?: string;
   inputTokens: number;
   outputTokens: number;
@@ -188,8 +229,9 @@ async function recordLlmUsage(options: RecordUsageOptions): Promise<void> {
 
   if (!teamId) return;
 
+  const { resolved } = options;
   const costMicrodollars = calculateCostMicrodollars({
-    model: options.model,
+    served: resolved,
     inputTokens: options.inputTokens,
     outputTokens: options.outputTokens,
     cacheReadTokens: options.cacheReadTokens ?? 0,
@@ -201,8 +243,9 @@ async function recordLlmUsage(options: RecordUsageOptions): Promise<void> {
       .insertInto('llm_usage')
       .values({
         team_id: teamId as TeamId,
-        provider: options.provider,
-        model: options.model,
+        provider: resolved.provider,
+        model: resolved.wireModel,
+        preferred_model: resolved.provider === 'jev' ? null : resolved.preferred,
         call_type: options.callType,
         label: options.label ?? null,
         input_tokens: options.inputTokens,
@@ -252,6 +295,7 @@ async function releaseLlmUsageRunReferences(scope: LlmUsageRunScope): Promise<vo
 
 export {
   LlmUsageContext,
+  calculateCostMicrodollars,
   currentLlmUsageContext,
   recordLlmUsage,
   releaseLlmUsageRunReferences,

@@ -3,36 +3,57 @@
 import { z } from 'zod';
 
 import { logger } from '../../../services/logger';
+import { recordLlmUsage } from '../../llm_usage';
+import type { Resolved } from '../map';
 import { openAiClient } from '../providers/openai';
 import type { GeneratedImage, ImageRequest } from './index';
 
-// The values DALL·E 3 takes. Parsed rather than asserted: the request's
-// strings come from a model's tool call, and one the endpoint does not know
-// should fail here naming the field, not as a 400 naming nothing we wrote.
-const DalleOptions = z.object({
-  size: z.enum(['1024x1024', '1792x1024', '1024x1792']).default('1024x1024'),
-  quality: z.enum(['standard', 'hd']).default('standard'),
-  style: z.enum(['vivid', 'natural']).default('vivid'),
+// The values gpt-image-1 takes, from the images reference
+// (https://developers.openai.com/api/reference/python/resources/images/methods/generate,
+// checked 2026-09-24) and the SDK's `ImageGenerateParams`. Parsed rather than
+// asserted: an unknown value should fail here naming the field, not as a 400
+// naming nothing we wrote. Unset knobs are not sent, so OpenAI's own `auto`
+// applies. `style` and `response_format` are gone because the endpoint now
+// refuses them as unknown parameters, and a GPT image model always answers in
+// base64.
+const GptImageOptions = z.object({
+  size: z.enum(['1024x1024', '1536x1024', '1024x1536', 'auto']).optional(),
+  quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
 });
 
 export async function openAiGenerateImage(
-  wireModel: string,
+  resolved: Resolved,
   req: ImageRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<GeneratedImage> {
-  const options = DalleOptions.safeParse({ size: req.size, quality: req.quality, style: req.style });
+  const { wireModel } = resolved;
+  const options = GptImageOptions.safeParse({ size: req.size, quality: req.quality });
   if (!options.success) {
     throw new Error(`An image request OpenAI cannot take: ${options.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
   }
+  const { size, quality } = options.data;
   logger.info(`OpenAI image submitted ${req.label ? `(${req.label})` : ''}`, { model: wireModel });
   const response = await openAiClient(env).images.generate({
     model: wireModel,
     prompt: req.prompt,
     n: 1,
-    ...options.data,
-    response_format: 'b64_json',
+    ...(size === undefined ? {} : { size }),
+    ...(quality === undefined ? {} : { quality }),
   });
+
+  // Priced per token like any other call: the reply counts the prompt's tokens
+  // and the image's.
+  if (response.usage) {
+    recordLlmUsage({
+      resolved,
+      callType: 'image',
+      label: req.label,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    }).catch(() => {});
+  }
+
   const b64 = response.data?.[0]?.b64_json;
   if (!b64) throw new Error(`${wireModel} returned no image data.`);
-  return { bytes: Buffer.from(b64, 'base64'), mimeType: 'image/png' };
+  return { bytes: Buffer.from(b64, 'base64'), mimeType: `image/${response.output_format ?? 'png'}` };
 }

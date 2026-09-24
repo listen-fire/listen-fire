@@ -6,11 +6,23 @@ import { logger } from '../../../services/logger';
 import { geminiClient } from '../providers/gemini';
 import type { GeneratedImage, ImageRequest } from './index';
 
-/** DALL·E's sizes as Gemini's aspect ratio and resolution tier. */
-function geminiImageConfig(size?: string): { aspectRatio: string; imageSize: string } {
-  if (size === '1792x1024') return { aspectRatio: '16:9', imageSize: '2K' };
-  if (size === '1024x1792') return { aspectRatio: '9:16', imageSize: '2K' };
-  return { aspectRatio: '1:1', imageSize: '1K' };
+/** What Gemini draws: the square, 1K picture image generation on Google has
+ *  always asked for. */
+const IMAGE_CONFIG = { aspectRatio: '1:1', imageSize: '1K' };
+
+/**
+ * `size` and `quality` are gpt-image-1's vocabulary, and neither has an honest
+ * Gemini reading: a pixel size is not an aspect ratio and resolution tier, and
+ * Gemini has no quality knob. Set, each is refused by name rather than dropped,
+ * because a caller that asked for a landscape image and got a square one was
+ * told nothing.
+ */
+function refuseUnhonoured(feature: 'size' | 'quality', value: string | undefined): void {
+  if (value === undefined) return;
+  throw new Error(
+    `Image ${feature} "${value}" is not supported by the gemini provider. ` +
+      `Leave ${feature} unset, or map the image model to openai.`,
+  );
 }
 
 export async function geminiGenerateImage(
@@ -18,9 +30,8 @@ export async function geminiGenerateImage(
   req: ImageRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<GeneratedImage> {
-  // `quality` and `style` have no Gemini parameter and are not sent: they are
-  // DALL·E's names for what the prompt itself describes to Gemini, and this
-  // is how image generation on Google has always behaved here.
+  refuseUnhonoured('size', req.size);
+  refuseUnhonoured('quality', req.quality);
   logger.info(`Gemini image submitted ${req.label ? `(${req.label})` : ''}`, { model: wireModel });
   // In the project's own region rather than the model region: image
   // generation has always run there, and the global endpoint is not where
@@ -29,7 +40,7 @@ export async function geminiGenerateImage(
   const response = await client.models.generateContent({
     model: wireModel,
     contents: [{ role: 'user', parts: [{ text: req.prompt }] }],
-    config: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: geminiImageConfig(req.size) },
+    config: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: IMAGE_CONFIG },
   });
   const parts = response.candidates?.[0]?.content?.parts ?? [];
   const image = parts.find((part) => part.inlineData?.mimeType?.startsWith('image/'))?.inlineData;

@@ -186,8 +186,7 @@ export async function askJev(
   }
 
   await recordLlmUsage({
-    provider: 'jev',
-    model: parsed.data.model,
+    resolved: { provider: 'jev', wireModel: parsed.data.model },
     callType: 'structured',
     label: options.label,
     inputTokens: parsed.data.usage?.input_tokens ?? 0,

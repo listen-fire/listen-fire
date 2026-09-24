@@ -1,5 +1,5 @@
 // Image generation behind the model map: the caller names a registry model and
-// DALL·E 3's knobs, and the map decides which vendor draws it.
+// gpt-image-1's knobs, and the map decides which vendor draws it.
 
 import { neverAsAny } from '../../utils/types';
 import { assertCallable, resolveModel } from '../map';
@@ -7,15 +7,14 @@ import type { ImageModelName } from '../registry';
 import { geminiGenerateImage } from './gemini';
 import { openAiGenerateImage } from './openai';
 
-/** DALL·E 3's request shape, the interface every image provider answers. */
+/** gpt-image-1's request shape, the interface every image provider answers.
+ *  A provider that cannot honour a knob that is set refuses it by name. */
 export interface ImageRequest {
   prompt: string;
-  /** `1024x1024`, `1792x1024` or `1024x1792`. */
+  /** `1024x1024`, `1536x1024`, `1024x1536` or `auto`. */
   size?: string;
-  /** `standard` or `hd`. */
+  /** `low`, `medium`, `high` or `auto`. */
   quality?: string;
-  /** `vivid` or `natural`. */
-  style?: string;
   label?: string;
 }
 
@@ -34,7 +33,7 @@ export async function generateImage(
   const { provider, wireModel } = resolved;
   switch (provider) {
     case 'openai':
-      return openAiGenerateImage(wireModel, req, env);
+      return openAiGenerateImage(resolved, req, env);
     case 'gemini':
       return geminiGenerateImage(wireModel, req, env);
     case 'anthropic':

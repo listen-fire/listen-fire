@@ -4,6 +4,7 @@
 import { countTokens } from '../../chunking';
 import { recordLlmUsage } from '../../llm_usage';
 import { geminiClient } from '../providers/gemini';
+import type { Resolved } from '../map';
 import type { EmbeddingRequest, EmbeddingResult } from './index';
 import type { EmbeddingRange } from './range';
 
@@ -39,10 +40,11 @@ function normalize(values: number[]): number[] {
 }
 
 export async function geminiEmbed(
-  wireModel: string,
+  resolved: Resolved,
   req: EmbeddingRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<EmbeddingResult> {
+  const { wireModel } = resolved;
   const model = GEMINI_EMBEDDING_MODELS[wireModel];
   if (!model) {
     throw new Error(
@@ -86,8 +88,7 @@ export async function geminiEmbed(
     embeddings.push(embedding.values.length < model.max ? normalize(embedding.values) : embedding.values);
 
     recordLlmUsage({
-      provider: 'google',
-      model: wireModel,
+      resolved,
       callType: 'embedding',
       label: req.label,
       inputTokens: embedding.statistics?.tokenCount ?? 0,

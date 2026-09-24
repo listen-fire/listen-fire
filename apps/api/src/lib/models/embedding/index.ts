@@ -3,7 +3,7 @@
 
 import { neverAsAny } from '../../utils/types';
 import { assertCallable, resolveModel } from '../map';
-import type { Provider } from '../map';
+import type { Resolved } from '../map';
 import type { EmbeddingModelName } from '../registry';
 import { geminiEmbed } from './gemini';
 import { openAiEmbed } from './openai';
@@ -28,7 +28,7 @@ export async function embed(
   const resolved = resolveModel(name, env);
   assertCallable(resolved, env);
   const { provider, wireModel } = resolved;
-  const result = await embedOn(provider, wireModel, req, env, name);
+  const result = await embedOn(resolved, req, env);
   if (result.embeddings.length !== req.input.length) {
     throw new Error(
       `${provider}/${wireModel} returned ${result.embeddings.length} embeddings for ${req.input.length} texts.`,
@@ -45,18 +45,13 @@ export async function embed(
   return result;
 }
 
-function embedOn(
-  provider: Provider,
-  wireModel: string,
-  req: EmbeddingRequest,
-  env: NodeJS.ProcessEnv,
-  name: EmbeddingModelName,
-): Promise<EmbeddingResult> {
+function embedOn(resolved: Resolved, req: EmbeddingRequest, env: NodeJS.ProcessEnv): Promise<EmbeddingResult> {
+  const { provider, preferred: name } = resolved;
   switch (provider) {
     case 'openai':
-      return openAiEmbed(wireModel, req, env);
+      return openAiEmbed(resolved, req, env);
     case 'gemini':
-      return geminiEmbed(wireModel, req, env);
+      return geminiEmbed(resolved, req, env);
     case 'anthropic':
     case 'vertex':
       // Boot validation refuses this map line; reaching it means the map was

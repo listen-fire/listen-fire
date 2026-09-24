@@ -376,7 +376,7 @@ async function anthropicToolLoop(
   } = params;
 
   const anthropicTools = convertToolDefinitions(openaiTools);
-  const { client, wireModel } = chatCallFor(model);
+  const { client, wireModel, resolved } = chatCallFor(model);
 
   const resolvedThinking = resolveThinkingConfig({
     model,
@@ -521,8 +521,7 @@ async function anthropicToolLoop(
     });
 
     recordLlmUsage({
-      provider: 'anthropic',
-      model,
+      resolved,
       callType: 'tool_loop',
       label,
       inputTokens: event.inputTokens,
@@ -796,7 +795,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     effort,
     maxContinuations = MAX_CHAT_CONTINUATIONS,
   } = options;
-  const { client, wireModel } = chatCallFor(model);
+  const { client, wireModel, resolved } = chatCallFor(model);
 
   // Adaptive thinking is ON by default on these models; the only lever a chat
   // caller has over its depth is `effort`, and it only lands if `thinking` is
@@ -953,8 +952,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   });
 
   recordLlmUsage({
-    provider: 'anthropic',
-    model,
+    resolved,
     callType: 'chat',
     label,
     inputTokens: totalInputTokens,
@@ -1017,7 +1015,7 @@ async function anthropicChatStructured<T>(
     label,
   } = options;
 
-  const { client, wireModel } = chatCallFor(model);
+  const { client, wireModel, resolved } = chatCallFor(model);
   const tool = buildStructuredTool({ name: toolName, description: toolDescription, schema });
 
   const startMs = Date.now();
@@ -1041,8 +1039,7 @@ async function anthropicChatStructured<T>(
   });
 
   recordLlmUsage({
-    provider: 'anthropic',
-    model,
+    resolved,
     callType: 'structured',
     label,
     inputTokens: response.usage.input_tokens,
@@ -1353,11 +1350,8 @@ async function anthropicWebChat(
     fetchPage,
     searchWeb,
   } = options;
-  const {
-    client,
-    wireModel,
-    resolved: { provider },
-  } = chatCallFor(model);
+  const { client, wireModel, resolved } = chatCallFor(model);
+  const { provider } = resolved;
 
   const thinkingConfig =
     effort && usesAdaptiveThinking(model)
@@ -1534,8 +1528,7 @@ async function anthropicWebChat(
   });
 
   recordLlmUsage({
-    provider: 'anthropic',
-    model,
+    resolved,
     callType: 'chat',
     label,
     inputTokens: usage.inputTokens,

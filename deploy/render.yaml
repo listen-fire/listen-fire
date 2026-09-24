@@ -257,11 +257,12 @@ services:
         sync: false
       # Which vendor answers each model name. Unset (the dashboard owns it),
       # every name goes to its own vendor with the keys here; see
-      # deploy/SELF_HOSTING.md for a map that sends them through Google Cloud.
+      # deploy/SELF_HOSTING.md for worked maps: everything on OpenAI,
+      # everything on Gemini, and Claude through Google Cloud.
       - key: MODEL_MAP
         sync: false
-      # Voice notes are transcribed by Whisper unless MODEL_MAP sends
-      # `whisper-1` elsewhere; unset, a voice note fails naming the key.
+      # Transcription, embeddings and image generation go to OpenAI unless
+      # MODEL_MAP sends their names elsewhere; unset, each fails naming the key.
       - key: OPENAI_API_KEY
         sync: false
 

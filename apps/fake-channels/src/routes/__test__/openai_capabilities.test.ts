@@ -130,25 +130,39 @@ test('embeddings: refuses a width the model cannot produce, and a model that doe
   }
 });
 
-test('images: a 1×1 PNG as base64, and DALL·E 3’s own refusals', async () => {
+test('images: gpt-image-1 answers in base64 with its token usage, and refuses what the real endpoint refuses', async () => {
   const app = await bootApp();
   try {
     const ok = await postJson(`${app.baseUrl}/images/generations`, {
-      model: 'dall-e-3',
+      model: 'gpt-image-1',
       prompt: 'a leaf',
       n: 1,
-      size: '1792x1024',
-      quality: 'hd',
-      style: 'natural',
-      response_format: 'b64_json',
+      size: '1536x1024',
+      quality: 'high',
     });
     assert.equal(ok.status, 200);
-    assert.equal((await ok.json()).data[0].b64_json, FAKE_PNG_BASE64);
+    const body = await ok.json();
+    assert.equal(body.data[0].b64_json, FAKE_PNG_BASE64);
+    assert.equal(body.usage.output_tokens, 272);
 
-    const badSize = await postJson(`${app.baseUrl}/images/generations`, { model: 'dall-e-3', prompt: 'a leaf', size: '640x480' });
-    assert.equal(badSize.status, 400);
-    const two = await postJson(`${app.baseUrl}/images/generations`, { model: 'dall-e-3', prompt: 'a leaf', n: 2 });
-    assert.equal(two.status, 400);
+    for (const param of ['style', 'response_format']) {
+      const refused = await postJson(`${app.baseUrl}/images/generations`, { model: 'gpt-image-1', prompt: 'a leaf', [param]: 'x' });
+      assert.equal(refused.status, 400);
+      assert.deepEqual((await refused.json()).error, {
+        message: `Unknown parameter: '${param}'.`,
+        type: 'invalid_request_error',
+        param,
+        code: 'unknown_parameter',
+      });
+    }
+
+    const dalleSize = await postJson(`${app.baseUrl}/images/generations`, { model: 'gpt-image-1', prompt: 'a leaf', size: '1792x1024' });
+    assert.equal(dalleSize.status, 400);
+    const dalleQuality = await postJson(`${app.baseUrl}/images/generations`, { model: 'gpt-image-1', prompt: 'a leaf', quality: 'hd' });
+    assert.equal(dalleQuality.status, 400);
+    const dalle = await postJson(`${app.baseUrl}/images/generations`, { model: 'dall-e-3', prompt: 'a leaf' });
+    assert.equal(dalle.status, 400);
+    assert.equal((await dalle.json()).error.message, "The model 'dall-e-3' does not exist.");
   } finally {
     await app.close();
   }
