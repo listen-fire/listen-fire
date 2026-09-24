@@ -1322,12 +1322,18 @@ async function aggregateViaLLM(input: { values: unknown[]; prompt: string }): Pr
 }
 
 async function callLLM(prompt: string): Promise<string> {
-  // Lazy-loaded for the same reason the v3 bridge was: openai/index.ts has a
+  // Lazy-loaded for the same reason the v3 bridge was: the chat wrapper has a
   // transitive Prisma runtime dependency that fails in the unit-test
   // environment if eagerly imported.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-  const { openAiChat } = require('../../../lib/openai') as { openAiChat: (messages: any) => Promise<string> };
-  return openAiChat([{ role: 'user', content: prompt }]);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { anthropicChat }: typeof import('../../../lib/anthropic') = require('../../../lib/anthropic');
+  return anthropicChat({
+    model: 'claude-sonnet-5',
+    temperature: 0,
+    label: 'tg_llm_aggregate',
+    system: '',
+    userMessage: prompt,
+  });
 }
 
 // ── Function helpers ──────────────────────────────────────────────────────

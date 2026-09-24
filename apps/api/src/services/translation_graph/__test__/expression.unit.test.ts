@@ -1,3 +1,10 @@
+// The `llm` aggregate reaches the chat wrapper; answered here rather than on
+// the network, so the test says what the evaluator does, not whether a vendor
+// was reachable.
+jest.mock('../../../lib/anthropic', () => ({
+  anthropicChat: jest.fn(async () => 'an aggregated answer'),
+}));
+
 import {
   evaluateExpression,
   ExpressionNotImplementedError,
@@ -389,11 +396,6 @@ describe('evaluateExpression', () => {
       // no per-adapter capability gate. An adapter that omits `llm` from its
       // declared kinds must NOT reject it.
       //
-      // This exercises the real `callLLM` → `openAiChat` path unmocked (there is
-      // no recording context outside a request, so it always takes the live
-      // branch) — a genuine network call, not a seam to re-key. The default 5s
-      // Jest timeout is too tight for that under load; a longer per-test budget
-      // is the correct fix, per Jest's own guidance on long-running tests.
       const adapter: Adapter = {
         ...makeStubAdapter({}),
         runtimeCapabilities: () => permissiveCaps({
@@ -408,7 +410,7 @@ describe('evaluateExpression', () => {
         expression: { type: 'static', value: 'x' },
       };
       await expect(evaluateExpression(expr, ctx(adapter))).resolves.toBeDefined();
-    }, 20000);
+    });
   });
 
   describe('function', () => {

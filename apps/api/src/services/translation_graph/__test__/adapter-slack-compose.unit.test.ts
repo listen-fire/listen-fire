@@ -8,13 +8,13 @@
  * at the write boundary (S4). Also checks the function is advertised on the
  * message `text` fields and that `invokeFieldFunction` routes to it.
  *
- * The LLM (`openAiChat`) is mocked — no network.
+ * The LLM (`anthropicChat`) is mocked — no network.
  */
 
-const mockChatCalls: unknown[] = [];
-jest.mock('../../../lib/openai', () => ({
-  openAiChat: (messages: unknown) => {
-    mockChatCalls.push(messages);
+const mockChatCalls: Array<{ system: string; userMessage: string }> = [];
+jest.mock('../../../lib/anthropic', () => ({
+  anthropicChat: (options: { system: string; userMessage: string }) => {
+    mockChatCalls.push(options);
     return Promise.resolve('*Thanks @[Ada Okafor] for leading the Acme round!* 🎉');
   },
 }));
@@ -54,27 +54,23 @@ describe('composeSlackMessage', () => {
     });
     expect(out).toBe(COMPOSED);
 
-    const messages = mockChatCalls[0] as Array<{ role: string; content: string }>;
-    expect(messages[0].role).toBe('system');
-    expect(messages[0].content).toMatch(/@\[Name\]/); // mention convention taught
-    expect(messages[0].content).toMatch(/\*bold\*/); // mrkdwn rules present
-    expect(messages[1].role).toBe('user');
-    expect(messages[1].content).toContain('thank them for leading the round');
-    expect(messages[1].content).toContain('Ada Okafor');
-    expect(messages[1].content).toContain('Acme Series A');
+    const { system, userMessage } = mockChatCalls[0];
+    expect(system).toMatch(/@\[Name\]/); // mention convention taught
+    expect(system).toMatch(/\*bold\*/); // mrkdwn rules present
+    expect(userMessage).toContain('thank them for leading the round');
+    expect(userMessage).toContain('Ada Okafor');
+    expect(userMessage).toContain('Acme Series A');
   });
 
   it('drops null/undefined/empty data values from the user message', async () => {
     await composeSlackMessage({ instructions: 'hi', data: [null, undefined, '', 'Keep'] });
-    const messages = mockChatCalls[0] as Array<{ role: string; content: string }>;
-    expect(messages[1].content).toContain('Keep');
-    expect(messages[1].content).not.toMatch(/-\s*$/m); // no empty bullet line
+    expect(mockChatCalls[0].userMessage).toContain('Keep');
+    expect(mockChatCalls[0].userMessage).not.toMatch(/-\s*$/m); // no empty bullet line
   });
 
   it('renders array data as a joined value', async () => {
     await composeSlackMessage({ instructions: 'hi', data: [['a', 'b', 'c']] });
-    const messages = mockChatCalls[0] as Array<{ role: string; content: string }>;
-    expect(messages[1].content).toContain('a, b, c');
+    expect(mockChatCalls[0].userMessage).toContain('a, b, c');
   });
 });
 
