@@ -96,12 +96,23 @@ describe('chatCallFor', () => {
     expect(() => load().chatCallFor('whisper-1', {})).toThrow(/"whisper-1" is a transcription model/);
   });
 
-  it('says plainly that the translating providers are not here yet', () => {
+  it('sends a name mapped to openai through the OpenAI translator under the map’s spelling', () => {
+    const call = load().chatCallFor('claude-sonnet-5', {
+      OPENAI_API_KEY: 'k',
+      MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'openai/gpt-5' }),
+    });
+    expect(call.resolved.provider).toBe('openai');
+    expect(call.wireModel).toBe('gpt-5');
+    expect(typeof call.client.messages.create).toBe('function');
+    expect(anthropicCtor).not.toHaveBeenCalled();
+  });
+
+  it('says plainly that the Gemini translator is not here yet', () => {
     expect(() =>
       load().chatCallFor('claude-sonnet-5', {
-        OPENAI_API_KEY: 'k',
-        MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'openai/gpt-5' }),
+        ...GOOGLE,
+        MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'gemini/gemini-3-pro' }),
       }),
-    ).toThrow('Provider "openai" is not available yet');
+    ).toThrow('Provider "gemini" is not available yet');
   });
 });
