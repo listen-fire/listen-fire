@@ -290,6 +290,58 @@ describe('request: Anthropic in, Gemini out', () => {
     ]);
   });
 
+  it('a failed tool_result becomes an error response, with empty content said to be empty', async () => {
+    const request = await requestFor({
+      ...BASE,
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'search', input: {} },
+            { type: 'tool_use', id: 'toolu_2', name: 'fetch', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'rate limited' }], is_error: true },
+            { type: 'tool_result', tool_use_id: 'toolu_2', is_error: true },
+          ],
+        },
+      ],
+    });
+    expect(request.contents[2]).toEqual({
+      role: 'user',
+      parts: [
+        { functionResponse: { name: 'search', response: { error: 'rate limited' } } },
+        { functionResponse: { name: 'fetch', response: { error: '(no output)' } } },
+      ],
+    });
+  });
+
+  it('a non-text block inside a tool_result still raises', async () => {
+    await expect(
+      requestFor({
+        ...BASE,
+        messages: [
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'shot', input: {} }] },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_1',
+                is_error: true,
+                content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }],
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toThrow('A "image" block inside a tool_result cannot be sent to gemini');
+  });
+
   it('a tool_result answers the most recent tool_use with its id, since ids restart every reply', async () => {
     const request = await requestFor({
       ...BASE,

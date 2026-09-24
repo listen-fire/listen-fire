@@ -314,7 +314,15 @@ function userPartFor(block: Anthropic.ContentBlockParam, toolNames: ReadonlyMap<
         );
       }
       const text = toolResultText(block.content);
-      return { functionResponse: { name, response: block.is_error ? { error: text } : { output: text } } };
+      // Gemini reads a failed call from an `error` key in the response, beside
+      // `output` for a successful one. An empty error would read as a failure
+      // with no reason, which the model tends to retry blindly, so it says so.
+      return {
+        functionResponse: {
+          name,
+          response: block.is_error ? { error: text === '' ? '(no output)' : text } : { output: text },
+        },
+      };
     }
     default:
       return unsupported(`A "${block.type}" block in a user message`);
