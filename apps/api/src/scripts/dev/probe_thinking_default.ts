@@ -18,12 +18,12 @@
  *   pnpm dev:probe-thinking --models claude-opus-5,claude-sonnet-5
  */
 import { chatCallFor } from '../../lib/models/chat';
-import { parseModelName } from '../../lib/models/registry';
-import type { ModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
+import type { ChatModelName } from '../../lib/models/registry';
 
 /** Every model the Claude 5 move has to decide about, plus the two already on
  *  5 that the claim says behave differently. */
-const DEFAULT_MODELS: ModelName[] = [
+const DEFAULT_MODELS: ChatModelName[] = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-5',
@@ -52,7 +52,7 @@ function flag(name: string): string | undefined {
   return value === undefined || value.startsWith('--') ? undefined : value;
 }
 
-async function probe(model: ModelName, prompt: string): Promise<void> {
+async function probe(model: ChatModelName, prompt: string): Promise<void> {
   const { client, wireModel } = chatCallFor(model);
   const started = Date.now();
   try {
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   const models =
     flag('models')
       ?.split(',')
-      .map((name) => parseModelName(name, '--models')) ?? DEFAULT_MODELS;
+      .map((name) => parseChatModelName(name, '--models')) ?? DEFAULT_MODELS;
   const prompt = process.argv.includes('--hard') ? HARD_PROMPT : PROMPT;
   console.log(`no thinking field on the wire; max_tokens ${MAX_TOKENS}\nprompt: ${prompt}\n`);
   for (const model of models) await probe(model, prompt);

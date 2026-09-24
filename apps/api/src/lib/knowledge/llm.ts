@@ -21,8 +21,8 @@ import type { ChatProvider } from '../models/chat';
 import { providerCredentialsPresent, resolveModel } from '../models/map';
 import type { Provider } from '../models/map';
 import { anthropicKeyedChatProvider } from '../models/providers/anthropic';
-import { parseModelName } from '../models/registry';
-import type { ModelName } from '../models/registry';
+import { parseChatModelName } from '../models/registry';
+import type { ChatModelName } from '../models/registry';
 import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 
@@ -43,9 +43,9 @@ export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 /** Overridable because the operator paying for the calls should get to choose. */
-function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ModelName {
+function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ChatModelName {
   const raw = env.KNOWLEDGE_LLM_MODEL;
-  return raw ? parseModelName(raw, 'KNOWLEDGE_LLM_MODEL') : 'claude-opus-5';
+  return raw ? parseChatModelName(raw, 'KNOWLEDGE_LLM_MODEL') : 'claude-opus-5';
 }
 
 /** Refuse a `KNOWLEDGE_LLM_MODEL` the registry does not know, at boot rather

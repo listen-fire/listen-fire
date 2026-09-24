@@ -1,4 +1,4 @@
-import { isModelName, modelNames, models } from '../registry';
+import { hasCapability, isModelName, modelNames, models, parseChatModelName } from '../registry';
 
 describe('the model registry', () => {
   it('knows its own names and nothing else', () => {
@@ -21,5 +21,12 @@ describe('the model registry', () => {
 
   it('keeps the dated Claude name callers send today', () => {
     expect(models['claude-haiku-4-5-20251001']).toEqual({ capability: 'chat', home: 'anthropic' });
+  });
+
+  it('narrows a name by what it serves', () => {
+    expect(hasCapability('whisper-1', 'transcription')).toBe(true);
+    expect(hasCapability('whisper-1', 'chat')).toBe(false);
+    expect(parseChatModelName('claude-sonnet-5', 'X')).toBe('claude-sonnet-5');
+    expect(() => parseChatModelName('dall-e-3', 'X')).toThrow(/X is "dall-e-3", which is not a chat model \(it serves image\)/);
   });
 });

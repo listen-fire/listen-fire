@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 
-import type { ModelName } from '../../../../../lib/models/registry';
+import type { ChatModelName } from '../../../../../lib/models/registry';
 import { neverAsAny } from '../../../../../lib/utils/types';
 import { describeError } from '../fetch_resource';
 
@@ -97,7 +97,7 @@ export type ResearchEngineName = 'constrained' | 'agentic';
 /** The knobs the comparison harness turns. An engine's own workflow is its
  *  business; these are the terms both are held to. */
 export interface ResearchOptions {
-  model?: ModelName;
+  model?: ChatModelName;
   /** Reasoning depth, on the models that read it. */
   effort?: 'low' | 'medium' | 'high';
   /** At most this many searches, page reads and milliseconds per entry —

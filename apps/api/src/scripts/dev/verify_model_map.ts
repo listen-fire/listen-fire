@@ -41,18 +41,18 @@ import { z } from 'zod';
 
 import { anthropicChat, anthropicChatStructured, anthropicToolLoop } from '../../lib/anthropic';
 import { assertModelMapConfigured, resolveModel } from '../../lib/models/map';
-import { parseModelName } from '../../lib/models/registry';
-import type { ModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
+import type { ChatModelName } from '../../lib/models/registry';
 
 /** The model each capability's legs call. */
 interface Target {
-  chat: ModelName;
+  chat: ChatModelName;
 }
 
 interface Leg {
   name: string;
   /** Which of the target's models this leg calls, for the route column. */
-  model: (target: Target) => ModelName;
+  model: (target: Target) => ChatModelName;
   /** Resolves with a one-line detail on a pass; throws on a fail. */
   run: (target: Target) => Promise<string>;
 }
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
     process.env.OPENAI_API_KEY ??= 'fake';
   }
 
-  const target: Target = { chat: parseModelName(flag('model') ?? 'claude-sonnet-5', '--model') };
+  const target: Target = { chat: parseChatModelName(flag('model') ?? 'claude-sonnet-5', '--model') };
 
   // The same refusals the server makes at boot, so a bad map fails here with
   // the server's own words rather than as a confusing first-leg error.

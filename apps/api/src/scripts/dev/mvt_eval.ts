@@ -35,8 +35,8 @@ import './_profile_loader';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 import { anthropicToolLoop, type TurnEvent } from '../../lib/anthropic';
-import { parseModelName } from '../../lib/models/registry';
-import type { ModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
+import type { ChatModelName } from '../../lib/models/registry';
 import {
   createMovementAgentTools,
   movementToolDefinitions,
@@ -249,7 +249,7 @@ async function runCell(opts: {
   brief: Brief;
   mode: Mode;
   rep: number;
-  model: ModelName;
+  model: ChatModelName;
 }): Promise<RunRecord> {
   const { teamId, brief, mode, rep, model } = opts;
 
@@ -484,15 +484,15 @@ interface Args {
   k: number;
   briefIds: string[];
   modes: Mode[];
-  model: ModelName;
+  model: ChatModelName;
   out: string | null;
   pretty: boolean;
 }
 
-const DEFAULT_MODEL: ModelName = 'claude-sonnet-5';
+const DEFAULT_MODEL: ChatModelName = 'claude-sonnet-5';
 
-function parseModel(flag: string | undefined): ModelName {
-  return flag === undefined ? DEFAULT_MODEL : parseModelName(flag, '--model');
+function parseModel(flag: string | undefined): ChatModelName {
+  return flag === undefined ? DEFAULT_MODEL : parseChatModelName(flag, '--model');
 }
 
 function parseArgs(): Args {

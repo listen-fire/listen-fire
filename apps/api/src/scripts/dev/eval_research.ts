@@ -73,8 +73,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { anthropicChatStructured } from '../../lib/anthropic';
-import { parseModelName } from '../../lib/models/registry';
-import type { ModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
+import type { ChatModelName } from '../../lib/models/registry';
 import { runInContext } from '../../services/context/utils';
 import { research, usageWasNotMeasured } from '../../services/translation_graph/engine/transforms/research';
 import { ensureDevLoopTeam } from './_lib';
@@ -271,7 +271,7 @@ function judgeMessage(args: { fixture: Fixture; result: ResearchResult | null })
 async function judge(args: {
   fixture: Fixture;
   result: ResearchResult | null;
-  model: ModelName;
+  model: ChatModelName;
 }): Promise<Judgement> {
   return anthropicChatStructured({
     system: JUDGE_SYSTEM,
@@ -332,8 +332,8 @@ function expectMatches(fixture: Fixture, result: ResearchResult | null): {
 async function runOne(args: {
   fixture: Fixture;
   engine: ResearchEngineName;
-  model: ModelName;
-  judgeModel: ModelName;
+  model: ChatModelName;
+  judgeModel: ChatModelName;
 }): Promise<RunRecord> {
   const { fixture, engine, model, judgeModel } = args;
   const started = Date.now();
@@ -702,9 +702,9 @@ async function main(): Promise<void> {
   if (!fixturesPath) throw new Error('--fixtures <path to the fixture JSON> is required');
   const outDir = flag('out') ?? path.dirname(fixturesPath);
   const judgeFlag = flag('judge');
-  const judgeModel = judgeFlag ? parseModelName(judgeFlag, '--judge') : 'claude-opus-5';
+  const judgeModel = judgeFlag ? parseChatModelName(judgeFlag, '--judge') : 'claude-opus-5';
   const modelFlag = flag('model');
-  const model = modelFlag ? parseModelName(modelFlag, '--model') : 'claude-sonnet-5';
+  const model = modelFlag ? parseChatModelName(modelFlag, '--model') : 'claude-sonnet-5';
   const concurrency = Number(flag('concurrency') ?? 2);
   const only = flag('only');
 

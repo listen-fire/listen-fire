@@ -104,8 +104,12 @@ describe('chatCallFor', () => {
     expect(anthropicCtor).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a name that is not a chat model', () => {
-    expect(() => load().chatCallFor('whisper-1', {})).toThrow(/"whisper-1" is a transcription model/);
+  it('refuses a name that is not a chat model, at the type level', () => {
+    // Never called: the assertion is that this does not compile.
+    const askWhisperToChat = () =>
+      // @ts-expect-error whisper-1 transcribes; it is not a ChatModelName.
+      load().chatCallFor('whisper-1', {});
+    expect(typeof askWhisperToChat).toBe('function');
   });
 
   it('sends a name mapped to openai through the OpenAI translator under the map’s spelling', () => {

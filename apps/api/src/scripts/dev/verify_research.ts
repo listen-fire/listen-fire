@@ -24,7 +24,7 @@ import './_profile_loader';
 import '../../services';
 import '../../services/translation_graph/engine/transforms/register-bundled';
 
-import { parseModelName } from '../../lib/models/registry';
+import { parseChatModelName } from '../../lib/models/registry';
 import { runInContext } from '../../services/context/utils';
 import { research } from '../../services/translation_graph/engine/transforms/research';
 import { ensureDevLoopTeam } from './_lib';
@@ -83,7 +83,7 @@ async function main() {
     urls: flags('url'),
   };
   const modelFlag = flag('model');
-  const model = modelFlag === undefined ? undefined : parseModelName(modelFlag, '--model');
+  const model = modelFlag === undefined ? undefined : parseChatModelName(modelFlag, '--model');
   const engines: ResearchEngineName[] = has('both')
     ? ['constrained', 'agentic']
     : [(flag('engine') as ResearchEngineName) ?? 'constrained'];
