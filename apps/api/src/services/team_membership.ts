@@ -45,7 +45,8 @@ type CreatedMember = { id: UserId; username: string; email: string };
 
 type AddMemberResult =
   | { status: 'added'; member: { id: UserId; email: string } }
-  | { status: 'last_admin' };
+  | { status: 'last_admin' }
+  | { status: 'email_taken' };
 
 type CreateServiceAccountResult =
   | { status: 'created'; member: CreatedMember }
@@ -60,6 +61,22 @@ async function upsertMembership(
     .values({ user_id: input.userId, team_id: input.teamId, access: input.access })
     .onConflict((oc) => oc.columns(['user_id', 'team_id']).doUpdateSet({ access: input.access }))
     .execute();
+}
+
+/**
+ * Whether another team holds a pending invite for this address. Sign-in claims
+ * every pending invite for the address it verifies, so writing such an address
+ * onto an account — a new one, or an existing one's extra address — hands that
+ * account the other team's invite. Such an address counts as taken.
+ */
+async function invitedToAnotherTeam(input: { teamId: TeamId; email: string }): Promise<boolean> {
+  const invite = await getCoreQb(['team_invite'])
+    .selectFrom('team_invite')
+    .select('id')
+    .where('email', '=', input.email.toLowerCase().trim())
+    .where('team_id', '!=', input.teamId)
+    .executeTakeFirst();
+  return invite !== undefined;
 }
 
 /**
@@ -160,6 +177,9 @@ async function addMember(input: {
       await grantAccess({ teamId: input.teamId, userId: id, access: input.access });
     }
   } else {
+    if (await invitedToAnotherTeam({ teamId: input.teamId, email: lower })) {
+      return { status: 'email_taken' };
+    }
     ({ userId: id } = await ProvisioningService.provisionUser({
       teamId: input.teamId,
       email: lower,
@@ -200,7 +220,9 @@ async function createServiceAccount(input: {
     .select('id')
     .where('email', '=', email)
     .executeTakeFirst();
-  if (taken) return { status: 'email_taken' };
+  if (taken || (await invitedToAnotherTeam({ teamId: input.teamId, email }))) {
+    return { status: 'email_taken' };
+  }
 
   const now = new Date();
   const user = await getCoreQb(['user'])
@@ -304,5 +326,6 @@ export const TeamMembershipService = {
   addMember,
   createServiceAccount,
   removeMember,
+  invitedToAnotherTeam,
 };
 export type { Access, AddMemberResult, RemoveMemberResult, ChangeAccessResult, CreatedMember, CreateServiceAccountResult };

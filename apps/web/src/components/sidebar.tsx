@@ -56,7 +56,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { navIsMounted } from "@/lib/capabilities";
+import { firstMountedHref, navIsMounted } from "@/lib/capabilities";
 import { useCapabilities, useCapabilitiesSettled } from "@/lib/capabilities-provider";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "./ui";
@@ -371,7 +371,7 @@ export function Sidebar({
         }`}
       >
         <Link
-          href="/dashboard"
+          href={capabilities === null ? "/dashboard" : firstMountedHref(capabilities)}
           title="Home"
           className={`flex items-center gap-2 ${iconOnly ? "" : "min-w-0"}`}
         >

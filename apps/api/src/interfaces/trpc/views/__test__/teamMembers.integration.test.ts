@@ -3,14 +3,16 @@
 //
 //   • a per-member act only reaches people on the acting team;
 //   • the last write-access member cannot be demoted, as they cannot be removed;
-//   • adding an address that already has an account adds THAT account.
+//   • adding an address that already has an account adds THAT account;
+//   • no address or number this team writes can open a door to another team.
 
 import { randomUUID } from 'node:crypto';
 
-import { getCoreQb } from '../../../../lib/kysely';
+import { getAutomationsQb, getCoreQb } from '../../../../lib/kysely';
 import { Context } from '../../../../services/context';
 import { userPrincipal } from '../../../../services/principal';
 import { ProvisioningService } from '../../../../services/provisioning';
+import { TeamInviteService } from '../../../../services/team_invite';
 import { cleanupTeam } from '../../../../test/harness/cleanup';
 import { trpc } from '../../trpc';
 import { teamMembersRouter } from '../teamMembers';
@@ -148,6 +150,99 @@ describe('team members — managing the team from its own settings', () => {
     const soleTeam = new Map(overview.members.map((m) => [m.userId, m.soleTeam]));
     expect(soleTeam.get(shared.userId)).toBe(false);
     expect(soleTeam.get(admin.userId)).toBe(true);
+  });
+
+  it('refuses to change the sign-in details of a platform admin, even on their sole team', async () => {
+    const platformAdmin = await makeUser(teamId, 'read');
+    await getCoreQb(['user'])
+      .updateTable('user')
+      .set({ is_platform_admin: true })
+      .where('id', '=', platformAdmin.userId)
+      .execute();
+
+    expect(
+      await refusalOf({ userId: admin.userId, teamId }, (c) =>
+        c.addEmail({ userId: platformAdmin.userId, email: `x-${randomUUID().slice(0, 8)}@example.com` }),
+      ),
+    ).toMatchObject({ code: 'FORBIDDEN' });
+
+    const overview = await asMember({ userId: admin.userId, teamId }, (c) => c.overview());
+    const row = overview.members.find((m) => m.userId === platformAdmin.userId);
+    expect(row).toMatchObject({ soleTeam: true, platformAdmin: true });
+  });
+
+  it('refuses an address another team has a pending invite for', async () => {
+    const member = await makeUser(teamId, 'read');
+    const inviter = await makeUser(otherTeamId, 'write');
+    const invited = `invited-${randomUUID().slice(0, 8)}@example.com`;
+    await asMember({ userId: inviter.userId, teamId: otherTeamId }, () =>
+      TeamInviteService.addInvite({ teamId: otherTeamId, email: invited, invitedBy: inviter.userId }),
+    );
+
+    expect(
+      await refusalOf({ userId: admin.userId, teamId }, (c) =>
+        c.addEmail({ userId: member.userId, email: invited.toUpperCase() }),
+      ),
+    ).toMatchObject({ code: 'CONFLICT' });
+    expect(
+      await refusalOf({ userId: admin.userId, teamId }, (c) =>
+        c.addMember({ email: invited, username: 'Squatter', access: 'read' }),
+      ),
+    ).toMatchObject({ code: 'CONFLICT' });
+    expect(
+      await refusalOf({ userId: admin.userId, teamId }, (c) =>
+        c.createServiceAccount({ email: invited, access: 'read' }),
+      ),
+    ).toMatchObject({ code: 'CONFLICT' });
+
+    const written = await getCoreQb(['user_email'])
+      .selectFrom('user_email')
+      .select('id')
+      .where('email', '=', invited)
+      .executeTakeFirst();
+    expect(written).toBeUndefined();
+  });
+
+  it('refuses a phone number another person already has, as CONFLICT', async () => {
+    const holder = await makeUser(teamId, 'read');
+    const member = await makeUser(teamId, 'read');
+    const number = `+4477009${String(Math.floor(Math.random() * 1e5)).padStart(5, '0')}`;
+    try {
+      await asMember({ userId: admin.userId, teamId }, (c) =>
+        c.addPhone({ userId: holder.userId, phoneNumber: number }),
+      );
+      expect(
+        await refusalOf({ userId: admin.userId, teamId }, (c) =>
+          c.addPhone({ userId: member.userId, phoneNumber: number }),
+        ),
+      ).toMatchObject({ code: 'CONFLICT' });
+      // The holder setting their own number again is not a conflict.
+      await asMember({ userId: admin.userId, teamId }, (c) =>
+        c.addPhone({ userId: holder.userId, phoneNumber: number }),
+      );
+    } finally {
+      // Phone numbers live in automations, keyed on the user; team cleanup misses them.
+      await getAutomationsQb(['phone_number'])
+        .deleteFrom('phone_number')
+        .where('user_id', 'in', [holder.userId, member.userId])
+        .execute();
+    }
+  });
+
+  it('refuses to remove the last write-access member as PRECONDITION_FAILED', async () => {
+    expect(
+      await refusalOf({ userId: admin.userId, teamId }, (c) => c.remove({ userId: admin.userId })),
+    ).toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(await accessOn(teamId, admin.userId)).toBe('write');
+  });
+
+  it('tells a read-only member they are read-only, and refuses their writes as FORBIDDEN', async () => {
+    const reader = await makeUser(teamId, 'read');
+    const overview = await asMember({ userId: reader.userId, teamId }, (c) => c.overview());
+    expect(overview.viewer).toEqual({ userId: reader.userId, access: 'read' });
+    expect(
+      await refusalOf({ userId: reader.userId, teamId }, (c) => c.remove({ userId: admin.userId })),
+    ).toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('refuses to demote the last write-access member, and allows it once there is another', async () => {

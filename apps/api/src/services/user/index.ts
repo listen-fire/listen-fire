@@ -316,6 +316,30 @@ class User extends ModelService<'user'> {
     return ctx.prisma.phoneNumber.create({ data: { phoneNumber: normalisedNumber, userId } });
   }
 
+  /**
+   * Whether this number already belongs to anyone other than this user. The
+   * number is unique across all users, so `addPhoneNumber` would fail on it;
+   * asking first lets a caller refuse in words instead.
+   */
+  async phoneNumberHeldByAnother({
+    phoneNumber,
+    userId,
+  }: {
+    phoneNumber: string;
+    userId: string;
+  }): Promise<boolean> {
+    const { prisma } = currentContext();
+    const held = await prisma.phoneNumber.findFirst({
+      where: {
+        phoneNumber: normalisePhoneNumber(phoneNumber),
+        // A row nobody owns still holds the number.
+        OR: [{ userId: null }, { userId: { not: userId } }],
+      },
+      select: { id: true },
+    });
+    return held !== null;
+  }
+
   async updateUsername({ userId, newUsername }: { userId: string; newUsername: string }) {
     const trimmedUsername = newUsername.trim();
     if (trimmedUsername.length === 0) {

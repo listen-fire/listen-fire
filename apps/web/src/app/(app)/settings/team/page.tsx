@@ -5,7 +5,8 @@
  * needs to manage its own people. Inviting an address IS the invitation:
  * nothing is emailed and the person joins the next time they sign in, so the
  * page says that rather than promising a link. Adding someone directly puts
- * them on the team at once. Removing a member signs them out.
+ * them on the team at once. Removing a member signs them out. A read-only
+ * member sees the roster and nothing they could change.
  *
  */
 
@@ -18,18 +19,14 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui";
 import { usePageTitle } from "@/components/page-title";
 
+import { Card } from "../card";
+
 type Access = "read" | "write";
 
 const INPUT_CLASS =
   "w-64 max-w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-900 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400";
 
 const isEmail = (value: string) => /.+@.+\..+/.test(value);
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5">{children}</div>
-  );
-}
 
 function AccessToggle({
   value,
@@ -258,12 +255,38 @@ type Member = {
   access: Access;
   isServiceAccount: boolean;
   soleTeam: boolean;
+  platformAdmin: boolean;
 };
+
+/** Why this team may not change a member's name, addresses or number, if it may not. */
+function identityLockedReason(member: Member): string | null {
+  if (member.platformAdmin) {
+    return "A platform admin, so only platform admins can change their name, email or phone.";
+  }
+  if (!member.soleTeam) {
+    return "Also on another team, so only they can change their name, email or phone.";
+  }
+  return null;
+}
+
+/** Remove, and demoting yourself, take a second click — neither is easy to undo. */
+type Confirming = "remove" | "demote-self";
 
 type Editor = "rename" | "email" | "phone";
 
-function MemberRow({ member, onChanged }: { member: Member; onChanged: () => void }) {
+function MemberRow({
+  member,
+  canWrite,
+  isSelf,
+  onChanged,
+}: {
+  member: Member;
+  canWrite: boolean;
+  isSelf: boolean;
+  onChanged: () => void;
+}) {
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [value, setValue] = useState("");
   const [makePrimary, setMakePrimary] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -273,10 +296,14 @@ function MemberRow({ member, onChanged }: { member: Member; onChanged: () => voi
       setEditor(null);
       setValue("");
       setMakePrimary(false);
+      setConfirming(null);
       setError(null);
       onChanged();
     },
-    onError: (e: { message: string }) => setError(e.message),
+    onError: (e: { message: string }) => {
+      setConfirming(null);
+      setError(e.message);
+    },
   };
   const setAccess = trpc.views.teamMembers.setAccess.useMutation(settle);
   const rename = trpc.views.teamMembers.rename.useMutation(settle);
@@ -318,6 +345,31 @@ function MemberRow({ member, onChanged }: { member: Member; onChanged: () => voi
     }
   };
 
+  const changeAccess = (next: Access) => {
+    if (isSelf && next === "read") {
+      setError(null);
+      setConfirming("demote-self");
+      return;
+    }
+    setAccess.mutate({ userId: member.userId, access: next });
+  };
+
+  const confirm = () => {
+    if (confirming === null || busy) return;
+    switch (confirming) {
+      case "remove":
+        remove.mutate({ userId: member.userId });
+        return;
+      case "demote-self":
+        setAccess.mutate({ userId: member.userId, access: "read" });
+        return;
+      default:
+        neverAsAny(confirming);
+    }
+  };
+
+  const lockedReason = identityLockedReason(member);
+
   const actionClass =
     "flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-slate-700";
 
@@ -346,47 +398,79 @@ function MemberRow({ member, onChanged }: { member: Member; onChanged: () => voi
           {member.phoneNumber && (
             <p className="truncate text-[11px] text-slate-400">{member.phoneNumber}</p>
           )}
-          {!member.soleTeam && (
-            <p className="text-[11px] text-slate-400" data-testid="team-member-other-team">
-              Also on another team, so only they can change their name, email or phone.
+          {canWrite && lockedReason !== null && (
+            <p className="text-[11px] text-slate-400" data-testid="team-member-identity-locked">
+              {lockedReason}
             </p>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
-          <AccessToggle
-            value={member.access}
-            onChange={(next) => setAccess.mutate({ userId: member.userId, access: next })}
-            disabled={busy}
-            testId="team-member-access"
-          />
-          {member.soleTeam && (
-            <>
-              <button onClick={() => open("rename")} className={actionClass} data-testid="team-member-rename">
-                <Pencil size={12} />
-                Rename
-              </button>
-              <button onClick={() => open("email")} className={actionClass} data-testid="team-member-add-email">
-                <MailPlus size={12} />
-                Email
-              </button>
-              <button onClick={() => open("phone")} className={actionClass} data-testid="team-member-add-phone">
-                <Phone size={12} />
-                {member.phoneNumber ? "Change phone" : "Phone"}
-              </button>
-            </>
-          )}
-          <button
-            onClick={() => remove.mutate({ userId: member.userId })}
-            disabled={busy}
-            className="flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
-            data-testid="team-member-remove"
-          >
-            <UserMinus size={12} />
-            Remove
-          </button>
-        </div>
+        {!canWrite ? (
+          <span className="shrink-0 text-[11px] font-medium text-slate-500" data-testid="team-member-access-label">
+            {member.access === "write" ? "Full access" : "Read-only"}
+          </span>
+        ) : confirming !== null ? (
+          <div className="flex shrink-0 items-center gap-1" data-testid="team-member-confirm">
+            <span className="text-[12px] text-slate-500">
+              {confirming === "remove"
+                ? `Remove ${member.username}? They are signed out.`
+                : "Make yourself read-only? You will no longer be able to manage the team."}
+            </span>
+            <button
+              onClick={confirm}
+              disabled={busy}
+              className="rounded px-2 py-1 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50"
+              data-testid="team-member-confirm-yes"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => setConfirming(null)}
+              disabled={busy}
+              className="rounded px-2 py-1 text-[12px] text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex shrink-0 flex-wrap items-center gap-3">
+            <AccessToggle
+              value={member.access}
+              onChange={changeAccess}
+              disabled={busy}
+              testId="team-member-access"
+            />
+            {lockedReason === null && (
+              <>
+                <button onClick={() => open("rename")} className={actionClass} data-testid="team-member-rename">
+                  <Pencil size={12} />
+                  Rename
+                </button>
+                <button onClick={() => open("email")} className={actionClass} data-testid="team-member-add-email">
+                  <MailPlus size={12} />
+                  Email
+                </button>
+                <button onClick={() => open("phone")} className={actionClass} data-testid="team-member-add-phone">
+                  <Phone size={12} />
+                  {member.phoneNumber ? "Change phone" : "Phone"}
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => {
+                setError(null);
+                setConfirming("remove");
+              }}
+              disabled={busy}
+              className="flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
+              data-testid="team-member-remove"
+            >
+              <UserMinus size={12} />
+              Remove
+            </button>
+          </div>
+        )}
       </div>
-      {editor !== null && (
+      {canWrite && editor !== null && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
             autoFocus
@@ -454,12 +538,21 @@ export default function TeamPage() {
     );
   }
 
-  const { members, invites } = overview.data;
+  const { viewer, members, invites } = overview.data;
+  const canWrite = viewer.access === "write";
 
   return (
     <div className="space-y-5">
-      <AddMemberCard onChanged={refresh} />
-      <ServiceAccountCard onChanged={refresh} />
+      {canWrite ? (
+        <>
+          <AddMemberCard onChanged={refresh} />
+          <ServiceAccountCard onChanged={refresh} />
+        </>
+      ) : (
+        <p className="text-[12px] text-slate-500" data-testid="team-read-only">
+          You have read-only access, so you can see the team but not change it.
+        </p>
+      )}
 
       {/* Pending invites */}
       {invites.length > 0 && (
@@ -479,15 +572,17 @@ export default function TeamPage() {
                     Added {new Date(i.createdAt).toLocaleDateString()}
                   </p>
                 </div>
-                <button
-                  onClick={() => revoke.mutate({ inviteId: i.id })}
-                  disabled={revoke.isLoading}
-                  className="flex shrink-0 items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
-                  data-testid="team-invite-revoke"
-                >
-                  <X size={12} />
-                  Withdraw
-                </button>
+                {canWrite && (
+                  <button
+                    onClick={() => revoke.mutate({ inviteId: i.id })}
+                    disabled={revoke.isLoading}
+                    className="flex shrink-0 items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
+                    data-testid="team-invite-revoke"
+                  >
+                    <X size={12} />
+                    Withdraw
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -499,7 +594,13 @@ export default function TeamPage() {
         <p className="text-[13px] font-semibold text-slate-900">Members</p>
         <div className="mt-1 divide-y divide-slate-100">
           {members.map((m) => (
-            <MemberRow key={m.userId} member={m} onChanged={refresh} />
+            <MemberRow
+              key={m.userId}
+              member={m}
+              canWrite={canWrite}
+              isSelf={m.userId === viewer.userId}
+              onChanged={refresh}
+            />
           ))}
         </div>
       </Card>

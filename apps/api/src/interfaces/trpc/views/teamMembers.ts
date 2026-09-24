@@ -36,7 +36,10 @@ async function requireWriteAccess(teamId: TeamId, userId: UserId): Promise<void>
     .where('user_id', '=', userId)
     .executeTakeFirst();
   if (membership?.access !== 'write') {
-    throw new Error('Only members with write access can manage the team.');
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Only members with write access can manage the team.',
+    });
   }
 }
 
@@ -60,6 +63,8 @@ async function teamCounts(userIds: readonly UserId[]): Promise<Map<UserId, numbe
  * sign in with — also needs this team to be their ONLY team. Sign-in finds a
  * person by any of their addresses, so an address this team's admin adds is a
  * way in to every team the person belongs to; only a sole team may write one.
+ * A platform admin's identity is never this team's to write, sole team or not:
+ * a way in to that account is a way in to every team.
  */
 async function requireMember(
   teamId: TeamId,
@@ -76,6 +81,18 @@ async function requireMember(
     throw new TRPCError({ code: 'NOT_FOUND', message: 'That person is not a member of this team.' });
   }
   if (identity) {
+    const user = await getCoreQb(['user'])
+      .selectFrom('user')
+      .select('is_platform_admin')
+      .where('id', '=', membership.user_id)
+      .executeTakeFirstOrThrow();
+    if (user.is_platform_admin) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'This account is a platform admin; only platform admins can change its sign-in details.',
+      });
+    }
     const teams = (await teamCounts([membership.user_id])).get(membership.user_id) ?? 0;
     if (teams > 1) {
       throw new TRPCError({
@@ -98,6 +115,8 @@ async function managedTeam(): Promise<TeamId> {
 
 const accessSchema = z.enum(['read', 'write']);
 
+const ADDRESS_TAKEN_MESSAGE = 'That address is already in use.';
+
 const LAST_ADMIN_MESSAGE =
   'This is the team’s last admin — give another member write access before changing this one.';
 
@@ -116,6 +135,7 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
         .select([
           'user.id as userId',
           'user.username as username',
+          'user.is_platform_admin as platformAdmin',
           'team_membership.access as access',
           'team_membership.created_at as joinedAt',
         ])
@@ -150,7 +170,17 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
 
       const invites = await TeamInviteService.listPendingInvites(teamId);
 
+      const viewerMembership = members.find((m) => m.userId === ctx.user.id);
+
       return {
+        // Who is looking, so the page can offer only what they may do.
+        viewer: {
+          userId: ctx.user.id as UserId,
+          access:
+            viewerMembership === undefined
+              ? ('read' as const)
+              : accessSchema.parse(viewerMembership.access),
+        },
         members: members.map((m) => {
           const own = emails.filter((e) => e.user_id === m.userId);
           const primary = own.find((e) => e.is_primary);
@@ -165,6 +195,7 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
             // Whether this team may change their name, addresses and number
             // (see `requireMember`).
             soleTeam: (counts.get(m.userId) ?? 0) <= 1,
+            platformAdmin: m.platformAdmin,
             joinedAt: m.joinedAt,
           };
         }),
@@ -195,9 +226,12 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
           case 'created':
             return { invited: true as const };
           case 'already_member':
-            throw new Error('That email is already a member of this team.');
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'That email is already a member of this team.',
+            });
           case 'already_invited':
-            throw new Error('That email is already invited.');
+            throw new TRPCError({ code: 'CONFLICT', message: 'That email is already invited.' });
           default:
             return neverAsAny(result);
         }
@@ -234,11 +268,15 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
           case 'removed':
             return { removed: true as const, signedOut: result.signedOut };
           case 'not_a_member':
-            throw new Error('That person is not a member of this team.');
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: 'That person is not a member of this team.',
+            });
           case 'last_admin':
-            throw new Error(
-              'This is the team’s last admin — add another admin before removing this one.',
-            );
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'This is the team’s last admin — add another admin before removing this one.',
+            });
           default:
             return neverAsAny(result);
         }
@@ -262,6 +300,8 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
             return result.member;
           case 'last_admin':
             throw new TRPCError({ code: 'PRECONDITION_FAILED', message: LAST_ADMIN_MESSAGE });
+          case 'email_taken':
+            throw new TRPCError({ code: 'CONFLICT', message: ADDRESS_TAKEN_MESSAGE });
           default:
             return neverAsAny(result);
         }
@@ -278,7 +318,7 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
           case 'created':
             return result.member;
           case 'email_taken':
-            throw new TRPCError({ code: 'CONFLICT', message: 'That address is already in use.' });
+            throw new TRPCError({ code: 'CONFLICT', message: ADDRESS_TAKEN_MESSAGE });
           default:
             return neverAsAny(result);
         }
@@ -336,8 +376,11 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
           .select('id')
           .where('email', '=', input.email.toLowerCase().trim())
           .executeTakeFirst();
-        if (taken) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'That address is already in use.' });
+        if (
+          taken ||
+          (await TeamMembershipService.invitedToAnotherTeam({ teamId, email: input.email }))
+        ) {
+          throw new TRPCError({ code: 'CONFLICT', message: ADDRESS_TAKEN_MESSAGE });
         }
 
         await currentContext().enterTransaction();
@@ -351,6 +394,11 @@ const teamMembersRouter = (procedure: typeof trpc.procedure) => {
       .mutation(async ({ input }) => {
         const teamId = await managedTeam();
         const userId = await requireMember(teamId, input.userId, { identity: true });
+
+        await currentContext().enterTransaction();
+        if (await UserService.phoneNumberHeldByAnother({ userId, phoneNumber: input.phoneNumber })) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'That number is already in use.' });
+        }
         await UserService.addPhoneNumber({ userId, phoneNumber: input.phoneNumber });
         return { phoneNumber: input.phoneNumber };
       }),

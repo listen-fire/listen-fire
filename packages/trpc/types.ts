@@ -13727,6 +13727,10 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_in: typeof _trpc_server.unsetMarker;
                 _output_out: typeof _trpc_server.unsetMarker;
             }, {
+                viewer: {
+                    userId: UserId;
+                    access: "read" | "write";
+                };
                 members: {
                     userId: UserId;
                     username: string;
@@ -13739,6 +13743,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     access: "read" | "write";
                     isServiceAccount: boolean;
                     soleTeam: boolean;
+                    platformAdmin: boolean;
                     joinedAt: Date;
                 }[];
                 invites: {
