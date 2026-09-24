@@ -40,7 +40,7 @@ Your response will be parsed as JSON, so the entire response must be valid JSON 
       identifiesCompany: z.boolean(),
     }),
   ),
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
   fallback: [],
 } as const);
 

@@ -43,7 +43,7 @@ When you reply, you're not actually replying to the user: instead, you're produc
     })
     .nullable(),
   fallback: null,
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 
 export { parsePersonDisplayDef };

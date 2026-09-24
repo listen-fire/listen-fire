@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { parseJson } from '../utils/parse_json';
-import { openAiChat, openAiChatStructured } from '../openai';
 import { anthropicChat, anthropicChatStructured } from '../anthropic';
 import { logger } from '../../services/logger';
 import { DefinitionArgs, PromptDefinition } from './definition';
@@ -51,6 +50,11 @@ function parseJsonReply(
  * Anthropic wrappers take. System-role blocks become the system prompt;
  * everything else folds into the single user turn — Claude 4.6+ rejects a
  * trailing assistant prefill, so we never emit an assistant turn here.
+ *
+ * Several turns are each wrapped in a tag naming their role: a definition
+ * that sends two texts as two messages (two summaries to combine, two texts to
+ * merge) means them as separate things, and a blank line alone would run them
+ * together into one.
  */
 function flattenMessages(messages: { role: string; content?: unknown }[]): {
   system: string;
@@ -58,7 +62,11 @@ function flattenMessages(messages: { role: string; content?: unknown }[]): {
 } {
   const text = (c: unknown) => (typeof c === 'string' ? c : c == null ? '' : JSON.stringify(c));
   const system = messages.filter((m) => m.role === 'system').map((m) => text(m.content)).join('\n\n');
-  const userMessage = messages.filter((m) => m.role !== 'system').map((m) => text(m.content)).join('\n\n');
+  const turns = messages.filter((m) => m.role !== 'system');
+  const userMessage =
+    turns.length === 1
+      ? text(turns[0].content)
+      : turns.map((m) => `<${m.role}_message>\n${text(m.content)}\n</${m.role}_message>`).join('\n\n');
   return { system, userMessage };
 }
 
@@ -101,37 +109,6 @@ async function execute<
     };
   });
 
-  const getOutput = async () => {
-    if (definition.response) {
-      const output = await openAiChatStructured(
-        messageParams,
-        {
-          model: ('model' in definition ? definition.model : undefined) ?? 'o3',
-          response_format: definition.response
-            ? {
-                type: 'json_schema',
-                json_schema: {
-                  name,
-                  schema: z.toJSONSchema(definition.response),
-                },
-              }
-            : undefined,
-        },
-        `${name} (${JSON.stringify(args, (_, v) => (typeof v === 'string' && v.length > 30 ? `${v.slice(0, 30)}...` : v))})`,
-      );
-      return output;
-    } else {
-      const output = await openAiChat(
-        messageParams,
-        {
-          model: ('model' in definition ? definition.model : undefined) ?? 'gpt-4.1',
-          temperature: definition.temperature ?? undefined,
-        },
-        `${name} (${JSON.stringify(args, (_, v) => (typeof v === 'string' && v.length > 30 ? `${v.slice(0, 30)}...` : v))})`,
-      );
-      return output;
-    }
-  };
   const validate = (raw: string) => {
     if (!('validator' in definition) || !definition.validator) {
       return raw as Output;
@@ -140,109 +117,59 @@ async function execute<
     return definition.validator.parse(records) as Output;
   };
 
-  const model = 'model' in definition ? definition.model : undefined;
-  if (typeof model === 'string' && model.startsWith('claude-')) {
-    const { system, userMessage } = flattenMessages(messageParams);
-    const toolDescription =
-      'description' in definition && typeof definition.description === 'string'
-        ? definition.description
-        : `Produce the ${name} result.`;
+  const model = ('model' in definition ? definition.model : undefined) ?? 'claude-sonnet-5';
+  const { system, userMessage } = flattenMessages(messageParams);
+  const toolDescription =
+    'description' in definition && typeof definition.description === 'string'
+      ? definition.description
+      : `Produce the ${name} result.`;
 
-    // Structured: the forced tool guarantees schema-valid JSON, so the
-    // parseJson / repair / retry machinery below is unnecessary. Run the
-    // caller's validator (for transforms) and return.
-    if ('response' in definition && definition.response) {
-      try {
-        const result = await anthropicChatStructured({
-          system,
-          userMessage,
-          schema: definition.response,
-          toolName: name,
-          toolDescription,
-          model,
-          label: name,
-        });
-        return ('validator' in definition && definition.validator
-          ? definition.validator.parse(result)
-          : result) as Output;
-      } catch (err) {
-        if ('fallback' in definition) {
-          logger.error(`Structured Claude output failed for ${name}, using fallback`, { error: err });
-          return definition.fallback as Output;
-        }
-        throw err;
-      }
-    }
-
-    // Plain: string out → validate. The retry folds the correction into the
-    // user turn — never an assistant prefill (Claude 4.6+ rejects that).
-    const raw = await anthropicChat({
-      system,
-      userMessage,
-      model,
-      temperature: definition.temperature ?? undefined,
-      label: name,
-    });
+  // Structured: the forced tool guarantees schema-valid JSON, so the
+  // parseJson / repair / retry machinery below is unnecessary. Run the
+  // caller's validator (for transforms) and return.
+  if ('response' in definition && definition.response) {
     try {
-      return validate(raw);
+      const result = await anthropicChatStructured({
+        system,
+        userMessage,
+        schema: definition.response,
+        toolName: name,
+        toolDescription,
+        model,
+        label: name,
+      });
+      return ('validator' in definition && definition.validator
+        ? definition.validator.parse(result)
+        : result) as Output;
     } catch (err) {
       if ('fallback' in definition) {
-        logger.error(`Claude output failed for ${name}, using fallback`, { error: err });
+        logger.error(`Structured Claude output failed for ${name}, using fallback`, { error: err });
         return definition.fallback as Output;
       }
-      logger.info(`${err instanceof Error ? err.constructor.name : 'Error'} for ${name}, retrying with correction`);
-      const retryUserMessage = `${userMessage}\n\n<your_previous_response>\n${raw}\n</your_previous_response>\n\n${buildCorrectionMessage(err)}`;
-      const retryRaw = await anthropicChat({ system, userMessage: retryUserMessage, model, label: `${name} (retry)` });
-      return validate(retryRaw);
+      throw err;
     }
   }
 
-  const output = await getOutput();
-
+  // Plain: string out → validate. The retry folds the correction into the
+  // user turn — never an assistant prefill (Claude 4.6+ rejects that).
+  const raw = await anthropicChat({
+    system,
+    userMessage,
+    model,
+    temperature: definition.temperature ?? undefined,
+    label: name,
+  });
   try {
-    return validate(output);
+    return validate(raw);
   } catch (err) {
     if ('fallback' in definition) {
-      console.error(output);
-      console.error(err);
+      logger.error(`Claude output failed for ${name}, using fallback`, { error: err });
       return definition.fallback as Output;
     }
-
-    // Retry once: send the LLM its own output + the error, ask it to fix
-    const correctionMessage = buildCorrectionMessage(err);
-
     logger.info(`${err instanceof Error ? err.constructor.name : 'Error'} for ${name}, retrying with correction`);
-
-    const retryMessages = [
-      ...messageParams,
-      { role: 'assistant' as const, content: output },
-      { role: 'user' as const, content: correctionMessage },
-    ];
-
-    const retryResult = definition.response
-      ? await openAiChatStructured(
-          retryMessages,
-          {
-            model: model ?? 'o3',
-            response_format: {
-              type: 'json_schema',
-              json_schema: { name, schema: z.toJSONSchema(definition.response) },
-            },
-          },
-          `${name} (retry)`,
-        )
-      : await openAiChat(
-          retryMessages,
-          { model: model ?? 'gpt-4.1', temperature: 0.3 },
-          `${name} (retry)`,
-        );
-
-    try {
-      return validate(retryResult);
-    } catch (retryErr) {
-      logger.error(`Retry also failed for ${name}`, { error: retryErr });
-      throw retryErr;
-    }
+    const retryUserMessage = `${userMessage}\n\n<your_previous_response>\n${raw}\n</your_previous_response>\n\n${buildCorrectionMessage(err)}`;
+    const retryRaw = await anthropicChat({ system, userMessage: retryUserMessage, model, label: `${name} (retry)` });
+    return validate(retryRaw);
   }
 }
 

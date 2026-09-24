@@ -78,7 +78,7 @@ Your response will be parsed as JSON, so the entire response must be valid JSON 
     { role: 'user', content: '{{{message}}}' },
   ],
   validator: identifiedCompanies,
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
 } as const);
 
 export { identifyCompanySplittableDef };

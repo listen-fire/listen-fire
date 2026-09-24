@@ -36,7 +36,7 @@ Your response must start with an opening square bracket, and end with a closing 
     },
   ],
   fallback: [],
-  model: 'gpt-4.1',
+  model: 'claude-sonnet-5',
   validator: z.array(
     z.object({
       number: z.number(),

@@ -10,7 +10,7 @@ describe('flattenMessages', () => {
     expect(userMessage).toBe('Classify this.');
   });
 
-  it('joins multiple messages of the same role with a blank line', () => {
+  it('joins system messages with a blank line and tags each of several turns', () => {
     const { system, userMessage } = flattenMessages([
       { role: 'system', content: 'Rule one.' },
       { role: 'system', content: 'Rule two.' },
@@ -18,7 +18,9 @@ describe('flattenMessages', () => {
       { role: 'user', content: 'Part B.' },
     ]);
     expect(system).toBe('Rule one.\n\nRule two.');
-    expect(userMessage).toBe('Part A.\n\nPart B.');
+    expect(userMessage).toBe(
+      '<user_message>\nPart A.\n</user_message>\n\n<user_message>\nPart B.\n</user_message>',
+    );
   });
 
   it('folds any non-system role into the user turn (no assistant turn for Claude)', () => {
@@ -28,7 +30,9 @@ describe('flattenMessages', () => {
       { role: 'user', content: 'now' },
     ]);
     expect(system).toBe('sys');
-    expect(userMessage).toBe('prior\n\nnow');
+    expect(userMessage).toBe(
+      '<assistant_message>\nprior\n</assistant_message>\n\n<user_message>\nnow\n</user_message>',
+    );
   });
 
   it('returns empty system when there are no system messages', () => {
