@@ -1,7 +1,7 @@
 // Jev (Typesafe AI) — a non-generative judge. You send it a `state` and a
 // set of typed questions and it returns a probability distribution per
-// question, rather than free text to parse. Its own file, mirroring
-// `lib/anthropic/client.ts`'s placement, because it is a distinct vendor
+// question, rather than free text to parse. Its own file, mirroring the
+// model provider files' placement, because it is a distinct vendor
 // with its own auth and wire shape — everything here imports the
 // environment and nothing else project-specific besides billing.
 //
@@ -56,7 +56,7 @@ export function jevEntityResolutionEnabled(env: NodeJS.ProcessEnv = process.env)
 /**
  * Refuse a half-configured Jev route the first time anything asks whether
  * it is on — the same "loud, not silent" posture as
- * `assertModelRouteConfigured` (`lib/model_route.ts`). Called again at boot
+ * `assertModelMapConfigured` (`lib/models/map.ts`). Called again at boot
  * (`server.ts`) so a misconfigured deployment fails before its first write,
  * not at it.
  */

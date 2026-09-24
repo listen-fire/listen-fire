@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { anthropicToolLoop, type TurnEvent } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
 import { openAIResponses } from '../openai';
+import { resolveModel } from '../models/map';
 import { currentContext } from '../../services/context';
 import { mq } from '../message_queue';
 import type { AgentUpdate } from '../openai/types';
@@ -170,7 +171,11 @@ async function runSystemAgent(
         systemPrompt += `\n\n## MCP session constraints\n\nThis request is being served via MCP with a tight time budget. Be direct and concise — short answers, minimal formatting, no preamble. Prefer a single tool call over chained lookups when possible.`;
       }
 
-      const provider = (process.env.KNOWLEDGE_AGENT_PROVIDER ?? 'openai') as 'openai' | 'anthropic';
+      // The Responses loop stays reachable only for a deployment whose model map
+      // sends this agent's model to OpenAI; every other provider answers through
+      // the Claude tool loop.
+      const agentModel = resolveModel('claude-sonnet-5');
+      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
       const wrappedTools = createWrappedTools(emitUpdate, teamId as TeamId);
 
       const allToolDefs: any[] = [...(toolDefinitions as any[]), ...additionalToolDefs];
@@ -205,7 +210,7 @@ async function runSystemAgent(
             )
           : await openAIResponses(
               {
-                model: 'gpt-5-mini',
+                model: agentModel.wireModel,
                 input: [
                   { role: 'system', content: systemPrompt },
                   ...historyInput,

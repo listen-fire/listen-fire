@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { Resvg } from '@resvg/resvg-js';
-import { platformAnthropic } from '../anthropic/client';
+import { chatCallFor } from '../models/chat';
 import { logger } from '../../services/logger';
 
 const MAX_REFINEMENTS = 3;
@@ -146,9 +146,9 @@ export async function generateIconSvg({ name, description, existingIcons }: {
   }
 
   // Step 1: Opus reasons about the metaphor and generates the initial SVG
-  const { client, wireModel } = platformAnthropic();
+  const { client, wireModel } = chatCallFor(ICON_MODEL);
   const initialResponse = await client.messages.create({
-    model: wireModel(ICON_MODEL),
+    model: wireModel,
     max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: conceptMessage }],
@@ -181,7 +181,7 @@ export async function generateIconSvg({ name, description, existingIcons }: {
     }
 
     const refineResponse = await client.messages.create({
-      model: wireModel(ICON_MODEL),
+      model: wireModel,
       max_tokens: 2048,
       system: REFINE_SYSTEM_PROMPT,
       messages: [{

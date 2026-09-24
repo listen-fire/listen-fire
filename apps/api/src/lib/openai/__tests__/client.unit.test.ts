@@ -3,8 +3,8 @@
 // with the same name in another test file at project typecheck time.
 export {};
 
-// Which OpenAI-shaped client a call gets, what the model is called once it is
-// addressed to Google, and which JSON schemas that endpoint can honour.
+// Which OpenAI-shaped client a call gets, what the model is called once the map
+// sends it to Gemini, and which JSON schemas that endpoint can honour.
 //
 // The vendor constructor is mocked: this is about which client is built, with
 // what, and nothing here reaches a network.
@@ -26,9 +26,17 @@ jest.mock('../../google_cloud', () => ({
   googleBearerTokens: (...args: unknown[]) => googleBearerTokens(...args),
 }));
 
+/** The OpenAI-shaped names sent to Gemini, as the retired Google route renamed
+ *  them — now a worked example of the map rather than a table in code. */
+const GEMINI_MAP = {
+  o3: 'gemini/gemini-3.1-pro-preview',
+  'gpt-5': 'gemini/gemini-3.1-pro-preview',
+  'gpt-4.1': 'gemini/gemini-3.8-flash',
+  'gpt-5-nano': 'gemini/gemini-3.8-flash',
+};
+
 const GOOGLE_ENV = {
-  MODEL_ROUTE: 'google',
-  KNOWLEDGE_AGENT_PROVIDER: 'anthropic',
+  MODEL_MAP: JSON.stringify(GEMINI_MAP),
   GOOGLE_PRIVATE_KEY: 'pk',
   GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
   GOOGLE_PROJECT_ID: 'a-project',
@@ -36,7 +44,7 @@ const GOOGLE_ENV = {
 
 const DIRECT_ENV = { OPENAI_API_KEY_FALLBACK_OR_DEV: 'sk-dev' };
 
-// Re-imported per test: the clients are memoized per route, and a memo from one
+// Re-imported per test: the clients are memoized per door, and a memo from one
 // test would answer for the next.
 function load() {
   let mod: typeof import('../client') | undefined;
@@ -54,40 +62,34 @@ beforeEach(() => {
 });
 
 describe('the model name on the wire', () => {
-  it('leaves every model alone on the direct route', () => {
-    const { wireModel } = load().platformOpenAI(DIRECT_ENV);
-    expect(wireModel('gpt-4.1')).toBe('gpt-4.1');
-    expect(wireModel('a-model-nobody-knows')).toBe('a-model-nobody-knows');
+  it('leaves every model alone where the map is silent', () => {
+    expect(load().platformOpenAI('gpt-4.1', DIRECT_ENV).wireModel).toBe('gpt-4.1');
+    expect(load().platformOpenAI('whisper-1', GOOGLE_ENV).wireModel).toBe('whisper-1');
   });
 
-  it('sends reasoning models to the flagship Gemini', () => {
-    const { wireModel } = load().platformOpenAI(GOOGLE_ENV);
-    for (const model of ['o3', 'gpt-5']) {
-      expect(wireModel(model)).toBe('google/gemini-3.1-pro-preview');
-    }
+  it("sends a mapped name to Gemini under Google's prefixed spelling", () => {
+    expect(load().platformOpenAI('o3', GOOGLE_ENV).wireModel).toBe('google/gemini-3.1-pro-preview');
+    expect(load().platformOpenAI('gpt-4.1', GOOGLE_ENV).wireModel).toBe('google/gemini-3.8-flash');
   });
 
-  it('sends the small models to the fast Gemini', () => {
-    const { wireModel } = load().platformOpenAI(GOOGLE_ENV);
-    for (const model of ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-5-mini', 'gpt-5-nano']) {
-      expect(wireModel(model)).toBe('google/gemini-3.8-flash');
-    }
-  });
-
-  it('raises rather than sending a model Google has no equivalent for', () => {
-    const { wireModel } = load().platformOpenAI(GOOGLE_ENV);
-    expect(() => wireModel('gpt-4o')).toThrow(/no Gemini equivalent/);
-    expect(() => wireModel('whisper-1')).toThrow(/no Gemini equivalent/);
+  it('refuses a name the map sends to a Claude door', () => {
+    expect(() =>
+      load().platformOpenAI('gpt-4.1', {
+        MODEL_MAP: JSON.stringify({ 'gpt-4.1': 'anthropic/claude-sonnet-5' }),
+      }),
+    ).toThrow(/only openai and gemini serve/);
   });
 });
 
 describe('the platform client', () => {
-  it('sends the configured organisation on the direct route', () => {
-    const { provider } = load().platformOpenAI({ ...DIRECT_ENV, OPENAI_ORGANIZATION: 'org-a-customer-owns' });
+  it('sends the configured organisation to OpenAI', () => {
+    const { provider } = load().platformOpenAI('gpt-4.1', {
+      ...DIRECT_ENV,
+      OPENAI_ORGANIZATION: 'org-a-customer-owns',
+    });
     expect(provider).toBe('openai');
     // The key is read from the PROCESS environment through `getEnvVar`, not from
-    // the environment handed in — unchanged from before this file existed, and
-    // the reason it still is: `getEnvVar` carries the dev default and the
+    // the environment handed in — `getEnvVar` carries the dev default and the
     // production error, and no caller threads an environment here.
     expect(openAiCtor).toHaveBeenCalledWith({
       apiKey: expect.any(String),
@@ -96,13 +98,13 @@ describe('the platform client', () => {
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('baseURL');
   });
 
-  it('sends no organisation on the direct route when none is configured', () => {
-    load().platformOpenAI(DIRECT_ENV);
+  it('sends no organisation to OpenAI when none is configured', () => {
+    load().platformOpenAI('gpt-4.1', DIRECT_ENV);
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('organization');
   });
 
-  it('points at Google’s global OpenAI-shaped endpoint on the google route', () => {
-    const { provider } = load().platformOpenAI(GOOGLE_ENV);
+  it('points at Google’s global OpenAI-shaped endpoint for a name mapped to gemini', () => {
+    const { provider } = load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
     expect(provider).toBe('google');
     expect(openAiCtor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -113,7 +115,7 @@ describe('the platform client', () => {
   });
 
   it('keeps the region in host AND path when one is named', () => {
-    load().platformOpenAI({ ...GOOGLE_ENV, GOOGLE_MODEL_REGION: 'europe-west1' });
+    load().platformOpenAI('gpt-4.1', { ...GOOGLE_ENV, GOOGLE_MODEL_REGION: 'europe-west1' });
     expect(openAiCtor).toHaveBeenCalledWith(
       expect.objectContaining({
         baseURL:
@@ -123,12 +125,12 @@ describe('the platform client', () => {
   });
 
   it('sends no organisation header to Google', () => {
-    load().platformOpenAI(GOOGLE_ENV);
+    load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
     expect(openAiCtor.mock.calls[0][0]).not.toHaveProperty('organization');
   });
 
   it('asks for a fresh token per request rather than pinning one', async () => {
-    load().platformOpenAI(GOOGLE_ENV);
+    load().platformOpenAI('gpt-4.1', GOOGLE_ENV);
     const { apiKey } = openAiCtor.mock.calls[0][0];
     // A string here would be a token frozen at construction, and Google's expire
     // inside the hour — a server that ran longer would start 401ing.
@@ -142,8 +144,8 @@ describe('the platform client', () => {
 
   it('builds one client per process, not one per call', () => {
     const { platformOpenAI } = load();
-    platformOpenAI(GOOGLE_ENV);
-    platformOpenAI(GOOGLE_ENV);
+    platformOpenAI('gpt-4.1', GOOGLE_ENV);
+    platformOpenAI('o3', GOOGLE_ENV);
     expect(openAiCtor).toHaveBeenCalledTimes(1);
   });
 });

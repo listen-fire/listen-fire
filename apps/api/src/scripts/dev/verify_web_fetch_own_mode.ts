@@ -49,7 +49,7 @@ async function main() {
     }
   }
 
-  console.log(`Subject: ${subject}\nPage reader: own (our scraper), route: ${process.env.MODEL_ROUTE ?? 'direct'}\n`);
+  console.log(`Subject: ${subject}\nPage reader: own (our scraper), MODEL_MAP: ${process.env.MODEL_MAP || '(empty)'}\n`);
   const startedMs = Date.now();
 
   const reply = await anthropicWebChat({

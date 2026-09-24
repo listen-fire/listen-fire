@@ -13,7 +13,7 @@ import {
   truncateToTokenLimit,
 } from '../lib/chunking';
 import { googleBearerTokens, googleModelUrl } from '../lib/google_cloud';
-import { openAiRoute } from '../lib/model_route';
+import { resolveModel } from '../lib/models/map';
 import { neverAsAny } from '../lib/utils/types';
 import { UserService } from '../services/user';
 import { currentContext } from './context';
@@ -27,13 +27,12 @@ const openAIApiKey = () =>
   getEnvVar('OPENAI_API_KEY', { devDefault: 'test', because: 'embeddings are computed by OpenAI' });
 
 /**
- * Every pgvector column this repo writes, and the request that fills it on each
- * route. A vector's width belongs to the COLUMN, not to the model: the same text
+ * Every pgvector column this repo writes, and the model that fills it. A vector's width belongs to the COLUMN, not to the model: the same text
  * embedded for `extraction_fact` is 256 numbers wide because that column is, and
  * asking the provider for anything else writes a row Postgres refuses.
  *
- * Vectors written on one route are deliberately NOT required to be comparable
- * with vectors written on the other, so nothing here tries to reconcile the two
+ * Vectors written by one provider are deliberately NOT required to be comparable
+ * with vectors written by another, so nothing here tries to reconcile the two
  * models' spaces.
  */
 const EMBEDDING_DESTINATIONS = {
@@ -190,8 +189,8 @@ async function googleEmbed(options: {
 }
 
 /**
- * Embed some texts for one destination column, whichever vendor this deployment
- * routes model calls to. The caller names where the vectors are going, not which
+ * Embed some texts for one destination column, whichever vendor the model map
+ * sends that column's model to. The caller names where the vectors are going, not which
  * model to use: the model and the width are the destination's business.
  */
 export async function embedTexts(options: {
@@ -200,13 +199,13 @@ export async function embedTexts(options: {
   label?: string;
 }): Promise<number[][]> {
   if (options.texts.length === 0) return [];
-  const route = openAiRoute();
-  switch (route) {
-    case 'direct': {
-      const { openAi } = EMBEDDING_DESTINATIONS[options.destination];
+  const { openAi } = EMBEDDING_DESTINATIONS[options.destination];
+  const { provider, wireModel } = resolveModel(openAi.model);
+  switch (provider) {
+    case 'openai': {
       const client = new OpenAI({ apiKey: openAIApiKey() });
       const response = await client.embeddings.create({
-        model: openAi.model,
+        model: wireModel,
         input: options.texts,
         ...(openAi.dimensions === undefined ? {} : { dimensions: openAi.dimensions }),
       });
@@ -222,7 +221,7 @@ export async function embedTexts(options: {
 
       return response.data.map((d) => d.embedding);
     }
-    case 'google': {
+    case 'gemini': {
       const tooLong = options.texts.find((text) => countTokens(text) > GOOGLE_EMBEDDING_MAX_TOKENS);
       if (tooLong !== undefined) {
         throw new Error(
@@ -233,8 +232,13 @@ export async function embedTexts(options: {
       }
       return googleEmbed(options);
     }
+    case 'anthropic':
+    case 'vertex':
+      throw new Error(
+        `MODEL_MAP sends "${openAi.model}" to ${provider}, which does not serve embeddings.`,
+      );
     default:
-      return neverAsAny(route);
+      return neverAsAny(provider);
   }
 }
 
@@ -246,8 +250,8 @@ interface EmbedResult {
 class Embedding {
   async createEmbedding(text: string, label?: string): Promise<number[]> {
     const [embedding] = await embedTexts({
-      // Truncation stays on the caller's side of the route switch: it is what
-      // this path has always done, and the google branch refuses rather than
+      // Truncation stays on the caller's side of the provider switch: it is what
+      // this path has always done, and the gemini branch refuses rather than
       // truncates.
       texts: [truncateToTokenLimit(text)],
       destination: 'raw_text',

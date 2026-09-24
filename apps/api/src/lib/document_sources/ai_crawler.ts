@@ -4,7 +4,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { Page } from 'playwright';
 import { z } from 'zod';
 
-import { platformAnthropic } from '../anthropic/client';
+import { chatCallFor } from '../models/chat';
 import { logger } from '../../services/logger';
 import { recordLlmUsage } from '../llm_usage';
 import { Screenshot } from '../../services/crawler';
@@ -108,12 +108,12 @@ type AICrawlResult =
 
 // ── Anthropic client ───────────────────────────────────────────────────────
 
-// The crawler asks Claude what kind of page it has landed on, over whichever
-// route this deployment runs. The factory reads its credentials at first USE,
+// The crawler asks Claude what kind of page it has landed on, wherever the
+// model map sends that name. The factory reads its credentials at first USE,
 // not at module load, so merely importing this file cannot stop the process
 // booting.
 
-const VISION_MODEL = 'claude-sonnet-5' as const;
+const VISION_MODEL = 'claude-sonnet-5';
 
 async function visionCall(opts: {
   system: string;
@@ -122,9 +122,9 @@ async function visionCall(opts: {
   label: string;
 }): Promise<string> {
   const startMs = Date.now();
-  const { client, wireModel } = platformAnthropic();
+  const { client, wireModel } = chatCallFor(VISION_MODEL);
   const response = await client.messages.create({
-    model: wireModel(VISION_MODEL),
+    model: wireModel,
     max_tokens: 4096,
     system: opts.system,
     messages: [

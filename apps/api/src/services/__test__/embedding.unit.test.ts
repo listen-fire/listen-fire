@@ -1,4 +1,4 @@
-// Embedding on either route: which model, how wide the vector, and what happens
+// Embedding on either provider: which model, how wide the vector, and what happens
 // to a text the provider would otherwise quietly cut in half.
 
 const embeddingsCreate = jest.fn();
@@ -20,8 +20,11 @@ jest.mock('../../lib/google_cloud', () => ({
   googleBearerTokens: () => bearerToken,
 }));
 
-let route: 'direct' | 'google' = 'direct';
-jest.mock('../../lib/model_route', () => ({ openAiRoute: () => route }));
+/** Both embedding models sent to Gemini, as a Google-only deployment maps them. */
+const GEMINI_MAP = JSON.stringify({
+  'text-embedding-3-large': 'gemini/gemini-embedding-001',
+  'text-embedding-3-small': 'gemini/gemini-embedding-001',
+});
 
 // The knowledge query builder is only reached by `embedAndStore`, which these
 // tests do not exercise — but the module builds one at import.
@@ -50,7 +53,7 @@ function googleResponds(width: number) {
 const SAVED_ENV = { ...process.env };
 
 beforeEach(() => {
-  route = 'direct';
+  delete process.env.MODEL_MAP;
   process.env.GOOGLE_PRIVATE_KEY = 'pk';
   process.env.GOOGLE_CLIENT_EMAIL = 'robot@example.iam.gserviceaccount.com';
   process.env.GOOGLE_PROJECT_ID = 'a-project';
@@ -73,7 +76,7 @@ describe('nothing to embed', () => {
   });
 });
 
-describe('the direct route', () => {
+describe('OpenAI, where the map leaves embeddings at home', () => {
   beforeEach(() => {
     embeddingsCreate.mockResolvedValue({
       data: [{ embedding: [0.1, 0.2] }],
@@ -108,9 +111,9 @@ describe('the direct route', () => {
   });
 });
 
-describe('the google route', () => {
+describe('Gemini, where the map sends embeddings', () => {
   beforeEach(() => {
-    route = 'google';
+    process.env.MODEL_MAP = GEMINI_MAP;
   });
 
   it('asks for exactly the width the destination column stores', async () => {

@@ -1,4 +1,4 @@
-// What the wrapper actually puts on the wire when the route is google.
+// What the wrapper actually puts on the wire when the model map sends it to Gemini.
 //
 // Google's endpoint IGNORES a request option it does not support rather than
 // refusing it, so a request that quietly loses half its options is
@@ -15,20 +15,19 @@ jest.mock('../client', () => {
   const actual = jest.requireActual('../client');
   return {
     ...actual,
-    platformOpenAI: () => ({
+    platformOpenAI: (model: string) => ({
       client: { chat: { completions: { create, parse } } },
-      wireModel,
+      wireModel: wireModel(model),
       provider: 'google',
     }),
   };
 });
 
 jest.mock('../../llm_usage', () => ({ recordLlmUsage: (...args: unknown[]) => recordLlmUsage(...args) }));
-jest.mock('../../model_route', () => ({ openAiRoute: () => 'google' }));
 jest.mock('../../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 const { GOOGLE_SUPPORTED_CHAT_PARAMS } = jest.requireActual('../client');
-import { openAiChat, openAiChatStructured, openAIResponses } from '..';
+import { openAiChat, openAiChatStructured } from '..';
 
 const usage = { prompt_tokens: 11, completion_tokens: 22 };
 
@@ -74,7 +73,7 @@ describe('every option we send is one Google documents', () => {
 
 describe('temperature follows the model actually being sent', () => {
   it('keeps it for a Gemini standing in for an o-series name', async () => {
-    // On the direct route `gpt-5-nano` rejects any temperature but the default,
+    // On OpenAI's own API `gpt-5-nano` rejects any temperature but the default,
     // so the wrapper strips it. The Gemini answering for that name does not.
     await openAiChat([{ role: 'user', content: 'hi' }], { model: 'gpt-5-nano' });
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -123,10 +122,11 @@ describe('a schema Google would silently ignore', () => {
   });
 });
 
-describe('the Responses API', () => {
-  it('refuses rather than travelling to an endpoint that has none', async () => {
-    await expect(openAIResponses({ model: 'gpt-5', input: 'hi' })).rejects.toThrow(
-      /Google serves no OpenAI Responses API/,
-    );
+describe('a model name outside the registry', () => {
+  it('is refused before any client is asked', async () => {
+    await expect(
+      openAiChat([{ role: 'user', content: 'hi' }], { model: 'gpt-3.5-turbo' }),
+    ).rejects.toThrow(/The OpenAI chat model is "gpt-3.5-turbo"/);
+    expect(create).not.toHaveBeenCalled();
   });
 });

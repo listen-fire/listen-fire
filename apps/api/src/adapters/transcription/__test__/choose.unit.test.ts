@@ -1,42 +1,30 @@
-// Who transcribes, per route.
+// Who transcribes, per the model map's answer for Whisper.
 
 import { chooseTranscriptionAdapter } from '../choose';
 import { GoogleTranscriptionAdapter } from '../google';
 import { OpenAiTranscriptionAdapter } from '../openai';
 
-const GOOGLE_ENV = {
-  MODEL_ROUTE: 'google',
-  KNOWLEDGE_AGENT_PROVIDER: 'anthropic',
-  GOOGLE_PRIVATE_KEY: 'pk',
-  GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
-  GOOGLE_PROJECT_ID: 'a-project',
-};
-
 it('transcribes through OpenAI when nothing says otherwise', () => {
   expect(chooseTranscriptionAdapter({})).toBeInstanceOf(OpenAiTranscriptionAdapter);
-  expect(chooseTranscriptionAdapter({ MODEL_ROUTE: 'direct' })).toBeInstanceOf(
-    OpenAiTranscriptionAdapter,
-  );
+  expect(chooseTranscriptionAdapter({ MODEL_MAP: '' })).toBeInstanceOf(OpenAiTranscriptionAdapter);
 });
 
-it('transcribes through Gemini on the google route', () => {
-  expect(chooseTranscriptionAdapter(GOOGLE_ENV)).toBeInstanceOf(GoogleTranscriptionAdapter);
-});
-
-it("follows the OpenAI route rather than Claude's", () => {
-  // Whisper is an OpenAI model, so a deployment that has moved only its Claude
-  // calls to Google still transcribes through OpenAI, and one that has moved
-  // only its OpenAI-shaped calls transcribes through Gemini.
+it('transcribes through Gemini where the map sends Whisper there', () => {
   expect(
-    chooseTranscriptionAdapter({ MODEL_ROUTE: 'google', ANTHROPIC_MODEL_ROUTE: 'google', OPENAI_MODEL_ROUTE: 'direct' }),
-  ).toBeInstanceOf(OpenAiTranscriptionAdapter);
-  expect(chooseTranscriptionAdapter({ OPENAI_MODEL_ROUTE: 'google' })).toBeInstanceOf(
-    GoogleTranscriptionAdapter,
-  );
+    chooseTranscriptionAdapter({ MODEL_MAP: JSON.stringify({ 'whisper-1': 'gemini/gemini-3.8-flash' }) }),
+  ).toBeInstanceOf(GoogleTranscriptionAdapter);
 });
 
-it('refuses a route nobody serves rather than picking one', () => {
-  expect(() => chooseTranscriptionAdapter({ MODEL_ROUTE: 'whisper' })).toThrow(
-    /must be "direct" or "google"/,
-  );
+it("follows Whisper's own map line rather than Claude's", () => {
+  expect(
+    chooseTranscriptionAdapter({
+      MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'vertex/claude-sonnet-5' }),
+    }),
+  ).toBeInstanceOf(OpenAiTranscriptionAdapter);
+});
+
+it('refuses a map value nobody serves rather than picking one', () => {
+  expect(() =>
+    chooseTranscriptionAdapter({ MODEL_MAP: JSON.stringify({ 'whisper-1': 'whisper/whisper-1' }) }),
+  ).toThrow(/MODEL_MAP\["whisper-1"\]/);
 });

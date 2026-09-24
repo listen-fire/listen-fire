@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { getKnowledgeQb } from '../kysely';
 import { openAIResponses } from '../openai';
+import { resolveModel } from '../models/map';
 import { anthropicToolLoop, type TurnEvent } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
 import { currentContext } from '../../services/context';
@@ -1327,7 +1328,11 @@ Your role right now is to act like a brilliant Field Data Engineer meeting a new
 Be conversational and curious. Ask one or two questions at a time — don't overwhelm with a long list. Spend real time understanding before jumping to solutions. The user's first message is just them saying hello — start the discovery conversation.`;
       }
 
-      const provider = (process.env.KNOWLEDGE_AGENT_PROVIDER ?? 'openai') as 'openai' | 'anthropic';
+      // The Responses loop stays reachable only for a deployment whose model map
+      // sends this agent's model to OpenAI; every other provider answers through
+      // the Claude tool loop.
+      const agentModel = resolveModel('claude-sonnet-5');
+      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
       const wrappedTools = createWrappedTools(emitUpdate, teamId);
 
       // Inject additional tools from orchestrator (e.g., handoff tools)
@@ -1363,7 +1368,7 @@ Be conversational and curious. Ask one or two questions at a time — don't over
             )
           : await openAIResponses(
               {
-                model: 'gpt-5-mini',
+                model: agentModel.wireModel,
                 input: [
                   { role: 'system', content: systemPrompt },
                   ...historyInput,

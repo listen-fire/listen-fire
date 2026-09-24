@@ -34,6 +34,7 @@ import {
 } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
 import { openAIResponses } from '../openai';
+import { resolveModel } from '../models/map';
 import type { ModelName } from '../models/registry';
 import { currentContext } from '../../services/context';
 import { logger } from '../../services/logger';
@@ -1439,9 +1440,11 @@ export async function runUnifiedAgent(
       // fabricated answer is high, so we don't hand the reasoning loop to a
       // cheaper model. (Supersedes the 2026-06-11 "Sonnet composes Cypher
       // unaided" call: capability was never the question here; trust is.)
-      const provider = (process.env.KNOWLEDGE_AGENT_PROVIDER ?? 'anthropic') as
-        | 'openai'
-        | 'anthropic';
+      // The Responses loop stays reachable only for a deployment whose model map
+      // sends this agent's model to OpenAI; every other provider answers through
+      // the Claude tool loop.
+      const agentModel = resolveModel(unifiedAgentCall(options.modelUnderTest).model);
+      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
 
       const rawResult =
         provider === 'anthropic'
@@ -1460,7 +1463,7 @@ export async function runUnifiedAgent(
             )
           : await openAIResponses(
               {
-                model: 'gpt-5-mini',
+                model: agentModel.wireModel,
                 input: [
                   { role: 'system', content: systemPrompt },
                   ...historyInput,
@@ -1520,7 +1523,7 @@ export async function runUnifiedAgent(
               )
             : await openAIResponses(
                 {
-                  model: 'gpt-5-mini',
+                  model: agentModel.wireModel,
                   input: [
                     { role: 'system', content: systemPrompt },
                     ...historyInput,

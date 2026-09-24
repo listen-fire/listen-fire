@@ -34,7 +34,8 @@ process.on('unhandledRejection', (reason, promise) => {
   });
 });
 import { requireEnv } from './lib/utils/environment';
-import { assertModelRouteConfigured } from './lib/model_route';
+import { assertModelMapConfigured } from './lib/models/map';
+import { assertKnowledgeLlmModelConfigured } from './lib/knowledge/llm';
 import { assertJevConfigured } from './lib/jev/client';
 import { healthCheck, workersHealthCheck } from './lib/middleware/health_check';
 import { rootHandler } from './lib/middleware/root_handler';
@@ -78,11 +79,11 @@ registerAllRoutes();
 
 requireEnv('NODE_ENV');
 
-// Which vendor route this deployment's model calls take, and whether it is
-// configured for that route. Checked here rather than at the first model call:
-// a key that cannot be used is the sign that the deployment believes it is on
-// the other route, and a run is the wrong place to find that out.
-assertModelRouteConfigured();
+// Where this deployment's model names go, and whether every place the model
+// map sends one can actually be called. Checked here rather than at the first
+// model call: a run is the wrong place to find out a map line is wrong.
+assertModelMapConfigured();
+assertKnowledgeLlmModelConfigured();
 
 // Same posture, one env var over: a deployment that turns on the Jev entity
 // judge without its key believes duplicate merges are getting a second

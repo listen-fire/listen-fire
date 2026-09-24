@@ -17,11 +17,13 @@
  *   pnpm dev:probe-thinking
  *   pnpm dev:probe-thinking --models claude-opus-5,claude-sonnet-5
  */
-import { platformAnthropic } from '../../lib/anthropic/client';
+import { chatCallFor } from '../../lib/models/chat';
+import { parseModelName } from '../../lib/models/registry';
+import type { ModelName } from '../../lib/models/registry';
 
 /** Every model the Claude 5 move has to decide about, plus the two already on
  *  5 that the claim says behave differently. */
-const DEFAULT_MODELS = [
+const DEFAULT_MODELS: ModelName[] = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-5',
@@ -50,12 +52,12 @@ function flag(name: string): string | undefined {
   return value === undefined || value.startsWith('--') ? undefined : value;
 }
 
-async function probe(model: string, prompt: string): Promise<void> {
-  const { client, wireModel } = platformAnthropic();
+async function probe(model: ModelName, prompt: string): Promise<void> {
+  const { client, wireModel } = chatCallFor(model);
   const started = Date.now();
   try {
     const reply = await client.messages.create({
-      model: wireModel(model),
+      model: wireModel,
       max_tokens: MAX_TOKENS,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -82,7 +84,10 @@ async function probe(model: string, prompt: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const models = flag('models')?.split(',') ?? DEFAULT_MODELS;
+  const models =
+    flag('models')
+      ?.split(',')
+      .map((name) => parseModelName(name, '--models')) ?? DEFAULT_MODELS;
   const prompt = process.argv.includes('--hard') ? HARD_PROMPT : PROMPT;
   console.log(`no thinking field on the wire; max_tokens ${MAX_TOKENS}\nprompt: ${prompt}\n`);
   for (const model of models) await probe(model, prompt);

@@ -48,6 +48,12 @@ function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ModelName {
   return raw ? parseModelName(raw, 'KNOWLEDGE_LLM_MODEL') : 'claude-opus-5';
 }
 
+/** Refuse a `KNOWLEDGE_LLM_MODEL` the registry does not know, at boot rather
+ *  than at the first arbitration. */
+export function assertKnowledgeLlmModelConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  knowledgeLlmModel(env);
+}
+
 /** What an operator sets so knowledge's model can be called where it resolves. */
 function credentialsToSet(provider: Provider, env: NodeJS.ProcessEnv): string {
   switch (provider) {

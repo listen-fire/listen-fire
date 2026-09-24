@@ -6,8 +6,8 @@ import { logger } from '../../services/logger';
 import { SECOND } from '../../constants';
 import { RequestOptions } from 'openai/internal/request-options';
 import { recordLlmUsage } from '../llm_usage';
-import { openAiRoute } from '../model_route';
-import { assertSchemaIsNotRecursive, platformOpenAI } from './client';
+import { parseModelName } from '../models/registry';
+import { assertSchemaIsNotRecursive, directOpenAI, platformOpenAI } from './client';
 
 const rateLimitQueue = new Queue<any>({ concurrency: 8 });
 
@@ -62,7 +62,7 @@ const defaultOptions: Options = {
 
 // gpt-5 and o-series reasoning models reject any temperature other than the
 // default (1). The rule belongs to those OPENAI models, so it keys on the name
-// actually being sent — a Gemini answering for `gpt-5-nano` on the Google route
+// actually being sent — a Gemini answering for `gpt-5-nano` through the map
 // accepts temperature perfectly well, and stripping it because the name the
 // caller reached for looked o-series would quietly throw away the determinism
 // every one of those callers asked for.
@@ -81,12 +81,14 @@ function stripUnsupportedParams<T extends { model: string; temperature?: number 
 }
 
 async function openAiChat(messages: Messages, options?: Partial<Options>, label?: string) {
-  const { client, wireModel, provider } = platformOpenAI();
   const merged = options ? { ...defaultOptions, ...options } : defaultOptions;
+  const { client, wireModel, provider } = platformOpenAI(
+    parseModelName(merged.model, 'The OpenAI chat model'),
+  );
   // The wire name is also the billed name: on Google this really is a different
   // model at a different price, so the ledger follows the request rather than
   // the caller's wish.
-  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel(merged.model) });
+  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel });
   try {
     const text = await enqueueQuery(async () => {
       logger.info(`OpenAI chat submitted ${label ? `(${label})` : ''}`, sendOptions);
@@ -125,9 +127,11 @@ async function openAiChatStructured(
   options?: Partial<Options>,
   label?: string,
 ) {
-  const { client, wireModel, provider } = platformOpenAI();
   const merged = options ? { model: 'o3', ...options } : { model: 'o3' };
-  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel(merged.model) });
+  const { client, wireModel, provider } = platformOpenAI(
+    parseModelName(merged.model, 'The OpenAI structured chat model'),
+  );
+  const sendOptions = stripUnsupportedParams({ ...merged, model: wireModel });
 
   if (provider === 'google') {
     const responseFormat = sendOptions.response_format;
@@ -186,16 +190,17 @@ async function openAiTranscribe(
   audio: Buffer,
   options: { name: string; label?: string },
 ): Promise<TranscribeOutput> {
+  const { client, wireModel } = platformOpenAI(TRANSCRIPTION_MODEL);
   try {
     return await enqueueQuery(async () => {
       logger.info(
         `OpenAI transcription submitted ${options.label ? `(${options.label})` : ''}`,
-        { model: TRANSCRIPTION_MODEL, name: options.name, bytes: audio.length },
+        { model: wireModel, name: options.name, bytes: audio.length },
       );
       const file = await toFile(audio, options.name);
-      const transcription = await platformOpenAI().client.audio.transcriptions.create({
+      const transcription = await client.audio.transcriptions.create({
         file,
-        model: TRANSCRIPTION_MODEL,
+        model: wireModel,
         // verbose_json carries `duration` — the honest per-minute metering unit.
         response_format: 'verbose_json',
       });
@@ -214,19 +219,10 @@ async function openAIResponses(
   tools: Record<string, (args: any) => Promise<any>> = {},
   options?: RequestOptions & { label?: string; signal?: AbortSignal },
 ) {
-  // Google's endpoint serves chat completions and nothing else — there is no
-  // Responses API behind it to fall back to, and no sensible translation from a
-  // stateful `previous_response_id` loop into a stateless one. Boot validation
-  // already refuses this combination; this is the second wall, for a caller that
-  // reached the tool loop some other way.
-  if (openAiRoute() === 'google') {
-    throw new Error(
-      "The OpenAI route is google, and Google serves no OpenAI Responses API. The knowledge agents' " +
-        'Claude path does work on this route — set KNOWLEDGE_AGENT_PROVIDER=anthropic.',
-    );
-  }
-
-  const { client } = platformOpenAI();
+  // Only OpenAI's own API serves the Responses API, so this never follows the
+  // model map anywhere else: the knowledge agents reach it only when their
+  // model resolves to openai.
+  const client = directOpenAI();
   try {
     let currentParams: any = {
       model: 'gpt-5',
