@@ -85,8 +85,7 @@ function userPart(block: Anthropic.ContentBlockParam): OpenAiUserPart {
 }
 
 function toolMessage(block: Anthropic.ToolResultBlockParam): OpenAiMessage {
-  const { tool_use_id, content, type: _type, cache_control: _cacheControl, ...rest } = block;
-  // `is_error` lands here too: OpenAI's tool message has no error flag.
+  const { tool_use_id, content, is_error, type: _type, cache_control: _cacheControl, ...rest } = block;
   refuseRest('A tool_result block’s', rest);
   const text =
     content === undefined
@@ -99,7 +98,10 @@ function toolMessage(block: Anthropic.ToolResultBlockParam): OpenAiMessage {
               return textOf(part, 'tool_result');
             })
             .join('\n');
-  return { role: 'tool', tool_call_id: tool_use_id, content: text };
+  // The model must learn the call failed, and with no error flag on OpenAI's
+  // tool message the content is the only channel that can tell it.
+  const told = is_error ? `Tool error: ${text || '(no output)'}` : text;
+  return { role: 'tool', tool_call_id: tool_use_id, content: told };
 }
 
 function userMessages(content: Anthropic.MessageParam['content']): OpenAiMessage[] {

@@ -226,6 +226,27 @@ describe('Anthropic request to OpenAI body', () => {
     ]);
   });
 
+  it.each<[string, Anthropic.ToolResultBlockParam['content'], string]>([
+    ['with text', 'Page would not open: 404', 'Tool error: Page would not open: 404'],
+    ['with text blocks', [{ type: 'text', text: 'timed out' }], 'Tool error: timed out'],
+    ['with empty content', '', 'Tool error: (no output)'],
+    ['with no content', undefined, 'Tool error: (no output)'],
+  ])('a tool_result with is_error %s becomes a tool message prefixed "Tool error: "', (_label, content, expected) => {
+    expect(
+      toOpenAiRequest({
+        ...REQUEST,
+        messages: [
+          { role: 'user', content: 'Read it' },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'read_page', input: {} }] },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'call_1', is_error: true, ...(content !== undefined ? { content } : {}) }],
+          },
+        ],
+      }).messages[2],
+    ).toEqual({ role: 'tool', tool_call_id: 'call_1', content: expected });
+  });
+
   it.each<[Anthropic.OutputConfig['effort'], string]>([
     ['low', 'low'],
     ['medium', 'medium'],
@@ -301,16 +322,6 @@ describe('Anthropic request to OpenAI body', () => {
           ],
         },
         'An image with a url source',
-      ],
-      [
-        'a tool_result error flag',
-        {
-          ...REQUEST,
-          messages: [
-            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c', content: 'x', is_error: true }] },
-          ],
-        },
-        'A tool_result block’s `is_error`',
       ],
       [
         'an image inside a tool_result',
