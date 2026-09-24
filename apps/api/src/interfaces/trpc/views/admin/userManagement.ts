@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { trpc } from '../../trpc';
 import { currentContext } from '../../../../services/context';
 import { ProvisioningService } from '../../../../services/provisioning';
+import {
+  TeamMembershipService,
+  type CreatedMember,
+} from '../../../../services/team_membership';
 import { getCoreQb, getQb } from '../../../../lib/kysely';
 import { UserEmailId } from '../../../../generated/kysely/core/UserEmail';
 import { UserId } from '../../../../generated/kysely/core/User';
@@ -12,6 +16,7 @@ import {
   setTeamDetailLevel as setTeamDetailLevelService,
 } from '../../../../services/team/ops_detail';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
+import { neverAsAny } from '../../../../lib/utils/types';
 
 const userSchema = z.object({
   email: z.string().email(),
@@ -153,38 +158,23 @@ const userManagementRouter = (procedure: typeof trpc.procedure) => {
           email: z.string().email(),
         }),
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input }): Promise<CreatedMember> => {
         const ctx = currentContext();
         await ctx.enterTransaction();
 
-        const user = await ctx.prisma.user.create({
-          data: {
-            username: input.email,
-            defaultTeamId: input.teamId,
-            grantedAccessAt: new Date(),
-            completedRegistrationAt: new Date(),
-          },
+        const result = await TeamMembershipService.createServiceAccount({
+          teamId: input.teamId as TeamId,
+          email: input.email,
+          access: input.access,
         });
-
-        await ctx.prisma.userEmail.create({
-          data: {
-            userId: user.id,
-            email: input.email,
-            isPrimary: true,
-            isServiceEmail: true,
-            acceptsPlusAddressing: true,
-          },
-        });
-
-        await ctx.prisma.teamMembership.create({
-          data: {
-            userId: user.id,
-            teamId: input.teamId,
-            access: input.access,
-          },
-        });
-
-        return { id: user.id, username: user.username, email: input.email };
+        switch (result.status) {
+          case 'created':
+            return result.member;
+          case 'email_taken':
+            throw new Error(`Email ${input.email} is already in use`);
+          default:
+            return neverAsAny(result);
+        }
       }),
 
     grantTeamAccess: procedure
@@ -208,21 +198,10 @@ const userManagementRouter = (procedure: typeof trpc.procedure) => {
           select: { name: true },
         });
 
-        await ctx.prisma.teamMembership.upsert({
-          where: {
-            userId_teamId: {
-              userId: input.userId,
-              teamId: input.teamId,
-            },
-          },
-          create: {
-            userId: input.userId,
-            teamId: input.teamId,
-            access: input.access,
-          },
-          update: {
-            access: input.access,
-          },
+        await TeamMembershipService.grantAccess({
+          userId: input.userId as UserId,
+          teamId: input.teamId as TeamId,
+          access: input.access,
         });
 
         return { username: user.username, teamName: team.name, access: input.access };

@@ -1,23 +1,439 @@
 "use client";
 
 /**
- * `/settings/team` — who is on the team, who is invited, and the three acts an
- * admin has. Adding an address IS the invitation: nothing is emailed and the
- * person joins the next time they sign in, so the page says that rather than
- * promising a link. Removing a member signs them out.
+ * `/settings/team` — who is on the team, who is invited, and everything a team
+ * needs to manage its own people. Inviting an address IS the invitation:
+ * nothing is emailed and the person joins the next time they sign in, so the
+ * page says that rather than promising a link. Adding someone directly puts
+ * them on the team at once. Removing a member signs them out.
  *
  */
 
 import { useState } from "react";
-import { UserMinus, UserPlus, X } from "lucide-react";
+import { Bot, MailPlus, Pencil, Phone, UserMinus, UserPlus, X } from "lucide-react";
+
+import { neverAsAny } from "movement-lang";
 
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui";
 import { usePageTitle } from "@/components/page-title";
 
+type Access = "read" | "write";
+
+const INPUT_CLASS =
+  "w-64 max-w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-900 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400";
+
+const isEmail = (value: string) => /.+@.+\..+/.test(value);
+
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5">{children}</div>
+  );
+}
+
+function AccessToggle({
+  value,
+  onChange,
+  disabled,
+  testId,
+}: {
+  value: Access;
+  onChange: (access: Access) => void;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  const options: { access: Access; label: string }[] = [
+    { access: "write", label: "Full access" },
+    { access: "read", label: "Read-only" },
+  ];
+  return (
+    <div
+      className="inline-flex shrink-0 rounded-md border border-slate-200 p-0.5"
+      data-testid={testId}
+    >
+      {options.map((o) => (
+        <button
+          key={o.access}
+          type="button"
+          onClick={() => o.access !== value && onChange(o.access)}
+          disabled={disabled}
+          aria-pressed={o.access === value}
+          className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-60 ${
+            o.access === value
+              ? "bg-slate-900 text-white"
+              : "text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ErrorLine({ message, testId }: { message: string | null; testId: string }) {
+  if (!message) return null;
+  return (
+    <p className="mt-2 text-[12px] text-red-600" data-testid={testId}>
+      {message}
+    </p>
+  );
+}
+
+/** Invite by address (joins at next sign-in) or add directly (joins now). */
+function AddMemberCard({ onChanged }: { onChanged: () => void }) {
+  const [mode, setMode] = useState<"invite" | "direct">("invite");
+  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [access, setAccess] = useState<Access>("write");
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const succeed = (message: string) => {
+    setDone(message);
+    setEmail("");
+    setUsername("");
+    setError(null);
+    onChanged();
+  };
+
+  const invite = trpc.views.teamMembers.invite.useMutation({
+    onSuccess: () => succeed(`${email} can now sign in to this workspace.`),
+    onError: (e) => setError(e.message),
+  });
+  const addMember = trpc.views.teamMembers.addMember.useMutation({
+    onSuccess: () => succeed(`${email} is now a member.`),
+    onError: (e) => setError(e.message),
+  });
+
+  const busy = invite.isLoading || addMember.isLoading;
+  const valid = isEmail(email) && (mode === "invite" || username.trim().length > 0);
+  const submit = () => {
+    if (!valid || busy) return;
+    if (mode === "invite") invite.mutate({ email });
+    else addMember.mutate({ email, username: username.trim(), access });
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-[13px] font-semibold text-slate-900">Add a teammate</p>
+        <div className="inline-flex rounded-md border border-slate-200 p-0.5">
+          {(
+            [
+              ["invite", "Invite by email"],
+              ["direct", "Add directly"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                setMode(m);
+                setError(null);
+                setDone(null);
+              }}
+              aria-pressed={mode === m}
+              data-testid={`team-add-mode-${m}`}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                mode === m ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
+        {mode === "invite"
+          ? "They join this workspace the next time they sign in with this address. Nothing is emailed — they just sign in with this address and land here."
+          : "They are on the team straight away. If the address already has an account, that account joins."}
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setDone(null);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="teammate@company.com"
+          disabled={busy}
+          data-testid="team-invite-email"
+          className={INPUT_CLASS}
+        />
+        {mode === "direct" && (
+          <>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="Name"
+              disabled={busy}
+              data-testid="team-add-username"
+              className={`${INPUT_CLASS} w-40`}
+            />
+            <AccessToggle value={access} onChange={setAccess} disabled={busy} />
+          </>
+        )}
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={submit}
+          disabled={!valid || busy}
+          data-testid="team-invite-submit"
+        >
+          <UserPlus size={13} />
+          {busy ? "Adding…" : "Add"}
+        </Button>
+      </div>
+      <ErrorLine message={error} testId="team-invite-error" />
+      {done && !error && (
+        <p className="mt-2 text-[12px] text-emerald-600" data-testid="team-invite-sent">
+          {done}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/** A mailbox that acts as a member, e.g. an address other tools forward to. */
+function ServiceAccountCard({ onChanged }: { onChanged: () => void }) {
+  const [email, setEmail] = useState("");
+  const [access, setAccess] = useState<Access>("write");
+  const [error, setError] = useState<string | null>(null);
+
+  const create = trpc.views.teamMembers.createServiceAccount.useMutation({
+    onSuccess: () => {
+      setEmail("");
+      setError(null);
+      onChanged();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const valid = isEmail(email);
+  const submit = () => valid && !create.isLoading && create.mutate({ email, access });
+
+  return (
+    <Card>
+      <p className="text-[13px] font-semibold text-slate-900">Create a service account</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
+        A shared mailbox that acts as a member of the team. It also receives mail
+        sent to its address with a +suffix.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="deals@company.com"
+          disabled={create.isLoading}
+          data-testid="team-service-email"
+          className={INPUT_CLASS}
+        />
+        <AccessToggle value={access} onChange={setAccess} disabled={create.isLoading} />
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={submit}
+          disabled={!valid || create.isLoading}
+          data-testid="team-service-submit"
+        >
+          <Bot size={13} />
+          {create.isLoading ? "Creating…" : "Create"}
+        </Button>
+      </div>
+      <ErrorLine message={error} testId="team-service-error" />
+    </Card>
+  );
+}
+
+type Member = {
+  userId: string;
+  username: string;
+  emails: { email: string; isPrimary: boolean }[];
+  phoneNumber: string | null;
+  access: Access;
+  isServiceAccount: boolean;
+  soleTeam: boolean;
+};
+
+type Editor = "rename" | "email" | "phone";
+
+function MemberRow({ member, onChanged }: { member: Member; onChanged: () => void }) {
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [value, setValue] = useState("");
+  const [makePrimary, setMakePrimary] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const settle = {
+    onSuccess: () => {
+      setEditor(null);
+      setValue("");
+      setMakePrimary(false);
+      setError(null);
+      onChanged();
+    },
+    onError: (e: { message: string }) => setError(e.message),
+  };
+  const setAccess = trpc.views.teamMembers.setAccess.useMutation(settle);
+  const rename = trpc.views.teamMembers.rename.useMutation(settle);
+  const addEmail = trpc.views.teamMembers.addEmail.useMutation(settle);
+  const addPhone = trpc.views.teamMembers.addPhone.useMutation(settle);
+  const remove = trpc.views.teamMembers.remove.useMutation(settle);
+
+  const busy =
+    setAccess.isLoading ||
+    rename.isLoading ||
+    addEmail.isLoading ||
+    addPhone.isLoading ||
+    remove.isLoading;
+
+  const open = (next: Editor) => {
+    setEditor(editor === next ? null : next);
+    setValue(next === "rename" ? member.username : "");
+    setMakePrimary(false);
+    setError(null);
+  };
+
+  const editorValid =
+    editor === "email" ? isEmail(value) : value.trim().length > 0;
+  const save = () => {
+    if (!editorValid || busy || editor === null) return;
+    const userId = member.userId;
+    switch (editor) {
+      case "rename":
+        rename.mutate({ userId, username: value.trim() });
+        return;
+      case "email":
+        addEmail.mutate({ userId, email: value.trim(), isPrimary: makePrimary });
+        return;
+      case "phone":
+        addPhone.mutate({ userId, phoneNumber: value.trim() });
+        return;
+      default:
+        neverAsAny(editor);
+    }
+  };
+
+  const actionClass =
+    "flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-slate-700";
+
+  return (
+    <div className="py-3" data-testid="team-member-row">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[13px] text-slate-700">{member.username}</p>
+            {member.isServiceAccount && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-600"
+                data-testid="team-member-service"
+              >
+                <Bot size={11} />
+                Service account
+              </span>
+            )}
+          </div>
+          {member.emails.map((e) => (
+            <p key={e.email} className="truncate text-[11px] text-slate-400">
+              {e.email}
+              {e.isPrimary && member.emails.length > 1 && " (primary)"}
+            </p>
+          ))}
+          {member.phoneNumber && (
+            <p className="truncate text-[11px] text-slate-400">{member.phoneNumber}</p>
+          )}
+          {!member.soleTeam && (
+            <p className="text-[11px] text-slate-400" data-testid="team-member-other-team">
+              Also on another team, so only they can change their name, email or phone.
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <AccessToggle
+            value={member.access}
+            onChange={(next) => setAccess.mutate({ userId: member.userId, access: next })}
+            disabled={busy}
+            testId="team-member-access"
+          />
+          {member.soleTeam && (
+            <>
+              <button onClick={() => open("rename")} className={actionClass} data-testid="team-member-rename">
+                <Pencil size={12} />
+                Rename
+              </button>
+              <button onClick={() => open("email")} className={actionClass} data-testid="team-member-add-email">
+                <MailPlus size={12} />
+                Email
+              </button>
+              <button onClick={() => open("phone")} className={actionClass} data-testid="team-member-add-phone">
+                <Phone size={12} />
+                {member.phoneNumber ? "Change phone" : "Phone"}
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => remove.mutate({ userId: member.userId })}
+            disabled={busy}
+            className="flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
+            data-testid="team-member-remove"
+          >
+            <UserMinus size={12} />
+            Remove
+          </button>
+        </div>
+      </div>
+      {editor !== null && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            autoFocus
+            type={editor === "email" ? "email" : editor === "phone" ? "tel" : "text"}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") setEditor(null);
+            }}
+            placeholder={
+              editor === "email" ? "another@company.com" : editor === "phone" ? "+44 7700 900000" : "Name"
+            }
+            disabled={busy}
+            data-testid="team-member-editor"
+            className={INPUT_CLASS}
+          />
+          {editor === "email" && (
+            <label className="flex items-center gap-1.5 text-[12px] text-slate-500">
+              <input
+                type="checkbox"
+                checked={makePrimary}
+                onChange={(e) => setMakePrimary(e.target.checked)}
+                disabled={busy}
+              />
+              Make primary
+            </label>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={save}
+            disabled={!editorValid || busy}
+            data-testid="team-member-editor-save"
+          >
+            Save
+          </Button>
+          <button
+            onClick={() => setEditor(null)}
+            className="text-[12px] font-medium text-slate-400 hover:text-slate-700"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      <ErrorLine message={error} testId="team-member-error" />
+    </div>
   );
 }
 
@@ -28,29 +444,8 @@ export default function TeamPage() {
   const utils = trpc.useUtils();
   const refresh = () => void utils.views.teamMembers.overview.invalidate();
 
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [invited, setInvited] = useState<string | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
-
-  const invite = trpc.views.teamMembers.invite.useMutation({
-    onSuccess: () => {
-      setInvited(email);
-      setEmail("");
-      setError(null);
-      refresh();
-    },
-    onError: (e) => setError(e.message),
-  });
   const revoke = trpc.views.teamMembers.revokeInvite.useMutation({
     onSuccess: refresh,
-  });
-  const remove = trpc.views.teamMembers.remove.useMutation({
-    onSuccess: () => {
-      setRemoveError(null);
-      refresh();
-    },
-    onError: (e) => setRemoveError(e.message),
   });
 
   if (overview.isLoading || !overview.data) {
@@ -60,57 +455,11 @@ export default function TeamPage() {
   }
 
   const { members, invites } = overview.data;
-  const emailValid = /.+@.+\..+/.test(email);
 
   return (
     <div className="space-y-5">
-      {/* Invite */}
-      <Card>
-        <p className="text-[13px] font-semibold text-slate-900">
-          Add a teammate
-        </p>
-        <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
-          They join this workspace the next time they sign in with this address.
-          Nothing is emailed — they just sign in with this address and land here.
-        </p>
-        <div className="mt-3 flex items-center gap-2">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setInvited(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && emailValid) invite.mutate({ email });
-            }}
-            placeholder="teammate@company.com"
-            disabled={invite.isLoading}
-            data-testid="team-invite-email"
-            className="w-64 max-w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-900 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400"
-          />
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => invite.mutate({ email })}
-            disabled={!emailValid || invite.isLoading}
-            data-testid="team-invite-submit"
-          >
-            <UserPlus size={13} />
-            {invite.isLoading ? "Adding…" : "Add"}
-          </Button>
-        </div>
-        {error && (
-          <p className="mt-2 text-[12px] text-red-600" data-testid="team-invite-error">
-            {error}
-          </p>
-        )}
-        {invited && !error && (
-          <p className="mt-2 text-[12px] text-emerald-600" data-testid="team-invite-sent">
-            {invited} can now sign in to this workspace.
-          </p>
-        )}
-      </Card>
+      <AddMemberCard onChanged={refresh} />
+      <ServiceAccountCard onChanged={refresh} />
 
       {/* Pending invites */}
       {invites.length > 0 && (
@@ -148,40 +497,9 @@ export default function TeamPage() {
       {/* Members */}
       <Card>
         <p className="text-[13px] font-semibold text-slate-900">Members</p>
-        {removeError && (
-          <p className="mt-2 text-[12px] text-red-600" data-testid="team-remove-error">
-            {removeError}
-          </p>
-        )}
-        <div className="mt-3 divide-y divide-slate-100">
+        <div className="mt-1 divide-y divide-slate-100">
           {members.map((m) => (
-            <div
-              key={m.userId}
-              className="flex items-center justify-between gap-4 py-2"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-[13px] text-slate-700">
-                  {m.username}
-                </p>
-                {m.email && (
-                  <p className="truncate text-[11px] text-slate-400">{m.email}</p>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                  {m.access === "write" ? "Member" : "Read-only"}
-                </span>
-                <button
-                  onClick={() => remove.mutate({ userId: m.userId })}
-                  disabled={remove.isLoading}
-                  className="flex items-center gap-1 text-[12px] font-medium text-slate-400 transition-colors hover:text-red-600"
-                  data-testid="team-member-remove"
-                >
-                  <UserMinus size={12} />
-                  Remove
-                </button>
-              </div>
-            </div>
+            <MemberRow key={m.userId} member={m} onChanged={refresh} />
           ))}
         </div>
       </Card>

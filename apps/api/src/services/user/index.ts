@@ -271,10 +271,23 @@ class User extends ModelService<'user'> {
    * Take care not to expose this to non-admins, as throwing due to the uniqueness constraint
    * could expose the existence of other emails in the system
    */
-  async addEmail({ email, userId }: { email: string; userId: string }) {
+  async addEmail({
+    email,
+    userId,
+    isPrimary = false,
+  }: {
+    email: string;
+    userId: string;
+    isPrimary?: boolean;
+  }) {
     const { prisma } = currentContext();
 
-    await prisma.userEmail.create({ data: { email: email.toLowerCase(), userId } });
+    // A user has at most one primary address (a partial unique index), so a new
+    // primary takes the role over rather than colliding with the old one.
+    if (isPrimary) {
+      await prisma.userEmail.updateMany({ where: { userId, isPrimary: true }, data: { isPrimary: false } });
+    }
+    await prisma.userEmail.create({ data: { email: email.toLowerCase(), userId, isPrimary } });
   }
 
   /**
