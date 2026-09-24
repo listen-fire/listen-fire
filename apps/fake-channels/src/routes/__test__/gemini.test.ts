@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { FAKE_THOUGHT_SIGNATURE, geminiRoutes } from '../gemini';
+import { FAKE_PNG_BASE64, FAKE_THOUGHT_SIGNATURE, geminiRoutes } from '../gemini';
 
 /**
  * Route-level tests for the fake Gemini, run via `node --test` (through
@@ -208,6 +208,101 @@ test('with no scenario named, the fake answers as a model would', async () => {
       (await call(app.baseUrl, { method: 'streamGenerateContent', body: { ...HI, tools: TOOLS }, scenario: 'max_tokens' })).text,
     );
     assert.equal(header[header.length - 1].candidates[0].finishReason, 'MAX_TOKENS');
+  } finally {
+    await app.close();
+  }
+});
+
+test('generateContent answers an IMAGE modality request with an inline PNG', async () => {
+  const app = await bootApp();
+  try {
+    const { status, text } = await call(app.baseUrl, {
+      method: 'generateContent',
+      model: 'gemini-3.1-flash-image-preview',
+      body: {
+        ...HI,
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '16:9', imageSize: '2K' } },
+      },
+    });
+    assert.equal(status, 200);
+    const parts = JSON.parse(text).candidates[0].content.parts;
+    assert.deepEqual(parts[1], { inlineData: { mimeType: 'image/png', data: FAKE_PNG_BASE64 } });
+
+    const badRatio = await call(app.baseUrl, {
+      method: 'generateContent',
+      body: { ...HI, generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '7:3' } } },
+    });
+    assert.equal(badRatio.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('generateContent takes inline audio and answers in text', async () => {
+  const app = await bootApp();
+  try {
+    const { status, text } = await call(app.baseUrl, {
+      method: 'generateContent',
+      body: {
+        contents: [
+          { role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: 'UklGRg==' } }, { text: 'Transcribe this.' }] },
+        ],
+        generationConfig: { temperature: 0 },
+      },
+    });
+    assert.equal(status, 200);
+    assert.equal(JSON.parse(text).candidates[0].content.parts.map((p: { text: string }) => p.text).join(''), 'Hello from the fake Gemini.');
+  } finally {
+    await app.close();
+  }
+});
+
+async function predict(baseUrl: string, model: string, body: unknown): Promise<{ status: number; json: any }> {
+  const res = await fetch(`${baseUrl}${PROJECT}/${model}:predict`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, json: await res.json() };
+}
+
+test(':predict embeds one text at the requested width, un-normalised as the real model leaves it', async () => {
+  const app = await bootApp();
+  try {
+    const full = await predict(app.baseUrl, 'gemini-embedding-001', {
+      instances: [{ content: 'hello' }],
+      parameters: { autoTruncate: false },
+    });
+    assert.equal(full.status, 200);
+    const values: number[] = full.json.predictions[0].embeddings.values;
+    assert.equal(values.length, 3072);
+    assert.ok(Math.abs(Math.sqrt(values.reduce((s, v) => s + v * v, 0)) - 1) < 1e-9);
+
+    const short = await predict(app.baseUrl, 'gemini-embedding-001', {
+      instances: [{ content: 'hello' }],
+      parameters: { outputDimensionality: 256, autoTruncate: false },
+    });
+    const shortValues: number[] = short.json.predictions[0].embeddings.values;
+    assert.equal(shortValues.length, 256);
+    assert.deepEqual(shortValues, values.slice(0, 256));
+    assert.equal(typeof short.json.predictions[0].embeddings.statistics.token_count, 'number');
+  } finally {
+    await app.close();
+  }
+});
+
+test(':predict refuses two texts, a width out of range, and a model it does not serve', async () => {
+  const app = await bootApp();
+  try {
+    const two = await predict(app.baseUrl, 'gemini-embedding-001', { instances: [{ content: 'a' }, { content: 'b' }] });
+    assert.equal(two.status, 400);
+    const narrow = await predict(app.baseUrl, 'gemini-embedding-001', {
+      instances: [{ content: 'a' }],
+      parameters: { outputDimensionality: 64 },
+    });
+    assert.equal(narrow.status, 400);
+    const unknown = await predict(app.baseUrl, 'text-embedding-005', { instances: [{ content: 'a' }] });
+    assert.equal(unknown.status, 404);
   } finally {
     await app.close();
   }
