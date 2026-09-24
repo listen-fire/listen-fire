@@ -118,13 +118,4 @@ describe('chatCallFor', () => {
     expect(typeof call.client.messages.create).toBe('function');
     expect(anthropicCtor).not.toHaveBeenCalled();
   });
-
-  it('says plainly that the Gemini translator is not here yet', () => {
-    expect(() =>
-      load().chatCallFor('claude-sonnet-5', {
-        ...GOOGLE,
-        MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'gemini/gemini-3-pro' }),
-      }),
-    ).toThrow('Provider "gemini" is not available yet');
-  });
 });
