@@ -2,6 +2,7 @@
 
 import { recordLlmUsage } from '../../llm_usage';
 import { openAiClient } from '../providers/openai';
+import type { Resolved } from '../map';
 import type { EmbeddingRequest, EmbeddingResult } from './index';
 import type { EmbeddingRange } from './range';
 
@@ -20,10 +21,11 @@ export const OPENAI_EMBEDDING_DIMENSIONS: Readonly<Record<string, EmbeddingRange
 };
 
 export async function openAiEmbed(
-  wireModel: string,
+  resolved: Resolved,
   req: EmbeddingRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<EmbeddingResult> {
+  const { wireModel } = resolved;
   const native = OPENAI_EMBEDDING_DIMENSIONS[wireModel]?.max;
   const response = await openAiClient(env).embeddings.create({
     model: wireModel,
@@ -34,8 +36,7 @@ export async function openAiEmbed(
   });
 
   recordLlmUsage({
-    provider: 'openai',
-    model: wireModel,
+    resolved,
     callType: 'embedding',
     label: req.label,
     inputTokens: response.usage.total_tokens,

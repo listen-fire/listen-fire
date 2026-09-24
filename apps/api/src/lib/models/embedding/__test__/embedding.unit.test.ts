@@ -67,7 +67,10 @@ describe('OpenAI, where the map leaves embeddings at home', () => {
     embeddingsCreate.mockResolvedValue({ data: [{ embedding: vector(3072) }], usage: { total_tokens: 7 } });
     await embed('text-embedding-3-large', { input: ['hello'], label: 'l' }, {});
     expect(recordLlmUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: 'openai', model: 'text-embedding-3-large', inputTokens: 7 }),
+      expect.objectContaining({
+        resolved: { preferred: 'text-embedding-3-large', provider: 'openai', wireModel: 'text-embedding-3-large' },
+        inputTokens: 7,
+      }),
     );
   });
 });
@@ -105,11 +108,15 @@ describe('Gemini, where the map sends embeddings', () => {
     expect(embedContent).not.toHaveBeenCalled();
   });
 
-  it('bills Google, under the wire model', async () => {
+  it('bills Gemini, under the wire model', async () => {
     geminiResponds(3072);
     await embed('text-embedding-3-large', { input: ['hello'], label: 'l' }, GEMINI_ENV);
     expect(recordLlmUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: 'google', model: 'gemini-embedding-001', callType: 'embedding', inputTokens: 4 }),
+      expect.objectContaining({
+        resolved: { preferred: 'text-embedding-3-large', provider: 'gemini', wireModel: 'gemini-embedding-001' },
+        callType: 'embedding',
+        inputTokens: 4,
+      }),
     );
   });
 });

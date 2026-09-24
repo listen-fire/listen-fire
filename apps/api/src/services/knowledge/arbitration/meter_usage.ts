@@ -21,8 +21,7 @@ export function meterKnowledgeLlmUsage(): void {
       runInBackground(async () => {
         await new LlmUsageContext({ teamId: usage.teamId }).runAsync(async () => {
           await recordLlmUsage({
-            provider: 'anthropic',
-            model: usage.model,
+            resolved: usage.resolved,
             callType: 'structured',
             label: usage.purpose,
             inputTokens: usage.inputTokens,

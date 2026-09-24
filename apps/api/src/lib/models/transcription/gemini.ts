@@ -6,6 +6,7 @@ import { logger } from '../../../services/logger';
 import { recordLlmUsage } from '../../llm_usage';
 import { geminiClient } from '../providers/gemini';
 import { geminiAudioMimeType } from './audio_format';
+import type { Resolved } from '../map';
 import type { TranscriptionRequest, TranscriptionResult } from './index';
 
 /**
@@ -35,10 +36,11 @@ const TRANSCRIBE_PROMPT =
   'itself. If nothing is said, output nothing.';
 
 export async function geminiTranscribe(
-  wireModel: string,
+  resolved: Resolved,
   req: TranscriptionRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<TranscriptionResult> {
+  const { wireModel } = resolved;
   // A format Gemini does not take fails by name here rather than being sent
   // and hoped for: the endpoint's own refusal names a MIME type nobody
   // upstream ever wrote down.
@@ -85,8 +87,7 @@ export async function geminiTranscribe(
     .join('');
 
   recordLlmUsage({
-    provider: 'google',
-    model: wireModel,
+    resolved,
     callType: 'chat',
     label: req.label,
     inputTokens: response.usageMetadata?.promptTokenCount ?? 0,

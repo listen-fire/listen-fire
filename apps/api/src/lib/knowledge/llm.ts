@@ -19,7 +19,7 @@ import { missingGoogleServiceAccountVars } from '../google_cloud';
 import { chatCallFor } from '../models/chat';
 import type { ChatProvider } from '../models/chat';
 import { providerCredentialsPresent, resolveModel } from '../models/map';
-import type { Provider } from '../models/map';
+import type { Provider, Resolved } from '../models/map';
 import { anthropicKeyedChatProvider } from '../models/providers/anthropic';
 import { parseChatModelName } from '../models/registry';
 import type { ChatModelName } from '../models/registry';
@@ -82,13 +82,13 @@ export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): 
  * operator's choice of who pays for arbitration. Anywhere else the key has
  * nothing to open and is simply unused.
  */
-function knowledgeLlmClient(env: NodeJS.ProcessEnv): { client: ChatProvider; wireModel: string } {
+function knowledgeLlmClient(env: NodeJS.ProcessEnv): { client: ChatProvider; resolved: Resolved } {
   const model = knowledgeLlmModel(env);
   const resolved = resolveModel(model, env);
   if (resolved.provider === 'anthropic') {
     const apiKey = knowledgeLlmKey(env);
     if (!apiKey) throw new KnowledgeLlmUnavailable();
-    return { client: anthropicKeyedChatProvider(apiKey), wireModel: resolved.wireModel };
+    return { client: anthropicKeyedChatProvider(apiKey), resolved };
   }
   if (!providerCredentialsPresent(resolved.provider, env)) {
     throw new KnowledgeLlmUnavailable(credentialsToSet(resolved.provider, env));
@@ -105,7 +105,8 @@ export interface KnowledgeLlmUsageSink {
     teamId: string;
     /** What the call was for — the sink's only handle on which surface spent this. */
     purpose: string;
-    model: string;
+    /** Who answered and under what name, as the model map resolved it. */
+    resolved: Resolved;
     inputTokens: number;
     outputTokens: number;
   }): void;
@@ -151,11 +152,11 @@ export async function knowledgeLlmStructured<T extends z.ZodType>(input: {
   env?: NodeJS.ProcessEnv;
 }): Promise<z.infer<T>> {
   const env = input.env ?? process.env;
-  const { client, wireModel } = knowledgeLlmClient(env);
-  const model = knowledgeLlmModel(env);
+  const { client, resolved } = knowledgeLlmClient(env);
+  const model = resolved.preferred;
 
   const response = await client.messages.create({
-    model: wireModel,
+    model: resolved.wireModel,
     max_tokens: MAX_TOKENS,
     system: input.system,
     messages: [{ role: 'user', content: input.user }],
@@ -172,7 +173,7 @@ export async function knowledgeLlmStructured<T extends z.ZodType>(input: {
   usageSink?.record({
     teamId: input.teamId,
     purpose: input.purpose,
-    model,
+    resolved,
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
   });

@@ -38,7 +38,7 @@ export async function transcribe(
     case 'openai':
       return openAiTranscribe(wireModel, req, env);
     case 'gemini':
-      return geminiTranscribe(wireModel, req, env);
+      return geminiTranscribe(resolved, req, env);
     case 'anthropic':
     case 'vertex':
       // Boot validation refuses this map line; reaching it means the map was
