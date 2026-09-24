@@ -28,6 +28,12 @@ import { GoogleAppAdapter } from './adapters/google/connector';
 import { GoogleAuthClient } from './adapters/google/authClient';
 import { DropboxAppAdapter } from './adapters/dropbox/connector';
 import { DropboxAuthClient } from './adapters/dropbox/authClient';
+import { GmailAppAdapter } from './adapters/gmail/connector';
+import { GmailAuthClient } from './adapters/gmail/authClient';
+import {
+  gmailConnectMethod,
+  gmailOAuthClientCredentials,
+} from './adapters/gmail/connect_method';
 import { SlackMonitoring } from './lib/slack';
 import { getEnvVar } from './lib/utils/environment';
 import { neverAsAny } from './lib/utils/types';
@@ -324,6 +330,28 @@ if (GOOGLE_INTEGRATIONS_CLIENT_ID && GOOGLE_INTEGRATIONS_CLIENT_SECRET) {
       clientId: GOOGLE_INTEGRATIONS_CLIENT_ID,
       clientSecret: GOOGLE_INTEGRATIONS_CLIENT_SECRET,
       redirectBaseUrl: oauthRedirectBaseUrl(),
+    }),
+  });
+}
+
+// Gmail's OAuth client is the operator's own (`GMAIL_OAUTH_CLIENT_ID`) when
+// they registered one, and otherwise the client Sheets and Drive already use.
+// Registered only under the `oauth` connect method; under `delegated` there is
+// no sign-in, so no connector, and the key-entry form is what the app offers
+// instead.
+const GMAIL_OAUTH_CLIENT =
+  gmailConnectMethod() === 'oauth' ? gmailOAuthClientCredentials() : null;
+if (GMAIL_OAUTH_CLIENT) {
+  services.gmail = new GmailAppAdapter({
+    authClient: new GmailAuthClient({
+      clientId: GMAIL_OAUTH_CLIENT.clientId,
+      clientSecret: GMAIL_OAUTH_CLIENT.clientSecret,
+      redirectBaseUrl: oauthRedirectBaseUrl(),
+      // The dev loop signs in against the fake Google in fake-channels, so the
+      // real exchange and the real profile call run with nothing mocked out.
+      ...(process.env.MOCK_OUTPUT_ADAPTERS === 'true'
+        ? { fakeBaseUrl: process.env.FAKE_CHANNELS_URL ?? 'http://localhost:5556' }
+        : {}),
     }),
   });
 }

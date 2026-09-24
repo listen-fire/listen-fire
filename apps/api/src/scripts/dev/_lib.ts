@@ -6,7 +6,17 @@ import { getAutomationsQb, getCoreQb, getKnowledgeQb, getQb } from '../../lib/ky
 import { materializeTemplate } from '../../lib/knowledge/templates/materialize';
 import { generateJWT } from '../../lib/middleware/authentication/token';
 import { encryptToken, decryptToken } from '../../lib/credentials';
-import { isLegacyApp, defaultAppIdForType } from '../../services/credentials/app_id';
+import {
+  GMAIL_APP_ID,
+  gmailCredentialShape,
+  isLegacyApp,
+  defaultAppIdForType,
+} from '../../services/credentials/app_id';
+import { GmailAuthClient } from '../../adapters/gmail/authClient';
+import {
+  gmailConnectMethod,
+  type GmailConnectMethod,
+} from '../../adapters/gmail/connect_method';
 import { intrinsicProvisionerForType } from '../../services/credentials/intrinsic_provision';
 import { persistCredential } from '../../services/credentials/persist_credential';
 import { Context } from '../../services/context';
@@ -40,6 +50,107 @@ export const DEV_LOOP_TEAM_NAME = 'Dev Loop';
  * movement with "Unknown credential 'Dev Loop Slack'". `defaultAppIdForType`
  * is what the real connect flow uses; going through it is the whole fix.
  */
+/** The dev-loop mailbox, and the name every Gmail proof movement refers to. */
+export const DEV_LOOP_GMAIL_CREDENTIAL_NAME = 'Dev Loop Gmail';
+
+/**
+ * The dev-loop team's connected mailbox, in the shape this profile's connect
+ * method mints.
+ *
+ * DELEGATED is a row and nothing else: the address is the whole credential.
+ *
+ * OAUTH runs the REAL sign-in against the fake Google in fake-channels —
+ * install URL, consent redirect, code exchange — so the stored row carries
+ * tokens and granted scopes that came out of the actual OAuth client rather
+ * than out of a fixture. The mailbox address is read straight off the fake's
+ * profile endpoint: this is provisioning, and the connector's own profile call
+ * is what the callback path exercises.
+ *
+ * `replace` re-seeds an existing row, which is how `dev:gmail setup --method`
+ * switches a stack between the two shapes.
+ */
+export async function ensureDevLoopGmailCredential(input: {
+  teamId: TeamId;
+  method?: GmailConnectMethod;
+  replace?: boolean;
+}): Promise<{ created: boolean; method: GmailConnectMethod }> {
+  const method = input.method ?? gmailConnectMethod();
+  const existing = await getAutomationsQb(['external_service_credentials'])
+    .selectFrom('external_service_credentials')
+    .where('team_id', '=', input.teamId)
+    .where('type', '=', ExternalServiceType.GOOGLE_GMAIL)
+    .where('name', '=', DEV_LOOP_GMAIL_CREDENTIAL_NAME)
+    .select(['id', 'app_id'])
+    .executeTakeFirst();
+
+  if (existing && !input.replace && gmailCredentialShape(existing.app_id) === method) {
+    return { created: false, method };
+  }
+  if (existing) {
+    await getAutomationsQb(['external_service_credentials'])
+      .deleteFrom('external_service_credentials')
+      .where('id', '=', existing.id)
+      .execute();
+  }
+
+  const payload =
+    method === 'oauth' ? await devLoopGmailOAuthPayload() : { mailbox: DEV_LOOP_EMAIL };
+  const appId =
+    method === 'oauth' ? GMAIL_APP_ID.oauthMailbox : GMAIL_APP_ID.delegatedMailbox;
+
+  const credId = randomUUID() as ExternalServiceCredentialsId;
+  await getAutomationsQb(['external_service_credentials'])
+    .insertInto('external_service_credentials')
+    .values({
+      id: credId,
+      name: DEV_LOOP_GMAIL_CREDENTIAL_NAME,
+      type: ExternalServiceType.GOOGLE_GMAIL,
+      credentials: await encryptToken(JSON.stringify(payload), credId),
+      app_id: appId,
+      team_id: input.teamId,
+    } as never)
+    .execute();
+  return { created: true, method };
+}
+
+function fakeChannelsUrl(): string {
+  return (process.env.FAKE_CHANNELS_URL ?? 'http://localhost:5556').replace(/\/$/, '');
+}
+
+async function devLoopGmailOAuthPayload(): Promise<Record<string, unknown>> {
+  const fakeBaseUrl = fakeChannelsUrl();
+  const authClient = new GmailAuthClient({
+    clientId: process.env.GOOGLE_INTEGRATIONS_CLIENT_ID || 'dev-loop-google-client',
+    clientSecret: process.env.GOOGLE_INTEGRATIONS_CLIENT_SECRET || 'dev-loop-google-secret',
+    redirectBaseUrl: process.env.OAUTH_REDIRECT_BASE_URL || 'http://localhost:3003',
+    fakeBaseUrl,
+  });
+
+  const installUrl = await authClient.generateInstallUrl();
+  const consent = await fetch(installUrl, { redirect: 'manual' });
+  const location = consent.headers.get('location');
+  if (!location) {
+    throw new Error(
+      `The fake Google consent at ${fakeBaseUrl} did not redirect back ` +
+        `(${consent.status}). Is fake-channels running?`,
+    );
+  }
+  const back = new URL(location);
+  const tokens = await authClient.codeToToken({
+    state: back.searchParams.get('state') ?? '',
+    code: back.searchParams.get('code') ?? '',
+  });
+
+  const profileResponse = await fetch(`${fakeBaseUrl}/gmail/v1/users/me/profile`);
+  const profile: unknown = await profileResponse.json();
+  const mailbox =
+    typeof profile === 'object' && profile !== null
+      ? String(Reflect.get(profile, 'emailAddress') ?? DEV_LOOP_EMAIL)
+      : DEV_LOOP_EMAIL;
+
+  return { mailbox, ...tokens };
+}
+
 export async function ensureDevLoopSlackCredential(teamId: string): Promise<void> {
   const existing = await getAutomationsQb(['external_service_credentials'])
     .selectFrom('external_service_credentials')
@@ -502,37 +613,10 @@ export async function ensureDevLoopTeam(): Promise<SeedResult> {
     created.dealroomCredentials = true;
   }
 
-  // 6b-iii. The Gmail mailbox. There is no key to paste — a connected mailbox
-  // is just its address, and the deployment's service account is the authority
-  // — so the seeded row stores the dev-loop address and carries the delegated
-  // `app_id`, which is what tells it apart from the retired per-user sign-in.
-  // `injectFakeBaseUrl` points the client at the fake Gmail for this team.
-  const existingGmailCreds = await getAutomationsQb(['external_service_credentials'])
-    .selectFrom('external_service_credentials')
-    .where('team_id', '=', teamId as TeamId)
-    .where('type', '=', ExternalServiceType.GOOGLE_GMAIL)
-    .where('name', '=', 'Dev Loop Gmail')
-    .select('id')
-    .executeTakeFirst();
-  if (!existingGmailCreds) {
-    const credId = randomUUID() as ExternalServiceCredentialsId;
-    const encrypted = await encryptToken(
-      JSON.stringify({ mailbox: 'dev-loop@listen-fire.local' }),
-      credId,
-    );
-    await getAutomationsQb(['external_service_credentials'])
-      .insertInto('external_service_credentials')
-      .values({
-        id: credId,
-        name: 'Dev Loop Gmail',
-        type: ExternalServiceType.GOOGLE_GMAIL,
-        credentials: encrypted,
-        app_id: defaultAppIdForType(ExternalServiceType.GOOGLE_GMAIL),
-        team_id: teamId,
-      } as any)
-      .execute();
-    created.gmailCredentials = true;
-  }
+  // 6b-iii. The Gmail mailbox, in whichever shape this profile's connect method
+  // mints (see ensureDevLoopGmailCredential).
+  const gmail = await ensureDevLoopGmailCredential({ teamId: teamId as TeamId });
+  created.gmailCredentials = gmail.created;
 
   // 6c. The knowledge-graph connection. Unconditional: the helper is
   // idempotent and re-seeding is how a credential left pointing at a dead

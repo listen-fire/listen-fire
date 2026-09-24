@@ -11,6 +11,7 @@ import { AirtableConnector } from './airtable/interface';
 import { AttioConnector } from './attio/interface';
 import { GoogleConnector } from './google/interface';
 import { DropboxAppAdapter } from './dropbox/connector';
+import { GmailAppAdapter } from './gmail/connector';
 import { SlackMonitoring } from '../lib/slack';
 
 class Registry {
@@ -128,6 +129,18 @@ class Registry {
 
   get google() {
     return this._google;
+  }
+
+  // Registered only when this deployment connects Gmail by OAuth
+  // (GMAIL_CONNECT_METHOD) and carries the Google integrations client pair.
+  // Absent under the delegated method — there is no sign-in to run.
+  private _gmail?: GmailAppAdapter | undefined;
+  set gmail(gmailApp: GmailAppAdapter | undefined) {
+    this._gmail = gmailApp;
+  }
+
+  get gmail() {
+    return this._gmail;
   }
 
   private _dropbox?: DropboxAppAdapter | undefined;

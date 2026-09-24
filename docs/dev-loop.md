@@ -41,7 +41,7 @@ pnpm dev:granola setup                   # GRANOLA + SLACK creds + a granola-pol
 pnpm dev:telegram setup                  # TELEGRAM + SLACK creds + a movement extracting from message text + attachment files (voice notes transcribe)
 pnpm dev:evertrace setup                 # EVERTRACE + SLACK creds + a signal-poll and a list-entry listener movement
 pnpm dev:dealroom setup                  # DEALROOM + SLACK creds + a dealroom-poll listener movement (round → company + investors)
-pnpm dev:gmail setup                     # GOOGLE_GMAIL + SLACK creds + a gmail-poll listener movement (--write send|reply for the write shapes)
+pnpm dev:gmail setup                     # GOOGLE_GMAIL + SLACK creds + a gmail-poll listener movement (--write send|reply for the write shapes; --method oauth|delegated for the two connect shapes)
 
 # 7. Inspect what the system did
 pnpm dev:inspect attio                # fake-channels state
@@ -58,7 +58,7 @@ tail -F .dev-loop/loop.log            # API logs (loop.sh tees them here)
 | Postgres, Redis | **real** | docker compose, ports 9432 / 6379 |
 | S3 | **real** | uses your `AWS_*` env from apps/api/.env |
 | Anthropic, OpenAI (incl. whisper transcription), Google DocumentAI | **real** | hits live APIs; spends real tokens (a voice-note e2e costs well under 1p) |
-| Slack, Attio, Email (Mailgun), WhatsApp (Meta Cloud API — send + inbound media), Telegram (Bot API — send + getFile/media), Affinity, Airtable, Sheets, Granola (meeting-notes poll API), Evertrace (signal poll API), Dealroom (Premium search API), Gmail (users.messages / history / send) | **fake** | persistent SQLite-backed via `apps/fake-channels` (port 5556 default; 6056 / 6156 / 6256 under agent / agent2 / agent3) |
+| Slack, Attio, Email (Mailgun), WhatsApp (Meta Cloud API — send + inbound media), Telegram (Bot API — send + getFile/media), Affinity, Airtable, Sheets, Granola (meeting-notes poll API), Evertrace (signal poll API), Dealroom (Premium search API), Gmail (users.messages / history / send, plus a Google sign-in to connect a mailbox against) | **fake** | persistent SQLite-backed via `apps/fake-channels` (port 5556 default; 6056 / 6156 / 6256 under agent / agent2 / agent3) |
 | Valuations | **in-process** | Same monorepo — the local API IS the Valuations service (`/api/v1/valuations/...`). Not faked, just self-hosted. |
 | Acme CRM (`acme_crm`) | **fake** | The loop's one REMOTE adapter — a homespun CRM served behind the remote-adapter wire protocol (`pnpm dev:fake-crm`, port 5557 default; 6057 / 6157 / 6257 under agent / agent2 / agent3). `pnpm dev:seed` installs the `remote_adapter` row pointing at it. Writes are in-memory, so they reset with the loop. See `apps/api/src/scripts/dev/REMOTE_ADAPTER_VERIFY.md`. |
 

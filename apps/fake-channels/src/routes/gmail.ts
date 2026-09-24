@@ -474,6 +474,99 @@ export function gmailRoutes(store: EntityStore): Router {
     res.json({ history, historyId: String(mailbox.historyId) });
   });
 
+  // ── fake Google OAuth ─────────────────────────────────────────────────────
+  // Two endpoints, which is all a sign-in is: a consent that redirects back
+  // with a code, and a token endpoint that trades the code for tokens. The
+  // adapter under test is the REAL OAuth client with its endpoints pointed
+  // here, so the code exchange, the granted scopes and the refresh token are
+  // all exercised rather than stubbed.
+  //
+  // The consent never asks anybody anything — there is no account to choose
+  // between — so it redirects immediately. The scopes the client asked for are
+  // remembered against the code, because what Google GRANTED is the fact the
+  // send path later depends on.
+
+  r.get('/fake-google-oauth/auth', (req, res) => {
+    const redirectUri = String(req.query.redirect_uri ?? '');
+    if (redirectUri === '') return res.status(400).send('Missing redirect_uri');
+    const code = `fake-auth-code-${store.nextId(SVC, 'oauth_code')}`;
+    store.create(SVC, 'oauth_code', { scope: String(req.query.scope ?? '') }, code);
+    const back = new URL(redirectUri);
+    back.searchParams.set('code', code);
+    back.searchParams.set('state', String(req.query.state ?? ''));
+    res.redirect(back.toString());
+  });
+
+  r.post('/fake-google-oauth/token', (req, res) => {
+    const grantType = String(req.body?.grant_type ?? 'authorization_code');
+    const mailbox = readMailbox(store);
+
+    if (grantType === 'refresh_token') {
+      // A refresh renews the access token and nothing else — the same shape
+      // Google answers with, so the rotation listener has something real to
+      // write down. A refresh token minted here carries the scopes its original
+      // code was granted, which is how a PASTED token proves what it may do.
+      const refresh = String(req.body?.refresh_token ?? '');
+      const code = refresh.startsWith('fake-refresh-') ? refresh.slice('fake-refresh-'.length) : '';
+      const granted = store.get(SVC, 'oauth_code', code);
+      if (code !== '' && !granted) {
+        return res.status(400).json({
+          error: 'invalid_grant',
+          error_description: 'Token has been expired or revoked.',
+        });
+      }
+      return res.json({
+        access_token: `fake-access-${Date.now()}`,
+        expires_in: 3600,
+        token_type: 'Bearer',
+        scope: String(granted?.data.scope ?? req.body?.scope ?? ''),
+      });
+    }
+
+    const code = String(req.body?.code ?? '');
+    const row = store.get(SVC, 'oauth_code', code);
+    if (!row) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Unknown code' });
+    }
+    res.json({
+      access_token: `fake-access-${code}`,
+      refresh_token: `fake-refresh-${code}`,
+      expires_in: 3600,
+      token_type: 'Bearer',
+      scope: String(row.data.scope ?? ''),
+      // Not read by anything here; present because a real Google response with
+      // these scopes carries one, and a fake that omits it invites code that
+      // quietly depends on its absence.
+      id_token: `fake-id-token-for-${mailbox.emailAddress}`,
+    });
+  });
+
+  /** What Google's `tokeninfo` says about an access token. Only reached when a
+   *  token response carried no `scope` of its own, which this fake's does — it
+   *  exists so the fallback path has somewhere real to go. */
+  r.get('/fake-google-oauth/tokeninfo', (req, res) => {
+    const token = String(req.query.access_token ?? '');
+    if (token === '') {
+      return res.status(400).json({ error: 'invalid_token' });
+    }
+    res.json({
+      aud: 'fake-google-oauth-client',
+      scope: 'https://www.googleapis.com/auth/gmail.readonly',
+      expires_in: 3600,
+      email: readMailbox(store).emailAddress,
+    });
+  });
+
+  /** Mint a refresh token for a given scope set, so a test can paste one
+   *  without first driving a consent. Fake-only — there is no such endpoint at
+   *  Google, and the token it returns is redeemable only here. */
+  r.post('/fake-google-oauth/refresh-tokens', (req, res) => {
+    const scope = String(req.body?.scope ?? 'https://www.googleapis.com/auth/gmail.readonly');
+    const code = `pasted-${store.nextId(SVC, 'oauth_code')}`;
+    store.create(SVC, 'oauth_code', { scope }, code);
+    res.json({ refresh_token: `fake-refresh-${code}`, scope });
+  });
+
   // ── fake-only control surface ─────────────────────────────────────────────
 
   /** Drop a message into the mailbox, built from a friendly shape. */

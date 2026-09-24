@@ -138,10 +138,12 @@ const OAUTH_CONNECTOR_BY_TYPE: Partial<
   [ExternalServiceType.ATTIO]: () => services.attio,
   [ExternalServiceType.AIRTABLE]: () => services.airtable,
   [ExternalServiceType.GOOGLE]: () => services.google,
-  // GOOGLE_GMAIL is deliberately absent. The type belongs to the CONNECTOR —
-  // one mailbox the deployment's service account acts as, connected by naming
-  // the address (the key-entry form). There is no per-user Gmail sign-in to
-  // list here any more.
+  // Gmail connects by SIGNING IN AS THE MAILBOX under the default method, and
+  // `services.gmail` is registered only then — so under the delegated method
+  // this getter is empty and the key-entry form below is what a connect
+  // resolves to. Not the retired per-user sign-in: this credential is the
+  // connected mailbox itself.
+  [ExternalServiceType.GOOGLE_GMAIL]: () => services.gmail,
   [ExternalServiceType.DROPBOX]: () => services.dropbox,
 };
 

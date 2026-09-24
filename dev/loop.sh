@@ -178,10 +178,19 @@ export WHATSAPP_GRAPH_BASE_URL="${WHATSAPP_GRAPH_BASE_URL:-$FAKE_CHANNELS_URL/wh
 # app on an https port the API doesn't serve, so it can't be used here.
 export EXPOSED_FILE_PUBLIC_BASE_URL="${EXPOSED_FILE_PUBLIC_BASE_URL:-$API_BASE_URL}"
 
-# The dev-loop Gmail credential (_lib.ts's ensureDevLoopTeam) stores this
-# exact address. GMAIL_MAILBOX_ALLOWLIST refuses every mailbox when unset — a
-# deliberate default the dev loop must satisfy like any other deployment, so
-# `pnpm dev:gmail setup` stays connectable without special-casing the loop.
+# Gmail. The loop runs the DEFAULT connect method — a sign-in as the mailbox,
+# against the fake Google in fake-channels — so the path every deployment takes
+# is the path the loop proves. `pnpm dev:gmail setup --method delegated`
+# re-seeds the other shape when that is what is under test.
+export GMAIL_CONNECT_METHOD="${GMAIL_CONNECT_METHOD:-oauth}"
+# Sending is off by default everywhere, and the loop turns it on: both writes
+# (send and reply) are things the loop has proofs for, and a consent that never
+# asked for the scope cannot serve them.
+export GMAIL_SEND_ENABLED="${GMAIL_SEND_ENABLED:-true}"
+# The dev-loop Gmail credential (_lib.ts's ensureDevLoopGmailCredential) carries
+# this exact address. Setting it means the loop exercises the ENFORCED
+# allowlist, which is the half a deployment can get wrong — under the sign-in
+# method an unset one would restrict nothing and prove nothing.
 export GMAIL_MAILBOX_ALLOWLIST="${GMAIL_MAILBOX_ALLOWLIST:-dev-loop@listen-fire.local}"
 
 # The address inbound mail is routed on. It has no default anywhere in the
@@ -250,6 +259,8 @@ cat > "$PROFILE_FILE" <<EOF
     "FAKE_CHANNELS_URL": "$FAKE_CHANNELS_URL",
     "VITE_API_BASE_URL": "$VITE_API_BASE_URL",
     "NEXT_PUBLIC_API_URL": "$NEXT_PUBLIC_API_URL",
+    "GMAIL_CONNECT_METHOD": "$GMAIL_CONNECT_METHOD",
+    "GMAIL_SEND_ENABLED": "$GMAIL_SEND_ENABLED",
     "GMAIL_MAILBOX_ALLOWLIST": "$GMAIL_MAILBOX_ALLOWLIST"
   }
 }

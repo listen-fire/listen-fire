@@ -17,7 +17,15 @@ import {
 } from '../../../adapters/airtable/apiClient';
 import { attioCredsParser, getAttioClient } from '../../../adapters/attio/apiClient';
 import { googleCredsParser } from '../../../adapters/google/authClient';
-import { gmailCredsParser, validateGmailMailbox } from '../../../adapters/gmail/apiClient';
+import {
+  connectGmailByRefreshToken,
+  gmailCredsParser,
+  gmailDelegatedCredsParser,
+  gmailRefreshTokenCredsParser,
+  validateGmailMailbox,
+} from '../../../adapters/gmail/apiClient';
+import { forgetGmailTokenClient } from '../../../adapters/gmail/authClient';
+import { gmailConnectMethod } from '../../../adapters/gmail/connect_method';
 import { dropboxCredsParser } from '../../../adapters/dropbox/authClient';
 import { nativeValuationsCredsParser } from '../../../services/translation_graph/adapters/native_valuations';
 import { granolaCredsParser } from '../../../services/credentials/connect_form_spec';
@@ -53,19 +61,38 @@ function maybeFakeCreds<T extends Record<string, unknown>>(creds: T, serviceType
 }
 
 /**
- * The connect-LINK form (connect_form_spec.ts) runs `validateGmailMailbox`
- * before storing anything; the in-app modal skipped it, so a wrong address
- * — or one this installation's GMAIL_MAILBOX_ALLOWLIST does not name — only
- * failed the first time a run tried to use it. Run the SAME function here,
- * so the two save paths can never drift.
+ * What a Gmail save actually stores, checked live first.
+ *
+ * The connect-LINK forms (connect_form_spec.ts) check before storing anything;
+ * the in-app modal skipped it, so a wrong address — or one this installation's
+ * GMAIL_MAILBOX_ALLOWLIST does not name — only failed the first time a run
+ * tried to use it. The same functions run here, so the two save paths can never
+ * drift.
+ *
+ * Three things can arrive, and each is checked as itself: a typed mailbox
+ * address (the delegated form), the claimed payload of a sign-in, and a pasted
+ * refresh token. The last is the only one that RESOLVES to something else —
+ * Google answers with the mailbox and the scopes, and that is what gets stored.
  */
-async function assertGmailMailboxSavable(credentials: unknown): Promise<void> {
+async function gmailCredentialToStore(credentials: unknown): Promise<unknown> {
+  const pasted = gmailRefreshTokenCredsParser.safeParse(credentials);
+  if (pasted.success) {
+    const entry = maybeFakeCreds(pasted.data, 'GOOGLE_GMAIL');
+    const resolved = await connectGmailByRefreshToken({
+      refreshToken: entry.refreshToken,
+      ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+    });
+    if (!resolved.ok) throw new Error(resolved.message);
+    return resolved.credentials;
+  }
+
   const verdict = await validateGmailMailbox(
     maybeFakeCreds(gmailCredsParser.parse(credentials), 'GOOGLE_GMAIL'),
   );
   if (!verdict.ok) {
     throw new Error(verdict.message);
   }
+  return credentials;
 }
 
 /**
@@ -127,7 +154,9 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
             }),
             z.object({
               type: z.literal(ExternalServiceType.GOOGLE_GMAIL),
-              credentials: gmailCredsParser,
+              // Either Gmail connect form's posted values: a mailbox address
+              // under the delegated method, a pasted refresh token under oauth.
+              credentials: z.union([gmailRefreshTokenCredsParser, gmailDelegatedCredsParser]),
             }),
             z.object({
               type: z.literal(ExternalServiceType.DROPBOX),
@@ -193,7 +222,7 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
         }
 
         if (input.type === ExternalServiceType.GOOGLE_GMAIL) {
-          await assertGmailMailboxSavable(credentials);
+          credentials = await gmailCredentialToStore(credentials);
         }
 
         await persistCredential({
@@ -235,7 +264,9 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
             }),
             z.object({
               type: z.literal(ExternalServiceType.GOOGLE_GMAIL),
-              credentials: gmailCredsParser,
+              // Either Gmail connect form's posted values: a mailbox address
+              // under the delegated method, a pasted refresh token under oauth.
+              credentials: z.union([gmailRefreshTokenCredsParser, gmailDelegatedCredsParser]),
             }),
             z.object({
               type: z.literal(ExternalServiceType.DROPBOX),
@@ -298,7 +329,7 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
         }
 
         if (input.type === ExternalServiceType.GOOGLE_GMAIL) {
-          await assertGmailMailboxSavable(credentials);
+          credentials = await gmailCredentialToStore(credentials);
         }
 
         const updateLifecycle = credentialLifecycle(input.type);
@@ -338,6 +369,9 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
         if (input.type === 'GOOGLE') {
           services.google?.authClient.removeClient(input.id);
         }
+        if (input.type === ExternalServiceType.GOOGLE_GMAIL) {
+          forgetGmailTokenClient(input.id);
+        }
       }),
 
     deleteCredential: userProcedure
@@ -352,11 +386,14 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           .select(['id', 'type', 'credentials'])
           .executeTakeFirstOrThrow();
 
-        // GOOGLE_GMAIL has nothing to revoke: a connected mailbox stores only
-        // its own address, and the authority behind it is the deployment's
-        // service account, which no team's delete may touch.
         if (credential.type === ExternalServiceType.GOOGLE) {
           services.google?.authClient.removeClient(credential.id);
+        } else if (credential.type === ExternalServiceType.GOOGLE_GMAIL) {
+          // Nothing is revoked at Google: under delegation there is no token at
+          // all, and a sign-in's grant belongs to the account that made it, not
+          // to a team's delete. What must go is the cached token client, or the
+          // next connect under a reused id would reach for a dead token.
+          forgetGmailTokenClient(credential.id);
         } else if (credential.type === ExternalServiceType.AIRTABLE) {
           clearClientByCredentialsId(credential.id);
         }
@@ -473,6 +510,31 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
     googleConnectUrl: userProcedure.mutation(async () => {
       const ctx = currentContext();
       const installUrl = await services.google?.generateInstallUrl();
+      if (installUrl) {
+        const state = extractStateFromUrl(installUrl);
+        if (state) bindFlowToUser(state, ctx.user.id);
+      }
+      return installUrl;
+    }),
+
+    /**
+     * How THIS deployment connects a Gmail mailbox. `connectMethods` above
+     * cannot answer it: under the sign-in method a deployment with no OAuth
+     * client still offers a key-entry form, and so does the delegated method —
+     * but one asks for a refresh token and the other for a mailbox address, and
+     * the UI must not show the wrong one.
+     */
+    gmailConnectPolicy: userProcedure.query(() => ({
+      method: gmailConnectMethod(),
+      signIn: Boolean(services.gmail),
+    })),
+
+    // Only answers on a deployment that connects Gmail by sign-in; under the
+    // delegated method `services.gmail` is unregistered and this returns
+    // undefined.
+    gmailConnectUrl: userProcedure.mutation(async () => {
+      const ctx = currentContext();
+      const installUrl = await services.gmail?.generateInstallUrl();
       if (installUrl) {
         const state = extractStateFromUrl(installUrl);
         if (state) bindFlowToUser(state, ctx.user.id);

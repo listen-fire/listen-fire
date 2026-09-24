@@ -5,13 +5,16 @@
 import { decryptToken } from '../../../../lib/credentials';
 import { getAutomationsQb } from '../../../../lib/kysely';
 import { isTestHarnessTeam, injectFakeBaseUrl } from '../../../../lib/recording';
-import { isDelegatedGmail } from '../../../credentials/app_id';
+import { gmailCredentialShape } from '../../../credentials/app_id';
+import { neverAsAny } from '../../../../lib/utils/types';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { ExternalServiceCredentialsId } from '../../../../generated/kysely/automations/ExternalServiceCredentials';
 import {
   GmailApiClient,
   checkGmailMailboxAllowed,
-  gmailCredsParser,
+  gmailDelegatedCredsParser,
+  gmailOAuthCredsParser,
+  type GmailCredentials,
 } from '../../../../adapters/gmail/apiClient';
 
 export type { GmailApiClient };
@@ -20,14 +23,17 @@ export type { GmailApiClient };
  * Construct a client for a team's connected mailbox. Returns null when no
  * credential is wired, when the row belongs to the RETIRED per-user sign-in
  * (`app_id` says so without anything being decrypted), or when the stored
- * payload doesn't parse — the caller turns that into a clear "connect Gmail"
- * error, which is a better diagnostic than an impersonation failure.
+ * payload doesn't parse for the shape that column names — the caller turns that
+ * into a clear "connect Gmail" error, which is a better diagnostic than an
+ * authentication failure.
+ *
+ * The shape comes from `app_id` rather than from sniffing the payload: a row
+ * whose column and contents disagree is a row nothing should act on.
  *
  * THROWS, rather than returning null, when the credential is real but its
- * mailbox is not (or no longer) on this installation's allowlist — a
- * credential connected under a wider list must stop working the moment the
- * list narrows, and the run's trace should say why, not just that Gmail
- * needs reconnecting.
+ * mailbox is not (or no longer) allowed here — a credential connected under a
+ * wider list must stop working the moment the list narrows, and the run's trace
+ * should say why, not just that Gmail needs reconnecting.
  */
 export async function resolveGmailClient(input: {
   teamId: TeamId;
@@ -41,7 +47,8 @@ export async function resolveGmailClient(input: {
     .select(['id', 'credentials', 'app_id'])
     .executeTakeFirst();
   if (!row) return null;
-  if (!isDelegatedGmail(row.app_id)) return null;
+  const shape = gmailCredentialShape(row.app_id);
+  if (shape === null) return null;
 
   let payload: unknown;
   try {
@@ -51,19 +58,36 @@ export async function resolveGmailClient(input: {
   }
 
   // Route dev-loop team traffic to the fake Gmail (fake-channels). Without this
-  // the client would impersonate a mailbox that does not exist against a Google
+  // the client would address a mailbox that does not exist against a Google
   // that was never asked.
   const rawPayload =
     isTestHarnessTeam(input.teamId) && typeof payload === 'object' && payload !== null
       ? injectFakeBaseUrl({ ...payload }, 'GOOGLE_GMAIL')
       : payload;
 
-  const parsed = gmailCredsParser.safeParse(rawPayload);
-  if (!parsed.success) return null;
+  let credentials: GmailCredentials;
+  switch (shape) {
+    case 'oauth': {
+      const parsed = gmailOAuthCredsParser.safeParse(rawPayload);
+      if (!parsed.success) return null;
+      credentials = parsed.data;
+      break;
+    }
+    case 'delegated': {
+      const parsed = gmailDelegatedCredsParser.safeParse(rawPayload);
+      if (!parsed.success) return null;
+      credentials = parsed.data;
+      break;
+    }
+    default:
+      return neverAsAny(shape);
+  }
 
-  const allowed = checkGmailMailboxAllowed(parsed.data.mailbox);
+  const allowed = checkGmailMailboxAllowed(credentials.mailbox, { method: shape });
   if (!allowed.ok) {
     throw new Error(`GmailAdapter: ${allowed.message}`);
   }
-  return new GmailApiClient(parsed.data);
+  // The row id travels so a rotated OAuth token can be written back to the row
+  // it came from; the delegated shape has no token and ignores it.
+  return new GmailApiClient(credentials, { credentialsId: row.id });
 }
