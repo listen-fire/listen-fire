@@ -10,6 +10,7 @@
 //   MODEL_MAP='{"claude-sonnet-5":"gemini/gemini-3-pro"}' \
 //   GEMINI_BASE_URL="http://localhost:${FAKE_CHANNELS_PORT}/gemini" \
 //   GOOGLE_PRIVATE_KEY=unused GOOGLE_CLIENT_EMAIL=fake@example.com GOOGLE_PROJECT_ID=fake-project \
+//   GOOGLE_MODEL_REGION=global \
 //   pnpm tsx src/scripts/verify_model_map.ts
 //
 // The fake picks its canned reply from an `X-Fake-Scenario` header (`text` by
@@ -32,7 +33,7 @@ import type {
 } from '@google/genai';
 import { z } from 'zod';
 
-import { googleServiceAccount } from '../../google_cloud';
+import { googleModelRegion, googleServiceAccount } from '../../google_cloud';
 import { neverAsAny } from '../../utils/types';
 import type { ChatProvider } from '../chat';
 
@@ -62,12 +63,16 @@ export function geminiChatProvider(env: NodeJS.ProcessEnv = process.env): ChatPr
 }
 
 function geminiClient(env: NodeJS.ProcessEnv): GoogleGenAI {
-  const { projectId, projectLocation, privateKey, clientEmail } = googleServiceAccount(env);
+  const { projectId, privateKey, clientEmail } = googleServiceAccount(env);
   const baseUrl = env.GEMINI_BASE_URL;
   return new GoogleGenAI({
     vertexai: true,
     project: projectId,
-    location: projectLocation,
+    // Models are addressed where Claude on Vertex is (`GOOGLE_MODEL_REGION`,
+    // default the global endpoint): new Gemini models often launch there
+    // first, and it carries no regional premium. The project location stays
+    // the real region OCR and image generation need.
+    location: googleModelRegion(env),
     // Pinned rather than the SDK's `v1beta1` default: the GA surface is the one
     // the fake mirrors, and a beta default can move under a package upgrade.
     apiVersion: 'v1',

@@ -29,6 +29,7 @@ const GOOGLE = {
   GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
   GOOGLE_PROJECT_ID: 'a-project',
   GOOGLE_PROJECT_LOCATION: 'europe-west4',
+  GOOGLE_MODEL_REGION: 'us-central1',
 };
 
 // Re-imported per test: the provider is memoised for the process.
@@ -85,12 +86,12 @@ async function messageFor(chunks: GenerateContentResponse[]): Promise<Anthropic.
 beforeEach(() => jest.clearAllMocks());
 
 describe('the client', () => {
-  it('addresses Vertex with the service account, in the project location', () => {
+  it('addresses Vertex with the service account, in the model region rather than the project location', () => {
     load();
     expect(genaiCtor).toHaveBeenCalledWith({
       vertexai: true,
       project: 'a-project',
-      location: 'europe-west4',
+      location: 'us-central1',
       apiVersion: 'v1',
       googleAuthOptions: {
         credentials: { client_email: 'robot@example.iam.gserviceaccount.com', private_key: 'pk' },
@@ -99,12 +100,17 @@ describe('the client', () => {
     });
   });
 
+  it('addresses the global endpoint when no model region is set', () => {
+    load({ ...GOOGLE, GOOGLE_MODEL_REGION: '' });
+    expect(genaiCtor).toHaveBeenCalledWith(expect.objectContaining({ location: 'global' }));
+  });
+
   it('talks to a redirected base URL with a stub key rather than minting a token', () => {
     load({ ...GOOGLE, GEMINI_BASE_URL: 'http://localhost:5556/gemini' });
     expect(genaiCtor).toHaveBeenCalledWith({
       vertexai: true,
       project: 'a-project',
-      location: 'europe-west4',
+      location: 'us-central1',
       apiVersion: 'v1',
       apiKey: 'dev-loop-gemini-key',
       httpOptions: { baseUrl: 'http://localhost:5556/gemini' },
