@@ -156,9 +156,37 @@ docker compose run --rm --no-deps --entrypoint /usr/local/bin/with-generated-env
 
 **A model key is what buys you agents**, and any one of `ANTHROPIC_API_KEY`, `KNOWLEDGE_LLM_API_KEY` or `OPENAI_API_KEY` is enough. Without one the stack starts and serves — the graph, the CRM writes, the query surfaces and the whole of core need no model — and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for, each naming the key it wanted. `init` warns at every boot and so does the API, so it is not something you find out from a user. Nothing in this file is a hard requirement for starting.
 
-**Or run every model call through Google Cloud instead of a vendor key, with `MODEL_ROUTE=google`.** Claude runs on Google's Agent Platform there, and Gemini stands in for OpenAI, for transcription and for embeddings. Set `MODEL_ROUTE=google`, `GOOGLE_MODEL_REGION` (default `global`), the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`), and `KNOWLEDGE_AGENT_PROVIDER=anthropic`, then remove every vendor key — `ANTHROPIC_API_KEY`, `KNOWLEDGE_LLM_API_KEY`, `OPENAI_API_KEY` — because boot refuses to start with both a vendor key and this route set. Before switching, in the Google project: enable the Agent Platform API (`aiplatform.googleapis.com`), and switch on each Claude model you use, in Model Garden. This route has no hosted page fetching, so the web research step falls back to its own page reader instead, which needs `BRIGHT_DATA_ACCESS_TOKEN` and `BRIGHT_DATA_UNLOCKER_ZONE` to work.
+**`MODEL_MAP` decides which vendor answers each model name.** Every model call in the product names a model from a fixed list (Claude names such as `claude-sonnet-5`, OpenAI names such as `gpt-4.1`, `whisper-1`, `text-embedding-3-large`, `dall-e-3`). Left unset, each name goes to its own vendor under its own name, with the keys above. `MODEL_MAP` is a JSON object that sends a name somewhere else: the key is the model name, the value is `provider/wire-model`, where the provider is one of `anthropic`, `vertex` (Claude on Google Cloud), `openai` or `gemini` (Gemini on Google Cloud) and the wire model is that vendor's own spelling. Boot refuses a map with a name the product does not use, a provider outside those four, a provider that cannot do what the name is for (Claude cannot transcribe), or a mapped provider with no credentials. It does not refuse a vendor key that nothing uses any more.
 
-**The two vendors can move separately**, because Google grants their quota separately. `MODEL_ROUTE` is the default for both; `ANTHROPIC_MODEL_ROUTE` and `OPENAI_MODEL_ROUTE` each take `direct` or `google` and win for their own vendor when set. Claude's route covers the agents, extraction, the research step and knowledge arbitration; the OpenAI route covers everything OpenAI-shaped — chat, transcription, embeddings and image generation. To run Claude on your own Anthropic key while the OpenAI-shaped calls go to Gemini through Google: leave `MODEL_ROUTE` unset, set `OPENAI_MODEL_ROUTE=google` plus `KNOWLEDGE_AGENT_PROVIDER=anthropic` and the Google service account, keep `ANTHROPIC_API_KEY`, and remove `OPENAI_API_KEY`. Each refusal at boot names the variable that decided the route it is complaining about.
+To run every model call through Google Cloud instead of a vendor key, set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`), optionally `GOOGLE_MODEL_REGION` (default `global`, used for Claude on Vertex only), and this map, written on one line in `deploy/.env`:
+
+```json
+{
+  "claude-fable-5-1": "vertex/claude-fable-5-1",
+  "claude-opus-5": "vertex/claude-opus-5",
+  "claude-opus-4-8": "vertex/claude-opus-4-8",
+  "claude-opus-4-7": "vertex/claude-opus-4-7",
+  "claude-opus-4-6": "vertex/claude-opus-4-6",
+  "claude-sonnet-5": "vertex/claude-sonnet-5",
+  "claude-haiku-4-5": "vertex/claude-haiku-4-5@20251001",
+  "claude-haiku-4-5-20251001": "vertex/claude-haiku-4-5@20251001",
+  "o3": "gemini/gemini-3.1-pro-preview",
+  "gpt-5": "gemini/gemini-3.1-pro-preview",
+  "gpt-5-mini": "gemini/gemini-3.8-flash",
+  "gpt-5-nano": "gemini/gemini-3.8-flash",
+  "gpt-4.1": "gemini/gemini-3.8-flash",
+  "gpt-4.1-mini": "gemini/gemini-3.8-flash",
+  "gpt-4.1-nano": "gemini/gemini-3.8-flash",
+  "whisper-1": "gemini/gemini-3.8-flash",
+  "text-embedding-3-large": "gemini/gemini-embedding-001",
+  "text-embedding-3-small": "gemini/gemini-embedding-001",
+  "dall-e-3": "gemini/gemini-3.1-flash-image-preview"
+}
+```
+
+Google spells a Claude model whose name carries a date with the date behind an `@`, which is why the Haiku lines differ. Before switching, in the Google project: enable the Agent Platform API (`aiplatform.googleapis.com`), and switch on each Claude model you use, in Model Garden. Vertex has no hosted page fetching, so the web research step falls back to its own page reader, which needs `BRIGHT_DATA_ACCESS_TOKEN` and `BRIGHT_DATA_UNLOCKER_ZONE`. For now, the transcription, embedding and image lines choose Gemini but not which Gemini: those three use the model shown above whatever the line says.
+
+**The map moves one name at a time**, so a deployment can keep Claude on its own Anthropic key while sending only the OpenAI names to Gemini: map just those names, keep `ANTHROPIC_API_KEY`, and set the Google service account. The knowledge agents run on Claude unless the map sends their Claude model to `openai`.
 
 **Set your real URLs before you register anything or send anything.** `API_BASE_URL` and `WEB_BASE_URL` are where this installation is reachable from the internet, and both are used to build links that end up in other people's inboxes and in other systems' webhook registrations. They also decide cookie security: the session cookie is marked `Secure` only when those URLs are `https`, because a `Secure` cookie on a plain-http LAN address is set, silently dropped by the browser, and the person is bounced back to the login they just completed. Behind TLS, set them to your https URLs; on a plain-http trial, leave them http.
 
@@ -515,15 +543,12 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 |---|---|---|
 | `ANTHROPIC_API_KEY` | no, but agents need one | the key the agents use, and the fallback for the graph's arbitration. Absent, `init` and the API warn at boot and every model-backed call fails naming it |
 | `KNOWLEDGE_LLM_API_KEY` | no | falls back to `ANTHROPIC_API_KEY`; with neither, contested properties hold their value and the queue grows, visibly |
-| `KNOWLEDGE_LLM_MODEL` | no | `claude-opus-5` |
-| `KNOWLEDGE_AGENT_PROVIDER` | recommended | which provider the conversational surfaces use; the default is not the same in all of them, so set it rather than inherit the disagreement |
-| `OPENAI_API_KEY` | only for `KNOWLEDGE_AGENT_PROVIDER=openai` | nothing else reads it — it is not what makes entity matching work |
-| `OPENAI_ORGANIZATION` | no | none — the direct route sends no `organization`, and OpenAI uses the key's own default org |
-| `MODEL_ROUTE` | no | `direct` — every model call goes to its own vendor with the keys above. `google` sends them all through Google Cloud instead; boot refuses a vendor key alongside it |
-| `ANTHROPIC_MODEL_ROUTE` | no | `direct` or `google` for Claude alone, overriding `MODEL_ROUTE` |
-| `OPENAI_MODEL_ROUTE` | no | `direct` or `google` for the OpenAI-shaped calls alone (chat, transcription, embeddings, images), overriding `MODEL_ROUTE` |
-| `GOOGLE_MODEL_REGION` | only with `MODEL_ROUTE=google` | `global` — where Claude is addressed on Google |
-| `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | with `MODEL_ROUTE=google`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR and image generation |
+| `KNOWLEDGE_LLM_MODEL` | no | `claude-opus-5`. Must be a model name the product uses; boot refuses any other. Where it goes follows `MODEL_MAP`, and `KNOWLEDGE_LLM_API_KEY` applies only when that is Anthropic's own API |
+| `OPENAI_API_KEY` | only for names the map leaves at OpenAI | the key for OpenAI's own names: the OpenAI-shaped chat calls, transcription, embeddings and image generation. Absent, each fails naming it when asked for |
+| `OPENAI_ORGANIZATION` | no | none — no `organization` is sent, and OpenAI uses the key's own default org |
+| `MODEL_MAP` | no | empty — every model name goes to its own vendor under its own name. A JSON object from model name to `provider/wire-model` sends names elsewhere; see "What you configure" for the Google Cloud example. Boot refuses a map it cannot serve |
+| `GOOGLE_MODEL_REGION` | no | `global` — where Claude is addressed on Vertex |
+| `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | when the map names `vertex` or `gemini`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR and image generation |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_OCR_PROCESSOR_ID` / `GOOGLE_STORAGE_BUCKET_NAME` | only for OCR | OCR boots unconfigured, so a PDF past its own text layer fails naming what it wanted |
 | `GMAIL_MAILBOX_ALLOWLIST` | required to use the Gmail connector | unset or empty, the connector refuses to connect or use ANY mailbox — domain wide delegation has no per-mailbox limit of its own, so this list is this deployment's whole authority over which mailboxes it may act as |
 | `WEB_SEARCH_PROVIDER` | no | `google` — the LinkedIn activity research and the website research search through Google Programmable Search. `brightdata` switches both to Bright Data's SERP API instead (Google's own results, fetched a different way); anything else fails boot naming the variable and the two values. Google is discontinuing "search the entire web" in Programmable Search on 2027-01-01 |

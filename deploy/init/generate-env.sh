@@ -52,37 +52,32 @@ fi
 # holds once is not a guarantee, and this one guarded nothing this script
 # writes. So: say it, loudly, on every boot.
 #
-# Which key is the missing one follows each vendor's route: where a vendor goes
-# through Google there is no key for it at all — its calls go through the
-# deployment's one Google service account — so a vendor key is asked for only
-# while some vendor is still on its own API. MODEL_ROUTE is the default for
-# both vendors, and either one can be routed on its own.
-ANTHROPIC_ROUTE="${ANTHROPIC_MODEL_ROUTE:-${MODEL_ROUTE:-direct}}"
-OPENAI_ROUTE="${OPENAI_MODEL_ROUTE:-${MODEL_ROUTE:-direct}}"
+# Which credentials are missing follows MODEL_MAP: a line sending a model name
+# to vertex or gemini goes through the deployment's one Google service account,
+# and every name the map leaves alone goes to its own vendor's key. Boot checks
+# the map exactly; this is the early, loud hint.
 if [ "${LISTEN_FIRE_DEMO:-0}" != "1" ]; then
-  if [ "$ANTHROPIC_ROUTE" = "google" ] || [ "$OPENAI_ROUTE" = "google" ]; then
-    if [ -z "${GOOGLE_PRIVATE_KEY:-}" ] ||
-       [ -z "${GOOGLE_CLIENT_EMAIL:-}" ] ||
-       [ -z "${GOOGLE_PROJECT_ID:-}" ]; then
-      echo "[init] WARNING: a model route is google but the Google service account is not configured." >&2
-      echo "[init]   Set GOOGLE_PRIVATE_KEY, GOOGLE_CLIENT_EMAIL and GOOGLE_PROJECT_ID" >&2
-      echo "[init]   in deploy/.env." >&2
-      echo "[init]   The stack will start and serve. Agents, extraction and the" >&2
-      echo "[init]   arbitration of conflicting facts will fail when they are asked" >&2
-      echo "[init]   for, naming what is missing." >&2
-    fi
-  fi
-  if [ "$ANTHROPIC_ROUTE" != "google" ] || [ "$OPENAI_ROUTE" != "google" ]; then
-    if [ -z "${ANTHROPIC_API_KEY:-}" ] &&
-       [ -z "${KNOWLEDGE_LLM_API_KEY:-}" ] &&
-       [ -z "${OPENAI_API_KEY:-}" ]; then
-      echo "[init] WARNING: deploy/.env names no model key." >&2
-      echo "[init]   Any ONE of ANTHROPIC_API_KEY, KNOWLEDGE_LLM_API_KEY or" >&2
-      echo "[init]   OPENAI_API_KEY satisfies this." >&2
-      echo "[init]   The stack will start and serve. Agents, extraction and the" >&2
-      echo "[init]   arbitration of conflicting facts will fail when they are asked" >&2
-      echo "[init]   for, naming the missing key." >&2
-    fi
+  case "${MODEL_MAP:-}" in
+    *'"vertex/'* | *'"gemini/'*)
+      if [ -z "${GOOGLE_PRIVATE_KEY:-}" ] ||
+         [ -z "${GOOGLE_CLIENT_EMAIL:-}" ] ||
+         [ -z "${GOOGLE_PROJECT_ID:-}" ]; then
+        echo "[init] WARNING: MODEL_MAP sends model names to Google but the Google service account is not configured." >&2
+        echo "[init]   Set GOOGLE_PRIVATE_KEY, GOOGLE_CLIENT_EMAIL and GOOGLE_PROJECT_ID" >&2
+        echo "[init]   in deploy/.env. The API will refuse to boot until they are set." >&2
+      fi
+      ;;
+  esac
+  if [ -z "${MODEL_MAP:-}" ] &&
+     [ -z "${ANTHROPIC_API_KEY:-}" ] &&
+     [ -z "${KNOWLEDGE_LLM_API_KEY:-}" ] &&
+     [ -z "${OPENAI_API_KEY:-}" ]; then
+    echo "[init] WARNING: deploy/.env names no model key." >&2
+    echo "[init]   Any ONE of ANTHROPIC_API_KEY, KNOWLEDGE_LLM_API_KEY or" >&2
+    echo "[init]   OPENAI_API_KEY satisfies this." >&2
+    echo "[init]   The stack will start and serve. Agents, extraction and the" >&2
+    echo "[init]   arbitration of conflicting facts will fail when they are asked" >&2
+    echo "[init]   for, naming the missing key." >&2
   fi
 fi
 

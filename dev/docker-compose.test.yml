@@ -27,7 +27,7 @@ services:
       MOCK_OUTPUT_ADAPTERS: "true"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      MODEL_ROUTE: ${MODEL_ROUTE}
+      MODEL_MAP: ${MODEL_MAP}
       UI_TEST_BASE_URL: http://localhost:3003
       NODE_ENV: development
       TOKEN_SECRET: ui-test-secret

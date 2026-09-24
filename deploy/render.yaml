@@ -255,21 +255,13 @@ services:
       # ---- the model.
       - key: ANTHROPIC_API_KEY
         sync: false
-      # This blueprint stays on the direct route; `google` is for a
-      # deployment whose model calls all go through one Google Cloud
-      # project. Declared explicitly so the choice is visible here rather
-      # than assumed from MODEL_ROUTE's absence.
-      - key: MODEL_ROUTE
-        value: direct
-      # Per-vendor overrides of the line above, because Google grants Claude
-      # and Gemini quota separately. Left unset here (`sync: false`, so the
-      # dashboard owns them), and unset means MODEL_ROUTE decides.
-      - key: ANTHROPIC_MODEL_ROUTE
+      # Which vendor answers each model name. Unset (the dashboard owns it),
+      # every name goes to its own vendor with the keys here; see
+      # deploy/SELF_HOSTING.md for a map that sends them through Google Cloud.
+      - key: MODEL_MAP
         sync: false
-      - key: OPENAI_MODEL_ROUTE
-        sync: false
-      # Voice notes are transcribed by Whisper on the direct route; unset, a
-      # voice note fails naming the key.
+      # Voice notes are transcribed by Whisper unless MODEL_MAP sends
+      # `whisper-1` elsewhere; unset, a voice note fails naming the key.
       - key: OPENAI_API_KEY
         sync: false
 
