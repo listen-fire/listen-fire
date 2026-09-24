@@ -134,15 +134,6 @@ export function gmailMailboxAllowlist(env: NodeJS.ProcessEnv = process.env): Set
   );
 }
 
-/** A bearer token for a hand-rolled call to a Google endpoint. The SDK-backed
- *  callers hand {@link googleAuth} over instead and let it refresh itself. */
-export async function googleAccessToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  const client = await googleAuth(env).getClient();
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error('Google Cloud refused an access token for the service account.');
-  return token;
-}
-
 /**
  * A bearer token source for a long-lived client that must ask again on every
  * request — a Google access token lasts about an hour, and a process that runs
@@ -150,9 +141,7 @@ export async function googleAccessToken(env: NodeJS.ProcessEnv = process.env): P
  *
  * Bound to ONE `GoogleAuth`, deliberately: the library caches the token on its
  * client and mints a new one only as the old one expires, so asking per request
- * costs a property read rather than a round trip. {@link googleAccessToken}
- * builds a fresh `GoogleAuth` per call and therefore has no such cache — fine
- * for a one-off call, wrong for every request a server makes.
+ * costs a property read rather than a round trip.
  */
 export function googleBearerTokens(env: NodeJS.ProcessEnv = process.env): () => Promise<string> {
   const auth = googleAuth(env);
@@ -172,26 +161,4 @@ export function googleBearerTokens(env: NodeJS.ProcessEnv = process.env): () => 
  */
 export function googleModelRegion(env: NodeJS.ProcessEnv = process.env): string {
   return env.GOOGLE_MODEL_REGION || 'global';
-}
-
-/**
- * A published Google model's own REST address, for the calls that have no SDK
- * here — `:generateContent`, `:predict`. The global endpoint drops the region
- * from the HOST and keeps it in the path; every other one carries it in both.
- * https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations
- */
-export function googleModelUrl(options: {
-  model: string;
-  method: 'generateContent' | 'predict';
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const env = options.env ?? process.env;
-  const { projectId } = googleServiceAccount(env);
-  const region = googleModelRegion(env);
-  const host =
-    region === 'global' ? 'aiplatform.googleapis.com' : `${region}-aiplatform.googleapis.com`;
-  return (
-    `https://${host}/v1/projects/${projectId}/locations/${region}` +
-    `/publishers/google/models/${options.model}:${options.method}`
-  );
 }
