@@ -800,9 +800,11 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   const callFields = { label, model, requestId, ...runFields() };
   const callStartMs = Date.now();
 
-  const systemBlock = [
-    { type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } },
-  ];
+  // An empty system text block is a 400 at the API, and a caller that has only
+  // a user turn to send (a bare prompt) has nothing to put there.
+  const systemParam = system
+    ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
+    : {};
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
 
   let accumulated = '';
@@ -838,7 +840,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
         const stream = client.messages.stream({
           model: wireModel,
           max_tokens: maxTokens,
-          system: systemBlock,
+          ...systemParam,
           messages,
           ...thinkingConfigFor(currentEffort),
           ...(temperature != null && { temperature }),
