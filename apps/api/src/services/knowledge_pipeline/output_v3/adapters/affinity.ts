@@ -4,7 +4,6 @@ import { valueType, locationFieldValue, AffinityMergedEntityError } from '../../
 import { services } from '../../../../adapters/registry';
 import { streamToBlob } from '../../../../lib/utils/stream';
 import { logger } from '../../../logger';
-import { openAiChat } from '../../../../lib/openai';
 import { anthropicChat } from '../../../../lib/anthropic';
 import { HAIKU_MODEL } from '../../../agent_running_state';
 import type { V3Adapter, V3AdapterExecuteInput, AdapterResult, FieldConstraints, ResourceContext } from './types';
@@ -847,10 +846,11 @@ async function resolveFieldValue(
     }
     return match ? match.id : null;
   } else if (fieldDef.value_type === valueType.LOCATION) {
-    const formattedLocation = await openAiChat([
-      {
-        role: 'system',
-        content: `You are a location formatter. You will be given a location and you must format it into a string that can be used in a location field.
+    const formattedLocation = await anthropicChat({
+      model: 'claude-sonnet-5',
+      temperature: 0,
+      label: 'affinity_location_format',
+      system: `You are a location formatter. You will be given a location and you must format it into a string that can be used in a location field.
 Output a JSON object with the following keys:
 - street_address
 - city
@@ -861,9 +861,8 @@ Output a JSON object with the following keys:
 The corresponding values must be a string if an appropriate value appears in the user's input, or null otherwise.
 
 Output: strictly this JSON format. Do not include any additional text.`,
-      },
-      { role: 'user', content: String(value) },
-    ]);
+      userMessage: String(value),
+    });
     try {
       return locationFieldValue.parse(JSON.parse(formattedLocation));
     } catch {

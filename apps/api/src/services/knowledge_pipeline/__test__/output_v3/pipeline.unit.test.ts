@@ -61,30 +61,6 @@ jest.mock('../../../logger', () => ({
   },
 }));
 
-jest.mock('../../../../lib/openai', () => ({
-  openAiChat: jest.fn(async (messages: { role: string; content: string }[]) => {
-    const system = messages.find((m) => m.role === 'system')?.content ?? '';
-    const user = messages.find((m) => m.role === 'user')?.content ?? '';
-
-    // LLM selection — extract the prompt and return something reasonable
-    if (system.includes('data extraction system')) {
-      // Try to extract from entity data
-      if (user.includes('name:')) {
-        const nameMatch = user.match(/name:\s*(.+)/);
-        if (nameMatch) return JSON.stringify({ thought: 'found name', value: nameMatch[1].trim() });
-      }
-      return JSON.stringify({ thought: 'extracted', value: 'LLM extracted value' });
-    }
-
-    // LLM aggregation
-    if (system.includes('list of values')) {
-      return JSON.stringify({ thought: 'aggregated', value: 'LLM aggregated value' });
-    }
-
-    return 'fallback LLM response';
-  }),
-}));
-
 jest.mock('../../../../lib/prompts/execute', () => ({
   parseJson: jest.fn((text: string) => JSON.parse(text)),
 }));
