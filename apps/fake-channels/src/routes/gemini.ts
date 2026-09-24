@@ -12,11 +12,19 @@ import { z } from 'zod';
 // followed by `:generateContent` or `:streamGenerateContent` (`?alt=sse`).
 //
 // The reply is canned, chosen by the `X-Fake-Scenario` header, else by a
-// wire model named `fake-<scenario>`, else `text`. The model name is there
-// because the API's provider sends no per-call headers: a verify run picks a
-// scenario per registry name through the map, e.g.
-// `{"claude-opus-5": "gemini/fake-function_call"}`. Once the conversation's last turn is a function response, every
-// scenario answers with plain text, so a tool loop driven through here ends.
+// wire model named `fake-<scenario>`. The model name is there because the
+// API's provider sends no per-call headers: a verify run can pick a scenario
+// per registry name through the map, e.g.
+// `{"claude-opus-5": "gemini/fake-function_call"}`.
+//
+// With neither, the fake behaves like a model would, as the fake OpenAI does:
+// it calls a function when one is forced (mode ANY), or when functions are
+// offered and the last turn is the user's, and otherwise answers in text.
+// Call arguments are built from the function's JSON schema, so a structured
+// call made through a forced tool validates. Once the last turn is a function
+// response, every scenario answers with plain text, so a tool loop driven
+// through here ends. That default is what lets the unmodified wrapper run its
+// plain, structured and tool loop calls against this fake.
 //
 // `thought_signature` is the one scenario that checks the CONVERSATION as
 // well as the shape: a follow-up turn must carry back, on the first function
@@ -129,13 +137,83 @@ function googleError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: { code: status, message, status: statusName } });
 }
 
-function scenarioOf(req: Request, model: string): Scenario | undefined {
-  const raw = req.get('x-fake-scenario') ?? (model.startsWith('fake-') ? model.slice('fake-'.length) : 'text');
-  return SCENARIOS.find((s) => s === raw);
+function scenarioOf(req: Request, model: string, body: GenerateContentRequest): Scenario | undefined {
+  const raw = req.get('x-fake-scenario') ?? (model.startsWith('fake-') ? model.slice('fake-'.length) : undefined);
+  return raw === undefined ? inferScenario(body) : SCENARIOS.find((s) => s === raw);
 }
 
-function firstFunctionName(body: GenerateContentRequest): string {
-  return body.tools?.[0]?.functionDeclarations[0]?.name ?? 'lookup';
+function inferScenario(body: GenerateContentRequest): Scenario {
+  const offered = (body.tools ?? []).some((t) => t.functionDeclarations.length > 0);
+  const mode = body.toolConfig?.functionCallingConfig.mode;
+  if (!offered || mode === 'NONE') return 'text';
+  if (mode === 'ANY') return 'function_call';
+  const last = body.contents[body.contents.length - 1];
+  return (last.role ?? 'user') === 'user' ? 'function_call' : 'text';
+}
+
+type Declaration = NonNullable<GenerateContentRequest['tools']>[number]['functionDeclarations'][number];
+
+/** The function a call names: the one allowed name when a call is forced to
+ *  it, else the first declared. */
+function functionFor(body: GenerateContentRequest): Declaration | undefined {
+  const declarations = (body.tools ?? []).flatMap((t) => t.functionDeclarations);
+  const allowed = body.toolConfig?.functionCallingConfig.allowedFunctionNames ?? [];
+  return declarations.find((d) => allowed.length === 0 || allowed.includes(d.name));
+}
+
+/** A value that satisfies `schema`, as far as a fake needs: every required
+ *  property present, with the first enum value or a plain value of its type.
+ *  (The same sampler as the fake OpenAI's, kept local so each fake stands
+ *  alone.) */
+function sampleFromSchema(schema: unknown, root: unknown = schema): unknown {
+  const s = z.record(z.string(), z.unknown()).safeParse(schema);
+  if (!s.success) return null;
+  const node = s.data;
+  if (typeof node.$ref === 'string') {
+    const name = /^#\/\$defs\/(.+)$/.exec(node.$ref)?.[1];
+    const defs = z.object({ $defs: z.record(z.string(), z.unknown()) }).safeParse(root);
+    return name && defs.success ? sampleFromSchema(defs.data.$defs[name], root) : null;
+  }
+  if (Array.isArray(node.enum) && node.enum.length > 0) return node.enum[0];
+  if ('const' in node) return node.const;
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const options = node[key];
+    if (Array.isArray(options) && options.length > 0) return sampleFromSchema(options[0], root);
+  }
+  const type = Array.isArray(node.type) ? node.type[0] : node.type;
+  switch (type) {
+    case 'object': {
+      const properties = z.record(z.string(), z.unknown()).safeParse(node.properties);
+      const required = z.array(z.string()).safeParse(node.required);
+      const out: Record<string, unknown> = {};
+      for (const key of required.success ? required.data : []) {
+        out[key] = sampleFromSchema(properties.success ? properties.data[key] : undefined, root);
+      }
+      return out;
+    }
+    case 'array':
+      return [sampleFromSchema(node.items, root)];
+    case 'string':
+      return 'fake';
+    case 'number':
+    case 'integer':
+      return 1;
+    case 'boolean':
+      return true;
+    default:
+      return null;
+  }
+}
+
+/** The call a function scenario makes: to the chosen function, with
+ *  arguments its schema accepts. */
+function callFor(body: GenerateContentRequest): { name: string; args: Record<string, unknown> } {
+  const declaration = functionFor(body);
+  if (!declaration) return { name: 'lookup', args: {} };
+  const args = z
+    .record(z.string(), z.unknown())
+    .safeParse(sampleFromSchema(declaration.parametersJsonSchema ?? declaration.parameters ?? { type: 'object' }));
+  return { name: declaration.name, args: args.success ? args.data : {} };
 }
 
 /** Why a follow-up turn would be refused by real Gemini for a missing
@@ -157,21 +235,21 @@ function replyFor(scenario: Scenario, body: GenerateContentRequest): Reply {
   if (last.parts.some((p) => p.functionResponse)) {
     return { chunks: [[{ text: 'Done: ' }], [{ text: 'the tool answered.' }]], finishReason: 'STOP' };
   }
-  const name = firstFunctionName(body);
+  const call = callFor(body);
   switch (scenario) {
     case 'text':
       return { chunks: [[{ text: 'Hello from ' }], [{ text: 'the fake Gemini.' }]], finishReason: 'STOP' };
     case 'function_call':
-      return { chunks: [[{ functionCall: { name, args: {} } }]], finishReason: 'STOP' };
+      return { chunks: [[{ functionCall: call }]], finishReason: 'STOP' };
     case 'text_and_function_call':
-      return { chunks: [[{ text: 'Let me check.' }, { functionCall: { name, args: {} } }]], finishReason: 'STOP' };
+      return { chunks: [[{ text: 'Let me check.' }, { functionCall: call }]], finishReason: 'STOP' };
     case 'max_tokens':
       return { chunks: [[{ text: 'This answer is cut o' }]], finishReason: 'MAX_TOKENS' };
     case 'thought_signature':
       return {
         chunks: [
           [{ text: 'Deciding which tool to call.', thought: true }],
-          [{ functionCall: { name, args: {} }, thoughtSignature: FAKE_THOUGHT_SIGNATURE }],
+          [{ functionCall: call, thoughtSignature: FAKE_THOUGHT_SIGNATURE }],
         ],
         finishReason: 'STOP',
       };
@@ -203,7 +281,7 @@ export function geminiRoutes(): Router {
     if (!parsed.success) {
       return googleError(res, 400, `Invalid generateContent request: ${parsed.error.message}`);
     }
-    const scenario = scenarioOf(req, model);
+    const scenario = scenarioOf(req, model, parsed.data);
     if (!scenario) {
       return googleError(res, 400, `Unknown fake scenario; expected one of ${SCENARIOS.join(', ')}.`);
     }

@@ -158,3 +158,57 @@ test('a wire model named fake-<scenario> picks the scenario when no header does'
     await app.close();
   }
 });
+
+test('with no scenario named, the fake answers as a model would', async () => {
+  const app = await bootApp();
+  try {
+    const partsOf = async (body: unknown) =>
+      events((await call(app.baseUrl, { method: 'streamGenerateContent', body })).text).flatMap((c) => c.candidates[0].content.parts);
+
+    // No functions offered: text.
+    assert.equal((await partsOf(HI)).map((p) => p.text).join(''), 'Hello from the fake Gemini.');
+
+    // Functions offered and the user spoke last: a call, arguments built from the schema.
+    const answer = {
+      name: 'answer',
+      parametersJsonSchema: {
+        type: 'object',
+        properties: { verdict: { enum: ['yes', 'no'] }, score: { type: 'integer' }, note: { type: 'string' } },
+        required: ['verdict', 'score'],
+      },
+    };
+    const offered = await partsOf({ ...HI, tools: [{ functionDeclarations: [TOOLS[0].functionDeclarations[0], answer] }] });
+    assert.deepEqual(offered, [{ functionCall: { name: 'search', args: {} } }]);
+
+    // Forced to one name (a structured call): that function, schema-valid arguments.
+    const forced = await partsOf({
+      ...HI,
+      tools: [{ functionDeclarations: [TOOLS[0].functionDeclarations[0], answer] }],
+      toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['answer'] } },
+    });
+    assert.deepEqual(forced, [{ functionCall: { name: 'answer', args: { verdict: 'yes', score: 1 } } }]);
+
+    // Mode NONE: text even with functions offered.
+    const none = await partsOf({ ...HI, tools: TOOLS, toolConfig: { functionCallingConfig: { mode: 'NONE' } } });
+    assert.ok(none.every((p) => typeof p.text === 'string'));
+
+    // The last turn is a function response: text, so a tool loop ends.
+    const after = await partsOf({
+      tools: TOOLS,
+      contents: [
+        HI.contents[0],
+        { role: 'model', parts: [{ functionCall: { name: 'search', args: {} } }] },
+        { role: 'user', parts: [{ functionResponse: { name: 'search', response: { output: 'found' } } }] },
+      ],
+    });
+    assert.equal(after.map((p) => p.text).join(''), 'Done: the tool answered.');
+
+    // The header still wins over inference.
+    const header = events(
+      (await call(app.baseUrl, { method: 'streamGenerateContent', body: { ...HI, tools: TOOLS }, scenario: 'max_tokens' })).text,
+    );
+    assert.equal(header[header.length - 1].candidates[0].finishReason, 'MAX_TOKENS');
+  } finally {
+    await app.close();
+  }
+});
