@@ -9,16 +9,28 @@ import { buildStructuredTool, extractStructuredResult } from './structured';
 import {
   defaultPageReader,
   FETCH_BUDGET_SPENT,
+  hasHostedWebSearch,
   pageFetchOutcome,
   pageTextCeiling,
   readAnswerText,
   readPageRequests,
+  readSearchRequests,
   readServerToolCounts,
   readWebToolEvents,
+  searchOutcome,
   webChatTools,
   WEB_FETCH_MAX_CONTENT_TOKENS,
 } from './web_tools';
-import type { PageFetchResult, PageFetcher, PageReader, PageRequest, WebToolEvent } from './web_tools';
+import type {
+  PageFetchResult,
+  PageFetcher,
+  PageReader,
+  PageRequest,
+  SearchRequest,
+  WebSearcher,
+  WebSearchResult,
+  WebToolEvent,
+} from './web_tools';
 
 import { chatCallFor } from '../models/chat';
 import type { Provider } from '../models/map';
@@ -1059,9 +1071,9 @@ interface AnthropicWebChatOptions {
   /** Reasoning depth, on the models that read it (see {@link AnthropicChatOptions}). */
   effort?: 'low' | 'medium' | 'high' | 'xhigh';
   label?: string;
-  /** Hard ceiling on server-side searches for the whole request. Anthropic
-   *  enforces it; past the cap the tool returns `max_uses_exceeded` rather
-   *  than searching. */
+  /** Hard ceiling on searches for the whole request. Anthropic enforces it on
+   *  its hosted search, this loop on the client-side one; past the cap either
+   *  returns `max_uses_exceeded` rather than searching. */
   maxSearches?: number;
   /** The same ceiling for page reads. `web_fetch` only opens an address that
    *  is already in the conversation — a search result, or one the prompt put
@@ -1083,6 +1095,10 @@ interface AnthropicWebChatOptions {
    *  a wiring mistake, and throws at the call rather than turning every page
    *  read into a failure the model has to work around. */
   fetchPage?: PageFetcher;
+  /** Runs one search, where the provider has no hosted search of its own
+   *  (anything but `anthropic` and `vertex`). Required there, for the same
+   *  reason `fetchPage` is required by the `own` reader; ignored elsewhere. */
+  searchWeb?: WebSearcher;
   /** Every request this conversation may make, counting resumes and page-read
    *  answers. Defaults below; hitting it returns the partial answer. */
   maxTurns?: number;
@@ -1114,7 +1130,8 @@ interface AnthropicWebChatReply {
     outputTokens: number;
     cacheReadTokens: number;
     cacheCreationTokens: number;
-    /** Hosted searches, as Anthropic billed them. */
+    /** Searches made, whoever ran them: Anthropic's billed searches where it
+     *  hosts search, our own service's otherwise. */
     searches: number;
     /** Pages read, whoever read them: Anthropic's billed fetches on the hosted
      *  reader, our own fetcher's reads otherwise. "Nothing billed" is not
@@ -1123,11 +1140,11 @@ interface AnthropicWebChatReply {
   };
 }
 
-/** How many pages this loop opens at once when the model asks for several in
- *  one turn. Small on purpose: the fetcher behind the handler has its own queue
- *  and its own third party, and a turn asking for more than a handful of pages
- *  at once is not a turn that is converging. */
-const MAX_CONCURRENT_PAGE_FETCHES = 3;
+/** How many pages (or searches) this loop runs at once when the model asks for
+ *  several in one turn. Small on purpose: the handler behind each has its own
+ *  queue and its own third party, and a turn asking for more than a handful at
+ *  once is not a turn that is converging. */
+const MAX_CONCURRENT_CLIENT_TOOLS = 3;
 
 /** The page reader in force, with everything answering it needs. The handler
  *  travels WITH the mode so no later code has to re-check that it exists. */
@@ -1158,21 +1175,64 @@ function resolvePageReader(options: {
   }
 }
 
-/** What the turn that just came back asks the loop to do next. The hosted
- *  reader never stops a turn for an answer, so a `tool_use` stop is always the
- *  client-side page reader's. */
+/** Who runs a search: the provider's hosted tool, or our own handler. The
+ *  handler travels with the mode, as the page reader's does. */
+type ResolvedSearcher = { mode: 'hosted' } | { mode: 'own'; searchWeb: WebSearcher };
+
+function resolveSearcher(options: {
+  provider: Provider;
+  searchWeb: WebSearcher | undefined;
+}): ResolvedSearcher {
+  const { provider, searchWeb } = options;
+  if (hasHostedWebSearch(provider)) return { mode: 'hosted' };
+  if (!searchWeb) {
+    throw new Error(
+      `anthropicWebChat runs on the ${provider} provider, which has no hosted web search, but no ` +
+        '`searchWeb` handler was supplied to answer the model\'s searches.',
+    );
+  }
+  return { mode: 'own', searchWeb };
+}
+
+/** What the turn that just came back asks the loop to do next. Hosted tools
+ *  never stop a turn for an answer, so a `tool_use` stop is always a client
+ *  side tool's: a page read, a search, or both in one turn. */
 type WebChatStep =
   | { kind: 'done' }
   | { kind: 'resume' }
-  | { kind: 'pages'; requests: PageRequest[]; fetchPage: PageFetcher };
+  | { kind: 'client_tools'; pages: PageRequest[]; searches: SearchRequest[] };
 
-function nextWebChatStep(response: Anthropic.Message, pages: ResolvedPageReader): WebChatStep {
+function nextWebChatStep(options: {
+  response: Anthropic.Message;
+  pages: ResolvedPageReader;
+  searcher: ResolvedSearcher;
+}): WebChatStep {
+  const { response, pages, searcher } = options;
   if (response.stop_reason === 'pause_turn') return { kind: 'resume' };
-  if (response.stop_reason !== 'tool_use' || pages.mode !== 'own') return { kind: 'done' };
-  const requests = readPageRequests(response.content);
-  return requests.length > 0
-    ? { kind: 'pages', requests, fetchPage: pages.fetchPage }
+  if (response.stop_reason !== 'tool_use') return { kind: 'done' };
+  const pageRequests = pages.mode === 'own' ? readPageRequests(response.content) : [];
+  const searchRequests = searcher.mode === 'own' ? readSearchRequests(response.content) : [];
+  return pageRequests.length > 0 || searchRequests.length > 0
+    ? { kind: 'client_tools', pages: pageRequests, searches: searchRequests }
     : { kind: 'done' };
+}
+
+/** `fn` over every item, a few at a time, results in the items' order. */
+async function mapFewAtATime<T, R>(
+  items: readonly T[],
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = cursor++; i < items.length; i = cursor++) {
+      results[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(MAX_CONCURRENT_CLIENT_TOOLS, items.length) }, worker),
+  );
+  return results;
 }
 
 /**
@@ -1199,27 +1259,17 @@ async function answerPageRequests(options: {
     return { request, url: request.url };
   });
 
-  const outcomes = new Array<{ event: WebToolEvent; told: string; isError: boolean }>(
-    planned.length,
-  );
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    for (let i = cursor++; i < planned.length; i = cursor++) {
-      const step = planned[i];
-      const result: PageFetchResult = step.url
-        ? await fetchPage(step.url).catch((error: unknown) => ({ error: describeThrown(error) }))
-        : { error: 'spent' in step ? FETCH_BUDGET_SPENT : 'no_url' };
-      outcomes[i] = pageFetchOutcome({
-        url: step.request.url,
-        result,
-        maxContentChars,
-        retrievedAt: new Date().toISOString(),
-      });
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(MAX_CONCURRENT_PAGE_FETCHES, planned.length) }, worker),
-  );
+  const outcomes = await mapFewAtATime(planned, async (step) => {
+    const result: PageFetchResult = step.url
+      ? await fetchPage(step.url).catch((error: unknown) => ({ error: describeThrown(error) }))
+      : { error: 'spent' in step ? FETCH_BUDGET_SPENT : 'no_url' };
+    return pageFetchOutcome({
+      url: step.request.url,
+      result,
+      maxContentChars,
+      retrievedAt: new Date().toISOString(),
+    });
+  });
 
   return {
     results: outcomes.map((outcome, i) => ({
@@ -1233,6 +1283,45 @@ async function answerPageRequests(options: {
   };
 }
 
+/**
+ * Every search the model asked for in one turn, answered alongside its page
+ * reads. Budgeted in the order asked, before anything runs, as page reads are.
+ */
+async function answerSearchRequests(options: {
+  requests: readonly SearchRequest[];
+  searchWeb: WebSearcher;
+  /** Searches still inside the caller's ceiling. */
+  remaining: number;
+}): Promise<{ results: Anthropic.ToolResultBlockParam[]; events: WebToolEvent[]; ran: number }> {
+  const { requests, searchWeb, remaining } = options;
+
+  let budget = remaining;
+  const planned = requests.map((request) => {
+    if (!request.query) return { request, query: null };
+    if (budget <= 0) return { request, query: null, spent: true };
+    budget -= 1;
+    return { request, query: request.query };
+  });
+
+  const outcomes = await mapFewAtATime(planned, async (step) => {
+    const result: WebSearchResult = step.query
+      ? await searchWeb(step.query).catch((error: unknown) => ({ error: describeThrown(error) }))
+      : { error: 'spent' in step ? FETCH_BUDGET_SPENT : 'no_query' };
+    return searchOutcome({ query: step.request.query, result });
+  });
+
+  return {
+    results: outcomes.map((outcome, i) => ({
+      type: 'tool_result' as const,
+      tool_use_id: planned[i].request.id,
+      content: outcome.told,
+      ...(outcome.isError ? { is_error: true } : {}),
+    })),
+    events: outcomes.map((outcome) => outcome.event),
+    ran: planned.filter((step) => step.query != null).length,
+  };
+}
+
 /** A handler that rejected is a failed read, not a failed call: the model is
  *  told the page would not open and gets to try another one. */
 function describeThrown(error: unknown): string {
@@ -1240,10 +1329,11 @@ function describeThrown(error: unknown): string {
 }
 
 /**
- * One turn with Anthropic's own web search and page reader, resumed through
- * whatever pauses the server-side loop takes. Everything the model looked at
- * comes back alongside its answer, so a caller can cite what it read and see
- * what failed.
+ * One turn with web search and a page reader, resumed through whatever pauses
+ * the server-side loop takes. Search and page reads run on the provider where
+ * it hosts them and through the caller's handlers where it does not.
+ * Everything the model looked at comes back alongside its answer, so a caller
+ * can cite what it read and see what failed.
  */
 async function anthropicWebChat(
   options: AnthropicWebChatOptions,
@@ -1261,6 +1351,7 @@ async function anthropicWebChat(
     maxFetchContentTokens = WEB_FETCH_MAX_CONTENT_TOKENS,
     signal,
     fetchPage,
+    searchWeb,
   } = options;
   const {
     client,
@@ -1275,6 +1366,7 @@ async function anthropicWebChat(
 
   const pages = resolvePageReader({ requested: options.pageReader, provider, fetchPage });
   const pageReader = pages.mode;
+  const searcher = resolveSearcher({ provider, searchWeb });
   const tools = webChatTools({
     provider,
     pageReader,
@@ -1283,10 +1375,13 @@ async function anthropicWebChat(
     maxFetchContentTokens,
   });
   // Every request this conversation may make: the one that answers, one per
-  // resume of a paused server-side loop, one per page read, and two spare for
-  // a model that asks again after its page budget is spent. Without it, a model
-  // that keeps asking for pages it cannot have never stops.
-  const maxTurns = options.maxTurns ?? 1 + maxResumes + maxFetches + 2;
+  // resume of a paused server-side loop, one per page read and client-side
+  // search, and two spare for a model that asks again after its budget is
+  // spent. Without it, a model that keeps asking for what it cannot have never
+  // stops.
+  const maxTurns =
+    options.maxTurns ??
+    1 + maxResumes + maxFetches + (searcher.mode === 'own' ? maxSearches : 0) + 2;
 
   const requestId = randomUUID().slice(0, 8);
   const callFields = { label, model, requestId, ...runFields() };
@@ -1314,6 +1409,7 @@ async function anthropicWebChat(
       maxSearches,
       maxFetches,
       pageReader,
+      searcher: searcher.mode,
       effort,
     });
 
@@ -1360,7 +1456,7 @@ async function anthropicWebChat(
     usage.fetches += counts.fetches;
     stopReason = response.stop_reason;
 
-    const next = nextWebChatStep(response, pages);
+    const next = nextWebChatStep({ response, pages, searcher });
     if (next.kind === 'done') break;
 
     if (turns >= maxTurns) {
@@ -1388,16 +1484,30 @@ async function anthropicWebChat(
       continue;
     }
 
-    const answered = await answerPageRequests({
-      requests: next.requests,
-      fetchPage: next.fetchPage,
-      remaining: Math.max(0, maxFetches - usage.fetches),
-      maxContentChars: pageTextCeiling(maxFetchContentTokens),
-    });
-    events.push(...answered.events);
-    usage.fetches += answered.read;
+    // Every client-side call in the turn is answered in one user turn: a
+    // tool_use left without its result is a 400 on the next request.
+    const searched =
+      searcher.mode === 'own' && next.searches.length > 0
+        ? await answerSearchRequests({
+            requests: next.searches,
+            searchWeb: searcher.searchWeb,
+            remaining: Math.max(0, maxSearches - usage.searches),
+          })
+        : { results: [], events: [], ran: 0 };
+    const read =
+      pages.mode === 'own' && next.pages.length > 0
+        ? await answerPageRequests({
+            requests: next.pages,
+            fetchPage: pages.fetchPage,
+            remaining: Math.max(0, maxFetches - usage.fetches),
+            maxContentChars: pageTextCeiling(maxFetchContentTokens),
+          })
+        : { results: [], events: [], read: 0 };
+    events.push(...searched.events, ...read.events);
+    usage.searches += searched.ran;
+    usage.fetches += read.read;
     messages.push({ role: 'assistant', content: response.content });
-    messages.push({ role: 'user', content: answered.results });
+    messages.push({ role: 'user', content: [...searched.results, ...read.results] });
   }
 
   const durationMs = Date.now() - callStartMs;
@@ -1408,6 +1518,7 @@ async function anthropicWebChat(
     resumes,
     turns,
     pageReader,
+    searcher: searcher.mode,
     ...usage,
     failedTools: events.filter((e) => e.kind.endsWith('_failed')).length,
   });
@@ -1458,4 +1569,12 @@ export type {
   ChatReply,
 };
 export { defaultPageReader } from './web_tools';
-export type { PageFetcher, PageFetchResult, PageReader, WebToolEvent } from './web_tools';
+export type {
+  PageFetcher,
+  PageFetchResult,
+  PageReader,
+  SearchHit,
+  WebSearcher,
+  WebSearchResult,
+  WebToolEvent,
+} from './web_tools';
