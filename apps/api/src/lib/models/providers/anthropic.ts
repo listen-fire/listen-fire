@@ -22,3 +22,17 @@ export function anthropicChatProvider(env: NodeJS.ProcessEnv = process.env): Cha
       }),
   }));
 }
+
+// One per key rather than one per process: a unit that pays with its own key
+// (knowledge's `KNOWLEDGE_LLM_API_KEY`) must not share the platform's client.
+const keyedClients = new Map<string, Anthropic>();
+
+/** Anthropic's own API on a key the caller holds, rather than the platform's. */
+export function anthropicKeyedChatProvider(apiKey: string): ChatProvider {
+  let keyed = keyedClients.get(apiKey);
+  if (!keyed) {
+    keyed = new Anthropic({ apiKey });
+    keyedClients.set(apiKey, keyed);
+  }
+  return keyed;
+}

@@ -15,13 +15,14 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 
-import { clientFor, platformAnthropic } from '../anthropic/client';
-import type { AnthropicCall } from '../anthropic/client';
-import {
-  isGoogleServiceAccountConfigured,
-  missingGoogleServiceAccountVars,
-} from '../google_cloud';
-import { anthropicRoute } from '../model_route';
+import { missingGoogleServiceAccountVars } from '../google_cloud';
+import { chatCallFor } from '../models/chat';
+import type { ChatProvider } from '../models/chat';
+import { providerCredentialsPresent, resolveModel } from '../models/map';
+import type { Provider } from '../models/map';
+import { anthropicKeyedChatProvider } from '../models/providers/anthropic';
+import { parseModelName } from '../models/registry';
+import type { ModelName } from '../models/registry';
 import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 
@@ -32,62 +33,61 @@ import { logger } from '../../services/logger';
  * "no key" has to be expressible, because a store without one is a supported
  * deployment, not a misconfiguration.
  *
- * A key answers only for the direct route. Where the deployment routes its
- * model calls through Google Cloud there is no key at all, and the question
- * "can knowledge call a model" is {@link isKnowledgeLlmConfigured}'s.
+ * A key answers only when knowledge's model resolves to Anthropic's own API.
+ * Elsewhere the model map decides who answers and with what credentials, and
+ * the question "can knowledge call a model" is {@link isKnowledgeLlmConfigured}'s.
  */
 export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | null {
   const key = env.KNOWLEDGE_LLM_API_KEY ?? env.ANTHROPIC_API_KEY;
   return key ? key : null;
 }
 
-export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  const route = anthropicRoute(env);
-  switch (route) {
-    case 'direct':
-      return knowledgeLlmKey(env) !== null;
-    case 'google':
-      return isGoogleServiceAccountConfigured(env);
+/** Overridable because the operator paying for the calls should get to choose. */
+function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ModelName {
+  const raw = env.KNOWLEDGE_LLM_MODEL;
+  return raw ? parseModelName(raw, 'KNOWLEDGE_LLM_MODEL') : 'claude-opus-5';
+}
+
+/** What an operator sets so knowledge's model can be called where it resolves. */
+function credentialsToSet(provider: Provider, env: NodeJS.ProcessEnv): string {
+  switch (provider) {
+    case 'anthropic':
+      return 'KNOWLEDGE_LLM_API_KEY or ANTHROPIC_API_KEY';
+    case 'openai':
+      return 'OPENAI_API_KEY';
+    case 'vertex':
+    case 'gemini':
+      return missingGoogleServiceAccountVars(env).join(', ');
     default:
-      return neverAsAny(route);
+      return neverAsAny(provider);
   }
+}
+
+export function isKnowledgeLlmConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  const { provider } = resolveModel(knowledgeLlmModel(env), env);
+  return provider === 'anthropic'
+    ? knowledgeLlmKey(env) !== null
+    : providerCredentialsPresent(provider, env);
 }
 
 /**
- * Knowledge's own client, built the way this deployment's route says. Its key
- * override is the operator's choice of who pays for arbitration, so it survives
- * on the direct route — but a key on the Google route is a contradiction rather
- * than an override, and says so instead of being quietly ignored.
+ * Knowledge's own client, resolved through the same model map as everything
+ * else. On Anthropic's own API it keeps its own client on its own key — the
+ * operator's choice of who pays for arbitration. Anywhere else the key has
+ * nothing to open and is simply unused.
  */
-function knowledgeLlmClient(env: NodeJS.ProcessEnv): AnthropicCall {
-  const route = anthropicRoute(env);
-  switch (route) {
-    case 'direct': {
-      const apiKey = knowledgeLlmKey(env);
-      if (!apiKey) throw new KnowledgeLlmUnavailable();
-      return clientFor(apiKey, env);
-    }
-    case 'google': {
-      if (env.KNOWLEDGE_LLM_API_KEY) {
-        throw new Error(
-          'KNOWLEDGE_LLM_API_KEY is set while the Anthropic route is google. Knowledge calls ' +
-            'its model through Google Cloud on that route and no key is used — remove it, or ' +
-            'set ANTHROPIC_MODEL_ROUTE=direct.',
-        );
-      }
-      if (!isGoogleServiceAccountConfigured(env)) {
-        throw new KnowledgeLlmUnavailable(missingGoogleServiceAccountVars(env).join(', '));
-      }
-      return platformAnthropic(env);
-    }
-    default:
-      return neverAsAny(route);
+function knowledgeLlmClient(env: NodeJS.ProcessEnv): { client: ChatProvider; wireModel: string } {
+  const model = knowledgeLlmModel(env);
+  const resolved = resolveModel(model, env);
+  if (resolved.provider === 'anthropic') {
+    const apiKey = knowledgeLlmKey(env);
+    if (!apiKey) throw new KnowledgeLlmUnavailable();
+    return { client: anthropicKeyedChatProvider(apiKey), wireModel: resolved.wireModel };
   }
-}
-
-/** Overridable because the operator paying for the calls should get to choose. */
-function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): string {
-  return env.KNOWLEDGE_LLM_MODEL ?? 'claude-opus-5';
+  if (!providerCredentialsPresent(resolved.provider, env)) {
+    throw new KnowledgeLlmUnavailable(credentialsToSet(resolved.provider, env));
+  }
+  return chatCallFor(model, env);
 }
 
 /**
@@ -112,8 +112,9 @@ export function registerKnowledgeLlmUsageSink(sink: KnowledgeLlmUsageSink): void
 }
 
 export class KnowledgeLlmUnavailable extends Error {
-  /** What the operator has to set, which differs by route: a key on the direct
-   *  route, a Google service account where the calls go through Google Cloud. */
+  /** What the operator has to set, which differs by where knowledge's model
+   *  resolves: a key for Anthropic's own API, a Google service account for
+   *  Vertex. */
   constructor(setThis = 'KNOWLEDGE_LLM_API_KEY or ANTHROPIC_API_KEY') {
     super(
       `No LLM credentials are configured for knowledge (set ${setThis}). ` +
@@ -148,7 +149,7 @@ export async function knowledgeLlmStructured<T extends z.ZodType>(input: {
   const model = knowledgeLlmModel(env);
 
   const response = await client.messages.create({
-    model: wireModel(model),
+    model: wireModel,
     max_tokens: MAX_TOKENS,
     system: input.system,
     messages: [{ role: 'user', content: input.user }],
