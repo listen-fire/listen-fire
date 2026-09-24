@@ -1,8 +1,7 @@
-import {
-  ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionMessageParam,
-} from 'openai/resources';
+import { ChatCompletionMessageParam } from 'openai/resources';
 import { z } from 'zod';
+
+import type { ModelName } from '../models/registry';
 
 type PromptDefinition<T extends readonly string[], V extends z.ZodType> = {
   description: string;
@@ -10,7 +9,7 @@ type PromptDefinition<T extends readonly string[], V extends z.ZodType> = {
   messages: readonly ChatCompletionMessageParam[];
   validator?: V;
   fallback?: unknown;
-  model?: ChatCompletionCreateParamsNonStreaming['model'];
+  model?: ModelName;
   response?: z.ZodTypeAny;
   requestId?: string;
   temperature?: number;

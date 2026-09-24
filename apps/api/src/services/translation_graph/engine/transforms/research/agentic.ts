@@ -33,6 +33,7 @@
 
 import { z } from 'zod';
 
+import type { ModelName } from '../../../../../lib/models/registry';
 import {
   anthropicChatStructured,
   anthropicWebChat,
@@ -40,7 +41,7 @@ import {
   meterAnthropicUsage,
 } from '../../../../../lib/anthropic';
 import { runFields } from '../../../../../lib/llm_usage';
-import { anthropicRoute } from '../../../../../lib/model_route';
+import { resolveModel } from '../../../../../lib/models/map';
 import { logger } from '../../../../logger';
 import { missingBrightDataVars, ScraperService } from '../../../../scraper';
 import { describeError } from '../fetch_resource';
@@ -356,7 +357,7 @@ async function researchWithin(
   // Before any spend: a turn told it has a page reader, on a deployment where
   // nothing can answer one, would discover that one failed read at a time and
   // report it as a subject with no signal.
-  const pageReader = defaultPageReader(anthropicRoute());
+  const pageReader = defaultPageReader(resolveModel(model).provider);
   const missingFetcher = pageReader === 'own' ? missingBrightDataVars() : [];
   if (missingFetcher.length > 0) {
     return pageFetcherUnconfigured({ missing: missingFetcher, usage, name, run });
@@ -600,7 +601,7 @@ async function preReadProfile(args: {
  *  discard it. */
 async function shape(args: {
   writeUp: string;
-  model: string;
+  model: ModelName;
   name: string;
   run: Record<string, unknown>;
 }): Promise<{ value: z.infer<typeof shapeSchema> } | { failure: string }> {

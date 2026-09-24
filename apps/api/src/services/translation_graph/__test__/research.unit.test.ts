@@ -37,7 +37,7 @@ jest.mock('@anthropic-ai/sdk', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({ messages: { stream } })),
 }));
-// The same double on the Google route, where the engine reads pages with our
+// The same double on Vertex, where the engine reads pages with our
 // own fetcher instead of Anthropic's.
 jest.mock('@anthropic-ai/vertex-sdk', () => ({
   __esModule: true,
@@ -1193,17 +1193,17 @@ describe('the agentic engine’s allowance', () => {
 
 // ── The page reader, where Anthropic has none ────────────────────────────
 //
-// On the Google route there is no hosted page reader, so the turn gets a
+// On Vertex there is no hosted page reader, so the turn gets a
 // client-side `web_fetch` tool answered by the same scraper the rest of the
 // engine uses. A run must read the same either way: the same events, the same
 // counts, the same outcomes — and, where the scraper is not configured, a
 // refusal that names the setting instead of a subject with no signal.
 
-describe('the page reader on a route with no hosted one', () => {
-  async function onGoogle<T>(fn: () => Promise<T>): Promise<T> {
+describe('the page reader on a provider with no hosted one', () => {
+  async function onVertex<T>(fn: () => Promise<T>): Promise<T> {
     const restore = { ...process.env };
     Object.assign(process.env, {
-      MODEL_ROUTE: 'google',
+      MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'vertex/claude-sonnet-5' }),
       GOOGLE_PRIVATE_KEY: 'pk',
       GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
       GOOGLE_PROJECT_ID: 'a-project',
@@ -1233,7 +1233,7 @@ describe('the page reader on a route with no hosted one', () => {
       )
       .mockResolvedValueOnce(webReply({ text: 'It sells canteen software. [1]' }));
 
-    const result = await onGoogle(() =>
+    const result = await onVertex(() =>
       research({ name: 'Larkfield', urls: ['https://larkfield.example'] }, { engine: 'agentic' }),
     );
 
@@ -1249,7 +1249,7 @@ describe('the page reader on a route with no hosted one', () => {
   it('refuses the entry before any spend when the scraper is not configured', async () => {
     mockMissingBrightData.mockReturnValue(['BRIGHT_DATA_ACCESS_TOKEN']);
 
-    const result = await onGoogle(() =>
+    const result = await onVertex(() =>
       research({ name: 'Larkfield', urls: ['https://larkfield.example'] }, { engine: 'agentic' }),
     );
 
@@ -1259,7 +1259,7 @@ describe('the page reader on a route with no hosted one', () => {
     expect(mockGetWebsite).not.toHaveBeenCalled();
   });
 
-  it('leaves the hosted reader alone on the direct route', async () => {
+  it('leaves the hosted reader alone on Anthropic', async () => {
     finalMessage.mockResolvedValueOnce(webReply({ text: 'ok', blocks: FETCHED, fetches: 1 }));
 
     const result = await research(

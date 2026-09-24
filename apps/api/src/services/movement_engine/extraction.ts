@@ -780,7 +780,7 @@ function describeTruncation(reply: ChatReply, ceiling: number): string {
 
 /** Anthropic-backed default client — the same wiring as the TG
  *  production batcher's. */
-export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
+export function makeAnthropicLlmClient(): LlmClient {
   return {
     async call(input: LlmCallInput) {
       // The in-batch CANCEL gate (runs-and-cancel spec §cancel): both extraction
@@ -808,7 +808,6 @@ export function makeAnthropicLlmClient(opts?: { apiKey?: string }): LlmClient {
         // bounds a runaway, and it applies below whatever the caller asked for.
         ...(input.effort ? { effort: input.effort } : {}),
         label: input.label,
-        ...(opts?.apiKey ? { apiKey: opts.apiKey } : {}),
       });
       // A truncated body still parses: `parseJsonReply` repairs and trims to the
       // last closing bracket, and the extraction schema is all-optional, so the

@@ -49,3 +49,10 @@ export function isModelName(s: string): s is ModelName {
 }
 
 export const modelNames: readonly ModelName[] = Object.keys(models).filter(isModelName);
+
+/** A model name from outside the code — an env var, a CLI flag — refused with
+ *  its source named when it is not one the registry knows. */
+export function parseModelName(value: string, source: string): ModelName {
+  if (isModelName(value)) return value;
+  throw new Error(`${source} is "${value}", which is not a model name this code uses. Known names: ${modelNames.join(', ')}.`);
+}

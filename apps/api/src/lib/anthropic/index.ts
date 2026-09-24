@@ -5,7 +5,6 @@ import Anthropic from '@anthropic-ai/sdk';
 import { backOff } from 'exponential-backoff';
 import { z } from 'zod';
 
-import { clientFor, platformAnthropic } from './client';
 import { buildStructuredTool, extractStructuredResult } from './structured';
 import {
   defaultPageReader,
@@ -21,8 +20,9 @@ import {
 } from './web_tools';
 import type { PageFetchResult, PageFetcher, PageReader, PageRequest, WebToolEvent } from './web_tools';
 
-import { anthropicRoute } from '../model_route';
-import type { ModelRoute } from '../model_route';
+import { chatCallFor } from '../models/chat';
+import type { Provider } from '../models/map';
+import type { ModelName } from '../models/registry';
 import { Queue } from '../utils/queue';
 import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
@@ -306,7 +306,7 @@ export interface AnthropicSystemBlock {
 }
 
 interface AnthropicToolLoopParams {
-  model?: string;
+  model?: ModelName;
   max_output_tokens?: number;
   maxTurns?: number;
   /**
@@ -364,7 +364,7 @@ async function anthropicToolLoop(
   } = params;
 
   const anthropicTools = convertToolDefinitions(openaiTools);
-  const { client, wireModel } = platformAnthropic();
+  const { client, wireModel } = chatCallFor(model);
 
   const resolvedThinking = resolveThinkingConfig({
     model,
@@ -425,7 +425,7 @@ async function anthropicToolLoop(
     const response = await enqueueQuery(async () => {
       return client.messages.create(
         {
-          model: wireModel(model),
+          model: wireModel,
           max_tokens: max_output_tokens,
           system: systemMessages,
           tools: anthropicTools,
@@ -657,12 +657,11 @@ const SLOW_CALL_WARN_MS = 60 * SECOND;
 interface AnthropicChatOptions {
   system: string;
   userMessage: string;
-  model?: Anthropic.Messages.Model;
+  model?: ModelName;
   maxTokens?: number;
   label?: string;
   noContinue?: boolean;
   temperature?: number;
-  prefill?: string;
   /**
    * Reasoning depth for the models that reason by DEFAULT. Sonnet 5 and the
    * Opus 4.6+ family think adaptively when `thinking` is omitted, at effort
@@ -683,8 +682,6 @@ interface AnthropicChatOptions {
    *  more likely to be a runaway than a real answer — each continuation buys
    *  another whole `maxTokens` of output. */
   maxContinuations?: number;
-  /** BYOT — the team's own Anthropic key (pricing-v2 §B.2). Absent ⇒ platform key. */
-  apiKey?: string;
 }
 
 /**
@@ -784,12 +781,10 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     label,
     noContinue = false,
     temperature,
-    prefill,
     effort,
     maxContinuations = MAX_CHAT_CONTINUATIONS,
-    apiKey: byotApiKey,
   } = options;
-  const { client, wireModel } = clientFor(byotApiKey);
+  const { client, wireModel } = chatCallFor(model);
 
   // Adaptive thinking is ON by default on these models; the only lever a chat
   // caller has over its depth is `effort`, and it only lands if `thinking` is
@@ -808,12 +803,9 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   const systemBlock = [
     { type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } },
   ];
-  const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: userMessage },
-    ...(prefill ? [{ role: 'assistant' as const, content: prefill }] : []),
-  ];
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
 
-  let accumulated = prefill ?? '';
+  let accumulated = '';
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCacheReadTokens = 0;
@@ -844,7 +836,7 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
       // reassembles the same `Message`, so nothing downstream changes.
       response = await enqueueQuery(async () => {
         const stream = client.messages.stream({
-          model: wireModel(model),
+          model: wireModel,
           max_tokens: maxTokens,
           system: systemBlock,
           messages,
@@ -987,11 +979,9 @@ interface AnthropicChatStructuredOptions<T> {
   /** Tool name the model is forced to call. */
   toolName: string;
   toolDescription: string;
-  model?: Anthropic.Messages.Model;
+  model?: ModelName;
   maxTokens?: number;
   label?: string;
-  /** BYOT key (pricing-v2 §B.2). Never part of the recording hash. */
-  apiKey?: string;
 }
 
 /**
@@ -1011,16 +1001,15 @@ async function anthropicChatStructured<T>(
     model = 'claude-sonnet-5',
     maxTokens = 4096,
     label,
-    apiKey: byotApiKey,
   } = options;
 
-  const { client, wireModel } = clientFor(byotApiKey);
+  const { client, wireModel } = chatCallFor(model);
   const tool = buildStructuredTool({ name: toolName, description: toolDescription, schema });
 
   const startMs = Date.now();
   const response: Anthropic.Message = await enqueueQuery(async () =>
     client.messages.create({
-      model: wireModel(model),
+      model: wireModel,
       max_tokens: maxTokens,
       system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }],
       messages: [{ role: 'user', content: userMessage }],
@@ -1063,7 +1052,7 @@ const MAX_WEB_CHAT_RESUMES = 3;
 interface AnthropicWebChatOptions {
   system: string;
   userMessage: string;
-  model?: Anthropic.Messages.Model;
+  model?: ModelName;
   maxTokens?: number;
   /** Reasoning depth, on the models that read it (see {@link AnthropicChatOptions}). */
   effort?: 'low' | 'medium' | 'high' | 'xhigh';
@@ -1082,9 +1071,9 @@ interface AnthropicWebChatOptions {
   maxFetchContentTokens?: number;
   /**
    * Who reads a page: Anthropic's hosted fetcher, or ours through
-   * {@link fetchPage}. Defaults to whichever the route serves — but it is a
+   * {@link fetchPage}. Defaults to whichever the provider serves — but it is a
    * real choice on either, because our fetcher renders JavaScript-heavy pages
-   * the hosted one returns empty. Asking for `hosted` where the route has none
+   * the hosted one returns empty. Asking for `hosted` where the provider has none
    * is refused rather than quietly downgraded.
    */
   pageReader?: PageReader;
@@ -1100,8 +1089,6 @@ interface AnthropicWebChatOptions {
    *  searching, reading and billing after the caller has stopped waiting for
    *  it. An abort surfaces as a rejection from this function. */
   signal?: AbortSignal;
-  /** BYOT key (pricing-v2 §B.2). */
-  apiKey?: string;
 }
 
 interface AnthropicWebChatReply {
@@ -1118,7 +1105,7 @@ interface AnthropicWebChatReply {
   /** Every request made, including resumes and page-read answers. */
   turns: number;
   /** Which reader actually ran — on the record rather than re-derived from the
-   *  route, so a trace never has to guess why a fetch is not billed. */
+   *  provider, so a trace never has to guess why a fetch is not billed. */
   pageReader: PageReader;
   usage: {
     inputTokens: number;
@@ -1146,11 +1133,11 @@ type ResolvedPageReader = { mode: 'hosted' } | { mode: 'own'; fetchPage: PageFet
 
 function resolvePageReader(options: {
   requested: PageReader | undefined;
-  route: ModelRoute;
+  provider: Provider;
   fetchPage: PageFetcher | undefined;
 }): ResolvedPageReader {
-  const { requested, route, fetchPage } = options;
-  const mode = requested ?? defaultPageReader(route);
+  const { requested, provider, fetchPage } = options;
+  const mode = requested ?? defaultPageReader(provider);
   switch (mode) {
     case 'hosted':
       return { mode };
@@ -1271,21 +1258,23 @@ async function anthropicWebChat(
     maxResumes = MAX_WEB_CHAT_RESUMES,
     maxFetchContentTokens = WEB_FETCH_MAX_CONTENT_TOKENS,
     signal,
-    apiKey: byotApiKey,
     fetchPage,
   } = options;
-  const { client, wireModel } = clientFor(byotApiKey);
+  const {
+    client,
+    wireModel,
+    resolved: { provider },
+  } = chatCallFor(model);
 
   const thinkingConfig =
     effort && usesAdaptiveThinking(model)
       ? { thinking: { type: 'adaptive' as const }, output_config: { effort } }
       : {};
 
-  const route = anthropicRoute();
-  const pages = resolvePageReader({ requested: options.pageReader, route, fetchPage });
+  const pages = resolvePageReader({ requested: options.pageReader, provider, fetchPage });
   const pageReader = pages.mode;
   const tools = webChatTools({
-    route,
+    provider,
     pageReader,
     maxSearches,
     maxFetches,
@@ -1332,7 +1321,7 @@ async function anthropicWebChat(
       response = await enqueueQuery(async () => {
         const stream = client.messages.stream(
           {
-            model: wireModel(model),
+            model: wireModel,
             max_tokens: maxTokens,
             system: [
               { type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } },

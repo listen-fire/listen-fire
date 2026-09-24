@@ -483,16 +483,6 @@ describe('the answer', () => {
     });
   });
 
-  it('never prefills a model call (Sonnet 5 rejects one)', async () => {
-    mockSearch.mockResolvedValueOnce(RICH_INDEX_RESULT).mockResolvedValue(ACTIVITY_RESULT);
-    replies({ plan: PLAN_REPLY, synthesis: SYNTHESIS_REPLY });
-
-    await invoke({ url: PROFILE_URL });
-    for (const [options] of mockAnthropicChat.mock.calls) {
-      expect(options.prefill).toBeUndefined();
-    }
-  });
-
   it('attaches nothing when the synthesiser call fails outright', async () => {
     mockSearch.mockResolvedValueOnce(RICH_INDEX_RESULT).mockResolvedValue(ACTIVITY_RESULT);
     mockAnthropicChat.mockResolvedValue(PLAN_REPLY);

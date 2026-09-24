@@ -55,6 +55,7 @@ import path from 'node:path';
 import type { ExtractNode } from 'movement-lang';
 
 import { anthropicChatDetailed } from '../../lib/anthropic';
+import type { ModelName } from '../../lib/models/registry';
 import { parseJsonReply } from '../../lib/prompts/execute';
 import { logger } from '../../services/logger';
 import {
@@ -335,7 +336,7 @@ function proportionalMaxTokens(input: { system: string; userMessage: string }): 
   return Math.min(EXTRACTION_MAX_TOKENS, Math.max(EXTRACTION_MIN_TOKENS, proportional));
 }
 
-function makeDirectLlmClient(modelId: string): LlmClient {
+function makeDirectLlmClient(modelId: ModelName): LlmClient {
   return {
     async call(input: LlmCallInput) {
       const reply = await anthropicChatDetailed({

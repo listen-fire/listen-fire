@@ -35,6 +35,8 @@ import './_profile_loader';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 import { anthropicToolLoop, type TurnEvent } from '../../lib/anthropic';
+import { parseModelName } from '../../lib/models/registry';
+import type { ModelName } from '../../lib/models/registry';
 import {
   createMovementAgentTools,
   movementToolDefinitions,
@@ -247,7 +249,7 @@ async function runCell(opts: {
   brief: Brief;
   mode: Mode;
   rep: number;
-  model: string;
+  model: ModelName;
 }): Promise<RunRecord> {
   const { teamId, brief, mode, rep, model } = opts;
 
@@ -482,12 +484,16 @@ interface Args {
   k: number;
   briefIds: string[];
   modes: Mode[];
-  model: string;
+  model: ModelName;
   out: string | null;
   pretty: boolean;
 }
 
-const DEFAULT_MODEL = 'claude-sonnet-5';
+const DEFAULT_MODEL: ModelName = 'claude-sonnet-5';
+
+function parseModel(flag: string | undefined): ModelName {
+  return flag === undefined ? DEFAULT_MODEL : parseModelName(flag, '--model');
+}
 
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
@@ -506,7 +512,7 @@ function parseArgs(): Args {
     k: Number.isFinite(k) && k > 0 ? k : 3,
     briefIds,
     modes,
-    model: get('--model') ?? DEFAULT_MODEL,
+    model: parseModel(get('--model')),
     out: get('--out') ?? null,
     pretty: has('--pretty'),
   };

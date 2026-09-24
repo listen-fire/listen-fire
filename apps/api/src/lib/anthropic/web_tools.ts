@@ -3,7 +3,7 @@
 // Search always runs on Anthropic's infrastructure: the request declares it,
 // the model uses it inside one turn, and the reply carries a `server_tool_use`
 // block per request plus a result block per answer. A page read runs there too
-// where the route serves it, and otherwise is an ordinary client tool the web
+// where the provider serves it, and otherwise is an ordinary client tool the web
 // chat loop answers with a fetcher the caller supplied. Nothing here executes
 // anything — this file declares the tools and reads the blocks; the loop next
 // door does the work.
@@ -25,7 +25,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 
-import type { ModelRoute } from '../model_route';
+import type { Provider } from '../models/map';
 import { neverAsAny } from '../utils/types';
 
 /** The tool versions that filter results before they reach the context
@@ -33,7 +33,7 @@ import { neverAsAny } from '../utils/types';
 export const WEB_SEARCH_TOOL_TYPE = 'web_search_20260209';
 export const WEB_FETCH_TOOL_TYPE = 'web_fetch_20260209';
 
-/** Google serves web search in its first version only. Its results read back
+/** Vertex serves web search in its first version only. Its results read back
  *  through exactly the same blocks (one `web_search_tool_result` carrying
  *  either a list of hits or an error object), so nothing below branches on it. */
 export const WEB_SEARCH_TOOL_TYPE_BASIC = 'web_search_20250305';
@@ -70,30 +70,35 @@ const CHARS_PER_TOKEN = 3;
  *
  *  `hosted` — Anthropic's own fetcher, inside its turn. Nothing to run here.
  *  `own`    — a client-side tool this codebase answers with its own page
- *             fetcher. It is not only the route's fallback: our fetcher renders
- *             JavaScript-heavy pages the hosted one returns empty, so a caller
- *             may prefer it on either route. */
+ *             fetcher. It is not only the fallback where hosted fetch is
+ *             missing: our fetcher renders JavaScript-heavy pages the hosted
+ *             one returns empty, so a caller may prefer it anywhere. */
 export type PageReader = 'hosted' | 'own';
 
-/** What a route serves when the caller expresses no preference. */
-export function defaultPageReader(route: ModelRoute): PageReader {
-  return hasHostedWebFetch(route) ? 'hosted' : 'own';
+/** What a provider serves when the caller expresses no preference. */
+export function defaultPageReader(provider: Provider): PageReader {
+  return hasHostedWebFetch(provider) ? 'hosted' : 'own';
 }
 
 /** One name for the page reader whichever side runs it, so a prompt written
  *  for one reads the same to the other. */
 export const WEB_FETCH_TOOL_NAME = 'web_fetch';
 
-/** Hosted search, in whichever version this route serves. Both read back
- *  through identical blocks, so only the declaration differs. */
-function hostedSearchTool(route: ModelRoute, maxSearches: number): Anthropic.ToolUnion {
-  switch (route) {
-    case 'direct':
+/** Hosted search, in whichever version this provider serves. Both read back
+ *  through identical blocks, so only the declaration differs. Only the two
+ *  Claude doors run server tools at all; a translator has nothing to run one
+ *  on, and is refused here rather than handed a tool it would silently drop. */
+function hostedSearchTool(provider: Provider, maxSearches: number): Anthropic.ToolUnion {
+  switch (provider) {
+    case 'anthropic':
       return { type: WEB_SEARCH_TOOL_TYPE, name: 'web_search', max_uses: maxSearches };
-    case 'google':
+    case 'vertex':
       return { type: WEB_SEARCH_TOOL_TYPE_BASIC, name: 'web_search', max_uses: maxSearches };
+    case 'openai':
+    case 'gemini':
+      throw new Error(`Hosted web search does not exist on the ${provider} provider.`);
     default:
-      return neverAsAny(route);
+      return neverAsAny(provider);
   }
 }
 
@@ -124,24 +129,24 @@ function clientWebFetchTool(options: { maxFetches: number }): Anthropic.ToolUnio
  * The tools one web chat request declares: hosted search, plus whichever page
  * reader the caller asked for. Both kinds travel in the same array.
  *
- * Google runs web search in its first version and does not run hosted web fetch
+ * Vertex runs web search in its first version and does not run hosted web fetch
  * at all — a request that declares one is rejected — so asking for the hosted
  * reader there is refused here rather than at the vendor.
  */
 export function webChatTools(options: {
-  route: ModelRoute;
+  provider: Provider;
   pageReader: PageReader;
   maxSearches: number;
   maxFetches: number;
   maxFetchContentTokens: number;
 }): Anthropic.ToolUnion[] {
-  const { route, pageReader, maxSearches, maxFetches, maxFetchContentTokens } = options;
-  const search = hostedSearchTool(route, maxSearches);
+  const { provider, pageReader, maxSearches, maxFetches, maxFetchContentTokens } = options;
+  const search = hostedSearchTool(provider, maxSearches);
   switch (pageReader) {
     case 'hosted':
-      if (!hasHostedWebFetch(route)) {
+      if (!hasHostedWebFetch(provider)) {
         throw new Error(
-          `Anthropic's hosted page reader does not exist on the ${route} route. Ask for the ` +
+          `Anthropic's hosted page reader does not exist on the ${provider} provider. Ask for the ` +
             "'own' page reader, which answers the model's page reads with our own fetcher.",
         );
       }
@@ -161,15 +166,17 @@ export function webChatTools(options: {
   }
 }
 
-/** Whether the model can read a page itself on this route. */
-export function hasHostedWebFetch(route: ModelRoute): boolean {
-  switch (route) {
-    case 'direct':
+/** Whether the model can read a page itself on this provider. */
+export function hasHostedWebFetch(provider: Provider): boolean {
+  switch (provider) {
+    case 'anthropic':
       return true;
-    case 'google':
+    case 'vertex':
+    case 'openai':
+    case 'gemini':
       return false;
     default:
-      return neverAsAny(route);
+      return neverAsAny(provider);
   }
 }
 

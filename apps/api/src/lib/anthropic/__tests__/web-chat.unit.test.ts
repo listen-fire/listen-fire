@@ -90,11 +90,12 @@ function pageAsked(id: string, url: unknown) {
   return { type: 'tool_use', id, name: 'web_fetch', input: { url } };
 }
 
-/** Runs `fn` on the google route, where there is no hosted page reader. */
-async function onGoogle<T>(fn: () => Promise<T>): Promise<T> {
+/** Runs `fn` with the default model mapped to Vertex, where there is no hosted
+ *  page reader. */
+async function onVertex<T>(fn: () => Promise<T>): Promise<T> {
   const restore = { ...process.env };
   Object.assign(process.env, {
-    MODEL_ROUTE: 'google',
+    MODEL_MAP: JSON.stringify({ 'claude-sonnet-5': 'vertex/claude-sonnet-5' }),
     GOOGLE_PRIVATE_KEY: 'pk',
     GOOGLE_CLIENT_EMAIL: 'robot@example.iam.gserviceaccount.com',
     GOOGLE_PROJECT_ID: 'a-project',
@@ -339,12 +340,12 @@ describe('the request', () => {
     expect(request.output_config).toEqual({ effort: 'medium' });
   });
 
-  it('sends basic search and OUR page reader on the google route', async () => {
+  it('sends basic search and OUR page reader on Vertex', async () => {
     finalMessage.mockResolvedValueOnce(
       reply({ stopReason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }),
     );
 
-    await onGoogle(() =>
+    await onVertex(() =>
       anthropicWebChat({
         system: 's',
         userMessage: 'u',
@@ -355,7 +356,7 @@ describe('the request', () => {
     );
 
     const request = stream.mock.calls.at(-1)?.[0] as unknown as Record<string, unknown>;
-    // Google serves web search in its first version only and no hosted page
+    // Vertex serves web search in its first version only and no hosted page
     // reader at all, so the second tool is an ordinary client tool this loop
     // answers — same name, so the prompt reads the same either way.
     const tools = request.tools as Array<Record<string, unknown>>;
@@ -365,13 +366,13 @@ describe('the request', () => {
     expect(String(tools[1].description)).toContain('at most 2 page(s)');
   });
 
-  it('declares our page reader on the direct route too, when asked for it', async () => {
+  it('declares our page reader on Anthropic too, when asked for it', async () => {
     finalMessage.mockResolvedValueOnce(
       reply({ stopReason: 'end_turn', content: [{ type: 'text', text: 'ok' }] }),
     );
 
-    // Not only the google route's fallback: our fetcher renders pages the
-    // hosted one returns empty, so it is a real choice on either route.
+    // Not only Vertex's fallback: our fetcher renders pages the hosted one
+    // returns empty, so it is a real choice on either provider.
     await anthropicWebChat({
       system: 's',
       userMessage: 'u',
@@ -387,10 +388,10 @@ describe('the request', () => {
     expect(tools[1].type).toBeUndefined();
   });
 
-  it('refuses the hosted reader on a route that has none', async () => {
+  it('refuses the hosted reader on a provider that has none', async () => {
     await expect(
-      onGoogle(() => anthropicWebChat({ system: 's', userMessage: 'u', pageReader: 'hosted' })),
-    ).rejects.toThrow(/hosted page reader does not exist on the google route/);
+      onVertex(() => anthropicWebChat({ system: 's', userMessage: 'u', pageReader: 'hosted' })),
+    ).rejects.toThrow(/hosted page reader does not exist on the vertex provider/);
     expect(stream).not.toHaveBeenCalled();
   });
 

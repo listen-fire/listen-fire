@@ -73,6 +73,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { anthropicChatStructured } from '../../lib/anthropic';
+import { parseModelName } from '../../lib/models/registry';
+import type { ModelName } from '../../lib/models/registry';
 import { runInContext } from '../../services/context/utils';
 import { research, usageWasNotMeasured } from '../../services/translation_graph/engine/transforms/research';
 import { ensureDevLoopTeam } from './_lib';
@@ -269,7 +271,7 @@ function judgeMessage(args: { fixture: Fixture; result: ResearchResult | null })
 async function judge(args: {
   fixture: Fixture;
   result: ResearchResult | null;
-  model: string;
+  model: ModelName;
 }): Promise<Judgement> {
   return anthropicChatStructured({
     system: JUDGE_SYSTEM,
@@ -330,8 +332,8 @@ function expectMatches(fixture: Fixture, result: ResearchResult | null): {
 async function runOne(args: {
   fixture: Fixture;
   engine: ResearchEngineName;
-  model: string;
-  judgeModel: string;
+  model: ModelName;
+  judgeModel: ModelName;
 }): Promise<RunRecord> {
   const { fixture, engine, model, judgeModel } = args;
   const started = Date.now();
@@ -699,8 +701,10 @@ async function main(): Promise<void> {
   const fixturesPath = flag('fixtures');
   if (!fixturesPath) throw new Error('--fixtures <path to the fixture JSON> is required');
   const outDir = flag('out') ?? path.dirname(fixturesPath);
-  const judgeModel = flag('judge') ?? 'claude-opus-5';
-  const model = flag('model') ?? 'claude-sonnet-5';
+  const judgeFlag = flag('judge');
+  const judgeModel = judgeFlag ? parseModelName(judgeFlag, '--judge') : 'claude-opus-5';
+  const modelFlag = flag('model');
+  const model = modelFlag ? parseModelName(modelFlag, '--model') : 'claude-sonnet-5';
   const concurrency = Number(flag('concurrency') ?? 2);
   const only = flag('only');
 
