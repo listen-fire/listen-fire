@@ -82,6 +82,41 @@ describe('a call the model map resolved', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('prices every Claude name the registry holds, on both Claude doors', async () => {
+    const mod = load();
+    for (const name of [
+      'claude-fable-5-1',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-sonnet-5',
+      'claude-haiku-4-5',
+      'claude-haiku-4-5-20251001',
+    ] as const) {
+      for (const provider of ['anthropic', 'vertex'] as const) {
+        insertInto.mockReset();
+        const row = await record(mod, { preferred: name, provider, wireModel: name });
+        expect(row.cost_microdollars).toBeGreaterThan(0);
+      }
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('prices Fable 5.1 and the undated Haiku from the published table', async () => {
+    const mod = load();
+    const fable = await record(mod, { preferred: 'claude-fable-5-1', provider: 'anthropic', wireModel: 'claude-fable-5-1' });
+    insertInto.mockReset();
+    const haiku = await record(mod, { preferred: 'claude-haiku-4-5', provider: 'vertex', wireModel: 'claude-haiku-4-5' });
+    expect(fable.cost_microdollars).toBe(10_000_000);
+    expect(haiku.cost_microdollars).toBe(1_000_000);
+  });
+
+  it('prices gpt-image-1 by its tokens', async () => {
+    const row = await record(load(), { preferred: 'gpt-image-1', provider: 'openai', wireModel: 'gpt-image-1' });
+    expect(row.cost_microdollars).toBe(5_000_000);
+  });
+
   it('prices GPT chat, which the map can still send a Claude name to', async () => {
     const row = await record(load(), { preferred: 'claude-sonnet-5', provider: 'openai', wireModel: 'gpt-5' });
     expect(row.cost_microdollars).toBe(1_250_000);
@@ -111,8 +146,8 @@ describe('a key nobody priced', () => {
 
   it('names the map’s silence when the name went to its home vendor', async () => {
     const mod = load();
-    await record(mod, { preferred: 'claude-fable-5-1', provider: 'anthropic', wireModel: 'claude-fable-5-1' });
-    expect(warn.mock.calls[0][0]).toMatch(/"claude-fable-5-1", which MODEL_MAP does not mention/);
+    await record(mod, { preferred: 'whisper-1', provider: 'openai', wireModel: 'whisper-1' });
+    expect(warn.mock.calls[0][0]).toMatch(/"whisper-1", which MODEL_MAP does not mention/);
   });
 
   it('says so once per KEY, not once per call', async () => {

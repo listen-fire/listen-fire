@@ -93,6 +93,12 @@ function runFields(): { runId?: string } {
 type Price = { input: number; output: number; cacheRead?: number; cacheCreation?: number };
 
 const CLAUDE_PRICING: Record<string, Price> = {
+  // https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-24):
+  // base input, output, cache hits, 5m cache writes. Fable 5.1's cache hits are
+  // 0.025x its input price, not the usual 0.1x.
+  'claude-fable-5-1': { input: 10.0, output: 50.0, cacheRead: 0.25, cacheCreation: 12.5 },
+  'claude-opus-4-6': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
+  'claude-haiku-4-5': { input: 1.0, output: 5.0, cacheRead: 0.1, cacheCreation: 1.25 },
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0, cacheRead: 0.08, cacheCreation: 1.0 },
   'claude-sonnet-4-5-20250929': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
@@ -122,6 +128,11 @@ const MODEL_PRICING: Record<string, Price> = {
   'openai/o3': { input: 2.0, output: 8.0 },
   'openai/text-embedding-3-large': { input: 0.13, output: 0 },
   'openai/text-embedding-3-small': { input: 0.02, output: 0 },
+  // https://developers.openai.com/api/docs/pricing (checked 2026-09-24), per
+  // million tokens: text input $5, cached text input $1.25, image output $40.
+  // OpenAI also prices image INPUT tokens at $10, which this table cannot tell
+  // apart from text input; generation sends only a text prompt, so none arise.
+  'openai/gpt-image-1': { input: 5.0, output: 40.0, cacheRead: 1.25 },
   // Above 200K input tokens this becomes $4.00/$18.00 — a tier this table has
   // no way to express, so a very long prompt is under-priced rather than
   // unpriced.
