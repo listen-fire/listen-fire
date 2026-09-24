@@ -40,9 +40,9 @@ export default interface LlmUsageTable {
 
   trigger_run_id: ColumnType<string | null, string | null, string | null>;
 
-  byot: ColumnType<boolean, boolean | undefined, boolean>;
-
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+
+  preferred_model: ColumnType<string | null, string | null, string | null>;
 }
 
 export type LlmUsage = Selectable<LlmUsageTable>;

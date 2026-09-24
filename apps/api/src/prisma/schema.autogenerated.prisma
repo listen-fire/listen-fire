@@ -1614,8 +1614,8 @@ model LlmUsage {
   pipelineId          String?            @map("pipeline_id") @db.Uuid
   conversationId      String?            @map("conversation_id") @db.Uuid
   triggerRunId        String?            @map("trigger_run_id") @db.Uuid
-  byot                Boolean            @default(false)
   createdAt           DateTime           @default(now()) @map("created_at")
+  preferredModel      String?            @map("preferred_model")
   agentConversation   AgentConversation? @relation(fields: [conversationId], references: [id])
   dealflowPipeline    DealflowPipeline?  @relation(fields: [pipelineId], references: [id])
 

@@ -3091,7 +3091,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     pipeline_id: DealflowPipelineId | null;
                     conversation_id: AgentConversationId | null;
                     trigger_run_id: string | null;
-                    byot: boolean;
+                    preferred_model: string | null;
                 }[]>;
                 conversationDetail: _trpc_server.BuildProcedure<"query", {
                     _config: _trpc_server.RootConfig<{
@@ -3135,7 +3135,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     pipeline_id: DealflowPipelineId | null;
                     conversation_id: AgentConversationId | null;
                     trigger_run_id: string | null;
-                    byot: boolean;
+                    preferred_model: string | null;
                 }[]>;
                 teams: _trpc_server.BuildProcedure<"query", {
                     _config: _trpc_server.RootConfig<{

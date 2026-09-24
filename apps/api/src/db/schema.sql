@@ -1468,9 +1468,9 @@ CREATE TABLE public.llm_usage (
     pipeline_id uuid, -- @DEF: llm_usage_pipeline_id_fkey
     conversation_id uuid, -- @DEF: llm_usage_conversation_id_fkey
     trigger_run_id uuid, -- opaque automations run id, no foreign key (D3) — per-run LLM cost rollup (billing spec §2.3)
-    -- True when the call ran on the team's own Anthropic key (BYOT). Still
-    -- recorded for analytics, but NOT debited from the wallet. (pricing-v2 §B.3)
-    byot boolean NOT NULL DEFAULT false,
+    -- The registry name the caller asked for; `model` is what the model map sent
+    -- on the wire in its place. NULL on rows written before the map existed.
+    preferred_model text,
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
