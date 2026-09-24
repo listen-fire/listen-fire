@@ -1,31 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { Sidebar } from "./sidebar";
 import { AssistantPanel, AssistantProvider } from "./assistant";
 import { PageContextProvider } from "./page-context";
 
-/**
- * Routes that mount their own focused shell and should NOT show the
- * sidebar. Empty today: the onboarding funnel now renders inline on Home
- * with the nav visible (it's a real product, not a walled demo). Add a
- * prefix here if a future focused arc needs its own chrome-less shell;
- * matching is exact prefix.
- */
-const HIDDEN_SIDEBAR_PREFIXES = ['/settings'] as const;
-
-function shouldHideSidebar(pathname: string | null): boolean {
-  if (!pathname) return false;
-  return HIDDEN_SIDEBAR_PREFIXES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`),
-  );
-}
-
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const [collapsed, setCollapsed] = useState(false);
@@ -43,27 +26,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const toggle = useCallback(() => setCollapsed((c) => !c), []);
 
   // Cmd+K is handled by GlobalSearch (opens search modal)
-
-  const hideSidebar = shouldHideSidebar(pathname);
-
-  // AssistantProvider wraps BOTH layouts so the shared overlay state
-  // survives a navigation between them — e.g. /setup (sidebar hidden)
-  // opens the assistant conversation and hands off to Home (sidebar
-  // shown). The hidden-sidebar layout still mounts no chrome; it just
-  // lives inside the same provider tree.
-  if (hideSidebar) {
-    return (
-      <PageContextProvider>
-        <AssistantProvider>
-          <div className="flex h-full">
-            <main className="flex flex-1 flex-col overflow-hidden bg-white">
-              {children}
-            </main>
-          </div>
-        </AssistantProvider>
-      </PageContextProvider>
-    );
-  }
 
   return (
     <PageContextProvider>

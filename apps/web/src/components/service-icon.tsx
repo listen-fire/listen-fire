@@ -124,18 +124,6 @@ const TYPE_ALIASES: Record<string, string> = {
   WEB_QUESTION: "WEB",
 };
 
-/** Resolve the raw path + viewBox for a service type (after alias resolution),
- *  for callers that need to render the mark themselves (e.g. as a tiled mask).
- *  Returns null for unknown types. */
-export function getServiceIconPath(
-  type: string,
-): { d: string; viewBox: string } | null {
-  const key = TYPE_ALIASES[type] ?? type;
-  const icon = ICON_PATHS[key];
-  if (!icon) return null;
-  return { d: icon.d, viewBox: icon.viewBox ?? "0 0 24 24" };
-}
-
 export function ServiceIcon({
   type,
   className = "h-4 w-4",

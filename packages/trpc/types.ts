@@ -1748,6 +1748,13 @@ export type LlmUsageId = string & {
     __brand: 'public.llm_usage';
 };
 
+export type Access = 'read' | 'write';
+export type CreatedMember = {
+    id: UserId;
+    username: string;
+    email: string;
+};
+
 /** Identifier type for public.pipeline_configuration */
 export type PipelineConfigurationId = string & {
     __brand: 'public.pipeline_configuration';
@@ -2569,11 +2576,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     };
                     _output_in: typeof _trpc_server.unsetMarker;
                     _output_out: typeof _trpc_server.unsetMarker;
-                }, {
-                    id: string;
-                    username: string;
-                    email: string;
-                }>;
+                }, CreatedMember>;
                 grantTeamAccess: _trpc_server.BuildProcedure<"mutation", {
                     _config: _trpc_server.RootConfig<{
                         ctx: {
@@ -13724,11 +13727,23 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_in: typeof _trpc_server.unsetMarker;
                 _output_out: typeof _trpc_server.unsetMarker;
             }, {
+                viewer: {
+                    userId: UserId;
+                    access: "read" | "write";
+                };
                 members: {
                     userId: UserId;
                     username: string;
                     email: string | null;
-                    access: string;
+                    emails: {
+                        email: string;
+                        isPrimary: boolean;
+                    }[];
+                    phoneNumber: string | null;
+                    access: "read" | "write";
+                    isServiceAccount: boolean;
+                    soleTeam: boolean;
+                    platformAdmin: boolean;
                     joinedAt: Date;
                 }[];
                 invites: {
@@ -13817,6 +13832,189 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_in: typeof _trpc_server.unsetMarker;
                 _output_out: typeof _trpc_server.unsetMarker;
             }, any>;
+            addMember: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    email: string;
+                    username: string;
+                    access: "read" | "write";
+                };
+                _input_out: {
+                    email: string;
+                    username: string;
+                    access: "read" | "write";
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                id: UserId;
+                email: string;
+            }>;
+            createServiceAccount: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    email: string;
+                    access: "read" | "write";
+                };
+                _input_out: {
+                    email: string;
+                    access: "read" | "write";
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, CreatedMember>;
+            setAccess: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    userId: string;
+                    access: "read" | "write";
+                };
+                _input_out: {
+                    userId: string;
+                    access: "read" | "write";
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                access: Access;
+            }>;
+            rename: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    userId: string;
+                    username: string;
+                };
+                _input_out: {
+                    userId: string;
+                    username: string;
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                username: string;
+            }>;
+            addEmail: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    userId: string;
+                    email: string;
+                    isPrimary?: boolean | undefined;
+                };
+                _input_out: {
+                    userId: string;
+                    email: string;
+                    isPrimary: boolean;
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                email: string;
+            }>;
+            addPhone: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    userId: string;
+                    phoneNumber: string;
+                };
+                _input_out: {
+                    userId: string;
+                    phoneNumber: string;
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                phoneNumber: string;
+            }>;
         }>;
         usage: _trpc_server.CreateRouterInner<_trpc_server.RootConfig<{
             ctx: {
@@ -14400,50 +14598,6 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_in: typeof _trpc_server.unsetMarker;
                 _output_out: typeof _trpc_server.unsetMarker;
             }, void>;
-        }>;
-        workflowIdeas: _trpc_server.CreateRouterInner<_trpc_server.RootConfig<{
-            ctx: {
-                authorise: () => Promise<void>;
-            };
-            meta: object;
-            errorShape: {
-                message: string;
-                code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
-                data: _trpc_server_dist_error_formatter.DefaultErrorData;
-            };
-            transformer: _trpc_server.DefaultDataTransformer;
-        }>, {
-            generate: _trpc_server.BuildProcedure<"mutation", {
-                _config: _trpc_server.RootConfig<{
-                    ctx: {
-                        authorise: () => Promise<void>;
-                    };
-                    meta: object;
-                    errorShape: {
-                        message: string;
-                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
-                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
-                    };
-                    transformer: _trpc_server.DefaultDataTransformer;
-                }>;
-                _meta: object;
-                _ctx_out: {
-                    authorise: () => Promise<void>;
-                };
-                _input_in: {
-                    services: string[];
-                };
-                _input_out: {
-                    services: string[];
-                };
-                _output_in: typeof _trpc_server.unsetMarker;
-                _output_out: typeof _trpc_server.unsetMarker;
-            }, {
-                ideas: {
-                    tag: string;
-                    text: string;
-                }[];
-            }>;
         }>;
         testHarness: _trpc_server.CreateRouterInner<_trpc_server.RootConfig<{
             ctx: {

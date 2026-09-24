@@ -4,7 +4,7 @@
  * context (no injected seed cookie — dev:ui would mask exactly the thing
  * under test). Then read the emailed link out of the fake-channel outbox
  * and open it in the same clean-context style to confirm it lands
- * authenticated on /home.
+ * authenticated on /dashboard.
  *
  * Also checks the non-enumeration contract: requesting for an email with
  * no account reaches the same confirmation UI and sends no email.
@@ -95,7 +95,7 @@ async function main() {
   record('magic link URL extracted from email body', !!magicUrl, magicUrl ? magicUrl.replace(/token=[^&]+/, 'token=…') : '(none found)');
   await ctx1.close();
 
-  // ── 2: open the emailed link in a fresh clean context, land on /home ──
+  // ── 2: open the emailed link in a fresh clean context, land on /dashboard ──
   if (magicUrl) {
     const ctx2 = await browser.newContext();
     const page2 = await ctx2.newPage();
@@ -109,15 +109,15 @@ async function main() {
     const landedAt = page2.url();
     const cookies = (await ctx2.cookies()).map((c) => c.name);
     record(
-      'clicking the emailed link lands authenticated on /home with session cookies',
-      landedAt.startsWith(`${WEB_BASE_URL}/home`) &&
+      'clicking the emailed link lands authenticated on /dashboard with session cookies',
+      landedAt.startsWith(`${WEB_BASE_URL}/dashboard`) &&
         cookies.includes('listen_fire_token') &&
         cookies.includes('listen_fire_authed'),
       `landedAt=${landedAt} cookies=[${cookies.join(', ')}]`,
     );
     await ctx2.close();
   } else {
-    record('clicking the emailed link lands authenticated on /home with session cookies', false, 'skipped: no magic URL extracted');
+    record('clicking the emailed link lands authenticated on /dashboard with session cookies', false, 'skipped: no magic URL extracted');
   }
 
   // ── 3: non-enumeration — an email with NO account gets same confirmation, no email sent ──

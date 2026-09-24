@@ -8,7 +8,7 @@
  *
  * Five claims:
  *   1. the emailed link points at the WEB app, not the deleted apps/app
- *   2. clicking it lands an authenticated session on /home
+ *   2. clicking it lands an authenticated session on /dashboard
  *   3. the same link a second time shows the expired/used error state
  *   4. a hostile `redirectUrl` is ignored (open-redirect guard)
  */
@@ -106,7 +106,7 @@ async function main() {
   const first = await visitClean(fresh, magicUrl, 'magic-success.png');
   record(
     'clicking the link lands an authenticated session',
-    first.landedAt.startsWith(`${WEB_BASE_URL}/home`) &&
+    first.landedAt.startsWith(`${WEB_BASE_URL}/dashboard`) &&
       first.cookies.includes('listen_fire_token') &&
       first.cookies.includes('listen_fire_authed'),
     `landedAt=${first.landedAt} cookies=[${first.cookies.join(', ')}]`,
@@ -131,7 +131,7 @@ async function main() {
   const third = await visitClean(hostile, hostileUrl, 'magic-open-redirect.png');
   record(
     'a foreign redirectUrl is ignored',
-    third.landedAt.startsWith(`${WEB_BASE_URL}/home`) && !third.landedAt.includes('evil.example'),
+    third.landedAt.startsWith(`${WEB_BASE_URL}/dashboard`) && !third.landedAt.includes('evil.example'),
     `landedAt=${third.landedAt}`,
   );
   await hostile.close();

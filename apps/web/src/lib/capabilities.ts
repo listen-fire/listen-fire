@@ -60,7 +60,7 @@ const NAV_UNITS: Readonly<Record<string, Unit | readonly Unit[]>> = {
 };
 
 /** Where a deployment with no nav entry of its own sends people. */
-const FALLBACK_HREF = '/home';
+const FALLBACK_HREF = '/settings';
 
 function isUnit(value: unknown): value is Unit {
   return typeof value === 'string' && UNITS.some((unit) => unit === value);

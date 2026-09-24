@@ -271,10 +271,23 @@ class User extends ModelService<'user'> {
    * Take care not to expose this to non-admins, as throwing due to the uniqueness constraint
    * could expose the existence of other emails in the system
    */
-  async addEmail({ email, userId }: { email: string; userId: string }) {
+  async addEmail({
+    email,
+    userId,
+    isPrimary = false,
+  }: {
+    email: string;
+    userId: string;
+    isPrimary?: boolean;
+  }) {
     const { prisma } = currentContext();
 
-    await prisma.userEmail.create({ data: { email: email.toLowerCase(), userId } });
+    // A user has at most one primary address (a partial unique index), so a new
+    // primary takes the role over rather than colliding with the old one.
+    if (isPrimary) {
+      await prisma.userEmail.updateMany({ where: { userId, isPrimary: true }, data: { isPrimary: false } });
+    }
+    await prisma.userEmail.create({ data: { email: email.toLowerCase(), userId, isPrimary } });
   }
 
   /**
@@ -301,6 +314,30 @@ class User extends ModelService<'user'> {
       });
     }
     return ctx.prisma.phoneNumber.create({ data: { phoneNumber: normalisedNumber, userId } });
+  }
+
+  /**
+   * Whether this number already belongs to anyone other than this user. The
+   * number is unique across all users, so `addPhoneNumber` would fail on it;
+   * asking first lets a caller refuse in words instead.
+   */
+  async phoneNumberHeldByAnother({
+    phoneNumber,
+    userId,
+  }: {
+    phoneNumber: string;
+    userId: string;
+  }): Promise<boolean> {
+    const { prisma } = currentContext();
+    const held = await prisma.phoneNumber.findFirst({
+      where: {
+        phoneNumber: normalisePhoneNumber(phoneNumber),
+        // A row nobody owns still holds the number.
+        OR: [{ userId: null }, { userId: { not: userId } }],
+      },
+      select: { id: true },
+    });
+    return held !== null;
   }
 
   async updateUsername({ userId, newUsername }: { userId: string; newUsername: string }) {

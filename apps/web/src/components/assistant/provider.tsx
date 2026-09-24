@@ -28,7 +28,7 @@ import {
 
 type OpenPanelOpts = {
   legacyDomain?: string | null;
-  /** Arm follow-along for this conversation (the setup/onboarding hand-off). */
+  /** Arm follow-along for this conversation. */
   followByDefault?: boolean;
 };
 

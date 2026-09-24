@@ -95,8 +95,8 @@ describe('navIsMounted', () => {
 });
 
 describe('firstMountedHref', () => {
-  it('falls back to /home while capabilities are still loading', () => {
-    expect(firstMountedHref(null)).toBe('/home');
+  it('falls back to /settings while capabilities are still loading', () => {
+    expect(firstMountedHref(null)).toBe('/settings');
   });
 
   it('lands on the first nav entry the deployment actually runs', () => {
@@ -107,8 +107,8 @@ describe('firstMountedHref', () => {
     expect(firstMountedHref({ products: UNITS, identity: 'core' })).toBe('/dashboard');
   });
 
-  it('falls back to /home when no nav entry is mounted', () => {
-    expect(firstMountedHref({ products: ['asks'], identity: 'static' })).toBe('/home');
+  it('falls back to /settings when no nav entry is mounted', () => {
+    expect(firstMountedHref({ products: ['asks'], identity: 'static' })).toBe('/settings');
   });
 });
 
