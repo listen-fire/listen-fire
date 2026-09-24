@@ -1,49 +1,76 @@
 /**
- * Benchmark: fact extraction across Haiku, GPT-5 Nano, and Mercury 2.
+ * Benchmark: fact extraction and summary condensing, per registry model name.
  *
- * Measures speed, cost, and quality on a fixed set of test passages.
+ * Measures speed, cost, and quality on a fixed set of test passages. Each name
+ * goes wherever MODEL_MAP sends it, so comparing vendors is the same run under
+ * a different map, e.g. MODEL_MAP='{"claude-haiku-4-5":"openai/gpt-5-nano"}'.
  *
- * Usage:
+ * Usage (names default to claude-haiku-4-5):
  *   pnpm -F api ts-node --project tsconfig.dev.json --transpile-only \
  *     -r dotenv/config -r tsconfig-paths/register \
- *     src/scripts/benchmark_fact_extraction.ts
+ *     src/scripts/benchmark_fact_extraction.ts [model name ...]
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import type Anthropic from '@anthropic-ai/sdk';
 
-import { getEnvVar } from '../lib/utils/environment';
+import { calculateCostMicrodollars } from '../lib/llm_usage';
+import { chatCallFor } from '../lib/models/chat';
+import { parseChatModelName } from '../lib/models/registry';
+import type { ChatModelName } from '../lib/models/registry';
 import { parseJson } from '../lib/utils/parse_json';
 
 // ---------------------------------------------------------------------------
-// Clients
+// Models
 // ---------------------------------------------------------------------------
 
-const anthropic = new Anthropic({
-  apiKey: getEnvVar('ANTHROPIC_API_KEY', { devDefault: 'test' }),
-});
+const argNames = process.argv.slice(2);
+const MODELS: ChatModelName[] =
+  argNames.length > 0 ? argNames.map((v) => parseChatModelName(v, 'A model argument')) : ['claude-haiku-4-5'];
 
-const openai = new OpenAI({
-  apiKey: getEnvVar('OPENAI_API_KEY', { devDefault: 'test' }),
-});
+interface Completion {
+  /** The name asked for and where the map sent it, so a table row says both. */
+  model: string;
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  costDollars: number;
+}
 
-const INCEPTION_API_URL = 'https://api.inceptionlabs.ai/v1/chat/completions';
-const inceptionApiKey = getEnvVar('INCEPTION_API_KEY', { devDefault: 'test' });
-
-// ---------------------------------------------------------------------------
-// Pricing ($/M tokens, from llm_usage.ts)
-// ---------------------------------------------------------------------------
-
-const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0 },
-  'gpt-5-nano': { input: 0.05, output: 0.4 },
-  'mercury-2': { input: 0.25, output: 0.75 },
-};
-
-function costDollars(model: string, inputTokens: number, outputTokens: number): number {
-  const p = PRICING[model];
-  if (!p) return 0;
-  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+async function complete(
+  name: ChatModelName,
+  request: { system: string; user: string; maxTokens: number },
+): Promise<Completion> {
+  const { client, wireModel, resolved } = chatCallFor(name);
+  const start = Date.now();
+  const response = await client.messages.create({
+    model: wireModel,
+    max_tokens: request.maxTokens,
+    system: [{ type: 'text', text: request.system }],
+    messages: [{ role: 'user', content: request.user }],
+  });
+  const latencyMs = Date.now() - start;
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
+  const inputTokens = response.usage.input_tokens;
+  const outputTokens = response.usage.output_tokens;
+  const micro = calculateCostMicrodollars({
+    served: resolved,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: response.usage.cache_creation_input_tokens ?? 0,
+  });
+  return {
+    model: `${name} -> ${resolved.provider}/${wireModel}`,
+    text,
+    inputTokens,
+    outputTokens,
+    latencyMs,
+    costDollars: micro / 1_000_000,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -201,127 +228,13 @@ interface ModelResult {
   error?: string;
 }
 
-async function runHaiku(text: string): Promise<ModelResult> {
-  const model = 'claude-haiku-4-5-20251001';
-  const start = Date.now();
-
-  const response = await anthropic.messages.create({
-    model,
-    max_tokens: 4096,
-    system: [{ type: 'text', text: SYSTEM_PROMPT }],
-    messages: [{ role: 'user', content: text }],
-  });
-
-  const latencyMs = Date.now() - start;
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-
+async function runExtraction(name: ChatModelName, text: string): Promise<ModelResult> {
+  const { text: raw, ...completion } = await complete(name, { system: SYSTEM_PROMPT, user: text, maxTokens: 4096 });
   const parsed = parseJson(raw);
   const facts = Array.isArray(parsed?.facts)
     ? parsed.facts.filter((f: any) => f?.s && f?.p && f?.o)
     : [];
-
-  return {
-    model,
-    facts,
-    summary: parsed?.summary ?? '',
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
-    latencyMs,
-    costDollars: costDollars(model, response.usage.input_tokens, response.usage.output_tokens),
-    raw,
-  };
-}
-
-async function runGpt5Nano(text: string): Promise<ModelResult> {
-  const model = 'gpt-5-nano';
-  const start = Date.now();
-
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: text },
-    ],
-  });
-
-  const latencyMs = Date.now() - start;
-  const raw = response.choices[0]?.message?.content ?? '';
-
-  const parsed = parseJson(raw);
-  const facts = Array.isArray(parsed?.facts)
-    ? parsed.facts.filter((f: any) => f?.s && f?.p && f?.o)
-    : [];
-
-  return {
-    model,
-    facts,
-    summary: parsed?.summary ?? '',
-    inputTokens: response.usage?.prompt_tokens ?? 0,
-    outputTokens: response.usage?.completion_tokens ?? 0,
-    latencyMs,
-    costDollars: costDollars(model, response.usage?.prompt_tokens ?? 0, response.usage?.completion_tokens ?? 0),
-    raw,
-  };
-}
-
-async function runMercury2(text: string): Promise<ModelResult> {
-  const model = 'mercury-2';
-  const start = Date.now();
-
-  const response = await fetch(INCEPTION_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${inceptionApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: text },
-      ],
-    }),
-  });
-
-  const latencyMs = Date.now() - start;
-
-  if (!response.ok) {
-    const body = await response.text();
-    return {
-      model,
-      facts: [],
-      summary: '',
-      inputTokens: 0,
-      outputTokens: 0,
-      latencyMs,
-      costDollars: 0,
-      raw: '',
-      error: `HTTP ${response.status}: ${body}`,
-    };
-  }
-
-  const data = await response.json();
-  const raw = data.choices?.[0]?.message?.content ?? '';
-  const usage = data.usage ?? {};
-
-  const parsed = parseJson(raw);
-  const facts = Array.isArray(parsed?.facts)
-    ? parsed.facts.filter((f: any) => f?.s && f?.p && f?.o)
-    : [];
-
-  return {
-    model,
-    facts,
-    summary: parsed?.summary ?? '',
-    inputTokens: usage.prompt_tokens ?? 0,
-    outputTokens: usage.completion_tokens ?? 0,
-    latencyMs,
-    costDollars: costDollars(model, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0),
-    raw,
-  };
+  return { ...completion, facts, summary: parsed?.summary ?? '', raw };
 }
 
 // ---------------------------------------------------------------------------
@@ -448,99 +361,13 @@ interface CondenseResult {
   error?: string;
 }
 
-async function condenseHaiku(previous: string, newSection: string): Promise<CondenseResult> {
-  const model = 'claude-haiku-4-5-20251001';
-  const userMessage = `Previous: ${previous}\nNew section: ${newSection}`;
-  const start = Date.now();
-
-  const response = await anthropic.messages.create({
-    model,
-    max_tokens: 256,
-    system: [{ type: 'text', text: CONDENSE_SYSTEM }],
-    messages: [{ role: 'user', content: userMessage }],
+async function runCondense(name: ChatModelName, previous: string, newSection: string): Promise<CondenseResult> {
+  const { text: summary, ...completion } = await complete(name, {
+    system: CONDENSE_SYSTEM,
+    user: `Previous: ${previous}\nNew section: ${newSection}`,
+    maxTokens: 256,
   });
-
-  const latencyMs = Date.now() - start;
-  const summary = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-
-  return {
-    model,
-    summary,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
-    latencyMs,
-    costDollars: costDollars(model, response.usage.input_tokens, response.usage.output_tokens),
-  };
-}
-
-async function condenseGpt5Nano(previous: string, newSection: string): Promise<CondenseResult> {
-  const model = 'gpt-5-nano';
-  const userMessage = `Previous: ${previous}\nNew section: ${newSection}`;
-  const start = Date.now();
-
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: CONDENSE_SYSTEM },
-      { role: 'user', content: userMessage },
-    ],
-  });
-
-  const latencyMs = Date.now() - start;
-  const summary = response.choices[0]?.message?.content ?? '';
-
-  return {
-    model,
-    summary,
-    inputTokens: response.usage?.prompt_tokens ?? 0,
-    outputTokens: response.usage?.completion_tokens ?? 0,
-    latencyMs,
-    costDollars: costDollars(model, response.usage?.prompt_tokens ?? 0, response.usage?.completion_tokens ?? 0),
-  };
-}
-
-async function condenseMercury2(previous: string, newSection: string): Promise<CondenseResult> {
-  const model = 'mercury-2';
-  const userMessage = `Previous: ${previous}\nNew section: ${newSection}`;
-  const start = Date.now();
-
-  const response = await fetch(INCEPTION_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${inceptionApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: CONDENSE_SYSTEM },
-        { role: 'user', content: userMessage },
-      ],
-    }),
-  });
-
-  const latencyMs = Date.now() - start;
-
-  if (!response.ok) {
-    const body = await response.text();
-    return { model, summary: '', inputTokens: 0, outputTokens: 0, latencyMs, costDollars: 0, error: `HTTP ${response.status}: ${body}` };
-  }
-
-  const data = await response.json();
-  const summary = data.choices?.[0]?.message?.content ?? '';
-  const usage = data.usage ?? {};
-
-  return {
-    model,
-    summary,
-    inputTokens: usage.prompt_tokens ?? 0,
-    outputTokens: usage.completion_tokens ?? 0,
-    latencyMs,
-    costDollars: costDollars(model, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0),
-  };
+  return { ...completion, summary };
 }
 
 function scoreCondense(summary: string, keyTerms: string[]): { matched: number; total: number; missed: string[] } {
@@ -557,21 +384,16 @@ function scoreCondense(summary: string, keyTerms: string[]): { matched: number; 
   return { matched, total: keyTerms.length, missed };
 }
 
-const CONDENSE_RUNNERS = [
-  { name: 'Haiku', run: condenseHaiku },
-  { name: 'GPT-5 Nano', run: condenseGpt5Nano },
-  { name: 'Mercury 2', run: condenseMercury2 },
-];
+const CONDENSE_RUNNERS = MODELS.map((name) => ({
+  name,
+  run: (previous: string, newSection: string) => runCondense(name, previous, newSection),
+}));
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-const RUNNERS = [
-  { name: 'Haiku', run: runHaiku },
-  { name: 'GPT-5 Nano', run: runGpt5Nano },
-  { name: 'Mercury 2', run: runMercury2 },
-];
+const RUNNERS = MODELS.map((name) => ({ name, run: (text: string) => runExtraction(name, text) }));
 
 async function main() {
   console.log('=== Fact Extraction Benchmark ===\n');
