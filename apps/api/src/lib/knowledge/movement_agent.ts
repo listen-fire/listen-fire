@@ -12,15 +12,13 @@
 //   listMovements / getMovement — the saved inventory
 //
 // The agent follows the same runner pattern as the other knowledge chat
-// agents (system_agent et al.): provider-switched tool loop, mq progress
+// agents (system_agent et al.): the Claude tool loop, mq progress
 // updates, registered under the 'movement' domain.
 
 import { z } from 'zod';
 
 import { anthropicToolLoop, type TurnEvent } from '../anthropic';
 import { AgentResponseSchema } from '../openai/db_agent_schema';
-import { openAIResponses } from '../openai';
-import { resolveModel } from '../models/map';
 import { currentContext } from '../../services/context';
 import { mq } from '../message_queue';
 import type { AgentUpdate } from '../openai/types';
@@ -463,11 +461,6 @@ async function runMovementAgent(
     try {
       emitUpdate({ type: 'start', message: 'Starting movement author…' });
 
-      // The Responses loop stays reachable only for a deployment whose model map
-      // sends this agent's model to OpenAI; every other provider answers through
-      // the Claude tool loop.
-      const agentModel = resolveModel('claude-sonnet-5');
-      const provider = agentModel.provider === 'openai' ? 'openai' : 'anthropic';
       const wrappedTools = createWrappedTools(emitUpdate, teamId as TeamId);
 
       const allToolDefs: any[] = [...(toolDefinitions as any[]), ...additionalToolDefs];
@@ -479,40 +472,20 @@ async function runMovementAgent(
         }
       };
 
-      const historyInput = (conversationHistory ?? []).map((msg) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      }));
-
-      const rawResult =
-        provider === 'anthropic'
-          ? await anthropicToolLoop(
-              {
-                model: 'claude-sonnet-5',
-                max_output_tokens: 8192,
-                maxTurns: 50,
-                system: SYSTEM_PROMPT,
-                userMessage: message,
-                conversationHistory,
-                tools: allToolDefs,
-                onTurn,
-                label: 'movement_agent',
-              },
-              allToolImpls,
-            )
-          : await openAIResponses(
-              {
-                model: agentModel.wireModel,
-                input: [
-                  { role: 'system', content: SYSTEM_PROMPT },
-                  ...historyInput,
-                  ...(message ? [{ role: 'user' as const, content: message }] : []),
-                ],
-                tools: allToolDefs,
-              },
-              allToolImpls,
-              { label: 'movement_agent' },
-            );
+      const rawResult = await anthropicToolLoop(
+        {
+          model: 'claude-sonnet-5',
+          max_output_tokens: 8192,
+          maxTurns: 50,
+          system: SYSTEM_PROMPT,
+          userMessage: message,
+          conversationHistory,
+          tools: allToolDefs,
+          onTurn,
+          label: 'movement_agent',
+        },
+        allToolImpls,
+      );
 
       const validated = AgentResponseSchema.parse(rawResult);
       const text =
