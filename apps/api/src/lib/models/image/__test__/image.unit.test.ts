@@ -86,9 +86,9 @@ describe('OpenAI, where the map leaves gpt-image-1 at home', () => {
 });
 
 describe('Gemini, where the map sends gpt-image-1', () => {
-  it('asks the mapped image model for a square image, in the project region', async () => {
+  it('asks the mapped image model for a square image, in the model region', async () => {
     const image = await generateImage('gpt-image-1', { prompt: 'a leaf' }, GEMINI_ENV);
-    expect(geminiClient).toHaveBeenCalledWith(GEMINI_ENV, { location: 'europe-west4' });
+    expect(geminiClient).toHaveBeenCalledWith(GEMINI_ENV);
     expect(generateContent).toHaveBeenCalledWith({
       model: 'gemini-3.1-flash-image-preview',
       contents: [{ role: 'user', parts: [{ text: 'a leaf' }] }],

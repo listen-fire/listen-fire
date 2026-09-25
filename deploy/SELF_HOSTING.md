@@ -196,7 +196,7 @@ Three maps cover most deployments. Each is written on one line in `deploy/.env`;
 }
 ```
 
-The Google project needs the Agent Platform API (`aiplatform.googleapis.com`) enabled. Chat on Gemini is addressed in `GOOGLE_MODEL_REGION` (default `global`); image generation runs in `GOOGLE_PROJECT_LOCATION`.
+The Google project needs the Agent Platform API (`aiplatform.googleapis.com`) enabled. Every Gemini call, image generation included, is addressed in `GOOGLE_MODEL_REGION` (default `global`).
 
 **Claude on Google Cloud** keeps Claude and moves it off the Anthropic key: set the four Google service account variables (`GOOGLE_PRIVATE_KEY`, `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PROJECT_ID`, `GOOGLE_PROJECT_LOCATION`), optionally `GOOGLE_MODEL_REGION` (default `global`, where both Claude on Vertex and Gemini are addressed), and this map, written on one line in `deploy/.env`:
 
@@ -226,7 +226,7 @@ Google spells a Claude model whose name carries a date with the date behind an `
 | transcription (voice notes and audio attachments) | `whisper-1` | Whisper; the audio is uploaded as a file | a Gemini model given the audio inline, up to 7 MB per file, in the formats Gemini lists (Ogg, MP3, M4A, WAV, WebM, FLAC, AAC, PCM) |
 | embeddings, 3072 wide (`knowledge.raw_text.embedding`, `knowledge.raw_text_part.embedding`) | `text-embedding-3-large` | `text-embedding-3-large` (up to 3072) | `gemini-embedding-001` (128 to 3072), one text per request, 2048 tokens each at most |
 | embeddings, 256 wide (`knowledge.extraction_fact.embedding`) | `text-embedding-3-small` | `text-embedding-3-small` (up to 1536) | `gemini-embedding-001` |
-| image generation | `gpt-image-1` | GPT Image 1, at the size and quality asked for | a Gemini image model, called in `GOOGLE_PROJECT_LOCATION` rather than `GOOGLE_MODEL_REGION`; always square, and a request that sets a size or quality is refused rather than drawn some other way |
+| image generation | `gpt-image-1` | GPT Image 1, at the size and quality asked for | a Gemini image model, in `GOOGLE_MODEL_REGION` like every other Gemini call; a size or quality in the request is refused |
 
 An embedding line must name a model the product knows the widths of, and one wide enough for the column: `"text-embedding-3-large": "openai/text-embedding-3-small"` is refused at boot, because that model tops out at 1536 and the column stores 3072. Vectors written by one vendor are not comparable with vectors written by another, so moving an embedding line on a deployment that already has vectors means re-embedding what is stored.
 
@@ -609,9 +609,9 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `OPENAI_API_KEY` | only for names the map leaves at OpenAI | the key for OpenAI's own names: transcription, embeddings and image generation, plus any chat name the map sends to `openai`. Absent, each fails naming it when asked for |
 | `OPENAI_ORGANIZATION` | no | none — no `organization` is sent, and OpenAI uses the key's own default org |
 | `MODEL_MAP` | no | empty — every model name goes to its own vendor under its own name. A JSON object from model name to `provider/wire-model` sends names elsewhere; see "What you configure" for three worked maps (vendor keys, everything on OpenAI, everything on Gemini) and the Claude on Google Cloud one. Boot refuses a map it cannot serve |
-| `GOOGLE_MODEL_REGION` | no | `global` — where models are addressed on Google Cloud, for both the `vertex` (Claude) and `gemini` providers. `GOOGLE_PROJECT_LOCATION` is separate and stays the region OCR and image generation use |
+| `GOOGLE_MODEL_REGION` | no | `global` — where models are addressed on Google Cloud, for both the `vertex` (Claude) and `gemini` providers. `GOOGLE_PROJECT_LOCATION` is separate and stays the location OCR uses |
 | `GEMINI_BASE_URL` | no | unset — every call the map sends to `gemini` (chat, transcription, embeddings, images) goes to Google Cloud, signed with the service account. Set it only to point those calls at a stand-in such as the dev loop's fake Gemini (`http://localhost:<fake channels port>/gemini`); a redirected client sends a placeholder key instead of a Google token |
-| `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | when the map names `vertex` or `gemini`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR and image generation |
+| `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | when the map names `vertex` or `gemini`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_OCR_PROCESSOR_ID` / `GOOGLE_STORAGE_BUCKET_NAME` | only for OCR | OCR boots unconfigured, so a PDF past its own text layer fails naming what it wanted |
 | `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET` | no | Gmail signs in through the `GOOGLE_INTEGRATIONS` client. Set BOTH to give Gmail an OAuth client of its own; half a pair fails boot, since Google refuses an exchange carrying an id without its secret |
 | `GMAIL_CONNECT_METHOD` | no | `oauth` — a Google sign-in as the mailbox, through the same client Sheets and Drive use. `delegated` instead has the service account act as the address, granted once by a Workspace admin; anything else fails boot naming the variable and the two values |

@@ -1,7 +1,6 @@
 // Image generation on Gemini: a `generateContent` call to an image model, asked
 // for an image back, whose reply carries the picture as an inline part.
 
-import { googleServiceAccount } from '../../google_cloud';
 import { logger } from '../../../services/logger';
 import { geminiClient } from '../providers/gemini';
 import type { GeneratedImage, ImageRequest } from './index';
@@ -33,10 +32,10 @@ export async function geminiGenerateImage(
   refuseUnhonoured('size', req.size);
   refuseUnhonoured('quality', req.quality);
   logger.info(`Gemini image submitted ${req.label ? `(${req.label})` : ''}`, { model: wireModel });
-  // In the project's own region rather than the model region: image
-  // generation has always run there, and the global endpoint is not where
-  // every image model is served.
-  const client = geminiClient(env, { location: googleServiceAccount(env).projectLocation });
+  // The model region, like every other Gemini call: GOOGLE_PROJECT_LOCATION is
+  // the OCR location, which can be a multi-region such as `eu` that serves no
+  // model at all (proven 2026-09-25 with a 404 on Project A's project).
+  const client = geminiClient(env);
   const response = await client.models.generateContent({
     model: wireModel,
     contents: [{ role: 'user', parts: [{ text: req.prompt }] }],
