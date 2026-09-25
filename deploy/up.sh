@@ -392,6 +392,62 @@ if has_unit core; then
   done
 fi
 
+# ── post-success image pruning ──────────────────────────────────────────────
+#
+# The stack is healthy on $IMAGE_TAG, so this is the one moment we know both
+# what to keep and what is safe to discard: the tag just started, and — since
+# PRIOR_VERSION was captured before anything above touched the running
+# containers — the tag it replaced. Exactly one rollback target survives,
+# recorded in deploy/.env so the NEXT run of this script (which will have
+# moved PRIOR_VERSION on) still knows it. Everything else this installation's
+# own images (ghcr.io/listen-fire/{api,web,admin}) has ever pulled or built
+# goes, plus dangling layers. `--keep-images` skips all of it.
+if [ "$KEEP_IMAGES" -eq 0 ]; then
+  echo "[up] pruning old images…"
+
+  PREVIOUS_VERSION="$(configured LISTEN_FIRE_PREVIOUS_VERSION)"
+  if [ -n "$PRIOR_VERSION" ] && [ "$PRIOR_VERSION" != "$IMAGE_TAG" ]; then
+    PREVIOUS_VERSION="$PRIOR_VERSION"
+    if grep -q '^LISTEN_FIRE_PREVIOUS_VERSION=' .env; then
+      sed -i.bak "s/^LISTEN_FIRE_PREVIOUS_VERSION=.*/LISTEN_FIRE_PREVIOUS_VERSION=${PREVIOUS_VERSION}/" .env
+      rm -f .env.bak
+    else
+      printf '\n# Written by up.sh: the one rollback target its pruning keeps alongside\n# the running tag. Not something to set by hand.\nLISTEN_FIRE_PREVIOUS_VERSION=%s\n' "$PREVIOUS_VERSION" >> .env
+    fi
+  fi
+
+  KEEP_TAGS=("$IMAGE_TAG")
+  [ -n "$PREVIOUS_VERSION" ] && KEEP_TAGS+=("$PREVIOUS_VERSION")
+
+  REMOVED=()
+  for name in api web admin; do
+    while IFS= read -r ref; do
+      [ -z "$ref" ] && continue
+      tag="${ref##*:}"
+      keep=0
+      for k in "${KEEP_TAGS[@]}"; do [ "$tag" = "$k" ] && keep=1; done
+      if [ "$keep" -eq 0 ] && docker rmi "$ref" >/dev/null 2>&1; then
+        REMOVED+=("$ref")
+      fi
+    done < <(docker images --format '{{.Repository}}:{{.Tag}}' "$REGISTRY/$name")
+  done
+
+  if [ "${#REMOVED[@]}" -gt 0 ]; then
+    echo "[up] removed: ${REMOVED[*]}"
+  else
+    echo "[up] no old $REGISTRY images to remove (kept: ${KEEP_TAGS[*]})"
+  fi
+
+  docker image prune -f
+
+  PRUNE_CHECK_PATH="$(image_store_path)"
+  if [ -n "$PRUNE_CHECK_PATH" ] && [ -d "$PRUNE_CHECK_PATH" ]; then
+    FREE_GB_AFTER="$(free_gb_at "$PRUNE_CHECK_PATH")"
+    [ -n "$FREE_GB_AFTER" ] && echo "[up] free space at $PRUNE_CHECK_PATH: ${FREE_GB_AFTER} GB"
+  fi
+  echo
+fi
+
 if [ "$DEMO" -eq 1 ]; then
   echo "[up] seeding the demo dataset…"
   compose run --rm seed
