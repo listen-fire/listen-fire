@@ -42,6 +42,7 @@ import { hasAdapter } from '../../../services/translation_graph/adapters/registr
 import { buildWebhookTargetUrl } from '../../../services/webhook_sync/urls';
 import { describeExecutedVersion } from '../../../services/translation_graph/movement/version_store';
 import { flattenTriggerRunPlans } from '../../../services/translation_graph/runs/trigger_run_read';
+import { runCostSummaries } from '../../../lib/llm_usage';
 import {
   schemaRefSchema,
   adapterTypeForRef,
@@ -671,6 +672,9 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           .selectAll()
           .executeTakeFirst();
         if (!row) throw new Error(`trigger_run ${input.runId} not found`);
+        const cost = (await runCostSummaries([row.id as unknown as TriggerRunId])).get(
+          row.id as unknown as string,
+        );
         return {
           ...row,
           appliedActionPlans: flattenTriggerRunPlans(row.steps),
@@ -679,6 +683,12 @@ const credentialsRouter = (procedure: typeof trpc.procedure) => {
           executedVersion: await describeExecutedVersion({
             versionId: row.movement_version_id,
           }),
+          // Model-call cost this firing incurred, rolled up from
+          // `llm_usage` — zero when it made no model calls.
+          costMicrodollars: cost?.costMicrodollars ?? 0,
+          calls: cost?.calls ?? 0,
+          inputTokens: cost?.inputTokens ?? 0,
+          outputTokens: cost?.outputTokens ?? 0,
         };
       }),
   });

@@ -23,6 +23,7 @@ function makeQbStub(rowsByTable: Record<string, unknown[]>) {
     select: () => stub,
     orderBy: () => stub,
     limit: () => stub,
+    groupBy: () => stub,
   };
   let rows: unknown[] = [];
   stub.selectFrom = (table: string) => {
@@ -107,6 +108,12 @@ describe('movementRunsImpl', () => {
     },
   ];
 
+  // Cost rows for two of the four runs — the other two made no model calls.
+  const LLM_USAGE_ROWS = [
+    { trigger_run_id: 'run-1', calls: 2, input_tokens: 500, output_tokens: 100, cost_microdollars: 3000 },
+    { trigger_run_id: 'run-3', calls: 1, input_tokens: 50, output_tokens: 10, cost_microdollars: 200 },
+  ];
+
   beforeEach(() => {
     jest.resetModules();
 
@@ -118,7 +125,7 @@ describe('movementRunsImpl', () => {
     jest.doMock('../../../../lib/kysely', () => ({
       getKnowledgeQb: jest.fn(() => makeQbStub({})),
       getAutomationsQb: jest.fn(() => automationsQbStub),
-      getQb: jest.fn(() => makeQbStub({})),
+      getQb: jest.fn(() => makeQbStub({ llm_usage: LLM_USAGE_ROWS })),
       getCoreQb: jest.fn(() => makeQbStub({})),
     }));
 
@@ -161,6 +168,17 @@ describe('movementRunsImpl', () => {
     expect(result[1].failedAt).toBe(minus1h);
     expect(result[1].failureReason).toBe('timeout');
     expect(result[2].dryRun).toBe(true);
+
+    // Cost rolls up from llm_usage, per run — a run with no usage rows
+    // reads as zero, not missing.
+    expect(result[0].costMicrodollars).toBe(3000);
+    expect(result[0].calls).toBe(2);
+    expect(result[0].inputTokens).toBe(500);
+    expect(result[0].outputTokens).toBe(100);
+    expect(result[2].costMicrodollars).toBe(200);
+    expect(result[1].costMicrodollars).toBe(0);
+    expect(result[1].calls).toBe(0);
+    expect(result[3].costMicrodollars).toBe(0);
   });
 
   it('returns an empty array when the movement has no triggers', async () => {
@@ -332,6 +350,9 @@ describe('latestRunsByTriggerId', () => {
     expect(emailRun.nodesWritten).toBe(5);
     expect(emailRun.status).toBe('success');
     expect(emailRun.summary).toBe('Processed — 5 records');
+    // No llm_usage rows stubbed for this suite — cost reads as zero.
+    expect(emailRun.costMicrodollars).toBe(0);
+    expect(emailRun.calls).toBe(0);
 
     // Slack lane has no runs → absent from map → caller maps to null.
     expect(result.has(SLACK_TRIGGER_ID)).toBe(false);

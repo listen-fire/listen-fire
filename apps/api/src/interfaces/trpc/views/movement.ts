@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { currentContext } from '../../../services/context';
 import { trpc } from '../trpc';
 import { getQb, getAutomationsQb } from '../../../lib/kysely';
+import { runCostSummaries } from '../../../lib/llm_usage';
 import { summariseRun } from './triggers';
 import {
   describeMovementInstance,
@@ -74,6 +75,7 @@ import { listMovementRows } from '../../../services/translation_graph/movement/s
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import type { MovementId } from '../../../generated/kysely/automations/Movement';
 import type { TriggerId } from '../../../generated/kysely/automations/Trigger';
+import type { TriggerRunId } from '../../../generated/kysely/automations/TriggerRun';
 import { UserService } from '../../../services/user';
 import { userProcedure as sharedUserProcedure } from '../procedures';
 
@@ -89,6 +91,12 @@ export type MovementRunItem = {
   summary: string;
   /** The lane (trigger name) that produced this run. */
   lane: string;
+  /** Model-call cost this run incurred, rolled up from `llm_usage` — zero
+   *  when the run made no model calls (or ran before cost tracking). */
+  costMicrodollars: number;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
 };
 
 /**
@@ -136,23 +144,34 @@ export async function movementRunsImpl(params: {
     .limit(50)
     .execute();
 
-  return runRows.map((row) => ({
-    id: row.id as unknown as string,
-    status: row.status,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
-    failedAt: row.failed_at,
-    failureReason: row.failure_reason,
-    nodesWritten: row.nodes_written,
-    dryRun: row.dry_run,
-    summary: summariseRun({
+  const costByRunId = await runCostSummaries(
+    runRows.map((r) => r.id as unknown as TriggerRunId),
+  );
+
+  return runRows.map((row) => {
+    const cost = costByRunId.get(row.id as unknown as string);
+    return {
+      id: row.id as unknown as string,
       status: row.status,
-      failed_at: row.failed_at,
-      failure_reason: row.failure_reason,
-      nodes_written: row.nodes_written,
-    }),
-    lane: laneByTriggerId.get(row.trigger_id as unknown as string) ?? '',
-  }));
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      failedAt: row.failed_at,
+      failureReason: row.failure_reason,
+      nodesWritten: row.nodes_written,
+      dryRun: row.dry_run,
+      summary: summariseRun({
+        status: row.status,
+        failed_at: row.failed_at,
+        failure_reason: row.failure_reason,
+        nodes_written: row.nodes_written,
+      }),
+      lane: laneByTriggerId.get(row.trigger_id as unknown as string) ?? '',
+      costMicrodollars: cost?.costMicrodollars ?? 0,
+      calls: cost?.calls ?? 0,
+      inputTokens: cost?.inputTokens ?? 0,
+      outputTokens: cost?.outputTokens ?? 0,
+    };
+  });
 }
 
 export type MovementEventItem = {
@@ -251,10 +270,25 @@ export async function latestRunsByTriggerId(params: {
     .orderBy('created_at', 'desc')
     .execute();
 
-  const result = new Map<string, MovementRunItem>();
+  // First pass: pick the latest row per trigger (rows arrive newest-first).
+  const latestRows: typeof rows = [];
+  const seenTriggers = new Set<string>();
   for (const row of rows) {
     const triggerId = row.trigger_id as unknown as string;
-    if (result.has(triggerId)) continue;
+    if (seenTriggers.has(triggerId)) continue;
+    seenTriggers.add(triggerId);
+    latestRows.push(row);
+  }
+
+  // Cost only for the runs that survived the dedup, not the whole history.
+  const costByRunId = await runCostSummaries(
+    latestRows.map((r) => r.id as unknown as TriggerRunId),
+  );
+
+  const result = new Map<string, MovementRunItem>();
+  for (const row of latestRows) {
+    const triggerId = row.trigger_id as unknown as string;
+    const cost = costByRunId.get(row.id as unknown as string);
     result.set(triggerId, {
       id: row.id as unknown as string,
       status: row.status,
@@ -271,6 +305,10 @@ export async function latestRunsByTriggerId(params: {
         nodes_written: row.nodes_written,
       }),
       lane: '',
+      costMicrodollars: cost?.costMicrodollars ?? 0,
+      calls: cost?.calls ?? 0,
+      inputTokens: cost?.inputTokens ?? 0,
+      outputTokens: cost?.outputTokens ?? 0,
     });
   }
   return result;
