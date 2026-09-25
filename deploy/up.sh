@@ -23,6 +23,8 @@ DEMO=0
 # images: an installation that built from source would be running whatever the
 # checkout happens to be rather than the version it named.
 SOURCE=pull
+NO_SPACE_CHECK=0
+KEEP_IMAGES=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -35,13 +37,22 @@ for arg in "$@"; do
     # between shapes. Only safe when they are known to be current; a stale tag
     # boots silently and looks like the code.
     --no-build) SOURCE=reuse ;;
+    # Skip the free-space refusal below. For a machine this script cannot see
+    # the real disk of (Docker on a remote host), or an operator who has just
+    # freed space by hand and knows better.
+    --no-space-check) NO_SPACE_CHECK=1 ;;
+    # Skip the post-success image pruning below. For an operator who manages
+    # image retention themselves, or wants every pulled tag kept around.
+    --keep-images) KEEP_IMAGES=1 ;;
     -h|--help)
-      echo "usage: ./up.sh <unit…> [--demo] [--build|--no-build]"
+      echo "usage: ./up.sh <unit…> [--demo] [--build|--no-build] [--no-space-check] [--keep-images]"
       echo "units: ${VALID_UNITS[*]}"
       echo
       echo "Images come from ghcr.io/listen-fire at \$LISTEN_FIRE_VERSION (default: latest)."
-      echo "  --build     build them from this tree instead"
-      echo "  --no-build  use the images already on this machine"
+      echo "  --build            build them from this tree instead"
+      echo "  --no-build         use the images already on this machine"
+      echo "  --no-space-check   skip the free-space refusal before pulling or building"
+      echo "  --keep-images      skip pruning old images after a successful start"
       exit 0
       ;;
     -*)
@@ -206,6 +217,59 @@ default_from_env API_BASE_URL "$API_LOCAL"
 default_from_env WEB_BASE_URL "$WEB_LOCAL"
 
 compose() { docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"; }
+
+# Whatever is running RIGHT NOW, captured before build/pull touches anything —
+# the post-success pruning below needs this to name a rollback target, and the
+# tag alone can't tell current from previous across a --build or --no-build
+# run that never changes it. Empty when nothing answers yet (first boot).
+PRIOR_VERSION="$(curl -fsS "${API_LOCAL}/healthz/workers" 2>/dev/null \
+  | grep -o '"version":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')"
+
+# Where images actually land. The classic overlay2 graphdriver keeps them
+# under Docker's own root (`docker info`'s DockerRootDir); the containerd
+# image store — reported as `Driver: overlayfs`, not `overlay2` — keeps them
+# under containerd's own root instead, which is a separate filesystem on any
+# machine where the two were handed different disks.
+image_store_path() {
+  local driver
+  driver="$(docker info --format '{{.Driver}}' 2>/dev/null || true)"
+  if [ "$driver" = "overlayfs" ]; then
+    local root
+    root="$(containerd config dump 2>/dev/null \
+      | sed -n 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' | head -1)"
+    printf %s "${root:-/var/lib/containerd}"
+  else
+    docker info --format '{{.DockerRootDir}}' 2>/dev/null
+  fi
+}
+
+free_gb_at() {
+  local path="$1" free_kb
+  free_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}')"
+  [ -n "$free_kb" ] && echo $((free_kb / 1024 / 1024))
+}
+
+# ── disk pre-flight ─────────────────────────────────────────────────────────
+#
+# A pull adds ~4GB for the api image alone, and nothing before this pruned an
+# old tag: a boot disk that has taken two or three upgrades fills, the pull
+# fails half way through with "no space left on device", and the installation
+# stalls silently at the old version rather than the one just asked for.
+# Refuse to start below a floor instead — roughly twice the api image, so a
+# pull that is already this close to the edge gets a clear refusal now rather
+# than a mysterious one partway through.
+REQUIRED_SPACE_GB=10
+if [ "$NO_SPACE_CHECK" -eq 0 ] && [ "$SOURCE" != "reuse" ]; then
+  SPACE_CHECK_PATH="$(image_store_path)"
+  if [ -n "$SPACE_CHECK_PATH" ] && [ -d "$SPACE_CHECK_PATH" ]; then
+    FREE_GB="$(free_gb_at "$SPACE_CHECK_PATH")"
+    if [ -n "$FREE_GB" ] && [ "$FREE_GB" -lt "$REQUIRED_SPACE_GB" ]; then
+      echo "up.sh: only ${FREE_GB} GB free at $SPACE_CHECK_PATH — need at least ${REQUIRED_SPACE_GB} GB before pulling or building." >&2
+      echo "up.sh: free up space (old images are the usual cause — 'docker images' lists them), or rerun with --no-space-check." >&2
+      exit 1
+    fi
+  fi
+fi
 
 echo "[up] units:     $LISTEN_FIRE_PRODUCTS"
 echo "[up] identity:  $LISTEN_FIRE_PRINCIPAL"
