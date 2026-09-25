@@ -316,6 +316,12 @@ async function runCostSummaries(runIds: TriggerRunId[]): Promise<Map<string, Run
   return result;
 }
 
+/** Microdollars → USD, rounded to 4 decimal places — the MCP surface's
+ *  `costUsd`, precise enough to show sub-cent cost without float noise. */
+function costMicrodollarsToUsd(microdollars: number): number {
+  return Math.round(microdollars / 100) / 10000;
+}
+
 /** Which runs' usage lines to unlink: an explicit set, or every run of a team. */
 type LlmUsageRunScope = { runIds: TriggerRunId[] } | { teamId: TeamId };
 
@@ -348,6 +354,7 @@ async function releaseLlmUsageRunReferences(scope: LlmUsageRunScope): Promise<vo
 export {
   LlmUsageContext,
   calculateCostMicrodollars,
+  costMicrodollarsToUsd,
   currentLlmUsageContext,
   recordLlmUsage,
   releaseLlmUsageRunReferences,

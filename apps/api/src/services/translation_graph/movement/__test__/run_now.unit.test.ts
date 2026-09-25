@@ -39,6 +39,12 @@ jest.mock('../../runs/trigger_run', () => ({
 }));
 jest.mock('../../../../lib/kysely', () => ({ getAutomationsQb: jest.fn() }));
 jest.mock('../../../../lib/errors', () => ({ handleError: jest.fn() }));
+// The per-run cost rollup is its own unit (llm_usage_run_cost.unit.test.ts) —
+// stubbed here so this file doesn't also need a `getQb`/`llm_usage` double.
+jest.mock('../../../../lib/llm_usage', () => ({
+  runCostSummaries: jest.fn(async () => new Map()),
+  costMicrodollarsToUsd: jest.fn((microdollars: number) => Math.round(microdollars / 100) / 10000),
+}));
 
 import { runMovementNow, runMovementAsync, getMovementRunStatus } from '../run_now';
 
@@ -53,6 +59,9 @@ const { TriggerRunRecorder } = jest.requireMock('../../runs/trigger_run') as {
 };
 const { getAutomationsQb } = jest.requireMock('../../../../lib/kysely') as {
   getAutomationsQb: jest.Mock;
+};
+const { runCostSummaries } = jest.requireMock('../../../../lib/llm_usage') as {
+  runCostSummaries: jest.Mock;
 };
 
 const RUN_ID = 'run-async-1';
@@ -413,6 +422,10 @@ describe('runMovementAsync', () => {
 });
 
 describe('getMovementRunStatus', () => {
+  beforeEach(() => {
+    runCostSummaries.mockResolvedValue(new Map());
+  });
+
   it('projects a finished run row into the concise poll shape', async () => {
     const startedAt = new Date('2026-06-24T00:00:00Z');
     const completedAt = new Date('2026-06-24T00:00:30Z');
@@ -437,6 +450,33 @@ describe('getMovementRunStatus', () => {
     expect(result.startedAt).toBe(startedAt.toISOString());
     expect(result.finishedAt).toBe(completedAt.toISOString());
     expect(result.failedAt).toBeNull();
+    // No usage rows for this run — cost reads as zero, not missing.
+    expect(result.costUsd).toBe(0);
+    expect(result.modelCalls).toBe(0);
+  });
+
+  it('carries the run’s rolled-up model-call cost', async () => {
+    getAutomationsQb.mockImplementation(() =>
+      makeQbStub({
+        id: RUN_ID,
+        status: 'success',
+        nodes_written: 1,
+        errors: [],
+        dry_run: false,
+        started_at: new Date('2026-06-24T00:00:00Z'),
+        completed_at: new Date('2026-06-24T00:00:05Z'),
+        failed_at: null,
+        failure_reason: null,
+      }),
+    );
+    runCostSummaries.mockResolvedValue(
+      new Map([[RUN_ID, { runId: RUN_ID, costMicrodollars: 12_345, calls: 4, inputTokens: 100, outputTokens: 20 }]]),
+    );
+    const result = await getMovementRunStatus({ teamId: TEAM, runId: RUN_ID });
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+    expect(result.costUsd).toBeCloseTo(0.0123, 4);
+    expect(result.modelCalls).toBe(4);
   });
 
   it('a missing/cross-team run id is not found', async () => {

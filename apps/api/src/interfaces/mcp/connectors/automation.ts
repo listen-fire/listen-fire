@@ -386,7 +386,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       checkRun: {
         description:
-          'Read one automation run\'s status by id — the poll target for runAutomation\'s async dispatch. Pass the runId returned by runAutomation. Returns { status, recordCount, errors, startedAt, finishedAt, failedAt, failureReason }. status is "running" while it executes, then settles to "success" / "partial" / "failed" (or "parked" — paused, waiting for your review — see listReviews). Poll every few seconds until status leaves "running". To see WHAT the run captured and wrote (source event + resolved field values), call inspectRun.',
+          'Read one automation run\'s status by id — the poll target for runAutomation\'s async dispatch. Pass the runId returned by runAutomation. Returns { status, recordCount, errors, startedAt, finishedAt, failedAt, failureReason, costUsd, modelCalls }. status is "running" while it executes, then settles to "success" / "partial" / "failed" (or "parked" — paused, waiting for your review — see listReviews). Poll every few seconds until status leaves "running". costUsd is the run\'s model-call spend in dollars (0 if it made none); modelCalls is how many calls it made. To see WHAT the run captured and wrote (source event + resolved field values), call inspectRun.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           runId: z.string().describe('The run id returned by runAutomation.'),
@@ -400,7 +400,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       listRuns: {
         description:
-          'List an automation\'s recent runs (every listener firing and "Run now"), newest first — this is how you find the runId for an automation that fired on its own (not just one you launched with runAutomation). Returns each run\'s { runId, lane (which listener), triggerType, status, committed, captured, recordCount, timestamps } — `committed` is how many writes actually landed in a target system, `captured` how many were rehearsed (a `dry_run` target, or a whole-run rehearsal). Pass a runId to inspectRun to see what it actually captured and wrote. Pass the automation id or its exact name.',
+          'List an automation\'s recent runs (every listener firing and "Run now"), newest first — this is how you find the runId for an automation that fired on its own (not just one you launched with runAutomation). Returns each run\'s { runId, lane (which listener), triggerType, status, committed, captured, recordCount, timestamps, costUsd, modelCalls } — `committed` is how many writes actually landed in a target system, `captured` how many were rehearsed (a `dry_run` target, or a whole-run rehearsal), `costUsd`/`modelCalls` the run\'s model-call spend and call count. Pass a runId to inspectRun to see what it actually captured and wrote. Pass the automation id or its exact name.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           idOrName: z
@@ -417,7 +417,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       inspectRun: {
         description:
-          'See what a run actually did. Pass a runId (from listRuns or checkRun) and get back the source event that fired it, the resolved write-plan — every target record and the FINAL field values it wrote, with every set-if-empty (`?:`) rule and enum coercion already applied, each write flagged `committed` (it landed) or not (it was rehearsed — a `dry_run` target, or a whole-run rehearsal) — the decision trace (gate/branch outcomes, extraction emissions), and any errors, plus the run\'s `committed`/`captured` counts. A FAILED run still lists the writes that landed before it stopped — check them before re-running, or you may write the same records twice. The "did it do what I meant?" surface: use it to verify an automation before trusting a live listener, and to read back exactly which writes a rehearsal captured versus committed.',
+          'See what a run actually did. Pass a runId (from listRuns or checkRun) and get back the source event that fired it, the resolved write-plan — every target record and the FINAL field values it wrote, with every set-if-empty (`?:`) rule and enum coercion already applied, each write flagged `committed` (it landed) or not (it was rehearsed — a `dry_run` target, or a whole-run rehearsal) — the decision trace (gate/branch outcomes, extraction emissions), and any errors, plus the run\'s `committed`/`captured` counts and its `costUsd`/`modelCalls` model-call spend. A FAILED run still lists the writes that landed before it stopped — check them before re-running, or you may write the same records twice. The "did it do what I meant?" surface: use it to verify an automation before trusting a live listener, and to read back exactly which writes a rehearsal captured versus committed.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           runId: z.string().describe('The run id (from listRuns, runAutomation, or checkRun).'),

@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto';
 import { MovementParseError, parseProgram } from 'movement-lang';
 import { services } from '../../../adapters/registry';
 import { getQb, getAutomationsQb } from '../../../lib/kysely';
+import { costMicrodollarsToUsd, runCostSummaries } from '../../../lib/llm_usage';
 import { handleError } from '../../../lib/errors';
 import { logger } from '../../logger';
 import type { TeamId } from '../../../generated/kysely/core/Team';
@@ -341,6 +342,11 @@ export interface MovementRunStatus {
   /** Set once the run FAILED. */
   failedAt: string | null;
   failureReason: string | null;
+  /** Model-call cost this run incurred, in USD to 4 decimal places — 0 when
+   *  it made no model calls. Rolled up from `llm_usage`. */
+  costUsd: number;
+  /** How many model calls this run made. */
+  modelCalls: number;
 }
 
 /**
@@ -377,6 +383,10 @@ export async function getMovementRunStatus(input: {
       }))
     : [];
 
+  const cost = (await runCostSummaries([row.id as unknown as TriggerRunId])).get(
+    row.id as unknown as string,
+  );
+
   return {
     runId: row.id as unknown as string,
     status: row.status,
@@ -386,6 +396,8 @@ export async function getMovementRunStatus(input: {
     finishedAt: row.completed_at ? row.completed_at.toISOString() : null,
     failedAt: row.failed_at ? row.failed_at.toISOString() : null,
     failureReason: row.failure_reason,
+    costUsd: costMicrodollarsToUsd(cost?.costMicrodollars ?? 0),
+    modelCalls: cost?.calls ?? 0,
   };
 }
 
@@ -411,6 +423,11 @@ export interface MovementRunSummary {
   finishedAt: string | null;
   failedAt: string | null;
   failureReason: string | null;
+  /** Model-call cost this run incurred, in USD to 4 decimal places — 0 when
+   *  it made no model calls. Rolled up from `llm_usage`. */
+  costUsd: number;
+  /** How many model calls this run made. */
+  modelCalls: number;
 }
 
 /**
@@ -462,8 +479,13 @@ export async function listMovementRuns(input: {
     .limit(limit)
     .execute();
 
+  const costByRunId = await runCostSummaries(
+    runRows.map((r) => r.id as unknown as TriggerRunId),
+  );
+
   return runRows.map((row) => {
     const { committed, captured } = projectRunWrites(row.steps, row.dry_run);
+    const cost = costByRunId.get(row.id as unknown as string);
     return {
       runId: row.id as unknown as string,
       lane: laneByTriggerId.get(row.trigger_id as unknown as string) ?? '',
@@ -476,6 +498,8 @@ export async function listMovementRuns(input: {
       finishedAt: row.completed_at ? row.completed_at.toISOString() : null,
       failedAt: row.failed_at ? row.failed_at.toISOString() : null,
       failureReason: row.failure_reason,
+      costUsd: costMicrodollarsToUsd(cost?.costMicrodollars ?? 0),
+      modelCalls: cost?.calls ?? 0,
     };
   });
 }
@@ -545,6 +569,11 @@ export interface MovementRunInspection {
    *  emissions, AI calls, field misses — why the firing wrote what it wrote. */
   trace: unknown[];
   errors: Array<{ tgId?: string; nodeId?: string | null; message: string }>;
+  /** Model-call cost this run incurred, in USD to 4 decimal places — 0 when
+   *  it made no model calls. Rolled up from `llm_usage`. */
+  costUsd: number;
+  /** How many model calls this run made. */
+  modelCalls: number;
   /** What a PARKED run is waiting on, in plain language — one line per live
    *  await/timer leaf (P22). Empty for a run that is not waiting on anything an
    *  author chose (running / finished / on a spending-limit hold). */
@@ -679,6 +708,10 @@ export async function inspectMovementRun(input: {
   const awaiting =
     row.status === 'parked' ? await describeRunAwaits(row.id as unknown as TriggerRunId) : [];
 
+  const cost = (await runCostSummaries([row.id as unknown as TriggerRunId])).get(
+    row.id as unknown as string,
+  );
+
   return {
     runId: row.id as unknown as string,
     status: row.status,
@@ -689,6 +722,8 @@ export async function inspectMovementRun(input: {
     finishedAt: row.completed_at ? row.completed_at.toISOString() : null,
     failedAt: row.failed_at ? row.failed_at.toISOString() : null,
     failureReason: row.failure_reason,
+    costUsd: costMicrodollarsToUsd(cost?.costMicrodollars ?? 0),
+    modelCalls: cost?.calls ?? 0,
     sourceEvent: row.trigger_payload,
     executedVersion: await describeExecutedVersion({ versionId: row.movement_version_id }),
     changedFields: row.changed_fields,
