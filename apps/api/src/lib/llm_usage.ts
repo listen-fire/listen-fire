@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { sql } from 'kysely';
+
 import { getQb } from './kysely';
 import { logger } from '../services/logger';
 import type { Resolved } from './models/map';
@@ -265,6 +267,55 @@ async function recordLlmUsage(options: RecordUsageOptions): Promise<void> {
   }
 }
 
+// -- Per-run rollup --
+
+/** One run's model-cost account, rolled up from its `llm_usage` rows. */
+interface RunCostSummary {
+  runId: string;
+  costMicrodollars: number;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * Roll up `llm_usage` for a set of runs, in one grouped query — the run
+ * history view shows every run's cost, and fetching that per row would be
+ * N+1 against a table that already carries `trigger_run_id`. Runs with no
+ * usage rows (nothing billed — no model calls, or calls predating the
+ * `trigger_run_id` column) are simply absent from the returned map; callers
+ * treat a miss as zero.
+ */
+async function runCostSummaries(runIds: TriggerRunId[]): Promise<Map<string, RunCostSummary>> {
+  if (runIds.length === 0) return new Map();
+
+  const rows = await getQb(['llm_usage'])
+    .selectFrom('llm_usage')
+    .select([
+      'trigger_run_id',
+      sql<number>`count(*)::int`.as('calls'),
+      sql<number>`sum(input_tokens)::int`.as('input_tokens'),
+      sql<number>`sum(output_tokens)::int`.as('output_tokens'),
+      sql<number>`sum(cost_microdollars)::int`.as('cost_microdollars'),
+    ])
+    .where('trigger_run_id', 'in', runIds)
+    .groupBy('trigger_run_id')
+    .execute();
+
+  const result = new Map<string, RunCostSummary>();
+  for (const row of rows) {
+    if (!row.trigger_run_id) continue;
+    result.set(row.trigger_run_id, {
+      runId: row.trigger_run_id,
+      costMicrodollars: row.cost_microdollars,
+      calls: row.calls,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+    });
+  }
+  return result;
+}
+
 /** Which runs' usage lines to unlink: an explicit set, or every run of a team. */
 type LlmUsageRunScope = { runIds: TriggerRunId[] } | { teamId: TeamId };
 
@@ -300,6 +351,7 @@ export {
   currentLlmUsageContext,
   recordLlmUsage,
   releaseLlmUsageRunReferences,
+  runCostSummaries,
   runFields,
 };
-export type { RecordUsageOptions };
+export type { RecordUsageOptions, RunCostSummary };
