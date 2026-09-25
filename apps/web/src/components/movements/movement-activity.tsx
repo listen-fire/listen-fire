@@ -25,6 +25,7 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { Badge, EmptyState } from "@/components/ui";
 import { RecentActivityDetail } from "@/components/automations/recent-activity-detail";
 import { laneShortForm } from "@/lib/trigger-name";
+import { formatRunCostUsd } from "@/lib/run-cost";
 
 type MovementRun = RouterOutputs["views"]["movement"]["runs"][number];
 
@@ -264,6 +265,12 @@ export function MovementActivity({ movementId }: { movementId: string }) {
                         <Badge tone={outcomeTone(outcome)}>
                           {outcomeLabel(outcome)}
                         </Badge>
+                      </span>
+                      <span
+                        className="mt-0.5 w-14 shrink-0 text-right text-[12px] tabular-nums text-gray-500"
+                        title="Model-call cost"
+                      >
+                        {formatRunCostUsd(run.costMicrodollars)}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-1.5">

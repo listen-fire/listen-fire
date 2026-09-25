@@ -10,6 +10,7 @@
 import { useState } from "react";
 
 import { trpc } from "@/lib/trpc";
+import { formatRunCostUsd } from "@/lib/run-cost";
 
 interface AppliedPlan {
   nodeId: string;
@@ -407,6 +408,16 @@ export function RecentActivityDetail({ runId }: { runId: string }) {
               {data.executedVersion.currentNumber})
             </span>
           )}
+        </div>
+      )}
+
+      {/* Model-call cost — omitted entirely for a run that made none, rather
+          than showing a zero that would read as "free". */}
+      {data.calls > 0 && (
+        <div className="text-[11px] text-gray-400">
+          {formatRunCostUsd(data.costMicrodollars)} · {data.calls}{" "}
+          {data.calls === 1 ? "model call" : "model calls"} ·{" "}
+          {data.inputTokens.toLocaleString()} in / {data.outputTokens.toLocaleString()} out tokens
         </div>
       )}
 

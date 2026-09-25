@@ -1237,6 +1237,12 @@ export type MovementRunItem = {
     summary: string;
     /** The lane (trigger name) that produced this run. */
     lane: string;
+    /** Model-call cost this run incurred, rolled up from `llm_usage` — zero
+     *  when the run made no model calls (or ran before cost tracking). */
+    costMicrodollars: number;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
 };
 export type MovementEventItem = {
     id: string;
@@ -4819,6 +4825,10 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
             }, {
                 appliedActionPlans: unknown[];
                 executedVersion: ExecutedMovementVersion | null;
+                costMicrodollars: number;
+                calls: number;
+                inputTokens: number;
+                outputTokens: number;
                 id: TriggerRunId;
                 created_at: Date;
                 team_id: string;
