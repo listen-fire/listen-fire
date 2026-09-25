@@ -52,6 +52,10 @@ Migrations run as the one-shot `migrate` service, to completion, **before** the 
 
 Migrations are forward-only and append-only from `v0.1.0`. A published release never edits or removes a migration an earlier release applied, so the ledger of a running installation is always a prefix of the new version's, and applying the difference is the whole of the schema change.
 
+## Disk
+
+Images live on the boot disk — under containerd's own root by default, not just Docker's — so a small boot disk fills after two or three api versions (the api image alone is around 4GB), and a pull that runs out of space half way fails silently and leaves the installation on the old version. `up.sh` guards both ends of that: it refuses to start when the filesystem holding the image store has less than roughly twice the api image free, naming the path and the free and required GB, and — once the new version is healthy — it prunes every `ghcr.io/listen-fire/{api,web,admin}` tag except the one just started and one recorded rollback target, plus dangling layers. `--no-space-check` skips the refusal (for a machine this script cannot see the disk of, or an operator who has already freed space); `--keep-images` skips the pruning. Running `docker compose pull && docker compose up -d` yourself instead of `up.sh` gets neither — prune by hand with `docker images` and `docker rmi`.
+
 ## 4. Check
 
 ```bash

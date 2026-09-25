@@ -656,6 +656,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `AWS_S3_FORCE_PATH_STYLE` | MinIO and Ceph | on for the bundled store, off for yours — and only the literal lowercase `true` turns it on |
 | `ALLOW_UNSIGNED_WEBHOOKS` | no | inbound doors stay fail-closed. `true` only on a machine nothing else can reach; ignored in production |
 | `SENTRY_DSN` | no | no error reporting |
+| `LISTEN_FIRE_PREVIOUS_VERSION` | no | written by `up.sh`, not set by hand — the one rollback target its post-success image pruning keeps alongside the tag just started. See UPGRADING.md, "Disk" |
 
 The per-system credentials for Slack, Attio, Airtable, Google, Dropbox, Telegram, WhatsApp and Twilio are listed with what they do in "Registering your own third-party apps". Every one is optional, and an unset OAuth pair means that system is simply not offered — except Attio's, where it means Attio connects with a pasted access token instead. Gmail rides the Google pair above by default, takes its own `GMAIL_OAUTH_CLIENT_ID` / `_SECRET` when you set one, and under `GMAIL_CONNECT_METHOD=delegated` uses the deployment's service account instead. Its own variables are `GMAIL_CONNECT_METHOD`, `GMAIL_SEND_ENABLED` and `GMAIL_MAILBOX_ALLOWLIST` — see "Gmail" above.
 
