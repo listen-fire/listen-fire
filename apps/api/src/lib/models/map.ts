@@ -113,7 +113,7 @@ export function providerServes(provider: Provider, capability: Capability): bool
 }
 
 /** What an operator sets so `provider` can be called at all. */
-function credentialsFor(provider: Provider, env: NodeJS.ProcessEnv): string {
+export function credentialsFor(provider: Provider, env: NodeJS.ProcessEnv): string {
   switch (provider) {
     case 'anthropic':
       return 'ANTHROPIC_API_KEY';
@@ -220,5 +220,49 @@ export function assertCallable(resolved: Resolved, env: NodeJS.ProcessEnv = proc
       `${resolved.provider}, which has no credentials here. Set ` +
       `${credentialsFor(resolved.provider, env)}, or add a line to MODEL_MAP such as ` +
       `"${resolved.preferred}": "<provider>/<wire model>".`,
+  );
+}
+
+/** One name the process calls without being asked — nobody chose it, it's a
+ *  default — and whether wherever it resolves to can actually be called. */
+export interface DefaultModelUse {
+  resolved: Resolved;
+  /** Not simply `providerCredentialsPresent(resolved.provider)`: a caller may
+   *  have its own fallback credential (knowledge's own key answers for
+   *  anthropic too), so the caller says whether it is configured rather than
+   *  this function guessing from the provider alone. */
+  configured: boolean;
+}
+
+/**
+ * Boot-time, log-and-continue advisory: unlike {@link assertModelMapConfigured}
+ * and {@link assertCallable}, this never throws — a deployment with no model
+ * key at all is a supported, degrading-loudly-at-the-point-of-use state, not a
+ * boot failure. It exists only so that state is visible at boot rather than at
+ * the first failed call.
+ *
+ * "Is any vendor key set anywhere" is the wrong question — MODEL_MAP can route
+ * every name this process actually calls around a missing one. The right
+ * question is whether the handful of names nobody explicitly configured
+ * (a default agent model, a product's own default chat model) resolve
+ * somewhere callable.
+ */
+export function modelKeyWarning(
+  uses: readonly DefaultModelUse[],
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const unconfigured = new Map<Provider, Resolved>();
+  for (const { resolved, configured } of uses) {
+    if (!configured) unconfigured.set(resolved.provider, resolved);
+  }
+  if (unconfigured.size === 0) return null;
+
+  const detail = [...unconfigured.values()]
+    .map((resolved) => `${resolved.provider} (set ${credentialsFor(resolved.provider, env)})`)
+    .join('; ');
+  return (
+    `No model key is configured for ${detail}. Agents, extraction and property arbitration will fail ` +
+    'when asked for. Set the listed credentials, or send the affected models to a configured provider ' +
+    'via MODEL_MAP.'
   );
 }

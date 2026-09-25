@@ -34,8 +34,8 @@ process.on('unhandledRejection', (reason, promise) => {
   });
 });
 import { requireEnv } from './lib/utils/environment';
-import { assertModelMapConfigured } from './lib/models/map';
-import { assertKnowledgeLlmModelConfigured } from './lib/knowledge/llm';
+import { assertModelMapConfigured, modelKeyWarning, providerCredentialsPresent, resolveModel } from './lib/models/map';
+import { assertKnowledgeLlmModelConfigured, isKnowledgeLlmConfigured, knowledgeLlmModel } from './lib/knowledge/llm';
 import { assertJevConfigured } from './lib/jev/client';
 import { healthCheck, workersHealthCheck } from './lib/middleware/health_check';
 import { rootHandler } from './lib/middleware/root_handler';
@@ -241,14 +241,17 @@ async function main() {
   // A keyless deployment is supported and boots on purpose — the platform
   // client reads its key on first call rather than on import, exactly so that
   // it can. What is not supported is finding out only when the first agent
-  // request fails, so the process says it at boot as well. Any ONE of these
-  // three is enough, which is why the check is their disjunction.
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.KNOWLEDGE_LLM_API_KEY && !process.env.OPENAI_API_KEY) {
-    logger.warn(
-      'No model key is configured. Agents, extraction and property arbitration will fail when asked for. ' +
-        'Set any one of ANTHROPIC_API_KEY, KNOWLEDGE_LLM_API_KEY or OPENAI_API_KEY.',
-    );
-  }
+  // request fails, so the process says it at boot as well. This is not "is any
+  // vendor key set anywhere" — MODEL_MAP can route every model this process
+  // actually calls around a missing one — it is whether the default agent
+  // model and knowledge's own chat model resolve to a provider with
+  // credentials here.
+  const defaultAgentModel = resolveModel('claude-sonnet-5');
+  const bootModelKeyWarning = modelKeyWarning([
+    { resolved: defaultAgentModel, configured: providerCredentialsPresent(defaultAgentModel.provider) },
+    { resolved: resolveModel(knowledgeLlmModel()), configured: isKnowledgeLlmConfigured() },
+  ]);
+  if (bootModelKeyWarning) logger.warn(bootModelKeyWarning);
   // Each product serves its own MCP connector, and only where it runs.
   mountMcpConnectors(app);
   Sentry.setupExpressErrorHandler(app);

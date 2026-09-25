@@ -1,11 +1,13 @@
 import {
   assertCallable,
   assertModelMapConfigured,
+  modelKeyWarning,
   parseModelMap,
   providerCredentialsPresent,
   providerServes,
   resolveModel,
 } from '../map';
+import type { DefaultModelUse } from '../map';
 
 const GOOGLE = {
   GOOGLE_PRIVATE_KEY: 'pk',
@@ -238,5 +240,44 @@ describe('boot validation of embedding widths', () => {
         MODEL_MAP: mapOf({ 'text-embedding-3-large': 'gemini/text-embedding-005' }),
       }),
     ).toThrow(/MODEL_MAP\["text-embedding-3-large"\] is "gemini\/text-embedding-005", an embedding model the gemini provider does not list/);
+  });
+});
+
+describe('the boot warning for models nobody configured', () => {
+  // Mirrors how server.ts builds each use: resolve the name, then ask the
+  // provider (not the raw vendor keys) whether it is configured.
+  const use = (name: 'claude-sonnet-5' | 'claude-opus-5', env: NodeJS.ProcessEnv): DefaultModelUse => {
+    const resolved = resolveModel(name, env);
+    return { resolved, configured: providerCredentialsPresent(resolved.provider, env) };
+  };
+
+  it('stays quiet when a MODEL_MAP sends everything to a Gemini that has its service account', () => {
+    const env = {
+      ...GOOGLE,
+      MODEL_MAP: mapOf({ 'claude-sonnet-5': 'gemini/gemini-3.8-flash', 'claude-opus-5': 'gemini/gemini-3.8-flash' }),
+    };
+    expect(modelKeyWarning([use('claude-sonnet-5', env), use('claude-opus-5', env)], env)).toBeNull();
+  });
+
+  it('warns naming anthropic when nothing at all is set', () => {
+    const env = {};
+    const warning = modelKeyWarning([use('claude-sonnet-5', env), use('claude-opus-5', env)], env);
+    expect(warning).toMatch(/anthropic/);
+    expect(warning).toMatch(/ANTHROPIC_API_KEY/);
+    expect(warning).toMatch(/MODEL_MAP/);
+  });
+
+  it('warns naming openai when the default agent model is mapped there without a key', () => {
+    const env = { MODEL_MAP: mapOf({ 'claude-sonnet-5': 'openai/gpt-5' }), ANTHROPIC_API_KEY: 'k' };
+    const warning = modelKeyWarning([use('claude-sonnet-5', env), use('claude-opus-5', env)], env);
+    expect(warning).toMatch(/openai/);
+    expect(warning).toMatch(/OPENAI_API_KEY/);
+    expect(warning).not.toMatch(/anthropic/);
+  });
+
+  it('mentions every unconfigured provider once, not once per use', () => {
+    const env = {};
+    const warning = modelKeyWarning([use('claude-sonnet-5', env), use('claude-opus-5', env)], env);
+    expect(warning?.match(/anthropic/g)).toHaveLength(1);
   });
 });

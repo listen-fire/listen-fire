@@ -43,7 +43,7 @@ export function knowledgeLlmKey(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 /** Overridable because the operator paying for the calls should get to choose. */
-function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ChatModelName {
+export function knowledgeLlmModel(env: NodeJS.ProcessEnv = process.env): ChatModelName {
   const raw = env.KNOWLEDGE_LLM_MODEL;
   return raw ? parseChatModelName(raw, 'KNOWLEDGE_LLM_MODEL') : 'claude-opus-5';
 }
