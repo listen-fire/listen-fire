@@ -1,11 +1,16 @@
 // Gmail HTTP transport — the one owner of the wire shape for the movements
 // adapter (services/translation_graph/adapters/gmail) and its poll source.
 //
-// The mailbox is reached by DELEGATION: the deployment's Google service account
-// acts as the connected address, which a Workspace admin grants once against the
-// account's client id. There is no per-user sign-in and no consent screen, so
-// the stored credential is just the address (plus the dev loop's fake base URL);
-// everything secret lives in the deployment's own environment.
+// The mailbox is reached one of two ways, and the stored credential says which
+// (see `connect_method.ts` for the choice and `app_id.ts` for how a row is told
+// apart without decrypting it):
+//
+//   OAUTH — somebody signed in as the mailbox, and the credential carries that
+//     sign-in's refresh token plus the scopes Google granted. Google confines
+//     the token to that one address.
+//   DELEGATED — the deployment's service account acts as the address, granted
+//     once by a Workspace admin. The credential is then just the address:
+//     everything secret lives in the deployment's own environment.
 //
 // Every reply is parsed here with zod. The googleapis client types its responses
 // as "every field optional", which is a claim about the SDK's surface rather
@@ -24,6 +29,14 @@ import {
   isGoogleServiceAccountConfigured,
 } from '../../lib/google_cloud';
 import { neverAsAny } from '../../lib/utils/types';
+import {
+  GMAIL_REFRESH_TOKEN_REFUSED_MESSAGE,
+  GmailRefreshTokenError,
+  gmailTokenClient,
+  redeemGmailRefreshToken,
+  type GmailTokens,
+} from './authClient';
+import type { GmailConnectMethod } from './connect_method';
 
 /** The scopes a connected mailbox is reached through — read and send, nothing
  *  else. Exported so `describe` can name them without a second spelling. */
@@ -47,16 +60,54 @@ const SELF = 'me';
 export const GMAIL_MAX_PAGE = 500;
 
 /**
- * Stored Gmail credential. One field the user typed — the mailbox address —
+ * Stored DELEGATED credential. One field the user typed — the mailbox address —
  * plus the dev loop's injected base URL. No token, because there is none: the
  * deployment's service account is the whole authority, and this row only names
  * whose mail it acts on.
  */
-export const gmailCredsParser = z.object({
+export const gmailDelegatedCredsParser = z.object({
   mailbox: z.string().email(),
   baseUrl: z.string().url().optional(),
 });
+export type GmailDelegatedCredentials = z.infer<typeof gmailDelegatedCredsParser>;
+
+/**
+ * Stored OAUTH credential — the sign-in's tokens, the address that signed in
+ * (read from `users.getProfile` at connect time, never typed), and the scopes
+ * Google said it granted.
+ *
+ * The granted scopes are stored because they are the only way to know a send
+ * will be refused BEFORE asking Google to send. Google is still the authority,
+ * and the classification of a refused call stays the backstop — but a message
+ * that was never going to leave should fail saying so, not after a round trip.
+ */
+export const gmailOAuthCredsParser = z.object({
+  mailbox: z.string().email(),
+  accessToken: z.string(),
+  refreshToken: z.string(),
+  expiresAt: z.number(),
+  grantedScopes: z.array(z.string()),
+  baseUrl: z.string().url().optional(),
+});
+export type GmailOAuthCredentials = z.infer<typeof gmailOAuthCredsParser>;
+
+/** Either stored shape. Ordered so a full OAuth payload is never read as a
+ *  delegated one that happens to carry extra keys. */
+export const gmailCredsParser = z.union([gmailOAuthCredsParser, gmailDelegatedCredsParser]);
 export type GmailCredentials = z.infer<typeof gmailCredsParser>;
+
+/** Which shape a payload is, STRUCTURALLY — a credential that carries a refresh
+ *  token is one somebody signed in for, whatever any column says. */
+export function isGmailOAuthCredentials(
+  credentials: GmailCredentials,
+): credentials is GmailOAuthCredentials {
+  return 'refreshToken' in credentials;
+}
+
+/** The connect method a stored credential belongs to. */
+export function gmailMethodOf(credentials: GmailCredentials): GmailConnectMethod {
+  return isGmailOAuthCredentials(credentials) ? 'oauth' : 'delegated';
+}
 
 // ── Wire shapes ─────────────────────────────────────────────────────────────
 
@@ -254,16 +305,35 @@ export function classifyGmailError(err: unknown, operation: string): GmailApiErr
   return new GmailApiError('other', status, operation, detail);
 }
 
-/** What a deployment reads when a send fails because its delegation grant
- *  covers `gmail.readonly` but not `gmail.send`. Names the mailbox and the
- *  scope, and says reads are unaffected — the one thing a "send failed"
- *  message must not do here is suggest the mailbox is disconnected. */
-export function gmailMissingSendScopeMessage(mailbox: string): string {
-  return (
-    `Google's domain wide delegation for ${mailbox} does not include ` +
-    `${GMAIL_SEND_SCOPE}, so this mailbox cannot send mail. Reads still work — ` +
-    'ask a Workspace admin to add the send scope alongside the read one.'
-  );
+/** What a deployment reads when a send fails because the mailbox holds
+ *  `gmail.readonly` and not `gmail.send`. Names the mailbox and the scope, and
+ *  says reads are unaffected — the one thing a "send failed" message must not
+ *  do here is suggest the mailbox is disconnected. The remedy differs by
+ *  method: a sign-in asks for the scope only when the installation enabled
+ *  sending, while a delegated grant is the admin's to widen. */
+export function gmailMissingSendScopeMessage(
+  mailbox: string,
+  method: GmailConnectMethod = 'delegated',
+): string {
+  const head =
+    `${mailbox} does not hold ${GMAIL_SEND_SCOPE}, so this mailbox cannot send ` +
+    'mail. Reads still work — ';
+  switch (method) {
+    case 'oauth':
+      return (
+        head +
+        'the sign-in never asked for it. Set GMAIL_SEND_ENABLED=true on this ' +
+        'installation and reconnect the mailbox.'
+      );
+    case 'delegated':
+      return (
+        head +
+        "ask a Workspace admin to add the send scope alongside the read one on " +
+        "this deployment's domain wide delegation."
+      );
+    default:
+      return head + String(neverAsAny(method));
+  }
 }
 
 // ── The client ──────────────────────────────────────────────────────────────
@@ -282,17 +352,51 @@ export class GmailApiClient {
   /** Scoped to `gmail.readonly` — every call except the send. */
   private readonly readApi: gmail_v1.Gmail;
   /** Scoped to `gmail.send` — the send call ONLY, so it never depends on the
-   *  read scope having been granted, nor grants read access itself. */
+   *  read scope having been granted, nor grants read access itself. Under the
+   *  OAuth shape it is the SAME client as the read one: one sign-in produced
+   *  one token carrying whatever scopes were granted, and there is no second
+   *  token to narrow. */
   private readonly sendApi: gmail_v1.Gmail;
 
-  constructor(readonly credentials: GmailCredentials) {
+  constructor(
+    readonly credentials: GmailCredentials,
+    private readonly options: { credentialsId?: string } = {},
+  ) {
     const fake = credentials.baseUrl;
-    this.readApi = GmailApiClient.buildApi(credentials, fake, GMAIL_READ_SCOPES);
-    this.sendApi = GmailApiClient.buildApi(credentials, fake, GMAIL_SEND_SCOPES);
+    if (isGmailOAuthCredentials(credentials)) {
+      const api = this.buildTokenApi(credentials, fake);
+      this.readApi = api;
+      this.sendApi = api;
+    } else {
+      this.readApi = GmailApiClient.buildDelegatedApi(credentials, fake, GMAIL_READ_SCOPES);
+      this.sendApi = GmailApiClient.buildDelegatedApi(credentials, fake, GMAIL_SEND_SCOPES);
+    }
   }
 
-  private static buildApi(
-    credentials: GmailCredentials,
+  private buildTokenApi(
+    credentials: GmailOAuthCredentials,
+    fake: string | undefined,
+  ): gmail_v1.Gmail {
+    const tokens: GmailTokens = {
+      accessToken: credentials.accessToken,
+      refreshToken: credentials.refreshToken,
+      expiresAt: credentials.expiresAt,
+    };
+    return google.gmail({
+      version: 'v1',
+      auth: gmailTokenClient({
+        tokens,
+        ...(this.options.credentialsId !== undefined
+          ? { credentialsId: this.options.credentialsId }
+          : {}),
+        ...(fake !== undefined ? { fakeBaseUrl: fake } : {}),
+      }),
+      ...(fake ? { rootUrl: fake } : {}),
+    });
+  }
+
+  private static buildDelegatedApi(
+    credentials: GmailDelegatedCredentials,
     fake: string | undefined,
     scopes: readonly string[],
   ): gmail_v1.Gmail {
@@ -317,7 +421,16 @@ export class GmailApiClient {
     return schema.parse(payload);
   }
 
-  /** The mailbox's own profile — the connect-time proof that the delegation
+  /** Whether this credential may send. Under the OAuth shape the granted
+   *  scopes say so outright; under delegation nothing local knows, so the
+   *  answer is "ask Google" — which is what the send then does. */
+  canSend(): boolean {
+    return isGmailOAuthCredentials(this.credentials)
+      ? this.credentials.grantedScopes.includes(GMAIL_SEND_SCOPE)
+      : true;
+  }
+
+  /** The mailbox's own profile — the connect-time proof that the connection
    *  works AND the source of the first poll's change marker. */
   async getProfile(): Promise<GmailProfile> {
     return this.call('users.getProfile', gmailProfileSchema, () =>
@@ -408,6 +521,19 @@ export class GmailApiClient {
    * rather than only in the headers.
    */
   async sendMessage(input: { raw: string; threadId?: string }): Promise<GmailSentMessage> {
+    // A sign-in that was never granted the send scope is a fact we already
+    // hold, so it is answered here rather than by sending Google a message it
+    // will refuse. Google's own refusal stays the backstop — this only moves
+    // the failure to where the reason is known.
+    if (isGmailOAuthCredentials(this.credentials) && !this.canSend()) {
+      throw new GmailApiError(
+        'missing_send_scope',
+        undefined,
+        'users.messages.send',
+        `the sign-in for ${this.credentials.mailbox} granted ` +
+          `${this.credentials.grantedScopes.join(', ') || 'no scopes'}`,
+      );
+    }
     return this.call('users.messages.send', sentMessageSchema, () =>
       this.sendApi.users.messages.send({
         userId: SELF,
@@ -436,6 +562,10 @@ export class GmailApiClient {
 
 // ── Connect-time validation ─────────────────────────────────────────────────
 
+/** What the connect page tells the user when a sign-in produced a mailbox this
+ *  installation will not act as. */
+export const GMAIL_OAUTH_NOT_ALLOWED_PREFIX = 'That Google account cannot be connected here. ';
+
 /** What the connect form tells the user when the mailbox will not answer. */
 export const GMAIL_DELEGATION_MESSAGE =
   'Google refused to act as this mailbox. A Workspace admin has to grant this ' +
@@ -450,31 +580,50 @@ export const GMAIL_UNCONFIGURED_MESSAGE =
   'This server has no Google service account configured, so it cannot act as a ' +
   'mailbox at all.';
 
-/** The env var naming this installation's ONE authority over which mailboxes
- *  the Gmail connector may touch. */
+/** The env var naming which mailboxes the Gmail connector may touch. */
 const ALLOWLIST_VAR = 'GMAIL_MAILBOX_ALLOWLIST';
 
 /**
  * The ONE check every enforcement site shares: connect-time validation, the
- * in-app modal's save path, and the delegated client built at use time
- * (`resolveGmailClient`). Google's own delegation has no per-mailbox limit —
- * this installation's list is the whole of it — so all three read the same
- * verdict rather than each re-deriving it.
+ * in-app modal's save path, the OAuth callback, and the client built at use
+ * time (`resolveGmailClient`). All of them read the same verdict rather than
+ * each re-deriving it.
+ *
+ * Set, the list is policy and both methods obey it — a mailbox this
+ * installation has not named is refused however it was connected.
+ *
+ * UNSET, the answer differs by method, because the question is who else is
+ * enforcing anything:
+ *   oauth — Google is. A refresh token from signing in as one address works for
+ *     that address and no other, so an unset list restricts nothing that was
+ *     not already restricted, and demanding one would only stop a deployment
+ *     from connecting a mailbox it had every right to.
+ *   delegated — nobody is. Once a Workspace admin grants the service account
+ *     delegation it can act as EVERY mailbox in the Workspace, so an unset list
+ *     defaulting to "all of them" would be a guarantee that silently is not
+ *     one. Unset therefore refuses.
  */
 export function checkGmailMailboxAllowed(
   mailbox: string,
-  env: NodeJS.ProcessEnv = process.env,
+  options: { method: GmailConnectMethod; env?: NodeJS.ProcessEnv },
 ): { ok: true } | { ok: false; message: string } {
-  const allowlist = gmailMailboxAllowlist(env);
+  const allowlist = gmailMailboxAllowlist(options.env ?? process.env);
   if (allowlist.has(mailbox.trim().toLowerCase())) return { ok: true };
   if (allowlist.size === 0) {
-    return {
-      ok: false,
-      message:
-        `${ALLOWLIST_VAR} is not set, so this installation cannot connect or use ` +
-        'any Gmail mailbox. Set it to a comma separated list of the addresses ' +
-        'automations may act as, for example ops@example.com,deals@example.com.',
-    };
+    switch (options.method) {
+      case 'oauth':
+        return { ok: true };
+      case 'delegated':
+        return {
+          ok: false,
+          message:
+            `${ALLOWLIST_VAR} is not set, so this installation cannot connect or use ` +
+            'any Gmail mailbox. Set it to a comma separated list of the addresses ' +
+            'automations may act as, for example ops@example.com,deals@example.com.',
+        };
+      default:
+        return { ok: false, message: String(neverAsAny(options.method)) };
+    }
   }
   return {
     ok: false,
@@ -483,18 +632,112 @@ export function checkGmailMailboxAllowed(
 }
 
 /**
+ * What the paste-a-refresh-token form accepts. One field, and it is a secret:
+ * a refresh token IS the mailbox, so it is never echoed back onto the form and
+ * never reaches a log line.
+ */
+export const gmailRefreshTokenCredsParser = z.object({
+  refreshToken: z.string().min(1),
+  baseUrl: z.string().url().optional(),
+});
+export type GmailRefreshTokenEntry = z.infer<typeof gmailRefreshTokenCredsParser>;
+
+/**
+ * Connect a mailbox from a refresh token somebody obtained themselves — a
+ * Workspace admin who would rather authorise the mailbox than hand a sign-in to
+ * whoever is at the keyboard.
+ *
+ * It is an ordinary connect, not a way around one: the token is redeemed with
+ * the same OAuth client a sign-in would have used, the mailbox is read off
+ * `users.getProfile` rather than typed, the granted scopes come from what the
+ * exchange reported, and the allowlist applies exactly as it does everywhere
+ * else. What it stores is the SAME shape the callback stores, so nothing
+ * downstream can tell the two apart — which is the point.
+ */
+export async function connectGmailByRefreshToken(input: {
+  refreshToken: string;
+  /** The dev loop's fake Google, when one is in play. Never stored: the
+   *  resolve path re-injects it per team. */
+  baseUrl?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ ok: true; credentials: GmailOAuthCredentials } | { ok: false; message: string }> {
+  let redeemed;
+  try {
+    redeemed = await redeemGmailRefreshToken({
+      refreshToken: input.refreshToken,
+      ...(input.baseUrl !== undefined ? { fakeBaseUrl: input.baseUrl } : {}),
+      ...(input.env !== undefined ? { env: input.env } : {}),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof GmailRefreshTokenError ? err.message : String(err),
+    };
+  }
+
+  const probe = new GmailApiClient({
+    // A placeholder only until the profile answers — every stored copy below
+    // carries the address Google named.
+    mailbox: 'pending@invalid.example',
+    accessToken: redeemed.accessToken,
+    refreshToken: redeemed.refreshToken,
+    expiresAt: redeemed.expiresAt,
+    grantedScopes: redeemed.grantedScopes,
+    ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+  });
+
+  let mailbox: string;
+  try {
+    mailbox = (await probe.getProfile()).emailAddress;
+  } catch (err) {
+    const failure = classifyGmailError(err, 'users.getProfile');
+    return {
+      ok: false,
+      message:
+        failure.failure === 'delegation'
+          ? GMAIL_REFRESH_TOKEN_REFUSED_MESSAGE
+          : `Google could not be reached: ${failure.message}`,
+    };
+  }
+
+  const allowed = checkGmailMailboxAllowed(mailbox, {
+    method: 'oauth',
+    ...(input.env !== undefined ? { env: input.env } : {}),
+  });
+  if (!allowed.ok) return allowed;
+
+  return {
+    ok: true,
+    credentials: {
+      mailbox,
+      accessToken: redeemed.accessToken,
+      refreshToken: redeemed.refreshToken,
+      expiresAt: redeemed.expiresAt,
+      grantedScopes: redeemed.grantedScopes,
+    },
+  };
+}
+
+/**
  * Prove a mailbox before storing it. First the allowlist — a mailbox this
  * installation has not named is refused before anything asks Google — then
- * one call as the mailbox: either Google refuses the impersonation, or it
- * does not and Gmail says whether the address owns an inbox. Anything else is
- * reported as itself rather than guessed at.
+ * one call as the mailbox: either Google refuses to act as it, or it does not
+ * and Gmail says whether the address owns an inbox. Anything else is reported
+ * as itself rather than guessed at.
  */
 export async function validateGmailMailbox(
   credentials: GmailCredentials,
 ): Promise<{ ok: true; profile: GmailProfile } | { ok: false; message: string }> {
-  const allowed = checkGmailMailboxAllowed(credentials.mailbox);
+  const method = gmailMethodOf(credentials);
+  const allowed = checkGmailMailboxAllowed(credentials.mailbox, { method });
   if (!allowed.ok) return allowed;
-  if (credentials.baseUrl === undefined && !isGoogleServiceAccountConfigured()) {
+  // Only delegation needs the deployment's own service account; a sign-in
+  // carries its own authority.
+  if (
+    method === 'delegated' &&
+    credentials.baseUrl === undefined &&
+    !isGoogleServiceAccountConfigured()
+  ) {
     return { ok: false, message: GMAIL_UNCONFIGURED_MESSAGE };
   }
   try {

@@ -199,6 +199,12 @@ const submitHandler: RequestHandler = async (req, res) => {
       res.status(400).type('html').send(keyEntryPage(row, token, { error: verdict.message }));
       return;
     }
+    // A check that had to reach the system may hand back what it learned there
+    // — Gmail's pasted refresh token comes back as the mailbox it belongs to
+    // and the scopes it holds. That, not what was typed, is the credential.
+    if (verdict.credentials !== undefined) {
+      credentials = verdict.credentials;
+    }
   }
 
   // Consume FIRST (single-use, atomic) so a replayed submit can't double-persist.

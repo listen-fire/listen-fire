@@ -54,15 +54,30 @@ import {
 
 const ALLOWED_ENV = { GMAIL_MAILBOX_ALLOWLIST: 'deals@example.com,ops@example.com' };
 
+/** A signed-in mailbox's stored payload. `grantedScopes` is the knob under
+ *  test: it is what the send path consults before asking Google anything. */
+function oauthCredentials(grantedScopes: string[] = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE]) {
+  return {
+    mailbox: 'deals@example.com',
+    accessToken: 'access-token',
+    refreshToken: 'refresh-token',
+    expiresAt: 4102444800000,
+    grantedScopes,
+  };
+}
+
 beforeEach(() => {
   delegatedAuthCalls.length = 0;
   built.length = 0;
   gmailFactory.mockClear();
 });
 
-describe('checkGmailMailboxAllowed', () => {
-  it('names the variable and refuses everything when it is unset', () => {
-    const verdict = checkGmailMailboxAllowed('deals@example.com', {});
+describe('checkGmailMailboxAllowed — unset is a different answer per method', () => {
+  it('refuses everything under DELEGATION when the list is unset, naming the variable', () => {
+    const verdict = checkGmailMailboxAllowed('deals@example.com', {
+      method: 'delegated',
+      env: {},
+    });
     expect(verdict).toEqual({
       ok: false,
       message: expect.stringContaining('GMAIL_MAILBOX_ALLOWLIST'),
@@ -72,28 +87,49 @@ describe('checkGmailMailboxAllowed', () => {
     }
   });
 
-  it('treats an empty string the same as unset', () => {
-    expect(checkGmailMailboxAllowed('deals@example.com', { GMAIL_MAILBOX_ALLOWLIST: '' })).toEqual(
-      { ok: false, message: expect.stringContaining('GMAIL_MAILBOX_ALLOWLIST') },
-    );
+  it('allows any signed-in mailbox under OAUTH when the list is unset — Google draws that line', () => {
+    expect(
+      checkGmailMailboxAllowed('anyone@example.com', { method: 'oauth', env: {} }),
+    ).toEqual({ ok: true });
   });
 
-  it('refuses a mailbox the list does not name, naming the mailbox and the variable', () => {
-    const verdict = checkGmailMailboxAllowed('someoneelse@example.com', ALLOWED_ENV);
-    expect(verdict.ok).toBe(false);
-    if (!verdict.ok) {
-      expect(verdict.message).toContain('someoneelse@example.com');
-      expect(verdict.message).toContain('GMAIL_MAILBOX_ALLOWLIST');
+  it('treats an empty string the same as unset, both ways round', () => {
+    const env = { GMAIL_MAILBOX_ALLOWLIST: '' };
+    expect(checkGmailMailboxAllowed('deals@example.com', { method: 'delegated', env })).toEqual({
+      ok: false,
+      message: expect.stringContaining('GMAIL_MAILBOX_ALLOWLIST'),
+    });
+    expect(checkGmailMailboxAllowed('deals@example.com', { method: 'oauth', env })).toEqual({
+      ok: true,
+    });
+  });
+
+  it('enforces a list that IS set for BOTH methods', () => {
+    for (const method of ['oauth', 'delegated'] as const) {
+      const verdict = checkGmailMailboxAllowed('someoneelse@example.com', {
+        method,
+        env: ALLOWED_ENV,
+      });
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) {
+        expect(verdict.message).toContain('someoneelse@example.com');
+        expect(verdict.message).toContain('GMAIL_MAILBOX_ALLOWLIST');
+      }
+      expect(checkGmailMailboxAllowed('deals@example.com', { method, env: ALLOWED_ENV })).toEqual({
+        ok: true,
+      });
     }
   });
 
   it('allows a listed mailbox regardless of case or surrounding whitespace', () => {
-    expect(checkGmailMailboxAllowed(' Deals@Example.com ', ALLOWED_ENV)).toEqual({ ok: true });
+    expect(
+      checkGmailMailboxAllowed(' Deals@Example.com ', { method: 'delegated', env: ALLOWED_ENV }),
+    ).toEqual({ ok: true });
   });
 });
 
 describe('validateGmailMailbox — the allowlist gate runs before Google is ever asked', () => {
-  it('refuses an unlisted mailbox without needing a service account configured', async () => {
+  it('refuses an unlisted DELEGATED mailbox without needing a service account configured', async () => {
     await expect(
       validateGmailMailbox({ mailbox: 'someoneelse@example.com' }),
     ).resolves.toEqual({
@@ -101,6 +137,19 @@ describe('validateGmailMailbox — the allowlist gate runs before Google is ever
       message: expect.stringContaining('GMAIL_MAILBOX_ALLOWLIST'),
     });
     expect(gmailFactory).not.toHaveBeenCalled();
+  });
+
+  it('reads an OAuth payload as the oauth method, so an unset list does not refuse it', async () => {
+    const prior = process.env.GMAIL_MAILBOX_ALLOWLIST;
+    delete process.env.GMAIL_MAILBOX_ALLOWLIST;
+    try {
+      await expect(validateGmailMailbox(oauthCredentials())).resolves.toEqual({
+        ok: true,
+        profile: { emailAddress: 'deals@example.com', historyId: '1' },
+      });
+    } finally {
+      if (prior !== undefined) process.env.GMAIL_MAILBOX_ALLOWLIST = prior;
+    }
   });
 });
 
@@ -155,5 +204,40 @@ describe('GmailApiClient — each call asks for only the scope it needs', () => 
 
     expect(sendApi.users.messages.send).toHaveBeenCalledTimes(1);
     expect(readApi.users.getProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('GmailApiClient — the signed-in shape', () => {
+  it('builds ONE token-bearing client rather than impersonating anybody', () => {
+    // eslint-disable-next-line no-new
+    new GmailApiClient(oauthCredentials());
+    expect(delegatedAuthCalls).toEqual([]);
+    expect(gmailFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a send from the GRANTED SCOPES, before Google is called at all', async () => {
+    const client = new GmailApiClient(oauthCredentials([GMAIL_READONLY_SCOPE]));
+    const [api] = built;
+
+    await expect(client.sendMessage({ raw: 'cmF3' })).rejects.toThrow(/missing_send_scope/);
+    expect(api.users.messages.send).not.toHaveBeenCalled();
+  });
+
+  it('sends when the sign-in did grant the send scope', async () => {
+    const client = new GmailApiClient(oauthCredentials());
+    const [api] = built;
+
+    await client.sendMessage({ raw: 'cmF3' });
+
+    expect(api.users.messages.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the remedy that fits the method', () => {
+    expect(gmailMissingSendScopeMessage('deals@example.com', 'oauth')).toMatch(
+      /GMAIL_SEND_ENABLED/,
+    );
+    expect(gmailMissingSendScopeMessage('deals@example.com', 'delegated')).toMatch(
+      /Workspace admin/,
+    );
   });
 });

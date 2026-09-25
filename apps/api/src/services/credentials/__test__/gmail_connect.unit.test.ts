@@ -14,10 +14,28 @@ import {
   classifyGmailError,
   validateGmailMailbox,
 } from '../../../adapters/gmail/apiClient';
-import { GMAIL_APP_ID, defaultAppIdForType, isDelegatedGmail } from '../app_id';
+import {
+  GMAIL_APP_ID,
+  defaultAppIdForType,
+  gmailCredentialShape,
+  isDelegatedGmail,
+} from '../app_id';
 import { connectFormSpecForType, isKeyEntryConnectable } from '../connect_form_spec';
 
 const validateMock = jest.mocked(validateGmailMailbox);
+
+const priorMethod = process.env.GMAIL_CONNECT_METHOD;
+
+/** The form belongs to the DELEGATED method, so every test of it says so —
+ *  under the default `oauth` method nobody types an address at all. */
+beforeEach(() => {
+  process.env.GMAIL_CONNECT_METHOD = 'delegated';
+});
+
+afterEach(() => {
+  if (priorMethod === undefined) delete process.env.GMAIL_CONNECT_METHOD;
+  else process.env.GMAIL_CONNECT_METHOD = priorMethod;
+});
 
 describe('the Gmail connect form', () => {
   it('is key-entry connectable with one visible, non-secret field', () => {
@@ -25,6 +43,14 @@ describe('the Gmail connect form', () => {
     const spec = connectFormSpecForType(ExternalServiceType.GOOGLE_GMAIL);
     expect(spec?.fields.map((f) => f.name)).toEqual(['mailbox']);
     expect(spec?.fields[0]).toMatchObject({ secret: false, optional: false });
+  });
+
+  it('asks for a refresh token, not an address, when the deployment signs in as the mailbox', () => {
+    process.env.GMAIL_CONNECT_METHOD = 'oauth';
+    const spec = connectFormSpecForType(ExternalServiceType.GOOGLE_GMAIL);
+    expect(spec?.fields.map((f) => f.name)).toEqual(['refreshToken']);
+    // The token IS the mailbox, so it is never echoed back onto the form.
+    expect(spec?.fields[0]).toMatchObject({ secret: true, optional: false });
   });
 
   it('stores only the address — there is no token to keep', () => {
@@ -86,15 +112,25 @@ describe('telling a refused call apart', () => {
 });
 
 describe('the credential discriminator', () => {
-  it('marks a freshly connected mailbox as the delegated shape', () => {
+  it('marks a freshly connected mailbox with the shape this installation mints', () => {
     expect(defaultAppIdForType(ExternalServiceType.GOOGLE_GMAIL)).toBe(
       GMAIL_APP_ID.delegatedMailbox,
     );
     expect(isDelegatedGmail(defaultAppIdForType(ExternalServiceType.GOOGLE_GMAIL))).toBe(true);
+
+    process.env.GMAIL_CONNECT_METHOD = 'oauth';
+    expect(defaultAppIdForType(ExternalServiceType.GOOGLE_GMAIL)).toBe(GMAIL_APP_ID.oauthMailbox);
+  });
+
+  it('reads each live shape as itself', () => {
+    expect(gmailCredentialShape(GMAIL_APP_ID.delegatedMailbox)).toBe('delegated');
+    expect(gmailCredentialShape(GMAIL_APP_ID.oauthMailbox)).toBe('oauth');
   });
 
   it('reads a row from the retired sign-in — including a pre-discriminator null — as not a mailbox', () => {
     expect(isDelegatedGmail(null)).toBe(false);
     expect(isDelegatedGmail(GMAIL_APP_ID.legacySignIn)).toBe(false);
+    expect(gmailCredentialShape(null)).toBeNull();
+    expect(gmailCredentialShape(GMAIL_APP_ID.legacySignIn)).toBeNull();
   });
 });

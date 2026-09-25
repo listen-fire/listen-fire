@@ -2,6 +2,12 @@
  * Dev-loop provisioning CLI for the Gmail POLL source and the two writes.
  *
  *   pnpm dev:gmail setup [--query "from:acme.com"] [--write send|reply]
+ *                        [--method oauth|delegated]
+ *
+ * `--method` re-seeds the mailbox credential in that shape: `oauth` runs a real
+ * sign-in against the fake Google (code exchange, granted scopes, refresh
+ * token), `delegated` stores the address alone. Omitted, the stack's own
+ * `GMAIL_CONNECT_METHOD` decides — which defaults to `oauth`.
  *
  * Gmail is polled rather than pushed (a minute of delay buys away the Pub/Sub
  * topic, the push endpoint and the weekly watch renewal), so
@@ -46,7 +52,16 @@ import '../../services';
 
 import { getAutomationsQb } from '../../lib/kysely';
 import type { TeamId } from '../../generated/kysely/core/Team';
-import { ensureDevLoopTeam, ensureDevLoopSlackCredential } from './_lib';
+import {
+  ensureDevLoopGmailCredential,
+  ensureDevLoopSlackCredential,
+  ensureDevLoopTeam,
+} from './_lib';
+import {
+  GMAIL_CONNECT_METHODS,
+  gmailConnectMethod,
+  type GmailConnectMethod,
+} from '../../adapters/gmail/connect_method';
 import { saveMovement } from '../../services/translation_graph/movement/provision';
 
 /** What the provisioned movement DOES with a delivered message. */
@@ -114,7 +129,8 @@ async function main() {
   const command = args[0] ?? 'setup';
   if (command !== 'setup') {
     console.error(
-      `Unknown command '${command}'. Use: setup [--query "<gmail search>"] [--write send|reply]`,
+      `Unknown command '${command}'. Use: setup [--query "<gmail search>"] ` +
+        `[--write send|reply] [--method ${GMAIL_CONNECT_METHODS.join('|')}]`,
     );
     process.exit(1);
   }
@@ -126,8 +142,26 @@ async function main() {
   }
   const mode: WriteMode = write;
 
+  const requested = flagValue(args, 'method');
+  if (requested !== undefined && !GMAIL_CONNECT_METHODS.some((m) => m === requested)) {
+    console.error(
+      `Unknown --method '${requested}'. Use: ${GMAIL_CONNECT_METHODS.join(' or ')}.`,
+    );
+    process.exit(1);
+  }
+  const method: GmailConnectMethod =
+    requested === 'oauth' || requested === 'delegated' ? requested : gmailConnectMethod();
+
   const seed = await ensureDevLoopTeam();
   await ensureDevLoopSlackCredential(seed.teamId);
+  // Re-seed unconditionally: `--method` is how a stack is switched between the
+  // two credential shapes, and an idempotent skip would silently keep the old
+  // one.
+  await ensureDevLoopGmailCredential({
+    teamId: seed.teamId as TeamId,
+    method,
+    replace: true,
+  });
 
   const movement = await saveMovement({
     teamId: seed.teamId,
@@ -171,6 +205,7 @@ async function main() {
           : { errors: movement.errors, diagnostics: movement.diagnostics },
         query: query ?? null,
         write: mode,
+        connectMethod: method,
         triggers,
         nextSteps: [
           'pnpm dev:inject gmail-message --subject "Q3 figures" --from ops@northwind.example',

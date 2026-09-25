@@ -17,7 +17,11 @@
 import { logger } from '../../../logger';
 import type { FileRef, ParentLink, WriteResult } from '../../adapter';
 import { streamFileRef } from '../../engine/files/retrieve';
-import { GmailApiError, gmailMissingSendScopeMessage } from '../../../../adapters/gmail/apiClient';
+import {
+  GmailApiError,
+  gmailMethodOf,
+  gmailMissingSendScopeMessage,
+} from '../../../../adapters/gmail/apiClient';
 import {
   buildRfc2822,
   toGmailRaw,
@@ -142,7 +146,7 @@ export async function sendGmailMessage(input: {
       ...(replyTo?.threadId !== undefined ? { threadId: replyTo.threadId } : {}),
     });
   } catch (error) {
-    throw sendFailure(error, mailbox);
+    throw sendFailure(error, mailbox, gmailMethodOf(client.credentials));
   }
 
   logger.info(
@@ -190,19 +194,23 @@ function referenceChain(replyTo: GmailReplyTarget): string[] {
 }
 
 /**
- * A refusal Google explained, passed on in Google's own words.
+ * A refusal, reported as the thing the deployment can act on.
  *
- * The one refusal a deployment will actually meet is the scope: delegation
- * granted for reading and not for sending is a mailbox that lists mail all day
- * and fails the first time a movement answers any of it. The send call asks
- * for ONLY the send scope (apiClient.ts), so a token refusal here can only
- * ever mean that scope is missing — `classifyGmailError` reports it as
- * `missing_send_scope`, never the general `delegation` failure, because the
- * operation that failed already says which scope was being requested.
+ * The one refusal a deployment will actually meet is the scope: a mailbox that
+ * holds the read scope and not the send one lists mail all day and fails the
+ * first time a movement answers any of it. Under a sign-in the client knows
+ * that before it asks; under delegation only Google does, and the send call
+ * requests ONLY the send scope (apiClient.ts) so a token refusal there can mean
+ * nothing else. Both arrive here as `missing_send_scope`, and the remedy named
+ * depends on which method connected the mailbox.
  */
-function sendFailure(error: unknown, mailbox: string): Error {
+function sendFailure(
+  error: unknown,
+  mailbox: string,
+  method: ReturnType<typeof gmailMethodOf>,
+): Error {
   if (error instanceof GmailApiError && error.failure === 'missing_send_scope') {
-    return new Error(gmailMissingSendScopeMessage(mailbox));
+    return new Error(gmailMissingSendScopeMessage(mailbox, method));
   }
   return error instanceof Error ? error : new Error(String(error));
 }

@@ -8,6 +8,7 @@ import { ExternalServiceType } from "#trpc";
 import { Select } from "@/components/select";
 import { ServiceIcon } from "@/components/service-icon";
 import { openDriveSpreadsheetPicker } from "@/components/movements/connect-actions/google-drive-picker";
+import { GMAIL_UNAVAILABLE_NOTE, gmailConnectControls } from "@/lib/gmail-connect";
 
 const inputClass =
   "w-full rounded-md border border-gray-200 px-3 py-2 text-[13px] focus:border-gray-400 focus:outline-none";
@@ -43,6 +44,7 @@ const OAUTH_LABELS: Partial<Record<ExternalServiceType, string>> = {
   [ExternalServiceType.AIRTABLE]: "Airtable",
   [ExternalServiceType.ATTIO]: "Attio",
   [ExternalServiceType.GOOGLE]: "Google Drive",
+  [ExternalServiceType.GOOGLE_GMAIL]: "Gmail",
   [ExternalServiceType.DROPBOX]: "Dropbox",
 };
 
@@ -58,17 +60,25 @@ function useOAuthConnect(options: {
     trpc.views.credentials.attioConnectUrl.useMutation();
   const { mutateAsync: getGoogleUrl, isLoading: googleLoading } =
     trpc.views.credentials.googleConnectUrl.useMutation();
+  const { mutateAsync: getGmailUrl, isLoading: gmailLoading } =
+    trpc.views.credentials.gmailConnectUrl.useMutation();
   const { mutateAsync: getDropboxUrl, isLoading: dropboxLoading } =
     trpc.views.credentials.dropboxConnectUrl.useMutation();
 
   const isLoading =
-    slackLoading || airtableLoading || attioLoading || googleLoading || dropboxLoading;
+    slackLoading ||
+    airtableLoading ||
+    attioLoading ||
+    googleLoading ||
+    gmailLoading ||
+    dropboxLoading;
 
   const urlGetters: Partial<Record<ExternalServiceType, () => Promise<string | undefined>>> = {
     [ExternalServiceType.SLACK]: getSlackUrl,
     [ExternalServiceType.AIRTABLE]: getAirtableUrl,
     [ExternalServiceType.ATTIO]: getAttioUrl,
     [ExternalServiceType.GOOGLE]: getGoogleUrl,
+    [ExternalServiceType.GOOGLE_GMAIL]: getGmailUrl,
     [ExternalServiceType.DROPBOX]: getDropboxUrl,
   };
 
@@ -214,6 +224,7 @@ export function IntegrationModal({
 }) {
   const utils = trpc.useUtils();
   const connectMethods = trpc.views.credentials.connectMethods.useQuery();
+  const gmailPolicy = trpc.views.credentials.gmailConnectPolicy.useQuery();
   const { mutateAsync: addCredential } =
     trpc.views.credentials.addCredential.useMutation();
   const { mutateAsync: updateCredential } =
@@ -230,10 +241,13 @@ export function IntegrationModal({
   const [evertraceApiKey, setEvertraceApiKey] = useState("");
   const [dealroomApiKey, setDealroomApiKey] = useState("");
   const [attioAccessToken, setAttioAccessToken] = useState("");
-  // Gmail is named, not signed into: the deployment's service account acts
-  // as the mailbox through domain wide delegation, so the address is the
-  // whole credential.
+  // Gmail, under the delegated method: the deployment's service account acts as
+  // the mailbox, so the address is the whole credential.
   const [gmailMailbox, setGmailMailbox] = useState("");
+  // Gmail, under the sign-in method, for an admin who authorised the mailbox
+  // themselves. The address and the scopes come back from Google, never from
+  // here.
+  const [gmailRefreshToken, setGmailRefreshToken] = useState("");
   // Listen-Fire Valuations auto-mints its api-key server-side. The user only
   // provides an optional Base URL override (empty = use env default).
   const [valuationsBaseUrl, setValuationsBaseUrl] = useState("");
@@ -268,6 +282,7 @@ export function IntegrationModal({
     setDealroomApiKey("");
     setAttioAccessToken("");
     setGmailMailbox("");
+    setGmailRefreshToken("");
     setValuationsBaseUrl("");
     setClaimToken(null);
   }, [isOpen, existing, initialType]);
@@ -280,7 +295,18 @@ export function IntegrationModal({
     type === ExternalServiceType.ATTIO &&
     connectMethods.data?.[ExternalServiceType.ATTIO] === "key-entry";
 
-  const isOAuthType = !!type && OAUTH_TYPES.has(type) && !attioKeyEntry;
+  // Gmail is connected one of three ways depending on the installation: a
+  // Google sign-in AS the mailbox, a refresh token the mailbox already granted,
+  // or a mailbox address the deployment already has access to. Same
+  // server-owned derivation as Attio's above.
+  const isGmail = type === ExternalServiceType.GOOGLE_GMAIL;
+  const gmail = gmailConnectControls(isGmail ? gmailPolicy.data : undefined);
+  const gmailSignIn = gmail.signIn;
+  const gmailMailboxEntry = gmail.mailbox;
+  const gmailUnavailable =
+    isGmail && !gmail.signIn && !gmail.refreshToken && !gmail.mailbox && gmailPolicy.isFetched;
+
+  const isOAuthType = !!type && ((OAUTH_TYPES.has(type) && !attioKeyEntry) || gmailSignIn);
   const oauthConnected = isOAuthType && !!claimToken;
 
   const hasCredentials =
@@ -289,7 +315,8 @@ export function IntegrationModal({
     (type === ExternalServiceType.EVERTRACE && !!evertraceApiKey) ||
     (type === ExternalServiceType.DEALROOM && !!dealroomApiKey) ||
     (attioKeyEntry && !!attioAccessToken) ||
-    (type === ExternalServiceType.GOOGLE_GMAIL && !!gmailMailbox.trim()) ||
+    (gmailMailboxEntry && !!gmailMailbox.trim()) ||
+    (gmail.refreshToken && !!gmailRefreshToken.trim()) ||
     // Valuations needs no user-supplied credential — clicking save mints one.
     type === ExternalServiceType.NATIVE_VALUATIONS ||
     oauthConnected;
@@ -327,13 +354,24 @@ export function IntegrationModal({
         } else {
           await addCredential({ name: name.trim(), type, credentials: { apiKey: dealroomApiKey } });
         }
-      } else if (type === ExternalServiceType.GOOGLE_GMAIL) {
+      } else if (gmailMailboxEntry) {
         const mailbox = gmailMailbox.trim();
         if (!mailbox) return;
+        const gmailType = ExternalServiceType.GOOGLE_GMAIL;
         if (existing) {
-          await updateCredential({ id: existing.id, name: name.trim(), type, credentials: { mailbox } });
+          await updateCredential({ id: existing.id, name: name.trim(), type: gmailType, credentials: { mailbox } });
         } else {
-          await addCredential({ name: name.trim(), type, credentials: { mailbox } });
+          await addCredential({ name: name.trim(), type: gmailType, credentials: { mailbox } });
+        }
+      } else if (gmail.refreshToken && gmailRefreshToken.trim() && !claimToken) {
+        // Only when the user actually pasted one — the sign-in button is right
+        // beside this field, and a finished sign-in wins.
+        const refreshToken = gmailRefreshToken.trim();
+        const gmailType = ExternalServiceType.GOOGLE_GMAIL;
+        if (existing) {
+          await updateCredential({ id: existing.id, name: name.trim(), type: gmailType, credentials: { refreshToken } });
+        } else {
+          await addCredential({ name: name.trim(), type: gmailType, credentials: { refreshToken } });
         }
       } else if (attioKeyEntry) {
         if (!attioAccessToken) return;
@@ -513,7 +551,7 @@ export function IntegrationModal({
           </div>
         )}
 
-        {type === ExternalServiceType.GOOGLE_GMAIL && (
+        {gmailMailboxEntry && (
           <div>
             <label className="mb-1 block text-[12px] font-medium text-gray-600">
               Mailbox address
@@ -532,6 +570,33 @@ export function IntegrationModal({
               read and send as that address and nothing else.
             </p>
           </div>
+        )}
+
+        {/* Beside the sign-in button, for a Workspace admin who authorised the
+            mailbox themselves rather than handing the browser over. */}
+        {gmail.refreshToken && (
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-gray-600">
+              Or paste a refresh token
+            </label>
+            <input
+              type="password"
+              value={gmailRefreshToken}
+              onChange={(e) => setGmailRefreshToken(e.target.value)}
+              placeholder="Refresh token..."
+              autoComplete="off"
+              className={inputClass}
+            />
+            <p className="mt-1 text-[11px] text-gray-400">
+              For an admin who already authorised the mailbox. It has to come from
+              the same Google OAuth client this server is set up with. Which
+              mailbox it is, and what it may do, are read from Google.
+            </p>
+          </div>
+        )}
+
+        {gmailUnavailable && (
+          <p className="text-[12px] text-gray-500">{GMAIL_UNAVAILABLE_NOTE}</p>
         )}
 
         {/* Listen-Fire Valuations is intrinsic — we own both sides of the auth.
@@ -606,6 +671,13 @@ export function IntegrationModal({
                 <code className="rounded bg-gray-100 px-1 text-gray-600">/invite</code> and pick
                 the Listen-Fire app). Bots cannot self-join private channels, so this is required once
                 per private channel.
+              </p>
+            )}
+            {gmailSignIn && (
+              <p className="mt-2 text-[11px] text-gray-400">
+                Sign in as the mailbox itself, not as yourself — the account you
+                pick here is the mailbox automations will read and answer. Google
+                confines this connection to that one address.
               </p>
             )}
           </div>

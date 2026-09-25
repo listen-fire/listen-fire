@@ -79,7 +79,7 @@ export {
   GMAIL_MESSAGE_TYPE_ID,
 };
 
-const GMAIL_HANDBOOK_CONTENT = `Gmail is ONE connected mailbox — a real Google Workspace address the deployment acts as. It is not the forwarding address: that one only ever sees mail somebody sent to it, while this reads the inbox itself.
+const GMAIL_HANDBOOK_CONTENT = `Gmail is ONE connected mailbox — a real Google Workspace address the connection is signed in as. It is not the forwarding address: that one only ever sees mail somebody sent to it, while this reads the inbox itself.
 
 ### running when mail arrives
 
@@ -137,7 +137,7 @@ Mail always leaves as the connected mailbox — \`From\` is not writable, becaus
 
 ### what this connection cannot do
 
-It reads mail and sends mail. It can NEVER label, archive, delete, mark as read, or touch a draft — the two scopes it holds are read and send, so those are not features waiting to be built but things the mailbox has not granted. Say so rather than working around it. A message that is edited or re-labelled afterwards does not fire again: arrival is the only event here, and nothing fires on mail this mailbox sends. A mailbox can be granted the read scope without the send one, or the reverse — reads and sends fail independently, so a send refusal does not mean the mailbox is disconnected. Only a mailbox this installation lists in its own allowlist can be connected or used, on top of the admin's delegation grant.`;
+It reads mail and sends mail. It can NEVER label, archive, delete, mark as read, or touch a draft — the two scopes it holds are read and send, so those are not features waiting to be built but things the mailbox has not granted. Say so rather than working around it. A message that is edited or re-labelled afterwards does not fire again: arrival is the only event here, and nothing fires on mail this mailbox sends. Reading always works; SENDING works only where the installation enabled it, and a mailbox without it refuses a send saying so, with reads unaffected — so a send failing never means the mailbox is disconnected. An installation may also limit which addresses can be connected at all.`;
 
 /**
  * Static manifest. A polled source AND a target: `createRecord` sends as the
@@ -152,15 +152,15 @@ export const GMAIL_MANIFEST: AdapterManifest = {
   description:
     'One Google Workspace mailbox, read and written by automations. Run when ' +
     'mail arrives, search the inbox, read a message with its attachments, and ' +
-    'send or reply as the mailbox. Connected by naming the address — an admin ' +
-    'grants the deployment access to it once, and the mailbox must also be on ' +
-    'this installation’s own allowlist before it can be connected or used.',
+    'send or reply as the mailbox. Connected by signing in as that mailbox, so ' +
+    'the connection reaches it and no other address; sending is available only ' +
+    'where the installation enabled it.',
   authoringHints:
     'Gmail reads and sends, and does nothing else: no labelling, archiving, ' +
-    'deleting or drafts at all — those scopes were never granted. A mailbox can ' +
-    'be readable but not sendable (or the reverse) depending on which scopes ' +
-    'the Workspace admin granted — a send failing does not mean reads are ' +
-    'broken too. Read `Body` ' +
+    'deleting or drafts at all — those scopes were never granted. Reading ' +
+    'always works; a mailbox whose installation did not enable sending refuses ' +
+    'a send outright and says so, and that never means reads are broken too. ' +
+    'Read `Body` ' +
     'for what a message says; `Plain Body` and `HTML Body` are the alternatives ' +
     `as they arrived. ${GMAIL_WRITE_RULE} A send sets \`To\`, \`Subject\` and ` +
     '`Body`; a reply needs only a body. Subject, From, To, Cc, Labels, Date and ' +

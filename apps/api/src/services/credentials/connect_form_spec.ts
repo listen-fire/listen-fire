@@ -21,7 +21,14 @@ import { affinityCredsParser } from '../../adapters/affinity/apiClient';
 import { attioCredsParser } from '../../adapters/attio/apiClient';
 import { evertraceCredsParser } from '../../adapters/evertrace/apiClient';
 import { dealroomCredsParser } from '../../adapters/dealroom/apiClient';
-import { gmailCredsParser, validateGmailMailbox } from '../../adapters/gmail/apiClient';
+import {
+  connectGmailByRefreshToken,
+  gmailDelegatedCredsParser,
+  gmailRefreshTokenCredsParser,
+  validateGmailMailbox,
+} from '../../adapters/gmail/apiClient';
+import { gmailConnectMethod } from '../../adapters/gmail/connect_method';
+import { neverAsAny } from '../../lib/utils/types';
 import { RemoteAdapterCredentialPayload } from '../translation_graph/adapters/remote/manifest';
 
 /** Stored Granola credential — the API key the user pastes. */
@@ -70,9 +77,18 @@ export interface ConnectFormSpec {
    * re-renders the form with `message`, so the user corrects the thing that is
    * actually wrong rather than discovering it in a run a week later.
    *
+   * A check that had to CALL the system may hand back what it learned there, as
+   * `credentials`, and that is stored instead of what was typed. Gmail's pasted
+   * refresh token is the case: reaching the mailbox is how the token is proved,
+   * and the mailbox address and granted scopes come back with the proof. Nothing
+   * is invented — a spec that returns no credentials stores exactly what was
+   * parsed, as before.
+   *
    * Omitted ⇒ nothing is called and a parsed envelope is stored as-is.
    */
-  validate?(credentials: unknown): Promise<{ ok: true } | { ok: false; message: string }>;
+  validate?(
+    credentials: unknown,
+  ): Promise<{ ok: true; credentials?: unknown } | { ok: false; message: string }>;
 }
 
 function specFor(
@@ -225,13 +241,15 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
       note: 'API access is part of a Dealroom Premium plan \u2014 ask your account manager if the API section is missing.',
     },
   ),
-  // Gmail is connected by NAMING a mailbox, not by signing into one: the
-  // deployment's Google service account acts as the address through domain wide
-  // delegation, which a Workspace admin grants once. There is no secret to
-  // paste, which is why the form has one plain field and why the real check is
-  // the live `validate` below rather than anything the parser can see.
+  // Gmail's DELEGATED method: the mailbox is connected by NAMING it, not by
+  // signing into one — the deployment's Google service account acts as the
+  // address through domain wide delegation, which a Workspace admin grants
+  // once. There is no secret to paste, which is why the form has one plain
+  // field and why the real check is the live `validate` below rather than
+  // anything the parser can see. `connectFormSpecForType` withholds this whole
+  // form under the `oauth` method.
   [ExternalServiceType.GOOGLE_GMAIL]: specFor(
-    gmailCredsParser,
+    gmailDelegatedCredsParser,
     [
       {
         name: 'mailbox',
@@ -259,7 +277,7 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
         'Nothing is stored until the mailbox answers, so a failure here means the ' +
         'delegation or the address is wrong — not that anything was lost.',
       validate: async (credentials) =>
-        validateGmailMailbox(gmailCredsParser.parse(credentials)),
+        validateGmailMailbox(gmailDelegatedCredsParser.parse(credentials)),
     },
   ),
   // A user-installed remote adapter authenticates with a single secret (the
@@ -291,11 +309,79 @@ const CONNECT_FORM_SPECS: Partial<Record<ExternalServiceType, ConnectFormSpec>> 
   ),
 };
 
+/**
+ * Gmail's OAUTH-method form: paste a refresh token the mailbox already granted.
+ *
+ * Beside the sign-in button rather than instead of it — a Workspace admin who
+ * would rather authorise the mailbox themselves than hand a browser to whoever
+ * is connecting ends up here. The `validate` below is the whole check: it
+ * exchanges the token with this installation's own Gmail OAuth client, which is
+ * what proves the token is one that client issued and that the account has not
+ * revoked it, and what comes back is the mailbox and the scopes. So the stored
+ * credential is byte-identical to a signed-in one, and the token is never
+ * echoed, logged, or trusted for anything it did not prove.
+ */
+const GMAIL_REFRESH_TOKEN_SPEC: ConnectFormSpec = specFor(
+  gmailRefreshTokenCredsParser,
+  [
+    {
+      name: 'refreshToken',
+      label: 'Refresh token',
+      secret: true,
+      optional: false,
+      kind: 'text',
+      help:
+        'A Google OAuth refresh token for the mailbox, issued by the same OAuth ' +
+        'client this installation is configured with. The mailbox address and what ' +
+        'it may do are read from Google, not from anything typed here.',
+    },
+  ],
+  {
+    guide: [
+      'Authorise the mailbox against this installation’s Gmail OAuth client, asking for ' +
+        'https://www.googleapis.com/auth/gmail.readonly and, to send, ' +
+        'https://www.googleapis.com/auth/gmail.send.',
+      'Ask for offline access, so Google issues a refresh token rather than only an ' +
+        'access token.',
+      'Paste the refresh token below.',
+    ],
+    note:
+      'Most people should use the Google sign-in instead — this form is for a Workspace ' +
+      'admin who authorised the mailbox themselves.',
+    validate: async (credentials) => {
+      const entry = gmailRefreshTokenCredsParser.parse(credentials);
+      return connectGmailByRefreshToken({
+        refreshToken: entry.refreshToken,
+        ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+      });
+    },
+  },
+);
+
 /** The key-entry form spec for a credential type, or undefined if it isn't a
- *  key-entry connectable adapter (OAuth / intrinsic / handshake). */
+ *  key-entry connectable adapter (OAuth / intrinsic / handshake).
+ *
+ *  Gmail has TWO forms and the connect method picks between them — they ask for
+ *  different things because they carry different authority. Under `delegated`
+ *  the field is a mailbox address, because the deployment already holds the
+ *  right to act as it. Under `oauth` the field is a refresh token, because
+ *  nothing but a grant from that mailbox is a right to read it; typing an
+ *  address there would let a deployment claim a mailbox it was never given.
+ */
 export function connectFormSpecForType(
   type: ExternalServiceType,
 ): ConnectFormSpec | undefined {
+  if (type === ExternalServiceType.GOOGLE_GMAIL) {
+    const method = gmailConnectMethod();
+    switch (method) {
+      case 'oauth':
+        return GMAIL_REFRESH_TOKEN_SPEC;
+      case 'delegated':
+        return CONNECT_FORM_SPECS[type];
+      default:
+        return neverAsAny(method);
+    }
+  }
   return CONNECT_FORM_SPECS[type];
 }
 
