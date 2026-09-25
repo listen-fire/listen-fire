@@ -99,11 +99,12 @@ const CLAUDE_PRICING: Record<string, Price> = {
   'claude-fable-5-1': { input: 10.0, output: 50.0, cacheRead: 0.25, cacheCreation: 12.5 },
   'claude-opus-4-6': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
   'claude-haiku-4-5': { input: 1.0, output: 5.0, cacheRead: 0.1, cacheCreation: 1.25 },
-  'claude-haiku-4-5-20251001': { input: 0.8, output: 4.0, cacheRead: 0.08, cacheCreation: 1.0 },
+  'claude-haiku-4-5-20251001': { input: 1.0, output: 5.0, cacheRead: 0.1, cacheCreation: 1.25 },
   'claude-sonnet-4-5-20250929': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
-  // Standard rates; introductory $2/$10 applies through 2026-08-31, then reverts to these.
-  'claude-sonnet-5': { input: 3.0, output: 15.0, cacheRead: 0.3, cacheCreation: 3.75 },
+  // $2/$10 is the standard rate: the increase to $3/$15 once scheduled for
+  // September 2026 was withdrawn (https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-25).
+  'claude-sonnet-5': { input: 2.0, output: 10.0, cacheRead: 0.2, cacheCreation: 2.5 },
   'claude-opus-4-20250514': { input: 15.0, output: 75.0, cacheRead: 1.5, cacheCreation: 18.75 },
   'claude-opus-4-7': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
   'claude-opus-4-8': { input: 5.0, output: 25.0, cacheRead: 0.5, cacheCreation: 6.25 },
