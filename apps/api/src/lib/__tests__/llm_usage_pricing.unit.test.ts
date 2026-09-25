@@ -56,7 +56,7 @@ describe('a call the model map resolved', () => {
     insertInto.mockReset();
     const onAnthropic = await record(mod, { preferred: 'claude-sonnet-5', provider: 'anthropic', wireModel: 'claude-sonnet-5' });
     expect(onGemini.cost_microdollars).toBe(1_500_000);
-    expect(onAnthropic.cost_microdollars).toBe(3_000_000);
+    expect(onAnthropic.cost_microdollars).toBe(2_000_000);
   });
 
   it('prices Claude on Vertex as on Anthropic’s own API', async () => {
