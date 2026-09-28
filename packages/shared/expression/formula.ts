@@ -12,7 +12,7 @@
  *   compare    = additive (comp_op additive)?
  *   additive   = mult (('+' | '-') mult)*
  *   mult       = unary (('*' | '/') unary)*
- *   unary      = primary
+ *   unary      = '-' unary | primary
  *   primary    = '(' expr ')' | if_expr | fn_call | literal | identifier
  *   if_expr    = 'IF' expr 'THEN' expr ('ELSE' 'IF' expr 'THEN' expr)* 'ELSE' expr 'END'
  *   fn_call    = IDENT '(' expr (',' expr)* ')'
@@ -294,6 +294,14 @@ export function serialize(
     }
     case 'not': {
       return `NOT ${ser(expr.expression, 6)}`;
+    }
+    case 'negate': {
+      // Precedence 6: above mult (5), so `-a * b` and `a * -b` never need
+      // parens; below nothing, so a nested arithmetic operand always does
+      // (`-(a + b)`).
+      const prec = 6;
+      const inner = `-${ser(expr.expression, prec)}`;
+      return parentPrec > prec ? `(${inner})` : inner;
     }
     case 'concat': {
       return `CONCAT(${expr.parts.map(p => ser(p)).join(', ')})`;
@@ -1089,6 +1097,8 @@ function toResourcePredicate(expr: Expression): Expression {
       return { ...expr, operands: expr.operands.map(toResourcePredicate) };
     case 'not':
       return { ...expr, expression: toResourcePredicate(expr.expression) };
+    case 'negate':
+      return { ...expr, expression: toResourcePredicate(expr.expression) };
     case 'list':
       return { ...expr, elements: expr.elements.map(toResourcePredicate) };
     default:
@@ -1570,18 +1580,32 @@ class Parser {
   }
 
   private parseMul(): Expression {
-    let left = this.parsePrimary();
+    let left = this.parseUnary();
     while (true) {
       const t = this.peek();
       if (t.type === 'op' && (t.value === '*' || t.value === '/')) {
         const op = this.advance().value as '*' | '/';
-        const right = this.parsePrimary();
+        const right = this.parseUnary();
         left = { type: 'arithmetic', op, left, right };
       } else {
         break;
       }
     }
     return left;
+  }
+
+  /** `-x`, `-(a + b)`, `--x` — a prefix minus, recursing on itself so a chain
+   *  of signs parses (rare, but `unary = '-' unary | primary` says it should).
+   *  Distinct from the traversal form: `x-[:edge]->` never reaches here — the
+   *  statement layer's path-head scan consumes `-[` before an expression is
+   *  handed to this parser at all. */
+  private parseUnary(): Expression {
+    const t = this.peek();
+    if (t.type === 'op' && t.value === '-') {
+      this.advance();
+      return { type: 'negate', expression: this.parseUnary() };
+    }
+    return this.parsePrimary();
   }
 
   /**
@@ -2322,6 +2346,8 @@ function validateExpressionTree(expr: Expression, ctx: PropertyContext): string 
       return null;
     case 'not':
       return validateExpressionTree(expr.expression, ctx);
+    case 'negate':
+      return validateExpressionTree(expr.expression, ctx);
     case 'llm':
       return expr.promptExpression ? validateExpressionTree(expr.promptExpression, ctx) : null;
     case 'list':
@@ -2526,6 +2552,7 @@ function walkTgExpression(
       for (const op of expr.operands) walkTgExpression(op, ctx, errors);
       return;
     case 'not':
+    case 'negate':
     case 'aggregate':
       walkTgExpression(expr.expression, ctx, errors);
       return;
@@ -3621,6 +3648,7 @@ export function inferType(expr: Expression, ctx: PropertyContext): ExprType {
     case 'compare': return { kind: 'boolean' };
     case 'logical': return { kind: 'boolean' };
     case 'not': return { kind: 'boolean' };
+    case 'negate': return { kind: 'number' };
     case 'concat': return { kind: 'string' };
     case 'conditional': return mergeTypes(inferType(expr.then, ctx), inferType(expr.else, ctx));
     case 'aggregate': {

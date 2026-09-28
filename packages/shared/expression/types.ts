@@ -459,6 +459,9 @@ export type Expression =
   | { type: 'compare'; op: FilterOperator; left: Expression; right: Expression }
   | { type: 'logical'; op: 'and' | 'or'; operands: Expression[] }
   | { type: 'not'; expression: Expression }
+  // Unary minus (`-x`) — a distinct node from binary `-` (arity, not a
+  // sentinel-zero subtraction): mirrors `not` as the other unary operator.
+  | { type: 'negate'; expression: Expression }
   | { type: 'concat'; parts: Expression[] }
   | { type: 'conditional'; condition: Expression; then: Expression; else: Expression }
   // Array indexing — extracts a single element from a multi-cardinality value.

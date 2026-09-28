@@ -216,6 +216,12 @@ describe('evaluatePredicate — value semantics mirror the engine', () => {
     expect(evaluatePredicate(div(6, 0), scopeOf({}))).toBeNull();
   });
 
+  it('negate: unary minus over a leaf read', () => {
+    const negate: Expression = { type: 'negate', expression: { type: 'property', propertyTypeId: 'x' } };
+    expect(evaluatePredicate(negate, scopeOf({ x: 5 }))).toBe(-5);
+    expect(isPurePredicate(negate)).toBe(true);
+  });
+
   it('concat folds nulls to empty strings', () => {
     const expr: Expression = { type: 'concat', parts: [{ type: 'static', value: 'a' }, { type: 'property', propertyTypeId: 'x' }, { type: 'static', value: 'b' }] };
     expect(evaluatePredicate(expr, scopeOf({ x: null }))).toBe('ab');

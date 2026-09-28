@@ -602,6 +602,8 @@ function substitute(expr: Expression, repl: Map<string, Expression>): Expression
       return { ...expr, operands: expr.operands.map(o => substitute(o, repl)) };
     case 'not':
       return { ...expr, expression: substitute(expr.expression, repl) };
+    case 'negate':
+      return { ...expr, expression: substitute(expr.expression, repl) };
     case 'concat':
       return { ...expr, parts: expr.parts.map(p => substitute(p, repl)) };
     case 'conditional':
@@ -965,6 +967,8 @@ function normalizeCalls(expr: Expression): Expression {
     case 'logical':
       return { ...expr, operands: expr.operands.map((o) => normalizeCalls(o)) };
     case 'not':
+      return { ...expr, expression: normalizeCalls(expr.expression) };
+    case 'negate':
       return { ...expr, expression: normalizeCalls(expr.expression) };
     case 'concat':
       return { ...expr, parts: expr.parts.map((p) => normalizeCalls(p)) };

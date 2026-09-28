@@ -1362,6 +1362,11 @@ export async function evalMovementExpr(
       return { value: !inner.value, provenance: unionProvenance([inner.provenance]) };
     }
 
+    case 'negate': {
+      const inner = await evalMovementExpr(expr.expression, ctx);
+      return { value: -Number(inner.value), provenance: unionProvenance([inner.provenance]) };
+    }
+
     case 'arithmetic': {
       const left = await evalMovementExpr(expr.left, ctx);
       const right = await evalMovementExpr(expr.right, ctx);

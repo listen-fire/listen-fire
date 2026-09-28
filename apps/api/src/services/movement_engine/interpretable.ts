@@ -55,6 +55,7 @@ const SUPPORTED_EXPRESSION_KINDS: ReadonlySet<Expression['type']> = new Set<
   'compare',
   'logical',
   'not',
+  'negate',
   'arithmetic',
   'traverse',
   'aggregate',
@@ -537,6 +538,7 @@ class InterpretabilityScan {
         for (const o of expr.operands) this.scanExpression(o);
         return;
       case 'not':
+      case 'negate':
         this.scanExpression(expr.expression);
         return;
       case 'resource_traverse':

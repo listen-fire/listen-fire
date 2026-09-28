@@ -299,3 +299,39 @@ describe('a structured operand belongs to MOV_JSON_OPAQUE alone', () => {
     expect(codes(onDeal(both))).not.toContain(CODE);
   });
 });
+
+// ── Unary minus: negating a number is a number; anything else is refused
+// the way `+` on a non-number is (same code, same "requires numeric
+// operands" wording — see checkNegateOperand). ──
+
+describe('unary minus operand typing', () => {
+  it('negating a number is a number — clean', () => {
+    expectClean(onDeal('  write c-[:deals]-> { Amount: -d.`Amount` }'));
+    expectClean(onDeal('  write c-[:deals]-> { Amount: -(d.`Amount` + 1) }'));
+    expectClean(onDeal('  write c-[:deals]-> { Amount: 3 * -d.`Amount` }'));
+  });
+
+  it('negating text is refused the way + on text is', () => {
+    expect(codes(onDeal('  write c-[:deals]-> { Amount: -d.`Name` }'))).toContain(CODE);
+  });
+
+  it('negating a date is refused, pointed at the shift function', () => {
+    const source = onDeal('  write c-[:deals]-> { Amount: -d.`Closed` }');
+    expect(codes(source)).toContain(CODE);
+    expect(said(source)).toContain('DATE.ADD_DAYS(date, days)');
+  });
+
+  it('negating a boolean is refused', () => {
+    expect(codes(onDeal('  write c-[:deals]-> { Amount: -d.`Won` }'))).toContain(CODE);
+  });
+
+  it('a structured (json) operand belongs to MOV_JSON_OPAQUE alone, not doubled up', () => {
+    const codes_ = codes(onDeal('  write c-[:deals]-> { Amount: -d.`Payload` }'));
+    expect(codes_).toContain('MOV_JSON_OPAQUE');
+    expect(codes_).not.toContain(CODE);
+  });
+
+  it('an operand this layer cannot see stays silent', () => {
+    expectClean(onDeal('  write c-[:deals]-> { Amount: -NUMBER(d.`Name`) }'));
+  });
+});

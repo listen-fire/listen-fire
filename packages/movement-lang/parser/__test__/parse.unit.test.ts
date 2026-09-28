@@ -410,6 +410,24 @@ describe('§C traversal-headed blocks', () => {
     expect(assign.name).toBe('x');
   });
 
+  // Unary minus (a formula-grammar amendment, not a statement-layer change)
+  // and the traversal `-[` form are disjoint: `scanExpressionRootEnd` only
+  // ever looks for `-[`, so a bare `-x` never matches a path head and falls
+  // through to an ordinary expression slot, while `a-[:b]->` is untouched.
+  it('a leading unary minus is an expression slot, not a traversal head', () => {
+    const program = parseProgram('x = -back_days');
+    const assign = as(program.statements[0], 'assign');
+    expect(assign.name).toBe('x');
+    expect(rv(assign.value, 'expr').expr.raw).toBe('-back_days');
+  });
+
+  it('a name root still traverses (-[ is unaffected by unary minus)', () => {
+    const program = parseProgram(['y = a-[:b]-> {', '  z = 1', '}'].join('\n'));
+    const block = rv(as(program.statements[0], 'assign').value, 'block').block;
+    expect(block.head.root).toEqual({ kind: 'name', name: 'a' });
+    expect(block.head.hopsRaw).toBe('-[:b]->');
+  });
+
   it('parses extract assign + block assign + unbound write', () => {
     const program = parseProgram(C2);
     expect(program.statements).toHaveLength(3);

@@ -1154,6 +1154,7 @@ function collectNames(expr: Expression, out: CollectedNames, position: NamePosit
       expr.operands.forEach(o => collectNames(o, out, position));
       return;
     case 'not':
+    case 'negate':
       collectNames(expr.expression, out, position);
       return;
     case 'concat':

@@ -110,6 +110,37 @@ describe('parseMovementExpression', () => {
       });
     });
 
+    it('unary minus: -back_days negates the property read', () => {
+      expect(parseMovementExpression('-back_days')).toEqual({
+        type: 'negate',
+        expression: { type: 'property', propertyTypeId: 'back_days' },
+      });
+    });
+
+    it('unary minus over a parenthesised expression: -(a + b)', () => {
+      expect(parseMovementExpression('-(a + b)')).toEqual({
+        type: 'negate',
+        expression: {
+          type: 'arithmetic',
+          op: '+',
+          left: { type: 'property', propertyTypeId: 'a' },
+          right: { type: 'property', propertyTypeId: 'b' },
+        },
+      });
+    });
+
+    it("a - b, a -b, a-b all stay binary subtraction — spacing doesn't turn the right operand into a unary minus", () => {
+      const subtraction = {
+        type: 'arithmetic',
+        op: '-',
+        left: { type: 'property', propertyTypeId: 'a' },
+        right: { type: 'property', propertyTypeId: 'b' },
+      };
+      expect(parseMovementExpression('a - b')).toEqual(subtraction);
+      expect(parseMovementExpression('a -b')).toEqual(subtraction);
+      expect(parseMovementExpression('a-b')).toEqual(subtraction);
+    });
+
     it('probe: CONCAT("a", b) parses to { type: concat, parts } — the shape interpolation mirrors', () => {
       expect(parseMovementExpression('CONCAT("a", b)')).toEqual({
         type: 'concat',
