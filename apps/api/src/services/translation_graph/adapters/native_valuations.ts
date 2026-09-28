@@ -593,9 +593,10 @@ function commandEdgeRefs(parent: string): SchemaReferenceDescriptor[] {
 const LEGAL_ENTITY_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: LEGAL_ENTITY_TYPE,
   displayName: 'Legal Entity',
-  // `FUZZY` on a name-like field shortlists by similarity (the list route's
-  // `search`) and leaves the call to the engine's judge; see `resolveEntity`.
-  supportsFuzzyResolution: true,
+  // `FUZZY` on a name shortlists by similarity (the list route's `search`,
+  // whose search vector covers exactly these four) and leaves the call to the
+  // engine's judge; see `resolveEntity`. Any other field is exact-only.
+  supportsFuzzyResolution: ['name', 'legal_name', 'also_known_as', 'other_names'],
   fields: [
     ...commonFields(),
     { fieldId: 'type', displayName: 'Type', kind: 'enum', writable: true, required: true, enumValues: LEGAL_ENTITY_TYPES },
@@ -1730,25 +1731,35 @@ class NativeValuationsAdapter extends BaseAdapter {
 
     const resolver = await this.resolver({ types: [input.recordType] });
     const type = naturalName(input.recordType);
+    const descriptor = DESCRIPTORS_BY_DISPLAY_NAME[entity.displayName];
+    const fuzzyColumns = fuzzyColumnsOf(descriptor);
+    const columnOf = (field: string) => resolver.fieldId(type, naturalName(field));
+
+    // The checker admits `FUZZY` only where the descriptor declares it; one
+    // that reaches here anyway (an automation saved before that rule) would
+    // otherwise be quietly answered by equality, so refuse it before searching.
+    for (const entry of branches.flatMap((branch) => branch.all)) {
+      if (entry.fuzzy === true && !fuzzyColumns.has(columnOf(entry.field))) {
+        throw new Error(`FUZZY on \`${entry.field}\` is not supported by ${input.recordType}`);
+      }
+    }
+
     const creds = await this.requireCreds();
 
     const seen = new Set<string>();
     const candidates: ExternalRecordRef[] = [];
 
     for (const branch of branches) {
-      const wanted = branch.all.map((entry) => {
-        const column = resolver.fieldId(type, naturalName(entry.field));
-        return {
-          surface: entry.field,
-          column,
-          value: input.record[entry.field],
-          similar: entry.fuzzy === true && NAME_LIKE_COLUMNS.has(column),
-        };
-      });
+      const wanted = branch.all.map((entry) => ({
+        surface: entry.field,
+        column: columnOf(entry.field),
+        value: input.record[entry.field],
+        similar: entry.fuzzy === true,
+      }));
       // A group with nothing asserted for one of its fields identifies nothing.
       if (wanted.some((w) => w.value === undefined || w.value === null)) continue;
 
-      // A fuzzy name-like component is answered by the route's similarity
+      // A fuzzy component is answered by the route's similarity
       // search, not by equality: the shortlist comes back in relevance order
       // and the engine's judge decides. Every other component keeps equality.
       const query: Record<string, string | number> = { limit: IDENTITY_SEARCH_LIMIT };
@@ -1788,7 +1799,7 @@ class NativeValuationsAdapter extends BaseAdapter {
           // hit also carries every name the row answers to, so the judge can
           // see the alias or legal name that put it on the shortlist.
           data: {
-            ...(bySimilarity !== undefined ? nameLikeFieldsOf(row) : {}),
+            ...(bySimilarity !== undefined ? fuzzyFieldsOf({ row, descriptor, fuzzyColumns }) : {}),
             ...Object.fromEntries(wanted.map((w) => [w.surface, row[w.column]])),
           },
         });
@@ -2679,21 +2690,27 @@ function withoutEmptyFields(fields: Record<string, unknown>): Record<string, unk
  *  not a scan. */
 const IDENTITY_SEARCH_LIMIT = 100;
 
-/** The Legal Entity columns the list route's `search` matches by similarity
- *  (its search vector covers all four), keyed to their surface names. */
-const NAME_LIKE_FIELDS: ReadonlyArray<readonly [column: string, surface: string]> = [
-  ['name', 'Name'],
-  ['legal_name', 'Legal Name'],
-  ['also_known_as', 'Also Known As'],
-  ['other_names', 'Other Names'],
-];
-const NAME_LIKE_COLUMNS: ReadonlySet<string> = new Set(NAME_LIKE_FIELDS.map(([column]) => column));
+/** The columns a descriptor lets `FUZZY` name: none, every field, or the
+ *  listed ones. */
+function fuzzyColumnsOf(descriptor: SchemaTypeDescriptor | undefined): ReadonlySet<string> {
+  const declared = descriptor?.supportsFuzzyResolution;
+  if (declared === undefined || declared === false) return new Set();
+  if (declared === true) return new Set(descriptor?.fields.map((f) => f.fieldId) ?? []);
+  return new Set(declared);
+}
 
-function nameLikeFieldsOf(row: Record<string, unknown>): Record<string, unknown> {
+/** Every fuzzy-matchable value the row carries, under its surface name, so
+ *  the judge sees the alias or legal name that put the row on the shortlist. */
+function fuzzyFieldsOf(args: {
+  row: Record<string, unknown>;
+  descriptor: SchemaTypeDescriptor | undefined;
+  fuzzyColumns: ReadonlySet<string>;
+}): Record<string, unknown> {
   const names: Record<string, unknown> = {};
-  for (const [column, surface] of NAME_LIKE_FIELDS) {
-    const value = row[column];
-    if (value !== null && value !== undefined) names[surface] = value;
+  for (const field of args.descriptor?.fields ?? []) {
+    if (!args.fuzzyColumns.has(field.fieldId)) continue;
+    const value = args.row[field.fieldId];
+    if (value !== null && value !== undefined) names[field.displayName] = value;
   }
   return names;
 }

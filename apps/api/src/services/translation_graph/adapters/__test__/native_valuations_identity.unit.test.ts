@@ -180,6 +180,19 @@ describe('NativeValuationsAdapter.resolveEntity — a FUZZY name is a similarity
     expect(String((fetchSpy.mock.calls[0] ?? [])[0])).toContain('search=ACME');
     expect(result.candidates.map((c) => c.externalId)).toEqual(['le-1']);
   });
+  it('refuses FUZZY on a field the record type does not declare fuzzy, before searching', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    await expect(
+      adapter().resolveEntity({
+        record: { Name: 'Acme Ltd', City: 'York' },
+        recordType: 'Legal Entity',
+        candidates: [],
+        constraints: { any: [{ all: [{ field: 'Name', fuzzy: true }, { field: 'City', fuzzy: true }] }] },
+      }),
+    ).rejects.toThrow('FUZZY on `City` is not supported by Legal Entity');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('NativeValuationsAdapter.resolveEntity — a website is one identity however it is written', () => {
