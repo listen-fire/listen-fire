@@ -505,9 +505,13 @@ export function scanInstanceChains(source: string): InstanceChain[] {
             visitWrite(statement.value.write, aliasScope);
             const handle = writeHandleGrounding(statement.value.write, aliasScope);
             if (handle) aliasScope.set(statement.name, handle);
-          } else if (statement.value.kind === 'match') {
-            visitWrite(statement.value.match, aliasScope);
-            const handle = writeHandleGrounding(statement.value.match, aliasScope);
+          } else if (statement.value.kind === 'match' || statement.value.kind === 'link') {
+            // A link body IS a match (the parser made it one), so it grounds
+            // the name the same way.
+            const match =
+              statement.value.kind === 'match' ? statement.value.match : statement.value.link.to.match;
+            visitWrite(match, aliasScope);
+            const handle = writeHandleGrounding(match, aliasScope);
             if (handle) aliasScope.set(statement.name, handle);
           } else if (statement.value.kind === 'expr') {
             visitSlot(statement.value.expr, aliasScope);
@@ -556,6 +560,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           else if (value.kind === 'node') visitNode(value.node, aliasScope);
           else if (value.kind === 'write') visitWrite(value.write, aliasScope);
           else if (value.kind === 'match') visitWrite(value.match, aliasScope);
+          else if (value.kind === 'link') visitWrite(value.link.to.match, aliasScope);
           else if (value.kind === 'block') {
             visitHead(value.block.head, aliasScope);
             walk(value.block.body, blockScope(value.block.head, aliasScope));
@@ -583,6 +588,9 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           break;
         case 'match':
           visitWrite(statement.match, aliasScope);
+          break;
+        case 'link':
+          if (statement.link.to.kind === 'match') visitWrite(statement.link.to.match, aliasScope);
           break;
         case 'call':
           for (const arg of statement.args) visitCallArg(arg, aliasScope);

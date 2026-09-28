@@ -39,6 +39,7 @@ import {
   type Statement,
   type TypeRef,
   type MatchExpression,
+  type LinkExpression,
   type WriteExpression,
 } from '../parser/ast';
 import { constructionAsCall, pathRootName, spellPathHead } from '../parser/ast';
@@ -1544,12 +1545,15 @@ class Projection {
     const steps: Step[] = [];
     for (const statement of statements) {
       const step = this.step(statement);
-      if (step !== undefined) steps.push(step);
+      if (Array.isArray(step)) steps.push(...step);
+      else if (step !== undefined) steps.push(step);
     }
     return steps;
   }
 
-  private step(statement: Statement): Step | undefined {
+  /** Mostly one step per statement; a `link` body is two — the find, then
+   *  the link — exactly as its two-statement spelling projects. */
+  private step(statement: Statement): Step | Step[] | undefined {
     switch (statement.kind) {
       case 'import':
       case 'shape':
@@ -1612,7 +1616,7 @@ class Projection {
       case 'match':
         return this.matchStep(statement.match, statement.span);
       case 'link':
-        return this.linkStep(statement.link.span);
+        return this.linkSteps(statement.link);
       case 'unlink': {
         const scope = this.scopeOfNearest(statement.span);
         return {
@@ -1656,7 +1660,7 @@ class Projection {
   /** The step a RETURNED right-hand side projects in its own right — what the
    *  movement DOES, which a return must never hide. Undefined where the value
    *  is just a value; the `return` step then carries it. */
-  private returnedEffectStep(value: RValue, at: Span): Step | undefined {
+  private returnedEffectStep(value: RValue, at: Span): Step | Step[] | undefined {
     switch (value.kind) {
       case 'write':
         return {
@@ -1666,6 +1670,8 @@ class Projection {
         };
       case 'match':
         return this.matchStep(value.match, at);
+      case 'link':
+        return this.linkSteps(value.link);
       case 'call':
         return this.callStep(value.call, undefined);
       case 'block': {
@@ -1682,7 +1688,7 @@ class Projection {
     }
   }
 
-  private assignStep(binding: string, value: RValue, at: Span): Step | undefined {
+  private assignStep(binding: string, value: RValue, at: Span): Step | Step[] | undefined {
     switch (value.kind) {
       case 'write':
         return {
@@ -1692,6 +1698,8 @@ class Projection {
         };
       case 'match':
         return this.matchStep(value.match, at);
+      case 'link':
+        return this.linkSteps(value.link);
       case 'extract':
         return this.extractStep(value.extract.span, value.extract.from, binding, at);
       case 'await': {
@@ -1845,19 +1853,26 @@ class Projection {
     return { fields, children };
   }
 
-  private linkStep(span: Span): Step | undefined {
-    const recorded = this.nodes.get(`link:${spanKey(span)}`);
-    if (recorded?.kind !== 'link') return undefined;
+  /** `link a -[:e]-> b` is one step. A body is the match it desugars to, then
+   *  the link onto the record that match found. */
+  private linkSteps(link: LinkExpression): Step[] {
+    const found = link.to.kind === 'match' ? this.matchStep(link.to.match, link.to.match.span) : undefined;
+    const recorded = this.nodes.get(`link:${spanKey(link.span)}`);
+    if (recorded?.kind !== 'link') return found !== undefined ? [found] : [];
     const node: RecordedLink = recorded;
     const from = this.endpoint(node.from, node.scope);
-    const to = this.endpoint(node.to, node.scope);
+    const to: StoryEndpoint =
+      link.to.kind === 'handle'
+        ? this.endpoint(link.to.name, node.scope)
+        : { kind: 'record', id: recordId(link.to.match.span) };
     this.edges.push({ from, to, edge: node.edge, kind: 'link' });
-    return { kind: 'link', edge: node.edge, from, to, at: span };
+    const step: Step = { kind: 'link', edge: node.edge, from, to, at: link.span };
+    return found !== undefined ? [found, step] : [step];
   }
 
   /** A `match` finds a row of the graph — recorded by the checker exactly as a
    *  write body is, with action `find`. */
-  private matchStep(match: MatchExpression, at: Span): Step {
+  private matchStep(match: MatchExpression, at: Span): Extract<Step, { kind: 'match' }> {
     const recorded = this.writes.get(spanKey(match.span));
     return {
       kind: 'match',

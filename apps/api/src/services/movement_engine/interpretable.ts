@@ -271,6 +271,9 @@ class InterpretabilityScan {
             case 'match':
               this.scanWrite(statement.value.match);
               break;
+            case 'link':
+              this.scanWrite(statement.value.link.to.match);
+              break;
             case 'expr':
               this.scanSlot(statement.value.expr);
               break;
@@ -380,7 +383,8 @@ class InterpretabilityScan {
           // Runtime-dependent rejections (cross-graph endpoints, an
           // adapter without the capability) are not statically decidable
           // here — like other binding-kind checks they surface as failed
-          // runs.
+          // runs. A body is the match it desugars to.
+          if (statement.link.to.kind === 'match') this.scanWrite(statement.link.to.match);
           break;
         case 'unlink':
           // The inverse of the bare-handle link (the Adapter.unlinkRecords
