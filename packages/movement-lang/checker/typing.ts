@@ -161,13 +161,18 @@ export const TypedDiagnosticCodes = {
   AMBIGUOUS_PROPERTY: 'MOV_AMBIGUOUS_PROPERTY',
   EXTRACT_UNKNOWN_FIELD: 'MOV_EXTRACT_UNKNOWN_FIELD',
   EXTRACT_TYPE_CONFLICT: 'MOV_EXTRACT_TYPE_CONFLICT',
-  /** Info severity: an unannotated extract field flows into a typed write
+  /** Info severity: an unannotated extract field flows into an option-set write
    *  target — suggest the explicit (borrowed) annotation. The message names
    *  the discharge in the same breath, because annotating is exactly what
    *  makes the read `T | absent` (R14) and a plain write field then refuses
    *  it: a nudge that led an author into a refusal it never mentioned would
    *  be pointing two ways at once. */
   EXTRACT_ANNOTATE: 'MOV_EXTRACT_ANNOTATE',
+  /** An UNANNOTATED extract field — text, because the shortcut asks the model
+   *  for words — written into a field text cannot fill (a number, a date, a
+   *  yes/no, a file). TypeScript's string-where-number-is-required. The
+   *  message names the annotation that makes the model answer the right type. */
+  EXTRACT_NEEDS_ANNOTATION: 'MOV_EXTRACT_NEEDS_ANNOTATION',
   NARROWING: 'MOV_NARROWING',
   CALL_ARG_TYPE: 'MOV_CALL_ARG_TYPE',
   /** A comparison (relational `< <= > >=` or equality `== !=`) whose two
@@ -365,6 +370,12 @@ export const TypedDiagnosticCodes = {
    *  reports the same shape as an always-truthy condition. Silent whenever the
    *  subject's type is unknown — an underspecified surface is not a claim. */
   PRESENCE_TEST_CONSTANT: 'MOV_PRESENCE_TEST_CONSTANT',
+  /** A presence test (`== null`, `!= null`, `EXISTS`, `ISNULL`) on an
+   *  extracted TEXT field, which is never absent — a text not found is `""`.
+   *  An ERROR, unlike the constant-test note: the guard's author meant
+   *  "was it found", and the test they wrote can no longer answer that. The
+   *  message names the emptiness test that does. */
+  PRESENCE_TEST_ON_TEXT: 'MOV_PRESENCE_TEST_ON_TEXT',
   /** A read or traversal off a position whose union has had EVERY member ruled
    *  out by the `IS` tests above it — the empty union, TypeScript's `never`.
    *  Nothing can reach the branch, so there is no surface to read. Reaching the
@@ -3056,6 +3067,9 @@ export class ExpressionTyping {
         // only when something always answers); namespaced stdlib calls
         // (bridge-folded dotted ids) declare their returns. Additive only —
         // every other bare function stays untyped (silent).
+        if (expr.fn === 'isnull' && expr.args.length === 1) {
+          this.refuseTextPresenceTest(expr.args[0], 'absent');
+        }
         if (expr.fn === FILE_FUNCTION_ID) return 'file';
         if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);
         if (expr.fn === CHUNKS_FUNCTION_ID) return this.typeChunksCall(args);
@@ -3389,6 +3403,7 @@ export class ExpressionTyping {
     ];
     for (const [subject, subjectType] of sides) {
       if (isNullLiteral(subject)) continue;
+      if (this.refuseTextPresenceTest(subject, op === 'eq' ? 'absent' : 'present')) continue;
       const label = subjectLabel(subject);
       if (label === undefined) continue;
       // The subject's own type answers when it HAS one (a field read, a typed
@@ -3405,6 +3420,40 @@ export class ExpressionTyping {
         'info',
       );
     }
+  }
+
+  /**
+   * A presence test on an extracted TEXT field — `x.f == null`, `!= null`,
+   * `EXISTS(x.f)`, `ISNULL(x.f)` — can never say anything: a text the model
+   * did not find is handed over as `""`, never absent. TypeScript refuses the
+   * same shape ("this comparison appears to be unintentional because the
+   * types have no overlap"), and so does this, naming the emptiness test that
+   * does what the guard meant.
+   *
+   * Only an extracted field: that "" is a promise the engine keeps. A system's
+   * text field is typed the same, but a source may still hand back nothing,
+   * so a guard on one stays legal. Returns true when it fired.
+   */
+  private refuseTextPresenceTest(subject: Expression, asks: 'present' | 'absent'): boolean {
+    const field = directFieldRead(subject);
+    if (field === undefined) return false;
+    const position = this.rootType(field.root);
+    if (position?.kind !== 'extract') return false;
+    const declared = position.node.properties.get(field.propertyId);
+    if (declared === undefined) return false;
+    const isText =
+      declared.explicit === 'text' || (declared.explicit === undefined && declared.annotationRaw === undefined);
+    if (!isText) return false;
+    const label = `${field.root}.${quoteName(field.propertyId)}`;
+    const [verdict, fix] =
+      asks === 'present'
+        ? ['always true', `\`${label} != ""\` (or \`LENGTH(${label}) > 0\`)`]
+        : ['always false', `\`${label} == ""\``];
+    this.report(
+      TypedDiagnosticCodes.PRESENCE_TEST_ON_TEXT,
+      `'${label}' is extracted text, and a text the model did not find is "" — never absent — so testing it for null is ${verdict}. Test whether it is empty instead: ${fix}.`,
+    );
+    return true;
   }
 
   /** WITHIN's right side, when literal, must be a duration: `<n>d` days,
@@ -4572,44 +4621,64 @@ export class ExpressionTyping {
       // write field, an ordered comparison), not at the read.
       //
       // Text is the exception, because text HAS such a value: the runtime
-      // hands a text field nobody found over as `""` (`presentText` in the
+      // hands a text field nobody found over as `""` (`presentTextFields` in the
       // engine's extraction export), so the read is present, and a text a
       // program only prints or writes needs no discharge.
       return field.explicit === 'text' ? 'text' : maybeAbsent(field.explicit);
     }
-    // Backward adoption is DEMOTED (explicit over implicit): a typed write
-    // target no longer silently types the extraction — it earns an
-    // info-severity suggestion to annotate, and the field stays untyped.
-    // BUT only when the field has NO annotation: if it carries one that simply
-    // didn't resolve here (missing schema / bad borrow), "annotate it" is
-    // misleading — the author already did, and the engine re-resolves live.
-    // And only when the annotation would ADD something: an unannotated
-    // extraction already yields text, so a plain-text target has nothing to
-    // constrain (TypeScript doesn't ask for `: string` on a string) — and a
-    // `json` target constrains even less, since it accepts every data shape.
-    if (
-      writeTarget !== undefined &&
-      field.annotationRaw === undefined &&
-      stripAbsent(writeTarget.type) !== 'text' &&
-      stripAbsent(writeTarget.type) !== 'json'
-    ) {
-      const annotation =
-        writeTarget.path ??
-        (typeof writeTarget.type === 'string' ? writeTarget.type : undefined);
-      if (annotation !== undefined) {
-        field.suggested ??= new Set();
-        if (!field.suggested.has(annotation)) {
-          field.suggested.add(annotation);
-          this.options.report(
-            TypedDiagnosticCodes.EXTRACT_ANNOTATE,
-            `'${propertyId}' on ${nodeLabel} flows into a ${describeFieldType(writeTarget.type)} field${writeTarget.path !== undefined ? ` (${writeTarget.path})` : ''} — annotate it as such (\`${propertyId}: <${borrowedAnnotationSpelling(annotation)}> "…"\`) so the extraction is constrained by the target's type; only explicit annotations constrain extraction. An annotated field reads as its type OR absent, so discharge that in the same edit — write the target field with '?:' (set-if-empty), wrap the read in COALESCE, or guard on it — since a plain field is refused a value that may be absent`,
-            field.span,
-            'info',
-          );
-        }
-      }
+    // An UNANNOTATED field is text — the inline shortcut asks the model for
+    // words — and, like `<text>`, present. Only an annotation constrains what
+    // the model answers, so a target that needs something text cannot be (a
+    // number, a date, a yes/no, a file) is refused here, naming the
+    // annotation, exactly as TypeScript refuses a string where a number is
+    // required. An option set is text-shaped, so it earns the suggestion
+    // instead: the value may still land, and the annotation is what makes it
+    // one of the options.
+    //
+    // A field whose annotation simply didn't resolve here (missing schema /
+    // bad borrow) is neither: the author already annotated it and the engine
+    // re-resolves live, so it stays untyped and unremarked.
+    if (field.annotationRaw !== undefined) return undefined;
+    if (writeTarget === undefined) return 'text';
+    const targetBase = baseKind(writeTarget.type);
+    if (targetBase === 'text' || targetBase === 'json' || targetBase === 'absent') {
+      if (isEnumType(unwrapList(writeTarget.type))) this.suggestAnnotation(field, propertyId, nodeLabel, writeTarget);
+      return 'text';
     }
+    if (targetBase === 'record') return 'text';
+    const primitive = describeFieldType(unwrapList(writeTarget.type));
+    const borrow =
+      writeTarget.path !== undefined
+        ? ` (or borrow the field's own type: \`${propertyId}: <${borrowedAnnotationSpelling(writeTarget.path)}> "…"\`)`
+        : '';
+    this.report(
+      TypedDiagnosticCodes.EXTRACT_NEEDS_ANNOTATION,
+      `'${propertyId}' on ${nodeLabel} is text — a field with no annotation asks the model for words — and it is written into a ${describeFieldType(writeTarget.type)} field${writeTarget.path !== undefined ? ` (${writeTarget.path})` : ''}. Annotate it so the model answers a ${primitive}: \`${propertyId}: <${primitive}> "…"\`${borrow}. An annotated ${primitive} may not be found, so write it with '?:' (set-if-empty), or fall back with COALESCE.`,
+    );
     return undefined;
+  }
+
+  /** The info nudge toward an annotation that would ADD a constraint (an
+   *  option set) without the write being wrong without it. Deduped per
+   *  (field, target) so repeated writes say it once. */
+  private suggestAnnotation(
+    field: ExtractFieldInfo,
+    propertyId: string,
+    nodeLabel: string,
+    writeTarget: WriteTargetRef,
+  ): void {
+    const annotation =
+      writeTarget.path ?? (typeof writeTarget.type === 'string' ? writeTarget.type : undefined);
+    if (annotation === undefined) return;
+    field.suggested ??= new Set();
+    if (field.suggested.has(annotation)) return;
+    field.suggested.add(annotation);
+    this.options.report(
+      TypedDiagnosticCodes.EXTRACT_ANNOTATE,
+      `'${propertyId}' on ${nodeLabel} flows into a ${describeFieldType(writeTarget.type)} field${writeTarget.path !== undefined ? ` (${writeTarget.path})` : ''} — annotate it as such (\`${propertyId}: <${borrowedAnnotationSpelling(annotation)}> "…"\`) so the extraction is constrained by the target's type; only explicit annotations constrain extraction. An annotated field reads as its type OR absent, so discharge that in the same edit — write the target field with '?:' (set-if-empty), wrap the read in COALESCE, or guard on it — since a plain field is refused a value that may be absent`,
+      field.span,
+      'info',
+    );
   }
 }
 

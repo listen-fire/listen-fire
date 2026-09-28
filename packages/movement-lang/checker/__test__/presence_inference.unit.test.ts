@@ -98,11 +98,46 @@ describe('an extracted text field is present', () => {
     expect(codes(`${EXTRACT}  write chat-[:note]-> { Body: r.title }`)).toEqual([]);
   });
 
-  it('so testing it for presence is constant, and says so', () => {
-    const infos = all(`${EXTRACT}  if EXISTS(r.title) { write chat-[:note]-> { Body: "y" } }`).filter(
-      (d) => d.code === 'MOV_PRESENCE_TEST_CONSTANT',
+  it('so testing it for null is refused, naming the emptiness test', () => {
+    const body = `${EXTRACT}  if EXISTS(r.title) { write chat-[:note]-> { Body: "y" } }`;
+    expect(codes(body)).toEqual(['MOV_PRESENCE_TEST_ON_TEXT']);
+    expect(messages(body)).toContain('r.title != ""');
+  });
+
+  it('every spelling of the test is refused, the shortcut included', () => {
+    for (const test of ['r.note == null', 'r.note != null', 'ISNULL(r.note)', 'EXISTS(r.note)', 'ISNULL(r.title)']) {
+      expect(codes(`${EXTRACT}  if ${test} { write chat-[:note]-> { Body: "y" } }`)).toEqual([
+        'MOV_PRESENCE_TEST_ON_TEXT',
+      ]);
+    }
+    expect(messages(`${EXTRACT}  if ISNULL(r.note) { write chat-[:note]-> { Body: "y" } }`)).toContain(
+      'r.note == ""',
     );
-    expect(infos).toHaveLength(1);
+  });
+
+  it('inside a nested node too', () => {
+    expect(
+      codes(`${EXTRACT}  r-[i:item]-> { if EXISTS(i.label) { write chat-[:note]-> { Body: i.label } } }`),
+    ).toEqual(['MOV_PRESENCE_TEST_ON_TEXT']);
+  });
+
+  it('a typed field may still be tested — it can be absent', () => {
+    expect(codes(`${EXTRACT}  if EXISTS(r.size) { write chat-[:note]-> { Body: "sized" } }`)).toEqual([]);
+    expect(codes(`${EXTRACT}  if ISNULL(r.verdict) { write chat-[:note]-> { Body: "none" } }`)).toEqual([]);
+  });
+
+  it('a system text field may still be tested — a source can hand back nothing', () => {
+    expect(codes('  if EXISTS(c.`Name`) { write chat-[:note]-> { Body: "y" } }')).toEqual([]);
+  });
+
+  it('the shortcut written into a number field is refused, naming the annotation', () => {
+    const body = `${EXTRACT}  write chat-[:note]-> { Count: r.note }`;
+    expect(codes(body)).toEqual(['MOV_EXTRACT_NEEDS_ANNOTATION']);
+    expect(messages(body)).toContain('note: <number> "…"');
+  });
+
+  it('the shortcut is text, so it compares as text', () => {
+    expect(codes(`${EXTRACT}  big = r.note > 3`)).toContain('MOV_COMPARE_TYPE_MISMATCH');
   });
 
   it('the inline shortcut fills a plain write field', () => {
