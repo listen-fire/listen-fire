@@ -168,6 +168,10 @@ const messageRefSchema = z.object({
 });
 export type GmailMessageRef = z.infer<typeof messageRefSchema>;
 
+/** A message history reports as added, with the id of the history record that
+ *  added it — the point a reader that stops part way through resumes from. */
+export type GmailHistoryAddition = GmailMessageRef & { historyId?: string };
+
 const messageListSchema = z.object({
   messages: z.array(messageRefSchema).nullish(),
   nextPageToken: z.string().nullish(),
@@ -444,6 +448,8 @@ export class GmailApiClient {
     labelIds?: readonly string[];
     maxResults?: number;
     pageToken?: string;
+    /** Gmail's search leaves Spam and Trash out unless this is set. */
+    includeSpamTrash?: boolean;
   }): Promise<{ messages: GmailMessageRef[]; nextPageToken?: string }> {
     const page = await this.call('users.messages.list', messageListSchema, () =>
       this.readApi.users.messages.list({
@@ -454,6 +460,7 @@ export class GmailApiClient {
           ? { maxResults: Math.min(input.maxResults, GMAIL_MAX_PAGE) }
           : {}),
         ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}),
+        ...(input.includeSpamTrash === true ? { includeSpamTrash: true } : {}),
       }),
     );
     return {
@@ -488,7 +495,7 @@ export class GmailApiClient {
     startHistoryId: string;
     labelId?: string;
     pageToken?: string;
-  }): Promise<{ added: GmailMessageRef[]; nextPageToken?: string; historyId?: string }> {
+  }): Promise<{ added: GmailHistoryAddition[]; nextPageToken?: string; historyId?: string }> {
     const page = await this.call('history.list', historyListSchema, () =>
       this.readApi.users.history.list({
         userId: SELF,
@@ -498,10 +505,11 @@ export class GmailApiClient {
         ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}),
       }),
     );
-    const added: GmailMessageRef[] = [];
+    const added: GmailHistoryAddition[] = [];
     for (const record of page.history ?? []) {
       for (const entry of record.messagesAdded ?? []) {
-        if (entry.message) added.push(entry.message);
+        if (!entry.message) continue;
+        added.push({ ...entry.message, ...(record.id ? { historyId: record.id } : {}) });
       }
     }
     return {

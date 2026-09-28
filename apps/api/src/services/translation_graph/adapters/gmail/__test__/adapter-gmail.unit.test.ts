@@ -185,8 +185,10 @@ describe('the manifest', () => {
     expect(GMAIL_MANIFEST.subscribableEvents).toEqual(['message_received']);
     expect(GMAIL_MANIFEST.listenConfig?.map((k) => k.key)).toEqual([
       'query',
+      'labels',
       'pollIntervalSeconds',
     ]);
+    expect(GMAIL_MANIFEST.listenConfig?.find((k) => k.key === 'labels')?.format).toBe('strings');
   });
 
   it('says what the connector cannot do, rather than leaving it to be found out', () => {
