@@ -167,21 +167,21 @@ function maxPdfBufferBytes(): number {
  * read every born-digital PDF it is sent. A scanned page has no text layer, so
  * the caller falls through to the provider.
  */
-async function pdfTextLayer(bytes: Buffer, ref: FileRef): Promise<string | null> {
+async function pdfTextLayer(bytes: Buffer, name: string | undefined): Promise<string | null> {
   try {
     const { extractText } = await import('unpdf');
     const { text, totalPages } = await extractText(new Uint8Array(bytes), { mergePages: true });
     const dense = text.replace(/\s/g, '').length;
     if (totalPages > 0 && dense / totalPages > PDF_TEXT_LAYER_CHARS_PER_PAGE) return text;
     logger.debug('[movement:file-text] the PDF has no usable text layer — trying OCR', {
-      name: ref.name,
+      name,
       totalPages,
       chars: dense,
     });
     return null;
   } catch (error) {
     logger.warn('[movement:file-text] the PDF text layer could not be read — trying OCR', {
-      name: ref.name,
+      name,
       message: error instanceof Error ? error.message : String(error),
       error,
     });
@@ -193,16 +193,20 @@ async function pdfTextLayer(bytes: Buffer, ref: FileRef): Promise<string | null>
  * A PDF: its text layer first, the OCR provider second. An OCR failure after an
  * empty text layer says BOTH halves — "no text layer; OCR is not configured …"
  * — because either one alone sends the reader after the wrong thing.
+ *
+ * Exported so a linked document (a deck fetched from a link) is read by this
+ * same function: the linked path used to send every PDF straight to OCR, so a
+ * deployment without OCR could read attachments but not the same file linked.
  */
-async function extractPdfText(
-  resolved: ResolveFileRefResult,
-  ref: FileRef,
+export async function extractPdfText(
+  stream: Readable,
+  file: { name?: string; size?: number },
 ): Promise<string | FileUnreadable | null> {
-  const declaredSize = resolved.size ?? ref.size ?? 0;
+  const declaredSize = file.size ?? 0;
   const cap = maxPdfBufferBytes();
-  if (declaredSize > cap) return services.ocr.extractPdf(resolved.stream, { size: declaredSize });
+  if (declaredSize > cap) return services.ocr.extractPdf(stream, { size: declaredSize });
 
-  const bytes = await bufferStreamCapped(resolved.stream, cap);
+  const bytes = await bufferStreamCapped(stream, cap);
   if (bytes === null) {
     // The stream is spent, so OCR can no longer be offered the bytes either.
     return {
@@ -210,7 +214,7 @@ async function extractPdfText(
       detail: `the PDF is larger than the ${cap}-byte limit for reading a PDF`,
     };
   }
-  const layer = await pdfTextLayer(bytes, ref);
+  const layer = await pdfTextLayer(bytes, file.name);
   if (layer !== null) return layer;
   try {
     return await services.ocr.extractPdf(Readable.from(bytes), { size: bytes.length });
@@ -227,7 +231,7 @@ async function extractTextFromStream(
 ): Promise<string | FileUnreadable | null> {
   switch (kind) {
     case 'pdf':
-      return extractPdfText(resolved, ref);
+      return extractPdfText(resolved.stream, { name: ref.name, size: resolved.size ?? ref.size });
     case 'pptx':
       return getPptxText(resolved.stream);
     case 'xlsx':
