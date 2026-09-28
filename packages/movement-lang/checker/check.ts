@@ -2913,7 +2913,7 @@ class Checker {
         // place (positions/writableRoots/resultShape alias one object).
         const symbol = scope.symbols.get(statement.name);
         if (symbol?.kind === 'shape' && symbol.schema) {
-          this.resolveShapeBorrows(statement.root, statement.name, symbol.schema, scope);
+          this.resolveShapeFieldTypes(statement.root, statement.name, symbol.schema, scope);
         }
         this.checkShapeDescriptions(statement.root, scope);
         return;
@@ -8259,21 +8259,22 @@ class Checker {
 
   /**
    * A declared node's fields take the same explicit types extract annotations
-   * do: primitive names or BORROWED dotted paths into another graph's field
-   * (`crm_stage: crm.companies.funding_stage`). `shapeToSchema` degraded
-   * dotted names to text at hoist time (the borrow's graph may not be
-   * bound yet); here — at the declaration's source position — each borrow
-   * resolves through the same path logic, reports the same MOV_BORROW_*
-   * diagnostics, and patches the schema in place.
+   * do: primitive names, refinements declared in THIS file, or BORROWED dotted
+   * paths into another graph's field (`crm_stage: crm.companies.funding_stage`).
+   * `shapeToSchema` degraded anything it could not name to text at hoist time
+   * (the borrow's graph may not be bound yet); here — at the declaration's
+   * source position — each annotation resolves through the same resolver an
+   * extract field's does, reports the same diagnostics (an unknown name,
+   * including a refinement only an IMPORTING file declares, is
+   * MOV_UNKNOWN_TYPE_NAME), and patches the schema in place.
    */
-  private resolveShapeBorrows(
+  private resolveShapeFieldTypes(
     node: ShapeNode,
     key: string,
     schema: InstanceSchema,
     scope: Scope,
   ): void {
     for (const field of node.fields) {
-      if (borrowedTypeSegments(field.type) === undefined) continue;
       const resolved = this.resolveExtractFieldType(
         { type: field.type, span: field.span },
         scope,
@@ -8284,7 +8285,7 @@ class Checker {
       }
     }
     for (const child of node.children) {
-      this.resolveShapeBorrows(child, `${key}.${child.name}`, schema, scope);
+      this.resolveShapeFieldTypes(child, `${key}.${child.name}`, schema, scope);
     }
   }
 

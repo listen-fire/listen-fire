@@ -205,15 +205,17 @@ export interface ExtractSpecOptions {
   resolveDescription?: (slot: ExprSlot) => Promise<string>;
   /**
    * The node declaration `node entry: <Entry>` takes as its shape, with the
-   * evaluator for ITS words — a declaration's descriptions read the scope it
-   * was declared in (its file's), not the scope of whichever movement reuses
-   * it. Absent (or unresolvable) and a declared node cannot be built.
+   * resolvers for ITS words and types — a declaration's descriptions and
+   * refinements read the scope it was declared in (its file's), not the scope
+   * of whichever movement reuses it. Absent (or unresolvable) and a declared
+   * node cannot be built.
    */
   resolveDeclaredNode?: (type: string) => DeclaredNodeShape | undefined;
 }
 
 export interface DeclaredNodeShape {
   root: ShapeNode;
+  resolveDeclaredType: (name: string) => FieldType | undefined;
   resolveDescription: (slot: ExprSlot) => Promise<string>;
 }
 
@@ -334,6 +336,7 @@ async function buildDeclaredNodeSpec(
   }
   const declaredOptions: ExtractSpecOptions = {
     ...options,
+    resolveDeclaredType: declared.resolveDeclaredType,
     resolveDescription: declared.resolveDescription,
   };
   const shape = await buildShapeNodeSpec(node.name, declared.root, declaredOptions);

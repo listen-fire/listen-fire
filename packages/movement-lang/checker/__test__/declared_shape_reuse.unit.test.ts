@@ -150,6 +150,26 @@ describe('an extraction node that takes a declaration as its shape', () => {
     const resolve: ResolveFile = (path) => (path === 'lib/entries' ? { source: lib } : undefined);
     expect(errors(source, resolve).map((d) => `${d.code}: ${d.message}`)).toEqual([]);
   });
+
+  it('refuses a field annotated with a name that is not a type', () => {
+    const declaration = ['node Entry: "each company" {', '  thesis: <Thesiss> "its thesis"', '}'].join('\n');
+    expect(codes(extractEntries, declaration)).toEqual([C.UNKNOWN_TYPE_NAME]);
+  });
+
+  it("refuses an imported declaration's refinement that only the IMPORTER declares", () => {
+    // PRELUDE declares `Thesis`; the library does not — lexical scoping, so the
+    // library's declaration cannot see it.
+    const lib = ['export node Entry: "each company" {', '  thesis: <Thesis> "its thesis"', '}'].join('\n');
+    const source = [
+      PRELUDE,
+      'import { Entry } from "lib/entries"',
+      'movement main(msg: <graph-[:message]->>) {',
+      ...extractEntries,
+      '}',
+    ].join('\n');
+    const resolve: ResolveFile = (path) => (path === 'lib/entries' ? { source: lib } : undefined);
+    expect(errors(source, resolve).map((d) => d.code)).toEqual([C.UNKNOWN_TYPE_NAME]);
+  });
 });
 
 describe('presence on a declared shape — exactly as on the inline block', () => {

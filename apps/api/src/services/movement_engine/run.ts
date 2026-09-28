@@ -1543,10 +1543,14 @@ class Interpreter {
   /** The running movement's body — the extraction module's backward
    *  type adoption scans it for writes the extracted fields flow into. */
   private movementBody: Statement[] = [];
-  /** The program's author-declared refinements (`type Thesis = <"A" | "B">`),
-   *  by name. File-level, so one map answers everywhere the checker's scope
-   *  resolution would. */
-  private declaredTypes: Map<string, SchemaFieldType> = new Map();
+  /** Each file's author-declared refinements (`type Thesis = <"A" | "B">`),
+   *  by the file environment they were declared in. A `type` is file-level and
+   *  lexically scoped exactly as a value is: a name resolves in the file that
+   *  WROTE it, never in the file that reuses what it wrote. */
+  private readonly fileTypes = new WeakMap<Environment, Map<string, SchemaFieldType>>();
+  /** The same, per library file — an imported declaration's types need no
+   *  library environment built, only its program. */
+  private readonly libraryTypes = new Map<string, Map<string, SchemaFieldType>>();
   private defaultLlm?: LlmClient;
   private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in
@@ -1600,7 +1604,6 @@ class Interpreter {
   }
 
   async run(program: Program): Promise<MovementRunResult> {
-    this.declaredTypes = declaredTypesIn(program);
     const { movement, movementEnv } = await this.prepareMovement(program);
     this.movementBody = movement.body;
     this.callStack.push(movement);
@@ -2526,6 +2529,7 @@ class Interpreter {
     program: Program,
   ): Promise<{ movement: MovementDeclaration; movementEnv: Environment }> {
     const fileEnv = new Environment();
+    this.fileTypes.set(fileEnv, declaredTypesIn(program));
 
     // File scope, pass 1 — declarations only (constructions are inert
     // data; adapters resolve lazily at first read/write). Movements are
@@ -2811,6 +2815,7 @@ class Interpreter {
     if (cached) return cached;
     const env = new Environment();
     this.libraryEnvs.set(file.path, env);
+    this.fileTypes.set(env, this.typesOfLibrary(file));
 
     const savedImports = this.currentImports;
     const savedOriginals = new Map(this.importOriginals);
@@ -2837,6 +2842,32 @@ class Interpreter {
       for (const [key, value] of savedOriginals) this.importOriginals.set(key, value);
     }
     return env;
+  }
+
+  private typesOfLibrary(file: LinkedFile): Map<string, SchemaFieldType> {
+    let types = this.libraryTypes.get(file.path);
+    if (types === undefined) {
+      types = declaredTypesIn(file.program);
+      this.libraryTypes.set(file.path, types);
+    }
+    return types;
+  }
+
+  /** The refinements visible where `env` sits: its file's. A scope rebuilt
+   *  from a park reads the running file's, as it always has. */
+  private typesIn(env: Environment | undefined): Map<string, SchemaFieldType> {
+    const file = env?.chainFromRoot()[0];
+    return (
+      (file !== undefined ? this.fileTypes.get(file) : undefined)
+      ?? (this.fileEnv !== undefined ? this.fileTypes.get(this.fileEnv) : undefined)
+      ?? new Map()
+    );
+  }
+
+  /** A node declaration's refinements: those of the scope it was DECLARED in —
+   *  the same scope its descriptions read. */
+  private shapeTypes(shape: Extract<Binding, { kind: 'shape' }>): Map<string, SchemaFieldType> {
+    return shape.library !== undefined ? this.typesOfLibrary(shape.library) : this.typesIn(shape.fileEnv);
   }
 
   private instanceBinding(name: string, construct: ConstructionCall): Binding {
@@ -3342,7 +3373,7 @@ class Interpreter {
           const schema = this.graphSchemaOf(segments[0], env);
           return schema ? resolveBorrowedField(schema, segments[1], segments[2]) : undefined;
         })()
-      : this.declaredTypes.get(expr.type);
+      : this.typesIn(env).get(expr.type);
     if (!isEnumType(resolved)) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
@@ -4930,7 +4961,8 @@ class Interpreter {
     if (subjectSurface.kind === 'unknown') {
       throw this.undiscriminatedIsTest(subjectName, subjectSurface.reason);
     }
-    const declared = shapeToSchema(graph.declaration, (name) => this.declaredTypes.get(name));
+    const types = this.shapeTypes(graph);
+    const declared = shapeToSchema(graph.declaration, (name) => types.get(name));
     return (
       surfaceMisfit(subjectSurface.surface, {
         schema: declared,
@@ -4971,7 +5003,7 @@ class Interpreter {
         const declaration = env.resolve(subject.shape);
         return declaration?.kind === 'shape'
           ? positionSurface(
-              shapeToSchema(declaration.declaration, (name) => this.declaredTypes.get(name)),
+              shapeToSchema(declaration.declaration, (name) => this.shapeTypes(declaration).get(name)),
               subject.node,
             )
           : { kind: 'unknown', reason: UNKNOWN_STRUCTURE };
@@ -5056,19 +5088,21 @@ class Interpreter {
         if (!schema) return undefined;
         return resolveBorrowedField(schema, rootName, fieldName);
       },
-      resolveDeclaredType: (name) => this.declaredTypes.get(name),
+      resolveDeclaredType: (name) => this.typesIn(env).get(name),
       // A description is a string expression like any other, so it is
       // evaluated in the firing environment — a constant it interpolates is
       // the same constant a write field would see.
       resolveDescription: (slot) => this.describeIn(slot, env),
-      // A reused declaration's words read the scope it was declared in.
+      // A reused declaration's words and types read the scope it was declared in.
       resolveDeclaredNode: (type) => {
         const binding = env.resolve(type);
         if (binding?.kind !== 'shape') return undefined;
         const { library } = binding;
         const declaredIn = binding.fileEnv ?? this.fileEnv ?? env;
+        const types = this.shapeTypes(binding);
         return {
           root: binding.declaration.root,
+          resolveDeclaredType: (name) => types.get(name),
           resolveDescription: async (slot) =>
             this.describeIn(slot, library !== undefined ? await this.libraryEnv(library) : declaredIn),
         };

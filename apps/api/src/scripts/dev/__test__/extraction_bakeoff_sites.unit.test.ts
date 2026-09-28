@@ -44,6 +44,7 @@ async function sitesOf(tree: string): Promise<number> {
         ? undefined
         : {
             root,
+            resolveDeclaredType: () => undefined,
             resolveDescription: async () => {
               throw new Error('these words interpolate nothing');
             },

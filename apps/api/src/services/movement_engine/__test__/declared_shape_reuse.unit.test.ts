@@ -508,6 +508,100 @@ describe('an IMPORTED declaration', () => {
     expect(llm.calls[0].system).toContain("the name, route by the library's lens");
     expect(llm.calls[0].system).not.toContain("the importer's lens");
   });
+
+  /** Runs `node entry: <Entry>` imported from a library that declares it
+   *  (and its refinement) as `library`; the importer adds `importerLines`. */
+  async function extractImported(library: string, importerLines: string[] = []) {
+    const source = [
+      PRELUDE,
+      'import { Entry } from "lib/entries"',
+      ...importerLines,
+      'movement m(msg: <inbox-[:message]->>) {',
+      '  found = extract from [msg.`text`] {',
+      '    node entry: <Entry>',
+      '  }',
+      '}',
+    ].join('\n');
+    const llm = queuedMovementLlm([{ 'x:extract_result#1': [{ entry: [] }] }]);
+    await runMovement({
+      source,
+      event: webhookEvent('email', { subject: 'Deals', text: 'Acme is raising.' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveFile: (path) => (path === 'lib/entries' ? { source: library } : undefined),
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: makeFakeAdapter('attio').adapter,
+      }),
+      llm: llm.client,
+      dryRun: true,
+    });
+    return llm.calls[0].system;
+  }
+
+  it("constrains a field by a refinement only its library declares", async () => {
+    const system = await extractImported(
+      [
+        'type Verdict = <"Keep" | "Drop">',
+        'export node Entry: "each company pitched" {',
+        '  verdict: <Verdict> "whether to keep it"',
+        '}',
+      ].join('\n'),
+    );
+    expect(system).toContain('`verdict` (enum: Keep | Drop)');
+  });
+
+  it("resolves a refinement the importer also names to the library's", async () => {
+    // PRELUDE declares `Thesis` as Consumer | Infra — the library's own wins.
+    const system = await extractImported(
+      [
+        'type Thesis = <"Fintech" | "Health">',
+        'export node Entry: "each company pitched" {',
+        '  thesis: <Thesis> "the thesis"',
+        '}',
+      ].join('\n'),
+    );
+    expect(system).toContain('`thesis` (enum: Fintech | Health)');
+    expect(system).not.toContain('Consumer');
+  });
+
+  it('an IMPORTED function extracts with its own file\'s refinements, inline and declared', async () => {
+    const library = [
+      PRELUDE,
+      'type Verdict = <"Keep" | "Drop">',
+      'node Local: "each company" { verdict: <Verdict> "keep or drop it" }',
+      'export node Note { body: <text> }',
+      'export function triage(n: <Note>) {',
+      '  found = extract from [n.body] {',
+      '    overall: <Verdict> "the batch as a whole"',
+      '    node entry: <Local>',
+      '  }',
+      '}',
+    ].join('\n');
+    const source = [
+      PRELUDE,
+      'import { triage } from "lib/triage"',
+      'movement m(msg: <inbox-[:message]->>) {',
+      '  triage(n: node { body: msg.`text` })',
+      '}',
+    ].join('\n');
+    const llm = queuedMovementLlm([{ 'x:extract_result#1': [{ entry: [] }] }]);
+    await runMovement({
+      source,
+      event: webhookEvent('email', { subject: 'Deals', text: 'Acme is raising.' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveFile: (path) => (path === 'lib/triage' ? { source: library } : undefined),
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: makeFakeAdapter('attio').adapter,
+      }),
+      llm: llm.client,
+      dryRun: true,
+    });
+    expect(llm.calls[0].system).toContain('`overall` (enum: Keep | Drop)');
+    expect(llm.calls[0].system).toContain('`verdict` (enum: Keep | Drop)');
+  });
 });
 
 describe('a spread of a declared structure, or of a record built in memory', () => {
