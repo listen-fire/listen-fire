@@ -211,6 +211,7 @@ function \`Intake\`(msg: <inbox-[:Email]->>) {
 \`\`\`
 
 - Every argument is a **position**: pass a bound name (the event, a write handle) when the callee's parameter type already matches, or build one on the spot — \`\`Log Lead\`(l: node { … })\` assembles exactly what the callee declares out of whatever the caller holds, computed values included.
+- A system can publish the same record kind along two edges — a readable collection and the edge a listener fires along. A record reached by walking the collection matches a parameter typed on the listener's own address with no wrapper needed, because the two promises share one position.
 - Related records travel as **edges of that literal**, so a whole small graph goes down in one argument: \`node { Name: …, files: msg-[a:Attachments]-> }\`. A call that needs two unrelated things takes two parameters instead, one per thing.
 - The callee sees only its parameters and ITS OWN file's top-level names — caller locals are invisible. An imported automation runs against its own file's imports and constructions, which is why a reusable automation constructs the instances it writes to.
 - A callee's effects are its writes, recorded on the caller's run.

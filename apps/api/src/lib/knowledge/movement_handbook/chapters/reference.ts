@@ -5,7 +5,7 @@ export const reference: Chapter = {
   title: 'Reference — the whole surface on one page (forms, operators, modifiers, pitfalls)',
   content: `## Reference — the whole surface on one page
 
-A terse lookup, not a lesson. The teaching chapters explain *why*; this one is for refreshing a single rule mid-author — the exact spelling of an operator, the write modifiers, the \`unique by\` forms, a traversal head. Learn the language from the other chapters; come back here to check a detail.
+A terse lookup, not a lesson. The teaching chapters explain *why*; this one is for refreshing a single rule mid-author — the exact spelling of an operator, the write modifiers, the \`unique by\` forms, a traversal head. Learn the language from the other chapters; come back here to check a detail. For one function's full entry — signature, presence, ordering, an example — the \`builtins\` chapter has a section per name (\`builtins#SUM\`).
 
 ### top-level
 
@@ -62,14 +62,15 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 
 - Compare: \`==\` \`!=\` \`<\` \`<=\` \`>\` \`>=\` \`CONTAINS\`. Logic: \`AND\` \`OR\` \`NOT\` \`EXISTS(…)\` \`IS <type>\`. Binding is \`=\` (never a comparison).
 - \`IS\` also takes a declared node (\`rec IS <Contact>\`): true when the record carries every field that structure declares — nested nodes don't gate it, extras allowed. Narrows the same way.
-- Aggregates / lists: \`CONCAT(a, b)\`, \`COALESCE(a, b)\` (first non-empty), \`ONLY(…)\` (the one that matched — fails the run on more than one), \`COUNT(…)\`, \`COLLECT(…)\`, \`JOIN(list, ", ")\`, \`SORT(list)\` / \`SORT(list, DESC)\` / \`SORT(list, key)\` / \`SORT(list, key, DESC)\`, \`[a, b]\` (list literal). \`JOIN\` / \`FIRST\` / \`LAST\` need a sequence: a \`SORT\`, an \`ORDER BY\` on the hop, or a relationship the source keeps in order.
-- Dicts: \`{ k: v }\` (dict literal, text keys only), \`AT(dict, "k")\` (lookup — present for a key the literal wrote, refused for one it did not, \`T | absent\` for a computed key).
-- Value iteration (each takes a function, \`(member) => { return … }\`): \`MAP(list, f)\`, \`FILTER(list, f)\`, \`REDUCE(list, start, f)\` (needs an ordered list; \`f\` is \`(carried, member)\`), \`GROUPBY(list, key)\` → dict of lists, \`KEYBY(list, key)\` → dict of members (a repeated key fails the run). The function may not \`await\`.
+- Aggregates / lists: \`CONCAT(a, b)\`, \`COALESCE(a, b)\` (first non-empty), \`ONLY(…)\` (the one that matched — fails the run on more than one), \`COUNT(…)\`, \`SUM(…)\`, \`AVG(…)\` (always present), \`MIN(…)\`, \`MAX(…)\` (\`T | absent\`), \`COLLECT(…)\`, \`JOIN(list, ", ")\`, \`SORT(list)\` / \`SORT(list, DESC)\` / \`SORT(list, key)\` / \`SORT(list, key, DESC)\`, \`[a, b]\` (list literal). \`JOIN\` / \`FIRST\` / \`LAST\` / \`AT(list, n)\` need a sequence: a \`SORT\`, an \`ORDER BY\` on the hop, or a relationship the source keeps in order.
+- Dicts: \`{ k: v }\` (dict literal, text keys only), \`AT(dict, "k")\` (lookup — present for a key the literal wrote, refused for one it did not, \`T | absent\` for a computed key or a dict of unknown shape). \`AT(list, n)\` — a number index, \`T | absent\`, same ordering need as \`FIRST\`.
+- Value iteration (each takes a function, \`(member) => { return … }\`): \`MAP(list, f)\` (alone may skip \`return\`; legal as a bare statement too), \`FILTER(list, f)\`, \`REDUCE(list, start, f)\` (needs an ordered list; \`f\` is \`(carried, member)\`), \`GROUPBY(list, key)\` → dict of lists, \`KEYBY(list, key)\` → dict of members (a repeated key fails the run). The function may not \`await\`.
 - \`MEMBERS(<T>)\` — a closed type's values, in declaration order. Refused on a known-values (open) field.
 - Value-level conditional: \`IF <cond> THEN <a> ELSE <b> END\` (uppercase; the lowercase \`if\` branches statements).
-- Strings: double-quoted, may span newlines, and interpolate with \${…} — including directly inside a call argument, e.g. \`AI("the company in \${msg.Subject}")\`.
+- Strings: double-quoted, may span newlines, and interpolate with \${…} — including directly inside a call argument, e.g. \`AI("the company in \${msg.Subject}")\`. An interpolated \`T | absent\` value prints as nothing.
 - \`AI("…")\` — a value from a language model; it sees only the prompt, so interpolate the context in. Optional second arg is the tier — \`"quick"\` (default), \`"careful"\`, \`"thorough"\`. Resolves to a real null when nothing applies — gate with \`EXISTS(…)\`.
-- Built-in helpers (bare, everywhere): \`TRIM\` \`LOWER\` \`UPPER\` \`LENGTH\` \`ABS\` \`ROUND\` \`TOSTRING\` \`TONUMBER\` \`SPLIT\` \`MULTI\` \`ISNULL\`.
+- Built-in helpers (bare, everywhere): \`TRIM\` \`LOWER\` \`UPPER\` \`LENGTH\` \`ABS\` \`ROUND\` \`FLOOR\` \`CEIL\` \`TOSTRING\` \`TONUMBER\` \`SPLIT\` \`MULTI\` \`ISNULL\`.
+- Unary minus: \`-x\`, \`-(a + b)\` — arithmetic negation; the traversal \`-[\` form is unrelated.
 - Coercers (bare): \`DATE(v)\`, \`DATETIME(v)\`, \`NUMBER(v)\`.
 - Helper families (deterministic, \`FAMILY.FUNCTION(…)\`): \`CURRENCY.GET_NUMBER_FROM_FIGURE\`, \`CURRENCY.GET_CODE_FROM_FIGURE\`, \`DATE.PARSE\`, \`DATE.ADD_DAYS\`, \`DATE.FORMAT(value, "MMMM D, YYYY")\`, \`DATE.FORMAT_ISO\`, \`DATE.TODAY("Europe/Berlin")\`, \`DATETIME.AT(date, "07:00", "Europe/Berlin")\`, \`TEXT.REGEX_EXTRACT\`, \`TEXT.SLUG\`, \`URL.HOST(text)\` → \`text | absent\` (the host, lowercased, \`www.\` kept — absent when the text isn't a URL with a host).
 - Time zones: \`DATE.TODAY(zone)\` is the day it is there (the run's firing moment, one answer per run); \`DATETIME.AT(date, time, zone)\` is the instant a wall-clock time names there. Move days with \`DATE.ADD_DAYS\` on the date and anchor each end of a window separately — daylight saving then takes care of itself. Zone and time are literals, checked when you save.

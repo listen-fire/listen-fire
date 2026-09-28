@@ -48,6 +48,7 @@ const ALL_CHAPTERS: ChapterId[] = [
   'use-cases',
   'runs',
   'reference',
+  'builtins',
 ];
 
 describe('movement_handbook registry', () => {

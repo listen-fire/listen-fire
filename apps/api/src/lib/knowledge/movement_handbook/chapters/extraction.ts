@@ -106,6 +106,28 @@ function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
 - \`found\` is then a list of results — one per piece — and a block over it (\`found-[c:company]->\`) walks each in turn, in the order the pieces were in.
 - \`READ\` and \`CHUNKS\` are in the expressions chapter, the gathering node \`deduped\` in the anatomy chapter's *collect-what-you-wrote*, and the plain plugin call in *through* below.
 
+### a yes-or-no field
+
+A field that answers a yes-or-no judgement is \`<boolean>\`, branched on directly:
+
+\`\`\`
+found = extract from [m.\`Body\`] {
+  node company: "the company this email is about" {
+    name:      "the company's name"
+    \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
+  }
+}
+
+found-[c:company]-> {
+  if c.\`Is Warm\` == null { ERROR("couldn't tell whether this is a warm contact") }
+  if c.\`Is Warm\` {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description: "Warm Lead" }
+  }
+}
+\`\`\`
+
+A \`<boolean>\` field is a typed field like any other, so it's \`T | absent\` until guarded — the guard clause above proves it present for the rest of the block. Once present it *is* the condition: \`if c.\`Is Warm\` { … }\` needs no comparison, and a description that argues both ways ("true when… false otherwise") gives the model a real decision to make rather than a value to lean toward.
+
 ### how hard it works
 
 \`\`\`
@@ -167,6 +189,33 @@ c-[r:_resources WHERE type == "FILE"]-> {
 
 Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A document a \`through [ … ]\` stage downloaded is a \`"FILE"\` too. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
   engineClaims: [
+    {
+      construct: 'a <boolean> extraction field, guarded then branched on directly with if',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Triage\`(m: <inbox-[:Email]->>) {
+  found = extract from [m.\`Body\`] {
+    node company: "the company this email is about" {
+      name:      "the company's name"
+      \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
+    }
+  }
+
+  found-[c:company]-> {
+    if c.\`Is Warm\` == null { ERROR("couldn't tell whether this is a warm contact") }
+    if c.\`Is Warm\` {
+      write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description: "Warm Lead" }
+    }
+  }
+}
+`,
+    },
     {
       construct: 'extract tier — one tier for every stage of the extraction',
       status: 'runs',
