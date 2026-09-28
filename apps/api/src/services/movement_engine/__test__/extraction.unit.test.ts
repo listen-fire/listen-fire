@@ -158,6 +158,7 @@ import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { MutationContext } from '../../translation_graph/mutation_context';
 import { positionData } from '../../translation_graph/types';
+import { candidateIsAllExact } from '../../translation_graph/uniqueness';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000010' as TeamId;
@@ -3691,6 +3692,66 @@ describe('a response that never answers the question is an error, not an empty e
 
     expect(slack.creates).toEqual([]);
     expect(llm.calls).toHaveLength(1);
+  });
+});
+
+// An empty key is no key. A text nobody found is handed over as "", and two
+// records that both lack a name are not thereby the same record — so a blank
+// identity component reaches the adapter's search as null, which every
+// adapter reads as "cannot match on this", and the engine's own exactness
+// check never counts two blanks as equal.
+describe('a unique-by key that came back empty matches nothing', () => {
+  const event = webhookEvent('email', { text: 'two unnamed companies' });
+  const UNNAMED = { adapterType: 'attio', externalId: 'existing-unnamed', data: { name: '' } };
+
+  it('two writes with an empty name create two records, never merging with an existing unnamed one', async () => {
+    const searched: Array<Record<string, unknown>> = [];
+    // A naive search that would happily match "" against the unnamed record
+    // already there — and, like every real adapter, finds nothing on null.
+    const attio = makeFakeAdapter('attio', {
+      resolveCandidates: (record) => {
+        searched.push(record);
+        return record.name == null ? [] : [UNNAMED];
+      },
+    });
+    const llm = queuedMovementLlm([
+      {
+        'x:extract_result#1': [
+          {
+            company: [
+              { name: wrap(''), website: wrap('one.fi') },
+              { name: wrap('  '), website: wrap('two.fi') },
+            ],
+          },
+        ],
+      },
+    ]);
+    await runMovement({
+      source: ONE_STAGE_FETCH_MOVEMENT,
+      event,
+      teamId: TEAM_ID,
+      catalog: movementCatalog,
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: attio.adapter,
+        slack: makeFakeAdapter('slack').adapter,
+      }),
+      llm: llm.client,
+    });
+
+    expect(searched.map((r) => r.name)).toEqual([null, null]);
+    expect(attio.updates).toEqual([]);
+    expect(attio.creates.map((c) => c.fields)).toEqual([
+      { name: '', summary: 'one.fi' },
+      { name: '', summary: 'two.fi' },
+    ]);
+  });
+
+  it('a candidate whose key is empty is never an exact match for an empty asserted key', () => {
+    const constraints = { any: [{ all: [{ field: 'name' }] }] };
+    expect(candidateIsAllExact(constraints, { name: '' }, { name: '' })).toBe(false);
+    expect(candidateIsAllExact(constraints, { name: null }, { name: null })).toBe(false);
+    expect(candidateIsAllExact(constraints, { name: 'Acme' }, { name: 'acme' })).toBe(true);
   });
 });
 
