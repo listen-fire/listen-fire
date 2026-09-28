@@ -18,9 +18,9 @@ person = write crm-[:People]-> {
   Name:  COALESCE(AI("the sender's name, cleaned — no email address, no 'via', no company suffix: \${msg.\`From\`}"), msg.\`From\`)
 }
 
-chat-[ch:Channels WHERE \`Name\` == "intake"]-> {
-  write ch-[:Messages]-> { Message: "New sender: \${msg.\`From\`} (\${person.externalId})" }
-}
+intake = ONLY(chat-[ch:Channels WHERE \`Name\` == "intake"]->)
+if intake == null { ERROR("no #intake channel") }
+write intake-[:Messages]-> { Message: "New sender: \${msg.\`From\`} (\${person.externalId})" }
 \`\`\`
 
 Key the identity on something actually carried in the message, so a second arrival updates rather than duplicates. The \`AI()\` touch is a micro-judgement — tidying a display name; pulling an entity *out of* the prose would be an \`extract\` job — and it is wrapped in \`COALESCE\` because \`Name\` is required and a judgement can come back with nothing.
@@ -32,9 +32,9 @@ Several systems hearing one event is several writes in one body; a later write q
 \`\`\`
 record = write crm-[:Companies]-> { … }
 
-chat-[ch:Channels WHERE \`Name\` == "ops"]-> {
-  write ch-[:Messages]-> { Message: "Logged to the CRM: \${record.externalId}" }
-}
+ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
+if ops == null { ERROR("no #ops channel") }
+write ops-[:Messages]-> { Message: "Logged to the CRM: \${record.externalId}" }
 \`\`\`
 
 For writes that genuinely don't depend on each other, \`parallel\` runs them at once:
@@ -75,9 +75,9 @@ function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
     return "- \${c.\`Name\`}"
   }
 
-  chat-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "New this week:\\n\${JOIN(lines, "\\n")}" }
-  }
+  ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "New this week:\\n\${JOIN(lines, "\\n")}" }
 }
 
 listen as "Weekly digest" to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`
@@ -103,9 +103,9 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
   theses   = MEMBERS(<Thesis>)
   sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
 
-  chat-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: JOIN(sections, "\\n") }
-  }
+  ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: JOIN(sections, "\\n") }
 }
 \`\`\`
 
@@ -205,9 +205,9 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
   theses   = MEMBERS(<Thesis>)
   sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
 
-  chat-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: JOIN(sections, "\\n") }
-  }
+  ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: JOIN(sections, "\\n") }
 }
 
 listen to runs {} fire \`Thesis Recap\`
@@ -379,10 +379,10 @@ function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
     return "- \${c.\`Name\`}"
   }
 
-  chat-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> {
-      Message: "New this week:\\n\${JOIN(lines, "\\n")}"
-    }
+  ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> {
+    Message: "New this week:\\n\${JOIN(lines, "\\n")}"
   }
 }
 

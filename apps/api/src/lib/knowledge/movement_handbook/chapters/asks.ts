@@ -56,9 +56,9 @@ So when you need a value to *act* on — a name to look up, a number to write in
 \`\`\`
 q = write asks-[:Check]-> { Prompt: "Pursue this company?" }
 
-chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-  write ch-[:Messages]-> { Message: "New company — pursue it? \${q.Url}" }
-}
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+write deals-[:Messages]-> { Message: "New company — pursue it? \${q.Url}" }
 
 answer = await FIRST(q-[:Response]->)
 if answer.Answer {
@@ -85,18 +85,21 @@ q = write asks-[:Choose]-> {
 }
 
 a = await FIRST(q-[:Response]->)
-crm-[pick:Companies WHERE \`Name\` == a.Answer]-> {
-  write pick-[:Notes]-> { Title: "Chosen", Content: "Picked from \${COUNT(found)} candidates." }
-}
+pick = ONLY(crm-[co:Companies WHERE \`Name\` == a.Answer]->)
+if pick == null { ERROR("no company named \${a.Answer}") }
+write pick-[:Notes]-> { Title: "Chosen", Content: "Picked from \${COUNT(found)} candidates." }
 \`\`\`
 
-Options gathered at run time are ordinary — the answer is plain text rather than one of a known set, which is what it honestly is. The answer names the record; the traversal after it keys on that name.
+Options gathered at run time are ordinary — the answer is plain text rather than one of a known set, which is what it honestly is. The answer names the record; the lookup after it keys on that name.
 
 ### timeout-and-escalation
 
 Give an unattended question a deadline by racing the wait for it against a \`sleep\` and proceeding with whichever settles first. There is no \`fallback\` clause — a deadline, a reminder, and an escalation are all **composed** from those two pieces:
 
 \`\`\`
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+
 r = await race([
   () => {
     a = await FIRST(q-[:Response]->)
@@ -104,18 +107,14 @@ r = await race([
   },
   () => {
     await sleep(6h)
-    chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-      write ch-[:Messages]-> { Message: "Still waiting: \${q.Url}" }
-    }
+    write deals-[:Messages]-> { Message: "Still waiting: \${q.Url}" }
     await sleep(2d)
   },
 ])
 
 decision = AT(r, 0)
 if decision == null {
-  chat-[ch2:Channels WHERE \`Name\` == "deals"]-> {
-    write ch2-[:Messages]-> { Message: "Nobody decided in time — holding." }
-  }
+  write deals-[:Messages]-> { Message: "Nobody decided in time — holding." }
 }
 if decision == TRUE {
   write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: \`Company Name\` }
@@ -172,12 +171,13 @@ One callback in several places settles on the first tap but says nothing about *
 deals = callback({ })
 board = callback({ })
 
-chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-  write ch-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # carries "\${deals.id}"
-}
-chat-[b:Channels WHERE \`Name\` == "board"]-> {
-  write b-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }    # carries "\${board.id}"
-}
+\`Deals Channel\` = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if \`Deals Channel\` == null { ERROR("no #deals channel") }
+\`Board Channel\` = ONLY(chat-[b:Channels WHERE \`Name\` == "board"]->)
+if \`Board Channel\` == null { ERROR("no #board channel") }
+
+write \`Deals Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # carries "\${deals.id}"
+write \`Board Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … ] }   # carries "\${board.id}"
 
 r = await race([
   () => {
@@ -192,9 +192,9 @@ r = await race([
 
 first = AT(r, 0)
 if first != null {
-  chat-[log:Channels WHERE \`Name\` == "general"]-> {
-    write log-[:Messages]-> { Message: "approved in #\${first.channel} at \${first.at}" }
-  }
+  general = ONLY(chat-[g:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> { Message: "approved in #\${first.channel} at \${first.at}" }
 }
 \`\`\`
 
@@ -303,9 +303,9 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
     Prompt: "Pursue \${\`Company Name\`}?"
     Detail: "\${msg.\`Subject\`}"
   }
-  team-[ch:Channels WHERE \`Name\` == "deals"]-> {
-    write ch-[:Messages]-> { Message: "New: \${\`Company Name\`}. Pursue it? \${q.Url}" }
-  }
+  deals = ONLY(team-[ch:Channels WHERE \`Name\` == "deals"]->)
+  if deals == null { ERROR("no #deals channel") }
+  write deals-[:Messages]-> { Message: "New: \${\`Company Name\`}. Pursue it? \${q.Url}" }
 
   r = await race([
     () => {
@@ -323,9 +323,7 @@ function \`Triage Inbound\`(msg: <inbox-[:Email]->>) {
     }
   }
   if decision == null {
-    team-[ch2:Channels WHERE \`Name\` == "deals"]-> {
-      write ch2-[:Messages]-> { Message: "Nobody decided in time." }
-    }
+    write deals-[:Messages]-> { Message: "Nobody decided in time." }
   }
 }
 
@@ -366,15 +364,13 @@ function \`First Approval Wins\`(go: <runs-[:Invocation]->>) {
   ])
 
   tapped = AT(r, 0)
+  general = ONLY(team-[g:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
   if tapped != null {
-    team-[ch2:Channels WHERE \`Name\` == "general"]-> {
-      write ch2-[:Messages]-> { Message: "Approved at \${tapped}." }
-    }
+    write general-[:Messages]-> { Message: "Approved at \${tapped}." }
   }
   if tapped == null {
-    team-[ch3:Channels WHERE \`Name\` == "general"]-> {
-      write ch3-[:Messages]-> { Message: "Nobody approved in time." }
-    }
+    write general-[:Messages]-> { Message: "Nobody approved in time." }
   }
 }
 
@@ -395,27 +391,28 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
   dealflow = callback({ })
   portfolio = callback({ })
 
-  team-[ch:Channels WHERE \`Name\` == "dealflow"]-> {
-    write ch-[:Messages]-> {
-      Message: "Approve this?"
-      Blocks: [
-        { type: "actions", elements: [
-          { type: "button", text: { type: "plain_text", text: "Approve" },
-            value: "\${dealflow.id}" }
-        ] }
-      ]
-    }
+  \`Dealflow Channel\` = ONLY(team-[ch:Channels WHERE \`Name\` == "dealflow"]->)
+  if \`Dealflow Channel\` == null { ERROR("no #dealflow channel") }
+  \`Portfolio Channel\` = ONLY(team-[p:Channels WHERE \`Name\` == "portfolio"]->)
+  if \`Portfolio Channel\` == null { ERROR("no #portfolio channel") }
+
+  write \`Dealflow Channel\`-[:Messages]-> {
+    Message: "Approve this?"
+    Blocks: [
+      { type: "actions", elements: [
+        { type: "button", text: { type: "plain_text", text: "Approve" },
+          value: "\${dealflow.id}" }
+      ] }
+    ]
   }
-  team-[p:Channels WHERE \`Name\` == "portfolio"]-> {
-    write p-[:Messages]-> {
-      Message: "Approve this?"
-      Blocks: [
-        { type: "actions", elements: [
-          { type: "button", text: { type: "plain_text", text: "Approve" },
-            value: "\${portfolio.id}" }
-        ] }
-      ]
-    }
+  write \`Portfolio Channel\`-[:Messages]-> {
+    Message: "Approve this?"
+    Blocks: [
+      { type: "actions", elements: [
+        { type: "button", text: { type: "plain_text", text: "Approve" },
+          value: "\${portfolio.id}" }
+      ] }
+    ]
   }
 
   r = await race([
@@ -431,10 +428,10 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
 
   first = AT(r, 0)
   if first != null {
-    team-[log:Channels WHERE \`Name\` == "general"]-> {
-      write log-[:Messages]-> {
-        Message: "approved in #\${first.channel} at \${first.at}"
-      }
+    general = ONLY(team-[g:Channels WHERE \`Name\` == "general"]->)
+    if general == null { ERROR("no #general channel") }
+    write general-[:Messages]-> {
+      Message: "approved in #\${first.channel} at \${first.at}"
     }
   }
 }
@@ -457,10 +454,10 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
   budget = write asks-[:Check]-> { Prompt: "Budget approved?" }
   legal  = write asks-[:Check]-> { Prompt: "Legal approved?" }
 
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> {
-      Message: "Budget: \${budget.Url}\\nLegal: \${legal.Url}"
-    }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> {
+    Message: "Budget: \${budget.Url}\\nLegal: \${legal.Url}"
   }
 
   r = await parallel([
@@ -475,9 +472,9 @@ function \`Both Must Agree\`(go: <runs-[:Invocation]->>) {
   ])
 
   if AT(r, 0) AND AT(r, 1) {
-    team-[ch2:Channels WHERE \`Name\` == "general"]-> {
-      write ch2-[:Messages]-> { Message: "Both approved: \${go.\`Text\`}." }
-    }
+    general = ONLY(team-[g:Channels WHERE \`Name\` == "general"]->)
+    if general == null { ERROR("no #general channel") }
+    write general-[:Messages]-> { Message: "Both approved: \${go.\`Text\`}." }
   }
 }
 
@@ -506,9 +503,9 @@ function \`Wait For The Name\`(go: <runs-[:Invocation]->>) {
     return co.\`Name\` == "Acme"
   }, every: 1h)
 
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Renamed at last." }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Renamed at last." }
 }
 
 listen to runs {} fire \`Wait For The Name\`
@@ -531,9 +528,9 @@ function \`Record Headcount\`(go: <runs-[:Invocation]->>) {
     Prompt: "How many people work there?"
     \`Answer Type\`: "number"
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "How many people work there? \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "How many people work there? \${q.Url}" }
 
   a = await FIRST(q-[:Response]->)
   write crm-[:Companies]-> {
@@ -563,9 +560,9 @@ function \`Decide Next Step\`(go: <runs-[:Invocation]->>) {
     Prompt: "What next?"
     Options: ["pursue", "hold", "pass"]
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "What next? \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "What next? \${q.Url}" }
 
   a = await FIRST(q-[:Response]->)
   if a.Answer == "pursue" {
@@ -595,14 +592,12 @@ function \`Pick Channels\`(go: <runs-[:Invocation]->>) {
     Prompt: "Which teams should hear about this?"
     Options: ["sales", "support", "finance"]
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Who should hear about this? \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Who should hear about this? \${q.Url}" }
 
   a = await FIRST(q-[:Response]->)
-  team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-    write ch2-[:Messages]-> { Message ?: "Telling: \${JOIN(a.Answer, ", ")}" }
-  }
+  write ops-[:Messages]-> { Message ?: "Telling: \${JOIN(a.Answer, ", ")}" }
 }
 
 listen to runs {} fire \`Pick Channels\`
@@ -625,9 +620,9 @@ function \`Acknowledge First\`(go: <runs-[:Invocation]->>) {
     Prompt: "Read this before it goes out"
     Detail: go.\`Text\`
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Please read: \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Please read: \${q.Url}" }
 
   await FIRST(q-[:Response]->)
   write crm-[:Companies]-> {
@@ -655,14 +650,12 @@ function \`Draft The Reply\`(go: <runs-[:Invocation]->>) {
     Prompt: "Draft the reply"
     Detail: go.\`Text\`
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Draft it here: \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Draft it here: \${q.Url}" }
 
   await FIRST(q-[:Response]->)
-  team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-    write ch2-[:Messages]-> { Message: "The draft is in." }
-  }
+  write ops-[:Messages]-> { Message: "The draft is in." }
 }
 
 listen to runs {} fire \`Draft The Reply\`
@@ -687,14 +680,12 @@ function \`Fix The Rows\`(go: <runs-[:Invocation]->>) {
       { Name: "Initech", Stage: "Open", Owner: go.\`Run by (email)\` }
     ]
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Check these before they land: \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Check these before they land: \${q.Url}" }
 
   await FIRST(q-[:Response]->)
-  team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-    write ch2-[:Messages]-> { Message: "Corrections in." }
-  }
+  write ops-[:Messages]-> { Message: "Corrections in." }
 }
 
 listen to runs {} fire \`Fix The Rows\`
@@ -716,14 +707,12 @@ function \`Collect The Details\`(go: <runs-[:Invocation]->>) {
     Prompt: "Fill in the missing details"
     Fields: ["Company", "Contact", "Budget"]
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "A few details needed: \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "A few details needed: \${q.Url}" }
 
   a = await FIRST(q-[:Response]->)
-  team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-    write ch2-[:Messages]-> { Message: "Details in — budget \${a.\`Budget\`}." }
-  }
+  write ops-[:Messages]-> { Message: "Details in — budget \${a.\`Budget\`}." }
 }
 
 listen to runs {} fire \`Collect The Details\`
@@ -750,16 +739,16 @@ function \`Pick The Company\`(go: <runs-[:Invocation]->>) {
     Prompt: "Which company did they mean?"
     Options: found
   }
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> { Message: "Which one? \${q.Url}" }
-  }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Which one? \${q.Url}" }
 
   a = await FIRST(q-[:Response]->)
-  crm-[pick:Companies WHERE \`Name\` == a.Answer]-> {
-    write pick-[:Notes]-> {
-      Title:   "Chosen"
-      Content: go.\`Text\`
-    }
+  pick = ONLY(crm-[co:Companies WHERE \`Name\` == a.Answer]->)
+  if pick == null { ERROR("no company named \${a.Answer}") }
+  write pick-[:Notes]-> {
+    Title:   "Chosen"
+    Content: go.\`Text\`
   }
 }
 
@@ -778,25 +767,24 @@ asks = ask()
 runs = manual()
 
 function \`Decide By Link\`(go: <runs-[:Invocation]->>) {
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+
   q   = write asks-[:Check]-> { Prompt: "Pursue this company?" }
   yes = callback({ write q-[:Response]-> { Answer: TRUE } })
   no  = callback({ write q-[:Response]-> { Answer: FALSE } })
   nudge = callback(
-    { team-[chn:Channels WHERE \`Name\` == "ops"]-> { write chn-[:Messages]-> { Message: "Still waiting: \${q.Url}" } } },
+    { write ops-[:Messages]-> { Message: "Still waiting: \${q.Url}" } },
     { once: FALSE, ttl: 2d }
   )
 
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> {
-      Message: "Pursue it?\\nYes: \${yes.url}\\nNo: \${no.url}\\nNudge the channel: \${nudge.url}\\nOr decide on the page: \${q.Url}"
-    }
+  write ops-[:Messages]-> {
+    Message: "Pursue it?\\nYes: \${yes.url}\\nNo: \${no.url}\\nNudge the channel: \${nudge.url}\\nOr decide on the page: \${q.Url}"
   }
 
   answer = await FIRST(q-[:Response]->)
   if answer.Answer {
-    team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-      write ch2-[:Messages]-> { Message: "Pursuing." }
-    }
+    write ops-[:Messages]-> { Message: "Pursuing." }
   }
 }
 
@@ -835,16 +823,14 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
   })
   again = callback(\`Chase\`(c: company), { once: FALSE })
 
-  team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-    write ch-[:Messages]-> {
-      Message: "Pick a day: \${booked.url}\\nOr chase again: \${again.url}"
-    }
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> {
+    Message: "Pick a day: \${booked.url}\\nOr chase again: \${again.url}"
   }
 
   call = await FIRST(booked-[:Called]->)
-  team-[ch2:Channels WHERE \`Name\` == "ops"]-> {
-    write ch2-[:Messages]-> { Message: "Booked for \${call.\`day\`} (\${call.\`At\`})." }
-  }
+  write ops-[:Messages]-> { Message: "Booked for \${call.\`day\`} (\${call.\`At\`})." }
 }
 
 listen to runs {} fire \`Book The Follow Up\`

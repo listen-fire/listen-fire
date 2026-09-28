@@ -72,9 +72,9 @@ write co-[:Team]-> {
 Where both records are already in the graph, assert the edge rather than writing through it:
 
 \`\`\`
-graph-[p:Person WHERE \`Email\` == msg.\`From\`]-> {
-  link co-[:Team]-> p
-}
+person = ONLY(graph-[p:Person WHERE \`Email\` == msg.\`From\`]->)
+if person == null { ERROR("no person with email \${msg.\`From\`}") }
+link co-[:Team]-> person
 \`\`\`
 
 Asserting an edge that is already there changes nothing, so this is safe to re-run. Edges read and write from either end — the model names both directions, and you may write along whichever one reads better.
@@ -85,10 +85,10 @@ Run an automation whenever a record in the graph changes, whoever changed it:
 
 \`\`\`
 function \`Announce The Ticket\`(change: <graph-[:\`Record Change\` WHERE \`type\` == "Support Ticket" AND \`action\` == "record.updated"]->>) {
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
   change-[ticket:Record]-> {
-    team-[ch:Channels WHERE \`Name\` == "general"]-> {
-      write ch-[:Messages]-> { Message: "Ticket now: \${ticket.\`Status\`}" }
-    }
+    write general-[:Messages]-> { Message: "Ticket now: \${ticket.\`Status\`}" }
   }
 }
 
@@ -159,11 +159,11 @@ team = slack(credentials: team_workspace)
 graph = kg()
 
 function \`Announce The Ticket\`(change: <graph-[:\`Record Change\` WHERE \`type\` == "Support Ticket" AND \`action\` == "record.updated"]->>) {
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
   change-[ticket:Record]-> {
-    team-[ch:Channels WHERE \`Name\` == "general"]-> {
-      write ch-[:Messages]-> {
-        Message: "Ticket now \${ticket.\`Status\`}."
-      }
+    write general-[:Messages]-> {
+      Message: "Ticket now \${ticket.\`Status\`}."
     }
   }
 }
@@ -191,10 +191,10 @@ function \`Weekly Graph Digest\`(go: <runs-[:Invocation]->>) {
     return "\${c.\`Name\`} — \${COUNT(c-[:Team]->)} on the team"
   }
 
-  team-[ch:Channels WHERE \`Name\` == "general"]-> {
-    write ch-[:Messages]-> {
-      Message: "Active companies:\\n\${JOIN(lines, "\\n")}"
-    }
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> {
+    Message: "Active companies:\\n\${JOIN(lines, "\\n")}"
   }
 }
 

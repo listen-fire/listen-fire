@@ -21,9 +21,9 @@ A Telegram message is always written along an edge: \`-[:Messages]->\` off a lin
 ### what-a-send-carries
 
 \`\`\`
-tg-[u:\`Linked Users\` WHERE \`Email\` == "ops@example.com"]-> {
-  write u-[:Messages]-> { Text: "The nightly run finished clean." }
-}
+person = ONLY(tg-[u:\`Linked Users\` WHERE \`Email\` == "ops@example.com"]->)
+if person == null { ERROR("ops@example.com hasn't linked Telegram") }
+write person-[:Messages]-> { Text: "The nightly run finished clean." }
 \`\`\`
 
 \`Text\` is the message, and it is required — a send carries no file, so anything you would have attached goes in the words or in a link inside them. (Media coming the other way is ordinary: read it off \`msg-[:Attachments]->.File\`.)
