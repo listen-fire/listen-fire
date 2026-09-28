@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import type { EvaluationResult } from '../engine/types';
 import type { MovementRunResult } from '../../movement_engine/run';
-import type { MovementTraceEntry } from '../../movement_engine/expression';
+import { isWriteEffect, type MovementTraceEntry } from '../../movement_engine/expression';
 import { SECOND } from '../../../constants';
 import { getAutomationsQb, getQb } from '../../../lib/kysely';
 import { mq } from '../../../lib/message_queue';
@@ -372,7 +372,9 @@ export class TriggerRunRecorder {
       tgId: `movement:${input.movementId}`,
       tgName: input.movementName,
       sourceAdapterType: input.sourceAdapterType ?? null,
-      targetAdapterType: lastDistinctAdapter(writes.map((w) => w.adapterType)),
+      targetAdapterType: lastDistinctAdapter(
+        writes.filter(isWriteEffect).map((w) => w.adapterType),
+      ),
       status: 'success',
       appliedActionPlans: movementWritePlans(writes),
       diagnostics: movementStepDiagnostics(input.result),
@@ -383,7 +385,7 @@ export class TriggerRunRecorder {
         : {}),
     });
     if (this.opsRunId) {
-      const n = input.result.writes.length;
+      const n = input.result.writes.filter(isWriteEffect).length;
       void addOpsRunMessage(this.opsRunId, {
         title: `${input.movementName}: ${n} record${n === 1 ? '' : 's'} written`,
         level: OpsDetailLevel.medium,
@@ -415,7 +417,8 @@ export class TriggerRunRecorder {
       tgName: input.tgName ?? null,
       sourceAdapterType: input.sourceAdapterType ?? null,
       targetAdapterType:
-        input.targetAdapterType ?? lastDistinctAdapter(writes.map((w) => w.adapterType)),
+        input.targetAdapterType ??
+        lastDistinctAdapter(writes.filter(isWriteEffect).map((w) => w.adapterType)),
       status: 'failed',
       appliedActionPlans: movementWritePlans(writes),
       diagnostics: input.partial ? movementStepDiagnostics(input.partial) : {},
@@ -800,10 +803,11 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
     // run-inspection surface reports this instead of a run-level flag.
     committed: write.committed,
     ...(write.externalId !== undefined ? { externalId: write.externalId } : {}),
-    // Standalone link statements and deletes keep their identity on
-    // the persisted firing record: `kind` ('link' | 'unlink' |
-    // 'delete'; absent = a record write) and — for the link pair —
-    // the edge itself.
+    // Standalone link statements, deletes and matches keep their identity
+    // on the persisted firing record: `kind` ('link' | 'unlink' | 'delete'
+    // | 'match'; absent = a record write) and — for the link pair — the
+    // edge itself. A match is a record FOUND, not written: readers count it
+    // out through `kind`.
     ...(write.kind !== undefined ? { kind: write.kind } : {}),
     // What the record write actually did — create / update / attach (parent
     // association only) / noop (nothing sent). `created` cannot tell the last
@@ -826,11 +830,12 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
 }
 
 /** A movement step's diagnostics: the write count `finish()` sums into
- *  `nodes_written`, plus the run's decision-point trace — what the firing
- *  decided and why ("no records written" gets an explanation in the UI). */
+ *  `nodes_written` (effects only — a record a `match` found was not
+ *  written), plus the run's decision-point trace — what the firing decided
+ *  and why ("no records written" gets an explanation in the UI). */
 function movementStepDiagnostics(result: MovementRunResult): Record<string, unknown> {
   return {
-    writes: result.writes.length,
+    writes: result.writes.filter(isWriteEffect).length,
     ...(result.trace.length > 0 ? { trace: result.trace } : {}),
   };
 }

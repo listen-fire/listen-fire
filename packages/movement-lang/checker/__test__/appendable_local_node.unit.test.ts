@@ -206,9 +206,12 @@ ${written}
     expect(codes(body)).toContain(C.NODE_EDGE_DEFERRED);
   });
 
-  it('a criteria body is refused — a node this run built has no system to search', () => {
-    const body = `  ${DECLARED}\n  link sent -[:messages]-> { Text: "hi" }`;
-    expect(codes(body)).toContain(C.NODE_LINK_CRITERIA);
+  it('a match looks among the landings a node this run built carries — no system, no effect', () => {
+    const body = `  ${DECLARED}\n  hit = match sent-[:messages]-> { unique by (FUZZY \`Text\`), Text: "hi" }\n  t = hit.Text`;
+    expect(codes(body)).toEqual([]);
+    const row = rowOf(body);
+    expect(row.read).toEqual([]);
+    expect(row.write).toEqual([]);
   });
 });
 

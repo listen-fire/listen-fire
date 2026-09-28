@@ -111,6 +111,7 @@ export type Statement =
   | MovementDeclaration
   | ListenDeclaration
   | WriteStatement
+  | MatchStatement
   | CallStatement
   | BlockStatement
   | LinkStatement
@@ -183,7 +184,7 @@ export type RValue =
    */
   | { kind: 'call'; call: CallStatement }
   | { kind: 'write'; write: WriteExpression }
-  | { kind: 'link'; link: LinkExpression }
+  | { kind: 'match'; match: MatchExpression }
   | { kind: 'extract'; extract: ExtractExpression }
   | { kind: 'block'; block: TraversalBlock }
   | { kind: 'await'; await: AwaitExpression }
@@ -326,6 +327,38 @@ export interface BindClause {
 export interface WriteStatement {
   kind: 'write';
   write: WriteExpression;
+  span: Span;
+}
+
+/**
+ * Where a `match` looks: a hop from a handle, a root collection, or the tuple
+ * of parent paths — everything a `write` addresses except a bare position,
+ * which is a record already in hand and so has nothing left to find.
+ */
+export type MatchTarget = Extract<WriteTarget, { kind: 'linked' | 'tuple' }>;
+
+/**
+ * `existing = match crm-[:companies]-> { unique by (FUZZY \`name\`), name: n }`
+ * — the identity half of a write, on its own: resolve candidates by the
+ * `unique by` clauses (OR across clauses) and arbitrate, then bind the record
+ * found. It never creates and never writes. On a miss the ENCLOSING SCOPE ends
+ * quietly, so inside the scope the handle is always a real record.
+ *
+ * The body's fields are ASSERTIONS — the values identity compares against and
+ * the judge reads — so they take `:` only; there is nothing to fill or append.
+ */
+export interface MatchExpression {
+  target: MatchTarget;
+  uniqueBy: UniqueClause[];
+  fields: FieldEntry[];
+  span: Span;
+}
+
+/** A match used as a statement: a gate — the rest of the scope runs only when
+ *  the record exists. */
+export interface MatchStatement {
+  kind: 'match';
+  match: MatchExpression;
   span: Span;
 }
 
@@ -500,34 +533,20 @@ export interface BlockStatement {
 
 // ── Link statements (the edge-only write) ──
 
-/** What a `link` connects its source to. */
-export type LinkTarget =
-  /** `link a -[:e]-> b` — both records already written and bound. */
-  | { kind: 'handle'; name: string }
-  /**
-   * `link c -[:portfolio]-> { name: "Fund III" }` — the target is FOUND
-   * by identity criteria: the body's fields resolve an existing record
-   * (adapter candidate search + arbitration, exactly as a write's
-   * identity does) but the target is NEVER created and NEVER written.
-   * `explicitType` names the found type for polymorphic edges, like
-   * linked writes.
-   */
-  | { kind: 'criteria'; explicitType?: string; fields: FieldEntry[]; span: Span };
-
 /**
- * The edge-only write of the symmetric family (`write` node+edge, `link`
- * edge only, `unlink` edge removal, `delete` node+edges). Used as a
- * statement, or — criteria form only — bound: `p = link c-[:e]-> { … }`
- * yields the FOUND target's handle.
+ * `link a -[:e]-> b` — assert an edge between two records already bound. The
+ * edge-only write of the symmetric family (`write` node+edge, `link` edge
+ * only, `unlink` edge removal, `delete` node+edges). Binds nothing: to FIND a
+ * record to link, `match` it first and link the handle.
  */
 export interface LinkExpression {
   from: string;
   edge: string;
-  target: LinkTarget;
+  to: string;
   span: Span;
 }
 
-/** `link champion -[:led]-> part` / `link c -[:portfolio]-> { … }`. */
+/** `link champion -[:led]-> part`. */
 export interface LinkStatement {
   kind: 'link';
   link: LinkExpression;

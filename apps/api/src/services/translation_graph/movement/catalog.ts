@@ -272,14 +272,24 @@ function pluginSpecOf(signature: TransformSignature): PluginSpec {
  * the checker typed cannot disagree.
  */
 function pluginOutputOf(output: NonNullable<TransformSignature['output']>): PluginOutput {
-  if (output.kind === 'value') {
-    return { kind: 'value', type: outputFieldType(output) };
+  switch (output.kind) {
+    case 'value':
+      return { kind: 'value', type: outputFieldType(output) };
+    case 'record':
+      return { kind: 'record', fields: outputFieldTypes(output.fields) };
+    case 'records':
+      return { kind: 'records', fields: outputFieldTypes(output.fields) };
+    default:
+      return neverAsAny(output);
   }
-  const fields: Record<string, SchemaFieldType> = {};
-  for (const [name, field] of Object.entries(output.fields)) {
-    fields[name] = outputFieldType(field);
-  }
-  return { kind: 'record', fields };
+}
+
+function outputFieldTypes(
+  fields: Record<string, { type: ExpressionType; optional?: boolean }>,
+): Record<string, SchemaFieldType> {
+  const out: Record<string, SchemaFieldType> = {};
+  for (const [name, field] of Object.entries(fields)) out[name] = outputFieldType(field);
+  return out;
 }
 
 function outputFieldType(field: { type: ExpressionType; optional?: boolean }): SchemaFieldType {

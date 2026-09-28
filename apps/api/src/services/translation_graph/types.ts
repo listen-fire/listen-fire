@@ -1606,9 +1606,10 @@ export const schemaTypeDescriptorSchema = z.object({
    * the engine to arbitrate. Gates the movement-language `FUZZY`
    * modifier: an author may only mark a `unique by` component fuzzy
    * where the target honestly supports it. Default unset/false ⇒
-   * exact-only, FUZZY rejected at author time.
+   * exact-only, FUZZY rejected at author time. `true` ⇒ every field; a list
+   * of field ids ⇒ only those (Valuations: the names its search covers).
    */
-  supportsFuzzyResolution: z.boolean().optional(),
+  supportsFuzzyResolution: z.union([z.boolean(), z.array(z.string()).nonempty()]).optional(),
   /**
    * Whether a movement may author `unique by` on this type. Default
    * (unset) ⇒ yes. `false` ⇒ the adapter decides record identity itself
@@ -2118,8 +2119,11 @@ export const transformOutputFieldSchema = z.object({
  * on whichever plane it lives, which is the same two planes every bound value
  * in the language has:
  *
- *   - `value`  — one value, read as itself;
- *   - `record` — several values read by name (`more.summary`).
+ *   - `value`   — one value, read as itself;
+ *   - `record`  — several values read by name (`more.summary`);
+ *   - `records` — a list of those, one per thing the plugin found
+ *                 (`FIRST(pages).text`). The fields are the same for every
+ *                 member, which is what lets one declaration type them all.
  *
  * A `through [ … ]` stage declares `additions` instead, and the two answer
  * different questions: `additions` is what reaches the EXTRACTOR, this is what
@@ -2136,6 +2140,11 @@ export const transformOutputSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('record'),
     fields: z.record(z.string(), transformOutputFieldSchema),
+  }),
+  z.object({
+    kind: z.literal('records'),
+    fields: z.record(z.string(), transformOutputFieldSchema),
+    description: z.string().optional(),
   }),
 ]);
 

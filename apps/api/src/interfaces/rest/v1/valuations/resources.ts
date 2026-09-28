@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sql } from 'kysely';
 
 import LegalEntityType from '../../../../generated/kysely/valuations/LegalEntityType';
 import InvestmentStatus from '../../../../generated/kysely/valuations/InvestmentStatus';
@@ -19,6 +20,35 @@ import { type Router } from 'express';
 
 // ── Legal Entities ──
 
+/**
+ * `search` finds an entity by any name it answers to, spelled roughly: the
+ * search vector's tokens (Name, Legal Name, Also Known As, Other Names), a
+ * trigram match on Name or Legal Name for misspellings, or the plain contains
+ * it has always done. Without an explicit `sort`, the best match comes first.
+ * `%` is pg_trgm's similarity operator (default threshold 0.3); it, unlike
+ * `similarity(...) > 0.3`, can use the trigram indexes.
+ */
+function searchLegalEntities(query: any, options: { q: string; ordered: boolean }): any {
+  const { q } = options;
+  const tsquery = sql`plainto_tsquery('english', ${q})`;
+  const filtered = query.where(
+    sql<boolean>`(
+      legal_entity.search_vector @@ ${tsquery}
+      OR legal_entity.name OPERATOR(public.%) ${q}
+      OR legal_entity.legal_name OPERATOR(public.%) ${q}
+      OR legal_entity.name ILIKE ${`%${q}%`}
+    )`,
+  );
+  if (!options.ordered) return filtered;
+  return filtered
+    .orderBy(
+      sql`ts_rank(legal_entity.search_vector, ${tsquery})
+        + greatest(public.similarity(legal_entity.name, ${q}), public.similarity(legal_entity.legal_name, ${q}))`,
+      'desc',
+    )
+    .orderBy('legal_entity.name', 'asc');
+}
+
 const legalEntitiesRouter: Router = buildCrudRouter({
   table: 'legal_entity',
   defaultSort: 'created_at',
@@ -37,7 +67,9 @@ const legalEntitiesRouter: Router = buildCrudRouter({
       query = query.where('legal_entity.is_own_investing_entity', '=', params.is_own_investing_entity);
     if (params.investment_status)
       query = query.where('legal_entity.investment_status', '=', params.investment_status);
-    if (params.search) query = query.where('legal_entity.name', 'ilike', `%${params.search}%`);
+    if (typeof params.search === 'string' && params.search !== '') {
+      query = searchLegalEntities(query, { q: params.search, ordered: params.sort === undefined });
+    }
     return query;
   },
   createSchema: z.object({

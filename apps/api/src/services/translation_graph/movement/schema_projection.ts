@@ -108,6 +108,40 @@ function projectNativeUniqueness(input: {
 }
 
 /**
+ * Project a descriptor's fuzzy-resolution declaration onto the write shape.
+ * `true` is every field; a list names the fields the adapter can search by
+ * similarity, in the adapter's INTERNAL field ids (the same currency as its
+ * uniqueness constraints), so each maps through the field descriptors to the
+ * surface name the checker compares a `unique by` component against. An id
+ * that maps to nothing is dropped with a note — declaring a field the author
+ * cannot name would promise nothing — and a list that maps to nothing at all
+ * declares no fuzzy resolution.
+ */
+function projectFuzzyResolution(input: {
+  declared: boolean | readonly string[] | undefined;
+  /** Internal field id → surface name (readable and write-only fields). */
+  surfaceFieldByInternalId: ReadonlyMap<string, string>;
+  label: string;
+  notes: string[];
+}): true | string[] | undefined {
+  const declared = input.declared;
+  if (declared === undefined || declared === false) return undefined;
+  if (declared === true) return true;
+  const fields: string[] = [];
+  for (const fieldId of declared) {
+    const surface = input.surfaceFieldByInternalId.get(fieldId);
+    if (surface === undefined) {
+      input.notes.push(
+        `${input.label}: fuzzy resolution names '${fieldId}', which is not one of its fields — omitted`,
+      );
+    } else if (!fields.includes(surface)) {
+      fields.push(surface);
+    }
+  }
+  return fields.length > 0 ? fields : undefined;
+}
+
+/**
  * Project a descriptor's UNTAGGED write union (`writeUnion` — variants of field
  * IDS) onto the write shape the checker sees (variants of surface field NAMES).
  * The descriptor schema has already guaranteed each id is a writable field of
@@ -691,6 +725,12 @@ export function instanceSchemaFromDescriptors(input: {
       // like `discriminatedWrite`, which has to wait for its variant TYPES to
       // have been described. A union variant names no type, so there is
       // nothing to wait for.
+      const fuzzyResolution = projectFuzzyResolution({
+        declared: descriptor.supportsFuzzyResolution,
+        surfaceFieldByInternalId: new Map([...writeFieldNameById, ...surfaceFieldByInternalId]),
+        label: name,
+        notes,
+      });
       const writeUnion =
         descriptor.writeUnion !== undefined
           ? projectWriteUnion({
@@ -732,7 +772,7 @@ export function instanceSchemaFromDescriptors(input: {
         ...(requiredEdges.length > 0 ? { requiredEdges } : {}),
         ...(requiredFields.length > 0 ? { requiredFields } : {}),
         ...(Object.keys(fieldDocs).length > 0 ? { fieldDocs } : {}),
-        ...(descriptor.supportsFuzzyResolution ? { fuzzyResolution: true } : {}),
+        ...(fuzzyResolution !== undefined ? { fuzzyResolution } : {}),
         ...(descriptor.uniquenessAuthorable === false
           ? { uniquenessAuthorable: false }
           : {}),

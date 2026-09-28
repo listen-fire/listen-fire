@@ -84,6 +84,8 @@ import { makeEphemeralPosition, type TransformOutputShape } from '../translation
 import type { FileRef, Resource } from '../translation_graph/adapter';
 import { isFileRef } from '../translation_graph/engine/files/retrieve';
 import { stampResourceId } from '../translation_graph/engine/files/resources';
+import { documentStoreFileRef } from '../translation_graph/engine/files/document_store';
+import { DocumentService } from '../document';
 import {
   isFileUnreadable,
   MovementEngineError,
@@ -294,6 +296,17 @@ async function buildNodeSpec(
 export interface TransformInvocationResult {
   text?: string;
   data?: Record<string, unknown>;
+  /**
+   * Each thing the plugin fetched, as its own record — the link, a name, the
+   * file, the text — in the order it fetched them. A stored document is
+   * already the file value a write can carry (never the storage id it was
+   * emitted as), and a fetch that stored nothing has no `file` at all.
+   *
+   * Two readers: a plain call to a `records`-output plugin binds exactly this
+   * list, and a `through` stage turns every record carrying a file into a FILE
+   * resource on the extracted record's `_resources`.
+   */
+  records?: Array<Record<string, unknown>>;
   /** What the plugin says became of the invocation, in its own words. Carried
    *  to the trace and nowhere else — an outcome is not enrichment, so a
    *  plugin that reports one and attaches nothing still counts as empty. */
@@ -384,10 +397,12 @@ export const registryTransformInvoker: MovementTransformInvoker = {
     // extracted-context plugin adds `properties` the next stage can read.
     const data: Record<string, unknown> = { ...(result.properties ?? {}) };
     const fetchedText = collectEmissionText(result.edges);
+    const records = await emissionRecords(result.edges, plugin);
 
     const out: TransformInvocationResult = {};
     if (fetchedText) out.text = fetchedText;
     if (Object.keys(data).length > 0) out.data = data;
+    if (records.length > 0) out.records = records;
     if (result.outcome) out.outcome = result.outcome;
 
     logger.info('[movement:transform] ran', {
@@ -429,6 +444,100 @@ function collectEmissionText(edges: TransformOutput['edges']): string | undefine
     }
   }
   return chunks.length > 0 ? chunks.join('\n\n') : undefined;
+}
+
+/**
+ * A pre-extraction plugin's edge emissions as records, one per emission, in the
+ * order emitted. A fetch that stored a document emits the document's id on
+ * `file` — a storage detail no author can do anything with — so it is swapped
+ * here for the file value itself, the same document-store file a `FILE()`
+ * render produces. One lookup per invocation, however many documents it
+ * stored.
+ *
+ * A document that can no longer be found drops the `file` and keeps the rest:
+ * the page's text still reached the extraction, and the record says what it
+ * can.
+ */
+async function emissionRecords(
+  edges: TransformOutput['edges'],
+  plugin: string,
+): Promise<Array<Record<string, unknown>>> {
+  if (!edges) return [];
+  const emitted: Array<Record<string, unknown>> = [];
+  for (const emissions of Object.values(edges)) {
+    for (const emission of Array.isArray(emissions) ? emissions : [emissions]) {
+      if (emission.data !== null && typeof emission.data === 'object') {
+        emitted.push({ ...(emission.data as Record<string, unknown>) });
+      }
+    }
+  }
+  const documentIds = [
+    ...new Set(emitted.flatMap((r) => (typeof r.file === 'string' ? [r.file] : []))),
+  ];
+  const files = await storedDocumentFiles(documentIds, plugin);
+  return emitted.map((record) => {
+    const { file, ...rest } = record;
+    const ref = typeof file === 'string' ? files.get(file) : undefined;
+    return ref !== undefined ? { ...rest, file: ref } : rest;
+  });
+}
+
+/** Stored documents by id, as file values. The loads go through the document
+ *  service's batching loader, so several ids are one query. */
+async function storedDocumentFiles(ids: string[], plugin: string): Promise<Map<string, FileRef>> {
+  const files = new Map<string, FileRef>();
+  if (ids.length === 0) return files;
+  const loaded = await Promise.allSettled(ids.map((id) => DocumentService.getById(id)));
+  loaded.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      files.set(
+        ids[i],
+        documentStoreFileRef({ objectUri: result.value.objectUri, name: result.value.description }),
+      );
+    } else {
+      logger.warn('[movement:transform] stored document not found — its file is dropped', {
+        plugin,
+        documentId: ids[i],
+        error: result.reason,
+        ...runFields(),
+      });
+    }
+  });
+  return files;
+}
+
+/**
+ * The FILE resources a plugin's records carry — one per record whose `file` is
+ * a file value, shaped exactly as a source file's resource is (`file`, `name`,
+ * `type`), plus the `url` it was fetched from. To the language the two are the
+ * same thing: a file the record was extracted from, walked off `_resources`.
+ */
+function pluginFileResources(result: TransformInvocationResult): Resource[] {
+  const resources: Resource[] = [];
+  for (const record of result.records ?? []) {
+    const file = record.file;
+    if (!isFileRef(file)) continue;
+    const name = typeof record.name === 'string' ? record.name : file.name;
+    const url = typeof record.url === 'string' ? record.url : null;
+    resources.push(
+      stampResourceId({
+        ...(file.source?.handle !== undefined ? { externalId: file.source.handle } : {}),
+        type: 'FILE',
+        ...(name !== undefined ? { name } : {}),
+        url,
+        fileRef: file,
+        ...(file.contentType !== undefined ? { contentType: file.contentType } : {}),
+        data: {
+          file,
+          ...(name !== undefined ? { name } : {}),
+          ...(url !== null ? { url } : {}),
+          type: 'FILE',
+          ...(file.contentType !== undefined ? { contentType: file.contentType } : {}),
+        },
+      }),
+    );
+  }
+  return resources;
 }
 
 // ── The output ceiling ──────────────────────────────────────────────────────
@@ -970,6 +1079,10 @@ interface WorkingEmission {
   /** The entity's site-level origin (absent for the no-emission root
    *  fallback). */
   origin?: ProvenanceOrigin;
+  /** The files this entity's own `through` stages fetched, as FILE resources.
+   *  They join the extract's source resources on this record and every record
+   *  beneath it (see `exportEmission`). */
+  resources?: Resource[];
   children: Map<string, WorkingEmission[]>;
 }
 
@@ -1037,6 +1150,9 @@ class Materializer {
     // source text and the order their origins join the provenance.
     const fromPipeline = spec.stages[0]?.through ?? [];
     const fromBranches = fromPipeline.map(() => trace.branch());
+    // The files the bundle-level stage fetched belong to the extract exactly as
+    // its `from` sources do: every record it produces carries them.
+    const pipelineResources: Resource[] = [];
     try {
       const results = await mapConcurrent(fromPipeline, async (plugin, i) => {
         // The same boundary the per-entity pipeline keeps (see `runPipeline`):
@@ -1053,6 +1169,7 @@ class Materializer {
         if (result === SKIPPED) return;
         segments = segments.concat(transformResultSegments(plugin.plugin, result));
         baseSources.push({ kind: 'enrichment', plugin: plugin.plugin });
+        pipelineResources.push(...pluginFileResources(result));
       });
     } finally {
       trace.absorb(fromBranches);
@@ -1070,7 +1187,7 @@ class Materializer {
         children: new Map(),
       } satisfies WorkingEmission);
     await this.resolveFences(root, { segments, baseSources, ancestorContext: {}, trace });
-    return exportEmission(root, fromData.resources);
+    return exportEmission(root, [...fromData.resources, ...pipelineResources]);
   }
 
   // ── `from` data → segments ──
@@ -1586,6 +1703,9 @@ class Materializer {
         spec.name,
         trace,
       );
+      // A fetched file is this record's source whether or not the stage goes on
+      // to read anything — a deck with no readable text still carries forward.
+      addResources(emission, enrichments);
       // A stage fenced behind plugins that all came back with nothing has
       // nothing new for this entity to be read from: the prompt would carry
       // the same source text and the same fields the previous stage already
@@ -1683,13 +1803,17 @@ class Materializer {
           branches[i],
         );
         const region = this.buildRegion(child, 0, false, { skipOwnThrough: true });
-        return this.extractRegion(
+        const children = await this.extractRegion(
           region,
           walk.segments,
           { spec: emission.spec, context: emission.context, enrichments },
           stageSources(walk.baseSources, enrichments),
           branches[i],
         );
+        // The child's stage ran once for all of its records, so each carries
+        // what it fetched.
+        for (const extracted of children) addResources(extracted, enrichments);
+        return children;
       });
       specs.forEach((child, i) => emission.children.set(child.name, extracted[i]));
     } finally {
@@ -2015,9 +2139,23 @@ function projectEmission(raw: Record<string, unknown>, site: CallSite): WorkingE
   };
 }
 
+/** The files a stage's plugins fetched, joined onto the record they ran for. */
+function addResources(
+  emission: WorkingEmission,
+  enrichments: Array<{ plugin: string; result: TransformInvocationResult }>,
+): void {
+  const fetched = enrichments.flatMap(({ result }) => pluginFileResources(result));
+  if (fetched.length === 0) return;
+  emission.resources = [...(emission.resources ?? []), ...fetched];
+}
+
 /** The source content (`from [...]` resources) is shared by every emission of
- *  one `extract` — it rides the root and every descendant unchanged. */
-function exportEmission(working: WorkingEmission, resources: Resource[]): ExtractEmission {
+ *  one `extract` — it rides the root and every descendant unchanged. A record
+ *  whose own stage fetched files adds them, for itself and everything beneath
+ *  it, since those records were read in the light of what it fetched. */
+function exportEmission(working: WorkingEmission, inherited: Resource[]): ExtractEmission {
+  const resources =
+    working.resources !== undefined ? [...inherited, ...working.resources] : inherited;
   const fields: Record<string, unknown> = {};
   const provenance: Record<string, ProvenanceOrigin> = {};
   for (const name of working.spec.exported) {

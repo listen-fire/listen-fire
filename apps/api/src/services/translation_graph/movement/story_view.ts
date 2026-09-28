@@ -366,6 +366,7 @@ function eachChip(story: StoryIR, visit: (chip: Chip) => void): void {
           if (step.wait.kind === 'until' && step.wait.condition) visit(step.wait.condition);
           break;
         case 'write':
+        case 'match':
         case 'link':
         case 'unlink':
         case 'ask':
