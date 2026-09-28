@@ -713,9 +713,10 @@ export function instanceOfType(type: PositionTypeRef): InstanceRef | undefined {
 export interface ExtractFieldInfo {
   span: Span;
   /** What the author said this field is, in their own words — the same text the
-   *  extraction itself is given. Every field declares one (the parser requires
-   *  it), so it is never absent and never invented. */
-  description: string;
+   *  extraction itself is given. An inline field always declares one (the
+   *  parser requires it); a field of a node declaration may not, and is then
+   *  extracted by its name alone — absent, never invented. */
+  description?: string;
   /** Explicit annotation — a primitive (`amount: number "…"`) or a
    *  borrowed path (`stage: crm.companies.funding_stage "…"`). The ONLY
    *  thing that types an extract field: backward adoption from write

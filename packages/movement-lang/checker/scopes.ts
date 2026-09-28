@@ -25,7 +25,7 @@
 // symbols (params, aliases, handles, extract/block bindings), `movement`
 // for lazy parameter typing at call sites.
 
-import { Loc, MovementDeclaration, Span } from '../parser/ast';
+import { Loc, MovementDeclaration, ShapeDeclaration, Span } from '../parser/ast';
 import { FieldType, InstanceSchema } from './catalog';
 import type { EffectRow } from './effects';
 import { PositionTypeRef, ReturnShape } from './typing';
@@ -81,6 +81,10 @@ export interface ScopeSymbol {
   arity?: number;
   /** For `instance` / `shape`: the graph's schema (when resolvable). */
   schema?: InstanceSchema;
+  /** For `shape`: the declaration itself — the tree an extraction node taking
+   *  it as its shape (`node entry: <Entry>`) spells out. An imported one is
+   *  its library's. */
+  declaration?: ShapeDeclaration;
   /** Graph identity override for IMPORTED graphs: the symbol the graph was
    *  originally declared by (in its library's file scope). Two positions
    *  are in the same graph iff their tokens match by reference, so an

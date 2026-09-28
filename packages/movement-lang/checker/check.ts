@@ -39,6 +39,7 @@ import { quoteName } from '@listen-fire/shared/expression/formula';
 import {
   constructionAsCall,
   EXPRESSION_ROOT_PROBE,
+  expandWriteSpreads,
   pathRootName,
   probePathHead,
   spellPathHead,
@@ -85,12 +86,15 @@ import {
   RefreshStatement,
   RValue,
   ClosureExpression,
+  DeclaredExtractNode,
+  ShapeDeclaration,
   ShapeNode,
   Span,
   Statement,
   TraversalBlock,
   TypeRef,
   WriteExpression,
+  WriteSpread,
 } from '../parser/ast';
 import { isValidDuration, durationToMs } from '../parser/duration';
 
@@ -168,7 +172,7 @@ import { terminates } from './flow';
 import { didYouMean } from './meta';
 import { genericLandingKey, literalStringValuesOf } from './generics';
 import { parseTraversalPath } from '../service/selectors';
-import { Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
+import { Resolution, Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
 import {
   CALLBACK_CONFIG_KEYS,
   CallbackParams,
@@ -341,6 +345,12 @@ export const DiagnosticCodes = {
    *  "transformation wins" semantic and stays legal; this only catches two
    *  fields naming the same thing in the same stage. */
   EXTRACT_FIELD_DUPLICATE: 'MOV_EXTRACT_FIELD_DUPLICATE',
+  /** `node entry: <X>` where `X` is not a node declaration — an extraction
+   *  node's shape is a declared structure, never a system's record type. */
+  EXTRACT_SHAPE_NOT_DECLARED: 'MOV_EXTRACT_SHAPE_NOT_DECLARED',
+  /** `...x` in a write body where `x`'s fields are not known — a spread
+   *  writes every field of an extracted record, so it needs one. */
+  WRITE_SPREAD_SOURCE: 'MOV_WRITE_SPREAD_SOURCE',
   // Listeners (trigger rows are derived from `listen` statements)
   LISTEN_FILE_LEVEL: 'MOV_LISTEN_FILE_LEVEL',
   LISTEN_NOT_INSTANCE: 'MOV_LISTEN_NOT_INSTANCE',
@@ -647,6 +657,9 @@ export interface RecordedWrite {
   /** Plain-language target name, e.g. `crm.company`. */
   description: string;
   declaredFields: Set<string>;
+  /** The body's field lines with any `...` spread written out — what the
+   *  write actually carries, for a reader that shows its fields. */
+  fields: FieldEntry[];
   hasUniqueBy: boolean;
   /** The scope the write sits in (for `unique by` handle references). */
   scope: Scope;
@@ -1616,11 +1629,31 @@ function conformsToDeclaredNode(
  *  names — a primitive, a declared option set, or another field's. */
 type ExtractTypeResolver = (field: ExtractField) => SchemaFieldType | undefined;
 
+/** A node declaration an extraction node takes as its shape, with the schema
+ *  its field types were resolved into where it was declared. */
+interface DeclaredExtractShape {
+  declaration: ShapeDeclaration;
+  schema: InstanceSchema;
+}
+
+function declaredExtractShape(resolution: Resolution): DeclaredExtractShape | undefined {
+  if (resolution.kind !== 'found' || resolution.symbol.kind !== 'shape') return undefined;
+  const { declaration, schema } = resolution.symbol;
+  return declaration !== undefined && schema !== undefined ? { declaration, schema } : undefined;
+}
+
+interface ExtractGraphResolvers {
+  resolveType: ExtractTypeResolver;
+  /** The declaration `node entry: <Entry>` names — undefined when it names
+   *  none (reported where the tree is checked, not here). */
+  resolveDeclared: (type: string) => DeclaredExtractShape | undefined;
+}
+
 /** Infers an extract result graph from the tree (4_type_system.md "Extract graphs"). */
 function buildExtractGraph(
   name: string,
   stages: ExtractStage[],
-  resolveType: ExtractTypeResolver,
+  resolvers: ExtractGraphResolvers,
   description?: ExprSlot,
 ): ExtractNodeType {
   const node: ExtractNodeType = {
@@ -1629,6 +1662,73 @@ function buildExtractGraph(
     properties: new Map(),
     children: new Map(),
   };
+  applyExtractStages(node, stages, resolvers);
+  return node;
+}
+
+/**
+ * A node that takes a declaration as its shape: the declaration IS its first
+ * stage — its fields, typed where the declaration resolved them, and its nested
+ * nodes — and the `through` stages that follow apply on top, as they would to
+ * the inline block the declaration spells out.
+ */
+function declaredExtractGraph(
+  node: DeclaredExtractNode,
+  resolvers: ExtractGraphResolvers,
+): ExtractNodeType {
+  const shape = resolvers.resolveDeclared(node.declared.type);
+  const graph: ExtractNodeType =
+    shape === undefined
+      ? { name: node.name, properties: new Map(), children: new Map() }
+      : shapeExtractGraph(node.name, shape.declaration.root, shape.declaration.name, shape.schema);
+  // The use site's words replace the declaration's record-level ones.
+  if (node.description !== undefined) graph.description = authoredStringText(node.description.raw);
+  applyExtractStages(graph, node.stages, resolvers);
+  return graph;
+}
+
+/** One node of a declaration, read as the extract node it describes. `key` is
+ *  its position in the declaration's schema (`Entry.founder`). */
+function shapeExtractGraph(
+  name: string,
+  shape: ShapeNode,
+  key: string,
+  schema: InstanceSchema,
+): ExtractNodeType {
+  const properties = schema.positions[key]?.properties ?? {};
+  const graph: ExtractNodeType = {
+    name,
+    ...(shape.description !== undefined
+      ? { description: authoredStringText(shape.description.raw) }
+      : {}),
+    properties: new Map(),
+    children: new Map(),
+  };
+  for (const child of shape.children) {
+    graph.children.set(
+      child.name,
+      shapeExtractGraph(child.name, child, `${key}.${child.name}`, schema),
+    );
+  }
+  for (const field of shape.fields) {
+    const explicit = properties[field.name];
+    graph.properties.set(field.name, {
+      span: field.span,
+      ...(field.description !== undefined
+        ? { description: authoredStringText(field.description.raw) }
+        : {}),
+      ...(explicit !== undefined ? { explicit } : {}),
+      annotationRaw: field.type,
+    });
+  }
+  return graph;
+}
+
+function applyExtractStages(
+  node: ExtractNodeType,
+  stages: ExtractStage[],
+  resolvers: ExtractGraphResolvers,
+): void {
   // A stage INHERITS the fields of the stage before it and declares only what
   // it transforms, so every field a node declares anywhere is part of its
   // shape; a re-declaration is the transformation, and wins.
@@ -1636,11 +1736,13 @@ function buildExtractGraph(
     for (const child of stage.children) {
       node.children.set(
         child.name,
-        buildExtractGraph(child.name, child.stages, resolveType, child.description),
+        child.declared === undefined
+          ? buildExtractGraph(child.name, child.stages, resolvers, child.description)
+          : declaredExtractGraph(child, resolvers),
       );
     }
     for (const field of stage.fields) {
-      const explicit = resolveType(field);
+      const explicit = resolvers.resolveType(field);
       node.properties.set(field.name, {
         span: field.span,
         description: authoredStringText(field.description.raw),
@@ -1649,7 +1751,6 @@ function buildExtractGraph(
       });
     }
   }
-  return node;
 }
 
 /**
@@ -2718,7 +2819,10 @@ class Checker {
         span: statement.span,
         ...(statement.kind === 'movement'
           ? { arity: statement.params.length, movement: { decl: statement, declScope: scope } }
-          : { schema: shapeToSchema(statement, name => this.declaredTypeIn(name, scope)) }),
+          : {
+              schema: shapeToSchema(statement, name => this.declaredTypeIn(name, scope)),
+              declaration: statement,
+            }),
       };
       const existing = this.declareAuthored(scope, symbol, statement.span);
       if (existing) {
@@ -2769,6 +2873,7 @@ class Checker {
               kind: 'shape',
               span: statement.span,
               schema: shapeToSchema(statement, name => this.declaredTypeIn(name, scope)),
+              declaration: statement,
             },
             statement.span,
           );
@@ -2781,6 +2886,7 @@ class Checker {
         if (symbol?.kind === 'shape' && symbol.schema) {
           this.resolveShapeBorrows(statement.root, statement.name, symbol.schema, scope);
         }
+        this.checkShapeDescriptions(statement.root, scope);
         return;
       }
       case 'movement':
@@ -2928,6 +3034,7 @@ class Checker {
         kind: 'shape',
         span: input.span,
         ...(librarySymbol.schema ? { schema: librarySymbol.schema } : {}),
+        ...(librarySymbol.declaration ? { declaration: librarySymbol.declaration } : {}),
         // Graph identity stays the LIBRARY's declaring symbol, so positions
         // made through this import fit the library movements' parameters.
         graphToken: librarySymbol.graphToken ?? librarySymbol,
@@ -4980,10 +5087,17 @@ class Checker {
   }
 
   private checkWrite(
-    write: WriteExpression,
+    authored: WriteExpression,
     scope: Scope,
     options?: { isBound?: boolean; binding?: string },
   ): PositionTypeRef | undefined {
+    // A spread is the field lines it stands for, so every check below — an
+    // excess field, a maybe-absent value, a required field — reads them as if
+    // they had been written out.
+    const write: WriteExpression =
+      authored.spreads === undefined
+        ? authored
+        : { ...authored, fields: expandWriteSpreads(authored, s => this.spreadFields(s, scope)) };
     if (this.refuseShapeWrite(write, scope)) return undefined;
     const isBound = options?.isBound === true;
     let root: WritableRootSchema | undefined;
@@ -5078,6 +5192,7 @@ class Checker {
         ...(root ? { root } : {}),
         description: rootDescription,
         declaredFields: new Set(write.fields.map(f => f.name)),
+        fields: write.fields,
         hasUniqueBy: write.uniqueBy.length > 0,
         scope,
         ...(options?.binding !== undefined ? { binding: options.binding } : {}),
@@ -5122,7 +5237,7 @@ class Checker {
         const available = Object.keys(root.fields);
         this.report(
           DiagnosticCodes.WRITE_UNKNOWN_FIELD,
-          `${rootDescription} has no field '${field.name}'${available.length ? ` — it has: ${available.join(', ')}` : ''}`,
+          `${rootDescription} has no field '${field.name}'${available.length ? ` — it has: ${available.join(', ')}` : ''}${field.spread !== undefined ? ` ('...${field.spread}' writes every field of '${field.spread}', '${field.name}' included — write the fields that belong here one per line instead)` : ''}`,
           field.span,
         );
       }
@@ -5174,7 +5289,9 @@ class Checker {
       if (isMaybeAbsent(valueType) && field.semantics !== 'fill') {
         this.report(
           DiagnosticCodes.ABSENT_REQUIRED,
-          `'${field.name}' on ${rootDescription} needs a value, but this expression may be absent (${describeFieldType(valueType!)}) — it comes from a branch that might not have run, or an answer that might not be there. Discharge it: test it with '==' and write inside that branch, gate on it first ('r-[x:…]-> { write … }'), default it with '?:', or fall back to something that always answers ('COALESCE(…, "unknown")')`,
+          field.spread !== undefined
+            ? `'${field.name}' on ${rootDescription} needs a value, but '...${field.spread}' writes '${field.spread}.${field.name}', which may be absent (${describeFieldType(valueType!)}). Spread it set-if-empty ('?...${field.spread}'), or write '${field.name}' on its own line with a value that is always there`
+            : `'${field.name}' on ${rootDescription} needs a value, but this expression may be absent (${describeFieldType(valueType!)}) — it comes from a branch that might not have run, or an answer that might not be there. Discharge it: test it with '==' and write inside that branch, gate on it first ('r-[x:…]-> { write … }'), default it with '?:', or fall back to something that always answers ('COALESCE(…, "unknown")')`,
           field.value.span,
         );
       }
@@ -5200,6 +5317,28 @@ class Checker {
       );
     }
     return handle;
+  }
+
+  /**
+   * The fields `...e` writes: every field of the extracted record `e`. Only an
+   * extracted record's fields are known for certain on both sides of the save —
+   * the engine spreads the same list from the record it holds — so anything
+   * else is refused with the fix rather than spread by a guess.
+   */
+  private spreadFields(spread: WriteSpread, scope: Scope): readonly string[] | undefined {
+    const resolution = scope.resolve(spread.source);
+    if (resolution.kind !== 'found') {
+      this.reportResolutionFailure(spread.source, spread.span, resolution);
+      return undefined;
+    }
+    const type = resolution.symbol.posType;
+    if (type?.kind === 'extract') return [...type.node.properties.keys()];
+    this.report(
+      DiagnosticCodes.WRITE_SPREAD_SOURCE,
+      `'...${spread.source}' writes every field of an extracted record, and '${spread.source}' is ${type !== undefined ? describePosition(type) : describeKind[resolution.symbol.kind]} — write its fields out one per line ('name: ${spread.source}.name')`,
+      spread.span,
+    );
+    return undefined;
   }
 
   /**
@@ -5388,6 +5527,7 @@ class Checker {
         ...(root ? { root } : {}),
         description: rootDescription,
         declaredFields: new Set(match.fields.map((f) => f.name)),
+        fields: match.fields,
         hasUniqueBy: match.uniqueBy.length > 0,
         scope,
         ...(options?.binding !== undefined ? { binding: options.binding } : {}),
@@ -7935,9 +8075,10 @@ class Checker {
       this.checkExprSlot(slot, scope);
     }
     this.checkExtractStages(extract.stages, scope, new Set());
-    const node = buildExtractGraph(EXTRACT_ROOT_NAME, extract.stages, field =>
-      this.resolveExtractFieldType(field, scope),
-    );
+    const node = buildExtractGraph(EXTRACT_ROOT_NAME, extract.stages, {
+      resolveType: field => this.resolveExtractFieldType(field, scope),
+      resolveDeclared: type => declaredExtractShape(scope.resolve(type)),
+    });
     this.recordNode({
       kind: 'extract',
       span: extract.span,
@@ -8051,6 +8192,20 @@ class Checker {
   }
 
   /**
+   * A declaration's words are string expressions, checked HERE — against the
+   * file scope at the declaration — so a name bound further down is refused as
+   * read before it is bound, and an extraction that reuses the declaration from
+   * anywhere gets the words the declaration's own scope gives them.
+   */
+  private checkShapeDescriptions(node: ShapeNode, scope: Scope): void {
+    if (node.description !== undefined) this.checkExprSlot(node.description, scope);
+    for (const field of node.fields) {
+      if (field.description !== undefined) this.checkExprSlot(field.description, scope);
+    }
+    for (const child of node.children) this.checkShapeDescriptions(child, scope);
+  }
+
+  /**
    * A declared node's fields take the same explicit types extract annotations
    * do: primitive names or BORROWED dotted paths into another graph's field
    * (`crm_stage: crm.companies.funding_stage`). `shapeToSchema` degraded
@@ -8118,10 +8273,42 @@ class Checker {
       }
       for (const name of stageFields[k]) prior.add(name);
       for (const child of stage.children) {
-        this.checkExprSlot(child.description, scope);
-        this.checkExtractStages(child.stages, scope, new Set(prior));
+        if (child.description !== undefined) this.checkExprSlot(child.description, scope);
+        if (child.declared === undefined) {
+          this.checkExtractStages(child.stages, scope, new Set(prior));
+          continue;
+        }
+        // The declaration is the node's first stage; the `through` stages that
+        // follow may read its fields. Its own words were checked where it was
+        // declared, against the scope it was declared in.
+        const shape = this.resolveExtractShape(child, scope);
+        const declaredFields = shape?.declaration.root.fields.map(f => f.name) ?? [];
+        this.checkExtractStages(child.stages, scope, new Set([...prior, ...declaredFields]));
       }
     }
+  }
+
+  /** The declaration `node entry: <Entry>` takes as its shape — refused, with
+   *  the fix, when the name is not a node declaration. */
+  private resolveExtractShape(
+    node: DeclaredExtractNode,
+    scope: Scope,
+  ): DeclaredExtractShape | undefined {
+    const { type, span } = node.declared;
+    const resolution = scope.resolve(type);
+    if (resolution.kind !== 'found') {
+      this.reportResolutionFailure(type, span, resolution);
+      return undefined;
+    }
+    const shape = declaredExtractShape(resolution);
+    if (shape === undefined) {
+      this.report(
+        DiagnosticCodes.EXTRACT_SHAPE_NOT_DECLARED,
+        `'${type}' is ${describeKind[resolution.symbol.kind]}, not a node declaration — an extraction node takes its shape from a declared node ('node ${type}: "…" { … }' at the top of the file), or spells its fields inline ('node ${node.name}: "…" { … }')`,
+        span,
+      );
+    }
+    return shape;
   }
 
   private checkPluginCall(plugin: PluginCall, scope: Scope, fields: ThroughFieldsContext): void {

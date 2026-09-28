@@ -292,6 +292,8 @@ export interface WriteExpression {
   target: WriteTarget;
   uniqueBy: UniqueClause[];
   fields: FieldEntry[];
+  /** `...e` / `?...e` entries, in source order — see {@link WriteSpread}. */
+  spreads?: WriteSpread[];
   /**
    * `bind <name>` between the write target and the body — "this written
    * record IS the counterpart of `<name>`." Declares an engine-owned,
@@ -384,7 +386,61 @@ export interface FieldEntry {
   value: ExprSlot;
   /** Write-precedence operator; absent ⇒ `replace`. See {@link FieldWriteMode}. */
   semantics?: FieldWriteMode;
+  /** The record a `...` spread wrote this line from — absent on a written line. */
+  spread?: string;
   span: Span;
+}
+
+/**
+ * `...e` — write every FIELD of `e` as a plain assignment; `?...e` — write each
+ * one set-if-empty (the `?:` modifier applied to each). Fields only: `e`'s
+ * nested nodes are edges, and an edge is its own write. An explicit line for a
+ * field wins over a spread's value for it, and a later spread over an earlier.
+ *
+ * The parser cannot know `e`'s fields, so a spread stays a spread here and
+ * {@link expandWriteSpreads} turns it into ordinary field lines where the
+ * fields ARE known (the checker from `e`'s type, the engine from its value).
+ */
+export interface WriteSpread {
+  /** The spread record's bound name. */
+  source: string;
+  /** `?...` ⇒ `'fill'`; absent ⇒ a plain assignment. */
+  semantics?: 'fill';
+  span: Span;
+}
+
+/**
+ * A write body with its spreads written out as the field lines they stand for:
+ * `...e` becomes `f: e.f` for every field `f` of `e` that no explicit line (and
+ * no later spread) already writes. `fieldsOf` answers a spread's fields, or
+ * `undefined` when they are unknown — that spread then contributes nothing, and
+ * saying why is the caller's job.
+ */
+export function expandWriteSpreads(
+  write: { fields: FieldEntry[]; spreads?: WriteSpread[] },
+  fieldsOf: (spread: WriteSpread) => readonly string[] | undefined,
+): FieldEntry[] {
+  const spreads = write.spreads ?? [];
+  if (spreads.length === 0) return write.fields;
+  const written = new Set(write.fields.map((f) => f.name));
+  const expanded: FieldEntry[] = [];
+  for (let i = spreads.length - 1; i >= 0; i--) {
+    const spread = spreads[i];
+    const lines: FieldEntry[] = [];
+    for (const name of fieldsOf(spread) ?? []) {
+      if (written.has(name)) continue;
+      written.add(name);
+      lines.push({
+        name,
+        value: { raw: `${spellName(spread.source)}.${spellName(name)}`, span: spread.span },
+        ...(spread.semantics !== undefined ? { semantics: spread.semantics } : {}),
+        spread: spread.source,
+        span: spread.span,
+      });
+    }
+    expanded.unshift(...lines);
+  }
+  return [...write.fields, ...expanded];
 }
 
 /**
@@ -937,7 +993,16 @@ export interface ShapeDeclaration {
 /** One node of a declaration tree. A child's `name` is the edge that reaches it. */
 export interface ShapeNode {
   name: string;
-  fields: Array<{ name: string; type: string; span: Span }>;
+  /**
+   * `node Entry: "each distinct item" { … }` — the node's own words, on the
+   * same terms as an extraction node's: an ordinary string expression, which
+   * may interpolate file-scope bindings declared above the declaration. What an
+   * extraction taking this declaration as its shape tells the extractor;
+   * absent ⇒ undescribed.
+   */
+  description?: ExprSlot;
+  /** A field's `description` is its extraction words, on the same terms. */
+  fields: Array<{ name: string; type: string; description?: ExprSlot; span: Span }>;
   children: ShapeNode[];
   /**
    * `order by arrival` after this node's closing `}` — the author saying the
@@ -1123,11 +1188,34 @@ export interface ExtractField {
   span: Span;
 }
 
+/** `node company: "description" { stage } through […] { stage } …` — or a node
+ *  that takes a declaration as its shape (`DeclaredExtractNode`). */
+export type ExtractNode = InlineExtractNode | DeclaredExtractNode;
+
 /** `node company: "description" { stage } through […] { stage } …` */
-export interface ExtractNode {
+export interface InlineExtractNode {
   name: string;
   /** The node's own words, on the same terms as a field's (see `ExtractField`). */
   description: ExprSlot;
+  stages: ExtractStage[];
+  declared?: undefined;
+  span: Span;
+}
+
+/**
+ * `node entry: <Entry> "…" through […] { … }` — a node whose shape AND words
+ * come from a node declaration. It extracts exactly what the inline block that
+ * spells the declaration out would, so `found-[e:entry]->` walks records of the
+ * declared structure. A description written here replaces the declaration's
+ * record-level one for this extraction.
+ *
+ * `stages` holds only the `through […] { … }` stages that FOLLOW — the
+ * declaration itself is the node's first stage.
+ */
+export interface DeclaredExtractNode {
+  name: string;
+  declared: { type: string; span: Span };
+  description?: ExprSlot;
   stages: ExtractStage[];
   span: Span;
 }

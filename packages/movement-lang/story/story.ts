@@ -378,7 +378,7 @@ export interface StoryEdge {
 export interface StoryExtractNode {
   name: string;
   description?: string;
-  fields: Array<{ name: string; description: string; type?: SchemaFieldType; at: Span }>;
+  fields: Array<{ name: string; description?: string; type?: SchemaFieldType; at: Span }>;
   children: StoryExtractNode[];
 }
 
@@ -1490,7 +1490,7 @@ class Projection {
     const scope = recorded?.scope;
     const fields: Record<string, Chip> = {};
     const fieldModes: StoryRecord['fieldModes'] = {};
-    for (const field of write.fields) {
+    for (const field of recorded?.fields ?? write.fields) {
       if (scope !== undefined) fields[field.name] = this.chip(field.value, scope);
       if (field.semantics !== undefined) fieldModes[field.name] = field.semantics;
     }
@@ -2071,7 +2071,7 @@ function projectExtractNode(node: ExtractNodeType): StoryExtractNode {
     ...(node.description !== undefined ? { description: node.description } : {}),
     fields: [...node.properties.entries()].map(([name, info]) => ({
       name,
-      description: info.description,
+      ...(info.description !== undefined ? { description: info.description } : {}),
       ...(info.explicit !== undefined ? { type: info.explicit } : {}),
       at: info.span,
     })),

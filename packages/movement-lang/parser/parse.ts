@@ -70,6 +70,7 @@ import {
   UniqueClause,
   UnlinkStatement,
   WriteExpression,
+  WriteSpread,
   WriteTarget,
 } from './ast';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
@@ -89,6 +90,12 @@ const NODE_ENTRY_EFFECTS = new Set(['write', 'match', 'link', 'unlink', 'delete'
  *  has; `document` and `chronological` say the author is collecting pieces
  *  that were already in that order, and read back the same way. */
 const ENTRY_SEQUENCINGS: readonly EdgeSequencing[] = ['arrival', 'document', 'chronological'];
+
+/** A write body's spread, `...e`, and the modifier that makes it set-if-empty
+ *  (`?...e`). The modifier's spelling is provisional — it lives here alone so a
+ *  rename is one line. */
+const SPREAD = '...';
+const FILL_SPREAD_MODIFIER = '?';
 
 /** `lazy` and `await` are duals in one slot, and composing them is nonsense —
  *  one of them has to happen first, and neither answer is a thing to mean. */
@@ -1365,8 +1372,15 @@ class Parser {
   private parseWriteExpression(start: number): WriteExpression {
     const target = this.parseWriteTarget('write');
     const bind = this.tryParseBindClause();
-    const { uniqueBy, fields } = this.parseWriteBody('write');
-    return { target, uniqueBy, fields, ...(bind ? { bind } : {}), span: this.spanFrom(start) };
+    const { uniqueBy, fields, spreads } = this.parseWriteBody('write');
+    return {
+      target,
+      uniqueBy,
+      fields,
+      ...(spreads.length > 0 ? { spreads } : {}),
+      ...(bind ? { bind } : {}),
+      span: this.spanFrom(start),
+    };
   }
 
   /**
@@ -1384,7 +1398,13 @@ class Parser {
       );
     }
     const matchTarget: MatchTarget = target;
-    const { uniqueBy, fields } = this.parseWriteBody('match');
+    const { uniqueBy, fields, spreads } = this.parseWriteBody('match');
+    if (spreads.length > 0) {
+      throw new MovementParseError(
+        `'...${spreads[0].source}' writes, and a match never writes — list the fields it looks the record up by ('name: ${spreads[0].source}.name'), or use 'write' when the record should be created or changed`,
+        spreads[0].span.start,
+      );
+    }
     for (const field of fields) {
       if (field.semantics === undefined) continue;
       const op = field.semantics === 'fill' ? '?:' : field.semantics === 'append' ? '+:' : '+?:';
@@ -1555,24 +1575,32 @@ class Parser {
   private parseWriteBody(keyword: 'write' | 'match'): {
     uniqueBy: UniqueClause[];
     fields: FieldEntry[];
+    spreads: WriteSpread[];
   } {
     this.skipInlineWs();
     const braceOffset = this.pos;
     this.expect('{', `to open the ${keyword} body`);
     const uniqueBy: UniqueClause[] = [];
     const fields: FieldEntry[] = [];
+    const spreads: WriteSpread[] = [];
     for (;;) {
       this.skipAllWs();
       if (this.eof()) this.error(`Expected '}' to close the ${keyword} body`, braceOffset);
       if (this.peekCh() === '}') {
         this.pos++;
-        return { uniqueBy, fields };
+        return { uniqueBy, fields, spreads };
       }
       if (this.peekCh() === ',') {
         this.pos++;
         continue;
       }
       const entryStart = this.pos;
+      const spread = this.tryParseWriteSpread();
+      if (spread !== undefined) {
+        spreads.push(spread);
+        this.finishNodeEntry(spread.source);
+        continue;
+      }
       if (this.peekIdent() === 'unique') {
         this.pos += 'unique'.length;
         this.skipInlineWs();
@@ -1608,6 +1636,25 @@ class Parser {
       });
       if (stop === ',') this.pos++;
     }
+  }
+
+  /** `...e` / `?...e` at an entry's start — consumes nothing when absent. The
+   *  source is a bound NAME: a spread copies a record already in hand. */
+  private tryParseWriteSpread(): WriteSpread | undefined {
+    const start = this.pos;
+    const fill = this.startsWith(`${FILL_SPREAD_MODIFIER}${SPREAD}`);
+    if (!fill && !this.startsWith(SPREAD)) return undefined;
+    this.pos += fill ? FILL_SPREAD_MODIFIER.length + SPREAD.length : SPREAD.length;
+    const spelled = `${fill ? FILL_SPREAD_MODIFIER : ''}${SPREAD}`;
+    if (!/[A-Za-z_`]/.test(this.peekCh() ?? '')) {
+      this.error(
+        `'${spelled}' spreads a record's fields into the write — name the record right after it: '${spelled}e'`,
+      );
+    }
+    const source = this.readName(`the record to spread after '${spelled}'`);
+    const spread: WriteSpread = { source, span: this.spanFrom(start) };
+    if (fill) spread.semantics = 'fill';
+    return spread;
   }
 
   private parseUniqueClause(entryStart: number): UniqueClause {
@@ -1649,7 +1696,14 @@ class Parser {
       try {
         this.readName('a name');
         this.skipInlineWs();
-        named = this.peekCh() === '{';
+        if (this.peekCh() === ':') {
+          // `node Entry: "…" { … }` — a described declaration.
+          this.pos++;
+          this.skipInlineWs();
+          named = this.peekCh() === '"';
+        } else {
+          named = this.peekCh() === '{';
+        }
       } catch {
         named = false;
       }
@@ -2968,6 +3022,14 @@ class Parser {
    *  grammar — there is no separate edge line. */
   private parseDeclaredNode(name: string, start: number): ShapeNode {
     this.skipInlineWs();
+    // `node Entry: "each distinct item" { … }` — the node's own words, spelled
+    // as an extraction node's are.
+    let description: ExprSlot | undefined;
+    if (this.tryConsume(':')) {
+      this.skipInlineWs();
+      description = this.readStringSlot(`describing the node '${name}'`);
+      this.skipInlineWs();
+    }
     const braceOffset = this.pos;
     this.expect('{', `to open the node '${name}'`);
     const fields: ShapeNode['fields'] = [];
@@ -3016,10 +3078,28 @@ class Parser {
         `for the field '${fieldName}' (e.g. <text>, <number>)`,
         { allowFieldTail: true },
       );
-      fields.push({ name: fieldName, type: marker.text, span: this.spanFrom(fieldStart) });
+      // `name: <text> "the company's name"` — the type stays explicit here;
+      // only an inline extract block may drop `<text>`.
+      this.skipInlineWs();
+      const fieldDescription =
+        this.peekCh() === '"'
+          ? this.readStringSlot(`describing the field '${fieldName}'`)
+          : undefined;
+      fields.push({
+        name: fieldName,
+        type: marker.text,
+        ...(fieldDescription !== undefined ? { description: fieldDescription } : {}),
+        span: this.spanFrom(fieldStart),
+      });
       this.expectStatementEnd();
     }
-    return { name, fields, children, span: this.spanFrom(start) };
+    return {
+      name,
+      ...(description !== undefined ? { description } : {}),
+      fields,
+      children,
+      span: this.spanFrom(start),
+    };
   }
 
   // ── export ──
@@ -3404,9 +3484,10 @@ class Parser {
     this.skipInlineWs();
     this.expect(':', `after the node name '${name}'`);
     this.skipAllWs();
+    if (this.peekCh() === '<') return this.parseDeclaredExtractNode(name, start);
     if (this.peekCh() !== '"') {
       this.error(
-        `Expected a double-quoted description for the node '${name}', found ${this.describeHere()}`,
+        `Expected a double-quoted description for the node '${name}' (or a declared node as its shape, \`node ${name}: <Entry>\`), found ${this.describeHere()}`,
       );
     }
     const description = this.readStringSlot(`for the node '${name}'`);
@@ -3419,6 +3500,36 @@ class Parser {
     const stages: ExtractStage[] = [this.parseExtractStage(undefined)];
     this.parseChainedStages(stages);
     return { name, description, stages, span: this.spanFrom(start) };
+  }
+
+  /**
+   * `node entry: <Entry> "…" through […] { … }` — the declaration is the node's
+   * shape and its first stage, so nothing but `through` stages may follow. A
+   * brace here would be a second, competing spelling of the same fields.
+   */
+  private parseDeclaredExtractNode(name: string, start: number): ExtractNode {
+    const markerStart = this.pos;
+    const marker = this.readTypeMarker(`as the shape of the node '${name}'`);
+    const declared = { type: marker.text, span: this.spanFrom(markerStart) };
+    this.skipInlineWs();
+    const description =
+      this.peekCh() === '"' ? this.readStringSlot(`for the node '${name}'`) : undefined;
+    this.skipInlineWs();
+    if (this.peekCh() === '{') {
+      this.error(
+        `'${name}' takes its fields from <${marker.text}> — change a field in a following 'through […] { … }' stage, or write the node inline ('node ${name}: "…" { … }') instead of naming a declaration`,
+      );
+    }
+    const stages: ExtractStage[] = [];
+    this.parseChainedStages(stages);
+    if (stages.length === 0) this.expectStatementEnd();
+    return {
+      name,
+      declared,
+      ...(description !== undefined ? { description } : {}),
+      stages,
+      span: this.spanFrom(start),
+    };
   }
 }
 

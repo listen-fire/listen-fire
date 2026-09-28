@@ -418,7 +418,7 @@ describe('§C traversal-headed blocks', () => {
     expect(extract.from.map((f) => f.raw)).toEqual(['msg.`text`']);
     expect(extract.stages).toHaveLength(1);
     expect(extract.stages[0].children.map((c) => c.name)).toEqual(['company']);
-    expect(extract.stages[0].children[0].description.raw).toBe('"each company mentioned"');
+    expect(extract.stages[0].children[0].description?.raw).toBe('"each company mentioned"');
     expect(extract.stages[0].children[0].stages[0].fields.map((f) => f.name)).toEqual(['name']);
 
     const orgsAssign = as(program.statements[1], 'assign');
