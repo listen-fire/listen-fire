@@ -192,6 +192,7 @@ const FILE_KEYWORDS: MovementCompletionItem[] = [
 
 const BODY_KEYWORDS: MovementCompletionItem[] = [
   { label: 'write', insert: 'write ', kind: 'keyword', detail: 'write a record' },
+  { label: 'match', insert: 'match ', kind: 'keyword', detail: 'go on only if an existing record matches' },
   { label: 'if', insert: 'if ', kind: 'keyword', detail: 'branch' },
   { label: 'parallel', insert: 'parallel {', kind: 'keyword', detail: 'run statements concurrently' },
   { label: 'link', insert: 'link ', kind: 'keyword', detail: 'connect two records with an edge' },
@@ -249,7 +250,7 @@ const STDLIB_COMPLETIONS: MovementCompletionItem[] = [
 
 const RVALUE_KEYWORDS: MovementCompletionItem[] = [
   { label: 'write', insert: 'write ', kind: 'keyword', detail: 'bind the write handle' },
-  { label: 'link', insert: 'link ', kind: 'keyword', detail: 'find an existing record by criteria, link it, bind its handle' },
+  { label: 'match', insert: 'match ', kind: 'keyword', detail: 'find an existing record by identity and bind it; never creates' },
   { label: 'extract from', insert: 'extract from [', kind: 'keyword', detail: 'materialise an extraction' },
   { label: 'callback', insert: 'callback({', kind: 'keyword', detail: 'mint a deferred invocation: bind its .id into a button, await its Called edge' },
 ];
@@ -268,7 +269,8 @@ const KEYWORD_HOVERS: Record<string, string> = {
   if: 'if — branch on a condition; an IS test narrows the position inside the arm',
   else: 'else — taken when the preceding if conditions are all false',
   parallel: 'parallel — run the enclosed statements concurrently; their bindings come into scope after the block',
-  link: 'link — find an existing record by criteria and connect it with an edge',
+  match: 'match — find an existing record by its unique by identity and bind it; never creates or writes. On a miss the rest of the block is skipped',
+  link: 'link — connect two records you already hold with an edge',
   unlink: 'unlink — remove an edge between two records',
   bind: 'bind — deprecated, under review; identify a record by unique by instead',
   run: 'run — invoke a movement directly',
@@ -561,7 +563,7 @@ export function getMovementCompletions(
     const items: MovementCompletionItem[] = [];
     // FUZZY prefixes a component to match it by similarity — only offered where
     // the target's adapter can resolve identity fuzzily.
-    if (region?.root?.fuzzyResolution === true) {
+    if (region?.root?.fuzzyResolution !== undefined) {
       items.push({
         label: 'FUZZY',
         insert: 'FUZZY ',

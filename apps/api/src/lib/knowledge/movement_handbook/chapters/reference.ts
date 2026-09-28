@@ -44,7 +44,7 @@ f = (day: <date>) => { … }                     # a closure: a body run later, 
 
 Types **always** wear angle brackets; positions, scalar values, and handles **never** do.
 
-- Brackets: automation params (\`m: <inbox-[:Email]->>\`, \`root: <crm>\`), extract field annotations (\`amount: <number>\`, borrowed \`stage: <crm-[:Requests]->.Stage>\`), declared fields (\`Name: <text>\`), \`IS\` tests (\`rec IS <crm-[:Companies]->>\`), explicit polymorphic targets (\`link a-[:related]-><Companies> { … }\`).
+- Brackets: automation params (\`m: <inbox-[:Email]->>\`, \`root: <crm>\`), extract field annotations (\`amount: <number>\`, borrowed \`stage: <crm-[:Requests]->.Stage>\`), declared fields (\`Name: <text>\`), \`IS\` tests (\`rec IS <crm-[:Companies]->>\`), explicit polymorphic targets (\`match a-[:related]-><Companies> { … }\`).
 - No brackets: write targets (\`write crm-[:Companies]->\`), traversal hops and edge names, \`unique by\` components, call arguments, per-family answer types (a \`Check\` answers boolean, a \`Provide\` answers whatever its \`Answer Type\` names — no bracket-generic syntax).
 - Primitives: \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, \`<json>\`. Borrowed path: \`<instance-[:record_type]->.field>\`.
 - Declared refinement: \`type Thesis = <"Consumer" | "Infra">\` at file scope, then \`<Thesis>\` anywhere a type goes. It constrains an extraction to those values, tells the model which to pick from, and flags a literal that is not one of them; the values are ordinary text everywhere else.
@@ -110,7 +110,7 @@ Connecting records (write related records **along their edges**, never as flat r
 - \`write company-[:Notes]-> { … }\` — linked write off a parent handle.
 - \`write (a-[:agreements]->, b-[:agreements]->) { … }\` — one record under several parents; \`unique by (a, b)\`.
 - \`link champion -[:led]-> part\` — connect two records already bound.
-- \`p = link c -[:portfolio]-> { Name: "Fund III" }\` — find-and-link; the body is *criteria*, it never writes.
+- \`p = match c-[:portfolio]-> { unique by (\`Name\`), Name: "Fund III" }\` — find by identity, never create or write; on a miss the scope ends quietly.
 - \`write record { Status: "Customer" }\` — in-place update of a held/traversed record (no \`unique by\`).
 - \`unlink a -[:related]-> b\` — sever an edge. \`delete stale\` — remove a record (only when removal is the automation's purpose).
 
@@ -239,7 +239,7 @@ The description carries cardinality ("the company" = one; "each company" = all).
 - **Assigning handles to reference fields.** \`Partner: pa\` is rejected — use a linked / tuple target or \`link\`.
 - **Writing into a declared \`node\`.** A declaration names a structure, not a system that stores anything — build the record with \`node { … }\` and pass that.
 - **Leaving related records unconnected.** The most common and costly miss: after the run, every related record should end up attached, not standalone.
-- **Writing fields in a \`link\` body.** Criteria find; they never write. To update, use \`write … unique by\`.
+- **Writing fields in a \`match\` body.** A match finds; it never writes. To update, use \`write … unique by\`.
 - **Reaching for a loop.** Enumeration is a traversal-headed block, not a loop.
 - **Using an alias outside its block.** \`return\` what the rest of the automation needs from the block.
 - **Listening to an adapter type instead of an instance.** Construct first; listen to the instance.

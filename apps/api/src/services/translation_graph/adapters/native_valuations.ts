@@ -36,6 +36,9 @@ import type {
   EventSubscriptionRegistration,
   RemoveEventSubscriptionInput,
   EdgesFromResult,
+  ResolveEntityInput,
+  ResolveEntityResult,
+  ExternalRecordRef,
 } from '../adapter';
 import { BaseAdapter } from './base';
 import { uniformWalk } from './hop';
@@ -590,6 +593,10 @@ function commandEdgeRefs(parent: string): SchemaReferenceDescriptor[] {
 const LEGAL_ENTITY_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: LEGAL_ENTITY_TYPE,
   displayName: 'Legal Entity',
+  // `FUZZY` on a name shortlists by similarity (the list route's `search`,
+  // whose search vector covers exactly these four) and leaves the call to the
+  // engine's judge; see `resolveEntity`. Any other field is exact-only.
+  supportsFuzzyResolution: ['name', 'legal_name', 'also_known_as', 'other_names'],
   fields: [
     ...commonFields(),
     { fieldId: 'type', displayName: 'Type', kind: 'enum', writable: true, required: true, enumValues: LEGAL_ENTITY_TYPES },
@@ -1696,13 +1703,111 @@ class NativeValuationsAdapter extends BaseAdapter {
 
   // ── 2. Entity resolution ──
   // Inbound (V → K): match the Valuations row id against linked_object
-  // candidates. That's exactly the BaseAdapter default — no override
-  // needed. Outbound mutation flows bypass resolveEntity entirely; the
-  // engine pre-resolves the bridge from candidates filtered by node_id.
+  // candidates — BaseAdapter's default, which the override below falls back to.
   //
-  // Valuations entities are addressed by Listen-Fire-managed UUIDs; there's no
-  // native uniqueness constraint to declare. Authors can still layer
-  // TG-level constraints on top.
+  // Valuations entities are addressed by Listen-Fire-managed UUIDs, so there is
+  // no native uniqueness rule to declare and every identity here is one the
+  // author wrote (`unique by (\`Name\`)`). Answering it takes a search: without
+  // one the resolve returns nothing, and "find the record or create it" quietly
+  // becomes "create it", once per message.
+
+  /**
+   * Find the rows an author's `unique by (…)` names.
+   *
+   * The constraint is an OR of AND-groups over this entity's own field names.
+   * Each group is answered with ONE narrow list request, and the equality that
+   * decides identity is applied here, to the rows that came back — the list
+   * endpoints filter loosely (`search` is a case-insensitive contains), and a
+   * loose filter must never be the thing that decides two records are the same.
+   * The one exception is a `FUZZY` component on a name-like field: there the
+   * similarity search IS the shortlist, and the engine's judge decides.
+   */
+  async resolveEntity(input: ResolveEntityInput): Promise<ResolveEntityResult> {
+    const branches = input.constraints?.any ?? [];
+    const entity = this.structuredIdFor(input.recordType);
+    if (branches.length === 0 || entity === undefined || this.credentialsId === undefined) {
+      return super.resolveEntity(input);
+    }
+
+    const resolver = await this.resolver({ types: [input.recordType] });
+    const type = naturalName(input.recordType);
+    const descriptor = DESCRIPTORS_BY_DISPLAY_NAME[entity.displayName];
+    const fuzzyColumns = fuzzyColumnsOf(descriptor);
+    const columnOf = (field: string) => resolver.fieldId(type, naturalName(field));
+
+    // The checker admits `FUZZY` only where the descriptor declares it; one
+    // that reaches here anyway (an automation saved before that rule) would
+    // otherwise be quietly answered by equality, so refuse it before searching.
+    for (const entry of branches.flatMap((branch) => branch.all)) {
+      if (entry.fuzzy === true && !fuzzyColumns.has(columnOf(entry.field))) {
+        throw new Error(`FUZZY on \`${entry.field}\` is not supported by ${input.recordType}`);
+      }
+    }
+
+    const creds = await this.requireCreds();
+
+    const seen = new Set<string>();
+    const candidates: ExternalRecordRef[] = [];
+
+    for (const branch of branches) {
+      const wanted = branch.all.map((entry) => ({
+        surface: entry.field,
+        column: columnOf(entry.field),
+        value: input.record[entry.field],
+        similar: entry.fuzzy === true,
+      }));
+      // A group with nothing asserted for one of its fields identifies nothing.
+      if (wanted.some((w) => w.value === undefined || w.value === null)) continue;
+
+      // A fuzzy component is answered by the route's similarity
+      // search, not by equality: the shortlist comes back in relevance order
+      // and the engine's judge decides. Every other component keeps equality.
+      const query: Record<string, string | number> = { limit: IDENTITY_SEARCH_LIMIT };
+      const bySimilarity = wanted.find((w) => w.similar);
+      const byName = bySimilarity ?? wanted.find((w) => w.column === 'name');
+      if (byName !== undefined) query.search = String(byName.value);
+      const exact = wanted.filter((w) => !w.similar);
+
+      let page: ValuationsListResponse<Record<string, unknown>>;
+      try {
+        page = await valuationsFetch<ValuationsListResponse<Record<string, unknown>>>(creds, {
+          method: 'GET',
+          path: `/api/v1/valuations/${entity.slug}`,
+          query,
+        });
+      } catch (err) {
+        // A search that cannot be run is not an assertion that nothing matches,
+        // but there is nothing else to answer with; say so and fall through to
+        // the create the engine would otherwise have made anyway.
+        logger.warn('[NativeValuationsAdapter] identity search failed; resolving to no match', {
+          recordType: input.recordType,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+
+      for (const row of page.data) {
+        const externalId = String(row.id ?? '');
+        if (externalId === '' || seen.has(externalId)) continue;
+        if (!exact.every((w) => identityFieldAgrees(w.column, w.value, row[w.column]))) continue;
+        seen.add(externalId);
+        candidates.push({
+          adapterType: this.adapterType,
+          externalId,
+          // Keyed by SURFACE name: arbitration compares this against the
+          // asserted record, which is in the write's currency. A similarity
+          // hit also carries every name the row answers to, so the judge can
+          // see the alias or legal name that put it on the shortlist.
+          data: {
+            ...(bySimilarity !== undefined ? fuzzyFieldsOf({ row, descriptor, fuzzyColumns }) : {}),
+            ...Object.fromEntries(wanted.map((w) => [w.surface, row[w.column]])),
+          },
+        });
+      }
+    }
+
+    return { candidates };
+  }
 
   // ── 3. Field-level access ──
 
@@ -2374,7 +2479,11 @@ class NativeValuationsAdapter extends BaseAdapter {
     const creds = await this.requireCreds();
     const response = await valuationsFetch<ValuationsRecordResponse<Record<string, unknown>>>(
       creds,
-      { method: 'POST', path: `/api/v1/valuations/${entity.slug}`, body: fields },
+      {
+        method: 'POST',
+        path: `/api/v1/valuations/${entity.slug}`,
+        body: withoutEmptyFields(fields),
+      },
     );
     return {
       adapterType: NATIVE_VALUATIONS_ADAPTER_TYPE,
@@ -2470,7 +2579,20 @@ class NativeValuationsAdapter extends BaseAdapter {
         creds,
         { method: 'GET', path: `/api/v1/valuations/${entity.slug}/${input.externalId}` },
       );
-      return response.data;
+      // The REST record is keyed by Valuations' own column names; the caller
+      // asked in the write's currency (the surface field names it is about to
+      // write). Answer in the currency it asked in, or `?:` and no-op
+      // suppression compare a value against a key that is never there — which
+      // reads as "empty" and overwrites what is already on the record.
+      const requested = input.fieldIds ?? [];
+      if (requested.length === 0) return response.data;
+      const resolver = await this.resolver({ types: [input.recordType] });
+      const type = naturalName(input.recordType);
+      const current: Record<string, unknown> = {};
+      for (const name of requested) {
+        current[name] = response.data[resolver.fieldId(type, naturalName(name))];
+      }
+      return current;
     } catch (err) {
       logger.warn('[NativeValuationsAdapter] readRecord failed; returning null', {
         recordType: input.recordType,
@@ -2547,4 +2669,82 @@ function readDotPath(obj: unknown, path: string): unknown {
     }
   }
   return current;
+}
+
+/**
+ * A create has no existing value to clear, so a field with nothing in it is a
+ * field the caller did not set — `Field ?: <something the source didn't have>`
+ * is exactly that. The entity create schemas take an absent optional field and
+ * refuse an explicit null, so send neither. (The command create path has always
+ * done this; see `createCommandRecord`.) An update keeps its nulls: clearing a
+ * field there is the point.
+ */
+function withoutEmptyFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined && value !== null),
+  );
+}
+
+/** How many rows one identity search reads. The list endpoints answer newest
+ *  first and `search` already narrows to the name, so a page is a shortlist,
+ *  not a scan. */
+const IDENTITY_SEARCH_LIMIT = 100;
+
+/** The columns a descriptor lets `FUZZY` name: none, every field, or the
+ *  listed ones. */
+function fuzzyColumnsOf(descriptor: SchemaTypeDescriptor | undefined): ReadonlySet<string> {
+  const declared = descriptor?.supportsFuzzyResolution;
+  if (declared === undefined || declared === false) return new Set();
+  if (declared === true) return new Set(descriptor?.fields.map((f) => f.fieldId) ?? []);
+  return new Set(declared);
+}
+
+/** Every fuzzy-matchable value the row carries, under its surface name, so
+ *  the judge sees the alias or legal name that put the row on the shortlist. */
+function fuzzyFieldsOf(args: {
+  row: Record<string, unknown>;
+  descriptor: SchemaTypeDescriptor | undefined;
+  fuzzyColumns: ReadonlySet<string>;
+}): Record<string, unknown> {
+  const names: Record<string, unknown> = {};
+  for (const field of args.descriptor?.fields ?? []) {
+    if (!args.fuzzyColumns.has(field.fieldId)) continue;
+    const value = args.row[field.fieldId];
+    if (value !== null && value !== undefined) names[field.displayName] = value;
+  }
+  return names;
+}
+
+function identityFieldAgrees(column: string, asserted: unknown, stored: unknown): boolean {
+  return column === 'personal_website'
+    ? websitesAgree(asserted, stored)
+    : valuationsFieldsAgree(asserted, stored);
+}
+
+/** The same site written two ways (`https://www.acme.com/` and `acme.com`) is
+ *  one identity: compare without scheme, `www.`, trailing slash or case. */
+function websitesAgree(asserted: unknown, stored: unknown): boolean {
+  if (typeof asserted !== 'string' || typeof stored !== 'string') return false;
+  const bare = normaliseWebsite(asserted);
+  return bare !== '' && bare === normaliseWebsite(stored);
+}
+
+function normaliseWebsite(url: string): string {
+  return url
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/+$/, '');
+}
+
+/** Identity equality as Valuations stores it: text compares case-insensitively
+ *  (the list `search` filter already does), and a multi-valued column matches
+ *  when the asserted scalar is one of its values. */
+function valuationsFieldsAgree(asserted: unknown, stored: unknown): boolean {
+  if (asserted === null || asserted === undefined) return false;
+  if (stored === null || stored === undefined) return false;
+  const target = String(asserted).trim().toLowerCase();
+  const pool = Array.isArray(stored) ? stored : [stored];
+  return pool.some((v) => v !== null && v !== undefined && String(v).trim().toLowerCase() === target);
 }

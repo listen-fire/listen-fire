@@ -121,6 +121,7 @@ import type {
   InstanceSchema,
   LinkExpression,
   LinkedExport,
+  MatchExpression,
   LinkedFile,
   EventAddress,
   MovementCondition,
@@ -144,10 +145,12 @@ import {
   leafReadKey,
   pureLeafReads,
 } from '#shared/expression/filter';
+import { neverAsAny } from '../../lib/utils/types';
 import type { TeamId } from '../../generated/kysely/core/Team';
 import type { LinkedObject } from '../../generated/kysely/knowledge/LinkedObject';
 import type {
   Adapter,
+  ExternalRecordRef,
   FieldEvidence,
   FileRef,
   ParentLink,
@@ -1249,12 +1252,24 @@ interface ResolvedLinkStatement {
   toHandle: WriteRecord;
 }
 
+/** The body a write and a match share: a target, identity clauses and
+ *  fields. Everything that reads only those takes either. */
+type IdentityBody = WriteExpression | MatchExpression;
+
+/** A match's target as the author wrote it, for messages. */
+function describeMatchTarget(match: MatchExpression): string {
+  const spell = (path: PathHead): string => `${pathRootName(path) ?? ''}${path.hopsRaw}`;
+  return match.target.kind === 'linked'
+    ? spell(match.target.path)
+    : `(${match.target.paths.map(spell).join(', ')})`;
+}
+
 /**
  * Control-flow sentinel — the documented find-on-missing semantics: a
- * criteria-form `link` found no target, so the ENCLOSING SCOPE ends
- * quietly. Caught at scope boundaries (a fan-out iteration skips, a
- * callee body returns, the movement body simply stops); nothing throws
- * outward, because transactionality across systems can't be guaranteed.
+ * `match` found no record, so the ENCLOSING SCOPE ends quietly. Caught at
+ * scope boundaries (a fan-out iteration skips, a callee body returns, the
+ * movement body simply stops); nothing throws outward, because
+ * transactionality across systems can't be guaranteed.
  */
 class ScopeEndedQuietly extends Error {
   constructor(message: string) {
@@ -2684,8 +2699,8 @@ class Interpreter {
             throw unsupported('file-level traversal blocks', 'blocks run inside a movement body');
           case 'write':
             throw unsupported('file-level writes', 'writes run inside a movement body');
-          case 'link':
-            throw unsupported('file-level link statements', 'links run inside a movement body');
+          case 'match':
+            throw unsupported('file-level matches', 'a match runs inside a movement body');
         }
         return;
       case 'shape':
@@ -2949,8 +2964,11 @@ class Interpreter {
         case 'call':
           await this.executeCall(statement, env, { ...body, address: stmtAddress });
           break;
+        case 'match':
+          await this.executeMatch(statement.match, undefined, env);
+          break;
         case 'link':
-          await this.executeLink(statement.link, undefined, env);
+          await this.executeLink(statement.link, env);
           break;
         case 'unlink':
           await this.executeUnlinkStatement(statement, env);
@@ -3041,8 +3059,8 @@ class Interpreter {
       case 'block':
         await this.interpretBlock(value.block, name, env, stmtAddress);
         break;
-      case 'link':
-        await this.executeLink(value.link, name, env);
+      case 'match':
+        await this.executeMatch(value.match, name, env);
         break;
       case 'await':
         await this.interpretAwait(value.await, name, env, stmtAddress, body);
@@ -3582,7 +3600,8 @@ class Interpreter {
    * IS. A `value` output is the text; a `record` output reads the properties,
    * with the fetched text under `text` for the plugins that declare it, since a
    * plugin that fetched a page and had no way to hand it back would be throwing
-   * away most of what it did.
+   * away most of what it did; a `records` output is one record per thing it
+   * fetched.
    */
   private async executePluginCall(
     statement: Extract<Statement, { kind: 'call' }>,
@@ -5816,7 +5835,7 @@ class Interpreter {
     if (write.target.kind === 'position') {
       return this.executePositionWrite(write, write.target, bindingName, env);
     }
-    const resolved = await this.resolveWriteTarget(write, env);
+    const resolved = await this.resolveWriteTarget(write, env, 'write');
     const adapter = resolved.adapter;
     const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources, descriptor } =
       await this.evaluateWriteFields({ write, target: resolved, env });
@@ -5840,18 +5859,7 @@ class Interpreter {
     // lookup it uses for property values. ALL tuple parents fold in
     // (consolidate's AND semantics). This powers `unique by (parent AND field)`
     // and is independent of binding/correspondence — it stays.
-    const resolveRecord: Record<string, unknown> = { ...fields, ...identity.valueOverlay };
-    {
-      const constraintFields = new Set(
-        constraints.any.flatMap((branch) => branch.all.map((entry) => entry.field)),
-      );
-      for (const parent of target.parents) {
-        if (parent.externalId === undefined) continue;
-        if (constraintFields.has(parent.edgeName)) {
-          resolveRecord[parent.edgeName] = { id: parent.externalId };
-        }
-      }
-    }
+    const resolveRecord = this.identityRecord({ fields, identity, constraints, target });
 
     // Parent → child links, forwarded to the adapter so it wires the
     // relationships at write time (KG: insert/resolve every connecting
@@ -5910,6 +5918,87 @@ class Interpreter {
   }
 
   /**
+   * The record the adapter searches by: the asserted fields, the literal
+   * values a `unique by` pinned, and — edge-scoped COMPOUND IDENTITY, not
+   * correspondence — each already-resolved parent whose EDGE a constraint
+   * names, folded in under the edge's NATURAL name so the adapter matches by
+   * adjacency through the same opaque `record[field]` lookup it uses for
+   * property values. ALL tuple parents fold in (consolidate's AND semantics).
+   * This powers `unique by (parent AND field)`.
+   */
+  private identityRecord(input: {
+    fields: Record<string, unknown>;
+    identity: { valueOverlay: Record<string, unknown> };
+    constraints: UniquenessConstraints;
+    target: Pick<ResolvedWriteTarget, 'parents'>;
+  }): Record<string, unknown> {
+    const record: Record<string, unknown> = { ...input.fields, ...input.identity.valueOverlay };
+    const constraintFields = new Set(
+      input.constraints.any.flatMap((branch) => branch.all.map((entry) => entry.field)),
+    );
+    for (const parent of input.target.parents) {
+      if (parent.externalId === undefined) continue;
+      if (constraintFields.has(parent.edgeName)) {
+        record[parent.edgeName] = { id: parent.externalId };
+      }
+    }
+    return record;
+  }
+
+  /**
+   * The identity half of every write and every match: the adapter searches by
+   * the effective constraints, the engine narrows the shortlist by any
+   * non-equality conjuncts, and the shared module arbitrates (an exact hit
+   * wins outright, a lone fuzzy hit goes to the judge). Returns the chosen
+   * candidate, or undefined when nothing matched.
+   *
+   * `judgeUnavailable` distinguishes "the judge looked and genuinely declined"
+   * from "the judge never got an answer" — both leave `matched` undefined, but
+   * only the second is a caveat the caller must carry (2026-09-15, the entity
+   * judge routing incident: a judge call that always failed read identically
+   * to an honest decline and created duplicates silently).
+   *
+   * `candidates: []` — the cross-adapter `resolveEntity` interface keeps the
+   * `candidates` slot for the FROZEN TG engine (P7); identity is `constraints`.
+   */
+  private async resolveIdentity(input: {
+    adapter: Adapter;
+    recordType: string;
+    resolveRecord: Record<string, unknown>;
+    constraints: UniquenessConstraints;
+    identityPostFilter?: Expression;
+    /** What the body asserted — what exactness is judged against and what
+     *  the judge reads. */
+    asserted: Record<string, unknown>;
+  }): Promise<{ matched: ExternalRecordRef | undefined; judgeUnavailable?: string }> {
+    const resolved = await input.adapter.resolveEntity({
+      record: input.resolveRecord,
+      recordType: input.recordType,
+      candidates: [],
+      constraints: input.constraints,
+    });
+    const candidates =
+      input.identityPostFilter !== undefined
+        ? this.narrowCandidatesByPredicate(resolved.candidates, input.identityPostFilter)
+        : resolved.candidates;
+    let judgeUnavailable: string | undefined;
+    const chosen = await arbitrateEntityCandidates({
+      asserted: input.asserted,
+      candidates,
+      recordType: input.recordType,
+      constraints: input.constraints,
+      onJudgeUnavailable: (message) => {
+        judgeUnavailable = message;
+      },
+    });
+    // The index is into the list the arbiter saw — the narrowed one.
+    return {
+      matched: chosen !== null ? candidates[chosen] : undefined,
+      ...(judgeUnavailable !== undefined ? { judgeUnavailable } : {}),
+    };
+  }
+
+  /**
    * The identity-resolve write path (no `bind`): the adapter searches by the
    * effective `unique by` ∪ native constraints, the shared module arbitrates,
    * and a match updates / a miss creates. Correspondence is NOT established
@@ -5941,32 +6030,15 @@ class Interpreter {
     body: BodyContext;
   }): Promise<WriteRecord> {
     const { target, adapter } = input;
-    const resolved = await adapter.resolveEntity({
-      record: input.resolveRecord,
+    const { matched, judgeUnavailable } = await this.resolveIdentity({
+      adapter,
       recordType: target.recordType,
-      candidates: [],
+      resolveRecord: input.resolveRecord,
       constraints: input.constraints,
-    });
-    const candidates =
-      input.identityPostFilter !== undefined
-        ? this.narrowCandidatesByPredicate(resolved.candidates, input.identityPostFilter)
-        : resolved.candidates;
-    // Distinguishes "the judge looked and genuinely declined" from "the judge
-    // never got an answer" — both resolve `chosen` to null, but only the
-    // second is a caveat the resulting create needs to carry (2026-09-15,
-    // the entity judge routing incident: a judge call that always failed
-    // read identically to an honest decline and created duplicates silently).
-    let judgeUnavailable: string | undefined;
-    const chosen = await arbitrateEntityCandidates({
+      ...(input.identityPostFilter ? { identityPostFilter: input.identityPostFilter } : {}),
       asserted: input.fields,
-      candidates,
-      recordType: target.recordType,
-      constraints: input.constraints,
-      onJudgeUnavailable: (message) => {
-        judgeUnavailable = message;
-      },
     });
-    const matchedExternalId = chosen !== null ? resolved.candidates[chosen].externalId : undefined;
+    const matchedExternalId = matched?.externalId;
 
     if (matchedExternalId !== undefined) {
       const updated = await this.applyUpdate({
@@ -6221,7 +6293,7 @@ class Interpreter {
    * coercion and field-function advertisement both key on the displayName.
    */
   private async evaluateWriteFields(input: {
-    write: WriteExpression;
+    write: IdentityBody;
     target: WriteDestination;
     env: Environment;
   }): Promise<{
@@ -6304,7 +6376,7 @@ class Interpreter {
    * deduped by the stable resource `id` so the same source file contributes
    * once. Over-collection is harmless: `persistKgResources` dedups on `id`.
    */
-  private collectWriteResources(write: WriteExpression, env: Environment): Resource[] {
+  private collectWriteResources(write: IdentityBody, env: Environment): Resource[] {
     const seen = new Set<string>();
     const out: Resource[] = [];
     const consider = (name: string): void => {
@@ -6829,15 +6901,13 @@ class Interpreter {
   // ── Link statements (the edge-only write — §B, absorbed `edge`) ──
 
   /**
-   * `link a -[:e]-> b` — assert an edge between two records that were
-   * BOTH already written (the bare-handle form; linked writes cover the
-   * parent-child shape, this is the residual case) — or
-   * `p = link c-[:portfolio]-> { …criteria… }` — find the edge's target
-   * by identity criteria and link it (the criteria form). The runtime
-   * owns most of the validation:
-   *   - the from name must be a write handle; the bare-handle form's to
-   *     name must be one in the SAME graph (binding object identity, the
-   *     alias-safe graph identity the IS tests use);
+   * `link a -[:e]-> b` — assert an edge between two records already bound
+   * (linked writes cover the parent-child shape, this is the residual case;
+   * a record to link that you don't hold yet is found with `match`). The
+   * runtime owns most of the validation:
+   *   - the from name must be a write handle; the to name must be one in
+   *     the SAME graph (binding object identity, the alias-safe graph
+   *     identity the IS tests use);
    *   - the edge resolves against the FROM side's type in that graph's
    *     schema where one is known (untyped graphs defer to the adapter's
    *     own resolution, which fails loud on a bad name);
@@ -6848,23 +6918,15 @@ class Interpreter {
    * here: graph mutation events reach listeners only via the knowledge
    * outbox drainer (M-38), external ones only via their webhooks.
    */
-  private async executeLink(
-    link: LinkExpression,
-    bindingName: string | undefined,
-    env: Environment,
-  ): Promise<void> {
+  private async executeLink(link: LinkExpression, env: Environment): Promise<void> {
     const fromBinding = env.resolve(link.from);
     if (fromBinding?.kind === 'nodePosition') {
       this.appendLocalLanding(link, fromBinding, env);
       return;
     }
-    if (link.target.kind === 'criteria') {
-      await this.executeCriteriaLink(link, link.target, bindingName, env);
-      return;
-    }
-    const at = `link ${link.from} -[:${link.edge}]-> ${link.target.name}`;
+    const at = `link ${link.from} -[:${link.edge}]-> ${link.to}`;
     const resolved = await this.resolveLinkStatement(
-      { from: link.from, edge: link.edge, to: link.target.name },
+      { from: link.from, edge: link.edge, to: link.to },
       env,
       at,
     );
@@ -6899,12 +6961,6 @@ class Interpreter {
     env: Environment,
   ): void {
     const at = `link ${link.from} -[:${link.edge}]->`;
-    if (link.target.kind !== 'handle') {
-      throw unsupported(
-        `${at} { … } on a record this run built`,
-        'criteria find a record in a system; link a position you already have',
-      );
-    }
     const edge = from.edges[link.edge];
     if (edge === undefined || edge.kind !== 'landed') {
       throw new MovementEngineError(
@@ -6912,180 +6968,164 @@ class Interpreter {
         `${at}: '${link.from}' has no appendable edge '${link.edge}' — the checker should have caught this`,
       );
     }
-    const to = env.resolve(link.target.name);
+    const to = env.resolve(link.to);
     if (!to) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'${link.target.name}' is not in scope — the checker should have caught this`,
+        `'${link.to}' is not in scope — the checker should have caught this`,
       );
     }
     if (!APPENDABLE_LANDING_KINDS.has(to.kind)) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `${at} ${link.target.name}: an edge lands on a position — '${link.target.name}' is ${describeBinding[to.kind]}`,
+        `${at} ${link.to}: an edge lands on a position — '${link.to}' is ${describeBinding[to.kind]}`,
       );
     }
     edge.landings.push(to);
   }
 
+  // ── Matches (the identity half of a write, on its own) ──
+
   /**
-   * The criteria form: `link c -[:portfolio]-> { name: "Fund III" }` —
-   * the target is FOUND, never created and never written. The body's
-   * fields are identity criteria ONLY: they resolve through the same
-   * gate a write's identity does (adapter candidate search merged with
-   * the target's native uniqueness, then `arbitrateEntityCandidates`),
-   * the found type inferred from the edge like a linked write. On
-   * missing, the ENCLOSING SCOPE ends quietly — the documented
-   * find-on-missing semantics (a fan-out iteration skips; nothing
-   * throws, because transactionality across systems can't be
-   * guaranteed). Binding the statement yields the FOUND target's handle,
-   * with full result data via `readRecord` where the adapter offers it.
+   * `x = match <path> { unique by (…) … }` — find an existing record by
+   * identity and bind it; never create, never write. It is the first half of
+   * `executeWrite`, run by the same pieces in the same order: resolve the
+   * target, evaluate the asserted fields, lower `unique by` merged with the
+   * target's native rules, fold edge-scoped parents in, then
+   * `resolveIdentity`. Where a write would update or create, a match binds
+   * what it found — its full result data via `readRecord` where the adapter
+   * offers it, over the candidate's snapshot.
+   *
+   * On a miss the ENCLOSING SCOPE ends quietly — the documented
+   * find-on-missing semantics (a fan-out iteration skips; nothing throws,
+   * because transactionality across systems can't be guaranteed).
+   *
+   * The run log gets a `kind: 'match'` row so an inspector sees what the run
+   * resolved to. It is not a write: nothing counted as written counts it.
    */
-  private async executeCriteriaLink(
-    link: LinkExpression,
-    target: Extract<LinkExpression['target'], { kind: 'criteria' }>,
+  private async executeMatch(
+    match: MatchExpression,
     bindingName: string | undefined,
     env: Environment,
   ): Promise<void> {
-    const at = `link ${link.from} -[:${link.edge}]-> { … }`;
-    const from = this.resolveEdgeEndpoint(link.from, env, at);
-    const graph = from.graph;
-    const surfaceType = this.inferLinkedSurfaceType({
-      graph,
-      parentSurfaceType: from.targetType,
-      edgeName: link.edge,
-      explicitType: target.explicitType,
-      rootName: link.from,
-      verb: 'link',
+    const at = `match ${describeMatchTarget(match)}`;
+    if (match.target.kind === 'linked') {
+      const root = pathRootName(match.target.path);
+      const rootBinding = root !== undefined ? env.resolve(root) : undefined;
+      if (rootBinding?.kind === 'nodePosition') {
+        await this.executeLocalMatch({ match, target: match.target, from: rootBinding, bindingName, env, at });
+        return;
+      }
+    }
+    const resolved = await this.resolveWriteTarget(match, env, 'match');
+    const { adapter } = resolved;
+    const { fields, descriptor } = await this.evaluateWriteFields({ write: match, target: resolved, env });
+    const handleType = this.discriminatedHandleType(resolved, fields);
+    const identity = this.uniqueByIdentity(match, resolved);
+    const constraints = mergeUniqueness(descriptor?.uniquenessConstraints, identity.constraints);
+    const { matched, judgeUnavailable } = await this.resolveIdentity({
+      adapter,
+      recordType: resolved.recordType,
+      resolveRecord: this.identityRecord({ fields, identity, constraints, target: resolved }),
+      constraints,
+      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      asserted: fields,
     });
-    const fromId = from.handle.externalId;
-    if (fromId === undefined) {
-      throw new MovementEngineError(
-        'MOVENG_RUNTIME',
-        `${at}: '${link.from}' carries no written record id to link`,
+    if (matched === undefined) {
+      throw new ScopeEndedQuietly(
+        `${at}: no existing ${resolved.recordType} matched${judgeUnavailable !== undefined ? ` (judge unavailable: ${judgeUnavailable})` : ''}`,
       );
     }
-    const adapter = await this.targetAdapterFor(graph.instance);
-    // The found type and the edge cross the boundary in the program's NATURAL
-    // currency; the adapter resolves them (the edge against the FROM side's
-    // type) to its own ids internally.
-    const recordType = surfaceType;
-    const edgeName = link.edge;
-
-    // Criteria evaluation — match values only, keyed by natural field name
-    // exactly like write fields (the adapter translates).
-    const criteria: Record<string, unknown> = {};
-    for (const field of target.fields) {
-      const { value } = await this.evaluateSlot(field.value, { env });
-      if (value === undefined) continue;
-      criteria[field.name] = value;
-    }
-
-    // Identity: the criteria AND-group ∪ the target's native rules —
-    // the same merge a write's resolution applies (unique-by-style).
-    const descriptor = await adapter.describe(recordType);
-    const constraints = mergeUniqueness(descriptor?.uniquenessConstraints, {
-      any:
-        Object.keys(criteria).length > 0
-          ? [{ all: Object.keys(criteria).map((field) => ({ field })) }]
-          : [],
-    });
-    // Find-existing resolves purely by identity criteria — correspondence is
-    // bind-only now (the implicit bridge is gone, 3b). `candidates: []` keeps
-    // the cross-adapter interface slot the frozen TG engine still uses (P7).
-    const resolved = await adapter.resolveEntity({
-      record: criteria,
-      recordType,
-      candidates: [],
-      constraints,
-    });
-    const chosen = await arbitrateEntityCandidates({
-      asserted: criteria,
-      candidates: resolved.candidates,
-      recordType,
-      constraints,
-    });
-    if (chosen === null) {
-      // Find-on-missing: the enclosing scope ends quietly.
-      throw new ScopeEndedQuietly(`${at}: no existing ${surfaceType} matched the criteria`);
-    }
-    const matched = resolved.candidates[chosen];
-
-    if (typeof adapter.linkRecords !== 'function') {
-      throw new MovementEngineError(
-        'MOVENG_RUNTIME',
-        `${at}: the '${adapter.adapterType}' adapter cannot link two existing records (no linkRecords capability)`,
-      );
-    }
-    const fromRecordType = from.targetType;
-    const linked = await adapter.linkRecords({
-      from: { recordType: fromRecordType, externalId: fromId },
-      edgeName,
-      to: { recordType, externalId: matched.externalId },
-      mutationContext: this.mutationContext,
-    });
-
-    // The FOUND handle — full result data via readRecord where the
-    // adapter offers it, falling back to the candidate's snapshot.
     let resultData: Record<string, unknown> = {
       ...(matched.url !== undefined ? { url: matched.url } : {}),
       ...matched.data,
     };
     if (typeof adapter.readRecord === 'function') {
       const current = await adapter.readRecord({
-        recordType,
+        recordType: resolved.recordType,
         externalId: matched.externalId,
       });
       if (current) resultData = { ...resultData, ...current };
     }
-    // The firing entry is the LINK itself — FROM-keyed, the edge in
-    // `link`, recorded onto the firing log. The bound handle is a
-    // SEPARATE record: it stands on the FOUND to-side node (its identity,
-    // its read-back fields), which was found-not-written, so it is not a
-    // firing-log entry of its own — its `origin` chains to the link's
-    // index so later reads still trace back through the firing graph.
-    const writeIndex = this.writes.length;
-    this.writes.push({
-      kind: 'link',
+    const found: WriteRecord = {
+      kind: 'match',
       adapterType: adapter.adapterType,
-      recordType: fromRecordType,
-      created: linked.created,
-      committed: this.committedThrough(adapter),
-      externalId: fromId,
-      writtenValues: {},
-      link: {
-        edgeName,
-        toRecordType: recordType,
-        toExternalId: matched.externalId,
-        foundTarget: true,
-      },
-      provenance: {
-        from: this.summariser.summariseTrail(handleTrail(from.handle)),
-        // The to side was FOUND, not written — no write origin to chain.
-        to: [],
-      },
-      ...(bindingName !== undefined ? { bindingName } : {}),
-    });
-    const foundHandle: WriteRecord = {
-      adapterType: adapter.adapterType,
-      recordType,
+      recordType: handleType ?? resolved.recordType,
+      // Nothing was created and nothing was sent, so nothing was committed.
       created: false,
-      // The to-side was FOUND, not written — no effect to commit or capture.
-      committed: this.committedThrough(adapter),
+      committed: false,
       externalId: matched.externalId,
       writtenValues: {},
       resultData,
       provenance: {},
-      origin: { kind: 'write', writeIndex, externalId: matched.externalId },
     };
-    if (bindingName !== undefined) {
-      env.declare(bindingName, {
-        kind: 'handle',
-        handle: foundHandle,
-        targetType: surfaceType,
-        graph,
-      });
+    this.recordWrite({
+      write: found,
+      bindingName,
+      env,
+      target: handleType !== undefined ? { ...resolved, handleType } : resolved,
+      fieldProvenance: {},
+    });
+  }
+
+  /**
+   * `match deduped-[:companies]-> { unique by (FUZZY \`name\`), … }` — a match
+   * among the landings of a node THIS RUN BUILT. The same stand-in adapter a
+   * local write resolves through (`localEdgeAdapter` over the edge's landings)
+   * answers the same `resolveIdentity`, so a match here means exactly what the
+   * local write's identity means; it binds the landing it found, as a local
+   * write binds the landing it made.
+   */
+  private async executeLocalMatch(input: {
+    match: MatchExpression;
+    target: Extract<MatchExpression['target'], { kind: 'linked' }>;
+    from: Extract<Binding, { kind: 'nodePosition' }>;
+    bindingName: string | undefined;
+    env: Environment;
+    at: string;
+  }): Promise<void> {
+    const { match, from, env, at } = input;
+    const edgeName = this.singleWriteEdge(input.target.path);
+    const edge = from.edges[edgeName];
+    if (edge === undefined || edge.kind !== 'landed') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `${at}: '${pathRootName(input.target.path)}' has no appendable edge '${edgeName}' — the checker should have caught this`,
+      );
     }
+    const store = localEdgeAdapter({ edge, edgeName });
+    const destination: WriteDestination = { adapter: store.adapter, recordType: edgeName, parents: [] };
+    const { fields } = await this.evaluateWriteFields({ write: match, target: destination, env });
+    const identity = this.uniqueByIdentity(match, destination);
+    const { matched, judgeUnavailable } = await this.resolveIdentity({
+      adapter: store.adapter,
+      recordType: edgeName,
+      resolveRecord: { ...fields, ...identity.valueOverlay },
+      constraints: identity.constraints,
+      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      asserted: fields,
+    });
+    const landing = matched !== undefined ? store.landingOf(matched.externalId) : undefined;
+    if (landing === undefined) {
+      throw new ScopeEndedQuietly(
+        `${at}: no landing on '${edgeName}' matched${judgeUnavailable !== undefined ? ` (judge unavailable: ${judgeUnavailable})` : ''}`,
+      );
+    }
+    this.recordLocalWrite({
+      record: {
+        kind: 'match',
+        adapterType: store.adapter.adapterType,
+        recordType: edgeName,
+        created: false,
+        committed: false,
+        writtenValues: {},
+        provenance: {},
+        local: { edge: edgeName, ...(store.capped() ? { candidatesCapped: true as const } : {}) },
+      },
+      fieldProvenance: {},
+      bindingName: input.bindingName,
+    });
+    if (input.bindingName !== undefined) env.declare(input.bindingName, landing);
   }
 
   /**
@@ -7364,11 +7404,12 @@ class Interpreter {
    * runtime re-enforces it for untyped graphs).
    */
   private async resolveWriteTarget(
-    write: WriteExpression,
+    write: IdentityBody,
     env: Environment,
+    verb: 'write' | 'match',
   ): Promise<ResolvedWriteTarget> {
     if (write.target.kind === 'tuple') {
-      return this.resolveTupleWriteTarget(write.target, env);
+      return this.resolveTupleWriteTarget(write.target, env, verb);
     }
 
     if (write.target.kind === 'position') {
@@ -7397,7 +7438,7 @@ class Interpreter {
       path: target.path,
       explicitType: target.explicitType,
       env,
-      verb: 'write',
+      verb,
     });
     return {
       adapter: await this.targetAdapterFor(graph.instance),
@@ -7495,13 +7536,14 @@ class Interpreter {
   private async resolveTupleWriteTarget(
     target: Extract<WriteExpression['target'], { kind: 'tuple' }>,
     env: Environment,
+    verb: 'write' | 'match',
   ): Promise<ResolvedWriteTarget> {
     const resolved = target.paths.map((path) =>
       this.resolveLinkedParent({
         path,
         explicitType: target.explicitType,
         env,
-        verb: 'write',
+        verb,
       }),
     );
     const [first, ...rest] = resolved;
@@ -7540,7 +7582,7 @@ class Interpreter {
     path: PathHead;
     explicitType: string | undefined;
     env: Environment;
-    verb: 'write';
+    verb: 'write' | 'match';
   }): {
     graph: HandleGraph;
     surfaceType: string;
@@ -7669,17 +7711,17 @@ class Interpreter {
   }
 
   /** The target type one declared edge points at, in surface currency —
-   *  shared by linked writes, tuple paths, and criteria links. */
+   *  shared by linked writes, tuple paths, and matches. */
   private inferLinkedSurfaceType(input: {
     graph: HandleGraph;
     parentSurfaceType: string;
     edgeName: string;
     explicitType: string | undefined;
     rootName: string;
-    verb: 'write' | 'link';
+    verb: 'write' | 'match';
   }): string {
     const { graph, edgeName } = input;
-    const keyword = input.verb === 'write' ? 'write' : 'link';
+    const keyword = input.verb;
     const schema = graph.instance.schema;
     // A WRITABLE-ONLY type mints no position (an ask family: you can raise a
     // request, you can never enumerate open ones), so its relationship table
@@ -7693,7 +7735,7 @@ class Interpreter {
     if (edge?.polymorphic && input.explicitType === undefined) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'${edgeName}' is polymorphic — say which type this ${input.verb === 'write' ? 'write creates' : 'link finds'}: ${keyword} …-[:${edgeName}]-><type> { … }`,
+        `'${edgeName}' is polymorphic — say which type this ${input.verb === 'write' ? 'write creates' : 'match finds'}: ${keyword} …-[:${edgeName}]-><type> { … }`,
       );
     }
     if (input.explicitType !== undefined) return input.explicitType;
@@ -7730,7 +7772,7 @@ class Interpreter {
    * filter unit — precise, over a bounded shortlist (principle 4).
    */
   private uniqueByIdentity(
-    write: WriteExpression,
+    write: IdentityBody,
     target: Pick<ResolvedWriteTarget, 'parents'>,
   ): {
     constraints: UniquenessConstraints;
@@ -8790,10 +8832,33 @@ function pluginCallBinding(
   result: TransformInvocationResult,
   provenance: Provenance,
 ): { binding: Binding; handedBack: boolean } {
-  if (output.kind === 'value') {
-    const value = result.text !== undefined && result.text !== '' ? result.text : null;
-    return { binding: { kind: 'value', value, provenance }, handedBack: value !== null };
+  switch (output.kind) {
+    case 'value': {
+      const value = result.text !== undefined && result.text !== '' ? result.text : null;
+      return { binding: { kind: 'value', value, provenance }, handedBack: value !== null };
+    }
+    case 'records': {
+      // One record per thing the plugin found, in its order — the landings of
+      // a hop, so FIRST, MAP and a field read across them all work as they do
+      // on any other list of records. None found is the empty list.
+      const landings = (result.records ?? []).map((record): Binding => {
+        const fieldProvenance: Record<string, Provenance> = {};
+        for (const name of Object.keys(record)) fieldProvenance[name] = provenance;
+        return { kind: 'nodePosition', fields: { ...record }, fieldProvenance, edges: {} };
+      });
+      return { binding: { kind: 'positions', landings }, handedBack: landings.length > 0 };
+    }
+    case 'record':
+      return recordCallBinding(result, provenance);
+    default:
+      return neverAsAny(output);
   }
+}
+
+function recordCallBinding(
+  result: TransformInvocationResult,
+  provenance: Provenance,
+): { binding: Binding; handedBack: boolean } {
   const fields: Record<string, unknown> = {};
   const fieldProvenance: Record<string, Provenance> = {};
   if (result.text !== undefined && result.text !== '') {

@@ -274,8 +274,10 @@ movement \`Upsert Deal\`(e: <crm-[:\`Organization\`]->>) {
     \`Deal Stage\` ?: "Sourced"
     \`Deal Source\` ?: "Inbound"
   }
-  link entry -[:\`Owners\`]-> { \`Email\`: "${OWNERS[0].email}" }
-  link entry -[:\`Owners\`]-> { \`Email\`: "${OWNERS[1].email}" }
+  first = match entry-[:\`Owners\`]-> { \`Email\`: "${OWNERS[0].email}" }
+  link entry -[:\`Owners\`]-> first
+  second = match entry-[:\`Owners\`]-> { \`Email\`: "${OWNERS[1].email}" }
+  link entry -[:\`Owners\`]-> second
   write org-[:\`Founders\`]-> {
     \`First name\` ?: "${FOUNDERS[0].first}"
     \`Last name\` ?: "${FOUNDERS[0].last}"

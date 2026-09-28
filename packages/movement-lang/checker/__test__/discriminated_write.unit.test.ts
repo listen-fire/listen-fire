@@ -300,11 +300,12 @@ describe('the handle a discriminated write hands back', () => {
     );
   });
 
-  it('a link off the handle walks the variant\'s edge too', () => {
+  it('a match off the handle walks the variant\'s edge too, and links what it found', () => {
     expectClean(
       withOrg(
         'entry = write o-[:`List Entries`]-> { listName: "Deals" }\n' +
-          '    link entry -[:Owners]-> { Name: "Daria Gneusheva" }',
+          '    owner = match entry-[:Owners]-> { unique by (`Name`), Name: "Ada" }\n' +
+          '    link entry -[:Owners]-> owner',
       ),
     );
   });

@@ -57,6 +57,7 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Set a field once, never overwrite', chapter: 'writes', section: 'set-if-empty' },
   { intent: 'Add to a multi-value field', chapter: 'writes', section: 'append-to-a-multi-value-field' },
   { intent: 'Find a record without creating one, or update one you have', chapter: 'writes', section: 'looking-up-existing-records' },
+  { intent: 'Find a record by its identity, never creating it', chapter: 'writes', section: 'match' },
   { intent: 'Remove a relationship or delete a record', chapter: 'writes', section: 'removal' },
   { intent: 'Create a child record under its parent', chapter: 'writes', section: 'linked-writes' },
   { intent: 'Post to a channel, or reply to a message', chapter: 'writes', section: 'conversation-writes' },

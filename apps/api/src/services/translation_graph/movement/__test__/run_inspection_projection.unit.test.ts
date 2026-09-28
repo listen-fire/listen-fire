@@ -26,6 +26,22 @@ describe('projectRunWrites — per-write committed + summary', () => {
     expect(projected.captured).toBe(1);
   });
 
+  it('lists a record a match FOUND, as a match, without counting it as committed or captured', () => {
+    const projected = projectRunWrites(
+      steps([
+        { nodeId: 'known', kind: 'match', adapterType: 'attio', recordType: 'Company', created: false, committed: false, externalId: 'co-9', writtenValues: {} },
+        { nodeId: 'msg', adapterType: 'slack', recordType: 'message', created: true, committed: true, writtenValues: { text: 'hi' } },
+      ]),
+      false,
+    );
+    expect(projected.writes.map((w) => [w.binding, w.action, w.externalId])).toEqual([
+      ['known', 'match', 'co-9'],
+      ['msg', 'create', undefined],
+    ]);
+    expect(projected.committed).toBe(1);
+    expect(projected.captured).toBe(0);
+  });
+
   it('a live run that captured a dry_run instance reports the captured write, not "all committed"', () => {
     const projected = projectRunWrites(
       steps([

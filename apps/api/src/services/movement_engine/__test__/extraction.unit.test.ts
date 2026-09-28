@@ -94,6 +94,20 @@ jest.mock('../../../lib/anthropic', () => ({
   MAX_CHAT_CONTINUATIONS: 5,
 }));
 
+// A plugin that stored a document hands back the document's id; the invoker
+// looks the stored object up. No database here — the lookup is answered from
+// this table, which each test fills.
+const storedDocuments = new Map<string, { id: string; description: string; objectUri: string }>();
+jest.mock('../../document', () => ({
+  DocumentService: {
+    getById: jest.fn(async (id: string) => {
+      const found = storedDocuments.get(id);
+      if (!found) throw new Error(`Could not find document ${id}`);
+      return found;
+    }),
+  },
+}));
+
 jest.mock('../../translation_graph/adapters/resolve', () => ({
   resolveAdapter: jest.fn(() => {
     throw new Error('test: resolveAdapter must not be called — tests inject a resolver');
@@ -122,10 +136,13 @@ import {
 } from '../extraction';
 import { NO_PROVENANCE } from '../provenance';
 import {
+  getTransform,
   registerTransform,
   type TransformImpl,
   type TransformInput,
 } from '../../translation_graph/engine/transforms/registry';
+import { registerBundledTransforms } from '../../translation_graph/engine/transforms/register-bundled';
+import { DOCUMENT_STORE_OWNER } from '../../translation_graph/engine/files/document_store';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import type {
   LlmCallInput,
@@ -2314,6 +2331,7 @@ const carryFileSchema = (): { catalog: ReturnType<typeof mockCatalog> } => {
         dealflow_inbox: { adapters: ['email'] },
         acme_main: { adapters: ['attio'] },
       },
+      plugins: { vc_url_retrieval: { args: [] } },
     }),
   };
 };
@@ -2594,6 +2612,113 @@ describe('Layer 5 — extracted-node `_resources` carries the source file forwar
 
     expect(attio.creates).toHaveLength(2);
     expect(attio.creates[1].fields.deck).toBe(deckRef);
+  });
+});
+
+// Files a `through` plugin fetched are sources too: a deck behind a link in the
+// message lands on the extracted record's `_resources` exactly as an attached
+// deck does, so the same carry block attaches it.
+describe('Layer 5 — files a `through` plugin fetched join `_resources`', () => {
+  const FETCHED_MOVEMENT = [
+    'import { email, attio } from adapters',
+    'import { dealflow_inbox, acme_main } from credentials',
+    'import { vc_url_retrieval } from plugins',
+    '',
+    'inbox = email(credentials: dealflow_inbox)',
+    'crm   = attio(credentials: acme_main)',
+    '',
+    'movement carry(msg: <inbox-[:message]->>) {',
+    '  deal = extract from [msg.`text`] through [vc_url_retrieval] {',
+    '    name: "the company name"',
+    '  }',
+    '',
+    '  co = write crm-[:companies]-> {',
+    '    unique by (`name`)',
+    '    name: deal.`name`',
+    '  }',
+    '',
+    '  deal-[r:_resources WHERE type == "FILE"]-> {',
+    '    write crm-[:companies]-> {',
+    '      unique by (`name`)',
+    '      name: r.`url`',
+    '      deck: r.`file`',
+    '    }',
+    '  }',
+    '}',
+  ].join('\n');
+
+  let run: jest.SpyInstance;
+  beforeEach(() => {
+    registerBundledTransforms();
+    const impl = getTransform('vc-url-retrieval');
+    if (!impl) throw new Error('test: vc-url-retrieval is not registered');
+    run = jest.spyOn(impl, 'run');
+    storedDocuments.clear();
+    storedDocuments.set('doc-1', {
+      id: 'doc-1',
+      description: 'Acme deck.pdf',
+      objectUri: 's3://bucket/uuid-1/Acme deck.pdf',
+    });
+  });
+  afterEach(() => run.mockRestore());
+
+  async function runFetched(emissions: Array<Record<string, unknown>>) {
+    run.mockResolvedValue({ edges: { vcUrl: emissions.map((data) => ({ data })) } });
+    const email = makeFakeAdapter('email');
+    const attio = makeCapturingAttio();
+    const llm = queuedMovementLlm([{ 'x:extract_result#1': [{ name: wrap('Acme') }] }]);
+    await runMovement({
+      source: FETCHED_MOVEMENT,
+      event: webhookEvent('email', { subject: 'Deck', text: 'deck: https://docsend.example/acme' }),
+      teamId: TEAM_ID,
+      catalog: carryFileSchema().catalog,
+      resolveAdapter: makeResolver({ email: email.adapter, attio: attio.adapter }),
+      llm: llm.client,
+    });
+    return { creates: attio.creates, llm };
+  }
+
+  it('a fetched deck is a FILE resource carrying the stored document, and its text still reaches the model', async () => {
+    const { creates, llm } = await runFetched([
+      {
+        name: 'Acme deck.pdf',
+        url: 'https://docsend.example/acme',
+        file: 'doc-1',
+        text: 'Acme builds rockets.',
+      },
+    ]);
+
+    expect(llm.calls[0].userMessage).toContain('Acme builds rockets.');
+
+    // The plain write carries the fetched deck as one of the record's sources.
+    expect(creates).toHaveLength(2);
+    const [fileResource] = (creates[0].resources ?? []).filter((r) => r.type === 'FILE');
+    expect(fileResource).toMatchObject({
+      type: 'FILE',
+      name: 'Acme deck.pdf',
+      url: 'https://docsend.example/acme',
+      data: { name: 'Acme deck.pdf', url: 'https://docsend.example/acme', type: 'FILE' },
+    });
+    expect(fileResource.fileRef).toMatchObject({
+      __brand: 'FileRef',
+      name: 'Acme deck.pdf',
+      source: { ownerAdapterType: DOCUMENT_STORE_OWNER, handle: 's3://bucket/uuid-1/Acme deck.pdf' },
+    });
+    expect((fileResource.data as { file: unknown }).file).toBe(fileResource.fileRef);
+
+    // The carry block reads it exactly as it reads an attached file.
+    expect(creates[1].fields.name).toBe('https://docsend.example/acme');
+    expect(creates[1].fields.deck).toBe(fileResource.fileRef);
+  });
+
+  it('a page that stored no file adds no resource, and its text still reaches the model', async () => {
+    const { creates, llm } = await runFetched([
+      { name: 'https://acme.example', url: 'https://acme.example', file: null, text: 'Acme home.' },
+    ]);
+
+    expect(llm.calls[0].userMessage).toContain('Acme home.');
+    expect(creates).toHaveLength(1);
+    expect((creates[0].resources ?? []).filter((r) => r.type === 'FILE')).toEqual([]);
   });
 });
 

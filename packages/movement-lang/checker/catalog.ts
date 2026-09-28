@@ -367,16 +367,21 @@ export interface PluginFedArg {
  * What a plugin's plain call evaluates to, on whichever PLANE it lives — the
  * same two planes every other bound value has, and no third type language:
  *
- *   - `value`  — one value on the dot plane, an ordinary `FieldType`. Absence
- *                is spelled the way absence is spelled everywhere else, with
- *                `maybeAbsent`;
- *   - `record` — several values read by name, which is a node on the arrow
- *                plane: the checker mints a LOCAL node whose reads are these
- *                fields, exactly as `callback(…)` and a node literal do.
+ *   - `value`   — one value on the dot plane, an ordinary `FieldType`. Absence
+ *                 is spelled the way absence is spelled everywhere else, with
+ *                 `maybeAbsent`;
+ *   - `record`  — several values read by name, which is a node on the arrow
+ *                 plane: the checker mints a LOCAL node whose reads are these
+ *                 fields, exactly as `callback(…)` and a node literal do;
+ *   - `records` — zero or more of those nodes, one per thing the plugin found.
+ *                 The value is a list of records, typed exactly as a hop's
+ *                 landings are, so `FIRST(pages).text` and `MAP` read it the
+ *                 way they read any other list of records.
  */
 export type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> };
+  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  | { kind: 'records'; fields: Record<string, SchemaFieldType> };
 
 // ── Field value types ──
 
@@ -1172,14 +1177,16 @@ export interface WritableRootSchema {
    */
   fieldDocs?: Record<string, string>;
   /**
-   * Whether this target's adapter can resolve identity by SIMILARITY, not just
+   * Which fields this target's adapter can resolve by SIMILARITY, not just
    * equality — surfacing close candidates for the engine to arbitrate. Gates
    * the `FUZZY` modifier on a `unique by` component: an author may only mark a
    * component fuzzy where the target can honour it (the KG's pg_trgm search,
-   * Attio's `$contains`). Absent/false ⇒ the adapter matches exactly only, and
+   * Attio's `$contains`). `true` ⇒ every field; a list ⇒ only those fields (by
+   * their names in `fields`), since a system that searches names by
+   * similarity may still compare a city exactly. Absent ⇒ exact only, and
    * FUZZY is rejected at author time.
    */
-  fuzzyResolution?: boolean;
+  fuzzyResolution?: true | readonly string[];
   /**
    * Whether a movement may author `unique by` on this root. Default (absent) ⇒
    * yes. `false` ⇒ the target decides record identity ITSELF and doesn't accept

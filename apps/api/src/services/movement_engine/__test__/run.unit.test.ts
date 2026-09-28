@@ -3339,9 +3339,9 @@ describe('EXISTS — adapter-edge quantifiers gate writes', () => {
   });
 });
 
-// ── 6f. Criteria-form link — find-and-link (the edge-only write's body form) ─
+// ── 6f. match — find by identity, then link what was found ──────────────────
 
-describe('criteria-form link statements — find, arbitrate, link, bind the FOUND handle', () => {
+describe('match — find, arbitrate, bind the FOUND handle; link it with link', () => {
   const FIND_AND_LINK = [
     PRELUDE,
     '',
@@ -3350,7 +3350,8 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
     '    unique by (`name`)',
     '    name: msg.`user`',
     '  }',
-    '  fund = link co -[:portfolio]-> { name: "Fund III" }',
+    '  fund = match co-[:portfolio]-> { unique by (`name`), name: "Fund III" }',
+    '  link co -[:portfolio]-> fund',
     '  write inbox-[:messages]-> {',
     '    channel: "#funds"',
     '    text:    "${fund.`vintage`} ${fund.`name`}"',
@@ -3399,13 +3400,13 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
     });
   }
 
-  it('resolves the criteria like a write identity, links the found record, and binds its handle (resultData via readRecord)', async () => {
+  it('resolves like a write identity, binds the found record (resultData via readRecord), and link joins it', async () => {
     const { fake, resolveCalls, linkCalls } = fundAttio();
     const slack = makeFakeAdapter('slack');
     const result = await runFind({ attio: fake.adapter, slack: slack.adapter });
 
-    // The criteria resolved through the same resolveEntity gate a write
-    // uses — match values only; the found record is never written.
+    // The match resolved through the same resolveEntity gate a write uses;
+    // the found record is never created and never written.
     expect(resolveCalls.find((c) => c.recordType === 'fund')).toEqual({
       recordType: 'fund',
       record: { name: 'Fund III' },
@@ -3424,26 +3425,29 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
       },
     ]);
 
-    // The firing record's link entry carries the found-not-created flag
-    // and the binding name; from-side provenance chains to the write.
+    // The run log shows what the match found — a `match` row, nothing
+    // written, nothing committed — and the link's to-side chains to it.
     expect(result.writes[1]).toEqual({
       bindingName: 'fund',
-      kind: 'link',
+      kind: 'match',
       adapterType: 'attio',
-      recordType: 'company',
-      created: true,
-      committed: true,
-      externalId: 'ext-attio-1',
+      recordType: 'fund',
+      created: false,
+      committed: false,
+      externalId: 'fund-7',
       writtenValues: {},
-      link: {
-        edgeName: 'portfolio',
-        toRecordType: 'fund',
-        toExternalId: 'fund-7',
-        foundTarget: true,
-      },
+      resultData: { url: 'https://crm/funds/7', name: 'Fund III', vintage: '2024' },
+      provenance: {},
+      origin: { kind: 'write', writeIndex: 1, externalId: 'fund-7' },
+    });
+    expect(result.writes[2]).toMatchObject({
+      kind: 'link',
+      recordType: 'company',
+      externalId: 'ext-attio-1',
+      link: { edgeName: 'portfolio', toRecordType: 'fund', toExternalId: 'fund-7' },
       provenance: {
         from: [{ kind: 'write', write: 0, externalId: 'ext-attio-1' }],
-        to: [],
+        to: [{ kind: 'write', write: 1, externalId: 'fund-7' }],
       },
     });
 
@@ -3464,17 +3468,20 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
     const slack = makeFakeAdapter('slack');
     const result = await runFind({ attio: fake.adapter, slack: slack.adapter });
 
-    // The company write stands; the link found nothing, so the rest of
-    // the body never ran. Nothing threw.
+    // The company write stands; the match found nothing, so the rest of
+    // the body — the link and the message — never ran. Nothing threw, and
+    // nothing about the fund was written.
     expect(result.writes.map((w) => [w.recordType, w.kind ?? 'write'])).toEqual([
       ['company', 'write'],
     ]);
+    expect(fake.creates.map((c) => c.recordType)).toEqual(['company']);
+    expect(fake.updates).toEqual([]);
     expect(linkCalls).toEqual([]);
     expect(slack.creates).toEqual([]);
   });
 
   it('on missing inside a fan-out, THAT iteration skips and the next proceeds', async () => {
-    // One iteration per file; the link only finds a fund for deck.pdf.
+    // One iteration per file; the match only finds a fund named 'Fund III'.
     const FILES_FIND = [
       PRELUDE,
       '',
@@ -3484,7 +3491,8 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
       '      unique by (`name`)',
       '      name: f.`name`',
       '    }',
-      '    fund = link co -[:portfolio]-> { name: f.`url` }',
+      '    fund = match co-[:portfolio]-> { unique by (`name`), name: f.`url` }',
+      '    link co -[:portfolio]-> fund',
       '    write inbox-[:messages]-> {',
       '      channel: "#funds"',
       '      text:    "${co.`name`} -> ${fund.`name`}"',
@@ -3538,6 +3546,10 @@ describe('criteria-form link statements — find, arbitrate, link, bind the FOUN
       'memo.doc -> Fund III',
     ]);
     expect(fake.creates.map((c) => c.fields.name)).toEqual(['deck.pdf', 'notes.txt', 'memo.doc']);
+    expect(result.writes.filter((w) => w.kind === 'match').map((w) => w.externalId)).toEqual([
+      'fund-7',
+      'fund-7',
+    ]);
     expect(result.writes.filter((w) => w.kind === 'link')).toHaveLength(2);
   });
 });
@@ -3603,7 +3615,8 @@ describe('a discriminated write hands back a handle of the variant it named', ()
     'movement m(msg: <inbox-[:message]->>) {',
     '  o = write crm-[:organizations]-> { name: msg.`user` }',
     '  e = write o-[:`List Entries`]-> { listName: "Deals" }',
-    '  link e -[:Owners]-> { name: "Daria Gneusheva" }',
+    '  owner = match e-[:Owners]-> { unique by (`name`), name: "Ada" }',
+    '  link e -[:Owners]-> owner',
     '}',
   ].join('\n');
 
@@ -3614,7 +3627,7 @@ describe('a discriminated write hands back a handle of the variant it named', ()
   } {
     const fake = makeFakeAdapter('attio', {
       resolveCandidates: (record) =>
-        record.name === 'Daria Gneusheva'
+        record.name === 'Ada'
           ? [{ adapterType: 'attio', externalId: 'person-3', data: {} }]
           : [],
     });
@@ -3664,6 +3677,7 @@ describe('a discriminated write hands back a handle of the variant it named', ()
     expect(result.writes.map((w) => [w.kind ?? 'write', w.recordType, w.committed])).toEqual([
       ['write', 'organization', false],
       ['write', 'entry', false],
+      ['match', 'person', false],
       ['link', 'List Entry — Deals', false],
     ]);
   });
