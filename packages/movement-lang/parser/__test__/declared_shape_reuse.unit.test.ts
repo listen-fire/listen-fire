@@ -86,6 +86,11 @@ describe('a described node declaration', () => {
     expect(decl.root.children[0].description).toBeUndefined();
   });
 
+  it('takes several fields on one line, separated by `;` (the handbook spelling)', () => {
+    const decl = declaration('node Company { name: <text>; website: <text> }');
+    expect(decl.root.fields.map((f) => f.name)).toEqual(['name', 'website']);
+  });
+
   it('keeps the type explicit — a description alone is not a field type', () => {
     expect(parseError('node Doc {\n  title: "the title"\n}')).toMatch(/type in angle brackets/);
   });

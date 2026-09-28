@@ -896,17 +896,14 @@ function describeHeadValue(value: unknown): string {
 
 const NULL_SLOT: Binding = { kind: 'value', value: null, provenance: NO_PROVENANCE };
 
-/** The fields `...e` writes: every field the extracted record declares — the
- *  same list the checker spread from its type, since an extraction's record
- *  carries every declared field, found or not. */
-function spreadFields(spread: WriteSpread, env: Environment): readonly string[] {
-  const binding = env.resolve(spread.source);
-  if (binding?.kind === 'extractRoot' || binding?.kind === 'extractPosition') {
-    return Object.keys(binding.emission.fields);
-  }
+/** The fields `...e` writes: the list the checker resolved from `e`'s TYPE.
+ *  Never read off the value — a record handed to a `<Deal>` parameter may carry
+ *  fields `Deal` does not declare, and the write must not take them. */
+function spreadFields(spread: WriteSpread): readonly string[] {
+  if (spread.fields !== undefined) return spread.fields;
   throw new MovementEngineError(
     'MOVENG_RUNTIME',
-    `'...${spread.source}' spreads an extracted record, and '${spread.source}' is ${binding?.kind ?? 'unbound'} here — the checker should have caught this`,
+    `'...${spread.source}' has no field list — the program was not checked, or the checker should have refused this spread`,
   );
 }
 
@@ -5861,7 +5858,7 @@ class Interpreter {
         ? authored
         : {
             ...authored,
-            fields: expandWriteSpreads(authored, (spread) => spreadFields(spread, env)),
+            fields: expandWriteSpreads(authored, spreadFields),
           };
     if (write.target.kind === 'linked') {
       const rootBinding =

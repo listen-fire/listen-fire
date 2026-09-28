@@ -1636,6 +1636,35 @@ interface DeclaredExtractShape {
   schema: InstanceSchema;
 }
 
+/**
+ * A record type's fields, where the PROGRAM says what they are: an extracted
+ * record, a record of a declared structure (the root or a nested node), or a
+ * node built in memory. Undefined for a system's record — its fields are the
+ * system's — and for anything that is not a record.
+ */
+function knownFieldsOf(type: PositionTypeRef): string[] | undefined {
+  switch (type.kind) {
+    case 'extract':
+      return [...type.node.properties.keys()];
+    case 'local':
+      return Object.keys(type.reads);
+    case 'position': {
+      const { token } = type.instance;
+      const declared = 'kind' in token && token.kind === 'shape';
+      const properties = type.instance.schema.positions[type.position]?.properties;
+      return declared && properties !== undefined ? Object.keys(properties) : undefined;
+    }
+    case 'meta':
+    case 'union':
+    case 'handle':
+    case 'closure':
+    case 'maybeEmpty':
+      return undefined;
+    default:
+      return neverAsAny(type);
+  }
+}
+
 function declaredExtractShape(resolution: Resolution): DeclaredExtractShape | undefined {
   if (resolution.kind !== 'found' || resolution.symbol.kind !== 'shape') return undefined;
   const { declaration, schema } = resolution.symbol;
@@ -5320,10 +5349,12 @@ class Checker {
   }
 
   /**
-   * The fields `...e` writes: every field of the extracted record `e`. Only an
-   * extracted record's fields are known for certain on both sides of the save —
-   * the engine spreads the same list from the record it holds — so anything
-   * else is refused with the fix rather than spread by a guess.
+   * The fields `...e` writes: every field of `e`'s type, where that type is one
+   * the program itself spells out — an extracted record, a record of a declared
+   * structure (`d: <Deal>`), a `node { … }` literal. The list is recorded on the
+   * spread so the engine writes exactly these, whatever the value it is handed
+   * carries besides (TS spreads a value by its declared object type the same
+   * way). A system's record is refused: its field list is the system's to say.
    */
   private spreadFields(spread: WriteSpread, scope: Scope): readonly string[] | undefined {
     const resolution = scope.resolve(spread.source);
@@ -5332,10 +5363,14 @@ class Checker {
       return undefined;
     }
     const type = resolution.symbol.posType;
-    if (type?.kind === 'extract') return [...type.node.properties.keys()];
+    const fields = type !== undefined ? knownFieldsOf(type) : undefined;
+    if (fields !== undefined) {
+      spread.fields = fields;
+      return fields;
+    }
     this.report(
       DiagnosticCodes.WRITE_SPREAD_SOURCE,
-      `'...${spread.source}' writes every field of an extracted record, and '${spread.source}' is ${type !== undefined ? describePosition(type) : describeKind[resolution.symbol.kind]} — write its fields out one per line ('name: ${spread.source}.name')`,
+      `'...${spread.source}' writes every field of a record whose fields this program spells out — an extracted record, a declared structure, or a 'node { … }' — and '${spread.source}' is ${type !== undefined ? describePosition(type) : describeKind[resolution.symbol.kind]}${type !== undefined && instanceOfType(type) !== undefined ? ", whose fields are the system's to say, not this program's" : ''}. Write the fields it should carry one per line ('name: ${spread.source}.name')`,
       spread.span,
     );
     return undefined;

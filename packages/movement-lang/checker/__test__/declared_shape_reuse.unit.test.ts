@@ -210,11 +210,64 @@ describe('a spread in a write body', () => {
     expect(codes(writeWith('name: "fixed", ?...e'))).toEqual([]);
   });
 
-  it('refuses a spread of something that is not an extracted record', () => {
-    const diagnostics = errors(
-      program(['  write graph-[:company]-> { ?...msg }']),
-    );
+  it("refuses a system's record — its fields are the system's to say", () => {
+    const diagnostics = errors(program(['  write graph-[:company]-> { ?...msg }']));
     expect(diagnostics.map((d) => d.code)).toEqual([C.WRITE_SPREAD_SOURCE]);
-    expect(diagnostics[0].message).toContain("write its fields out one per line");
+    expect(diagnostics[0].message).toContain("the system's to say");
+    expect(diagnostics[0].message).toContain('one per line');
+  });
+});
+
+describe('a spread of any record whose fields the program spells out', () => {
+  const DEAL = [
+    'node Deal {',
+    '  name:  <text>',
+    '  stage: <text>',
+    '  node founder { first: <text> }',
+    '}',
+  ].join('\n');
+
+  const withCallee = (body: string, declarations = DEAL): string =>
+    [PRELUDE, declarations, 'function record_deal(d: <Deal>) {', `  ${body}`, '}'].join('\n');
+
+  it('spreads a parameter typed on a declared structure — its fields, never its nested nodes', () => {
+    expect(errors(withCallee('write graph-[:company]-> { ...d }')).map((d) => d.code)).toEqual([]);
+  });
+
+  it("records the declaration's field list on the spread, for the engine to write", () => {
+    const parsed = parseProgram(withCallee('write graph-[:company]-> { ...d }'));
+    checkProgram(parsed, catalog);
+    const callee = parsed.statements.find((s) => s.kind === 'movement');
+    if (callee?.kind !== 'movement') throw new Error('expected the callee');
+    const write = callee.body[0];
+    if (write.kind !== 'write') throw new Error('expected a write');
+    expect(write.write.spreads?.[0].fields).toEqual(['name', 'stage']);
+  });
+
+  it('refuses a declared field the target lacks, naming it', () => {
+    const wide = DEAL.replace('  stage: <text>', '  stage: <text>\n  round: <number>');
+    const diagnostics = errors(withCallee('write graph-[:company]-> { ...d }', wide));
+    expect(diagnostics.map((d) => d.code)).toEqual([C.WRITE_UNKNOWN_FIELD]);
+    expect(diagnostics[0].message).toContain("has no field 'round'");
+  });
+
+  it('spreads a `node { … }` literal bound to a name', () => {
+    expect(
+      codes([
+        '  n = node { name: msg.`Body`, stage: "Seed", company: node { name: "x" } }',
+        '  write graph-[:company]-> { ...n }',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('checks each field of a literal as the written line would be — an unknown one is named', () => {
+    const diagnostics = errors(
+      program([
+        '  n = node { name: msg.`Body`, owner: "sam" }',
+        '  write graph-[:company]-> { ...n }',
+      ]),
+    );
+    expect(diagnostics.map((d) => d.code)).toEqual([C.WRITE_UNKNOWN_FIELD]);
+    expect(diagnostics[0].message).toContain("has no field 'owner'");
   });
 });
