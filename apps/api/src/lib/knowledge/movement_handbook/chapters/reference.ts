@@ -62,7 +62,7 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - Compare: \`==\` \`!=\` \`<\` \`<=\` \`>\` \`>=\` \`CONTAINS\`. Logic: \`AND\` \`OR\` \`NOT\` \`EXISTS(…)\` \`IS <type>\`. Binding is \`=\` (never a comparison).
 - \`IS\` also takes a declared node (\`rec IS <Contact>\`): true when the record carries every field that structure declares — nested nodes don't gate it, extras allowed. Narrows the same way.
 - Aggregates / lists: \`CONCAT(a, b)\`, \`COALESCE(a, b)\` (first non-empty), \`ONLY(…)\` (the one that matched — fails the run on more than one), \`COUNT(…)\`, \`COLLECT(…)\`, \`JOIN(list, ", ")\`, \`SORT(list)\` / \`SORT(list, DESC)\` / \`SORT(list, key)\` / \`SORT(list, key, DESC)\`, \`[a, b]\` (list literal). \`JOIN\` / \`FIRST\` / \`LAST\` need a sequence: a \`SORT\`, an \`ORDER BY\` on the hop, or a relationship the source keeps in order.
-- Dicts: \`{ k: v }\` (dict literal, text keys only), \`AT(dict, "k")\` (lookup — \`T | absent\`).
+- Dicts: \`{ k: v }\` (dict literal, text keys only), \`AT(dict, "k")\` (lookup — present for a key the literal wrote, refused for one it did not, \`T | absent\` for a computed key).
 - Value iteration (each takes a function, \`(member) => { return … }\`): \`MAP(list, f)\`, \`FILTER(list, f)\`, \`REDUCE(list, start, f)\` (needs an ordered list; \`f\` is \`(carried, member)\`), \`GROUPBY(list, key)\` → dict of lists, \`KEYBY(list, key)\` → dict of members (a repeated key fails the run). The function may not \`await\`.
 - \`MEMBERS(<T>)\` — a closed type's values, in declaration order. Refused on a known-values (open) field.
 - Value-level conditional: \`IF <cond> THEN <a> ELSE <b> END\` (uppercase; the lowercase \`if\` branches statements).

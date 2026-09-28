@@ -14,7 +14,7 @@ Message: "New enquiry from \${msg-[:Sender]->.\`Name\`}:
   \${company.url}"
 \`\`\`
 
-Double-quoted strings span newlines and interpolate with \`\${…}\`. Whenever you are composing prose a person will read, write it as a template rather than as a \`CONCAT\` — the template shows the paragraphs it produces.
+Double-quoted strings span newlines and interpolate with \`\${…}\`. A value that may not be there prints as nothing, so \`"\${x}"\` needs no fallback — in an \`AI("…")\` prompt too. Whenever you are composing prose a person will read, write it as a template rather than as a \`CONCAT\` — the template shows the paragraphs it produces.
 
 ### ai
 
@@ -102,7 +102,7 @@ line     = AT(sections, "body")
 
 A **dict** is a set of values looked up by name — write it in braces, read it with \`AT(dict, "key")\`. Keys are text and nothing else: a key of some other kind is refused when you save, with the coercion for you to write (\`DATE.FORMAT(d, "YYYY-MM-DD")\` for a day, or a template for anything else) — there is no one right spelling, and a silent choice is how two halves of the same automation come to disagree about the same day.
 
-A lookup answers \`T | absent\`: a key that is not there is the everyday case, not a failure, so discharge it the way you discharge any other possibly-missing value.
+A dict written in braces knows its keys, each with its own type. Looked up by a key written in quotes, it answers that key's value, always there; a key it was not written with is refused when you save, naming the closest one. Looked up by a key worked out while the automation runs, it answers \`T | absent\`: a key that is not there is the everyday case, not a failure, so discharge it the way you discharge any other possibly-missing value. A dict whose keys came from data — \`GROUPBY\`'s answer — is always looked up that way.
 
 ### iterating-values
 
@@ -119,6 +119,7 @@ Iterate a collection with these five, each given a function that runs once per m
 - \`REDUCE(list, <start>, f)\` carries a value forward — \`f\` is given what it has so far and the next member. It reads the members one after another, so it needs a list with an order, exactly as \`JOIN\` does.
 - \`GROUPBY(list, key)\` files each member under the key its function answers, and hands back a dict of **lists**. \`KEYBY(list, key)\` does the same where each key names one member, and hands back a dict of members — a repeated key fails the run, naming it.
 - \`rows = MAP(ch-[m:Messages]->, (t) => { return t })\` hands the records back as records, so a block head walks the answer: \`rows-[a:Author]-> { … }\`. Return a map instead — \`{ who: t }\` — and the answer is a list of maps, one key of each holding a record.
+- A map written in braces keeps its keys through all five, so \`AT(r, "who")\` in a later function reads the key's own type, and a misspelt key is caught when you save.
 - Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
 A function written in place takes its parameter's type from the collection, so there is nothing to annotate. It must \`return\` something, and it may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`).
@@ -142,9 +143,9 @@ A separate and stronger thing is a value typed as *possibly not there at all* �
 - **an aggregate that can come up empty.** \`ONLY\`, \`FIRST\`, \`LAST\`, \`MIN\`, \`MAX\`, and \`AT\` all answer null when there's nothing to aggregate over, so \`ONLY(msg-[:Attachments]->.\`Name\`)\` may be absent exactly when there are no attachments. Over a *bare* traversal (no field on the end) they bind the whole record, not one of its fields — \`channel = ONLY(chat-[ch:Channels WHERE …]->)\` — see *looking-up-existing-records* in the writes chapter for that idiom;
 - **a landing that can resolve empty** — awaiting an answer that was cancelled rather than given yields nothing to read;
 - **a \`race\` slot** — \`AT(r, 0)\` reads what the first arm of a \`race\` returned, and only the arm that settled first has its slot filled, so every slot off a \`race\` may be absent. (\`parallel\` waits for every arm, so its slots are not.)
-- **an extracted field, and a dict lookup.** Every field of an \`extract\` is something the model was asked for and may not have found, so reading one is \`T | absent\` — a write field takes it with the \`?:\` fill rather than plainly. \`AT(dict, key)\` is the same: a key that is not there reads nothing.
+- **a typed extracted field, and a lookup by a computed key.** A \`<number>\`, \`<date>\`, \`<boolean>\` or set-of-values field of an \`extract\` is something the model was asked for and may not have found, so reading one is \`T | absent\` — a write field takes it with the \`?:\` fill rather than plainly. A text field is never absent: one the model did not find reads as \`""\`. \`AT(dict, key)\` with a key worked out at run time is the same: a key that is not there reads nothing.
 
-Reading such a value is always fine. What is refused is **using** it somewhere a value is genuinely required — a write field, a write or traversal target, a field read off it, an ordered comparison (\`<\`, \`<=\`, \`>\`, \`>=\`) — and the refusal comes while you write rather than at run time. There is no "it will probably be there".
+Reading such a value is always fine, and so is interpolating it — it prints as nothing. What is refused is **using** it somewhere a value is genuinely required — a write field, a write or traversal target, a field read off it, an ordered comparison (\`<\`, \`<=\`, \`>\`, \`>=\`) — and the refusal comes while you write rather than at run time. There is no "it will probably be there".
 
 Five things discharge it, and one of them always fits:
 
