@@ -46,6 +46,7 @@ const PURE_KINDS: ReadonlySet<Expression['type']> = new Set<Expression['type']>(
   'compare',
   'logical',
   'not',
+  'negate',
   'concat',
   'conditional',
   'at',
@@ -187,6 +188,8 @@ export function replacePureLeaves(
       return { ...expr, operands: expr.operands.map((o) => replacePureLeaves(o, replacements)) };
     case 'not':
       return { ...expr, expression: replacePureLeaves(expr.expression, replacements) };
+    case 'negate':
+      return { ...expr, expression: replacePureLeaves(expr.expression, replacements) };
     case 'concat':
       return { ...expr, parts: expr.parts.map((p) => replacePureLeaves(p, replacements)) };
     case 'conditional':
@@ -218,6 +221,7 @@ function childExpressions(expr: Expression): Expression[] {
     case 'logical':
       return expr.operands;
     case 'not':
+    case 'negate':
       return [expr.expression];
     case 'concat':
       return expr.parts;
@@ -307,6 +311,9 @@ export function evaluatePredicate(expr: Expression, scope: FilterScope): unknown
 
     case 'not':
       return !evaluatePredicate(expr.expression, scope);
+
+    case 'negate':
+      return -Number(evaluatePredicate(expr.expression, scope));
 
     case 'arithmetic': {
       const l = Number(evaluatePredicate(expr.left, scope));

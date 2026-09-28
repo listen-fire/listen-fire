@@ -248,6 +248,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
         expr.operands.forEach((e) => visitExpression(e, aliasScope));
         return;
       case 'not':
+      case 'negate':
         visitExpression(expr.expression, aliasScope);
         return;
       case 'concat':

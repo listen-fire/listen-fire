@@ -3696,6 +3696,32 @@ describe('required fields', () => {
     );
     expect(codes(source)).not.toContain(C.ABSENT_REQUIRED);
   });
+
+  // URL.HOST(text) — same shape as DATE.PARSE: `text | absent`, absent when
+  // the text doesn't parse as a URL with a host.
+  it('an unguarded URL.HOST into a required field is MOV_ABSENT_REQUIRED (typed absence)', () => {
+    const source = inMovement(
+      [
+        '  write graph-[:contact]-> {',
+        '    name: msg.`subject`',
+        '    email: URL.HOST(msg.`subject`)',
+        '  }',
+      ].join('\n'),
+    );
+    expect(codes(source)).toContain(C.ABSENT_REQUIRED);
+  });
+
+  it('a `?:` fill discharges the possibly-absent URL.HOST cleanly', () => {
+    const source = inMovement(
+      [
+        '  write graph-[:contact]-> {',
+        '    name: msg.`subject`',
+        '    email ?: URL.HOST(msg.`subject`)',
+        '  }',
+      ].join('\n'),
+    );
+    expect(codes(source)).not.toContain(C.ABSENT_REQUIRED);
+  });
 });
 
 describe('AI(prompt, tier)', () => {

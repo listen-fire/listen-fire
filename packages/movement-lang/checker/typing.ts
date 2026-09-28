@@ -1139,6 +1139,7 @@ function subExpressions(expr: Expression): Expression[] {
     case 'aggregate':
       return expr.orderBy !== undefined ? [expr.expression, expr.orderBy] : [expr.expression];
     case 'not':
+    case 'negate':
       return [expr.expression];
     case 'at':
       return [expr.expression, expr.index];
@@ -1668,6 +1669,27 @@ export function checkArithmeticOperands(
   return {
     code: TypedDiagnosticCodes.ARITH_NON_NUMERIC,
     message: `An arithmetic operation requires numeric operands — ${subject}.${hintFor(expr, offenders.map(o => baseKind(o.type!)))}`,
+  };
+}
+
+/**
+ * Unary minus's one operand, refused the same way `+` on a non-number is
+ * (same code, same "requires numeric operands" wording) — negating a number
+ * is a number; anything else is an error, not a silent `NaN`.
+ */
+export function checkNegateOperand(
+  type: FieldType | undefined,
+): { code: string; message: string } | null {
+  if (type === undefined || baseKind(type) === 'json' || baseKind(type) === 'number') return null;
+  const described = describeFieldType(stripAbsent(type));
+  const kind = baseKind(type);
+  const hint =
+    kind === 'text' ? ' Wrap it in NUMBER(…) if it holds a number.'
+    : kind === 'date' || kind === 'datetime' ? ' Shift a date with DATE.ADD_DAYS(date, days) instead.'
+    : '';
+  return {
+    code: TypedDiagnosticCodes.ARITH_NON_NUMERIC,
+    message: `An arithmetic operation requires numeric operands — the operand of unary '-' is ${described}.${hint}`,
   };
 }
 
@@ -2971,6 +2993,13 @@ export class ExpressionTyping {
       case 'not':
         this.inferAt(expr.expression, position);
         return 'boolean';
+      case 'negate': {
+        const inner = this.inferAt(expr.expression, position);
+        this.requireTransparent(inner, 'negated');
+        const nonNumeric = checkNegateOperand(inner);
+        if (nonNumeric !== null) this.report(nonNumeric.code, nonNumeric.message);
+        return 'number';
+      }
       case 'conditional': {
         this.inferAt(expr.condition, position);
         // The condition guards its own THEN — `IF EXISTS(x) THEN "…${x}…"` is

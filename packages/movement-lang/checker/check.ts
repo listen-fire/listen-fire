@@ -1167,6 +1167,7 @@ function collectNames(expr: Expression, out: CollectedNames, position: NamePosit
       expr.operands.forEach(o => collectNames(o, out, position));
       return;
     case 'not':
+    case 'negate':
       collectNames(expr.expression, out, position);
       return;
     case 'concat':
@@ -2065,6 +2066,12 @@ const NO_RETURN: ReturnShape = { returns: false };
  *  type space. Neither a claim that it does nor that it doesn't, so no site
  *  refuses on it. */
 const UNKNOWN_RETURN: ReturnShape = { returns: true };
+
+/** A `MAP` closure with no `return` — legal (FILTER/REDUCE still require
+ *  one). Each slot is absent, exactly as an extracted field with no
+ *  explicit value is: known, not unknown, so `MAP(...)` types `list of
+ *  absent` rather than falling silent. */
+const MAP_SLOT_ABSENT: ReturnShape = { returns: true, fieldType: 'absent' };
 
 /** Which plane a return sits on — `undefined` for a return whose value the
  *  checker could not type (unknown is not a plane). */
@@ -2977,6 +2984,11 @@ class Checker {
       case 'combinator':
         this.reportCombinatorNeedsAwait(statement.combinator);
         this.checkCombinator(statement.combinator, scope, undefined);
+        return;
+      case 'collection':
+        // Bare, unbound — run for the function's effects; the answer (if any)
+        // is discarded exactly as an unbound 'call' statement's is.
+        this.checkCollectionOp(statement.collection, scope);
         return;
       case 'error':
         this.checkExprSlot(statement.message, scope);
@@ -4122,10 +4134,12 @@ class Checker {
         suppliedParams: supplied,
       });
       this.absorbCollectionRow(effects, spelling, expr.fn.span);
+      if (expr.op === 'map' && !returns.returns) return MAP_SLOT_ABSENT;
       this.requireCollectionReturn(returns, spelling, expr.fn.span);
       return returns;
     }
     const named = this.checkArm(expr.fn, spelling, scope, undefined, arity);
+    if (expr.op === 'map' && !named.returns) return MAP_SLOT_ABSENT;
     this.requireCollectionReturn(named, spelling, expr.fn.span);
     return named;
   }

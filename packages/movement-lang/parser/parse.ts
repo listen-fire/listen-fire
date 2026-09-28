@@ -844,6 +844,19 @@ class Parser {
         break;
     }
 
+    // A collection op run bare, for its function's effects, with the answer
+    // (if any) unbound — `MAP(xs, (x) => { write … })` reads the same as a
+    // block iterated for effects. Tried here, before the identifier-led
+    // forms, exactly as `race`/`parallel` are above: a bare call would
+    // otherwise resolve `word` as a movement name and refuse it as unknown.
+    const collectionOp = word !== undefined ? Parser.COLLECTION_OPS.get(word) : undefined;
+    if (collectionOp !== undefined && this.followedByCall(word!)) {
+      this.pos += word!.length;
+      const collection = this.parseCollectionOp(start, word!, collectionOp);
+      this.expectStatementEnd();
+      return { kind: 'collection', collection, span: collection.span };
+    }
+
     // Identifier-led: assignment, call, or rooted traversal block.
     this.pos += word.length;
     return this.parseIdentifierLedStatement(word, start, false);

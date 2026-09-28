@@ -237,6 +237,38 @@ describe('MAP / FILTER / REDUCE run the function once per member, in order', () 
   });
 });
 
+// Small syntax (2026-09-28): a MAP closure with no `return` is legal, and a
+// bare `MAP(...)` statement (no binding) is legal — the function runs for
+// its own effects. Project A's recap relies on writes inside a MAP closure
+// landing; this pins that they do even with no `return` at all.
+describe('a bare MAP(...) statement, with no return, still runs its writes', () => {
+  it('one write per member lands, in order — the answer (absent per slot) is never read', async () => {
+    const creates = await runBody(
+      '  MAP(graph-[f:finding]->, (t) => { write graph-[:note]-> { body: t.`headline` } })',
+      ROWS,
+    );
+    expect(creates.map((c) => c.fields.body)).toEqual([
+      'Acme raised',
+      'Globex hiring',
+      'Initech pivot',
+    ]);
+  });
+
+  it('a bound MAP with no return also runs every write — the binding is absent per slot', async () => {
+    const creates = await runBody(
+      [
+        '  results = MAP(graph-[f:finding]->, (t) => { write graph-[:note]-> { body: t.`headline` } })',
+        '  write graph-[:note]-> { body: "count", payload: { n: LENGTH(results) } }',
+      ].join('\n'),
+      ROWS,
+    );
+    // Three notes from inside MAP, plus the summary note — proof each slot
+    // still occupies its place in the list (LENGTH sees 3), even absent.
+    expect(creates).toHaveLength(4);
+    expect(creates[3].fields.payload).toEqual({ n: 3 });
+  });
+});
+
 describe('GROUPBY and KEYBY file the members under a key', () => {
   it('GROUPBY collects each key’s members into a list, in the order they came', async () => {
     const creates = await runBody(

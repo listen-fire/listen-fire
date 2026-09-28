@@ -3068,6 +3068,11 @@ class Interpreter {
         case 'combinator':
           await this.interpretCombinator(statement.combinator, undefined, env, stmtAddress, body);
           break;
+        case 'collection':
+          // Bare — the function's effects are the point; the answer (if any)
+          // is unbound, exactly as an unbound 'call' statement's return is.
+          await this.interpretCollectionOp(statement.collection, undefined, env, body);
+          break;
         case 'shape':
         case 'movement':
           throw unsupported(`nested ${statement.kind} declarations inside a movement body`);
@@ -3265,6 +3270,12 @@ class Interpreter {
       });
       const outcome = await this.invokeClosure(fn, args, body);
       if (!outcome.returned) {
+        // MAP alone allows this (checker: MAP_SLOT_ABSENT) — the closure ran
+        // for its statements' effects (its writes already landed, above) and
+        // this member's slot is simply absent. FILTER/REDUCE/GROUPBY/KEYBY
+        // still require a return, so reaching here for one of those really is
+        // the checker escape the message names.
+        if (expr.op === 'map') return null;
         throw new MovementEngineError(
           'MOVENG_RUNTIME',
           `the function for '${spelling}' returned nothing — the checker should have caught this`,

@@ -410,6 +410,24 @@ describe('§C traversal-headed blocks', () => {
     expect(assign.name).toBe('x');
   });
 
+  // Unary minus (a formula-grammar amendment, not a statement-layer change)
+  // and the traversal `-[` form are disjoint: `scanExpressionRootEnd` only
+  // ever looks for `-[`, so a bare `-x` never matches a path head and falls
+  // through to an ordinary expression slot, while `a-[:b]->` is untouched.
+  it('a leading unary minus is an expression slot, not a traversal head', () => {
+    const program = parseProgram('x = -back_days');
+    const assign = as(program.statements[0], 'assign');
+    expect(assign.name).toBe('x');
+    expect(rv(assign.value, 'expr').expr.raw).toBe('-back_days');
+  });
+
+  it('a name root still traverses (-[ is unaffected by unary minus)', () => {
+    const program = parseProgram(['y = a-[:b]-> {', '  z = 1', '}'].join('\n'));
+    const block = rv(as(program.statements[0], 'assign').value, 'block').block;
+    expect(block.head.root).toEqual({ kind: 'name', name: 'a' });
+    expect(block.head.hopsRaw).toBe('-[:b]->');
+  });
+
   it('parses extract assign + block assign + unbound write', () => {
     const program = parseProgram(C2);
     expect(program.statements).toHaveLength(3);
@@ -435,6 +453,35 @@ describe('§C traversal-headed blocks', () => {
     expect(write.fields[1].value.raw).toBe(
       '"Logged ${COUNT(orgs-[:co]->)} companies. First: ${FIRST(orgs-[:co]->).`url`}"',
     );
+  });
+});
+
+describe('a bare collection-op statement (no binding)', () => {
+  it('MAP(...) run bare parses — the function runs for its effects, the answer unbound', () => {
+    const program = parseProgram(
+      ['xs = [1, 2, 3]', 'MAP(xs, (n) => { write crm-[:note]-> { text: "x" } })'].join('\n'),
+    );
+    expect(program.statements).toHaveLength(2);
+    const statement = as(program.statements[1], 'collection');
+    expect(statement.collection.op).toBe('map');
+  });
+
+  it('FILTER(...) and REDUCE(...) parse bare too — the checker, not the parser, decides whether the function must return', () => {
+    const filterProgram = parseProgram(
+      ['xs = [1, 2, 3]', 'FILTER(xs, (n) => { return n > 1 })'].join('\n'),
+    );
+    expect(as(filterProgram.statements[1], 'collection').collection.op).toBe('filter');
+
+    const reduceProgram = parseProgram(
+      ['xs = [1, 2, 3]', 'REDUCE(xs, 0, (acc, n) => { return acc + n })'].join('\n'),
+    );
+    expect(as(reduceProgram.statements[1], 'collection').collection.op).toBe('reduce');
+  });
+
+  it('a name that merely happens to be spelled MAP but is not called stays an ordinary name', () => {
+    const program = parseProgram(['MAP = 3', 'y = MAP + 1'].join('\n'));
+    expect(program.statements).toHaveLength(2);
+    expect(as(program.statements[0], 'assign').name).toBe('MAP');
   });
 });
 

@@ -736,6 +736,32 @@ function textSlug(args: unknown[]): unknown {
     .replace(/^-+|-+$/g, '');
 }
 
+// ── URL ──────────────────────────────────────────────────────────────────────
+
+// This package declares no DOM/Node lib (`tsconfig.json`'s `lib: ["es2022"]`
+// only — pure, environment-agnostic functions, per the file header's purity
+// contract), so the global `URL` constructor — present at runtime in Node,
+// every browser, and every other JS host that runs this package — needs its
+// own narrow ambient type here rather than pulling in a whole environment's
+// globals for one function's sake.
+declare const URL: { new (input: string): { hostname: string } };
+
+function urlHost(args: unknown[]): unknown {
+  const [text] = args;
+  if (text == null) return null;
+  let url: { hostname: string };
+  try {
+    url = new URL(String(text));
+  } catch {
+    return null;
+  }
+  // No host at all (`file:///x`, `mailto:a@b.com`) — nothing to answer.
+  if (!url.hostname) return null;
+  // `URL` already normalizes the hostname to lowercase, keeps `www.`, and
+  // carries no port (that's `url.port`) or path — verbatim otherwise.
+  return url.hostname;
+}
+
 // ── The registry ─────────────────────────────────────────────────────────────
 
 function spec(
@@ -899,6 +925,20 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         arity: { min: 1, max: 1 },
         returns: 'text',
         apply: textSlug,
+      }),
+    ],
+  },
+  {
+    namespace: 'URL',
+    functions: [
+      spec('URL', 'HOST', {
+        args: 'text',
+        summary:
+          'the host of a URL, lowercased and otherwise verbatim (`www.` kept, no port, no path) — URL.HOST("https://WWW.Acme.com:8080/x") is "www.acme.com"; text that isn\'t a URL with a host is absent',
+        arity: { min: 1, max: 1 },
+        returns: 'text',
+        maybeAbsent: true,
+        apply: urlHost,
       }),
     ],
   },
