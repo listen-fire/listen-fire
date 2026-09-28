@@ -114,6 +114,94 @@ describe('NativeValuationsAdapter.resolveEntity — an author-declared identity 
   });
 });
 
+describe('NativeValuationsAdapter.resolveEntity — a FUZZY name is a similarity shortlist', () => {
+  it('searches by the fuzzy name and keeps the rows the route returned, unfiltered', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(
+      listResponse([
+        { id: 'le-1', name: 'Acme Limited', also_known_as: 'Acme, ACME Ltd', other_names: null },
+        { id: 'le-2', name: 'Acme Widgets', legal_name: 'Acme Widgets Ltd' },
+      ]),
+    );
+
+    const result = await adapter().resolveEntity({
+      record: { Name: 'Acme Ltd' },
+      recordType: 'Legal Entity',
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'Name', fuzzy: true }] }] },
+    });
+
+    expect(String((fetchSpy.mock.calls[0] ?? [])[0])).toContain('search=Acme+Ltd');
+    // Neither row equals "Acme Ltd"; both reach arbitration, carrying the names
+    // that put them on the shortlist so the judge can see the alias.
+    expect(result.candidates).toEqual([
+      {
+        adapterType: 'native-valuations',
+        externalId: 'le-1',
+        data: { Name: 'Acme Limited', 'Also Known As': 'Acme, ACME Ltd' },
+      },
+      {
+        adapterType: 'native-valuations',
+        externalId: 'le-2',
+        data: { Name: 'Acme Widgets', 'Legal Name': 'Acme Widgets Ltd' },
+      },
+    ]);
+  });
+
+  it('still filters an exact component in the same group', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      listResponse([
+        { id: 'le-1', name: 'Acme Limited', city: 'Leeds' },
+        { id: 'le-2', name: 'Acme Widgets', city: 'York' },
+      ]),
+    );
+
+    const result = await adapter().resolveEntity({
+      record: { Name: 'Acme Ltd', City: 'york' },
+      recordType: 'Legal Entity',
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'Name', fuzzy: true }, { field: 'City' }] }] },
+    });
+
+    expect(result.candidates.map((c) => c.externalId)).toEqual(['le-2']);
+  });
+
+  it('searches by a fuzzy Also Known As', async () => {
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(listResponse([{ id: 'le-1', name: 'Acme Limited', also_known_as: 'Acme, ACME Ltd' }]));
+
+    const result = await adapter().resolveEntity({
+      record: { 'Also Known As': 'ACME' },
+      recordType: 'Legal Entity',
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'Also Known As', fuzzy: true }] }] },
+    });
+
+    expect(String((fetchSpy.mock.calls[0] ?? [])[0])).toContain('search=ACME');
+    expect(result.candidates.map((c) => c.externalId)).toEqual(['le-1']);
+  });
+});
+
+describe('NativeValuationsAdapter.resolveEntity — a website is one identity however it is written', () => {
+  it('matches https://www.acme.com/ against acme.com', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValue(
+      listResponse([
+        { id: 'le-1', name: 'Acme Limited', personal_website: 'acme.com' },
+        { id: 'le-2', name: 'Acme Widgets', personal_website: 'acmewidgets.com' },
+      ]),
+    );
+
+    const result = await adapter().resolveEntity({
+      record: { Website: 'https://www.acme.com/' },
+      recordType: 'Legal Entity',
+      candidates: [],
+      constraints: { any: [{ all: [{ field: 'Website' }] }] },
+    });
+
+    expect(result.candidates.map((c) => c.externalId)).toEqual(['le-1']);
+  });
+});
+
 describe("NativeValuationsAdapter.readRecord — current values in the write's currency", () => {
   it('keys the answer by the surface names it was asked for', async () => {
     jest

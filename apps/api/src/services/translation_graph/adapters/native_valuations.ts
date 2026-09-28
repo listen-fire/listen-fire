@@ -593,6 +593,9 @@ function commandEdgeRefs(parent: string): SchemaReferenceDescriptor[] {
 const LEGAL_ENTITY_DESCRIPTOR: SchemaTypeDescriptor = {
   typeId: LEGAL_ENTITY_TYPE,
   displayName: 'Legal Entity',
+  // `FUZZY` on a name-like field shortlists by similarity (the list route's
+  // `search`) and leaves the call to the engine's judge; see `resolveEntity`.
+  supportsFuzzyResolution: true,
   fields: [
     ...commonFields(),
     { fieldId: 'type', displayName: 'Type', kind: 'enum', writable: true, required: true, enumValues: LEGAL_ENTITY_TYPES },
@@ -1715,6 +1718,8 @@ class NativeValuationsAdapter extends BaseAdapter {
    * decides identity is applied here, to the rows that came back — the list
    * endpoints filter loosely (`search` is a case-insensitive contains), and a
    * loose filter must never be the thing that decides two records are the same.
+   * The one exception is a `FUZZY` component on a name-like field: there the
+   * similarity search IS the shortlist, and the engine's judge decides.
    */
   async resolveEntity(input: ResolveEntityInput): Promise<ResolveEntityResult> {
     const branches = input.constraints?.any ?? [];
@@ -1731,17 +1736,26 @@ class NativeValuationsAdapter extends BaseAdapter {
     const candidates: ExternalRecordRef[] = [];
 
     for (const branch of branches) {
-      const wanted = branch.all.map((entry) => ({
-        surface: entry.field,
-        column: resolver.fieldId(type, naturalName(entry.field)),
-        value: input.record[entry.field],
-      }));
+      const wanted = branch.all.map((entry) => {
+        const column = resolver.fieldId(type, naturalName(entry.field));
+        return {
+          surface: entry.field,
+          column,
+          value: input.record[entry.field],
+          similar: entry.fuzzy === true && NAME_LIKE_COLUMNS.has(column),
+        };
+      });
       // A group with nothing asserted for one of its fields identifies nothing.
       if (wanted.some((w) => w.value === undefined || w.value === null)) continue;
 
+      // A fuzzy name-like component is answered by the route's similarity
+      // search, not by equality: the shortlist comes back in relevance order
+      // and the engine's judge decides. Every other component keeps equality.
       const query: Record<string, string | number> = { limit: IDENTITY_SEARCH_LIMIT };
-      const byName = wanted.find((w) => w.column === 'name');
+      const bySimilarity = wanted.find((w) => w.similar);
+      const byName = bySimilarity ?? wanted.find((w) => w.column === 'name');
       if (byName !== undefined) query.search = String(byName.value);
+      const exact = wanted.filter((w) => !w.similar);
 
       let page: ValuationsListResponse<Record<string, unknown>>;
       try {
@@ -1764,14 +1778,19 @@ class NativeValuationsAdapter extends BaseAdapter {
       for (const row of page.data) {
         const externalId = String(row.id ?? '');
         if (externalId === '' || seen.has(externalId)) continue;
-        if (!wanted.every((w) => valuationsFieldsAgree(w.value, row[w.column]))) continue;
+        if (!exact.every((w) => identityFieldAgrees(w.column, w.value, row[w.column]))) continue;
         seen.add(externalId);
         candidates.push({
           adapterType: this.adapterType,
           externalId,
           // Keyed by SURFACE name: arbitration compares this against the
-          // asserted record, which is in the write's currency.
-          data: Object.fromEntries(wanted.map((w) => [w.surface, row[w.column]])),
+          // asserted record, which is in the write's currency. A similarity
+          // hit also carries every name the row answers to, so the judge can
+          // see the alias or legal name that put it on the shortlist.
+          data: {
+            ...(bySimilarity !== undefined ? nameLikeFieldsOf(row) : {}),
+            ...Object.fromEntries(wanted.map((w) => [w.surface, row[w.column]])),
+          },
         });
       }
     }
@@ -2659,6 +2678,48 @@ function withoutEmptyFields(fields: Record<string, unknown>): Record<string, unk
  *  first and `search` already narrows to the name, so a page is a shortlist,
  *  not a scan. */
 const IDENTITY_SEARCH_LIMIT = 100;
+
+/** The Legal Entity columns the list route's `search` matches by similarity
+ *  (its search vector covers all four), keyed to their surface names. */
+const NAME_LIKE_FIELDS: ReadonlyArray<readonly [column: string, surface: string]> = [
+  ['name', 'Name'],
+  ['legal_name', 'Legal Name'],
+  ['also_known_as', 'Also Known As'],
+  ['other_names', 'Other Names'],
+];
+const NAME_LIKE_COLUMNS: ReadonlySet<string> = new Set(NAME_LIKE_FIELDS.map(([column]) => column));
+
+function nameLikeFieldsOf(row: Record<string, unknown>): Record<string, unknown> {
+  const names: Record<string, unknown> = {};
+  for (const [column, surface] of NAME_LIKE_FIELDS) {
+    const value = row[column];
+    if (value !== null && value !== undefined) names[surface] = value;
+  }
+  return names;
+}
+
+function identityFieldAgrees(column: string, asserted: unknown, stored: unknown): boolean {
+  return column === 'personal_website'
+    ? websitesAgree(asserted, stored)
+    : valuationsFieldsAgree(asserted, stored);
+}
+
+/** The same site written two ways (`https://www.acme.com/` and `acme.com`) is
+ *  one identity: compare without scheme, `www.`, trailing slash or case. */
+function websitesAgree(asserted: unknown, stored: unknown): boolean {
+  if (typeof asserted !== 'string' || typeof stored !== 'string') return false;
+  const bare = normaliseWebsite(asserted);
+  return bare !== '' && bare === normaliseWebsite(stored);
+}
+
+function normaliseWebsite(url: string): string {
+  return url
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/+$/, '');
+}
 
 /** Identity equality as Valuations stores it: text compares case-insensitively
  *  (the list `search` filter already does), and a multi-valued column matches
