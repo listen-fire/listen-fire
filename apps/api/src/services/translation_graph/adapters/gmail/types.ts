@@ -67,6 +67,19 @@ export interface GmailCheckpoint {
   /** ISO instant — the newest message already delivered, or the moment the
    *  listener went live. */
   lastSeenAt?: string;
+  /**
+   * Arrivals history reported that the listen's search did not yet admit.
+   * Gmail's search catches up with its history only eventually, so "not
+   * admitted" first means "not yet known" — each is re-checked on later ticks
+   * until its grace window runs out, and only then taken to be excluded.
+   */
+  pending?: GmailPendingArrival[];
+}
+
+export interface GmailPendingArrival {
+  id: string;
+  /** ISO instant — the tick that first saw it arrive. */
+  firstSeenAt: string;
 }
 
 /**

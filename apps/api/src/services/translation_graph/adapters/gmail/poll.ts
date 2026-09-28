@@ -9,6 +9,11 @@
 // The marker is PERISHABLE — Gmail drops it after about a week of inactivity —
 // so the checkpoint carries a second mark, the last seen time, and an expired
 // marker resyncs from that rather than leaving the listener dead forever.
+//
+// History is exact but Gmail's SEARCH, which applies the listen's query, only
+// catches up eventually. An arrival the search does not admit yet rides the
+// checkpoint as pending and is re-checked on later ticks, so a slow index
+// delays a message rather than losing it.
 
 import type { DiscriminableEvent } from '../../adapter';
 import type { PollSource } from '../../poll_source';
@@ -21,7 +26,11 @@ import {
 import { decodeGmailMessage, type GmailMessageRecord } from '../../../../adapters/gmail/mime';
 import { resolveGmailClient, type GmailApiClient } from './client';
 import { anyGmailLabel, combineGmailQueries } from './filter';
-import { GMAIL_MESSAGE_EVENT_TAG, type GmailCheckpoint } from './types';
+import {
+  GMAIL_MESSAGE_EVENT_TAG,
+  type GmailCheckpoint,
+  type GmailPendingArrival,
+} from './types';
 
 /** Gmail's default cadence — overridable per automation via the `listen` option
  *  `pollIntervalSeconds`. A minute of delay on arriving mail is what the ruling
@@ -47,14 +56,42 @@ const MAX_PER_TICK = 100;
  *  — which can only happen to a row written before both marks existed. */
 const RESYNC_FALLBACK_MS = 24 * 60 * 60 * 1000;
 
+/** How long an arrival the listen's search does not admit is re-checked
+ *  before it counts as excluded. Gmail's search index trails its history by
+ *  seconds to minutes; past this, the query genuinely does not match. */
+const PENDING_GRACE_MS = 15 * 60 * 1000;
+
+/** How many search pages one narrowing reads looking for the ids in hand —
+ *  enough for a busy tick, bounded so a broad query cannot page the mailbox.
+ *  An id not found stays pending rather than being dropped. */
+const NARROW_MAX_PAGES = 5;
+
 function checkpointOf(value: unknown): GmailCheckpoint {
   if (typeof value !== 'object' || value === null) return {};
   const historyId = Reflect.get(value, 'historyId');
   const lastSeenAt = Reflect.get(value, 'lastSeenAt');
+  const pending = pendingOf(Reflect.get(value, 'pending'));
   return {
     ...(typeof historyId === 'string' && historyId !== '' ? { historyId } : {}),
     ...(typeof lastSeenAt === 'string' && lastSeenAt !== '' ? { lastSeenAt } : {}),
+    ...(pending.length > 0 ? { pending } : {}),
   };
+}
+
+/** A checkpoint written before `pending` existed has none; an entry that does
+ *  not parse is dropped rather than failing the listener. */
+function pendingOf(value: unknown): GmailPendingArrival[] {
+  if (!Array.isArray(value)) return [];
+  const out: GmailPendingArrival[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const id = Reflect.get(entry, 'id');
+    const firstSeenAt = Reflect.get(entry, 'firstSeenAt');
+    if (typeof id !== 'string' || id === '') continue;
+    if (typeof firstSeenAt !== 'string' || Number.isNaN(Date.parse(firstSeenAt))) continue;
+    out.push({ id, firstSeenAt });
+  }
+  return out;
 }
 
 /** The author's own narrowing. A listen without one is a listener on every
@@ -157,7 +194,25 @@ export class GmailPollSource implements PollSource {
       now,
     });
 
-    const messages = await this.fetchMessages({ client, refs, labels, query });
+    // Arrivals carried over from earlier ticks go through the same narrowing as
+    // this tick's: one the search now admits is delivered now.
+    const fresh = new Set(refs.map((ref) => ref.id));
+    const carried = (mark.pending ?? []).filter((entry) => !fresh.has(entry.id));
+    const candidates = [...refs, ...carried.map((entry) => ({ id: entry.id }))];
+
+    const { messages, unadmitted } = await this.fetchMessages({
+      client,
+      refs: candidates,
+      labels,
+      query,
+    });
+
+    const firstSeen = new Map(carried.map((entry) => [entry.id, entry.firstSeenAt]));
+    const pending: GmailPendingArrival[] = [];
+    for (const id of unadmitted) {
+      const firstSeenAt = firstSeen.get(id) ?? new Date(now).toISOString();
+      if (now - Date.parse(firstSeenAt) < PENDING_GRACE_MS) pending.push({ id, firstSeenAt });
+    }
 
     const events: DiscriminableEvent[] = messages.map((message) => ({
       payload: { ...message, ...(resynced ? { resynced: true } : {}) },
@@ -180,6 +235,7 @@ export class GmailPollSource implements PollSource {
     const checkpoint: GmailCheckpoint = {
       historyId: historyId ?? mark.historyId,
       lastSeenAt: new Date(now).toISOString(),
+      ...(pending.length > 0 ? { pending } : {}),
     };
     return { events, checkpoint };
   }
@@ -225,26 +281,31 @@ export class GmailPollSource implements PollSource {
   /**
    * The messages behind the refs, narrowed to the author's filter.
    *
-   * History does not take a query, so a listener with one narrows HERE — one
-   * `messages.list` whose answer is intersected with the ids in hand, which is
-   * a single request rather than a fetch per message that is then thrown away.
+   * History does not take a query, so a listener with one narrows HERE — a
+   * search whose answer is intersected with the ids in hand, which is a page
+   * or two of ids rather than a fetch per message that is then thrown away.
+   * The ids the search did NOT admit come back too: the caller decides whether
+   * the index has not caught up yet or the query excludes them.
    */
   private async fetchMessages(input: {
     client: GmailApiClient;
     refs: GmailMessageRef[];
     labels: readonly string[];
     query: string | undefined;
-  }): Promise<GmailMessageRecord[]> {
-    const wanted = input.refs.slice(0, MAX_PER_TICK);
-    if (wanted.length === 0) return [];
+  }): Promise<{ messages: GmailMessageRecord[]; unadmitted: string[] }> {
+    if (input.refs.length === 0) return { messages: [], unadmitted: [] };
 
-    const allowed = await this.narrow({ ...input, refs: wanted });
+    const allowed = await this.narrow(input);
     const messages: GmailMessageRecord[] = [];
-    for (const ref of wanted) {
-      if (!allowed.has(ref.id)) continue;
+    const unadmitted: string[] = [];
+    for (const ref of input.refs) {
+      if (!allowed.has(ref.id)) {
+        unadmitted.push(ref.id);
+        continue;
+      }
       messages.push(decodeGmailMessage(await input.client.getMessage(ref.id)));
     }
-    return messages;
+    return { messages, unadmitted };
   }
 
   /** The subset of ids the listen's own query admits, among mail carrying any
@@ -256,13 +317,23 @@ export class GmailPollSource implements PollSource {
     labels: readonly string[];
     query: string | undefined;
   }): Promise<Set<string>> {
-    if (input.query === undefined) return new Set(input.refs.map((ref) => ref.id));
-    const { messages } = await input.client.listMessages({
-      ...searchOf({ labels: input.labels, terms: [input.query] }),
-      maxResults: MAX_PER_TICK,
-    });
-    const matching = new Set(messages.map((message) => message.id));
-    return new Set(input.refs.map((ref) => ref.id).filter((id) => matching.has(id)));
+    const wanted = new Set(input.refs.map((ref) => ref.id));
+    if (input.query === undefined) return wanted;
+    const admitted = new Set<string>();
+    let pageToken: string | undefined;
+    for (let page = 0; page < NARROW_MAX_PAGES; page += 1) {
+      const result = await input.client.listMessages({
+        ...searchOf({ labels: input.labels, terms: [input.query] }),
+        maxResults: MAX_PER_TICK,
+        ...(pageToken !== undefined ? { pageToken } : {}),
+      });
+      for (const message of result.messages) {
+        if (wanted.has(message.id)) admitted.add(message.id);
+      }
+      pageToken = result.nextPageToken;
+      if (pageToken === undefined || admitted.size === wanted.size) break;
+    }
+    return admitted;
   }
 }
 

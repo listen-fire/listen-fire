@@ -49,7 +49,7 @@ interface HistoryPage {
 
 interface Calls {
   history: { startHistoryId: string; labelId?: string; pageToken?: string }[];
-  list: { query?: string; maxResults?: number; includeSpamTrash?: boolean }[];
+  list: { query?: string; maxResults?: number; includeSpamTrash?: boolean; pageToken?: string }[];
   get: string[];
 }
 
@@ -60,6 +60,8 @@ function fakeClient(setup: {
   historyExpired?: boolean;
   /** What every `messages.list` returns, whatever the query. */
   search?: GmailMessageRef[];
+  /** A PAGED search instead: page n's token is `"search:<n>"`. */
+  searchPages?: GmailMessageRef[][];
 }) {
   const calls: Calls = { history: [], list: [], get: [] };
   const byId = new Map(setup.messages.map((m) => [m.id, m]));
@@ -82,9 +84,20 @@ function fakeClient(setup: {
         ...(page.historyId !== undefined ? { historyId: page.historyId } : {}),
       };
     },
-    async listMessages(input: { query?: string; maxResults?: number; includeSpamTrash?: boolean }) {
+    async listMessages(input: {
+      query?: string;
+      maxResults?: number;
+      includeSpamTrash?: boolean;
+      pageToken?: string;
+    }) {
       calls.list.push(input);
-      return { messages: setup.search ?? [] };
+      if (setup.searchPages === undefined) return { messages: setup.search ?? [] };
+      const index = input.pageToken === undefined ? 0 : Number(input.pageToken.split(':')[1]);
+      const next = index + 1 < setup.searchPages.length ? `search:${index + 1}` : undefined;
+      return {
+        messages: setup.searchPages[index],
+        ...(next !== undefined ? { nextPageToken: next } : {}),
+      };
     },
     async getMessage(id: string): Promise<GmailMessage> {
       calls.get.push(id);
@@ -279,5 +292,114 @@ describe('an expired change marker', () => {
     expect(result.events.map((e) => e.externalId)).toEqual(['pitch']);
     expect(result.events[0].payload).toMatchObject({ resynced: true });
     expect(result.checkpoint).toMatchObject({ historyId: '9000' });
+  });
+});
+
+describe('an arrival the search has not caught up on', () => {
+  const T0 = Date.UTC(2026, 8, 28, 12, 0);
+  let clock = T0;
+  beforeEach(() => {
+    clock = T0;
+    jest.spyOn(Date, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  const QUERY = { query: '-from:project-a.vc', labels: ['INBOX', 'SPAM'] };
+
+  it('is carried as pending with the time it was first seen, not dropped', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('pitch', ['SPAM'])],
+      history: { SPAM: [{ added: [added('pitch', '4001')], historyId: '5000' }] },
+      search: [],
+    });
+    const result = await source.getEvents({ config: QUERY, checkpoint: MARK });
+
+    expect(result.events).toEqual([]);
+    expect(calls.get).toEqual([]);
+    expect(result.checkpoint).toMatchObject({
+      historyId: '5000',
+      pending: [{ id: 'pitch', firstSeenAt: new Date(T0).toISOString() }],
+    });
+  });
+
+  it('is delivered on a later tick once the search admits it', async () => {
+    const pending = [{ id: 'pitch', firstSeenAt: new Date(T0).toISOString() }];
+    clock = T0 + 2 * 60 * 1000;
+    const { source, calls } = pollWith({
+      messages: [wireMessage('pitch', ['SPAM'])],
+      search: [{ id: 'pitch', threadId: 't' }],
+    });
+    const result = await source.getEvents({ config: QUERY, checkpoint: { ...MARK, pending } });
+
+    expect(result.events.map((e) => e.externalId)).toEqual(['pitch']);
+    expect(calls.get).toEqual(['pitch']);
+    expect(result.checkpoint).not.toHaveProperty('pending');
+  });
+
+  it('keeps its first-seen time while it waits', async () => {
+    const firstSeenAt = new Date(T0).toISOString();
+    clock = T0 + 5 * 60 * 1000;
+    const { source } = pollWith({ messages: [], search: [] });
+    const result = await source.getEvents({
+      config: QUERY,
+      checkpoint: { ...MARK, pending: [{ id: 'pitch', firstSeenAt }] },
+    });
+    expect(result.checkpoint).toMatchObject({ pending: [{ id: 'pitch', firstSeenAt }] });
+  });
+
+  it('is given up once the grace window has passed — the query excludes it', async () => {
+    clock = T0 + 15 * 60 * 1000;
+    const { source, calls } = pollWith({ messages: [], search: [] });
+    const result = await source.getEvents({
+      config: QUERY,
+      checkpoint: {
+        ...MARK,
+        pending: [{ id: 'internal', firstSeenAt: new Date(T0).toISOString() }],
+      },
+    });
+    expect(calls.list).toHaveLength(1);
+    expect(result.events).toEqual([]);
+    expect(result.checkpoint).not.toHaveProperty('pending');
+  });
+
+  it('reads further search pages for an id the first page did not hold', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1')],
+      history: { INBOX: [{ added: [added('m1', '4001')], historyId: '5000' }] },
+      searchPages: [[{ id: 'newer', threadId: 't' }], [{ id: 'm1', threadId: 't' }], [{ id: 'x' }]],
+    });
+    const result = await source.getEvents({
+      config: { query: 'from:acme.com' },
+      checkpoint: MARK,
+    });
+
+    expect(calls.list.map((c) => c.pageToken)).toEqual([undefined, 'search:1']);
+    expect(result.events.map((e) => e.externalId)).toEqual(['m1']);
+  });
+
+  it('never holds anything pending when the listen has no query', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1')],
+      history: { INBOX: [{ added: [added('m1', '4001')], historyId: '5000' }] },
+    });
+    const result = await source.getEvents({ config: {}, checkpoint: MARK });
+    expect(calls.list).toEqual([]);
+    expect(result.checkpoint).not.toHaveProperty('pending');
+  });
+
+  it('reads a checkpoint written before pending existed, and skips a malformed entry', async () => {
+    const { source } = pollWith({ messages: [], search: [] });
+    const old = await source.getEvents({ config: QUERY, checkpoint: MARK });
+    expect(old.checkpoint).toMatchObject({ historyId: '5000' });
+    expect(old.checkpoint).not.toHaveProperty('pending');
+
+    const odd = await source.getEvents({
+      config: QUERY,
+      checkpoint: {
+        ...MARK,
+        pending: [{ id: 'ok', firstSeenAt: new Date(T0).toISOString() }, { id: 3 }, 'x'],
+      },
+    });
+    expect(odd.checkpoint).toMatchObject({ pending: [{ id: 'ok' }] });
   });
 });
