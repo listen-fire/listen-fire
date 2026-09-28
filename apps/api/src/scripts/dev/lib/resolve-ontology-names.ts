@@ -306,6 +306,7 @@ function walkExpression(
         ),
       };
     case 'not':
+    case 'negate':
       return {
         ...expr,
         expression: walkExpression(expr.expression, ctx, propertyCtxKey, `${path}.expression`),

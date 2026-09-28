@@ -577,6 +577,11 @@ export async function evalExpr(
       return bare(!v);
     }
 
+    case 'negate': {
+      const v = await evaluateExpression(expr.expression, ctx);
+      return bare(-Number(v));
+    }
+
     case 'arithmetic': {
       const left = Number(await evaluateExpression(expr.left, ctx));
       const right = Number(await evaluateExpression(expr.right, ctx));

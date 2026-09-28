@@ -247,6 +247,15 @@ async function evaluateExpressionInner(
       return !val;
     }
 
+    case 'negate': {
+      const noConstraints = { ...ctx, constraints: undefined };
+      const val = await evaluateExpression(expr.expression, noConstraints);
+      if (val == null) return null;
+      const n = Number(val);
+      if (isNaN(n)) return null;
+      return -n;
+    }
+
     // ── Concat — null propagation (null in any part → null) ──
     // Strip constraints: parts are intermediate; the concatenated result is the output
 
