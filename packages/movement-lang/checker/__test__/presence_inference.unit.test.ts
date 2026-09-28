@@ -126,6 +126,37 @@ describe('an extracted text field is present', () => {
     expect(codes(`${EXTRACT}  if ISNULL(r.verdict) { write chat-[:note]-> { Body: "none" } }`)).toEqual([]);
   });
 
+  it('a typed field proven by a guard is present inside the arm, and only there', () => {
+    const write = 'write chat-[:note]-> { Count: r.size }';
+    expect(codes(`${EXTRACT}  if EXISTS(r.size) { ${write} }`)).toEqual([]);
+    expect(codes(`${EXTRACT}  if r.size != null { ${write} }`)).toEqual([]);
+    expect(codes(`${EXTRACT}  if NOT ISNULL(r.size) { ${write} }`)).toEqual([]);
+    // The control: unguarded, and after the arm, the read may still be absent.
+    expect(codes(`${EXTRACT}  ${write}`)).toEqual(['MOV_ABSENT_REQUIRED']);
+    expect(codes(`${EXTRACT}  if EXISTS(r.size) { }\n  ${write}`)).toEqual(['MOV_ABSENT_REQUIRED']);
+    // A proof about one field says nothing about another.
+    expect(codes(`${EXTRACT}  if EXISTS(r.verdict) { ${write} }`)).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('a guard clause proves a typed field for everything after it', () => {
+    const body = `${EXTRACT}  if r.size == null { ERROR("no size") }\n  write chat-[:note]-> { Count: r.size }`;
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('a typed field of a nested node narrows the same way', () => {
+    const nested = EXTRACT.replace('label: <text> "its label"', 'label: <text> "its label"\n      rank: <number> "its rank"');
+    expect(
+      codes(`${nested}  r-[i:item]-> { if EXISTS(i.rank) { write chat-[:note]-> { Count: i.rank } } }`),
+    ).toEqual([]);
+  });
+
+  it('a record the program built narrows the same way', () => {
+    const built = '  n = node { said: FIRST(COLLECT(c-[m:Messages]->.`Text`)) }\n';
+    const write = 'write chat-[:note]-> { Body: n.said }';
+    expect(codes(`${built}  ${write}`)).toEqual(['MOV_ABSENT_REQUIRED']);
+    expect(codes(`${built}  if EXISTS(n.said) { ${write} }`)).toEqual([]);
+  });
+
   it('a system text field may still be tested — a source can hand back nothing', () => {
     expect(codes('  if EXISTS(c.`Name`) { write chat-[:note]-> { Body: "y" } }')).toEqual([]);
   });

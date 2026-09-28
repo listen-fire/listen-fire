@@ -2240,8 +2240,11 @@ function addResources(
 
 /**
  * The fields a program reads as PRESENT text: those declared plain text — the
- * inline `name: "…"` shortcut, or `<text>` — by the stage that last declares
- * them (a later stage re-declaring a field transforms it, type included).
+ * inline `name: "…"` shortcut, or `<text>`, whether inline or from a node
+ * declaration (`node entry: <Entry>`, whose spec is the inline block's) — by
+ * the stage that last declares them (a later stage re-declaring a field
+ * transforms it, type included). The checker's half of this rule is
+ * `readsAsPresentText`.
  *
  * Text has a value that means "nothing found", `""`, so the program is handed
  * that and never has to discharge an absence it would only print or write

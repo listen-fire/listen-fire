@@ -546,8 +546,11 @@ export type PositionTypeRef =
       edges?: Record<string, EdgeSchema>;
       genericLandings?: Record<string, string>;
     }
-  /** A position in an extract result graph (the root binding or a traversed node). */
-  | { kind: 'extract'; node: ExtractNodeType }
+  /** A position in an extract result graph (the root binding or a traversed
+   *  node). `present` holds the fields a guard in scope has proven present —
+   *  TypeScript's narrowed property reference, carried on the reference rather
+   *  than the node, since the node is the one graph every reader shares. */
+  | { kind: 'extract'; node: ExtractNodeType; present?: ReadonlySet<string> }
   /**
    * A CLOSURE — `(d: <date>) => { … }`, and everything sugared onto it (a
    * callback's body, an `until` condition). It is a value that can be bound,
@@ -749,6 +752,17 @@ export interface ExtractFieldInfo {
   /** Annotation suggestions already emitted for this field (dedupe key:
    *  the suggested annotation text). */
   suggested?: Set<string>;
+}
+
+/**
+ * Does this extracted field read as PRESENT text? Plain text is — the inline
+ * `name: "…"` shortcut or `<text>`, inline or from a node declaration alike —
+ * because the engine hands a text nobody found over as `""` (its
+ * `presentTextFields`, the runtime half of this rule). A typed field, or one
+ * whose annotation did not resolve here, is not.
+ */
+export function readsAsPresentText(field: ExtractFieldInfo): boolean {
+  return field.explicit === 'text' || (field.explicit === undefined && field.annotationRaw === undefined);
 }
 
 export interface ExtractNodeType {
@@ -2472,6 +2486,23 @@ export function narrowPresent(
   switch (position.kind) {
     case 'maybeEmpty':
       return isMaybeAbsent(lookupPropertyType(position, propertyId)) ? position.of : undefined;
+    // - an extracted TYPED field is `T | absent` on a node that is always
+    //   there, so the proof discharges just that field (text is already
+    //   present, and testing it is refused elsewhere).
+    case 'extract': {
+      const field = position.node.properties.get(propertyId);
+      if (field === undefined || readsAsPresentText(field) || position.present?.has(propertyId)) {
+        return undefined;
+      }
+      return { ...position, present: new Set([...(position.present ?? []), propertyId]) };
+    }
+    // - a record the program built carries each field's own type, so a
+    //   maybe-absent one is re-declared present.
+    case 'local': {
+      const read = position.reads[propertyId];
+      if (read === undefined || !isMaybeAbsent(read)) return undefined;
+      return { ...position, reads: { ...position.reads, [propertyId]: stripAbsent(read) } };
+    }
     // Every other position type is unconditionally present — nothing to
     // discharge. Listed rather than defaulted so a new kind that CAN be absent
     // has to say so here.
@@ -2479,8 +2510,6 @@ export function narrowPresent(
     case 'position':
     case 'union':
     case 'handle':
-    case 'local':
-    case 'extract':
     case 'closure':
       return undefined;
   }
@@ -3455,9 +3484,7 @@ export class ExpressionTyping {
     if (position?.kind !== 'extract') return false;
     const declared = position.node.properties.get(field.propertyId);
     if (declared === undefined) return false;
-    const isText =
-      declared.explicit === 'text' || (declared.explicit === undefined && declared.annotationRaw === undefined);
-    if (!isText) return false;
+    if (!readsAsPresentText(declared)) return false;
     const label = `${field.root}.${quoteName(field.propertyId)}`;
     const [verdict, fix] =
       asks === 'present'
@@ -4439,8 +4466,10 @@ export class ExpressionTyping {
     if (position === undefined) return undefined;
     if (propertyId === POSITION_SENTINEL) return undefined; // "the positions themselves"
     switch (position.kind) {
-      case 'extract':
-        return this.readExtractField(position.node, propertyId, writeTarget);
+      case 'extract': {
+        const read = this.readExtractField(position.node, propertyId, writeTarget);
+        return read !== undefined && position.present?.has(propertyId) ? stripAbsent(read) : read;
+      }
       case 'handle': {
         const declared = position.resultShape[propertyId];
         if (declared !== undefined) return declared;
@@ -4638,7 +4667,7 @@ export class ExpressionTyping {
       // hands a text field nobody found over as `""` (`presentTextFields` in the
       // engine's extraction export), so the read is present, and a text a
       // program only prints or writes needs no discharge.
-      return field.explicit === 'text' ? 'text' : maybeAbsent(field.explicit);
+      return readsAsPresentText(field) ? 'text' : maybeAbsent(field.explicit);
     }
     // An UNANNOTATED field is text — the inline shortcut asks the model for
     // words — and, like `<text>`, present. Only an annotation constrains what

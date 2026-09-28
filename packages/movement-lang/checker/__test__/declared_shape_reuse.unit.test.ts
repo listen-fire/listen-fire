@@ -106,7 +106,8 @@ describe('an extraction node that takes a declaration as its shape', () => {
     ];
     const uses = ['  found-[e:entry]-> {', '    write graph-[:company]-> { name: e.name }', '  }'];
     expect(codes([...extractEntries, ...uses])).toEqual(codes([...inline, ...uses]));
-    expect(codes([...extractEntries, ...uses])).toEqual([C.ABSENT_REQUIRED]);
+    // `<text>` is present text, declared or inline: a plain write takes it.
+    expect(codes([...extractEntries, ...uses])).toEqual([]);
   });
 
   it('lets a following `through` stage read the declared fields, and nothing later', () => {
@@ -151,6 +152,68 @@ describe('an extraction node that takes a declaration as its shape', () => {
   });
 });
 
+describe('presence on a declared shape — exactly as on the inline block', () => {
+  const TYPED = [
+    'node Entry: "each company pitched" {',
+    '  name: <text> "its name"',
+    '  thesis: <Thesis> "the thesis it routes to"',
+    '  employees: <number> "headcount"',
+    '  public: <boolean> "listed?"',
+    '}',
+  ].join('\n');
+  const INLINE = [
+    '  found = extract from [msg.`Body`] {',
+    '    node entry: "each company pitched" {',
+    '      name: <text> "its name"',
+    '      thesis: <Thesis> "the thesis it routes to"',
+    '      employees: <number> "headcount"',
+    '      public: <boolean> "listed?"',
+    '    }',
+    '  }',
+  ];
+  /** The same body, checked against the declared shape and the inline block. */
+  const both = (uses: string[]): [string[], string[]] => [
+    codes([...extractEntries, '  found-[e:entry]-> {', ...uses, '  }'], TYPED),
+    codes([...INLINE, '  found-[e:entry]-> {', ...uses, '  }'], TYPED),
+  ];
+
+  it('a `<text>` field is present: a plain write and an interpolation need nothing', () => {
+    const [declared, inline] = both([
+      '    write graph-[:company]-> { name: e.name, stage: "${e.name} (seed)" }',
+    ]);
+    expect(declared).toEqual([]);
+    expect(declared).toEqual(inline);
+  });
+
+  it('a typed field — number, boolean, refinement — may be absent', () => {
+    const [declared, inline] = both(['    write graph-[:company]-> { thesis: e.thesis }']);
+    expect(declared).toEqual([C.ABSENT_REQUIRED]);
+    expect(declared).toEqual(inline);
+    for (const read of ['    big = e.employees > 3', '    both = e.public AND e.public']) {
+      const [typed, typedInline] = both([read]);
+      expect(typed).toEqual(typedInline);
+    }
+    const [ordered] = both(['    big = e.employees > 3']);
+    expect(ordered).toEqual([C.ABSENT_REQUIRED]);
+  });
+
+  it('a null test on its text is refused, naming the emptiness test', () => {
+    for (const test of ['e.name == null', 'e.name != null', 'EXISTS(e.name)', 'ISNULL(e.name)']) {
+      const [declared, inline] = both([`    if ${test} { write graph-[:company]-> { name: "y" } }`]);
+      expect(declared).toEqual([C.PRESENCE_TEST_ON_TEXT]);
+      expect(declared).toEqual(inline);
+    }
+  });
+
+  it('a guard on a typed field narrows it present inside the arm', () => {
+    const [declared, inline] = both([
+      '    if EXISTS(e.thesis) { write graph-[:company]-> { thesis: e.thesis } }',
+    ]);
+    expect(declared).toEqual([]);
+    expect(declared).toEqual(inline);
+  });
+});
+
 describe("a declaration's descriptions", () => {
   it('may interpolate a file-scope binding declared above it', () => {
     expect(codes([...extractEntries])).toEqual([]);
@@ -181,12 +244,10 @@ describe('a spread in a write body', () => {
   });
 
   it('`...e` refuses a maybe-absent field exactly as the plain line would, naming `?...`', () => {
+    // Only `thesis` (a refinement) may be absent; `name` and `stage` are text.
     const diagnostics = errors(program(writeWith('...e')));
-    expect(diagnostics.map((d) => d.code)).toEqual([
-      C.ABSENT_REQUIRED,
-      C.ABSENT_REQUIRED,
-      C.ABSENT_REQUIRED,
-    ]);
+    expect(diagnostics.map((d) => d.code)).toEqual([C.ABSENT_REQUIRED]);
+    expect(diagnostics[0].message).toContain('thesis');
     expect(diagnostics[0].message).toContain("'?...e'");
   });
 

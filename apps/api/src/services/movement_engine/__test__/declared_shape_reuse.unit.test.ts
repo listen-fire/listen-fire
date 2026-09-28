@@ -312,9 +312,13 @@ const REPLY = {
 
 async function run(
   source: string,
-  { attio = makeFakeAdapter('attio'), movementName }: { attio?: ReturnType<typeof makeFakeAdapter>; movementName?: string } = {},
+  {
+    attio = makeFakeAdapter('attio'),
+    movementName,
+    reply = REPLY,
+  }: { attio?: ReturnType<typeof makeFakeAdapter>; movementName?: string; reply?: unknown } = {},
 ) {
-  const llm = queuedMovementLlm([REPLY]);
+  const llm = queuedMovementLlm([reply]);
   const writes: CapturedWrite[] = [];
   await runMovement({
     source,
@@ -373,6 +377,59 @@ describe('an extraction node that takes a declaration as its shape', () => {
     );
     expect(writes).toEqual([
       expect.objectContaining({ kind: 'create', fields: { name: 'Ada', stage: 'Seed' } }),
+    ]);
+  });
+});
+
+describe('presence on a declared shape — exactly as on the inline block', () => {
+  /** The model found the name, and neither the stage (text) nor the thesis
+   *  (a refinement). */
+  const SPARSE = {
+    'x:extract_result#1': [{ entry: [{ name: wrap('Acme'), stage: null, thesis: null, founder: [] }] }],
+  };
+  const both = async (after: string[]) => {
+    const declared = await run(movement(ENTRY, ['    node entry: <Entry>'], after), { reply: SPARSE });
+    const inline = await run(movement('', INLINE_ENTRY, after), { reply: SPARSE });
+    expect(declared.writes).toEqual(inline.writes);
+    return declared.writes;
+  };
+
+  it('hands a text nobody found over as "" — a plain write and an interpolation take it', async () => {
+    const writes = await both([
+      '  found-[e:entry]-> {',
+      '    write crm-[:companies]-> { name: e.name, stage: e.stage, thesis ?: "(${e.stage})" }',
+      '  }',
+    ]);
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: '', thesis: '()' } }),
+    ]);
+  });
+
+  it('keeps a typed field nobody found absent — a guard on it skips its arm', async () => {
+    const writes = await both([
+      '  found-[e:entry]-> {',
+      '    if EXISTS(e.thesis) { write crm-[:companies]-> { name: e.name, thesis: e.thesis } }',
+      '    write crm-[:companies]-> { name: "after", thesis ?: e.thesis }',
+      '  }',
+    ]);
+    // Absent (null to a fill), never "" — the guarded write never ran.
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'after', thesis: null } }),
+    ]);
+  });
+});
+
+describe('a guard on a typed field of a declared shape', () => {
+  it('narrows it present in the arm, so a plain write of it saves and runs', async () => {
+    const { writes } = await run(
+      movement(ENTRY, ['    node entry: <Entry>'], [
+        '  found-[e:entry]-> {',
+        '    if EXISTS(e.thesis) { write crm-[:companies]-> { name: e.name, thesis: e.thesis } }',
+        '  }',
+      ]),
+    );
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', thesis: 'Infra' } }),
     ]);
   });
 });
