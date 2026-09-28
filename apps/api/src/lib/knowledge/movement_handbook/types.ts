@@ -15,7 +15,8 @@ export type ChapterId =
   | 'patterns'
   | 'use-cases'
   | 'runs'
-  | 'reference';
+  | 'reference'
+  | 'builtins';
 
 /** A chapter contributed by an adapter's manifest, namespaced by its slug so
  *  it can never collide with (or masquerade as) a hand-written chapter. */

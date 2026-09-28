@@ -33,6 +33,7 @@ import { patterns } from './chapters/patterns';
 import { useCases } from './chapters/use_cases';
 import { runs } from './chapters/runs';
 import { reference } from './chapters/reference';
+import { builtins } from './chapters/builtins';
 
 /**
  * `foundations#conventions` is a route the index serves and a section every
@@ -107,7 +108,7 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Check what a run did; trace where a written value came from', chapter: 'runs', section: 'run-history' },
   { intent: 'What makes a run expensive, and how to cut it', chapter: 'runs', section: 'what-a-run-costs' },
   { intent: 'One language rule, without a whole chapter', chapter: 'reference' },
-  { intent: 'Exact spelling of an operator or function; when a name needs backticks', chapter: 'reference', section: 'operators-and-functions' },
+  { intent: 'Exact spelling of an operator; when a name needs backticks', chapter: 'reference', section: 'operators-and-functions' },
   { intent: 'Write field modifiers and unique by forms; traversal and query clauses', chapter: 'reference', section: 'writes' },
   { intent: 'Common authoring mistakes in one place', chapter: 'reference', section: 'pitfalls' },
 ];
@@ -126,6 +127,7 @@ const CHAPTERS: Record<ChapterId, Chapter> = {
   'use-cases': useCases,
   runs,
   reference,
+  builtins,
 };
 
 /**

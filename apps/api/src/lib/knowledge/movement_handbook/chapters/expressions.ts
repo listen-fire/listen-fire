@@ -130,6 +130,36 @@ theses = MEMBERS(<Thesis>)
 
 \`MEMBERS(<T>)\` lists a closed type's values in the order they were **declared** — a refinement you wrote, or a field's option set borrowed from a system. That order is a fact about the type, so a report's sections come from the declaration instead of a list kept beside it. A field whose values are merely *known* (other values are legal there too) has no complete membership, and is refused.
 
+### a-table-you-declare-once
+
+\`\`\`
+roster = [
+  { Name: "Ada",   Theme: "Consumer" },
+  { Name: "Grace", Theme: "Infra" },
+  { Name: "Alan",  Theme: "Health" },
+]
+
+function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
+  themes = JOIN(lines, ", ")
+  byName = KEYBY(roster, (r) => { return r.Name })
+
+  found = extract from [m.\`Body\`] {
+    node company: "each company named, weighed against the team's own themes: \${themes}" {
+      name: "the company's name"
+    }
+  }
+
+  owner = AT(byName, "Ada")
+  if owner == null { ERROR("no such teammate on the roster") }
+  found-[c:company]-> {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: "flagged by \${owner.Name}" }
+  }
+}
+\`\`\`
+
+A file-scope list of dict literals is a small table any function in the file can read, declared once rather than rebuilt per call. \`MAP\` turns each row into a line and \`JOIN\` turns the lines into one string — the same string that goes into a prompt (here, an extraction's own description) or into code: \`KEYBY\` turns the table into a dict keyed by one of its own fields, so a later lookup (\`AT(byName, "Ada")\`) is a plain read rather than a search — a computed key still needs the ordinary guard, since \`KEYBY\`'s keys are data, not a written literal.
+
 ### values-that-may-not-be-there
 
 \`\`\`
@@ -211,6 +241,41 @@ pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
 - Say \`entities\` instead of \`size\` to cut by what a piece is expected to yield — \`CHUNKS(text, { entities: 20 })\` fills each piece with about twenty records' worth of lines, and never splits a line. One of the two is required, and \`overlap\` works with either.
 - \`extract from [pieces]\` is one extraction reading every piece as a segment; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is one extraction per piece. Reach for the second where each piece should be read on its own.`,
   engineClaims: [
+    {
+      construct: 'a file-scope table of dict-literal rows, MAP+JOIN into an extraction description, KEYBY+AT as a lookup',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+roster = [
+  { Name: "Ada",   Theme: "Consumer" },
+  { Name: "Grace", Theme: "Infra" },
+  { Name: "Alan",  Theme: "Health" },
+]
+
+function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
+  themes = JOIN(lines, ", ")
+  byName = KEYBY(roster, (r) => { return r.Name })
+
+  found = extract from [m.\`Body\`] {
+    node company: "each company named, weighed against the team's own themes: \${themes}" {
+      name: "the company's name"
+    }
+  }
+
+  owner = AT(byName, "Ada")
+  if owner == null { ERROR("no such teammate on the roster") }
+  found-[c:company]-> {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: "flagged by \${owner.Name}" }
+  }
+}
+`,
+    },
     {
       construct: 'SORT over a collection in hand, then an order-sensitive fold',
       status: 'runs',
