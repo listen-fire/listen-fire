@@ -23,12 +23,14 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ### Changed
 
+- The handbook looks a single record up with `ONLY` and a guard (`x = ONLY(…)` then `if x == null { ERROR("…") }`) wherever one record is expected; a nested hop is for fanning out over many. Examples across the chapters and adapter sections follow it.
 - The Bright Data SERP provider waits up to 90 s per request and retries a 429, a 5xx (including one reported only in `x-brd-status-code`), a timeout or an empty body, up to three attempts.
 - A refusal from Google Custom Search is logged with its reason and fails the search, instead of reading as "no results".
 - Website identity ignores scheme, `www.`, trailing slash and case.
 
 ### Fixed
 
+- A PDF reached through a link is read from its own text layer before OCR, and is kept (with empty text and a warning) when no text can be read; it was sent straight to OCR and dropped when OCR was not configured. Any fetched document with no readable text is now kept rather than discarded.
 - A write whose identity candidates were filtered could bind or update the wrong record.
 - A valuations write with `unique by` created a new row every time instead of finding the existing one.
 - `?:` on a valuations record now sees an existing value; a create no longer sends explicit nulls.
