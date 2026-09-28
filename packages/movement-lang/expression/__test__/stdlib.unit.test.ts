@@ -62,6 +62,32 @@ describe('namespaced stdlib calls fold to dotted function nodes', () => {
     });
   });
 
+  it('URL.HOST(text) folds to a plain function node', () => {
+    expect(parseMovementExpression('URL.HOST(msg.`link`)')).toEqual({
+      type: 'function',
+      fn: 'url.host',
+      args: [
+        {
+          type: 'traverse',
+          aliasRoot: 'msg',
+          steps: [],
+          expression: { type: 'property', propertyTypeId: 'link' },
+        },
+      ],
+    });
+  });
+
+  it('DATE.ADD_DAYS(d, -back_days) — a unary-minus argument parses (was the motivating case for the grammar amendment)', () => {
+    expect(parseMovementExpression('DATE.ADD_DAYS(d, -back_days)')).toEqual({
+      type: 'function',
+      fn: 'date.add_days',
+      args: [
+        { type: 'property', propertyTypeId: 'd' },
+        { type: 'negate', expression: { type: 'property', propertyTypeId: 'back_days' } },
+      ],
+    });
+  });
+
   it('namespace and function names are case-insensitive (function-name convention)', () => {
     expect(parseMovementExpression('currency.get_code_from_figure(msg.`amount`)')).toEqual({
       type: 'function',
@@ -451,6 +477,30 @@ describe('TEXT', () => {
     expect(apply('text.slug', 'Acme Corp Ltd.')).toBe('acme-corp-ltd');
     expect(apply('text.slug', '  Café — Zürich  ')).toBe('cafe-zurich');
     expect(apply('text.slug', null)).toBeNull();
+  });
+});
+
+describe('URL.HOST', () => {
+  it('lowercases the host, otherwise verbatim', () => {
+    expect(apply('url.host', 'https://WWW.Acme.com/path?x=1')).toBe('www.acme.com');
+  });
+
+  it('keeps www., drops port and path', () => {
+    expect(apply('url.host', 'https://www.acme.com:8080/deals/1')).toBe('www.acme.com');
+  });
+
+  it('a URL with no host (mailto:, a relative path) is absent', () => {
+    expect(apply('url.host', 'mailto:a@b.com')).toBeNull();
+    expect(apply('url.host', '/deals/1')).toBeNull();
+  });
+
+  it('text that is not a URL at all is absent', () => {
+    expect(apply('url.host', 'not a url')).toBeNull();
+    expect(apply('url.host', 'acme.com')).toBeNull(); // no scheme — not a URL
+  });
+
+  it('null is absent', () => {
+    expect(apply('url.host', null)).toBeNull();
   });
 });
 
