@@ -140,7 +140,8 @@ roster = [
 ]
 
 function \`Match Mentions\`(m: <inbox-[:Email]->>) {
-  themes = JOIN(MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" }), ", ")
+  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
+  themes = JOIN(lines, ", ")
   byName = KEYBY(roster, (r) => { return r.Name })
 
   found = extract from [m.\`Body\`] {
@@ -257,7 +258,8 @@ roster = [
 ]
 
 function \`Match Mentions\`(m: <inbox-[:Email]->>) {
-  themes = JOIN(MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" }), ", ")
+  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
+  themes = JOIN(lines, ", ")
   byName = KEYBY(roster, (r) => { return r.Name })
 
   found = extract from [m.\`Body\`] {

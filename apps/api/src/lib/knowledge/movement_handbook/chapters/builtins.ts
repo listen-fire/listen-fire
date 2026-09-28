@@ -2,7 +2,7 @@ import type { Chapter } from '../types';
 
 export const builtins: Chapter = {
   id: 'builtins',
-  title: 'Builtins — every function and helper family, one entry each',
+  title: 'Builtins — one entry per function',
   content: `## Builtins — every function and helper family, one entry each
 
 Every built-in function, one section each — fetch one by name (\`builtins#SUM\`) instead of the whole chapter. Each entry gives the signature, what it means, whether the result is always there or \`T | absent\`, an ordering requirement where one exists, and an example. The reference chapter's *operators-and-functions* is the one-page version of this list; come here for the detail behind one name.
