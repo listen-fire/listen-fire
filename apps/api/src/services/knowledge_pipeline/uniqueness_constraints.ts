@@ -5,6 +5,7 @@ import { getKnowledgeQb } from '../../lib/kysely';
 import { logger } from '../logger';
 import type { Expression, EdgeStep } from '#shared/expression/types';
 import { expressionSchema } from './output_v3/expression';
+import { isBlankIdentityValue } from '../translation_graph/uniqueness';
 import type { NodeId } from '../../generated/kysely/knowledge/Node';
 import type { NodeTypeId } from '../../generated/kysely/knowledge/NodeType';
 import type { PropertyTypeId } from '../../generated/kysely/knowledge/PropertyType';
@@ -452,7 +453,7 @@ async function searchCandidatesByConstraints(options: {
         }
         if (entry.expr.type === 'property') {
           const extractedVal = extractedPropertyValues.get(entry.expr.propertyTypeId);
-          if (extractedVal == null) { allMatch = false; break; }
+          if (isBlankIdentityValue(extractedVal)) { allMatch = false; break; }
           const candidateVals = propValuesByNode.get(nodeId)?.get(entry.expr.propertyTypeId);
           if (!candidateVals || candidateVals.size === 0) { allMatch = false; break; }
           const match = entry.fuzzy
@@ -525,7 +526,7 @@ function compileEntry(
 
   if (expr.type === 'property') {
     const value = extractedPropertyValues.get(expr.propertyTypeId);
-    if (value == null) return null;
+    if (isBlankIdentityValue(value)) return null;
     const lowerVal = String(value).toLowerCase();
 
     // Check both value_text (single-cardinality) and value_text_array (multi-cardinality)

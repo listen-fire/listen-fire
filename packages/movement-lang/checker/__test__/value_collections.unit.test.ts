@@ -85,8 +85,12 @@ describe('the dict literal', () => {
     expect(codes('  d = { one: "a", two: "b" }\n  write chat-[:note]-> { Body ?: AT(d, "one") }')).toEqual([]);
   });
 
-  it('the lookup is possibly absent, so an undischarged write is refused', () => {
-    const body = '  d = { one: "a" }\n  write chat-[:note]-> { Body: AT(d, "one") }';
+  it('a key the literal wrote down is present, so it fills a plain write field', () => {
+    expect(codes('  d = { one: "a" }\n  write chat-[:note]-> { Body: AT(d, "one") }')).toEqual([]);
+  });
+
+  it('a key only known at run time is possibly absent, so an undischarged write is refused', () => {
+    const body = '  d = { one: "a" }\n  k = c.`Name`\n  write chat-[:note]-> { Body: AT(d, k) }';
     expect(codes(body)).toContain('MOV_ABSENT_REQUIRED');
   });
 
@@ -109,9 +113,9 @@ describe('the dict literal', () => {
     expect(messages(body)).toContain('DATE.FORMAT');
   });
 
-  it('a literal whose values disagree is json, not a dict — nothing claims a shape for it', () => {
-    // A json value is opaque, so folding it into text is the error that says
-    // this is not a dict of text.
+  it('a literal whose values disagree is still structured — folding the whole of it into text is refused', () => {
+    // Its keys are typed one by one, but the dict itself is no text, so
+    // folding it is the structured-value error.
     expect(codes('  d = { a: "x", b: 3 }\n  t = CONCAT(d, "!")')).toContain('MOV_JSON_OPAQUE');
   });
 

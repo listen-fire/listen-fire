@@ -98,8 +98,8 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
     }
   }
 
-  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: COALESCE(f.headline, "") } }
-  by       = GROUPBY(rows, (r) => { return COALESCE(AT(r, "thesis"), "Consumer") })
+  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } }
+  by       = GROUPBY(rows, (r) => { return AT(r, "thesis") })
   theses   = MEMBERS(<Thesis>)
   sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
 
@@ -111,7 +111,7 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
 
 - Adding a thesis is one edit — the declaration — and the report grows a section on its own, in the place the declaration puts it. A thesis nothing matched is an ordinary missing lookup, so it still gets its line.
 - The rows are **dicts** rather than records because that is what a value collection holds: \`GROUPBY\`, \`MAP\` and the rest iterate values, while records keep the traversal-headed block.
-- Every extracted field may not have been found, so each one is defaulted on the way into the row.
+- A thesis the model could not settle on is defaulted on the way into the row. The headline needs no default — a text field it did not find is \`""\` — and neither does \`AT(r, "thesis")\`, because the row was written with that key.
 
 ### extract-and-connect
 
@@ -254,8 +254,8 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
     }
   }
 
-  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: COALESCE(f.headline, "") } }
-  by       = GROUPBY(rows, (r) => { return COALESCE(AT(r, "thesis"), "Consumer") })
+  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } }
+  by       = GROUPBY(rows, (r) => { return AT(r, "thesis") })
   theses   = MEMBERS(<Thesis>)
   sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
 

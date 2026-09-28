@@ -1222,7 +1222,7 @@ describe('worked examples under full schemas (zero diagnostics)', () => {
         '        stage:  "the round\'s stage, e.g. Seed, Series A"',
         '        node investor: "each investor participating in this round" {',
         '          name: "investor name"',
-        '          lead: "whether this investor is leading the round"',
+        '          lead: <boolean> "whether this investor is leading the round"',
         '        }',
         '      }',
         '    }',
@@ -1244,7 +1244,7 @@ describe('worked examples under full schemas (zero diagnostics)', () => {
         '        write fr-[:participants]-> {',
         '          unique by (fr AND `investor_name`)',
         '          investor_name: i.`name`',
-        '          lead:          i.`lead`',
+        '          lead ?:        i.`lead`',
         '        }',
         '      }',
         '    }',
@@ -2309,7 +2309,7 @@ describe('extract result typing', () => {
     expect(diagnostics[0].message).toContain('urls, name');
   });
 
-  it('adoption is DEMOTED: a typed write target no longer types the field — it earns an info suggestion naming the borrowable path', () => {
+  it('an unannotated field is text, so writing it into a NUMBER field is refused, naming the annotation', () => {
     const source = inMovement(
       [
         '  deals = extract from [msg.`text`] {',
@@ -2323,39 +2323,32 @@ describe('extract result typing', () => {
         '  }',
       ].join('\n'),
     );
-    // No errors: only explicit annotations constrain; the old adopted-type
-    // conflict (number-here, text-there) is gone with adoption itself.
-    expect(check(source)).toEqual([]);
-    const suggestions = infos(source).filter(d => d.code === C.EXTRACT_ANNOTATE);
-    // Only the NUMBER target earns a suggestion. The text target (Slack's
-    // `text`) does not: an unannotated extraction is text already, so the
-    // annotation would add no constraint.
-    expect(suggestions.map(d => d.message)).toEqual([
-      expect.stringContaining('graph.funding_round.amount'),
-    ]);
-    expect(suggestions[0].message).toContain('annotate');
-    expect(suggestions.some(d => d.message.includes('team.message.text'))).toBe(false);
-    // Annotating is what MAKES the read `T | absent`, so the nudge names the
+    // TypeScript's string-where-number-is-required: only the number target is
+    // refused. The text target is text already.
+    const diagnostics = check(source);
+    expect(diagnostics.map(d => d.code)).toEqual([C.EXTRACT_NEEDS_ANNOTATION]);
+    expect(diagnostics[0].message).toContain('amount: <number> "…"');
+    expect(diagnostics[0].message).toContain('graph.funding_round.amount');
+    // The annotated field may not be found, so the refusal names the
     // discharge in the same breath — following it must never walk the author
-    // into a refusal it never mentioned.
-    expect(suggestions[0].message).toContain("'?:'");
-    expect(suggestions[0].message).toContain('COALESCE');
-    expect(suggestions[0].message).toContain('may be absent');
+    // into a second refusal it never mentioned.
+    expect(diagnostics[0].message).toContain("'?:'");
+    expect(infos(source).filter(d => d.code === C.EXTRACT_ANNOTATE)).toEqual([]);
   });
 
   it('annotation suggestions dedupe per (field, target path) across repeated writes', () => {
     const source = inMovement(
       [
         '  deals = extract from [msg.`text`] {',
-        '    node round: "the round" {',
-        '      amount: "the amount raised"',
+        '    node company: "each company" {',
+        '      stage: "the funding stage"',
         '    }',
         '  }',
-        '  deals-[r:round]-> {',
-        '    write graph-[:funding_round]-> { stage: "Seed", amount: r.`amount` }',
+        '  deals-[c:company]-> {',
+        '    write aff-[:organizations]-> { name: "Acme", stage: c.`stage` }',
         '  }',
-        '  deals-[r2:round]-> {',
-        '    write graph-[:funding_round]-> { stage: "Seed", amount: r2.`amount` }',
+        '  deals-[c2:company]-> {',
+        '    write aff-[:organizations]-> { name: "Acme", stage: c2.`stage` }',
         '  }',
       ].join('\n'),
     );

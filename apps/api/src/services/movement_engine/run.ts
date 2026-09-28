@@ -189,7 +189,7 @@ import {
   type SourcePosition,
   type TransformOutputShape,
 } from '../translation_graph/types';
-import { mergeUniqueness, type UniquenessConstraints } from '../translation_graph/uniqueness';
+import { isBlankIdentityValue, mergeUniqueness, type UniquenessConstraints } from '../translation_graph/uniqueness';
 import type { LlmClient } from '../translation_graph/engine/batched_extraction';
 import {
   matchesResourceFilter,
@@ -5976,6 +5976,13 @@ class Interpreter {
     const constraintFields = new Set(
       input.constraints.any.flatMap((branch) => branch.all.map((entry) => entry.field)),
     );
+    // An empty key is no key: a text nobody found is handed over as "", and
+    // two records sharing "" are not the same record. Every adapter already
+    // reads a null key component as "cannot match on this", so blank becomes
+    // null here, once, instead of in each adapter's search.
+    for (const field of constraintFields) {
+      if (isBlankIdentityValue(record[field])) record[field] = null;
+    }
     for (const parent of input.target.parents) {
       if (parent.externalId === undefined) continue;
       if (constraintFields.has(parent.edgeName)) {

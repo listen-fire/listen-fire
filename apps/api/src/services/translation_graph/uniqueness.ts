@@ -45,10 +45,20 @@ export function mergeUniqueness(
   return { any: [...(a?.any ?? []), ...(b?.any ?? [])] };
 }
 
+/**
+ * An identity key component that says nothing: absent, or text with nothing
+ * in it. An empty key is no key — two records that both lack a name are not
+ * thereby the same record — so such a component never matches and is never
+ * matched on.
+ */
+export function isBlankIdentityValue(value: unknown): boolean {
+  return value == null || (typeof value === 'string' && value.trim() === '');
+}
+
 /** Case-insensitive equality that treats a multi-value field as a match when
  *  the asserted scalar appears among the candidate's values. */
 function fieldValuesMatch(asserted: unknown, candidate: unknown): boolean {
-  if (asserted == null || candidate == null) return false;
+  if (isBlankIdentityValue(asserted) || isBlankIdentityValue(candidate)) return false;
   const target = String(asserted).toLowerCase();
   const pool = Array.isArray(candidate) ? candidate : [candidate];
   return pool.some((v) => v != null && String(v).toLowerCase() === target);

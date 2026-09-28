@@ -164,11 +164,12 @@ describe('a dict is a JSON object, and AT looks up a key', () => {
     expect(creates.map((c) => c.fields.payload)).toEqual([{ one: 'a', two: 'b' }]);
   });
 
-  it('AT reads the key, and a key that is not there reads nothing', async () => {
+  it('AT reads the key, and a computed key that is not there reads nothing', async () => {
     const creates = await runBody(
       [
         '  d = { one: "hit" }',
-        '  write graph-[:note]-> { body ?: AT(d, "one"), payload: { missing: COALESCE(AT(d, "nope"), "none") } }',
+        '  k = LOWER("NOPE")',
+        '  write graph-[:note]-> { body ?: AT(d, "one"), payload: { missing: COALESCE(AT(d, k), "none") } }',
       ].join('\n'),
       ROWS,
     );

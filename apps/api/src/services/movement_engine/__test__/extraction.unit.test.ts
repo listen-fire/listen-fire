@@ -158,6 +158,7 @@ import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import type { MutationContext } from '../../translation_graph/mutation_context';
 import { positionData } from '../../translation_graph/types';
+import { candidateIsAllExact } from '../../translation_graph/uniqueness';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000010' as TeamId;
@@ -1421,10 +1422,10 @@ describe('a stage whose plugins contributed nothing', () => {
     // The plugin ran (the company had an address) — and the stage behind it
     // did not, because there was nothing for it to read.
     expect(calls).toHaveLength(1);
-    // Its declared field joins the entity with no value — the same thing the
+    // Its declared text field joins the entity empty — the same thing the
     // call it replaced produced, since the model had nothing new to answer
     // from either.
-    expect(writes).toEqual([{ name: 'Gondor', summary: null }]);
+    expect(writes).toEqual([{ name: 'Gondor', summary: '' }]);
   });
 
   it('carries the plugin’s own outcome onto its trace entry', async () => {
@@ -3380,41 +3381,48 @@ describe('the Anthropic-backed extraction client', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 8. Absence discipline — an unproduced extract field is ABSENT, never `""`
+// 8. Presence — an unproduced TEXT field is `""`; an unproduced typed field is absent
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// Field evidence from the first production migration: models answer `""` for a
-// field they found nothing for about as readily as they answer `null`, and only
-// one of those two reaches the null plane. Every author guard (`ISNULL`,
-// `EXISTS`, `== null`) silently passed on the other, which is why authors were
-// writing `COALESCE(x, "")` just to make the two agree.
+// Models answer `""` for a field they found nothing for about as readily as
+// they answer `null`, so the two are collapsed into one fact. Which fact
+// depends on the field's type. Text has a value that means "nothing found" —
+// the empty string — so a text field nobody found reaches the program as `""`
+// and reads as present (the checker types it `text`, not `text | absent`),
+// which is what lets it be printed or written with no `COALESCE(x, "")`. A
+// number, a date, a choice from a set has no such value, so it stays absent.
 
-const ABSENCE_MOVEMENT = [
+const PRESENCE_MOVEMENT = [
   MOVEMENT_PRELUDE,
   '',
   'movement m(msg: <inbox-[:message]->>) {',
   '  deals = extract from [msg.`text`] {',
   '    node company: "each company mentioned" {',
-  '      name: "the company\'s name"',
-  '      stage: "the funding stage, e.g. Seed"',
+  '      name:  "the company\'s name"',
+  '      stage: <text> "the funding stage, e.g. Seed"',
+  '      note:  "anything else said about it"',
+  '      size:  <number> "the round size in dollars"',
   '    }',
   '  }',
   '  deals-[c:company]-> {',
-  '    if ISNULL(c.`stage`) {',
-  '      write team-[:messages]-> { channel: "#missing", text: COALESCE(c.`stage`, "no stage") }',
+  '    if c.`stage` == "" {',
+  '      write team-[:messages]-> { channel: "#missing", text: "[${c.`note`}]" }',
   '    } else {',
   '      write team-[:messages]-> { channel: "#found", text: c.`stage` }',
+  '    }',
+  '    if ISNULL(c.`size`) {',
+  '      write team-[:messages]-> { channel: "#no-size", text: c.`name` }',
   '    }',
   '  }',
   '}',
 ].join('\n');
 
-describe('an empty extraction resolves to absent, not an empty string', () => {
+describe('an unproduced text field is the empty string; a typed one is absent', () => {
   async function runWith(companies: unknown[]): Promise<Record<string, unknown>[]> {
     const llm = queuedMovementLlm([{ 'x:extract_result#1': [{ company: companies }] }]);
     const slack = makeFakeAdapter('slack');
     await runMovement({
-      source: ABSENCE_MOVEMENT,
+      source: PRESENCE_MOVEMENT,
       event: webhookEvent('email', { text: 'who knows' }),
       teamId: TEAM_ID,
       catalog: movementCatalog,
@@ -3428,59 +3436,65 @@ describe('an empty extraction resolves to absent, not an empty string', () => {
     return slack.creates.map((c) => c.fields);
   }
 
-  it("an empty-string answer takes the same branch a null one does — and COALESCE's fallback", async () => {
-    expect(await runWith([{ name: wrap('Acme'), stage: wrap('') }])).toEqual([
-      { channel: '#missing', text: 'no stage' },
-    ]);
-    expect(await runWith([{ name: wrap('Acme'), stage: wrap(null) }])).toEqual([
-      { channel: '#missing', text: 'no stage' },
+  it('a declared <text> field answered blank, null or not at all reads as ""', async () => {
+    for (const stage of [wrap(''), wrap(null), wrap('  \n '), undefined]) {
+      expect(
+        await runWith([{ name: wrap('Acme'), ...(stage ? { stage } : {}), size: wrap(5) }]),
+      ).toEqual([{ channel: '#missing', text: '[]' }]);
+    }
+  });
+
+  it('the inline shortcut interpolates as nothing when it was not found', async () => {
+    expect(await runWith([{ name: wrap('Acme'), stage: wrap(''), note: wrap('  '), size: wrap(5) }])).toEqual([
+      { channel: '#missing', text: '[]' },
     ]);
   });
 
-  it('a whitespace-only answer is nothing extracted too', async () => {
-    expect(await runWith([{ name: wrap('Acme'), stage: wrap('  \n ') }])).toEqual([
-      { channel: '#missing', text: 'no stage' },
-    ]);
-  });
-
-  it('a real value is untouched — it is only the blank that collapses', async () => {
-    expect(await runWith([{ name: wrap('Acme'), stage: wrap('Seed') }])).toEqual([
+  it('a real value is untouched', async () => {
+    expect(await runWith([{ name: wrap('Acme'), stage: wrap('Seed'), size: wrap(5) }])).toEqual([
       { channel: '#found', text: 'Seed' },
     ]);
   });
 
-  it('an omitted field and a blank one are indistinguishable to the author', async () => {
-    expect(await runWith([{ name: wrap('Acme') }])).toEqual([
-      { channel: '#missing', text: 'no stage' },
+  it('a typed field nobody found stays absent', async () => {
+    expect(await runWith([{ name: wrap('Acme'), stage: wrap('Seed') }])).toEqual([
+      { channel: '#found', text: 'Seed' },
+      { channel: '#no-size', text: 'Acme' },
     ]);
   });
 
-  it('counts a blank-only entity as empty in the trace, exactly as an all-null one', async () => {
+  it('counts a blank-only entity as empty in the trace, and drops it, exactly as an all-null one', async () => {
     const llm = queuedMovementLlm([
       {
         'x:extract_result#1': [
-          { company: [{ name: wrap(''), stage: wrap('   ') }, { name: wrap('Globex'), stage: wrap('A') }] },
+          {
+            company: [
+              { name: wrap(''), stage: wrap('   ') },
+              { name: wrap('Globex'), stage: wrap('A'), size: wrap(1) },
+            ],
+          },
         ],
       },
     ]);
+    const slack = makeFakeAdapter('slack');
     const runResult = await runMovement({
-      source: ABSENCE_MOVEMENT,
+      source: PRESENCE_MOVEMENT,
       event: webhookEvent('email', { text: 'who knows' }),
       teamId: TEAM_ID,
       catalog: movementCatalog,
       resolveAdapter: makeResolver({
         email: makeFakeAdapter('email').adapter,
         attio: makeFakeAdapter('attio').adapter,
-        slack: makeFakeAdapter('slack').adapter,
+        slack: slack.adapter,
       }),
       llm: llm.client,
     });
     expect(runResult.trace.find((e) => e.kind === 'extraction')).toMatchObject({
       empty: { company: 1 },
     });
+    expect(slack.creates.map((c) => c.fields)).toEqual([{ channel: '#found', text: 'A' }]);
   });
 });
-
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 8. A record with no value in ANY field is dropped, never emitted all-null
@@ -3642,7 +3656,7 @@ describe('a response that never answers the question is an error, not an empty e
 
     await expect(
       runMovement({
-        source: ABSENCE_MOVEMENT,
+        source: PRESENCE_MOVEMENT,
         event,
         teamId: TEAM_ID,
         catalog: movementCatalog,
@@ -3664,7 +3678,7 @@ describe('a response that never answers the question is an error, not an empty e
     const slack = makeFakeAdapter('slack');
 
     await runMovement({
-      source: ABSENCE_MOVEMENT,
+      source: PRESENCE_MOVEMENT,
       event,
       teamId: TEAM_ID,
       catalog: movementCatalog,
@@ -3678,6 +3692,66 @@ describe('a response that never answers the question is an error, not an empty e
 
     expect(slack.creates).toEqual([]);
     expect(llm.calls).toHaveLength(1);
+  });
+});
+
+// An empty key is no key. A text nobody found is handed over as "", and two
+// records that both lack a name are not thereby the same record — so a blank
+// identity component reaches the adapter's search as null, which every
+// adapter reads as "cannot match on this", and the engine's own exactness
+// check never counts two blanks as equal.
+describe('a unique-by key that came back empty matches nothing', () => {
+  const event = webhookEvent('email', { text: 'two unnamed companies' });
+  const UNNAMED = { adapterType: 'attio', externalId: 'existing-unnamed', data: { name: '' } };
+
+  it('two writes with an empty name create two records, never merging with an existing unnamed one', async () => {
+    const searched: Array<Record<string, unknown>> = [];
+    // A naive search that would happily match "" against the unnamed record
+    // already there — and, like every real adapter, finds nothing on null.
+    const attio = makeFakeAdapter('attio', {
+      resolveCandidates: (record) => {
+        searched.push(record);
+        return record.name == null ? [] : [UNNAMED];
+      },
+    });
+    const llm = queuedMovementLlm([
+      {
+        'x:extract_result#1': [
+          {
+            company: [
+              { name: wrap(''), website: wrap('one.fi') },
+              { name: wrap('  '), website: wrap('two.fi') },
+            ],
+          },
+        ],
+      },
+    ]);
+    await runMovement({
+      source: ONE_STAGE_FETCH_MOVEMENT,
+      event,
+      teamId: TEAM_ID,
+      catalog: movementCatalog,
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: attio.adapter,
+        slack: makeFakeAdapter('slack').adapter,
+      }),
+      llm: llm.client,
+    });
+
+    expect(searched.map((r) => r.name)).toEqual([null, null]);
+    expect(attio.updates).toEqual([]);
+    expect(attio.creates.map((c) => c.fields)).toEqual([
+      { name: '', summary: 'one.fi' },
+      { name: '', summary: 'two.fi' },
+    ]);
+  });
+
+  it('a candidate whose key is empty is never an exact match for an empty asserted key', () => {
+    const constraints = { any: [{ all: [{ field: 'name' }] }] };
+    expect(candidateIsAllExact(constraints, { name: '' }, { name: '' })).toBe(false);
+    expect(candidateIsAllExact(constraints, { name: null }, { name: null })).toBe(false);
+    expect(candidateIsAllExact(constraints, { name: 'Acme' }, { name: 'acme' })).toBe(true);
   });
 });
 
@@ -3904,7 +3978,7 @@ describe('an extraction call describes itself on the run', () => {
   // digest it just attached.
   it('a call that is never answered fails the run by name, with the reply on the trace', async () => {
     const failure = await runMovement({
-      source: ABSENCE_MOVEMENT,
+      source: PRESENCE_MOVEMENT,
       event,
       teamId: TEAM_ID,
       catalog: movementCatalog,
@@ -3989,7 +4063,7 @@ describe('an extraction call describes itself on the run', () => {
   it('a call that died of something other than the schema keeps its own error', async () => {
     await expect(
       runMovement({
-        source: ABSENCE_MOVEMENT,
+        source: PRESENCE_MOVEMENT,
         event,
         teamId: TEAM_ID,
         catalog: movementCatalog,
@@ -4792,9 +4866,9 @@ describe('a per-entity refinement that is never answered keeps the entity, not t
     const { calls, writes } = await intake([GONDOR, {}, {}]);
 
     expect(calls).toHaveLength(3);
-    // `summary` is the refinement's own field: it joins the entity absent,
+    // `summary` is the refinement's own text field: it joins the entity empty,
     // exactly as it would have if the stage had found nothing to say.
-    expect(writes).toEqual([{ name: 'Gondor', summary: null }]);
+    expect(writes).toEqual([{ name: 'Gondor', summary: '' }]);
   });
 
   it('marks the fallback on the trace, with the reply and the enrichment it cost', async () => {
@@ -4818,7 +4892,7 @@ describe('a per-entity refinement that is never answered keeps the entity, not t
     const withEntities = trace.find((e) => e.kind === 'extraction' && e.entities);
     if (withEntities?.kind !== 'extraction') throw new Error('test: no entities on the trace');
     expect(withEntities.entities?.company).toEqual([
-      { fields: { name: 'Gondor', website: 'gondor.fi', summary: null } },
+      { fields: { name: 'Gondor', website: 'gondor.fi', summary: '' } },
     ]);
   });
 
