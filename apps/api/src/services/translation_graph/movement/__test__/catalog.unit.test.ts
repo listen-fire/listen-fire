@@ -1400,6 +1400,18 @@ describe('registeredPluginSpecs — declared output', () => {
     }
   });
 
+  it('link retrieval hands back one record per fetched link, file and text optional', () => {
+    expect(specs.vc_url_retrieval?.output).toEqual({
+      kind: 'records',
+      fields: {
+        name: 'text',
+        url: 'text',
+        file: { kind: 'maybeAbsent', of: 'file' },
+        text: { kind: 'maybeAbsent', of: 'text' },
+      },
+    });
+  });
+
   it('every bundled plugin that takes arguments of its own says what it hands back', () => {
     for (const [name, spec] of Object.entries(specs)) {
       if (spec.fedByExtraction === true) continue;

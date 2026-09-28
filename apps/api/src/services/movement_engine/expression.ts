@@ -3462,6 +3462,10 @@ function readBindingField(
       return readEmissionField(binding.emission, field);
     case 'value': {
       const value = binding.value;
+      // A RECORD held on the value plane (`deck = FIRST(pages)`) reads as the
+      // record it is — the dot-plane twin of a block head walking from one.
+      const held = bindingOf(value);
+      if (held !== undefined) return readBindingField(held, field, name);
       const projected =
         value !== null && typeof value === 'object' && !Array.isArray(value)
           ? ((value as Record<string, unknown>)[field] ?? null)

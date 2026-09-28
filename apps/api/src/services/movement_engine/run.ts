@@ -145,6 +145,7 @@ import {
   leafReadKey,
   pureLeafReads,
 } from '#shared/expression/filter';
+import { neverAsAny } from '../../lib/utils/types';
 import type { TeamId } from '../../generated/kysely/core/Team';
 import type { LinkedObject } from '../../generated/kysely/knowledge/LinkedObject';
 import type {
@@ -3599,7 +3600,8 @@ class Interpreter {
    * IS. A `value` output is the text; a `record` output reads the properties,
    * with the fetched text under `text` for the plugins that declare it, since a
    * plugin that fetched a page and had no way to hand it back would be throwing
-   * away most of what it did.
+   * away most of what it did; a `records` output is one record per thing it
+   * fetched.
    */
   private async executePluginCall(
     statement: Extract<Statement, { kind: 'call' }>,
@@ -8830,10 +8832,33 @@ function pluginCallBinding(
   result: TransformInvocationResult,
   provenance: Provenance,
 ): { binding: Binding; handedBack: boolean } {
-  if (output.kind === 'value') {
-    const value = result.text !== undefined && result.text !== '' ? result.text : null;
-    return { binding: { kind: 'value', value, provenance }, handedBack: value !== null };
+  switch (output.kind) {
+    case 'value': {
+      const value = result.text !== undefined && result.text !== '' ? result.text : null;
+      return { binding: { kind: 'value', value, provenance }, handedBack: value !== null };
+    }
+    case 'records': {
+      // One record per thing the plugin found, in its order — the landings of
+      // a hop, so FIRST, MAP and a field read across them all work as they do
+      // on any other list of records. None found is the empty list.
+      const landings = (result.records ?? []).map((record): Binding => {
+        const fieldProvenance: Record<string, Provenance> = {};
+        for (const name of Object.keys(record)) fieldProvenance[name] = provenance;
+        return { kind: 'nodePosition', fields: { ...record }, fieldProvenance, edges: {} };
+      });
+      return { binding: { kind: 'positions', landings }, handedBack: landings.length > 0 };
+    }
+    case 'record':
+      return recordCallBinding(result, provenance);
+    default:
+      return neverAsAny(output);
   }
+}
+
+function recordCallBinding(
+  result: TransformInvocationResult,
+  provenance: Provenance,
+): { binding: Binding; handedBack: boolean } {
   const fields: Record<string, unknown> = {};
   const fieldProvenance: Record<string, Provenance> = {};
   if (result.text !== undefined && result.text !== '') {
