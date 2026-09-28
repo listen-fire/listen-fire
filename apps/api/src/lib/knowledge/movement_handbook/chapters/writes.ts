@@ -86,6 +86,28 @@ unique by (\`First Name\`, \`Last Name\`)
 
 Identity at write time is the **union** of the target's own rules and your \`unique by\`, so author only the identity the target lacks: compound business keys, parent-scoped identity, fields it treats as ordinary.
 
+### match
+
+Use \`match\` to find a record you will not create:
+
+\`\`\`
+company = match crm-[:Companies]-> {
+  unique by (FUZZY \`Name\`)
+  unique by (\`Domains\`)
+  Name:    AI("the company name this email is about")
+  Domains: [msg-[:Sender]->.domain]
+}
+\`\`\`
+
+- The identity clauses work as in \`write\`: two clauses mean either, so this finds the company by a similar name or by its domain.
+- The fields are the values to match on, and nothing is written, so \`?:\`, \`+:\` and \`+?:\` are refused.
+- The lines after it run only when the record exists. On a miss the enclosing scope ends quietly: that iteration skips, or the run stops after the work already done.
+- Written without a name (\`match crm-[:Companies]-> { … }\`), it is a gate: the rest of the block runs only if the record is there.
+- The handle reads like a write's, without \`created\` and \`committed\`. A polymorphic edge takes the type explicitly: \`match a-[:related]-><Companies> { … }\`.
+- Use \`write … unique by\` instead when the record should be created if it is missing.
+
+\`FUZZY\` works only on the fields a target lists for similarity, and the save check names them. A valuations Legal Entity lists \`Name\`, \`Legal Name\`, \`Also Known As\` and \`Other Names\`: its shortlist searches the words in all four, plus near spellings of \`Name\` and \`Legal Name\`. Every other field matches exactly, and \`Website\` ignores the scheme, \`www.\` and a trailing slash.
+
 ### linked-writes
 
 When the new record should hang off one you just wrote, target **an edge from the handle**:
@@ -138,9 +160,7 @@ c = match p-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
 link p -[:Company]-> c
 \`\`\`
 
-Both ends are handles in the same graph, over an edge the from-side declares. To connect a record that exists but that you don't hold yet, \`match\` it first: it takes a write's target and \`unique by\`, finds the record, and never writes it (\`Name\` selects Acme, it doesn't rename anything). A polymorphic edge takes the type explicitly (\`match a-[:related]-><Companies> { … }\`).
-
-**On a miss the enclosing scope ends quietly** — that iteration skips, or the run stops after the work already done. Absence is a non-event, not a failure.
+Both ends are handles in the same graph, over an edge the from-side declares. To connect a record that exists but that you don't hold yet, \`match\` it first: \`Name\` selects Acme, it doesn't rename anything, and a miss skips the \`link\` with the rest of the scope.
 
 ### looking-up-existing-records
 
@@ -154,7 +174,7 @@ crm-[company:Companies WHERE \`Domains\` CONTAINS "acme.com"]-> {
 
 The hop's \`WHERE\` is the criteria and \`company\` is readable inside the block; on a miss the block runs zero times, so there is nothing to guard. The head roots at any instance in scope, not only the one whose event fired the automation.
 
-So: a lookup only finds, and skips on a miss; \`match … unique by\` only finds, by identity, and skips on a miss; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold.
+So: a lookup only finds; \`match\` finds by identity; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold. The first two skip on a miss.
 
 ### updating-a-record-in-place
 
@@ -207,6 +227,27 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   employer = match person-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
   link person -[:Company]-> employer
   write employer-[:Notes]-> { Title: "Introduced", Content: m.\`Subject\` }
+}
+`,
+    },
+    {
+      construct: 'unbound match as a gate, with FUZZY and two OR-ed identity clauses',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  match crm-[:Companies]-> {
+    unique by (FUZZY \`Name\`)
+    unique by (\`Domains\`)
+    Name:    m.\`Subject\`
+    Domains: [m.\`From\`]
+  }
+  write crm-[:People]-> { unique by (\`Name\`), Name: m.\`From\` }
 }
 `,
     },
