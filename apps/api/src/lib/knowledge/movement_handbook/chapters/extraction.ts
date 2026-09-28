@@ -59,6 +59,7 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
 - Every field is something the model was **asked** for and may not have found, so reading one is \`T | absent\`: a write field takes it with the \`?:\` fill (\`Stage ?: c.stage\`), or give it a fallback with \`COALESCE\`, or gate on it first. The *values-that-may-not-be-there* section of the expressions chapter has every discharge.
 - Nest a \`node\` when a child only makes sense inside its parent — a company's people, an order's line items. The child arrives already attached, so the write that links them has the relationship in hand.
 - A field's type comes from its annotation and nowhere else: a primitive (\`amount: <number> "the order's total"\`), a set of values you write out yourself (\`type Thesis = <"Consumer" | "Infra">\` at the top of the file, then \`thesis: <Thesis> "which thesis this fits"\`), or another field's type borrowed by its path (\`<crm-[:Onboarding]->.Stage>\`). A written set does everything a borrowed one does — it tells the extraction which values to pick from, and a value that is not one of them is flagged when you save; the values are ordinary text everywhere else. Borrowing is how a value lands in an option field — the annotation binds that field's live option list, re-read every run, so an option added there is usable on the next run with no edit here. A target that publishes no options borrows as plain text. An annotation that disagrees with the field you write it into — a \`<number>\` landing in an option field — is flagged when you save.
+- **Declare a record once, extract it anywhere**: \`node entry: <Entry>\` takes a described declaration (anatomy chapter, *declared-structures*) as the node — its fields, their types, its nested nodes, and its words — exactly as if the block were written out here. Words after it (\`node entry: <Entry> "each item in this call"\`) replace the record's own for this extraction; a field the declaration leaves undescribed is extracted by its name. Types stay explicit in a declaration (\`name: <text> "…"\`); only an inline block may leave \`<text>\` off.
 - The binding (\`found\`) is the result's root: traverse it with ordinary blocks, read its fields with ordinary reads. Fields declared outside any \`node\` describe the source as a whole (\`found.sentiment\`).
 - A larger declared tree runs on a more capable model, so it costs more. Declare the records and fields you will use, not every one you could.
 
@@ -154,6 +155,7 @@ found-[e:entry]-> {
 - A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before handing it to the next extraction.
 - Every plugin used this way is imported the same as any other — \`import { fetch_url, research } from plugins\` at the top of the file.
 - \`through [fetch_url(url: website), research(…)]\` after the sources is the short form of the same block, and still runs.
+- The short form follows a declared node the same way — \`node entry: <Entry> through [fetch_url(url: website)] { summary: "what the page says it does" }\` — and lists only the fields that stage adds or refines.
 
 ### source-content-of-an-extracted-node
 

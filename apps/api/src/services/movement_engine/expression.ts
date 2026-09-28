@@ -92,6 +92,7 @@ import {
 import type {
   ClosureExpression,
   InstanceSchema,
+  LinkedFile,
   MovementDeclaration,
   NodeLiteral,
   PathHead,
@@ -496,8 +497,13 @@ export type Binding =
    *  expression that produced it so later reads keep propagating. */
   | { kind: 'value'; value: unknown; provenance?: Provenance }
   /** A file-level `shape` declaration — a configuration-free graph;
-   *  `write <Shape>.<node> { … }` materialises in-memory positions. */
-  | { kind: 'shape'; declaration: ShapeDeclaration }
+   *  `write <Shape>.<node> { … }` materialises in-memory positions.
+   *  Where it was DECLARED is where its descriptions read their bindings,
+   *  wherever an extraction reuses it: `fileEnv` for a file's own
+   *  declaration, `library` for an imported one (its environment is built
+   *  only if a description actually interpolates). Neither = the running
+   *  file's. */
+  | { kind: 'shape'; declaration: ShapeDeclaration; fileEnv?: Environment; library?: LinkedFile }
   /** A movement declaration — callable (composition, §G). An IMPORTED
    *  movement carries its library's file environment (`fileEnv`): the
    *  callee executes against ITS OWN file scope, not the importer's

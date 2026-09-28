@@ -52,6 +52,7 @@ import {
   variantOf,
 } from 'movement-lang';
 import type {
+  DeclaredExtractNode,
   EnumType,
   ExprSlot,
   ExtractExpression,
@@ -59,6 +60,7 @@ import type {
   ExtractStage,
   FieldType,
   PluginCall,
+  ShapeNode,
 } from 'movement-lang';
 import { neverAsAny } from '../../lib/utils/types';
 import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS, type ChatReply } from '../../lib/anthropic';
@@ -201,6 +203,18 @@ export interface ExtractSpecOptions {
    * that does throws rather than pasting `${…}` into the prompt.
    */
   resolveDescription?: (slot: ExprSlot) => Promise<string>;
+  /**
+   * The node declaration `node entry: <Entry>` takes as its shape, with the
+   * evaluator for ITS words — a declaration's descriptions read the scope it
+   * was declared in (its file's), not the scope of whichever movement reuses
+   * it. Absent (or unresolvable) and a declared node cannot be built.
+   */
+  resolveDeclaredNode?: (type: string) => DeclaredNodeShape | undefined;
+}
+
+export interface DeclaredNodeShape {
+  root: ShapeNode;
+  resolveDescription: (slot: ExprSlot) => Promise<string>;
 }
 
 export async function buildExtractSpec(
@@ -239,11 +253,20 @@ async function describeSlot(
   return options.resolveDescription(slot);
 }
 
+/** Words that may not have been written: an undescribed field of a node
+ *  declaration is extracted by its name alone. */
+async function describeOptional(
+  slot: ExprSlot | undefined,
+  options: ExtractSpecOptions | undefined,
+): Promise<string> {
+  return slot === undefined ? '' : describeSlot(slot, options);
+}
+
 /** EXPLICIT annotations only (adoption is demoted): a primitive type name, a
  *  declared refinement, or a borrowed path resolved through
  *  `options.resolveBorrowed`. */
 function resolveFieldType(
-  field: ExtractField,
+  field: Pick<ExtractField, 'type'>,
   options: ExtractSpecOptions | undefined,
 ): FieldType | undefined {
   const segments = borrowedTypeSegments(field.type);
@@ -282,11 +305,77 @@ async function buildNodeSpec(
         ),
         children: await Promise.all(
           stage.children.map(async (c) =>
-            buildNodeSpec(c.name, await describeSlot(c.description, options), c.stages, options),
+            c.declared === undefined
+              ? buildNodeSpec(c.name, await describeSlot(c.description, options), c.stages, options)
+              : buildDeclaredNodeSpec(c, options),
           ),
         ),
       })),
     ),
+  };
+}
+
+/**
+ * `node entry: <Entry> "…" through […] { … }` — the spec the inline block that
+ * spells the declaration out would build: the declaration is the first stage
+ * (its fields, their types, its nested nodes, all its words), the `through`
+ * stages follow, and a use-site description replaces the declaration's own.
+ */
+async function buildDeclaredNodeSpec(
+  node: DeclaredExtractNode,
+  options: ExtractSpecOptions | undefined,
+): Promise<ExtractNodeSpec> {
+  const declared = options?.resolveDeclaredNode?.(node.declared.type);
+  if (declared === undefined) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `'${node.declared.type}' is not a node declaration in scope, so '${node.name}' has no shape to extract (the checker should have caught this)`,
+    );
+  }
+  const declaredOptions: ExtractSpecOptions = {
+    ...options,
+    resolveDescription: declared.resolveDescription,
+  };
+  const shape = await buildShapeNodeSpec(node.name, declared.root, declaredOptions);
+  const following = await buildNodeSpec(node.name, '', node.stages, options);
+  return {
+    name: node.name,
+    description:
+      node.description !== undefined ? await describeSlot(node.description, options) : shape.description,
+    exported: [...new Set([...shape.exported, ...following.exported])],
+    stages: [...shape.stages, ...following.stages],
+  };
+}
+
+/** One node of a declaration, as the single-stage spec its inline spelling
+ *  would build. */
+async function buildShapeNodeSpec(
+  name: string,
+  shape: ShapeNode,
+  options: ExtractSpecOptions,
+): Promise<ExtractNodeSpec> {
+  return {
+    name,
+    description: await describeOptional(shape.description, options),
+    exported: shape.fields.map((f) => f.name),
+    stages: [
+      {
+        through: [],
+        fields: await Promise.all(
+          shape.fields.map(async (f) => {
+            const type = resolveFieldType(f, options);
+            return {
+              name: f.name,
+              description: await describeOptional(f.description, options),
+              ...(type !== undefined ? { type } : {}),
+            };
+          }),
+        ),
+        children: await Promise.all(
+          shape.children.map((c) => buildShapeNodeSpec(c.name, c, options)),
+        ),
+      },
+    ],
   };
 }
 
@@ -2697,15 +2786,21 @@ function describeGuideType(type: FieldType | undefined): string {
   }
 }
 
+/** `: <words>` after a name in the guide — nothing when there are no words
+ *  (an undescribed declared field is extracted by its name alone). */
+function described(description: string): string {
+  return description === '' ? '' : `: ${description}`;
+}
+
 function guideSection(site: CallSite, parent: CallSite | undefined): string[] {
   const cardinality = site.single
     ? ' (exactly one entity)'
     : ' (emit each matching entity as an array element — zero, one, or many objects depending on the description)';
   const head = parent
-    ? `**${site.siteId}** (an array under the key \`${site.spec.name}\` inside each **${parent.siteId}** entity): ${site.spec.description}${cardinality}`
-    : `**${site.siteId}**: ${site.spec.description}${cardinality}`;
+    ? `**${site.siteId}** (an array under the key \`${site.spec.name}\` inside each **${parent.siteId}** entity)${described(site.spec.description)}${cardinality}`
+    : `**${site.siteId}**${described(site.spec.description)}${cardinality}`;
   const fieldLines = site.spec.stages[site.stageIndex].fields.map(
-    (f) => `    - \`${f.name}\` (${describeGuideType(f.type)}): ${f.description}`,
+    (f) => `    - \`${f.name}\` (${describeGuideType(f.type)})${described(f.description)}`,
   );
   const sections = [
     `${head}\n${fieldLines.length ? fieldLines.join('\n') : '    (no scalar fields — structural only)'}`,
@@ -2770,7 +2865,7 @@ function renderUserMessage(
       'CURRENT ENTITY',
       [
         '## CURRENT ENTITY',
-        `You are extracting the remaining fields of one already-identified entity: ${entity.spec.description}`,
+        `You are extracting the remaining fields of one already-identified entity${described(entity.spec.description)}`,
         '```json',
         JSON.stringify(entity.context, null, 2),
         '```',

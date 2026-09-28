@@ -96,6 +96,7 @@ import {
   constructionAsCall,
   schemaSurface,
   declaredTypesIn,
+  expandWriteSpreads,
   shapeToSchema,
   surfaceMisfit,
 } from 'movement-lang';
@@ -135,6 +136,7 @@ import type {
   Statement,
   TraversalBlock,
   WriteExpression,
+  WriteSpread,
   FieldWriteMode,
   SuppliedSurface,
 } from 'movement-lang';
@@ -894,6 +896,20 @@ function describeHeadValue(value: unknown): string {
 }
 
 const NULL_SLOT: Binding = { kind: 'value', value: null, provenance: NO_PROVENANCE };
+
+/** The fields `...e` writes: every field the extracted record declares — the
+ *  same list the checker spread from its type, since an extraction's record
+ *  carries every declared field, found or not. */
+function spreadFields(spread: WriteSpread, env: Environment): readonly string[] {
+  const binding = env.resolve(spread.source);
+  if (binding?.kind === 'extractRoot' || binding?.kind === 'extractPosition') {
+    return Object.keys(binding.emission.fields);
+  }
+  throw new MovementEngineError(
+    'MOVENG_RUNTIME',
+    `'...${spread.source}' spreads an extracted record, and '${spread.source}' is ${binding?.kind ?? 'unbound'} here — the checker should have caught this`,
+  );
+}
 
 /**
  * What a landing on a `<Entry>`-typed edge starts with — the declaration's
@@ -2736,7 +2752,7 @@ class Interpreter {
         }
         return;
       case 'shape':
-        env.declare(statement.name, { kind: 'shape', declaration: statement });
+        env.declare(statement.name, { kind: 'shape', declaration: statement, fileEnv: env });
         return;
       default:
         // Other file-level statements contribute nothing to a movement
@@ -2768,7 +2784,11 @@ class Interpreter {
         );
       }
       if (exported.kind === 'shape') {
-        env.declare(local, { kind: 'shape', declaration: exported.declaration });
+        env.declare(local, {
+          kind: 'shape',
+          declaration: exported.declaration,
+          library: exported.file,
+        });
       } else {
         env.declare(local, {
           kind: 'movement',
@@ -5043,9 +5063,18 @@ class Interpreter {
       // A description is a string expression like any other, so it is
       // evaluated in the firing environment — a constant it interpolates is
       // the same constant a write field would see.
-      resolveDescription: async (slot) => {
-        const { value } = await this.evaluateSlot(slot, { env });
-        return typeof value === 'string' ? value : String(value ?? '');
+      resolveDescription: (slot) => this.describeIn(slot, env),
+      // A reused declaration's words read the scope it was declared in.
+      resolveDeclaredNode: (type) => {
+        const binding = env.resolve(type);
+        if (binding?.kind !== 'shape') return undefined;
+        const { library } = binding;
+        const declaredIn = binding.fileEnv ?? this.fileEnv ?? env;
+        return {
+          root: binding.declaration.root,
+          resolveDescription: async (slot) =>
+            this.describeIn(slot, library !== undefined ? await this.libraryEnv(library) : declaredIn),
+        };
       },
     });
     // Where this extract's own trace entries start — the materialiser
@@ -5065,6 +5094,11 @@ class Interpreter {
     });
     recordExtractedEntities(this.trace, traceMark, emission);
     return emission;
+  }
+
+  private async describeIn(slot: ExprSlot, env: Environment): Promise<string> {
+    const { value } = await this.evaluateSlot(slot, { env });
+    return typeof value === 'string' ? value : String(value ?? '');
   }
 
   /** The live schema a borrowed type resolves against: a constructed
@@ -5815,11 +5849,20 @@ class Interpreter {
    *  shape position) — declared under `bindingName` when one is given,
    *  and the argument-adaptation currency for inline call args. */
   private async executeWrite(
-    write: WriteExpression,
+    authored: WriteExpression,
     bindingName: string | undefined,
     env: Environment,
     body: BodyContext,
   ): Promise<Binding> {
+    // A spread is the field lines it stands for — from here on nothing can
+    // tell `...e` from the lines written out.
+    const write: WriteExpression =
+      authored.spreads === undefined
+        ? authored
+        : {
+            ...authored,
+            fields: expandWriteSpreads(authored, (spread) => spreadFields(spread, env)),
+          };
     if (write.target.kind === 'linked') {
       const rootBinding =
         pathRootName(write.target.path) !== undefined

@@ -86,6 +86,7 @@ deal = node {
 - \`lazy\` defers the walk until something reads the edge (see the traversal chapter). Without it the walk happens where the literal is written.
 - \`both = [one, two]\` gathers records you already hold into one list, and a block head walks them in the order written: \`both-[c:company]-> { … }\`. A list holds one kind of thing — records or values, never both.
 - Nothing is provisioned: building one is not an effect, and it is checked by its structure — what it carries — not by any name.
+- A literal names every entry it carries. Copying a whole extracted record into a system is a write's job: \`?...e\` in the write body (see the writes chapter).
 
 ### collect-what-you-wrote
 
@@ -166,6 +167,7 @@ function \`Process Deal\`(d: <Deal>) { … }
 - A body holds typed fields and nested \`node <name> { … }\` declarations. **Nesting declares the relationship, and the nested name IS the relationship's name** — \`company\` above is what the callee traverses: \`d-[c:company]->\`. Nesting recurses; a declaration is a tree.
 - A field's type is \`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, or \`<json>\` — or borrowed from a real graph's field, which keeps the declaration in step with the system it feeds: \`Stage: <crm-[:Companies]->.Stage>\`.
 - The name is an annotation, never an identity: **what fits is decided by structure.** Anything carrying \`Title\` and \`Raised\` fits \`<Deal>\` — a literal built here, or a position that arrived from anywhere else. A nested node never gates the fit: a record with no \`company\` links fits too, and the traversal simply finds none. Extra entries are fine; the callee cannot see them.
+- A declaration may say what it, each field and each nested node **is**, in the words an extraction is given: \`node Deal: "each deal in the message" { Title: <text> "its headline"; node company: "the company raising" { … } }\`. Undescribed parts stay allowed. Words may use file-scope values bound **above** the declaration (\`"\${rules}"\`); an extraction then reuses the whole tree as \`node deal: <Deal>\` (extraction chapter, *basics*).
 - A declaration is not a place records live. There is nothing to write into \`Deal\` itself — build the record with a \`node { … }\` literal, or write into an entry typed by it (see *collect-what-you-wrote*).
 
 ### automations
