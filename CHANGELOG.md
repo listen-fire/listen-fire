@@ -10,7 +10,6 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ### Breaking
 
-- The criteria form of `link` is retired. `x = link p-[:Edge]-> { … }` is now a parse error that names its replacement: find the record with `x = match p-[:Edge]-> { … }`, then connect it with `link p -[:Edge]-> x`. The handle form of `link` is unchanged.
 - `vc_url_retrieval` called on its own returns a list of records, one per fetched link (`name`, `url`, `file`, `text`), instead of one string of all the page text. Hold one first, then read its fields: `deck = FIRST(linked)`, then `deck.text`.
 - A null test (`EXISTS`, `ISNULL`, `== null`, `!= null`) on an extracted text field is refused. Extracted text is always present — `""` when nothing was found — so test emptiness with `!= ""` instead.
 - An extracted field written into a `number`, `date`, `boolean` or file field is refused until the field is annotated with that type.
@@ -20,6 +19,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 ### Added
 
 - `match`: finds a record by identity without writing it. Same body and targets as `write` (`unique by` clauses plus asserted fields). A hit binds the record; a miss ends the enclosing scope quietly; used unbound it is a gate.
+- `link` takes a match body as sugar for `match` then `link`; a body with no `unique by` identifies by all its fields.
 - `FUZZY` is declared per field. The checker refuses `FUZZY` on a field the target does not list, and names the fields it does.
 - Valuations Legal Entity resolves `unique by` by identity, with fuzzy matching on Name, Legal Name, Also Known As and Other Names.
 - Files a `through` plugin fetched land on the extracted record's `_resources`, so the usual attach pattern puts them on any record with a file field.

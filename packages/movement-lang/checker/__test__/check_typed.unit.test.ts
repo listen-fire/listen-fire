@@ -3470,6 +3470,132 @@ describe('match', () => {
 });
 
 describe('link statements', () => {
+  // A body after the arrow is a match body: `x = link p-[:E]-> { … }` is
+  // `x = match p-[:E]-> { … }` then `link p -[:E]-> x`, checked as exactly that.
+  const CO = '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }';
+
+  it('a bound body with a FUZZY unique by binds the FOUND handle, usable downstream', () => {
+    expectClean(
+      inMovement(
+        [
+          CO,
+          '  p = link co -[:related]-><company> { unique by (FUZZY `name`), name: "Acme" }',
+          '  write p-[:rounds]-> { stage: p.name }',
+        ].join('\n'),
+      ),
+    );
+  });
+
+  it('an unbound body is a plain statement', () => {
+    expectClean(inMovement([CO, '  link co -[:related]-><company> { unique by (`name`), name: "Acme" }'].join('\n')));
+  });
+
+  it('a body with no unique by identifies by all of its fields — never MOV_MATCH_NO_IDENTITY', () => {
+    const fr = '  fr = write co-[:rounds]-> { stage: "Seed" }';
+    expectClean(inMovement([CO, fr, '  f = link co -[:rounds]-> { stage: "Seed" }', '  write f-[:participants]-> { investor_name: "x" }'].join('\n')));
+    // The same body spelled as `match` has said nothing about identity.
+    expect(codes(inMovement([CO, '  match co-[:rounds]-> { stage: "Seed" }'].join('\n')))).toEqual([C.MATCH_NO_IDENTITY]);
+  });
+
+  it('an empty body has nothing to identify the record by', () => {
+    expect(codes(inMovement([CO, '  link co -[:rounds]-> {}'].join('\n')))).toEqual([C.MATCH_NO_IDENTITY]);
+  });
+
+  it('checks the body as a match: FUZZY where the target cannot, fields the found type lacks', () => {
+    expect(codes(inMovement([CO, '  link co -[:rounds]-> { unique by (FUZZY `stage`), stage: "Seed" }'].join('\n')))).toEqual([
+      C.UNIQUE_FUZZY_UNSUPPORTED,
+    ]);
+    const found = check(inMovement([CO, '  link co -[:rounds]-> { ghost: "Seed" }'].join('\n')));
+    expect(found.map((d) => d.code)).toEqual([C.WRITE_UNKNOWN_FIELD]);
+    expect(found[0].message).toContain("a match's fields are fields of the record it finds");
+  });
+
+  it('the found handle is a match handle: no created / committed', () => {
+    const found = check(
+      inMovement([CO, '  p = link co -[:related]-><company> { name: "Acme" }', '  write p-[:rounds]-> { stage: p.created }'].join('\n')),
+    );
+    expect(found.map((d) => d.code)).toEqual([C.UNKNOWN_PROPERTY]);
+  });
+
+  it('a polymorphic edge needs the type named, as a match does', () => {
+    expect(codes(inMovement([CO, '  link co -[:related]-> { name: "Acme" }'].join('\n')))).toEqual([C.LINKED_NEEDS_TYPE]);
+  });
+
+  it('notes a read (the match) and a write (the edge) of the graph', () => {
+    const { recording } = checkProgramWithLink(
+      parseProgram(inMovement('  co = match graph-[:companies]-> { unique by (`name`), name: "x" }\n  link co -[:related]-><company> { name: "Acme" }')),
+      catalog,
+      { recordAnalysis: true },
+    );
+    const main = recording?.frames.find((frame) => frame.kind === 'file')?.scope.symbols.get('main');
+    if (main === undefined) throw new Error("'main' is not declared");
+    const row = effectRowOf(main);
+    if (row === undefined) throw new Error("'main' has no inferred row");
+    expect(row.write.map((s) => s.name)).toEqual(['graph']);
+  });
+
+  describe('a target that decides identity itself', () => {
+    const listsCatalog = mockCatalog({
+      adapters: {
+        email: { constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }], schema: emailSchema },
+        lists: {
+          constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
+          schema: {
+            positions: {
+              entry: { properties: { stage: 'text' }, edges: { Owners: { target: 'person', writable: true } } },
+              person: { properties: { 'Full name': 'text', Email: 'text' }, edges: {} },
+            },
+            collections: { entries: { target: 'entry' } },
+            writableRoots: {
+              entry: { fields: { stage: 'text' }, resultShape: { externalId: 'text', stage: 'text' }, uniquenessAuthorable: false },
+              person: {
+                fields: { 'Full name': 'text', Email: 'text' },
+                resultShape: { externalId: 'text', 'Full name': 'text', Email: 'text' },
+                uniquenessAuthorable: false,
+              },
+            },
+          },
+        },
+      },
+      credentials: { dealflow_inbox: { adapter: 'email' }, team_lists: { adapter: 'lists' } },
+    });
+    const inLists = (body: string) =>
+      [
+        'import { email, lists } from adapters',
+        'import { dealflow_inbox, team_lists } from credentials',
+        'inbox = email(credentials: dealflow_inbox)',
+        'crm = lists(credentials: team_lists)',
+        'movement main(msg: <inbox-[:message]->>) {',
+        '  entry = write crm-[:entries]-> { stage: "Seed" }',
+        body,
+        '}',
+      ].join('\n');
+    const errors = (source: string) =>
+      checkProgram(parseProgram(source), listsCatalog).filter((d) => (d.severity ?? 'error') === 'error');
+
+    it('takes the body as its lookup, with no unique by to refuse', () => {
+      expect(errors(inLists('  link entry -[:Owners]-> { `Full name`: msg.`subject` }')).map((d) => d.code)).toEqual([]);
+    });
+
+    it("refuses a 'unique by' the author wrote, as a match does", () => {
+      expect(
+        errors(inLists('  link entry -[:Owners]-> { unique by (`Email`), Email: msg.`subject` }')).map((d) => d.code),
+      ).toEqual([C.UNIQUE_NOT_AUTHORABLE]);
+    });
+  });
+
+  it('refuses a body from a node this run built: what it finds is linked already', () => {
+    const found = check(
+      inMovement(
+        [
+          '  sent = node { messages: [] }',
+          '  link sent -[:messages]-> { unique by (`text`), text: "x" }',
+        ].join('\n'),
+      ),
+    );
+    expect(found.map((d) => d.code)).toContain(C.NODE_LINK_BODY);
+  });
+
   // A `writable` edge promises two things — create the target along it, or
   // join one that is already there — and a system can keep the first without
   // the second. It says so per edge, and the refusal lands at check time
@@ -3489,6 +3615,11 @@ describe('link statements', () => {
       expect(found.map(d => d.code)).toEqual([C.LINK_UNSUPPORTED_EDGE]);
       expect(found[0].message).toContain('entries');
       expect(found[0].message).toContain('write co-[:entries]->');
+    });
+
+    it('refuses a link body too — the match finds, the link still joins', () => {
+      const found = check(withRecords('  link co -[:entries]-> { stage: "Seed" }'));
+      expect(found.map(d => d.code)).toEqual([C.LINK_UNSUPPORTED_EDGE]);
     });
 
     it('a match along it is clean — a match joins nothing', () => {

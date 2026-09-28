@@ -113,6 +113,7 @@ Connecting records (write related records **along their edges**, never as flat r
 - \`write (a-[:agreements]->, b-[:agreements]->) { … }\` — one record under several parents; \`unique by (a, b)\`.
 - \`link champion -[:led]-> part\` — connect two records already bound.
 - \`p = match c-[:portfolio]-> { unique by (\`Name\`), Name: "Fund III" }\` — find by identity, never create or write; on a miss the scope ends quietly.
+- \`p = link c -[:portfolio]-> { Name: "Fund III" }\` — \`match\` then \`link\`; a body with no \`unique by\` identifies by all its fields.
 - \`write record { Status: "Customer" }\` — in-place update of a held/traversed record (no \`unique by\`).
 - \`unlink a -[:related]-> b\` — sever an edge. \`delete stale\` — remove a record (only when removal is the automation's purpose).
 

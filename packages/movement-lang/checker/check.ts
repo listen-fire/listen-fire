@@ -66,6 +66,7 @@ import {
   InlineBlockExpression,
   LazyTraversal,
   LinkExpression,
+  LinkTarget,
   ListenDeclaration,
   Loc,
   MatchExpression,
@@ -314,6 +315,9 @@ export const DiagnosticCodes = {
   /** A `link` whose landing doesn't carry what the declared edge says its
    *  landings are — the same structural assignability an argument gets. */
   NODE_LINK_SHAPE: 'MOV_NODE_LINK_SHAPE',
+  /** A `link` body from a node this run built. The body finds among that
+   *  edge's own landings, so what it finds is already linked there. */
+  NODE_LINK_BODY: 'MOV_NODE_LINK_BODY',
   THROUGH_NOT_PLUGIN: 'MOV_THROUGH_NOT_PLUGIN',
   THROUGH_BAD_ARG: 'MOV_THROUGH_BAD_ARG',
   /** A required argument (`PluginSpec.requiredArgs`) the call never wrote at
@@ -740,7 +744,9 @@ export interface RecordedLink {
   scope: Scope;
   from: string;
   edge: string;
-  to: string;
+  /** The bound name linked to, or — for a body — the match whose record it
+   *  links (recorded as that match's own write entry, by this span). */
+  to: { kind: 'handle'; name: string } | { kind: 'match'; span: Span };
 }
 
 /** `await …` — the wake primitive, in each of its three sources. */
@@ -3255,6 +3261,11 @@ class Checker {
         symbol = { ...symbol, ...(handle ? { posType: handle } : {}), bindingPlane: 'node' };
         break;
       }
+      case 'link': {
+        const handle = this.checkLink(value.link, scope, name);
+        symbol = { ...symbol, ...(handle ? { posType: handle } : {}), bindingPlane: 'node' };
+        break;
+      }
       case 'extract': {
         const result = this.checkExtract(value.extract, scope, name);
         symbol = { ...symbol, posType: result, bindingPlane: 'node' };
@@ -5524,7 +5535,14 @@ class Checker {
   private checkMatch(
     match: MatchExpression,
     scope: Scope,
-    options?: { binding?: string },
+    options?: {
+      binding?: string;
+      /** The `unique by` is a link body's all-fields rule, not the author's —
+       *  its names are the body's own fields (checked below as fields), and a
+       *  target that decides identity itself still takes it as the lookup, as
+       *  it takes a write's fields. */
+      impliedIdentity?: boolean;
+    },
   ): PositionTypeRef | undefined {
     let root: WritableRootSchema | undefined;
     let rootDescription = 'the match target';
@@ -5599,7 +5617,13 @@ class Checker {
         match.target.span,
       );
     }
-    this.checkIdentity({ uniqueBy: match.uniqueBy, root, rootDescription, scope, local });
+    this.checkIdentity({
+      uniqueBy: options?.impliedIdentity === true ? [] : match.uniqueBy,
+      root,
+      rootDescription,
+      scope,
+      local,
+    });
 
     for (const field of match.fields) {
       const targetType = root?.fields[field.name];
@@ -6298,17 +6322,39 @@ class Checker {
    * `link a -[:e]-> b` — mirror name checks plus the one edge fact a system
    * can state (the runtime owns the rest of graph/edge validation, as it does
    * for `unlink`). A link onto a node this run built is checked structurally.
+   *
+   * `link a -[:e]-> { … }` is `match a-[:e]-> { … }` then the link, and is
+   * checked as exactly that: the parser has already made the body the match
+   * of the hop (with the all-fields identity where the author named none), so
+   * `checkMatch` checks it as it checks any match, and the link is then the
+   * handle form's, onto the record found. Returns the match's handle, which
+   * is what a bound link binds.
    */
-  private checkLink(link: LinkExpression, scope: Scope): void {
+  private checkLink(link: LinkExpression, scope: Scope, binding?: string): PositionTypeRef | undefined {
     const fromSymbol = this.resolveName(link.from, link.span, scope);
     const fromType = fromSymbol !== undefined ? this.symbolPositionType(fromSymbol) : undefined;
     if (fromType?.kind === 'local') {
-      this.checkLocalLink(link, fromType, scope);
-      return;
+      if (link.to.kind === 'match') {
+        this.report(
+          DiagnosticCodes.NODE_LINK_BODY,
+          `'${link.from}' is ${fromType.label} this run built, so a body here would find among what '${link.edge}' already holds — anything it found is linked already. To pick one of them out, 'match ${link.from}-[:${link.edge}]-> { … }'; to link a record you hold, 'link ${link.from} -[:${link.edge}]-> <name>'`,
+          link.to.match.span,
+        );
+        return undefined;
+      }
+      this.checkLocalLink({ ...link, to: link.to }, fromType, scope);
+      return undefined;
     }
+    const found =
+      link.to.kind === 'match'
+        ? this.checkMatch(link.to.match, scope, {
+            ...(binding !== undefined ? { binding } : {}),
+            impliedIdentity: link.to.impliedIdentity,
+          })
+        : undefined;
     // A link writes an EDGE, so it writes the graph the edge's source is in.
     this.noteNamedEffect('write', link.from, scope);
-    this.resolveName(link.to, link.span, scope);
+    if (link.to.kind === 'handle') this.resolveName(link.to.name, link.span, scope);
     this.checkBareLinkEdge(
       { from: link.from, edge: link.edge, span: link.span, verb: 'link' },
       scope,
@@ -6319,8 +6365,12 @@ class Checker {
       scope,
       from: link.from,
       edge: link.edge,
-      to: link.to,
+      to:
+        link.to.kind === 'handle'
+          ? { kind: 'handle', name: link.to.name }
+          : { kind: 'match', span: link.to.match.span },
     });
+    return found;
   }
 
   /**
@@ -6339,11 +6389,11 @@ class Checker {
    *
    */
   private checkLocalLink(
-    link: LinkExpression,
+    link: LinkExpression & { to: Extract<LinkTarget, { kind: 'handle' }> },
     from: Extract<PositionTypeRef, { kind: 'local' }>,
     scope: Scope,
   ): void {
-    const toSymbol = this.resolveName(link.to, link.span, scope);
+    const toSymbol = this.resolveName(link.to.name, link.span, scope);
     const edge = from.edges?.[link.edge];
     if (edge === undefined) {
       this.reportUndeclaredLocalEdge({
@@ -6368,7 +6418,7 @@ class Checker {
       scope,
       from: link.from,
       edge: link.edge,
-      to: link.to,
+      to: { kind: 'handle', name: link.to.name },
     });
     const toType = toSymbol !== undefined ? this.symbolPositionType(toSymbol) : undefined;
     const target = edge.target;
@@ -6397,7 +6447,7 @@ class Checker {
     ) {
       this.report(
         DiagnosticCodes.NODE_LINK_SHAPE,
-        `'${link.edge}' lands on ${describePosition(target)}, but '${link.to}' is ${describePosition(toType)}`,
+        `'${link.edge}' lands on ${describePosition(target)}, but '${link.to.name}' is ${describePosition(toType)}`,
         link.span,
       );
     }

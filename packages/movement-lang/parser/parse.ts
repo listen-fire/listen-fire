@@ -73,6 +73,7 @@ import {
   WriteSpread,
   WriteTarget,
 } from './ast';
+import { spellName } from './ast';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import { scanBacktickName, scanIdent, scanName } from './scan';
 
@@ -110,6 +111,18 @@ export class MovementParseError extends Error {
     this.name = 'MovementParseError';
     this.loc = loc;
   }
+}
+
+/**
+ * The identity of a `link` body that names none: **a link body with no
+ * `unique by` identifies by all of its fields, exactly** — one clause, an AND
+ * over every field it asserts (`{ Name: n, City: c }` finds the record whose
+ * Name AND City agree). That is the one rule that turns every such body into
+ * a well-formed match; a body that says `unique by` means exactly what it says.
+ */
+function linkBodyIdentity(fields: FieldEntry[], span: Span): UniqueClause {
+  const raw = fields.map((field) => spellName(field.name)).join(', ');
+  return { predicate: { raw, span }, span };
 }
 
 export function parseProgram(source: string): Program {
@@ -1048,10 +1061,15 @@ class Parser {
       return { kind: 'match', match: this.parseMatchExpression(start) };
     }
     if (word === 'link') {
-      this.error(
-        "A link binds nothing — 'link a -[:e]-> b' connects two records you already hold. To find a record, match it: 'x = match p-[:Edge]-> { unique by (…) … }', then 'link p -[:Edge]-> x' if you want the edge",
-        start,
-      );
+      this.pos += word.length;
+      const link = this.parseLinkExpression(start);
+      if (link.to.kind !== 'match') {
+        this.error(
+          `A link binds only the record it finds — 'x = link ${link.from} -[:${link.edge}]-> { … }' binds the match; 'link a -[:e]-> b' connects two records you already hold and binds nothing`,
+          start,
+        );
+      }
+      return { kind: 'link', link: { ...link, to: link.to } };
     }
     if (word === 'extract') {
       this.pos += word.length;
@@ -1411,10 +1429,20 @@ class Parser {
       );
     }
     const matchTarget: MatchTarget = target;
-    const { uniqueBy, fields, spreads } = this.parseWriteBody('match');
+    const { uniqueBy, fields } = this.parseMatchBody('match');
+    return { target: matchTarget, uniqueBy, fields, span: this.spanFrom(start) };
+  }
+
+  /** A match body — a write body whose fields are assertions only: `?:`, `+:`
+   *  and `+?:` write, and so does a spread, and a match never writes.
+   *  `keyword` is how the author spelled the find (`match`, or a `link` body,
+   *  which is one). */
+  private parseMatchBody(keyword: 'match' | 'link'): { uniqueBy: UniqueClause[]; fields: FieldEntry[] } {
+    const { uniqueBy, fields, spreads } = this.parseWriteBody(keyword);
+    const finder = keyword === 'link' ? 'link body' : 'match';
     if (spreads.length > 0) {
       throw new MovementParseError(
-        `'...${spreads[0].source}' writes, and a match never writes — list the fields it looks the record up by ('name: ${spreads[0].source}.name'), or use 'write' when the record should be created or changed`,
+        `'...${spreads[0].source}' writes, and a ${finder} never writes — list the fields it looks the record up by ('name: ${spreads[0].source}.name'), or use 'write' when the record should be created or changed`,
         spreads[0].span.start,
       );
     }
@@ -1422,11 +1450,11 @@ class Parser {
       if (field.semantics === undefined) continue;
       const op = field.semantics === 'fill' ? '?:' : field.semantics === 'append' ? '+:' : '+?:';
       throw new MovementParseError(
-        `'${field.name} ${op}' writes, and a match never writes — its fields are the values it looks the record up by. Use '${field.name}: …', or 'write' when the record should be created or changed`,
+        `'${field.name} ${op}' writes, and a ${finder} never writes — its fields are the values it looks the record up by. Use '${field.name}: …', or 'write' when the record should be created or changed`,
         field.span.start,
       );
     }
-    return { target: matchTarget, uniqueBy, fields, span: this.spanFrom(start) };
+    return { uniqueBy, fields };
   }
 
   /** `match` is CONTEXTUAL, like `node` and `type`: the keyword only where a
@@ -1585,7 +1613,7 @@ class Parser {
     return undefined;
   }
 
-  private parseWriteBody(keyword: 'write' | 'match'): {
+  private parseWriteBody(keyword: 'write' | 'match' | 'link'): {
     uniqueBy: UniqueClause[];
     fields: FieldEntry[];
     spreads: WriteSpread[];
@@ -2173,42 +2201,65 @@ class Parser {
   }
 
   /**
-   * After the `link` keyword: `from -[:edge]-> to`, both bound names. A body
-   * after the arrow is the retired criteria form — finding a record is
-   * `match`'s job, and the refusal spells the two statements that replace it.
+   * After the `link` keyword: `from -[:edge]->`, then either a bound name (the
+   * handle form) or a match body, optionally typed for a polymorphic edge
+   * (`link a -[:related]-> <Companies> { … }`).
+   *
+   * The body form is sugar for `match` then `link`, and this is where it
+   * desugars: the body becomes the match of the hop `from -[:edge]->`, and
+   * the link connects `from` to whatever that match finds.
    */
   private parseLinkExpression(start: number): LinkExpression {
     this.skipInlineWs();
+    const fromStart = this.pos;
     const from = this.readName("the link's source — a bound name");
     this.skipInlineWs();
+    const arrowStart = this.pos;
     this.expect('-[', "to begin the link arrow '-[:name]->'");
     this.expect(':', "after '-[' in the link arrow");
     const edge = this.readName('the edge name');
     this.expect(']', `after the edge name '${edge}'`);
     this.expect('->', 'to complete the link arrow');
+    const hopsRaw = this.src.slice(arrowStart, this.pos);
+    const pathSpan = this.spanFrom(fromStart);
     this.skipInlineWs();
     const targetStart = this.pos;
-    const refuseBody = (): never =>
-      this.error(
-        `A link connects two records you already hold — to find one, match it first: 'x = match ${from}-[:${edge}]-> { unique by (…) … }', then 'link ${from} -[:${edge}]-> x'`,
-        targetStart,
-      );
-    if (this.peekCh() === '{' || this.peekCh() === '<') refuseBody();
-    const scanned = scanName(this.src, this.pos);
-    if (!scanned) {
-      this.error(
-        `Expected a bound handle after the link arrow, found ${this.describeHere()}`,
-        targetStart,
-      );
+    let explicitType: string | undefined;
+    if (this.peekCh() === '<') {
+      explicitType = this.readTypeMarker('for the found type').text;
+    } else if (this.peekCh() !== '{') {
+      const scanned = scanName(this.src, this.pos);
+      if (!scanned) {
+        this.error(
+          `Expected a bound handle or a match body '{ … }' after the link arrow, found ${this.describeHere()}`,
+          targetStart,
+        );
+      }
+      this.pos = scanned.end;
+      const end = this.pos;
+      this.skipInlineWs();
+      if (this.peekCh() === '{') {
+        // `link c -[:e]-> Companies { … }` — a type without its brackets.
+        this.error(
+          `Types are written in angle brackets — wrap the type in angle brackets: <${scanned.name}>`,
+          targetStart,
+        );
+      }
+      this.pos = end;
+      return { from, edge, to: { kind: 'handle', name: scanned.name }, span: this.spanFrom(start) };
     }
-    this.pos = scanned.end;
-    const end = this.pos;
-    this.skipInlineWs();
-    // `link c -[:e]->company { … }` — the pre-bracket type spelling of the
-    // same retired body.
-    if (this.peekCh() === '{') refuseBody();
-    this.pos = end;
-    return { from, edge, to: scanned.name, span: this.spanFrom(start) };
+    const targetSpan = this.spanFrom(fromStart);
+    const bodyStart = this.pos;
+    const { uniqueBy, fields } = this.parseMatchBody('link');
+    const path: PathHead = { root: { kind: 'name', name: from }, hopsRaw, span: pathSpan };
+    const impliedIdentity = uniqueBy.length === 0 && fields.length > 0;
+    const match: MatchExpression = {
+      target: { kind: 'linked', path, explicitType, span: targetSpan },
+      uniqueBy: impliedIdentity ? [linkBodyIdentity(fields, this.spanFrom(bodyStart))] : uniqueBy,
+      fields,
+      span: this.spanFrom(fromStart),
+    };
+    return { from, edge, to: { kind: 'match', match, impliedIdentity }, span: this.spanFrom(start) };
   }
 
   private parseLinkStatement(): LinkStatement {

@@ -186,6 +186,9 @@ export type RValue =
   | { kind: 'call'; call: CallStatement }
   | { kind: 'write'; write: WriteExpression }
   | { kind: 'match'; match: MatchExpression }
+  /** `x = link p-[:e]-> { … }` — only the body form binds: the handle is the
+   *  record its match found. */
+  | { kind: 'link'; link: FindingLink }
   | { kind: 'extract'; extract: ExtractExpression }
   | { kind: 'block'; block: TraversalBlock }
   | { kind: 'await'; await: AwaitExpression }
@@ -600,19 +603,42 @@ export interface BlockStatement {
 // ── Link statements (the edge-only write) ──
 
 /**
- * `link a -[:e]-> b` — assert an edge between two records already bound. The
- * edge-only write of the symmetric family (`write` node+edge, `link` edge
- * only, `unlink` edge removal, `delete` node+edges). Binds nothing: to FIND a
- * record to link, `match` it first and link the handle.
+ * What a `link` connects its source to: a record already bound, or the record
+ * a match body FINDS.
+ *
+ * The body form is sugar. `x = link p-[:E]-> { … }` means
+ * `x = match p-[:E]-> { … }` then `link p -[:E]-> x`, so the parser hands the
+ * body over as that match — its target the hop `p-[:E]->` — and every later
+ * stage checks and runs the match it already knows, then the link.
+ */
+export type LinkTarget =
+  | { kind: 'handle'; name: string }
+  | {
+      kind: 'match';
+      match: MatchExpression;
+      /** The author wrote no `unique by`, so the match identifies by ALL of the
+       *  body's fields, exactly (see `linkBodyIdentity`). The clause is the
+       *  language's, not the author's, and nothing reports on it as authored. */
+      impliedIdentity: boolean;
+    };
+
+/**
+ * `link a -[:e]-> b` — assert an edge between two records. The edge-only write
+ * of the symmetric family (`write` node+edge, `link` edge only, `unlink` edge
+ * removal, `delete` node+edges): `write` changes the record and the edge,
+ * `link` only the edge, `match` neither.
  */
 export interface LinkExpression {
   from: string;
   edge: string;
-  to: string;
+  to: LinkTarget;
   span: Span;
 }
 
-/** `link champion -[:led]-> part`. */
+/** A link whose target is a match body — the only form that can be bound. */
+export type FindingLink = LinkExpression & { to: Extract<LinkTarget, { kind: 'match' }> };
+
+/** `link champion -[:led]-> part` / `link p -[:Company]-> { … }`. */
 export interface LinkStatement {
   kind: 'link';
   link: LinkExpression;

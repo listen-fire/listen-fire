@@ -121,6 +121,7 @@ import type {
   SchemaFieldType,
   InstanceSchema,
   LinkExpression,
+  LinkTarget,
   LinkedExport,
   MatchExpression,
   LinkedFile,
@@ -2750,6 +2751,8 @@ class Interpreter {
             throw unsupported('file-level writes', 'writes run inside a movement body');
           case 'match':
             throw unsupported('file-level matches', 'a match runs inside a movement body');
+          case 'link':
+            throw unsupported('file-level links', 'a link runs inside a movement body');
         }
         return;
       case 'shape':
@@ -3048,7 +3051,7 @@ class Interpreter {
           await this.executeMatch(statement.match, undefined, env);
           break;
         case 'link':
-          await this.executeLink(statement.link, env);
+          await this.executeLink(statement.link, undefined, env);
           break;
         case 'unlink':
           await this.executeUnlinkStatement(statement, env);
@@ -3146,6 +3149,9 @@ class Interpreter {
         break;
       case 'match':
         await this.executeMatch(value.match, name, env);
+        break;
+      case 'link':
+        await this.executeLink(value.link, name, env);
         break;
       case 'await':
         await this.interpretAwait(value.await, name, env, stmtAddress, body);
@@ -7010,18 +7016,31 @@ class Interpreter {
    * here: graph mutation events reach listeners only via the knowledge
    * outbox drainer (M-38), external ones only via their webhooks.
    */
-  private async executeLink(link: LinkExpression, env: Environment): Promise<void> {
+  private async executeLink(
+    link: LinkExpression,
+    bindingName: string | undefined,
+    env: Environment,
+  ): Promise<void> {
     const fromBinding = env.resolve(link.from);
     if (fromBinding?.kind === 'nodePosition') {
-      this.appendLocalLanding(link, fromBinding, env);
+      if (link.to.kind === 'match') {
+        throw unsupported(
+          `link ${link.from} -[:${link.edge}]-> { … } on a node this run built`,
+          'the body would find among what the edge already holds — the checker should have caught this',
+        );
+      }
+      this.appendLocalLanding({ ...link, to: link.to }, fromBinding, env);
       return;
     }
-    const at = `link ${link.from} -[:${link.edge}]-> ${link.to}`;
-    const resolved = await this.resolveLinkStatement(
-      { from: link.from, edge: link.edge, to: link.to },
-      env,
-      at,
-    );
+    // The body form is `match` then `link`: the match runs exactly as the
+    // statement would (its own run-log row, a quiet end of the scope on a
+    // miss), and the link then connects the record it found.
+    const to =
+      link.to.kind === 'match'
+        ? { name: bindingName ?? '{ … }', binding: await this.executeMatch(link.to.match, bindingName, env) }
+        : { name: link.to.name, binding: env.resolve(link.to.name) };
+    const at = `link ${link.from} -[:${link.edge}]-> ${to.name}`;
+    const resolved = await this.resolveLinkStatement({ from: link.from, edge: link.edge, to }, env, at);
     if (typeof resolved.adapter.linkRecords !== 'function') {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
@@ -7048,7 +7067,7 @@ class Interpreter {
    *
    */
   private appendLocalLanding(
-    link: LinkExpression,
+    link: LinkExpression & { to: Extract<LinkTarget, { kind: 'handle' }> },
     from: Extract<Binding, { kind: 'nodePosition' }>,
     env: Environment,
   ): void {
@@ -7060,17 +7079,17 @@ class Interpreter {
         `${at}: '${link.from}' has no appendable edge '${link.edge}' — the checker should have caught this`,
       );
     }
-    const to = env.resolve(link.to);
+    const to = env.resolve(link.to.name);
     if (!to) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'${link.to}' is not in scope — the checker should have caught this`,
+        `'${link.to.name}' is not in scope — the checker should have caught this`,
       );
     }
     if (!APPENDABLE_LANDING_KINDS.has(to.kind)) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `${at} ${link.to}: an edge lands on a position — '${link.to}' is ${describeBinding[to.kind]}`,
+        `${at} ${link.to.name}: an edge lands on a position — '${link.to.name}' is ${describeBinding[to.kind]}`,
       );
     }
     edge.landings.push(to);
@@ -7099,14 +7118,13 @@ class Interpreter {
     match: MatchExpression,
     bindingName: string | undefined,
     env: Environment,
-  ): Promise<void> {
+  ): Promise<Binding> {
     const at = `match ${describeMatchTarget(match)}`;
     if (match.target.kind === 'linked') {
       const root = pathRootName(match.target.path);
       const rootBinding = root !== undefined ? env.resolve(root) : undefined;
       if (rootBinding?.kind === 'nodePosition') {
-        await this.executeLocalMatch({ match, target: match.target, from: rootBinding, bindingName, env, at });
-        return;
+        return this.executeLocalMatch({ match, target: match.target, from: rootBinding, bindingName, env, at });
       }
     }
     const resolved = await this.resolveWriteTarget(match, env, 'match');
@@ -7151,7 +7169,7 @@ class Interpreter {
       resultData,
       provenance: {},
     };
-    this.recordWrite({
+    return this.recordWrite({
       write: found,
       bindingName,
       env,
@@ -7175,7 +7193,7 @@ class Interpreter {
     bindingName: string | undefined;
     env: Environment;
     at: string;
-  }): Promise<void> {
+  }): Promise<Binding> {
     const { match, from, env, at } = input;
     const edgeName = this.singleWriteEdge(input.target.path);
     const edge = from.edges[edgeName];
@@ -7218,6 +7236,7 @@ class Interpreter {
       bindingName: input.bindingName,
     });
     if (input.bindingName !== undefined) env.declare(input.bindingName, landing);
+    return landing;
   }
 
   /**
@@ -7234,7 +7253,15 @@ class Interpreter {
     env: Environment,
   ): Promise<void> {
     const at = `unlink ${statement.from} -[:${statement.edge}]-> ${statement.to}`;
-    const resolved = await this.resolveLinkStatement(statement, env, at);
+    const resolved = await this.resolveLinkStatement(
+      {
+        from: statement.from,
+        edge: statement.edge,
+        to: { name: statement.to, binding: env.resolve(statement.to) },
+      },
+      env,
+      at,
+    );
     if (typeof resolved.adapter.unlinkRecords !== 'function') {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
@@ -7315,17 +7342,23 @@ class Interpreter {
    * the edge name — translates to engine currency at this boundary.
    */
   private async resolveLinkStatement(
-    statement: { from: string; edge: string; to: string },
+    statement: {
+      from: string;
+      edge: string;
+      /** The to side, already resolved: a bound name's binding, or the record
+       *  a link body's match found (named for messages by its binding, if any). */
+      to: { name: string; binding: Binding | undefined };
+    },
     env: Environment,
     at: string,
   ): Promise<ResolvedLinkStatement> {
-    const from = this.resolveEdgeEndpoint(statement.from, env, at);
-    const to = this.resolveEdgeEndpoint(statement.to, env, at);
+    const from = this.resolveEdgeEndpoint(statement.from, env.resolve(statement.from), at);
+    const to = this.resolveEdgeEndpoint(statement.to.name, statement.to.binding, at);
     const graph = from.graph;
     if (to.graph.instance !== graph.instance) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `${at}: both handles must live in the same graph — '${statement.from}' is in ${describeHandleGraph(from.graph)} and '${statement.to}' is in ${describeHandleGraph(to.graph)}`,
+        `${at}: both handles must live in the same graph — '${statement.from}' is in ${describeHandleGraph(from.graph)} and '${statement.to.name}' is in ${describeHandleGraph(to.graph)}`,
       );
     }
 
@@ -7348,14 +7381,14 @@ class Interpreter {
     ) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `${at}: '${statement.edge}' connects ${from.targetType} to ${declaredEdge.target}, but '${statement.to}' is a ${to.targetType} handle`,
+        `${at}: '${statement.edge}' connects ${from.targetType} to ${declaredEdge.target}, but '${statement.to.name}' is a ${to.targetType} handle`,
       );
     }
 
     const fromId = from.handle.externalId;
     const toId = to.handle.externalId;
     if (fromId === undefined || toId === undefined) {
-      const missing = fromId === undefined ? statement.from : statement.to;
+      const missing = fromId === undefined ? statement.from : statement.to.name;
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
         `${at}: '${missing}' carries no written record id to link`,
@@ -7409,10 +7442,9 @@ class Interpreter {
 
   private resolveEdgeEndpoint(
     name: string,
-    env: Environment,
+    binding: Binding | undefined,
     at: string,
   ): Extract<Binding, { kind: 'handle' }> {
-    const binding = env.resolve(name);
     if (!binding) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',

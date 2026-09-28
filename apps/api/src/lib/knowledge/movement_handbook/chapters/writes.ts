@@ -154,16 +154,17 @@ Each path is a handle plus one edge its type declares, and the written type must
 
 ### link
 
-\`link\` connects two records you already hold, **without creating or modifying either one**.
+\`link\` connects two records **without creating or modifying either one**.
 
 \`\`\`
 link champion -[:led]-> part
 
-c = match p-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
-link p -[:Company]-> c
+c = link p -[:Company]-> { unique by (FUZZY \`Name\`), Name: "Acme" }
 \`\`\`
 
-Both ends are handles in the same graph, over an edge the from-side declares. To connect a record that exists but that you don't hold yet, \`match\` it first: \`Name\` selects Acme, it doesn't rename anything, and a miss skips the \`link\` with the rest of the scope.
+The first form joins two handles in the same graph, over an edge the from-side declares. The second takes a \`match\` body: it is \`c = match p-[:Company]-> { … }\` then \`link p -[:Company]-> c\`, and written without a name it links without binding. \`Name\` selects Acme, it doesn't rename anything, and a miss skips the \`link\` with the rest of the scope.
+
+A link body with no \`unique by\` identifies by all of its fields, exactly: \`link p -[:Company]-> { Name: "Acme", City: "Berlin" }\` finds the company whose Name and City both agree.
 
 ### looking-up-existing-records
 
@@ -229,6 +230,24 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   person = write crm-[:People]-> { unique by (\`Job Title\`), Name: m.\`From\` }
   employer = match person-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
   link person -[:Company]-> employer
+  write employer-[:Notes]-> { Title: "Introduced", Content: m.\`Subject\` }
+}
+`,
+    },
+    {
+      construct: 'link with a match body (match then link), bound and unbound, with and without unique by',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  person = write crm-[:People]-> { unique by (\`Job Title\`), Name: m.\`From\` }
+  employer = link person -[:Company]-> { unique by (FUZZY \`Name\`), Name: "Acme" }
+  link person -[:Company]-> { Name: m.\`Subject\` }
   write employer-[:Notes]-> { Title: "Introduced", Content: m.\`Subject\` }
 }
 `,
