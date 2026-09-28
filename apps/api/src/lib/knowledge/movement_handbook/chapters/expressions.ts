@@ -242,7 +242,7 @@ pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
 - \`extract from [pieces]\` is one extraction reading every piece as a segment; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is one extraction per piece. Reach for the second where each piece should be read on its own.`,
   engineClaims: [
     {
-      construct: 'a file-scope table of node{} records, MAP+JOIN into an extraction description, KEYBY+AT as a lookup',
+      construct: 'a file-scope table of dict-literal rows, MAP+JOIN into an extraction description, KEYBY+AT as a lookup',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
