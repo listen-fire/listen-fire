@@ -33,9 +33,22 @@ function missingBrightDataSerpVars(env: NodeJS.ProcessEnv = process.env): string
 }
 
 // SERP JSON is a few KB; these only guard a runaway or hung request, mirroring
-// the ceilings scraper.ts holds a page fetch to.
-const BRIGHT_DATA_SERP_TIMEOUT = 30 * SECOND;
+// the ceilings scraper.ts holds a page fetch to. Against a live SERP zone,
+// successful replies have arrived after as long as 65s, so the ceiling sits
+// well past that rather than cutting off slow-but-good answers.
+const BRIGHT_DATA_SERP_TIMEOUT = 90 * SECOND;
 const MAX_BRIGHT_DATA_SERP_RESPONSE_BYTES = 1 * 1024 * 1024;
+
+// A zone that times out, rate-limits or returns an empty body on one call
+// usually answers the same query moments later; three tries covers that
+// without turning one search into minutes of waiting.
+const BRIGHT_DATA_SERP_MAX_ATTEMPTS = 3;
+// Back-to-back retries kept failing the same way, so the zone gets a real
+// cooldown between attempts rather than a short blip.
+const BRIGHT_DATA_SERP_RETRY_DELAY = 15 * SECOND;
+// A 429 (from the gateway or from Bright Data) asks us to slow down; retrying
+// sooner only extends the limit.
+const BRIGHT_DATA_SERP_RATE_LIMIT_RETRY_DELAY = 30 * SECOND;
 
 // Verified against https://docs.brightdata.com/scraping-automation/serp-api/
 // (2026-09-18): POST the target Google search URL through the SERP zone with
@@ -102,6 +115,144 @@ async function readCappedText(response: Response): Promise<string> {
   return Buffer.concat(chunks, Math.min(received, MAX_BRIGHT_DATA_SERP_RESPONSE_BYTES)).toString(
     'utf8',
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// What one attempt observed, for the per-attempt log line. Every field but
+// `durationMs` is absent when the fetch itself rejected.
+type BrightDataSerpAttemptTrace = {
+  durationMs: number;
+  status?: number;
+  brdStatus?: string | null;
+  brdError?: string | null;
+  bytes?: number;
+};
+
+type BrightDataSerpAttemptOutcome =
+  | ({ ok: true; search: Search } & BrightDataSerpAttemptTrace)
+  | ({
+      ok: false;
+      retryable: boolean;
+      // Whether this failure was a 429 at either layer; the retry loop waits
+      // longer before the next attempt when it was.
+      rateLimited: boolean;
+      reason: string;
+      error: Error;
+    } & BrightDataSerpAttemptTrace);
+
+/** Classifies an HTTP-style status code as a failure: 429 and 5xx are the
+ *  zone under load and worth retrying; any other 4xx is a bad token, a
+ *  disabled zone or a malformed request, which no retry will fix. */
+function classifyFailureStatus(code: number): { retryable: boolean; rateLimited: boolean } {
+  return { retryable: code === 429 || code >= 500, rateLimited: code === 429 };
+}
+
+/** One round-trip against the SERP endpoint, classified into an outcome the
+ *  retry loop in `searchBrightData` can act on. Never throws: a fetch that
+ *  rejects outright comes back as a retryable failure too. */
+async function performBrightDataSerpAttempt(
+  searchUrl: URL,
+): Promise<BrightDataSerpAttemptOutcome> {
+  const start = Date.now();
+  let response: Response;
+  try {
+    response = await fetch('https://api.brightdata.com/request', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${getEnvVar('BRIGHT_DATA_ACCESS_TOKEN')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        zone: getEnvVar('BRIGHT_DATA_SERP_ZONE'),
+        url: searchUrl.toString(),
+        format: 'raw',
+      }),
+      signal: AbortSignal.timeout(BRIGHT_DATA_SERP_TIMEOUT),
+    });
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    const timedOut = error.name === 'AbortError' || error.name === 'TimeoutError';
+    return {
+      ok: false,
+      retryable: true,
+      rateLimited: false,
+      reason: timedOut ? 'timed out' : `network error: ${error.message}`,
+      error,
+      durationMs: Date.now() - start,
+    };
+  }
+
+  const brdStatus = response.headers.get('x-brd-status-code');
+  const brdError = response.headers.get('x-brd-error');
+  const text = await readCappedText(response).catch(() => '');
+  const trace: BrightDataSerpAttemptTrace = {
+    durationMs: Date.now() - start,
+    status: response.status,
+    brdStatus,
+    brdError,
+    bytes: text.length,
+  };
+
+  // Bright Data answers HTTP 200 for a page it could not render (its own
+  // selector wait timing out, or its own rate limit) and carries the real
+  // outcome in `x-brd-status-code`, so that header decides first. Only when it
+  // is absent or 2xx do the HTTP status and then the body decide.
+  const brdStatusCode = brdStatus === null ? NaN : Number(brdStatus);
+  if (Number.isFinite(brdStatusCode) && (brdStatusCode < 200 || brdStatusCode >= 300)) {
+    const reason = `Bright Data reported ${brdStatusCode}${brdError ? `: ${brdError}` : ''}`;
+    return {
+      ok: false,
+      ...classifyFailureStatus(brdStatusCode),
+      reason,
+      error: new Error(`Bright Data SERP request failed: ${reason}`),
+      ...trace,
+    };
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      ...classifyFailureStatus(response.status),
+      reason: `HTTP ${response.status} ${response.statusText}`,
+      error: new Error(
+        `Bright Data SERP request failed: ${response.status} ${response.statusText}: ${text.slice(0, 200)}`,
+      ),
+      ...trace,
+    };
+  }
+
+  let raw: unknown;
+  try {
+    raw = text.length ? JSON.parse(text) : undefined;
+  } catch {
+    raw = undefined;
+  }
+  if (raw === undefined) {
+    return {
+      ok: false,
+      retryable: true,
+      rateLimited: false,
+      reason: `response was not JSON (${response.status}, ${text.length} bytes)`,
+      error: new Error('Bright Data SERP response was not valid JSON'),
+      ...trace,
+    };
+  }
+
+  try {
+    return { ok: true, search: mapBrightDataSerpResponse(raw), ...trace };
+  } catch (err) {
+    return {
+      ok: false,
+      retryable: true,
+      rateLimited: false,
+      reason: `response was missing the organic array (${response.status}, ${text.length} bytes)`,
+      error: err instanceof Error ? err : new Error(String(err)),
+      ...trace,
+    };
+  }
 }
 
 interface ProfileSearchInput {
@@ -210,36 +361,44 @@ class WebSearch {
     searchUrl.searchParams.set('q', query);
     searchUrl.searchParams.set('brd_json', '1');
 
-    const response = await fetch('https://api.brightdata.com/request', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${getEnvVar('BRIGHT_DATA_ACCESS_TOKEN')}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        zone: getEnvVar('BRIGHT_DATA_SERP_ZONE'),
-        url: searchUrl.toString(),
-        format: 'raw',
-      }),
-      signal: AbortSignal.timeout(BRIGHT_DATA_SERP_TIMEOUT),
-    });
+    const failures: string[] = [];
+    for (let attempt = 1; ; attempt++) {
+      const outcome = await performBrightDataSerpAttempt(searchUrl);
+      const trace = {
+        attempt,
+        durationMs: outcome.durationMs,
+        status: outcome.status,
+        brdStatus: outcome.brdStatus,
+        brdError: outcome.brdError,
+        bytes: outcome.bytes,
+      };
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(
-        `Bright Data SERP request failed: ${response.status} ${response.statusText}: ${text.slice(0, 200)}`,
+      if (outcome.ok) {
+        logger.info('[web_search] Bright Data SERP request', { ...trace, outcome: 'ok' });
+        return outcome.search;
+      }
+
+      const isLastAttempt = attempt >= BRIGHT_DATA_SERP_MAX_ATTEMPTS;
+      const willRetry = outcome.retryable && !isLastAttempt;
+      logger.info('[web_search] Bright Data SERP request', {
+        ...trace,
+        outcome: willRetry ? 'retry' : 'failed',
+        reason: outcome.reason,
+      });
+
+      if (!outcome.retryable) throw outcome.error;
+
+      failures.push(`#${attempt} ${outcome.reason} (${outcome.durationMs}ms)`);
+      if (isLastAttempt) {
+        throw new Error(
+          `Bright Data SERP request failed after ${attempt} attempts: ${failures.join('; ')}`,
+        );
+      }
+
+      await sleep(
+        outcome.rateLimited ? BRIGHT_DATA_SERP_RATE_LIMIT_RETRY_DELAY : BRIGHT_DATA_SERP_RETRY_DELAY,
       );
     }
-
-    const text = await readCappedText(response);
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      throw new Error('Bright Data SERP response was not valid JSON');
-    }
-
-    return mapBrightDataSerpResponse(raw);
   }
 
   /**

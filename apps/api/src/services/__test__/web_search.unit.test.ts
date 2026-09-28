@@ -21,6 +21,9 @@ global.fetch = fetchMock as never;
 const ORIGINAL_ENV = process.env;
 
 beforeEach(() => {
+  // Only the retry wait's `setTimeout` is faked; `Date` stays real so the
+  // per-attempt duration is still wall-clock time.
+  jest.useFakeTimers({ doNotFake: ['Date'] });
   fetchMock.mockReset();
   process.env = { ...ORIGINAL_ENV };
   delete process.env.WEB_SEARCH_PROVIDER;
@@ -30,9 +33,18 @@ beforeEach(() => {
   delete process.env.BRIGHT_DATA_SERP_ZONE;
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 afterAll(() => {
   process.env = ORIGINAL_ENV;
 });
+
+// The two retry waits in web_search.ts. Advancing fake timers by these
+// flushes a wait without sleeping the suite.
+const RETRY_DELAY_MS = 15_000;
+const RATE_LIMIT_RETRY_DELAY_MS = 30_000;
 
 const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body), { status: 200, ...init });
@@ -241,27 +253,131 @@ describe('WebSearchService.search — brightdata response mapping', () => {
     expect(result.items).toEqual([]);
   });
 
-  it('an unexpected shape fails with a plain error naming the top-level keys', async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({ error: 'zone not found', status: 'failed' }),
-    );
+  it('an unexpected shape (no organic array) is retried, then the result returned', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'zone not found', status: 'failed' }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ organic: [] }));
 
-    await expect(WebSearchService.search('acme')).rejects.toThrow(
-      'Bright Data SERP response did not have the expected shape (top-level keys: error, status)',
-    );
+    const promise = WebSearchService.search('acme');
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    expect((await promise).items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('a non-JSON body fails plainly', async () => {
+  it('a non-JSON body is retried, then the result returned', async () => {
     fetchMock.mockResolvedValueOnce(new Response('<html>not json</html>', { status: 200 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ organic: [] }));
 
-    await expect(WebSearchService.search('acme')).rejects.toThrow(
-      'Bright Data SERP response was not valid JSON',
-    );
+    const promise = WebSearchService.search('acme');
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    expect((await promise).items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('a non-2xx response fails naming the status', async () => {
+  it('a non-2xx configuration error (403) fails at once, naming the status', async () => {
     fetchMock.mockResolvedValueOnce(new Response('zone unauthorized', { status: 403 }));
 
     await expect(WebSearchService.search('acme')).rejects.toThrow(/403/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Measured against a live SERP zone: a render failure (the zone's own
+// selector wait timing out) and the zone's own rate limit both arrive as
+// HTTP 200 with the real outcome in `x-brd-status-code` and an empty body.
+describe('WebSearchService.search — brightdata retries', () => {
+  beforeEach(() => {
+    process.env.WEB_SEARCH_PROVIDER = 'brightdata';
+    process.env.BRIGHT_DATA_ACCESS_TOKEN = 'token-123';
+    process.env.BRIGHT_DATA_SERP_ZONE = 'serp_zone';
+  });
+
+  const timeoutError = () =>
+    Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+
+  const brdRenderFailure = () =>
+    new Response('', {
+      status: 200,
+      headers: {
+        'x-brd-status-code': '502',
+        'x-brd-error': 'waiting for selector "#main" failed',
+      },
+    });
+
+  it('recovers from a Bright Data 502 with an empty body', async () => {
+    fetchMock.mockResolvedValueOnce(brdRenderFailure());
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ organic: [{ link: 'https://example.com/', title: 'Example' }] }),
+    );
+
+    const promise = WebSearchService.search('acme');
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    expect((await promise).items).toEqual([
+      { link: 'https://example.com/', title: 'Example', snippet: undefined },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers from a timeout', async () => {
+    fetchMock.mockRejectedValueOnce(timeoutError());
+    fetchMock.mockResolvedValueOnce(jsonResponse({ organic: [] }));
+
+    const promise = WebSearchService.search('acme');
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    expect((await promise).items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers from an HTTP 500', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('internal error', { status: 500 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ organic: [] }));
+
+    const promise = WebSearchService.search('acme');
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+
+    expect((await promise).items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits the longer rate-limit delay after a Bright Data 429', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('', { status: 200, headers: { 'x-brd-status-code': '429' } }),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ organic: [] }));
+
+    const promise = WebSearchService.search('acme');
+
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(RATE_LIMIT_RETRY_DELAY_MS - RETRY_DELAY_MS);
+    expect((await promise).items).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a Bright Data 403 fails at once, without retrying', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('', { status: 200, headers: { 'x-brd-status-code': '403' } }),
+    );
+
+    await expect(WebSearchService.search('acme')).rejects.toThrow(/Bright Data reported 403/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails after three transient failures, naming each attempt', async () => {
+    fetchMock.mockRejectedValueOnce(timeoutError());
+    fetchMock.mockResolvedValueOnce(brdRenderFailure());
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }));
+
+    const expectation = expect(WebSearchService.search('acme')).rejects.toThrow(
+      /^Bright Data SERP request failed after 3 attempts: #1 timed out \(\d+ms\); #2 Bright Data reported 502: waiting for selector "#main" failed \(\d+ms\); #3 response was not JSON \(200, 0 bytes\) \(\d+ms\)$/,
+    );
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    await jest.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    await expectation;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
