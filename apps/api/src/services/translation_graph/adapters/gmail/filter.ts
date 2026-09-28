@@ -181,3 +181,11 @@ export function combineGmailQueries(
   const parts = queries.filter((q): q is string => q !== undefined && q.trim() !== '');
   return parts.length > 0 ? parts.join(' ') : undefined;
 }
+
+/**
+ * A message carrying ANY of these labels: one label is a plain term, several
+ * are Gmail's brace OR group — `{label:INBOX label:SPAM}`.
+ */
+export function anyGmailLabel(labels: readonly string[]): string | undefined {
+  return anyOf('label', [...labels]);
+}

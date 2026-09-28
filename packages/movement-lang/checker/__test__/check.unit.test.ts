@@ -35,6 +35,18 @@ const catalog = mockCatalog({
       triggerConfig: ['shelf', 'crate', 'events'],
       triggerConfigRequired: ['shelf', 'crate'],
     },
+    // A listen key that takes a list of the source system's own names — the
+    // `'strings'` format. Deliberately NOT any real adapter's shape.
+    postbox: {
+      constructionArgs: [{ name: 'credentials', kind: 'position', required: false }],
+      triggerConfig: ['slots'],
+      triggerConfigFormats: { slots: 'strings' },
+      schema: {
+        positions: { letter: { properties: { sender: 'text' }, edges: {} } },
+        collections: {},
+        writableRoots: {},
+      },
+    },
     manual: {
       constructionArgs: [{ name: 'credentials', kind: 'position', required: false }],
       schema: {
@@ -1365,6 +1377,26 @@ describe('cron and manual listeners', () => {
         'listen to timer { schedule: "0 9 * * 1", timezone: "Europe/London" } fire digest',
       ].join('\n'),
     );
+  });
+
+  it('a strings-format listen key takes a non-empty list of quoted names', () => {
+    const program = (slots: string) =>
+      [
+        'import { postbox, slack } from adapters',
+        'import { acme_workspace } from credentials',
+        'team = slack(credentials: acme_workspace)',
+        'box  = postbox()',
+        'movement sort(l: <box-[:letter]->>) {',
+        '  write team-[:message]-> { text: l.`sender` }',
+        '}',
+        `listen to box { slots: ${slots} } fire sort`,
+      ].join('\n');
+    expectClean(program('["A", "B"]'));
+    for (const bad of ['[]', '"A"', '["A", ""]', '[1]']) {
+      const diagnostics = check(program(bad));
+      expect(diagnostics.map(d => d.code)).toEqual([C.LISTEN_BAD_CONFIG]);
+      expect(diagnostics[0].message).toContain("'slots' is a non-empty list of quoted, non-empty names");
+    }
   });
 
   it('an invalid timezone is MOV_LISTEN_BAD_CONFIG naming the zone', () => {

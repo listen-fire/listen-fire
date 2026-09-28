@@ -119,8 +119,11 @@ export interface AdapterSpec {
    * (the derived event type). Any adapter with a "only fire when one of
    * these attributes changed" surface declares it; it is not the graph's,
    * it is just the graph that needed it first.
+   *
+   * `'strings'` is a non-empty list of non-empty quoted strings — the shape
+   * only; the values are the source system's own (Gmail's `labels`).
    */
-  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields'>;
+  triggerConfigFormats?: Record<string, 'cron' | 'timezone' | 'fields' | 'strings'>;
   /**
    * Interactive "connect" actions the adapter offers when authoring against
    * one of its instances. The checker never reads these — they're carried

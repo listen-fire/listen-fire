@@ -527,8 +527,10 @@ export interface ListenConfigKey {
    *  five-field cron expression; `'timezone'` = an IANA time-zone id;
    *  `'fields'` = a list of BARE property names, validated against the position
    *  the listen's address lands on (the changed-attribute filter — any adapter
-   *  with a "only fire when one of these changed" surface declares it). */
-  format?: 'cron' | 'timezone' | 'fields';
+   *  with a "only fire when one of these changed" surface declares it);
+   *  `'strings'` = a non-empty list of non-empty quoted strings (Gmail's
+   *  `labels`). */
+  format?: 'cron' | 'timezone' | 'fields' | 'strings';
   /**
    * This key is one HOP of the address that narrows the event's record edge.
    *

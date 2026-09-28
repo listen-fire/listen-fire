@@ -7468,6 +7468,23 @@ class Checker {
             );
           }
         }
+      } else if (format === 'strings') {
+        // A list of the source system's own names (Gmail's `labels`). Only
+        // the shape is ours to check; the names are the system's.
+        const values = staticStringValues(arg.value);
+        if (
+          values === undefined ||
+          !isListSlot(arg.value) ||
+          values.length === 0 ||
+          values.some(value => value.trim() === '')
+        ) {
+          this.report(
+            DiagnosticCodes.LISTEN_BAD_CONFIG,
+            `'${arg.name}' is a non-empty list of quoted, non-empty names — e.g. ${arg.name}: ["…"]`,
+            arg.value.span,
+          );
+          continue;
+        }
       } else if (format === 'fields') {
         // The changed-attribute filter — bare property names of whatever the
         // listen's address lands on. The SHAPE is checkable here; the NAMES

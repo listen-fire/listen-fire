@@ -84,10 +84,10 @@ const GMAIL_HANDBOOK_CONTENT = `Gmail is ONE connected mailbox — a real Google
 ### running when mail arrives
 
 \`\`\`
-listen to gmail { query: "label:INBOX from:@acme.com" } fire triage
+listen to gmail { query: "from:@acme.com" } fire triage
 \`\`\`
 
-A listener fires once per message that has arrived since the last look, a minute or so behind. \`query\` is a Gmail search written exactly as you would type it into Gmail's own search box, and it narrows what is delivered; \`pollIntervalSeconds\` overrides the one-minute default. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Messages\` when you want history.
+A listener fires once per message that has arrived since the last look, a minute or so behind. \`query\` is a Gmail search written exactly as you would type it into Gmail's own search box, and it narrows what is delivered; \`pollIntervalSeconds\` overrides the one-minute default. \`labels\` says which arrivals count — mail landing in the inbox unless you say otherwise. Write \`labels: ["INBOX", "SPAM"]\` when mail you must not miss can land in Spam, such as cold inbound. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Messages\` when you want history.
 
 ### reading the message
 
@@ -167,7 +167,9 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     'Body reach Gmail’s own search; a walk with no WHERE stops at ' +
     `${GMAIL_SEARCH_CEILING} messages, since each one costs a request. A ` +
     'listener’s `query` option is a Gmail search string written exactly as ' +
-    'in Gmail’s search box, and the first poll delivers nothing.',
+    'in Gmail’s search box; its `labels` option (Gmail label ids, default ' +
+    '`["INBOX"]`) says which arrivals count, so add `"SPAM"` when mail that ' +
+    'must not be missed can land in Spam. The first poll delivers nothing.',
   handbookSection: {
     title: 'Gmail: one connected mailbox',
     content: GMAIL_HANDBOOK_CONTENT,
@@ -177,8 +179,9 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     'in the mailbox since the last poll, about a minute behind, narrowed by the ' +
     '`query` listen option (a Gmail search string). The first poll sets the ' +
     'mark and emits nothing, so going live never replays the back catalogue. It ' +
-    'reads the WHOLE mailbox, not a folder — narrow with `query: "label:…"` ' +
-    'when only some mail should run it. A message that is later edited, ' +
+    'reads mail arriving in the INBOX by default — widen with the `labels` ' +
+    'listen option (e.g. `labels: ["INBOX", "SPAM"]` to include Spam), and ' +
+    'narrow with `query`. A message that is later edited, ' +
     're-labelled or replied to does NOT fire again: arrival is the only event ' +
     'Gmail offers here. Nothing fires on mail this mailbox SENDS.',
   supportedTriggers: ['poll'],
@@ -193,6 +196,7 @@ export const GMAIL_MANIFEST: AdapterManifest = {
   defaultSubscribedEvents: [GMAIL_MESSAGE_RECEIVED_EVENT],
   listenConfig: [
     { key: 'query', required: false },
+    { key: 'labels', required: false, format: 'strings' },
     { key: 'pollIntervalSeconds', required: false },
   ],
   // No `triggerKinds`: the slug self-aliases, and the uppercase `GMAIL` kind is
