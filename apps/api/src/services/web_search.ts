@@ -5,6 +5,7 @@ import { Prompt } from '../lib/prompts';
 import { anthropicChat } from '../lib/anthropic';
 import { getEnvVar } from '../lib/utils/environment';
 import { neverAsAny } from '../lib/utils/types';
+import { logger } from './logger';
 // Tavily is a legacy-only supplementary search (no DPA) — gated per-caller via
 // `allowSupplementaryWebSearch`, which only the legacy pipelines pass.
 import { webSearch as tavilySearch, isAvailable as tavilyAvailable } from '../lib/web_search';
@@ -14,9 +15,9 @@ import { webSearch as tavilySearch, isAvailable as tavilyAvailable } from '../li
 // same ranking, different transport — so it stands in as a second provider
 // rather than a different search engine. Default stays `google` so an
 // unset variable reproduces today's behaviour exactly.
-type WebSearchProvider = 'google' | 'brightdata';
+export type WebSearchProvider = 'google' | 'brightdata';
 
-function resolveWebSearchProvider(env: NodeJS.ProcessEnv = process.env): WebSearchProvider {
+export function resolveWebSearchProvider(env: NodeJS.ProcessEnv = process.env): WebSearchProvider {
   const value = env.WEB_SEARCH_PROVIDER ?? 'google';
   if (value === 'google' || value === 'brightdata') return value;
   throw new Error(
@@ -128,6 +129,24 @@ type SearchResult = {
   title?: string | null;
 };
 
+// What Google sends in place of a `Search` when it refuses the request: a bad
+// or restricted key, an unknown `cx`, an exhausted quota, or an API that is
+// not enabled on the key's project. A genuine no-match never carries `error`;
+// it is a `Search` with no `items`.
+type SearchErrorBody = {
+  error: {
+    code?: number;
+    message?: string;
+    status?: string;
+    errors?: Array<{ reason?: string; message?: string }>;
+  };
+};
+
+function isSearchErrorBody(body: unknown): body is SearchErrorBody {
+  if (typeof body !== 'object' || body === null || !('error' in body)) return false;
+  return typeof body.error === 'object' && body.error !== null;
+}
+
 class WebSearch {
   async search(query: string): Promise<Search> {
     const provider = resolveWebSearchProvider();
@@ -147,8 +166,33 @@ class WebSearch {
     url.searchParams.set('cx', getEnvVar('GOOGLE_CX', { devDefault: 'local' }));
     url.searchParams.set('q', query);
 
-    const results = await fetch(url);
-    return results.json();
+    const response = await fetch(url);
+    const body: unknown = await response.json().catch(() => undefined);
+
+    // A refusal arrives either as a non-2xx status or, for at least the quota
+    // case, as a 200 whose body is an error envelope. Neither has `items`, so
+    // passing it on would read downstream as "nothing found".
+    if (!response.ok || isSearchErrorBody(body)) {
+      const error = isSearchErrorBody(body) ? body.error : undefined;
+      const code = error?.code ?? response.status;
+      const status = error?.status ?? response.statusText;
+      const reason = error?.errors?.[0]?.reason;
+      const message = error?.message ?? reason ?? response.statusText;
+
+      logger.warn('[web_search] Google Custom Search refused the request', {
+        status: code,
+        reason,
+        message,
+        query,
+      });
+
+      throw new Error(
+        `Google Custom Search refused the request (${code} ${status}): ${message}. ` +
+          `Check GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CX, and that the Custom Search JSON API is enabled on the key's Google Cloud project.`,
+      );
+    }
+
+    return body as Search;
   }
 
   // Read lazily, same reason as scraper.ts's Bright Data path: importing this

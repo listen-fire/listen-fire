@@ -79,6 +79,58 @@ describe('WebSearchService.search — provider switch', () => {
   });
 });
 
+// Google answers a refused request (bad key, unknown cx, API not enabled on
+// the key's project, exhausted quota) with an `error` envelope and no
+// `items`. Passed through, that reads downstream as "nobody found", so it
+// has to fail instead.
+describe('WebSearchService.search — google refusals', () => {
+  it('returns a normal result unchanged', async () => {
+    const items = [{ link: 'https://example.com/', title: 'Example', snippet: 'An example' }];
+    fetchMock.mockResolvedValueOnce(jsonResponse({ items }));
+
+    const result = await WebSearchService.search('example');
+
+    expect(result.items).toEqual(items);
+  });
+
+  it('a 403 refusal fails naming the API to enable', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: 403,
+            message: 'This project does not have the access to Custom Search JSON API.',
+            status: 'PERMISSION_DENIED',
+            errors: [{ reason: 'forbidden' }],
+          },
+        },
+        { status: 403 },
+      ),
+    );
+
+    await expect(WebSearchService.search('acme')).rejects.toThrow(
+      /Google Custom Search refused the request \(403 PERMISSION_DENIED\): This project does not have the access to Custom Search JSON API\..*Custom Search JSON API is enabled/,
+    );
+  });
+
+  it('a 200 carrying an error envelope fails with its message', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        error: {
+          code: 429,
+          message: "Quota exceeded for quota metric 'Queries' and limit 'Queries per day'.",
+          status: 'RESOURCE_EXHAUSTED',
+          errors: [{ reason: 'rateLimitExceeded' }],
+        },
+      }),
+    );
+
+    await expect(WebSearchService.search('acme')).rejects.toThrow(
+      /\(429 RESOURCE_EXHAUSTED\): Quota exceeded for quota metric 'Queries'/,
+    );
+  });
+});
+
 describe('WebSearchService.search — brightdata request shape', () => {
   beforeEach(() => {
     process.env.WEB_SEARCH_PROVIDER = 'brightdata';
