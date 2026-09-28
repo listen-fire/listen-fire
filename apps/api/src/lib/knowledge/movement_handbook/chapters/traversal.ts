@@ -76,6 +76,18 @@ A relationship either hands its records back in an order that means something or
 
 Which relationships are ordered is the source's own fact, and each one says: chat messages and thread replies by time, a curated list's entries by when they were added, a document's sections and an email's attachments by their place in it, answers and callback fires by when they landed.
 
+### looking-up-one-record
+
+Look up a single record — a channel by name, a company by its exact name — with \`ONLY\`, and guard it:
+
+\`\`\`
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+write deals-[:Messages]-> { Message: "A new company just landed." }
+\`\`\`
+
+The guard ends the run with a reason when nothing matches, so every line after it uses \`deals\` directly. Keep a block for a path that yields many.
+
 ### what-a-source-can-filter
 
 Expect the filter surface to differ per source. A CRM might filter companies by a categorised field at its query API but not by a long free-text one; a record's handful of related rows can be filtered on anything, because the set is already small. Each source declares — per relationship and per field — what it can do:
@@ -239,10 +251,10 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   orgs-[n:Notes]-> {
     write n { Title: "Logged" }
   }
-  team-[ch:Channels WHERE \`Name\` == "general"]-> {
-    write ch-[:Messages]-> {
-      Message: "Logged \${COUNT(orgs)} companies"
-    }
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> {
+    Message: "Logged \${COUNT(orgs)} companies"
   }
 }
 `,
@@ -287,10 +299,10 @@ function \`Name Them\`(m: <inbox-[:Email]->>) {
     }
     return f.\`Name\`
   }
-  team-[ch:Channels WHERE \`Name\` == "general"]-> {
-    write ch-[:Messages]-> {
-      Message: "\${COUNT(names)} files: \${JOIN(names, ", ")}"
-    }
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> {
+    Message: "\${COUNT(names)} files: \${JOIN(names, ", ")}"
   }
 }
 `,
