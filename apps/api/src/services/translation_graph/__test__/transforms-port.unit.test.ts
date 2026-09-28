@@ -40,6 +40,7 @@ jest.mock('../../web_search', () => ({
     findLinkedIn: (...args: unknown[]) => mockFindLinkedIn(...args),
     search: (...args: unknown[]) => mockSearch(...args),
   },
+  resolveWebSearchProvider: () => 'google',
 }));
 // vc-url-retrieval no longer borrows the dealflow pipeline's segment
 // helpers (chore(carve) teardown step 4 — url-fetch.ts owns this surface
@@ -789,6 +790,16 @@ describe('linkedin-enrichment.run — behavioural parity', () => {
       JSON.stringify({ name: 'Ada Lovelace', company: null, description: null }),
     );
     mockFindLinkedIn.mockResolvedValue([]);
+
+    const out = await linkedinEnrichmentImpl.run(ctxInput({ name: 'Ada Lovelace' }));
+    expect(out).toEqual({});
+  });
+
+  it('emits nothing, rather than failing the run, when the web search throws', async () => {
+    mockAnthropicChat.mockResolvedValueOnce(
+      JSON.stringify({ name: 'Ada Lovelace', company: null, description: null }),
+    );
+    mockFindLinkedIn.mockRejectedValue(new Error('Google Custom Search refused the request'));
 
     const out = await linkedinEnrichmentImpl.run(ctxInput({ name: 'Ada Lovelace' }));
     expect(out).toEqual({});

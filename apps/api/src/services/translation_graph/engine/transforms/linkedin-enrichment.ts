@@ -24,7 +24,7 @@ import { anthropicChat } from '../../../../lib/anthropic';
 import { parseJson } from '../../../../lib/utils/parse_json';
 import { runFields } from '../../../../lib/llm_usage';
 import { logger } from '../../../logger';
-import { WebSearchService } from '../../../web_search';
+import { WebSearchService, resolveWebSearchProvider } from '../../../web_search';
 import { resolvePersonContext } from './extracted_fields';
 import type { PersonContext, ResolvedField } from './extracted_fields';
 import { importIdentifier } from '../../movement/schema_projection';
@@ -223,14 +223,28 @@ export const linkedinEnrichmentImpl: TransformImpl = {
 
     logger.info('[transform:linkedin-enrichment] Identified person — searching the web', {
       ...identity,
+      webSearchProvider: resolveWebSearchProvider(),
+      googleSearchConfigured:
+        !!process.env.GOOGLE_CUSTOM_SEARCH_API_KEY && !!process.env.GOOGLE_CX,
+      linkedinReaderConfigured: !!services.linkedin,
       ...runFields(),
     });
 
-    const searchResults = await WebSearchService.findLinkedIn({
-      name: identity.name,
-      company: identity.company,
-      description: identity.description,
-    });
+    let searchResults: Awaited<ReturnType<typeof WebSearchService.findLinkedIn>>;
+    try {
+      searchResults = await WebSearchService.findLinkedIn({
+        name: identity.name,
+        company: identity.company,
+        description: identity.description,
+      });
+    } catch (error) {
+      logger.warn('[transform:linkedin-enrichment] Web search failed — the enrichment cannot run', {
+        name: identity.name,
+        error: error instanceof Error ? error.message : String(error),
+        ...runFields(),
+      });
+      return {};
+    }
 
     const linkedInUrl = searchResults[0]?.link;
     if (!linkedInUrl) {
