@@ -94,16 +94,16 @@ Act on everything a run wrote, however many branches wrote it. Give a \`node { â
 \`\`\`
 sent = node { messages: <chat-[:Channels]->-[:Messages]->> }
 
-chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-  if msg.\`Subject\` == "urgent" {
-    first = write ch-[:Messages]-> { Message: "A big one just landed." }
-    link sent -[:messages]-> first
-    second = write ch-[:Messages]-> { Message: "Worth a look today." }
-    link sent -[:messages]-> second
-  } else {
-    only = write ch-[:Messages]-> { Message: "A new company just landed." }
-    link sent -[:messages]-> only
-  }
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+if msg.\`Subject\` == "urgent" {
+  first = write deals-[:Messages]-> { Message: "A big one just landed." }
+  link sent -[:messages]-> first
+  second = write deals-[:Messages]-> { Message: "Worth a look today." }
+  link sent -[:messages]-> second
+} else {
+  only = write deals-[:Messages]-> { Message: "A new company just landed." }
+  link sent -[:messages]-> only
 }
 
 sent-[m:messages]-> {
@@ -289,16 +289,16 @@ chat  = slack(credentials: team_workspace)
 function \`Post And Confirm\`(msg: <inbox-[:Email]->>) {
   sent = node { messages: <chat-[:Channels]->-[:Messages]->> order by arrival }
 
-  chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-    if msg.\`Subject\` == "urgent" {
-      first = write ch-[:Messages]-> { Message: "A big one just landed." }
-      link sent -[:messages]-> first
-      second = write ch-[:Messages]-> { Message: "Worth a look today." }
-      link sent -[:messages]-> second
-    } else {
-      only = write ch-[:Messages]-> { Message: "A new company just landed." }
-      link sent -[:messages]-> only
-    }
+  deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+  if deals == null { ERROR("no #deals channel") }
+  if msg.\`Subject\` == "urgent" {
+    first = write deals-[:Messages]-> { Message: "A big one just landed." }
+    link sent -[:messages]-> first
+    second = write deals-[:Messages]-> { Message: "Worth a look today." }
+    link sent -[:messages]-> second
+  } else {
+    only = write deals-[:Messages]-> { Message: "A new company just landed." }
+    link sent -[:messages]-> only
   }
 
   sent-[m:messages]-> {

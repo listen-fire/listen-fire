@@ -33,9 +33,9 @@ timer = cron()
 team  = slack(credentials: team_workspace)
 
 function \`Weekly Digest\`(t: <timer-[:Tick]->>) {
-  team-[ch:Channels WHERE \`Name\` == "updates"]-> {
-    write ch-[:Messages]-> { Message: "Digest for \${t.\`Fired at\`}" }
-  }
+  updates = ONLY(team-[ch:Channels WHERE \`Name\` == "updates"]->)
+  if updates == null { ERROR("no #updates channel") }
+  write updates-[:Messages]-> { Message: "Digest for \${t.\`Fired at\`}" }
 }
 
 listen to timer { schedule: "0 9 * * 1" } fire \`Weekly Digest\`

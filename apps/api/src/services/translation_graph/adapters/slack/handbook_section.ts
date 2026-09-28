@@ -60,18 +60,18 @@ a = write questions-[:Check]-> { Prompt: "Ship the release?" }
 ship = callback({ write a-[:Response]-> { Answer: TRUE } })
 hold = callback({ write a-[:Response]-> { Answer: FALSE } })
 
-team-[ch:Channels WHERE \`Name\` == "releases"]-> {
-  write ch-[:Messages]-> {
-    Message: "Ship the release? \${a.Url}"
-    Blocks: [
-      { type: "actions", elements: [
-        { type: "button", text: { type: "plain_text", text: "Ship" },
-          value: "\${ship.id}" },
-        { type: "button", text: { type: "plain_text", text: "Hold" },
-          value: "\${hold.id}" }
-      ] }
-    ]
-  }
+releases = ONLY(team-[ch:Channels WHERE \`Name\` == "releases"]->)
+if releases == null { ERROR("no #releases channel") }
+write releases-[:Messages]-> {
+  Message: "Ship the release? \${a.Url}"
+  Blocks: [
+    { type: "actions", elements: [
+      { type: "button", text: { type: "plain_text", text: "Ship" },
+        value: "\${ship.id}" },
+      { type: "button", text: { type: "plain_text", text: "Hold" },
+        value: "\${hold.id}" }
+    ] }
+  ]
 }
 
 answer = await FIRST(a-[:Response]->)
@@ -155,9 +155,9 @@ movement sign_off(msg: <team-[:Message]->>) {
 
   answer = await FIRST(a-[:Response]->)
   if answer.Answer {
-    team-[ch:Channels WHERE \`Name\` == "general"]-> {
-      write ch-[:Messages]-> { Message: "Shipping now." }
-    }
+    general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+    if general == null { ERROR("no #general channel") }
+    write general-[:Messages]-> { Message: "Shipping now." }
   }
 }
 
