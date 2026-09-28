@@ -36,6 +36,9 @@ import type {
   EventSubscriptionRegistration,
   RemoveEventSubscriptionInput,
   EdgesFromResult,
+  ResolveEntityInput,
+  ResolveEntityResult,
+  ExternalRecordRef,
 } from '../adapter';
 import { BaseAdapter } from './base';
 import { uniformWalk } from './hop';
@@ -1696,13 +1699,85 @@ class NativeValuationsAdapter extends BaseAdapter {
 
   // ── 2. Entity resolution ──
   // Inbound (V → K): match the Valuations row id against linked_object
-  // candidates. That's exactly the BaseAdapter default — no override
-  // needed. Outbound mutation flows bypass resolveEntity entirely; the
-  // engine pre-resolves the bridge from candidates filtered by node_id.
+  // candidates — BaseAdapter's default, which the override below falls back to.
   //
-  // Valuations entities are addressed by Listen-Fire-managed UUIDs; there's no
-  // native uniqueness constraint to declare. Authors can still layer
-  // TG-level constraints on top.
+  // Valuations entities are addressed by Listen-Fire-managed UUIDs, so there is
+  // no native uniqueness rule to declare and every identity here is one the
+  // author wrote (`unique by (\`Name\`)`). Answering it takes a search: without
+  // one the resolve returns nothing, and "find the record or create it" quietly
+  // becomes "create it", once per message.
+
+  /**
+   * Find the rows an author's `unique by (…)` names.
+   *
+   * The constraint is an OR of AND-groups over this entity's own field names.
+   * Each group is answered with ONE narrow list request, and the equality that
+   * decides identity is applied here, to the rows that came back — the list
+   * endpoints filter loosely (`search` is a case-insensitive contains), and a
+   * loose filter must never be the thing that decides two records are the same.
+   */
+  async resolveEntity(input: ResolveEntityInput): Promise<ResolveEntityResult> {
+    const branches = input.constraints?.any ?? [];
+    const entity = this.structuredIdFor(input.recordType);
+    if (branches.length === 0 || entity === undefined || this.credentialsId === undefined) {
+      return super.resolveEntity(input);
+    }
+
+    const resolver = await this.resolver({ types: [input.recordType] });
+    const type = naturalName(input.recordType);
+    const creds = await this.requireCreds();
+
+    const seen = new Set<string>();
+    const candidates: ExternalRecordRef[] = [];
+
+    for (const branch of branches) {
+      const wanted = branch.all.map((entry) => ({
+        surface: entry.field,
+        column: resolver.fieldId(type, naturalName(entry.field)),
+        value: input.record[entry.field],
+      }));
+      // A group with nothing asserted for one of its fields identifies nothing.
+      if (wanted.some((w) => w.value === undefined || w.value === null)) continue;
+
+      const query: Record<string, string | number> = { limit: IDENTITY_SEARCH_LIMIT };
+      const byName = wanted.find((w) => w.column === 'name');
+      if (byName !== undefined) query.search = String(byName.value);
+
+      let page: ValuationsListResponse<Record<string, unknown>>;
+      try {
+        page = await valuationsFetch<ValuationsListResponse<Record<string, unknown>>>(creds, {
+          method: 'GET',
+          path: `/api/v1/valuations/${entity.slug}`,
+          query,
+        });
+      } catch (err) {
+        // A search that cannot be run is not an assertion that nothing matches,
+        // but there is nothing else to answer with; say so and fall through to
+        // the create the engine would otherwise have made anyway.
+        logger.warn('[NativeValuationsAdapter] identity search failed; resolving to no match', {
+          recordType: input.recordType,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+
+      for (const row of page.data) {
+        const externalId = String(row.id ?? '');
+        if (externalId === '' || seen.has(externalId)) continue;
+        if (!wanted.every((w) => valuationsFieldsAgree(w.value, row[w.column]))) continue;
+        seen.add(externalId);
+        candidates.push({
+          adapterType: this.adapterType,
+          externalId,
+          // Keyed by SURFACE name: arbitration compares this against the
+          // asserted record, which is in the write's currency.
+          data: Object.fromEntries(wanted.map((w) => [w.surface, row[w.column]])),
+        });
+      }
+    }
+
+    return { candidates };
+  }
 
   // ── 3. Field-level access ──
 
@@ -2374,7 +2449,11 @@ class NativeValuationsAdapter extends BaseAdapter {
     const creds = await this.requireCreds();
     const response = await valuationsFetch<ValuationsRecordResponse<Record<string, unknown>>>(
       creds,
-      { method: 'POST', path: `/api/v1/valuations/${entity.slug}`, body: fields },
+      {
+        method: 'POST',
+        path: `/api/v1/valuations/${entity.slug}`,
+        body: withoutEmptyFields(fields),
+      },
     );
     return {
       adapterType: NATIVE_VALUATIONS_ADAPTER_TYPE,
@@ -2470,7 +2549,20 @@ class NativeValuationsAdapter extends BaseAdapter {
         creds,
         { method: 'GET', path: `/api/v1/valuations/${entity.slug}/${input.externalId}` },
       );
-      return response.data;
+      // The REST record is keyed by Valuations' own column names; the caller
+      // asked in the write's currency (the surface field names it is about to
+      // write). Answer in the currency it asked in, or `?:` and no-op
+      // suppression compare a value against a key that is never there — which
+      // reads as "empty" and overwrites what is already on the record.
+      const requested = input.fieldIds ?? [];
+      if (requested.length === 0) return response.data;
+      const resolver = await this.resolver({ types: [input.recordType] });
+      const type = naturalName(input.recordType);
+      const current: Record<string, unknown> = {};
+      for (const name of requested) {
+        current[name] = response.data[resolver.fieldId(type, naturalName(name))];
+      }
+      return current;
     } catch (err) {
       logger.warn('[NativeValuationsAdapter] readRecord failed; returning null', {
         recordType: input.recordType,
@@ -2547,4 +2639,34 @@ function readDotPath(obj: unknown, path: string): unknown {
     }
   }
   return current;
+}
+
+/**
+ * A create has no existing value to clear, so a field with nothing in it is a
+ * field the caller did not set — `Field ?: <something the source didn't have>`
+ * is exactly that. The entity create schemas take an absent optional field and
+ * refuse an explicit null, so send neither. (The command create path has always
+ * done this; see `createCommandRecord`.) An update keeps its nulls: clearing a
+ * field there is the point.
+ */
+function withoutEmptyFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined && value !== null),
+  );
+}
+
+/** How many rows one identity search reads. The list endpoints answer newest
+ *  first and `search` already narrows to the name, so a page is a shortlist,
+ *  not a scan. */
+const IDENTITY_SEARCH_LIMIT = 100;
+
+/** Identity equality as Valuations stores it: text compares case-insensitively
+ *  (the list `search` filter already does), and a multi-valued column matches
+ *  when the asserted scalar is one of its values. */
+function valuationsFieldsAgree(asserted: unknown, stored: unknown): boolean {
+  if (asserted === null || asserted === undefined) return false;
+  if (stored === null || stored === undefined) return false;
+  const target = String(asserted).trim().toLowerCase();
+  const pool = Array.isArray(stored) ? stored : [stored];
+  return pool.some((v) => v !== null && v !== undefined && String(v).trim().toLowerCase() === target);
 }
