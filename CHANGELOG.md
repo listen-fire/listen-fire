@@ -8,6 +8,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.7.0] - 2026-09-28
+
 ### Breaking
 
 - `vc_url_retrieval` called on its own returns a list of records, one per fetched link (`name`, `url`, `file`, `text`), instead of one string of all the page text. Hold one first, then read its fields: `deck = FIRST(linked)`, then `deck.text`.
@@ -211,7 +213,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.7.0...HEAD
+[v0.7.0]: https://github.com/listen-fire/listen-fire/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/listen-fire/listen-fire/compare/v0.6.1...v0.6.2
 [v0.6.1]: https://github.com/listen-fire/listen-fire/compare/v0.6.0...v0.6.1
 [v0.6.0]: https://github.com/listen-fire/listen-fire/compare/v0.5.0...v0.6.0
