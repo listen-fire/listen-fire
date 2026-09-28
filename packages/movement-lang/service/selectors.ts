@@ -304,6 +304,11 @@ export function scanInstanceChains(source: string): InstanceChain[] {
       if (body[field.name] === undefined) body[field.name] = field.value.raw;
     }
     visitWriteTarget(write.target, aliasScope, body);
+    // A `...e` spread needs nothing here, though this scan runs before the
+    // checker knows `e`'s fields: each line it stands for is a one-field read
+    // off `e` (`e.name`), which grounds no hop chain, and is never a literal a
+    // body-decided landing could key on. The spread and its written-out lines
+    // scan the same.
     for (const field of write.fields) visitSlot(field.value, aliasScope);
     for (const clause of write.uniqueBy) visitSlot(clause.predicate, aliasScope);
   };

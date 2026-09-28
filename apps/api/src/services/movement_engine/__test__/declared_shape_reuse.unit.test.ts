@@ -310,7 +310,10 @@ const REPLY = {
   ],
 };
 
-async function run(source: string, attio = makeFakeAdapter('attio')) {
+async function run(
+  source: string,
+  { attio = makeFakeAdapter('attio'), movementName }: { attio?: ReturnType<typeof makeFakeAdapter>; movementName?: string } = {},
+) {
   const llm = queuedMovementLlm([REPLY]);
   const writes: CapturedWrite[] = [];
   await runMovement({
@@ -319,6 +322,7 @@ async function run(source: string, attio = makeFakeAdapter('attio')) {
     teamId: TEAM_ID,
     catalog,
     resolveAdapter: makeResolver({ email: makeFakeAdapter('email').adapter, attio: attio.adapter }),
+    ...(movementName !== undefined ? { movementName } : {}),
     llm: llm.client,
     dryRun: true,
     writeSink: (w) => writes.push(w),
@@ -403,7 +407,7 @@ describe('a spread in a write body', () => {
       resolveCandidates: () => [{ adapterType: 'attio', externalId: 'existing-1', data: {} }],
     });
     attio.adapter.readRecord = async () => ({ name: 'Acme', stage: 'Series B', thesis: null });
-    const { writes } = await run(spreading('unique by (name), ?...e'), attio);
+    const { writes } = await run(spreading('unique by (name), ?...e'), { attio });
     // `stage` is already set, so the fill leaves it; `thesis` is empty and fills.
     expect(writes).toEqual([
       expect.objectContaining({ kind: 'update', externalId: 'existing-1', fields: { thesis: 'Infra' } }),
@@ -446,5 +450,75 @@ describe('an IMPORTED declaration', () => {
     });
     expect(llm.calls[0].system).toContain("the name, route by the library's lens");
     expect(llm.calls[0].system).not.toContain("the importer's lens");
+  });
+});
+
+describe('a spread of a declared structure, or of a record built in memory', () => {
+  const DEAL = ['node Deal {', '  name:  <text>', '  stage: <text>', '}'].join('\n');
+  const RECORD_DEAL = ['function record_deal(d: <Deal>) {', '  write crm-[:companies]-> { ...d }', '}'];
+
+  it('writes the DECLARED fields of a `<Deal>` parameter — not whatever else the value carries', async () => {
+    // The record handed over also carries `thesis`; `Deal` does not declare it.
+    const source = movement([ENTRY, DEAL, ...RECORD_DEAL].join('\n'), ['    node entry: <Entry>'], [
+      '  found-[e:entry]-> {',
+      '    n = node { name: COALESCE(e.name, "?"), stage: COALESCE(e.stage, "?"), thesis: COALESCE(e.thesis, "?") }',
+      '    record_deal(d: n)',
+      '  }',
+    ]);
+    const { writes } = await run(source, { movementName: 'm' });
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: 'Seed' } }),
+    ]);
+  });
+
+  it('writes every field of a `node { … }` literal, and none of its edges', async () => {
+    const source = movement(ENTRY, ['    node entry: <Entry>'], [
+      '  found-[e:entry]-> {',
+      '    n = node { name: COALESCE(e.name, "?"), stage: "Seed", founder: node { name: "Ada" } }',
+      '    write crm-[:companies]-> { ...n }',
+      '  }',
+    ]);
+    const { writes } = await run(source);
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: 'Seed' } }),
+    ]);
+  });
+
+  it('spreads inside an IMPORTED callee — the library was checked, so its spread was resolved', async () => {
+    const library = [
+      PRELUDE,
+      'export node Deal {',
+      '  name:  <text>',
+      '  stage: <text>',
+      '}',
+      'export function record_deal(d: <Deal>) {',
+      '  write crm-[:companies]-> { ...d }',
+      '}',
+    ].join('\n');
+    const source = [
+      PRELUDE,
+      'import { record_deal } from "lib/deals"',
+      'movement m(msg: <inbox-[:message]->>) {',
+      '  record_deal(d: node { name: msg.`subject`, stage: "Seed" })',
+      '}',
+    ].join('\n');
+    const writes: CapturedWrite[] = [];
+    await runMovement({
+      source,
+      event: webhookEvent('email', { subject: 'Acme', text: '' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveFile: (path) => (path === 'lib/deals' ? { source: library } : undefined),
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: makeFakeAdapter('attio').adapter,
+      }),
+      llm: queuedMovementLlm([]).client,
+      dryRun: true,
+      writeSink: (w) => writes.push(w),
+    });
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: 'Seed' } }),
+    ]);
   });
 });

@@ -86,7 +86,7 @@ deal = node {
 - \`lazy\` defers the walk until something reads the edge (see the traversal chapter). Without it the walk happens where the literal is written.
 - \`both = [one, two]\` gathers records you already hold into one list, and a block head walks them in the order written: \`both-[c:company]-> { … }\`. A list holds one kind of thing — records or values, never both.
 - Nothing is provisioned: building one is not an effect, and it is checked by its structure — what it carries — not by any name.
-- A literal names every entry it carries. Copying a whole extracted record into a system is a write's job: \`?...e\` in the write body (see the writes chapter).
+- A literal names every entry it carries. Copying a whole record — a literal, an extracted one, a declared parameter — into a system is a write's job: \`...n\` or \`?...n\` in the write body (see the writes chapter).
 
 ### collect-what-you-wrote
 

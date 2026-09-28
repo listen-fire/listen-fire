@@ -95,7 +95,7 @@ company = write crm-[:Companies]-> {
   Owner   ?: @user_email      # set-if-empty — leaves an existing value alone
   Tags    +: ["inbound"]      # append to a multi-value field (duplicates allowed)
   Sources +?:["email"]        # append only what's missing (set-union)
-  ?...e                       # every field of extracted record e, set-if-empty (\`...e\`: plain)
+  ?...e                       # every field of e (extracted, <Decl>-typed, or node {…}), set-if-empty; \`...e\`: plain
   unique by (Domain)          # identity — repeats update instead of duplicate
 }
 \`\`\`

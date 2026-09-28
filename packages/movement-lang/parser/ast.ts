@@ -399,13 +399,22 @@ export interface FieldEntry {
  *
  * The parser cannot know `e`'s fields, so a spread stays a spread here and
  * {@link expandWriteSpreads} turns it into ordinary field lines where the
- * fields ARE known (the checker from `e`'s type, the engine from its value).
+ * fields ARE known: the checker resolves them from `e`'s type and records them
+ * on the spread (`fields`), and the engine expands from that record.
  */
 export interface WriteSpread {
   /** The spread record's bound name. */
   source: string;
   /** `?...` ⇒ `'fill'`; absent ⇒ a plain assignment. */
   semantics?: 'fill';
+  /**
+   * The fields this spread writes, as the CHECKER resolved them from the
+   * source's type — the one list both sides use. The engine cannot recover it
+   * from the value: a `<Deal>` parameter may be handed a record carrying more
+   * than `Deal` declares. Absent until the program is checked; the engine
+   * refuses a spread nobody resolved.
+   */
+  fields?: readonly string[];
   span: Span;
 }
 

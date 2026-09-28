@@ -66,7 +66,7 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
 Cut a long document into pieces, read each piece on its own, and gather what they found into one place before any of it reaches a system:
 
 \`\`\`
-node Company { name: <text> website: <text> }
+node Company { name: <text>; website: <text> }
 
 function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
   docs   = go-[:Files]->.\`File\`
