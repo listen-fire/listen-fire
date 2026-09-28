@@ -12,6 +12,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - The criteria form of `link` is retired. `x = link p-[:Edge]-> { … }` is now a parse error that names its replacement: find the record with `x = match p-[:Edge]-> { … }`, then connect it with `link p -[:Edge]-> x`. The handle form of `link` is unchanged.
 - `vc_url_retrieval` called on its own returns a list of records, one per fetched link (`name`, `url`, `file`, `text`), instead of one string of all the page text. Hold one first, then read its fields: `deck = FIRST(linked)`, then `deck.text`.
+- A null test (`EXISTS`, `ISNULL`, `== null`, `!= null`) on an extracted text field is refused. Extracted text is always present — `""` when nothing was found — so test emptiness with `!= ""` instead.
+- An extracted field written into a `number`, `date`, `boolean` or file field is refused until the field is annotated with that type.
+- An unknown type name on a declared node's field is refused; it used to read silently as text.
+- An empty `unique by` key component is treated as no key, and never matches.
 
 ### Added
 
@@ -20,6 +24,17 @@ Entries are written for two readers: an operator running a self-hosted installat
 - Valuations Legal Entity resolves `unique by` by identity, with fuzzy matching on Name, Legal Name, Also Known As and Other Names.
 - Files a `through` plugin fetched land on the extracted record's `_resources`, so the usual attach pattern puts them on any record with a file field.
 - A record held in a variable (`deck = FIRST(pages)`) reads by field.
+- `labels` listen option on a Gmail listener (default `["INBOX"]`) watches labels beyond the inbox, e.g. `["INBOX", "SPAM"]`.
+- A node declaration can describe itself, each field and each nested node, and an extraction reuses it with `node entry: <Entry>` instead of repeating the shape inline.
+- A write body can spread a record with `...e` / `?...e` — an extracted record, a declared parameter, or a record built in memory — writing each of its fields as a plain line.
+- A dict literal is typed by its keys: `AT(d, "k")` on a key the literal wrote down reads that key's own type, present; an unknown key is refused with a did-you-mean.
+- `AT(list, n)` reads a list by position. Like `FIRST`, it needs an ordered list and may miss.
+- A `MAP` closure may run with no `return`, for its writes alone; a bare `MAP(...)` (and `FILTER`/`REDUCE`/`GROUPBY`/`KEYBY`) can run as a statement with no binding.
+- `URL.HOST(text)` reads the lowercased host out of a link.
+- Unary minus (`-x`) in formulas.
+- A guard (`EXISTS(x.f)`, `x.f != null`, `NOT ISNULL(x.f)`) narrows a typed extracted field to present inside its arm.
+- A field refused on a narrowable type (a hop landing on more than one member of a polymorphic type) names the narrowing test that admits it.
+- The editor tints strings, so a multi-line prompt reads as text.
 
 ### Changed
 
@@ -27,6 +42,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 - The Bright Data SERP provider waits up to 90 s per request and retries a 429, a 5xx (including one reported only in `x-brd-status-code`), a timeout or an empty body, up to three attempts.
 - A refusal from Google Custom Search is logged with its reason and fails the search, instead of reading as "no results".
 - Website identity ignores scheme, `www.`, trailing slash and case.
+- A Gmail poll reads every history page and holds an arrival the search has not indexed yet for 15 minutes, instead of dropping it.
+- An imported declaration's refinements resolve in the library that declared it, instead of the importing file's own types.
 
 ### Fixed
 
@@ -34,6 +51,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 - A write whose identity candidates were filtered could bind or update the wrong record.
 - A valuations write with `unique by` created a new row every time instead of finding the existing one.
 - `?:` on a valuations record now sees an existing value; a create no longer sends explicit nulls.
+- An awaited `WHERE` stops at its first false condition, instead of reading every field it names off a candidate that already failed an earlier one.
+- An extracted text field that finds nothing arrives as `""` instead of absent.
 
 ### Operator notes
 
