@@ -1437,3 +1437,55 @@ describe('registeredPluginSpecs — declared output', () => {
     expect(specs.vc_url_retrieval?.fedByExtraction).toBeUndefined();
   });
 });
+
+// FUZZY is promised per field: a descriptor names the field ids it can match
+// by similarity, and the checker compares an author's `unique by` against the
+// names the author writes. The projection is the one place ids become those
+// names; a list that stayed as ids would reject every FUZZY on the target.
+describe('instanceSchemaFromDescriptors — fuzzy resolution per field', () => {
+  const projectedFuzzy = (supportsFuzzyResolution?: boolean | [string, ...string[]]) => {
+    const projected = instanceSchemaFromDescriptors({
+      supportsInPlaceUpdate: true,
+      adapterType: 'native_valuations',
+      entries: [{ typeId: 'legal_entity', displayName: 'Legal Entity', writable: true, readable: true }],
+      descriptors: new Map<string, SchemaTypeDescriptor>([
+        [
+          'legal_entity',
+          {
+            typeId: 'legal_entity',
+            displayName: 'Legal Entity',
+            ...(supportsFuzzyResolution !== undefined ? { supportsFuzzyResolution } : {}),
+            fields: [
+              { fieldId: 'name', displayName: 'Name', kind: 'string' as const, writable: true, required: true },
+              { fieldId: 'legal_name', displayName: 'Legal Name', kind: 'string' as const, writable: true, required: false },
+              { fieldId: 'city', displayName: 'City', kind: 'string' as const, writable: true, required: false },
+            ],
+            references: [],
+          },
+        ],
+      ]),
+    });
+    return { projected, fuzzy: projected.schema.writableRoots['Legal Entity']?.fuzzyResolution };
+  };
+
+  it('maps a list of field ids to the names an author writes', () => {
+    expect(projectedFuzzy(['name', 'legal_name']).fuzzy).toEqual(['Name', 'Legal Name']);
+  });
+
+  it('keeps true as true: every field matches by similarity', () => {
+    expect(projectedFuzzy(true).fuzzy).toBe(true);
+  });
+
+  it.each([
+    ['false', false],
+    ['absent', undefined],
+  ] as const)('declares no fuzzy resolution when the flag is %s', (_label, flag) => {
+    expect(projectedFuzzy(flag).fuzzy).toBeUndefined();
+  });
+
+  it('drops an id that names no field, and says so', () => {
+    const { projected, fuzzy } = projectedFuzzy(['name', 'nickname']);
+    expect(fuzzy).toEqual(['Name']);
+    expect(projected.notes.join()).toContain("fuzzy resolution names 'nickname'");
+  });
+});
