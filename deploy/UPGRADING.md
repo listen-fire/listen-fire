@@ -8,7 +8,7 @@ The same procedure applies wherever the installation runs, because every deploym
 
 ## Before
 
-**Read the release notes for every tag between the one you are on and the one you are going to.** Releases are cumulative but their notes are not: a required environment variable introduced in `v0.2.0` still applies when you jump from `v0.1.0` to `v0.3.0`.
+**Read the release notes in [CHANGELOG.md](../CHANGELOG.md) for every tag between the one you are on and the one you are going to.** Releases are cumulative but their notes are not: a required environment variable introduced in `v0.2.0` still applies when you jump from `v0.1.0` to `v0.3.0`.
 
 **Know which version you are on.** `curl -s http://localhost:8081/healthz/workers` reports it as `version`, and the web UI shows it under Settings → About.
 
