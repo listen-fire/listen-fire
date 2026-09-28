@@ -180,42 +180,19 @@ describe('§B writes, handles, identity', () => {
   it('parses the bare-handle link statement', () => {
     const program = parseProgram(B3);
     const link = as(program.statements[0], 'link').link;
-    expect(link).toMatchObject({
-      from: 'champion',
-      edge: 'led',
-      target: { kind: 'handle', name: 'part' },
-    });
+    expect(link).toMatchObject({ from: 'champion', edge: 'led', to: 'part' });
   });
 
-  it('parses the criteria-form link statement (identity-criteria body)', () => {
-    const program = parseProgram('link c -[:portfolio]-> { name: "Fund III" }');
-    const link = as(program.statements[0], 'link').link;
-    expect(link.from).toBe('c');
-    expect(link.edge).toBe('portfolio');
-    if (link.target.kind !== 'criteria') throw new Error('expected criteria target');
-    expect(link.target.explicitType).toBeUndefined();
-    expect(link.target.fields.map((f) => f.name)).toEqual(['name']);
-    expect(link.target.fields[0].value.raw).toBe('"Fund III"');
+  it('retires the criteria form of link, naming match + link as the replacement', () => {
+    const pointer = /match it first: 'x = match c-\[:portfolio\]-> \{ unique by \(…\) … \}', then 'link c -\[:portfolio\]-> x'/;
+    expectParseError('link c -[:portfolio]-> { name: "Fund III" }', pointer);
+    expectParseError('p = link c -[:portfolio]-> { name: "Fund III" }', /A link binds nothing[\s\S]*x = match p-\[:Edge\]->/);
+    expectParseError('link c -[:portfolio]-> <company> { name: "Fund III" }', pointer);
+    expectParseError('link c -[:portfolio]->company { name: "Fund III" }', pointer);
   });
 
-  it('parses a bound criteria link with an explicit type for a polymorphic edge', () => {
-    const program = parseProgram('p = link c -[:related]-><company> { name: "Fund III" }');
-    const assign = as(program.statements[0], 'assign');
-    expect(assign.name).toBe('p');
-    const link = rv(assign.value, 'link').link;
-    if (link.target.kind !== 'criteria') throw new Error('expected criteria target');
-    expect(link.target.explicitType).toBe('company');
-  });
-
-  it('rejects binding the bare-handle link form (it binds nothing)', () => {
-    expectParseError('p = link a -[:e]-> b', /criteria form/);
-  });
-
-  it("rejects 'unique by' inside a link body (criteria ARE the identity)", () => {
-    expectParseError(
-      'link c -[:portfolio]-> { unique by (`name`), name: "Fund III" }',
-      /criteria ARE the identity/,
-    );
+  it('rejects binding a link (it binds nothing)', () => {
+    expectParseError('p = link a -[:e]-> b', /A link binds nothing/);
   });
 
   it("retires the 'edge' statement keyword, pointing at link and at nesting", () => {
@@ -1708,16 +1685,11 @@ describe('type markers (every type slot wears angle brackets)', () => {
     expectParseError('write (a-[:rel]->, b-[:rel]->) note { text: "x" }', /wrap the type in angle brackets: <note>/);
   });
 
-  it('criteria-link explicit types: bare types get the fix-it (handle form untouched)', () => {
-    expectParseError('p = link c -[:related]->company { name: "x" }', /wrap the type in angle brackets: <company>/);
-    const program = parseProgram('link a -[:led]-> b');
-    expect(as(program.statements[0], 'link').link.target).toEqual({ kind: 'handle', name: 'b' });
-  });
-
-  it('criteria-link explicit types: the bracketed form parses', () => {
-    const program = parseProgram('p = link c -[:related]-> <company> { name: "x" }');
-    const link = rv(as(program.statements[0], 'assign').value, 'link').link;
-    expect(link.target).toMatchObject({ kind: 'criteria', explicitType: 'company' });
+  it('match explicit types: bare types get the fix-it, the bracketed form parses', () => {
+    expectParseError('p = match c-[:related]->company { unique by (`name`), name: "x" }', /wrap the type in angle brackets: <company>/);
+    const program = parseProgram('p = match c-[:related]-> <company> { unique by (`name`), name: "x" }');
+    const match = rv(as(program.statements[0], 'assign').value, 'match').match;
+    expect(match.target).toMatchObject({ kind: 'linked', explicitType: 'company' });
   });
 
   it('an unclosed type marker is reported at the missing `>`', () => {
@@ -1849,10 +1821,66 @@ describe('backtick-quoted names — the general rule', () => {
     );
     const link = as(program.statements[3], 'link').link;
     expect(link.from).toBe('my channel');
-    expect(link.target).toEqual({ kind: 'handle', name: 'my deal' });
+    expect(link.to).toBe('my deal');
     const unlink = as(program.statements[4], 'unlink');
     expect(unlink).toMatchObject({ from: 'my channel', edge: 'owns', to: 'my deal' });
     const listen = as(program.statements[5], 'listen');
     expect(listen.instance).toBe('my channel');
+  });
+});
+
+describe('match — the identity half of a write, on its own', () => {
+  it('binds a match over a hop, with two OR-ed unique by clauses', () => {
+    const program = parseProgram(
+      [
+        'existing = match source-[:val]-> {',
+        '  unique by (FUZZY `name`)',
+        '  unique by (`website`)',
+        '  name: extractedName',
+        '  website: extractedWebsite',
+        '}',
+      ].join('\n'),
+    );
+    const assign = as(program.statements[0], 'assign');
+    expect(assign.name).toBe('existing');
+    const match = rv(assign.value, 'match').match;
+    expect(match.target).toMatchObject({ kind: 'linked', path: { root: { kind: 'name', name: 'source' }, hopsRaw: '-[:val]->' } });
+    expect(match.uniqueBy.map(pred)).toEqual(['FUZZY `name`', '`website`']);
+    expect(match.fields.map((f) => f.name)).toEqual(['name', 'website']);
+  });
+
+  it('an unbound match is a statement (a gate), over a root collection', () => {
+    const program = parseProgram('match crm-[:companies]-> { unique by (`domain`), domain: "acme.com" }');
+    const statement = as(program.statements[0], 'match');
+    expect(statement.match.target).toMatchObject({ kind: 'linked', path: { hopsRaw: '-[:companies]->' } });
+    expect(statement.match.fields[0].value.raw).toBe('"acme.com"');
+  });
+
+  it('takes the tuple target a write takes', () => {
+    const program = parseProgram(
+      'deal = match (company-[:investments]->, investor-[:investments]->) { unique by (company, investor) }',
+    );
+    const match = rv(as(program.statements[0], 'assign').value, 'match').match;
+    expect(match.target.kind).toBe('tuple');
+    if (match.target.kind !== 'tuple') throw new Error('expected tuple');
+    expect(match.target.paths.map((p) => pathRootName(p))).toEqual(['company', 'investor']);
+  });
+
+  it('refuses a bare position: a record in hand has nothing left to find', () => {
+    expectParseError('match a { unique by (`name`), name: "x" }', /'a' is already a record — a match FINDS one/);
+  });
+
+  it.each(['?:', '+:', '+?:'])("refuses the '%s' operator — a match never writes", (op) => {
+    expectParseError(`match crm-[:companies]-> { unique by (\`name\`), name ${op} "x" }`, /a match never writes/);
+  });
+
+  it('is contextual: a value named match still binds and reads', () => {
+    const program = parseProgram('match = 1\nx = match');
+    expect(as(program.statements[0], 'assign').name).toBe('match');
+    expect(rv(as(program.statements[1], 'assign').value, 'expr').expr.raw).toBe('match');
+  });
+
+  it('a node literal refuses a match entry by name', () => {
+    expectParseError('n = node { co: match crm-[:companies]-> { unique by (`name`) } }', /'match' acts/);
   });
 });

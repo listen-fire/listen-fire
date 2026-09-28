@@ -482,26 +482,26 @@ describe('name resolution', () => {
     ).toEqual([C.NAME_UNRESOLVED]);
   });
 
-  it('a criteria-form link over an untyped graph stays silent (unknown never false-positives)', () => {
+  it('a match over an untyped graph stays silent (unknown never false-positives)', () => {
     expect(
       codes(
         inMovement(
           [
             '  co = write crm-[:company]-> { name: msg.`subject` }',
-            '  p = link co -[:portfolio]-> { name: "Fund III" }',
+            '  p = match co-[:portfolio]-> { unique by (`name`), name: "Fund III" }',
           ].join('\n'),
         ),
       ),
     ).toEqual([]);
   });
 
-  it("a criteria-form link's field expressions still resolve names", () => {
+  it("a match's field expressions still resolve names", () => {
     expect(
       codes(
         inMovement(
           [
             '  co = write crm-[:company]-> { name: msg.`subject` }',
-            '  link co -[:portfolio]-> { name: ghost.`name` }',
+            '  match co-[:portfolio]-> { unique by (`name`), name: ghost.`name` }',
           ].join('\n'),
         ),
       ),

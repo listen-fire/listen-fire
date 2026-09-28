@@ -59,6 +59,7 @@ import {
   ExtractExpression,
   ExtractField,
   ExtractStage,
+  FieldEntry,
   IfStatement,
   ImportStatement,
   InlineBlockExpression,
@@ -66,6 +67,8 @@ import {
   LinkExpression,
   ListenDeclaration,
   Loc,
+  MatchExpression,
+  MatchTarget,
   MovementDeclaration,
   MovementParam,
   NamedArg,
@@ -306,9 +309,6 @@ export const DiagnosticCodes = {
   /** A `link` whose landing doesn't carry what the declared edge says its
    *  landings are — the same structural assignability an argument gets. */
   NODE_LINK_SHAPE: 'MOV_NODE_LINK_SHAPE',
-  /** A criteria body (`link a -[:e]-> { … }`) on a run-local node. Criteria
-   *  FIND a record in the from-side's graph; a node this run built has none. */
-  NODE_LINK_CRITERIA: 'MOV_NODE_LINK_CRITERIA',
   THROUGH_NOT_PLUGIN: 'MOV_THROUGH_NOT_PLUGIN',
   THROUGH_BAD_ARG: 'MOV_THROUGH_BAD_ARG',
   /** A required argument (`PluginSpec.requiredArgs`) the call never wrote at
@@ -374,9 +374,14 @@ export const DiagnosticCodes = {
    *  target matching on its own native rules is expected; the editor shows
    *  the native rules as an overlay hint on the write target instead.) */
   UNIQUE_NATIVE_REDUNDANT: 'MOV_UNIQUE_NATIVE_REDUNDANT',
-  /** A `FUZZY` modifier on a `unique by` component whose target can't resolve
-   *  identity by similarity (no `fuzzyResolution` capability). */
+  /** A `FUZZY` modifier on a `unique by` component the target can't resolve
+   *  by similarity: the target has no `fuzzyResolution` at all, or lists the
+   *  fields it has it for and the component's field is not one of them. */
   UNIQUE_FUZZY_UNSUPPORTED: 'MOV_UNIQUE_FUZZY_UNSUPPORTED',
+  /** A `match` with nothing to identify the record by — no `unique by`, and a
+   *  target with no identity rules of its own. It could only ever find
+   *  "some record of this type". */
+  MATCH_NO_IDENTITY: 'MOV_MATCH_NO_IDENTITY',
   /** `unique by (…)` on a target that decides record identity itself and does
    *  not accept author-defined uniqueness (the adapter declared
    *  `uniquenessAuthorable: false` — e.g. Affinity, whose org/person matching
@@ -649,9 +654,10 @@ export interface RecordedWrite {
   binding?: string;
   /** Where it lands, resolved. Absent when the target didn't type. */
   target?: RecordedTarget;
-  /** A position write updates the record it already holds; every other form
-   *  resolves-or-creates one. */
-  action: 'create' | 'update';
+  /** A position write updates the record it already holds; every other write
+   *  resolves-or-creates one; a `match` — the same body, recorded here for
+   *  the same reasons — only finds one. */
+  action: 'create' | 'update' | 'find';
   /** The parent edges this write's form establishes (linked / tuple), as the
    *  checker resolved them. Empty for a root or position write. */
   parents: Array<{ edge: string; type?: string }>;
@@ -713,17 +719,14 @@ export interface RecordedListen {
   eventTypes: Array<{ key: string; display?: string }>;
 }
 
-/** `link a -[:e]-> b` / `p = link c -[:e]-> { … }` — the edge-only write. */
+/** `link a -[:e]-> b` — the edge-only write. */
 export interface RecordedLink {
   kind: 'link';
   span: Span;
   scope: Scope;
   from: string;
   edge: string;
-  /** A bare-handle link names its target; a criteria link FINDS one, so what
-   *  is known is the type it resolved to. */
-  target: { kind: 'handle'; name: string } | ({ kind: 'criteria' } & Partial<RecordedTarget>);
-  binding?: string;
+  to: string;
 }
 
 /** `await …` — the wake primitive, in each of its three sources. */
@@ -951,6 +954,32 @@ function scalarLiteralType(raw: string): FieldType | undefined {
  * the recorded form of `describePosition`'s subject. Structural: read off the
  * ref the checker built, never split out of the display text.
  */
+/**
+ * What a match checks its body against when the type it looks for has no
+ * write shape — a record you can find but never create. Its readable fields
+ * are the fields; nothing about it promises similarity or native identity,
+ * because only a write shape carries those.
+ */
+function readableMatchRoot(position: PositionSchema | undefined): WritableRootSchema | undefined {
+  if (position === undefined) return undefined;
+  return {
+    fields: position.properties,
+    resultShape: { externalId: 'text', url: 'text', ...position.properties },
+  };
+}
+
+/**
+ * The handle a `match` binds: the record, without the write-outcome facts. A
+ * write's handle answers "what happened" (`created`, `committed`) as well as
+ * "which record"; a match only ever answers the second, so the first is not
+ * part of its type rather than a flag that is always false.
+ */
+function foundHandle(handle: PositionTypeRef | undefined): PositionTypeRef | undefined {
+  if (handle?.kind !== 'handle') return handle;
+  const { created: _created, committed: _committed, ...resultShape } = handle.resultShape;
+  return { ...handle, resultShape };
+}
+
 function recordedTargetOf(handle: PositionTypeRef | undefined): RecordedTarget | undefined {
   switch (handle?.kind) {
     case 'handle':
@@ -2762,6 +2791,9 @@ class Checker {
       case 'write':
         this.checkWrite(statement.write, scope);
         return;
+      case 'match':
+        this.checkMatch(statement.match, scope);
+        return;
       case 'call':
         this.checkCall(statement, scope);
         return;
@@ -3069,8 +3101,8 @@ class Checker {
         symbol = { ...symbol, ...(handle ? { posType: handle } : {}), bindingPlane: 'node' };
         break;
       }
-      case 'link': {
-        const handle = this.checkLink(value.link, scope, name);
+      case 'match': {
+        const handle = this.checkMatch(value.match, scope, { binding: name });
         symbol = { ...symbol, ...(handle ? { posType: handle } : {}), bindingPlane: 'node' };
         break;
       }
@@ -4738,14 +4770,14 @@ class Checker {
    */
   private selectWriteVariant(
     root: WritableRootSchema | undefined,
-    write: WriteExpression,
+    body: { fields: FieldEntry[] },
     rootDescription: string,
   ): { root: WritableRootSchema | undefined; description: string; variant?: WritableRootSchema } {
     const discriminated = root?.discriminated;
     if (root === undefined || discriminated === undefined) {
       return { root, description: rootDescription };
     }
-    const discBody = write.fields.find((f) => f.name === discriminated.discriminant);
+    const discBody = body.fields.find((f) => f.name === discriminated.discriminant);
     if (discBody === undefined) return { root, description: rootDescription };
     const literal = staticStringLiteralOf(discBody.value);
     if (literal === undefined) {
@@ -4983,7 +5015,10 @@ class Checker {
         });
       }
     } else if (write.target.kind === 'tuple') {
-      const tuple = this.checkTupleWriteTarget(write.target, scope, parents, isBound);
+      const tuple = this.checkTupleWriteTarget(write.target, scope, parents, {
+        purpose: 'write',
+        isBound,
+      });
       root = tuple.root;
       handle = tuple.handle;
       if (tuple.description !== undefined) rootDescription = tuple.description;
@@ -5073,67 +5108,7 @@ class Checker {
       this.checkRequiredEdges({ write, root, rootDescription, parents, handle });
       this.checkRequiredFields({ write, root, rootDescription, parents });
 
-      // Some targets decide identity themselves and don't accept author-defined
-      // uniqueness (the adapter declared `uniquenessAuthorable: false` — e.g.
-      // Affinity, whose org/person matching is native). Reject the clause
-      // outright rather than silently ignore it; native matching still happens.
-      if (root?.uniquenessAuthorable === false && write.uniqueBy.length > 0) {
-        this.report(
-          DiagnosticCodes.UNIQUE_NOT_AUTHORABLE,
-          `${rootDescription} decides record identity itself — 'unique by' isn't configurable here. Drop the clause; matching on the system's own keys happens automatically`,
-          write.uniqueBy[0].span,
-        );
-      } else {
-      // The clause is a predicate that finds the existing record. Each name it
-      // references must be a field of the written record (`\`email\``,
-      // `\`stage\` == "Open"`) or a bound handle in scope (edge-scoped
-      // identity). A literal RHS / operators need no resolution.
-      for (const clause of write.uniqueBy) {
-        // A FUZZY modifier rides on a textual component, so split first and
-        // strip it before parsing each part as an ordinary expression.
-        for (const part of splitUniquenessConjuncts(clause.predicate.raw)) {
-          let parsed: Expression;
-          try {
-            parsed = parseMovementExpression(part.raw);
-          } catch (e) {
-            if (!(e instanceof BridgeError)) throw e;
-            this.report(
-              DiagnosticCodes.EXPR_PARSE,
-              e.message,
-              spanWithin(clause.predicate, part.offset + (e.pos ?? 0)),
-            );
-            continue;
-          }
-          if (root === undefined) continue; // schema unknown ⇒ stay silent
-          // FUZZY is adapter-specific: only targets that resolve by similarity
-          // (the KG's pg_trgm, Attio's $contains) may carry it.
-          if (part.fuzzy && root.fuzzyResolution !== true) {
-            this.report(
-              DiagnosticCodes.UNIQUE_FUZZY_UNSUPPORTED,
-              `FUZZY isn't available on ${rootDescription} — it matches identity exactly, not by similarity. Drop FUZZY and identify by an exact field, or pick a target that supports fuzzy matching`,
-              spanWithin(clause.predicate, part.offset),
-            );
-          }
-          const names = collectExpressionNames(parsed);
-          for (const ref of new Set(names.refs)) {
-            if (names.aliases.has(ref)) continue; // bound by a step within the predicate
-            if (ref in root.fields) continue;
-            // A bare name that is a bound handle is the EDGE-SCOPED identity
-            // spelling: identify the record by the parent it hangs off. A
-            // landing on a local node's edge hangs off nothing, so there is no
-            // parent for the name to be — it can only be a field of the
-            // landing, and letting it through would identify by nothing at all.
-            if (!local && scope.resolve(ref).kind === 'found') continue; // a bound handle
-            this.report(
-              DiagnosticCodes.UNIQUE_UNKNOWN_FIELD,
-              `'${ref}' is not a field of ${rootDescription} or a bound handle — a 'unique by' predicate identifies by fields of the written record or by a bound parent`,
-              clause.span,
-            );
-          }
-        }
-      }
-      this.checkNativeUniqueness(write, root, rootDescription);
-      }
+      this.checkIdentity({ uniqueBy: write.uniqueBy, root, rootDescription, scope, local });
     }
     const writtenSchema = handle !== undefined ? positionSchemaOfRef(handle) : undefined;
     // Empty-write watch (chunk D): count fields that can DISCHARGE TO OMISSION —
@@ -5227,6 +5202,238 @@ class Checker {
   }
 
   /**
+   * The identity rules `write` and `match` share — one routine, because they
+   * are one rule set: a match IS a write's identity half on its own.
+   *
+   *   - a target that decides identity itself refuses authored `unique by`;
+   *   - `FUZZY` only on a component the target can resolve by similarity;
+   *   - every name a component references is a field of the record or a
+   *     bound parent handle (edge-scoped identity);
+   *   - an authored clause that duplicates a native rule is noted.
+   */
+  private checkIdentity(input: {
+    uniqueBy: UniqueClause[];
+    root: WritableRootSchema | undefined;
+    rootDescription: string;
+    scope: Scope;
+    /** The record lands on an edge of a node this run built — no parent a
+     *  bare name could stand for. */
+    local: boolean;
+  }): void {
+    const { uniqueBy, root, rootDescription, scope, local } = input;
+    // Some targets decide identity themselves and don't accept author-defined
+    // uniqueness (the adapter declared `uniquenessAuthorable: false` — e.g.
+    // Affinity, whose org/person matching is native). Reject the clause
+    // outright rather than silently ignore it; native matching still happens.
+    if (root?.uniquenessAuthorable === false && uniqueBy.length > 0) {
+      this.report(
+        DiagnosticCodes.UNIQUE_NOT_AUTHORABLE,
+        `${rootDescription} decides record identity itself — 'unique by' isn't configurable here. Drop the clause; matching on the system's own keys happens automatically`,
+        uniqueBy[0].span,
+      );
+      return;
+    }
+    // The clause is a predicate that finds the existing record. Each name it
+    // references must be a field of the record (`\`email\``,
+    // `\`stage\` == "Open"`) or a bound handle in scope (edge-scoped
+    // identity). A literal RHS / operators need no resolution.
+    for (const clause of uniqueBy) {
+      // A FUZZY modifier rides on a textual component, so split first and
+      // strip it before parsing each part as an ordinary expression.
+      for (const part of splitUniquenessConjuncts(clause.predicate.raw)) {
+        let parsed: Expression;
+        try {
+          parsed = parseMovementExpression(part.raw);
+        } catch (e) {
+          if (!(e instanceof BridgeError)) throw e;
+          this.report(
+            DiagnosticCodes.EXPR_PARSE,
+            e.message,
+            spanWithin(clause.predicate, part.offset + (e.pos ?? 0)),
+          );
+          continue;
+        }
+        if (root === undefined) continue; // schema unknown ⇒ stay silent
+        const names = collectExpressionNames(parsed);
+        const refs = [...new Set(names.refs)].filter((ref) => !names.aliases.has(ref));
+        if (part.fuzzy) {
+          this.checkFuzzyComponent({
+            root,
+            rootDescription,
+            fields: refs.filter((ref) => ref in root.fields),
+            span: spanWithin(clause.predicate, part.offset),
+          });
+        }
+        for (const ref of refs) {
+          if (ref in root.fields) continue;
+          // A bare name that is a bound handle is the EDGE-SCOPED identity
+          // spelling: identify the record by the parent it hangs off. A
+          // landing on a local node's edge hangs off nothing, so there is no
+          // parent for the name to be — it can only be a field of the
+          // landing, and letting it through would identify by nothing at all.
+          if (!local && scope.resolve(ref).kind === 'found') continue; // a bound handle
+          this.report(
+            DiagnosticCodes.UNIQUE_UNKNOWN_FIELD,
+            `'${ref}' is not a field of ${rootDescription} or a bound handle — a 'unique by' predicate identifies by fields of the record or by a bound parent`,
+            clause.span,
+          );
+        }
+      }
+    }
+    this.checkNativeUniqueness(uniqueBy, root, rootDescription);
+  }
+
+  /**
+   * FUZZY is the target's promise to make, and it makes it per FIELD: a
+   * target resolves every field by similarity (`true`), only the fields it
+   * lists, or none. One code for all three: each is "this component can't be
+   * matched by similarity here", and the message names which case it is.
+   */
+  private checkFuzzyComponent(input: {
+    root: WritableRootSchema;
+    rootDescription: string;
+    /** The record fields the component names (bound handles excluded). */
+    fields: string[];
+    span: Span;
+  }): void {
+    const support = input.root.fuzzyResolution;
+    if (support === true) return;
+    if (support === undefined) {
+      this.report(
+        DiagnosticCodes.UNIQUE_FUZZY_UNSUPPORTED,
+        `FUZZY isn't available on ${input.rootDescription} — it matches identity exactly, not by similarity. Drop FUZZY and identify by an exact field, or pick a target that supports fuzzy matching`,
+        input.span,
+      );
+      return;
+    }
+    const listed = support.map((field) => `\`${field}\``).join(', ');
+    for (const field of input.fields) {
+      if (support.includes(field)) continue;
+      this.report(
+        DiagnosticCodes.UNIQUE_FUZZY_UNSUPPORTED,
+        `FUZZY isn't available for \`${field}\` on ${input.rootDescription} — it matches \`${field}\` exactly. Similarity covers ${listed}: drop FUZZY here, or match by similarity on one of those`,
+        input.span,
+      );
+    }
+  }
+
+  /**
+   * `x = match <path> { unique by (…) … }` — the identity half of a write,
+   * checked by the same rules: the target resolves as a write's does, the
+   * `unique by` clauses pass `checkIdentity`, and the body's fields must be
+   * fields of the record with values of the right type.
+   *
+   * Everything a CREATE needs is absent, because nothing is created: no
+   * required fields or edges, no write promise on the hop (a match reads), no
+   * write union. It notes a READ of the graph it looks in.
+   *
+   * The handle stands on the record FOUND: its result shape is the record's,
+   * without `created` / `committed` — those are facts about a write's
+   * outcome, and a match has no outcome to report beyond the record itself
+   * (a miss ends the scope, so no handle exists to ask).
+   */
+  private checkMatch(
+    match: MatchExpression,
+    scope: Scope,
+    options?: { binding?: string },
+  ): PositionTypeRef | undefined {
+    let root: WritableRootSchema | undefined;
+    let rootDescription = 'the match target';
+    let handle: PositionTypeRef | undefined;
+    let local = false;
+    const parents: Array<{ type?: string; edge: string }> = [];
+    if (match.target.kind === 'linked') {
+      const linked = this.checkLinkedPath(
+        {
+          path: match.target.path,
+          explicitType: match.target.explicitType,
+          span: match.target.span,
+          purpose: 'match',
+        },
+        scope,
+      );
+      root = linked.root;
+      handle = linked.handle;
+      local = linked.local === true;
+      if (linked.description !== undefined) rootDescription = linked.description;
+      if (linked.resolved) {
+        parents.push({
+          ...(linked.resolved.parentType !== undefined ? { type: linked.resolved.parentType } : {}),
+          edge: linked.resolved.edgeName,
+        });
+      }
+    } else {
+      const tuple = this.checkTupleWriteTarget(match.target, scope, parents, { purpose: 'match' });
+      root = tuple.root;
+      handle = tuple.handle;
+      if (tuple.description !== undefined) rootDescription = tuple.description;
+    }
+
+    // A discriminated collection: the body's literal picks the type the
+    // record found IS, exactly as it picks the type a write creates.
+    const selected = this.selectWriteVariant(root, match, rootDescription);
+    root = selected.root;
+    rootDescription = selected.description;
+    if (selected.variant !== undefined) handle = this.handleOfVariant(handle, selected.variant);
+
+    // A match against a node this run built looks in no graph — the same
+    // silence a local write keeps.
+    if (!local) this.noteTypedEffect('read', handle);
+
+    if (!this.typeOnly) {
+      const target = recordedTargetOf(handle);
+      this.options.recording?.writes.push({
+        span: match.span,
+        ...(root ? { root } : {}),
+        description: rootDescription,
+        declaredFields: new Set(match.fields.map((f) => f.name)),
+        hasUniqueBy: match.uniqueBy.length > 0,
+        scope,
+        ...(options?.binding !== undefined ? { binding: options.binding } : {}),
+        ...(target ? { target } : {}),
+        action: 'find',
+        parents: [...parents],
+      });
+    }
+
+    // Identity has to come from somewhere: the author's `unique by`, or the
+    // target's own rules (a target that decides identity itself, or declares
+    // native uniqueness). With neither, "match" would mean "any record of this
+    // type". An untyped target says nothing either way, so it stays silent.
+    const nativeIdentity =
+      root?.uniquenessAuthorable === false || (root?.nativeUniqueness?.length ?? 0) > 0;
+    if (root !== undefined && match.uniqueBy.length === 0 && !nativeIdentity) {
+      this.report(
+        DiagnosticCodes.MATCH_NO_IDENTITY,
+        `this match has nothing to identify ${rootDescription} by — add 'unique by (…)' naming the field(s) that make it the same record (e.g. 'unique by (${Object.keys(root.fields)[0] !== undefined ? `\`${Object.keys(root.fields)[0]}\`` : '…'})')`,
+        match.target.span,
+      );
+    }
+    this.checkIdentity({ uniqueBy: match.uniqueBy, root, rootDescription, scope, local });
+
+    for (const field of match.fields) {
+      const targetType = root?.fields[field.name];
+      if (root && targetType === undefined) {
+        const available = Object.keys(root.fields);
+        this.report(
+          DiagnosticCodes.WRITE_UNKNOWN_FIELD,
+          `${rootDescription} has no field '${field.name}' — a match's fields are fields of the record it finds${available.length ? `; it has: ${available.join(', ')}` : ''}`,
+          field.span,
+        );
+      }
+      const { valueType } = this.checkExprSlot(field.value, scope, {
+        ...(targetType !== undefined ? { writeTarget: { type: targetType } } : {}),
+      });
+      this.reportFieldValueType(field.name, rootDescription, targetType, valueType, field.value.span);
+      this.checkEnumLiteralWrite(field.value, {
+        targetType,
+        subject: `'${field.name}' on ${rootDescription}`,
+      });
+    }
+    return foundHandle(handle);
+  }
+
+  /**
    * A string LITERAL written into an enum field must be one of its options —
    * the write-side use of the shared membership helper (a typo'd value parses
    * fine and is text-compatible with the enum, so only the option set catches
@@ -5273,15 +5480,15 @@ class Checker {
    * the native layer can't see; they never count as a duplicate.
    */
   private checkNativeUniqueness(
-    write: WriteExpression,
+    uniqueBy: UniqueClause[],
     root: WritableRootSchema | undefined,
     rootDescription: string,
   ): void {
     const native = root?.nativeUniqueness;
-    if (!native || native.length === 0 || write.uniqueBy.length === 0) return;
+    if (!native || native.length === 0 || uniqueBy.length === 0) return;
     const describeRule = (group: string[]): string => group.map(f => `\`${f}\``).join(' + ');
 
-    for (const clause of write.uniqueBy) {
+    for (const clause of uniqueBy) {
       const refs = uniqueClauseRefs(clause);
       if (refs === undefined) continue; // unparseable — the expr check reports it
       const fieldComponents = refs.filter(r => root !== undefined && r in root.fields);
@@ -5428,21 +5635,22 @@ class Checker {
 
   /**
    * A linked path's destination (check 5) — shared by linked writes, every
-   * tuple-write path, and the criteria-form `link`: the path must start
-   * from a typed handle/position, every hop must be a declared edge, and
-   * the target type is inferred from the final edge (explicit only for
-   * polymorphic edges). The effect lands in the path root's graph.
+   * tuple-write path, and `match`: the path must start from a typed
+   * handle/position, every hop must be a declared edge, and the target type
+   * is inferred from the final edge (explicit only for polymorphic edges).
+   * A write needs the edge's write promise; a match only reads along it.
    */
   private checkLinkedPath(
     input: {
       path: PathHead;
       explicitType: string | undefined;
       span: Span;
-      /** Diagnostics phrasing — what the path establishes. */
-      purpose: 'write' | 'link';
+      /** What the path is for: a write creates along the edge, a match only
+       *  looks along it. */
+      purpose: 'write' | 'match';
       /** Whether this path's result is bound to a name (`x = write …`) —
        *  the only form an ephemeral final edge rejects. Bare statements and
-       *  criteria `link`s never trip the gate. */
+       *  matches never trip the gate. */
       isBound?: boolean;
     },
     scope: Scope,
@@ -5491,7 +5699,7 @@ class Checker {
     // of what follows — the instance, the write promise, the target's own
     // writability — has anything to consult. The edge's landing type is the
     // whole answer, and `localWriteTarget` is where it is read.
-    if (parent.kind === 'local' && input.purpose === 'write') {
+    if (parent.kind === 'local') {
       // The root's NAME is the subject only when the parent IS the root — one
       // hop further along and the author's name is for a different node.
       const subject = head.steps.length === 1 ? rootName : undefined;
@@ -5523,7 +5731,7 @@ class Checker {
         if (resolution.kind === 'found' && !isGraphSymbol(resolution.symbol)) {
           this.report(
             DiagnosticCodes.WRITE_TARGET_NOT_GRAPH,
-            `'${root}' is ${describeKind[resolution.symbol.kind]} standing for a whole system, not a record — a ${input.purpose === 'write' ? 'linked write' : 'link'} starts from a record handle or the instance's own edge: construct the instance in this file — instances don't pass between movements`,
+            `'${root}' is ${describeKind[resolution.symbol.kind]} standing for a whole system, not a record — a ${input.purpose === 'write' ? 'linked write' : 'match'} starts from a record handle or the instance's own edge: construct the instance in this file — instances don't pass between movements`,
             input.span,
           );
           return {};
@@ -5548,7 +5756,7 @@ class Checker {
         `${describePosition(parent)} has no edge '${edgeName}' — ${
           input.purpose === 'write'
             ? "a linked write creates the record AND the edge, so the parent's type must declare it"
-            : "a link asserts an edge the source's type declares"
+            : "a match looks along an edge the parent's type declares"
         }${available.length ? `; it declares: ${available.join(', ')}` : ''}`,
         input.span,
       );
@@ -5571,7 +5779,7 @@ class Checker {
     // hunting for a missing capability when the real answer was, for a bare
     // Google Sheets tab, that row 1 was blank. The target's own position says
     // which case this is; the message now asks.
-    if (!edgeIsWritable(edge)) {
+    if (input.purpose === 'write' && !edgeIsWritable(edge)) {
       const available = writableEdgesOf(instance.schema).map((e) => `${e.parent}-[:${e.edge}]->`);
       const target = edge.target;
       const targetSchema = target !== undefined ? instance.schema.positions[target] : undefined;
@@ -5590,17 +5798,6 @@ class Checker {
       return {};
     }
 
-    if (input.purpose === 'link' && edge.linkable === false) {
-      this.reportUnlinkableEdge({
-        edgeName,
-        parent,
-        instanceName: instance.name,
-        root: rootName,
-        span: input.span,
-      });
-      return {};
-    }
-
     if (edge.ephemeral === true && input.purpose === 'write' && input.isBound === true) {
       this.report(
         DiagnosticCodes.WRITE_EPHEMERAL_BOUND,
@@ -5615,7 +5812,7 @@ class Checker {
       if (input.explicitType === undefined) {
         this.report(
           DiagnosticCodes.LINKED_NEEDS_TYPE,
-          `'${edgeName}' is polymorphic — say which type this ${input.purpose === 'write' ? 'write creates' : 'link finds'}: ${input.purpose === 'write' ? `write …-[:${edgeName}]-><type> { … }` : `link …-[:${edgeName}]-><type> { … }`}`,
+          `'${edgeName}' is polymorphic — say which type this ${input.purpose === 'write' ? 'write creates' : 'match finds'}: ${input.purpose} …-[:${edgeName}]-><type> { … }`,
           input.span,
         );
         return {};
@@ -5654,7 +5851,9 @@ class Checker {
     }
 
     const root =
-      instance.schema.writableRoots[written] ?? instance.schema.createShapes?.[written];
+      instance.schema.writableRoots[written] ??
+      instance.schema.createShapes?.[written] ??
+      (input.purpose === 'match' ? readableMatchRoot(instance.schema.positions[written]) : undefined);
     // No second gate. Layer 13 collapsed the two promises into one: reaching
     // here means the edge declared `writable: true`, which IS the permission to
     // write along it — there is no separate create fact to re-check, and no
@@ -5701,7 +5900,7 @@ class Checker {
     target: Extract<WriteExpression['target'], { kind: 'tuple' }>,
     scope: Scope,
     parents: Array<{ type?: string; edge: string }>,
-    isBound?: boolean,
+    options: { purpose: 'write' | 'match'; isBound?: boolean },
   ): { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string } {
     let agreed:
       | { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string; instanceToken: object; written: string; pathIndex: number }
@@ -5710,7 +5909,7 @@ class Checker {
     for (let i = 0; i < target.paths.length; i++) {
       const path = target.paths[i];
       const linked = this.checkLinkedPath(
-        { path, explicitType: target.explicitType, span: path.span, purpose: 'write', isBound },
+        { path, explicitType: target.explicitType, span: path.span, ...options },
         scope,
       );
       const resolved = linked.resolved;
@@ -5906,83 +6105,32 @@ class Checker {
   }
 
   /**
-   * `link a -[:e]-> b` / `p = link c-[:portfolio]-> { …criteria… }`.
-   * The bare-handle form gets mirror name checks only (the runtime owns
-   * graph/edge validation, as it does for `unlink`). The criteria form
-   * infers the FOUND type from the edge exactly like a linked write, then
-   * validates the criteria fields against it — the criteria ARE the
-   * identity (resolved via adapter candidate search + arbitration), the
-   * target is never created and never written. Returns the found target's
-   * handle type for an optional binding.
+   * `link a -[:e]-> b` — mirror name checks plus the one edge fact a system
+   * can state (the runtime owns the rest of graph/edge validation, as it does
+   * for `unlink`). A link onto a node this run built is checked structurally.
    */
-  private checkLink(
-    link: LinkExpression,
-    scope: Scope,
-    binding?: string,
-  ): PositionTypeRef | undefined {
+  private checkLink(link: LinkExpression, scope: Scope): void {
     const fromSymbol = this.resolveName(link.from, link.span, scope);
     const fromType = fromSymbol !== undefined ? this.symbolPositionType(fromSymbol) : undefined;
     if (fromType?.kind === 'local') {
       this.checkLocalLink(link, fromType, scope);
-      return undefined;
+      return;
     }
-    // A link writes an EDGE, so it writes the graph the edge's source is in —
-    // the same graph either form of target lives in.
+    // A link writes an EDGE, so it writes the graph the edge's source is in.
     this.noteNamedEffect('write', link.from, scope);
-    if (link.target.kind === 'handle') {
-      this.resolveName(link.target.name, link.span, scope);
-      this.checkBareLinkEdge(
-        { from: link.from, edge: link.edge, span: link.span, verb: 'link' },
-        scope,
-      );
-      this.recordNode({
-        kind: 'link',
-        span: link.span,
-        scope,
-        from: link.from,
-        edge: link.edge,
-        target: { kind: 'handle', name: link.target.name },
-      });
-      return undefined;
-    }
-    const path: PathHead = {
-      root: { kind: 'name', name: link.from },
-      hopsRaw: `-[:${link.edge}]->`,
-      span: link.span,
-    };
-    const linked = this.checkLinkedPath(
-      { path, explicitType: link.target.explicitType, span: link.span, purpose: 'link' },
+    this.resolveName(link.to, link.span, scope);
+    this.checkBareLinkEdge(
+      { from: link.from, edge: link.edge, span: link.span, verb: 'link' },
       scope,
     );
-    const root = linked.root;
-    const description = linked.description ?? 'the link target';
     this.recordNode({
       kind: 'link',
       span: link.span,
       scope,
       from: link.from,
       edge: link.edge,
-      target: { kind: 'criteria', ...(recordedTargetOf(linked.handle) ?? {}) },
-      ...(binding !== undefined ? { binding } : {}),
+      to: link.to,
     });
-    for (const field of link.target.fields) {
-      const targetType = root?.fields[field.name];
-      if (root && targetType === undefined) {
-        const available = Object.keys(root.fields);
-        this.report(
-          DiagnosticCodes.WRITE_UNKNOWN_FIELD,
-          `${description} has no field '${field.name}' — link criteria are identity fields of the record being found${available.length ? `; it has: ${available.join(', ')}` : ''}`,
-          field.span,
-        );
-      }
-      const { valueType } = this.checkExprSlot(field.value, scope);
-      this.reportFieldValueType(field.name, description, targetType, valueType, field.value.span);
-      this.checkEnumLiteralWrite(field.value, {
-        targetType,
-        subject: `'${field.name}' on ${description}`,
-      });
-    }
-    return linked.handle;
   }
 
   /**
@@ -6005,15 +6153,7 @@ class Checker {
     from: Extract<PositionTypeRef, { kind: 'local' }>,
     scope: Scope,
   ): void {
-    if (link.target.kind !== 'handle') {
-      this.report(
-        DiagnosticCodes.NODE_LINK_CRITERIA,
-        `'${link.from}' is ${from.label} this run built, and a criteria body finds a record in a SYSTEM — link a position you already have instead: 'link ${link.from} -[:${link.edge}]-> <name>'`,
-        link.target.span,
-      );
-      return;
-    }
-    const toSymbol = this.resolveName(link.target.name, link.span, scope);
+    const toSymbol = this.resolveName(link.to, link.span, scope);
     const edge = from.edges?.[link.edge];
     if (edge === undefined) {
       this.reportUndeclaredLocalEdge({
@@ -6038,7 +6178,7 @@ class Checker {
       scope,
       from: link.from,
       edge: link.edge,
-      target: { kind: 'handle', name: link.target.name },
+      to: link.to,
     });
     const toType = toSymbol !== undefined ? this.symbolPositionType(toSymbol) : undefined;
     const target = edge.target;
@@ -6067,7 +6207,7 @@ class Checker {
     ) {
       this.report(
         DiagnosticCodes.NODE_LINK_SHAPE,
-        `'${link.edge}' lands on ${describePosition(target)}, but '${link.target.name}' is ${describePosition(toType)}`,
+        `'${link.edge}' lands on ${describePosition(target)}, but '${link.to}' is ${describePosition(toType)}`,
         link.span,
       );
     }
