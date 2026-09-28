@@ -52,7 +52,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import type { ExtractNode } from 'movement-lang';
+import type { ExtractExpression } from 'movement-lang';
 
 import { anthropicChatDetailed } from '../../lib/anthropic';
 import type { ChatModelName } from '../../lib/models/registry';
@@ -63,6 +63,8 @@ import {
   makeAnthropicLlmClient,
   materializeExtract,
   type ExtractEmission,
+  type ExtractNodeSpec,
+  type ExtractSpecOptions,
   type MovementTransformInvoker,
 } from '../../services/movement_engine/extraction';
 import { NO_PROVENANCE } from '../../services/movement_engine/provenance';
@@ -487,23 +489,35 @@ interface FixtureRun {
 
 /**
  * How many nested extraction sites the ROOT call carries — the same tally the
- * engine's density check takes, computed from the fixture's own tree so it can
- * be read without spending a call.
+ * engine's density check takes, computed from the spec the engine plans from
+ * so it can be read without spending a call.
  *
  * It matters because the density check is the only route in the product to an
  * Opus 4 model: 30 or more sites in one call and the model changes. Counting
  * follows the engine's two rules — a site is a NODE, not a field, and a child
  * whose first stage is fenced behind a plugin leaves the call rather than
  * joining it.
+ *
+ * Counted off the SPEC, not the written tree: a node that takes a declaration
+ * as its shape (`node entry: <Entry>`) writes no first stage of its own — the
+ * declaration is it — and only the spec has it spelled out.
  */
-function declaredSites(nodes: readonly ExtractNode[]): number {
+function declaredSites(nodes: readonly ExtractNodeSpec[]): number {
   return nodes
     .filter((child) => (child.stages[0]?.through ?? []).length === 0)
     .reduce((total, child) => total + 1 + declaredSites(child.stages[0]?.children ?? []), 0);
 }
 
-function rootSites(fixture: Fixture): number {
-  return 1 + declaredSites(fixture.extract.stages[0]?.children ?? []);
+export function rootSites(spec: ExtractNodeSpec): number {
+  return 1 + declaredSites(spec.stages[0]?.children ?? []);
+}
+
+/** The spec a fixture's tree plans from, built as the engine builds it. */
+export function fixtureSpec(
+  extract: ExtractExpression,
+  options: Pick<ExtractSpecOptions, 'resolveDeclaredNode'> = {},
+): Promise<ExtractNodeSpec> {
+  return buildExtractSpec(extract, { resolveDeclaredType, ...options });
 }
 
 function stubInvoker(fixture: Fixture): MovementTransformInvoker {
@@ -546,7 +560,7 @@ async function runOne(
   try {
     emission = await materializeExtract({
       extract: fixture.extract,
-      spec: await buildExtractSpec(fixture.extract, { resolveDeclaredType }),
+      spec: await fixtureSpec(fixture.extract),
       runtime: {
         llm,
         transformInvoker: stubInvoker(fixture),
@@ -986,7 +1000,7 @@ async function main(): Promise<void> {
   if (dryRun) {
     for (const fixture of fixtures) {
       console.log(`── ${fixture.id} — ${fixture.title}\n   ${fixture.asks}`);
-      const sites = rootSites(fixture);
+      const sites = rootSites(await fixtureSpec(fixture.extract));
       console.log(`   source ${fixture.source.length} chars, expects `
         + Object.entries(fixture.expected)
             .map(([n, e]) => `${e.entities.length} ${n}`)
@@ -1034,7 +1048,9 @@ async function main(): Promise<void> {
   console.log(`\nwrote ${outDir}/runs.json and ${outDir}/report.md`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
