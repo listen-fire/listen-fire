@@ -214,6 +214,37 @@ describe('a plugin declares what it hands back, so a plain call is typed', () =>
     expect(errors(bad, PUSHED, plugins).length).toBeGreaterThan(0);
   });
 
+  it('a declared RECORDS output is a list of records: read one, read across, and never as text', () => {
+    const plugins = {
+      scan_web: {
+        args: ['url'],
+        effects: { reads: ['the web'], ai: true },
+        output: {
+          kind: 'records' as const,
+          fields: {
+            url: 'text' as const,
+            text: { kind: 'maybeAbsent' as const, of: 'text' as const },
+            file: { kind: 'maybeAbsent' as const, of: 'file' as const },
+          },
+        },
+      },
+    };
+    const good = PLUGIN_PROGRAM(`  pages = scan_web(url: t.\`Title\`)
+  first = FIRST(pages)
+  head = COALESCE(first.text, JOIN(pages.url, ", ")) > "a"`);
+    expect(errors(good, PUSHED, plugins)).toEqual([]);
+
+    const unknownField = PLUGIN_PROGRAM(`  pages = scan_web(url: t.\`Title\`)
+  first = FIRST(pages)
+  head = COALESCE(first.headcount, "") > "a"`);
+    expect(errors(unknownField, PUSHED, plugins).length).toBeGreaterThan(0);
+
+    // The list is records, not text: comparing it as one is refused.
+    const asText = PLUGIN_PROGRAM(`  pages = scan_web(url: t.\`Title\`)
+  head = pages > "a"`);
+    expect(errors(asText, PUSHED, plugins).length).toBeGreaterThan(0);
+  });
+
   it('declaring no output keeps the plugin to a stage, and says which fact is missing', () => {
     const source = PLUGIN_PROGRAM('  found = scan_web(url: t.`Title`)');
     const plugins = { scan_web: { args: ['url'], effects: { reads: ['the web'] } } };

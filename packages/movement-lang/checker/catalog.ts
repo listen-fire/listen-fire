@@ -367,16 +367,21 @@ export interface PluginFedArg {
  * What a plugin's plain call evaluates to, on whichever PLANE it lives — the
  * same two planes every other bound value has, and no third type language:
  *
- *   - `value`  — one value on the dot plane, an ordinary `FieldType`. Absence
- *                is spelled the way absence is spelled everywhere else, with
- *                `maybeAbsent`;
- *   - `record` — several values read by name, which is a node on the arrow
- *                plane: the checker mints a LOCAL node whose reads are these
- *                fields, exactly as `callback(…)` and a node literal do.
+ *   - `value`   — one value on the dot plane, an ordinary `FieldType`. Absence
+ *                 is spelled the way absence is spelled everywhere else, with
+ *                 `maybeAbsent`;
+ *   - `record`  — several values read by name, which is a node on the arrow
+ *                 plane: the checker mints a LOCAL node whose reads are these
+ *                 fields, exactly as `callback(…)` and a node literal do;
+ *   - `records` — zero or more of those nodes, one per thing the plugin found.
+ *                 The value is a list of records, typed exactly as a hop's
+ *                 landings are, so `FIRST(pages).text` and `MAP` read it the
+ *                 way they read any other list of records.
  */
 export type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
-  | { kind: 'record'; fields: Record<string, SchemaFieldType> };
+  | { kind: 'record'; fields: Record<string, SchemaFieldType> }
+  | { kind: 'records'; fields: Record<string, SchemaFieldType> };
 
 // ── Field value types ──
 

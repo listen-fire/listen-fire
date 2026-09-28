@@ -160,6 +160,7 @@ import {
   UNKNOWN_ROW,
   type EffectRow,
 } from './effects';
+import { neverAsAny } from '../never';
 import { terminates } from './flow';
 import { didYouMean } from './meta';
 import { genericLandingKey, literalStringValuesOf } from './generics';
@@ -8099,16 +8100,24 @@ class Checker {
     // unknown — true, and it refuses nothing: binding one stays silent rather
     // than MOV_CALL_RETURNS_NOTHING, which would be a claim.
     if (stageOnly || spec?.output === undefined) return UNKNOWN_RETURN;
-    return spec.output.kind === 'value'
-      ? { returns: true, fieldType: spec.output.type }
-      : {
-          returns: true,
-          posType: {
-            kind: 'local',
-            label: `what '${statement.callee}' found`,
-            reads: { ...spec.output.fields },
-          },
-        };
+    const output = spec.output;
+    const found = (fields: Record<string, SchemaFieldType>): PositionTypeRef => ({
+      kind: 'local',
+      label: `what '${statement.callee}' found`,
+      reads: { ...fields },
+    });
+    switch (output.kind) {
+      case 'value':
+        return { returns: true, fieldType: output.type };
+      case 'record':
+        return { returns: true, posType: found(output.fields) };
+      case 'records':
+        // One record per thing found, in the order the plugin found them — a
+        // sequence, like a hop's landings, so FIRST and AT mean something.
+        return { returns: true, fieldType: listOf(recordOf(found(output.fields)), 'ordered') };
+      default:
+        return neverAsAny(output);
+    }
   }
 
   /**
