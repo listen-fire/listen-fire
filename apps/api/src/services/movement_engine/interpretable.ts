@@ -28,7 +28,7 @@ import type {
   CombinatorExpression,
   ExprSlot,
   ExtractExpression,
-  LinkExpression,
+  MatchExpression,
   NodeLiteral,
   PathHead,
   MovementCondition,
@@ -268,8 +268,8 @@ class InterpretabilityScan {
             case 'write':
               this.scanWrite(statement.value.write);
               break;
-            case 'link':
-              this.scanLink(statement.value.link);
+            case 'match':
+              this.scanWrite(statement.value.match);
               break;
             case 'expr':
               this.scanSlot(statement.value.expr);
@@ -370,15 +370,17 @@ class InterpretabilityScan {
           // shape-writes — scan them.
           for (const arg of statement.args) this.scanCallArg(arg);
           break;
+        case 'match':
+          // A match runs the write path's identity half (resolve +
+          // arbitrate, never create); its body is a write body.
+          this.scanWrite(statement.match);
+          break;
         case 'link':
-          // Link statements run (E7 — the Adapter.linkRecords seam),
-          // both forms: bare-handle asserts and criteria links (the
-          // target resolved like a write's identity, never created).
+          // Link statements run (E7 — the Adapter.linkRecords seam).
           // Runtime-dependent rejections (cross-graph endpoints, an
           // adapter without the capability) are not statically decidable
           // here — like other binding-kind checks they surface as failed
-          // runs. Criteria field slots carry expressions — scan them.
-          this.scanLink(statement.link);
+          // runs.
           break;
         case 'unlink':
           // The inverse of the bare-handle link (the Adapter.unlinkRecords
@@ -434,7 +436,7 @@ class InterpretabilityScan {
     }
   }
 
-  private scanWrite(write: WriteExpression): void {
+  private scanWrite(write: WriteExpression | MatchExpression): void {
     // The fields of an ADAPTER-target write are a field-function
     // context: the write path binds the destination field's advertised
     // functions at runtime, so whether a non-built-in name resolves
@@ -447,13 +449,6 @@ class InterpretabilityScan {
     if (functionBearing) this.writeFieldDepth++;
     for (const field of write.fields) this.scanSlot(field.value);
     if (functionBearing) this.writeFieldDepth--;
-  }
-
-  /** Criteria-form link bodies carry expression slots (match values —
-   *  no write-target field functions bind, so no field depth). */
-  private scanLink(link: LinkExpression): void {
-    if (link.target.kind !== 'criteria') return;
-    for (const field of link.target.fields) this.scanSlot(field.value);
   }
 
   private scanExtract(extract: ExtractExpression): void {

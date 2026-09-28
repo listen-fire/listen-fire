@@ -109,3 +109,19 @@ export function selectMember<T>(input: {
   }
   return undefined;
 }
+
+/**
+ * The fields a narrowing predicate may test: every key the members were
+ * labelled with. Read off the members themselves, so it cannot name a field no
+ * member carries. One rule for both places it is shown — a connection's
+ * describe (`narrowBy` on a polymorphic edge) and the checker's refusal of a
+ * field the unnarrowed type does not carry.
+ */
+export function narrowByOf(members: ReadonlyArray<{ data: unknown }>): string[] {
+  const fields = new Set<string>();
+  for (const member of members) {
+    const data = readableData(member.data);
+    if (data) for (const key of Object.keys(data)) fields.add(key);
+  }
+  return [...fields];
+}

@@ -163,7 +163,7 @@ c-[r:_resources WHERE type == "FILE"]-> {
 }
 \`\`\`
 
-Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
+Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A document a \`through [ … ]\` stage downloaded is a \`"FILE"\` too. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
   engineClaims: [
     {
       construct: 'extract tier — one tier for every stage of the extraction',
@@ -428,12 +428,13 @@ crm   = attio(credentials: acme)
 
 function \`Enrich\`(m: <inbox-[:Email]->>) {
   linked = vc_url_retrieval(text: m.\`Body\`)
+  deck   = FIRST(linked)
   page   = fetch_url(url: "https://example.com")
   more   = research(name: m.\`Subject\`, questions: "what it does, which sector, where it is based")
   write crm-[:Companies]-> {
     unique by (FUZZY \`Name\`)
     Name:          m.\`Subject\`
-    Description ?: COALESCE(more.summary, page, linked)
+    Description ?: COALESCE(more.summary, page, deck.text)
     Domains ?:     more.website
   }
 }

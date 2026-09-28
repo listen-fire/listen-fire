@@ -94,15 +94,27 @@ export const VC_URL_RETRIEVAL_SIGNATURE: TransformSignature = {
       },
     },
   },
-  // Every page it discovered and fetched, as one text. Nothing when the message
-  // carried no link worth following, or nothing came back from the ones it did.
+  // One record per link it fetched, in the order it found them — a message can
+  // carry several decks, and each keeps its own link, file and text. An empty
+  // list when there was no link worth following. `file` is there only when the
+  // link was a document it could store; `text` only when it could read some.
   output: {
-    kind: 'value',
-    type: { kind: 'string' },
-    optional: true,
-    description:
-      'The text of every page it fetched, run together. Nothing when there was no link '
-      + 'worth following.',
+    kind: 'records',
+    fields: {
+      name: { type: { kind: 'string' }, description: 'What the fetched page is called.' },
+      url: { type: { kind: 'string' }, description: 'The link it followed.' },
+      file: {
+        type: { kind: 'file' },
+        optional: true,
+        description: 'The downloaded document, when the link was one.',
+      },
+      text: {
+        type: { kind: 'string' },
+        optional: true,
+        description: 'The text read out of the page or document.',
+      },
+    },
+    description: 'Every link it fetched, one record each. Empty when there was no link worth following.',
   },
 };
 

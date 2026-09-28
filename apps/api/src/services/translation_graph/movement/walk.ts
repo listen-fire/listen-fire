@@ -21,6 +21,7 @@ import type { EdgesFromResult, EdgeTargetNode } from '../adapter';
 import type { SchemaFieldDescriptor, SchemaReferenceDescriptor, SchemaTypeDescriptor } from '../types';
 import { positionLabelEntry, referenceTargetTypeIds } from '../types';
 import { fieldTypeFromDescriptor } from './schema_projection';
+import { narrowByOf } from './narrowing';
 
 export interface WalkedProperty {
   type: FieldType;
@@ -213,15 +214,12 @@ function membersOf(input: {
   narrowBy: string[];
 } {
   const members: WalkedMember[] = [];
-  const narrowBy = new Set<string>();
+  const labelled: Array<{ data: unknown }> = [];
 
   for (const [fieldId, position] of Object.entries(input.hop.targetPositions ?? {})) {
     if (input.namedFieldIds.has(fieldId)) continue;
     if (position.recordType !== input.edge) continue;
-    const data = position.identity.data;
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      for (const key of Object.keys(data as Record<string, unknown>)) narrowBy.add(key);
-    }
+    labelled.push({ data: position.identity.data });
     const label = positionLabelEntry(position);
     if (!label) continue;
     members.push({
@@ -230,7 +228,7 @@ function membersOf(input: {
     });
   }
 
-  return { members, narrowBy: members.length > 0 ? [...narrowBy] : [] };
+  return { members, narrowBy: members.length > 0 ? narrowByOf(labelled) : [] };
 }
 
 /**

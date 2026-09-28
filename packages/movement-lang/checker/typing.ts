@@ -2103,6 +2103,19 @@ export function refineSelected(
   return positionRefIn(target.instance, refined) ?? target;
 }
 
+/**
+ * How to make a refused field readable on a NARROWABLE type: the type carries
+ * only what all its members share, so a field of one member appears once the
+ * hop is narrowed to it. The WHERE narrows as a whole, so the test may sit
+ * anywhere in it. Empty for a type with nothing to narrow by.
+ */
+function narrowingHint(position: Extract<PositionTypeRef, { kind: 'position' }>): string {
+  const [first, ...rest] = position.instance.schema.narrowBy?.[position.position] ?? [];
+  if (first === undefined) return '';
+  const others = rest.length > 0 ? ` (or ${rest.map(f => `\`${f}\``).join(', ')})` : '';
+  return `. If it is a field of one ${displayNameOf(position.instance, position.position)} only, narrow the hop that lands here to it: test \`${first}\` == "…"${others} in its WHERE`;
+}
+
 /** The instance a position ref belongs to — undefined for the refs that belong
  *  to no graph (an extract node, a closure, a construct's local surface). */
 export function instanceOfRef(type: PositionTypeRef | undefined): InstanceRef | undefined {
@@ -4346,7 +4359,7 @@ export class ExpressionTyping {
         const available = Object.keys(schema.properties);
         this.report(
           TypedDiagnosticCodes.UNKNOWN_PROPERTY,
-          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it has: ${available.join(', ')}` : ''}${didYouMean(propertyId, available)}`,
+          `${describePosition(position)} has no field '${propertyId}'${available.length ? ` — it has: ${available.join(', ')}` : ''}${didYouMean(propertyId, available)}${narrowingHint(position)}`,
         );
         return undefined;
       }

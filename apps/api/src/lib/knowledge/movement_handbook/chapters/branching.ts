@@ -35,6 +35,8 @@ function \`Route Change\`(ev: <crm-[:\`Webhook Event\`]->>) {
 
 A change event stands for creates, updates, and deletes, and what you can reach differs by case — a deleted record isn't there to traverse to. Inside the arm \`ev\` is a *created* event, so the edges only a live record has are reachable; outside it they are not, and traversing without narrowing is refused while you author, naming the cases the edge belongs to. \`IS\` is valid anywhere a boolean is, including \`WHERE\` filters. If a record arrives without a kind on it — an event the trigger never discriminated, or one delivered without the field a test names — the run stops with that reason rather than picking a branch, so no arm ever runs against a record it can't identify.
 
+A hop narrows from inside its \`WHERE\` the same way: testing a member's label (\`listName\` == "Deal Pipeline") picks that member for the whole hop — see *blocks* in the traversal chapter.
+
 An \`else\` narrows too: reaching it proves the record isn't what the arms above tested, so the else sees the kinds that are left, and an \`else if\` chain keeps eliminating down to one. Handle every kind and the final \`else\` has nothing left to reach — reading a field there is refused, which is how you find a branch that can't run.
 
 A test can also name a **declared structure** instead of a kind: it holds when the record carries every field that structure declares, with a compatible type. A nested node never gates the test — a record with none of that relationship carries an empty set of them, and fits. Carrying more than the declaration is fine. It narrows exactly like the tests above: the arm keeps the kinds that fit, the \`else\` keeps the rest.

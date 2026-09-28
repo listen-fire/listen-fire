@@ -99,7 +99,37 @@ const instanceWith = (
   ...overrides,
 });
 
+/** Nothing narrowed: no refined position, no member selected. How the type
+ *  narrows may still be recorded (`narrowBy`) — a fact about the type, not a
+ *  selection. */
+const expectUnnarrowed = (schema: InstanceSchema) => {
+  expect(schema.refinements ?? {}).toEqual({});
+  expect(schema.selectedMembers ?? {}).toEqual({});
+  expect(schema.positions).toBe(unionSchema.positions);
+};
+
 describe('refineInstanceSchema', () => {
+  // The checker's refusal of a field the unnarrowed type does not carry says
+  // how to narrow it — which needs the same `narrowBy` a describe shows, drawn
+  // from the members' labels. Recorded whether or not the WHERE selected
+  // anything, because the refusal is exactly the case where it did not.
+  it('records how a type narrows, from its members\' labels, even when nothing narrowed', async () => {
+    const { schema } = await refineInstanceSchema({
+      instance: instanceWith(),
+      chains: scanInstanceChains(sourceWith('`Rows` >= 5')),
+    });
+    expectUnnarrowed(schema);
+    expect(schema.narrowBy).toEqual({ [SPREADSHEET]: ['Title', 'Owner'] });
+  });
+
+  it('records nothing for a type with no members', async () => {
+    const { schema } = await refineInstanceSchema({
+      instance: instanceWith({ membersOf: async () => [] }),
+      chains: scanInstanceChains(sourceWith('`Rows` >= 5')),
+    });
+    expect(schema.narrowBy).toBeUndefined();
+  });
+
   it('grafts a refined position for a resolved selection and keys it for the checker', async () => {
     const calls: string[] = [];
     const { schema, notes } = await refineInstanceSchema({
@@ -236,7 +266,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith(),
       chains: scanInstanceChains(sourceWith('`Title` == "Pipeline Sheet" AND `Owner` == "sales"')),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   // Tighter than `isPurePredicate`: `@current_date` is pure but is a RUNTIME
@@ -246,7 +276,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith(),
       chains: scanInstanceChains(sourceWith('`Missing` == "x"')),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   it('does not narrow on an impure predicate', async () => {
@@ -254,7 +284,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith(),
       chains: scanInstanceChains(sourceWith('`Title` == AI("which sheet?")')),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   // A WHERE is answered in two places — the member picks the node, the rest
@@ -280,7 +310,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith(),
       chains: scanInstanceChains(sourceWith('`Title` == "Pipeline Sheet" OR `Missing` == "x"')),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   it('leaves the schema unchanged when the walk to the selected member does not resolve', async () => {
@@ -288,7 +318,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith({ describeType: async () => null }),
       chains: scanInstanceChains(source),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   it('an adapter with no meta-graph members does not narrow', async () => {
@@ -296,7 +326,7 @@ describe('refineInstanceSchema', () => {
       instance: instanceWith({ membersOf: async () => [] }),
       chains: scanInstanceChains(source),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
   });
 
   it('a throwing walk degrades to a note, never a failure', async () => {
@@ -308,7 +338,7 @@ describe('refineInstanceSchema', () => {
       }),
       chains: scanInstanceChains(source),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('upstream 500');
   });
@@ -322,7 +352,7 @@ describe('refineInstanceSchema', () => {
       }),
       chains: scanInstanceChains(source),
     });
-    expect(schema).toBe(unionSchema);
+    expectUnnarrowed(schema);
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('meta walk 500');
   });

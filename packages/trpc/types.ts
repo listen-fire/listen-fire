@@ -4784,7 +4784,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                         }[];
                     }[];
                 } | undefined;
-                supportsFuzzyResolution?: boolean | undefined;
+                supportsFuzzyResolution?: boolean | string[] | undefined;
                 uniquenessAuthorable?: boolean | undefined;
                 discriminatedWrite?: {
                     discriminant: string;

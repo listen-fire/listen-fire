@@ -182,6 +182,7 @@ describe("movement language tokenizer", () => {
       expect(styleOf(tokenizeDocument("export movement m() {}"), "export", 0)).toBe("keyword");
       expect(styleOf(tokenizeDocument("function m() {}"), "function", 0)).toBe("keyword");
       expect(styleOf(tokenizeDocument("link a -[:e]-> b"), "link", 0)).toBe("keyword");
+      expect(styleOf(tokenizeDocument("x = match a-[:e]-> { unique by (`n`) }"), "match", 0)).toBe("keyword");
       expect(styleOf(tokenizeDocument("unlink a -[:e]-> b"), "unlink", 0)).toBe("keyword");
       expect(styleOf(tokenizeDocument("delete a"), "delete", 0)).toBe("keyword");
       expect(styleOf(tokenizeDocument("refresh a"), "refresh", 0)).toBe("keyword");

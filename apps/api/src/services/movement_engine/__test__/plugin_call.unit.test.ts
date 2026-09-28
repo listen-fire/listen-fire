@@ -84,7 +84,7 @@ jest.mock('../../translation_graph/adapters/resolve', () => ({
 }));
 
 import { runMovement } from '../run';
-import type { MovementTransformInvoker } from '../extraction';
+import type { MovementTransformInvoker, TransformInvocationResult } from '../extraction';
 import type { MovementTraceEntry } from '../expression';
 
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
@@ -177,7 +177,7 @@ interface Recorded {
 }
 
 function stubInvoker(
-  answers: Record<string, { text?: string; data?: Record<string, unknown>; outcome?: string }>,
+  answers: Record<string, TransformInvocationResult>,
 ): { invoker: MovementTransformInvoker; calls: Recorded[] } {
   const calls: Recorded[] = [];
   const invoker: MovementTransformInvoker = {
@@ -354,27 +354,114 @@ describe('a plugin called plainly hands back its declared RECORD', () => {
   });
 });
 
-// ── The argument a stage gets fed for free ───────────────────────────────────
+// ── A list of records ────────────────────────────────────────────────────────
 
-describe('a plain call writes the argument a stage is fed', () => {
+describe('a plugin called plainly hands back its declared list of RECORDS', () => {
+  const deckFile = {
+    __brand: 'FileRef' as const,
+    name: 'deck.pdf',
+    contentType: 'application/pdf',
+    source: { ownerAdapterType: 'document-store', handle: 's3://bucket/abc/deck.pdf' },
+    retrieve: async () => ({ stream: {} as never, contentType: 'application/pdf' }),
+  };
+
+  // The first record read field by field: its link, its text, and whether it
+  // carries a file — each through the same dot read any record gets.
   const SCAN = [
     'movement intake(m: <inbox-[:message]->>) {',
     '  pages = vc_url_retrieval(text: m.`text`)',
-    '  co = write crm-[:companies]-> { name: m.`subject`, summary: COALESCE(pages, "nothing") }',
+    '  deck = FIRST(pages)',
+    '  if deck != null {',
+    '    write crm-[:companies]-> { name: deck.url, summary ?: deck.text }',
+    '    if deck.file != null {',
+    '      write crm-[:companies]-> { name: deck.name, summary: "carries a file" }',
+    '    }',
+    '  }',
     '}',
   ].join('\n');
 
-  it('reaches the plugin as its config, and its text comes back bound', async () => {
+  it('passes the fed argument through, and binds one record per fetched link', async () => {
     const email = makeFakeAdapter('email');
     const attio = makeFakeAdapter('attio');
-    const { invoker, calls } = stubInvoker({ vc_url_retrieval: { text: 'Two decks.' } });
+    const { invoker, calls } = stubInvoker({
+      vc_url_retrieval: {
+        text: 'Acme deck text.',
+        records: [
+          { name: 'deck.pdf', url: 'https://docsend.example/acme', file: deckFile, text: 'Acme deck text.' },
+        ],
+      },
+    });
 
-    await run(SCAN, invoker, { email: email.adapter, attio: attio.adapter });
+    const result = await run(SCAN, invoker, { email: email.adapter, attio: attio.adapter });
 
     expect(calls).toEqual([
       { plugin: 'vc_url_retrieval', config: { text: 'https://acme.example' } },
     ]);
-    expect(attio.creates[0]?.fields.summary).toBe('Two decks.');
+    expect(attio.creates.map((c) => c.fields)).toEqual([
+      { name: 'https://docsend.example/acme', summary: 'Acme deck text.' },
+      { name: 'deck.pdf', summary: 'carries a file' },
+    ]);
+    expect(pluginEntries(result.trace)[0]).toMatchObject({
+      plugin: 'vc_url_retrieval',
+      returned: 'value',
+    });
+  });
+
+  it('a link that stored no file reads its file as absent', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    const { invoker } = stubInvoker({
+      vc_url_retrieval: {
+        text: 'A company homepage.',
+        records: [{ name: 'https://acme.example', url: 'https://acme.example', text: 'A company homepage.' }],
+      },
+    });
+
+    await run(SCAN, invoker, { email: email.adapter, attio: attio.adapter });
+
+    expect(attio.creates.map((c) => c.fields)).toEqual([
+      { name: 'https://acme.example', summary: 'A company homepage.' },
+    ]);
+  });
+
+  it('several links read across as a list, in the order they were fetched', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    const { invoker } = stubInvoker({
+      vc_url_retrieval: {
+        records: [
+          { name: 'one', url: 'https://one.example', text: 'first' },
+          { name: 'two', url: 'https://two.example', file: deckFile },
+        ],
+      },
+    });
+    const source = [
+      'movement intake(m: <inbox-[:message]->>) {',
+      '  pages = vc_url_retrieval(text: m.`text`)',
+      '  write crm-[:companies]-> { name: JOIN(pages.url, ", "), summary: CONCAT("", COUNT(pages)) }',
+      '}',
+    ].join('\n');
+
+    await run(source, invoker, { email: email.adapter, attio: attio.adapter });
+
+    expect(attio.creates[0]?.fields).toEqual({
+      name: 'https://one.example, https://two.example',
+      summary: '2',
+    });
+  });
+
+  it('no link worth following binds the empty list, and the trace says nothing came back', async () => {
+    const email = makeFakeAdapter('email');
+    const attio = makeFakeAdapter('attio');
+    const { invoker } = stubInvoker({ vc_url_retrieval: {} });
+
+    const result = await run(SCAN, invoker, { email: email.adapter, attio: attio.adapter });
+
+    expect(attio.creates).toEqual([]);
+    expect(pluginEntries(result.trace)[0]).toMatchObject({
+      plugin: 'vc_url_retrieval',
+      returned: 'absent',
+    });
   });
 });
 

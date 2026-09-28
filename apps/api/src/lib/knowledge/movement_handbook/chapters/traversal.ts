@@ -22,6 +22,7 @@ msg-[a:Attachments]-> {
 - Head the block at an EXPRESSION that ends in a record, and skip the binding: \`AT(rows, 0)-[c:company]-> { … }\` walks exactly as naming the call first and hopping off the name does. The expression ends at the first \`-[\` outside its own brackets, so a hop written inside it belongs to it (\`ONLY(found-[c:company]->)-[f:founder]->\`).
 - The bracket-alias (\`a\`, \`c\`) names *this iteration's* position inside the block. Aliases are lexically scoped to their block.
 - A \`WHERE\` filter on the hop narrows which positions the block sees: \`msg-[f:attachments WHERE \`Content Type\` == "application/pdf"]-> { … }\`.
+- Pick one member of an edge that holds several kinds by testing its label in the \`WHERE\`: \`o-[le:\`List Entries\` WHERE \`listName\` == "Deal Pipeline" AND \`Deal Created\` >= cutoff]-> { … }\`. The whole \`WHERE\` narrows the hop to that list, whatever order its tests are in, so the list's own fields read in the \`WHERE\` and off \`le\`. Without that test the hop carries only what every list shares, and reading one list's field is refused, naming the test to add.
 - Blocks nest: a block over companies can contain a block over each company's rounds. With nesting, write the inner record as a **linked write** from the enclosing handle so the structure lands connected (see the writes chapter).
 
 A handle is already a position — "continue from the company I just wrote" needs no construct: expressions rooted at the handle read its own fields directly, and traversing further *edges* onward from it walks just like any other position (\`co-[n:Notes]-> { … }\`, \`"\${co-[:Notes]->.Content}"\`).
@@ -75,6 +76,18 @@ A relationship either hands its records back in an order that means something or
 - \`LIMIT n\` with no \`ORDER BY\` means *some n of them*, and is refused for the same reason — except over a relationship ordered by nature, where "the latest twenty" is exactly what it says.
 
 Which relationships are ordered is the source's own fact, and each one says: chat messages and thread replies by time, a curated list's entries by when they were added, a document's sections and an email's attachments by their place in it, answers and callback fires by when they landed.
+
+### looking-up-one-record
+
+Look up a single record — a channel by name, a company by its exact name — with \`ONLY\`, and guard it:
+
+\`\`\`
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+write deals-[:Messages]-> { Message: "A new company just landed." }
+\`\`\`
+
+The guard ends the run with a reason when nothing matches, so every line after it uses \`deals\` directly. Keep a block for a path that yields many.
 
 ### what-a-source-can-filter
 
@@ -239,10 +252,10 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   orgs-[n:Notes]-> {
     write n { Title: "Logged" }
   }
-  team-[ch:Channels WHERE \`Name\` == "general"]-> {
-    write ch-[:Messages]-> {
-      Message: "Logged \${COUNT(orgs)} companies"
-    }
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> {
+    Message: "Logged \${COUNT(orgs)} companies"
   }
 }
 `,
@@ -287,10 +300,10 @@ function \`Name Them\`(m: <inbox-[:Email]->>) {
     }
     return f.\`Name\`
   }
-  team-[ch:Channels WHERE \`Name\` == "general"]-> {
-    write ch-[:Messages]-> {
-      Message: "\${COUNT(names)} files: \${JOIN(names, ", ")}"
-    }
+  general = ONLY(team-[ch:Channels WHERE \`Name\` == "general"]->)
+  if general == null { ERROR("no #general channel") }
+  write general-[:Messages]-> {
+    Message: "\${COUNT(names)} files: \${JOIN(names, ", ")}"
   }
 }
 `,

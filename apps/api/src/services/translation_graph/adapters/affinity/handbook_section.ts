@@ -31,20 +31,21 @@ A company sits on a list once, so the row is identified by the pair — the comp
 
 ### attaching-people-to-a-row
 
-A list field holding people is a relationship, so it is asserted rather than set. \`link\` points it at somebody who already exists:
+A list field holding people is a relationship, so it is asserted rather than set. \`match\` finds somebody who already exists, and \`link\` points the field at them:
 
 \`\`\`
 d-[o:owners]-> {
-  link entry -[:Owners]-> { Name: o.name }
+  owner = match entry-[:Owners]-> { Name: o.name }
+  link entry -[:Owners]-> owner
 }
 \`\`\`
 
 \`entry\` is the handle the write above handed back, and it stands on the list it named — so that list's own relationships (\`Owners\`, \`Scouted By\`) are reachable from it, and nothing else's are.
 
-The body is match criteria only: nobody is created, and nothing about the person found is changed. Somebody who cannot be found is skipped quietly, so walking a list of names attaches the ones that resolve. \`unlink\` takes one back off; severing what was never there does nothing.
+Affinity decides who a person is itself, so the \`match\` body is only what it looks them up by: nobody is created, and nothing about the person found is changed. Somebody who cannot be found is skipped quietly, so walking a list of names attaches the ones that resolve. \`unlink\` takes one back off; severing what was never there does nothing.
 
 ### Common mistakes
 
-- **Writing one block per name.** A name is a value like any other — walk the names you have and \`link\` inside the walk.
+- **Writing one block per name.** A name is a value like any other — walk the names you have and \`match\` and \`link\` inside the walk.
 - **Computing the list name.** The list decides which fields exist, so it has to be known while the program is being written, not while it runs.`,
 };

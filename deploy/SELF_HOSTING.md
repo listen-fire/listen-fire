@@ -548,7 +548,7 @@ docker compose up -d
 
 Migrations run as a one-shot service before the new API starts. They are forward-only and applied by file name; **back up your database before an upgrade, because there is no down-migration path.** The config volume is untouched by an upgrade — it is generated once and never rewritten.
 
-[UPGRADING.md](UPGRADING.md) has the whole procedure: what to snapshot, how to check the new version is the one running, the smoke checks, and how to roll back.
+[UPGRADING.md](UPGRADING.md) has the whole procedure: what to snapshot, how to check the new version is the one running, the smoke checks, and how to roll back. [CHANGELOG.md](../CHANGELOG.md) lists what each release changed, including the settings and migrations it brings.
 
 ## Stopping and removing
 

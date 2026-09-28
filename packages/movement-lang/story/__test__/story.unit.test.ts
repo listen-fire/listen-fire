@@ -124,7 +124,8 @@ movement intake(m: <inbox-[:message]->>) {
   }
   c = write book-[:Companies]-> { unique by (\`Name\`) Name ?: facts.name }
   d = write c-[:Deals]-> { Title: "Deal — \${facts.name}", Summary: AI("summarise the thread") }
-  link c -[:Owner]-> { Name: "sam" }
+  lead = match c-[:Owner]-> { unique by (\`Name\`) Name: "sam" }
+  link c -[:Owner]-> lead
   a = write questions-[:Check]-> { prompt: "approve this deal?" }
   answer = await FIRST(a-[:Response]->)
   amount = COALESCE(facts.amount, 0)
@@ -280,11 +281,17 @@ describe('records — the inspectRun sibling rows', () => {
     expect(updates.every((r) => r.target.recordType === 'Deals')).toBe(true);
   });
 
-  it('a criteria link FINDS a record — a graph row that is never written', () => {
-    const found = story().records.filter((r) => r.action === 'find');
+  it('a match FINDS a record — a graph row that is never written, and draws no parent edge', () => {
+    const ir = story();
+    const found = ir.records.filter((r) => r.action === 'find');
     expect(found).toHaveLength(1);
+    expect(found[0].binding).toBe('lead');
     expect(found[0].target.recordType).toBe('People');
     expect(found[0].fields.Name.source).toBe('"sam"');
+    expect(found[0].uniqueBy.map((c) => c.source)).toEqual(['`Name`']);
+    expect(ir.edges.filter((e) => e.kind === 'parent' && e.to.kind === 'record' && e.to.id === found[0].id)).toEqual([]);
+    const step = stepsOfKind(intakeSteps(ir), 'match')[0];
+    expect(step).toMatchObject({ kind: 'match', record: found[0].id, binding: 'lead' });
   });
 
   it('chips classify interpolation and AI apart from plain literals', () => {
@@ -533,8 +540,8 @@ describe('references say what they refer to', () => {
   it('a value-position WALK carries its hops and landings, like a for-each head', () => {
     const result = storyOf({
       source: `${SOURCE.replace(
-        'link c -[:Owner]-> { Name: "sam" }',
-        'link c -[:Owner]-> { Name: "sam" }\n  owner = c-[:Owner]->.Name',
+        'link c -[:Owner]-> lead',
+        'link c -[:Owner]-> lead\n  owner = c-[:Owner]->.Name',
       )}`,
       catalog,
     });
@@ -552,8 +559,8 @@ describe('references say what they refer to', () => {
   it('an expression shown WHOLE says which names are visible inside it', () => {
     const result = storyOf({
       source: `${SOURCE.replace(
-        'link c -[:Owner]-> { Name: "sam" }',
-        'link c -[:Owner]-> { Name: "sam" }\n  pick = IF facts.amount > 1 THEN facts.name ELSE "none" END',
+        'link c -[:Owner]-> lead',
+        'link c -[:Owner]-> lead\n  pick = IF facts.amount > 1 THEN facts.name ELSE "none" END',
       )}`,
       catalog,
     });

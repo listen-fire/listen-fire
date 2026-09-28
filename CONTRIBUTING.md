@@ -115,6 +115,8 @@ chore(brand): the sans face is the reader's own, not a licensed one
 
 Write the subject as a fact about the resulting code, not as an instruction. Comments in the code explain *why*, never *what*.
 
+A pull request that changes what an operator sets or an author writes adds a line under Unreleased in [`CHANGELOG.md`](CHANGELOG.md), in the same pull request.
+
 ## Claude Code
 
 The maintainers develop this repository with Claude Code. [`CLAUDE.md`](CLAUDE.md) at the root is the instruction file it reads, and [`.claude/skills`](.claude/skills) holds the repo's packaged procedures: currently the schema-migration walkthrough and the batched pre-push gate. Both are checked in, so a contributor using Claude Code gets the same workflow the maintainers do; neither is required if you are not using it.

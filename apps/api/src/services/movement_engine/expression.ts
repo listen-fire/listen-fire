@@ -225,13 +225,18 @@ export interface WriteRecord {
    */
   parents?: Array<{ recordType: string; externalId: string; edgeName: string }>;
   /**
-   * What kind of effect this entry records. Absent = a record write
-   * (create/update — `created` discriminates). 'link' / 'unlink' are the
-   * standalone link statements (`link a -[:e]-> b` and its inverse
-   * `unlink`), both carrying the edge in `link`; 'delete' is a record
-   * removal (`delete <handle>`).
+   * What kind of entry this is. Absent = a record write (create/update —
+   * `created` discriminates). 'link' / 'unlink' are the standalone link
+   * statements (`link a -[:e]-> b` and its inverse `unlink`), both carrying
+   * the edge in `link`; 'delete' is a record removal (`delete <handle>`).
+   *
+   * 'match' is the one entry that is NOT an effect: a `match` FOUND this
+   * record by identity and wrote nothing (`created` and `committed` are
+   * false, `writtenValues` empty). It is on the log so an inspector sees what
+   * the run resolved to; every count of what a run wrote goes through
+   * `isWriteEffect`, which leaves it out.
    */
-  kind?: 'link' | 'unlink' | 'delete';
+  kind?: 'link' | 'unlink' | 'delete' | 'match';
   /**
    * What a record write ACTUALLY did, which `created` alone cannot say:
    * 'create' (the record was minted), 'update' (at least one field — or
@@ -277,15 +282,12 @@ export interface WriteRecord {
    * Present for a standalone link assert (`link a -[:e]-> b`, kind
    * 'link') or sever (`unlink a -[:e]-> b`, kind 'unlink'): the edge in
    * engine currency. `recordType` / `externalId` are the from side; the
-   * to side rides here. `foundTarget` marks the criteria form (`link
-   * c-[:e]-> { … }`): the to side was FOUND by identity criteria — never
-   * created, never written — rather than a bound written handle.
+   * to side rides here.
    */
   link?: {
     edgeName: string;
     toRecordType: string;
     toExternalId: string;
-    foundTarget?: boolean;
   };
 
   // ── Firing-log provenance ────────────────────────────────────────────────
@@ -303,7 +305,7 @@ export interface WriteRecord {
    *  (`writeIndex` chains into `MovementRunResult.writes`). */
   origin?: Extract<ProvenanceOrigin, { kind: 'write' }>;
   /** The handle name when the statement was bound (`co = write …`,
-   *  `p = link …` for a criteria link's FOUND handle). */
+   *  `p = match …`). */
   bindingName?: string;
   /**
    * An honest caveat about how this write's own decision was made, for a
@@ -314,6 +316,16 @@ export interface WriteRecord {
    * standing in for a merge the judge never got to attempt.
    */
   note?: string;
+}
+
+/**
+ * Whether a run-log entry is an EFFECT on a system — everything but a
+ * `match`, which only found a record. Every count of "records written" (the
+ * run's write total, the loop guard's budget, the runs list) asks this, so a
+ * lookup never reads as a write.
+ */
+export function isWriteEffect(entry: { kind?: WriteRecord['kind'] | string }): boolean {
+  return entry.kind !== 'match';
 }
 
 /**
@@ -2976,21 +2988,32 @@ async function evalScopedFilter(
   if (!isPurePredicate(filter)) {
     return evaluateMovementExpression(filter, scopedCtx);
   }
+  // `evalMovementExpr` resolves every leaf form — including a zero-step
+  // traverse (`t.firedAt`) via its alias-rooted read seam — so the value (and
+  // therefore the decision) is identical to the full async evaluator.
+  return decidePurePredicate(filter, async (leaf) => (await evalMovementExpr(leaf, scopedCtx)).value);
+}
+
+/**
+ * Decide a PURE predicate, reading each leaf only when the conjunct that needs
+ * it is reached: a top-level AND is taken one conjunct at a time, in the order
+ * written, and a false one ends it. That is the full evaluator's short-circuit,
+ * and every place that decides a WHERE by pre-reading leaves goes through here
+ * so none of them reads a field a false conjunct already ruled out — a field
+ * the record may not have at all. Each leaf is read at most once.
+ */
+export async function decidePurePredicate(
+  filter: Expression,
+  readLeaf: (leaf: LeafRead) => Promise<unknown>,
+): Promise<unknown> {
   const reads = new Map<string, unknown>();
-  const decide = async (conjunct: Expression): Promise<unknown> => {
-    for (const leaf of pureLeafReads(conjunct)) {
-      const name = leafReadKey(leaf);
-      if (reads.has(name)) continue;
-      // `evalMovementExpr` resolves every leaf form — including a zero-step
-      // traverse (`t.firedAt`) via its alias-rooted read seam — so the value
-      // (and therefore the decision) is identical to the full async evaluator.
-      reads.set(name, (await evalMovementExpr(leaf, scopedCtx)).value);
-    }
-    return evaluatePredicate(conjunct, { read: (name) => reads.get(name) });
-  };
   let last: unknown = true;
   for (const conjunct of flattenAndConjuncts(filter)) {
-    last = await decide(conjunct);
+    for (const leaf of pureLeafReads(conjunct)) {
+      const name = leafReadKey(leaf);
+      if (!reads.has(name)) reads.set(name, await readLeaf(leaf));
+    }
+    last = evaluatePredicate(conjunct, { read: (name) => reads.get(name) });
     if (!last) return last;
   }
   return last;
@@ -3450,6 +3473,10 @@ function readBindingField(
       return readEmissionField(binding.emission, field);
     case 'value': {
       const value = binding.value;
+      // A RECORD held on the value plane (`deck = FIRST(pages)`) reads as the
+      // record it is — the dot-plane twin of a block head walking from one.
+      const held = bindingOf(value);
+      if (held !== undefined) return readBindingField(held, field, name);
       const projected =
         value !== null && typeof value === 'object' && !Array.isArray(value)
           ? ((value as Record<string, unknown>)[field] ?? null)

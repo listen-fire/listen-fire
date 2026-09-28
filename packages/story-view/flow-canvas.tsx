@@ -543,6 +543,12 @@ function StepNode({ step }: { step: Step }) {
         </Frame>
       );
 
+    case "match": {
+      const record = records.get(step.record);
+      if (!record) return <Plain>Looks for something.</Plain>;
+      return <RecordCard record={record} relations={relations.get(record.id) ?? []} />;
+    }
+
     case "write": {
       const record = records.get(step.record);
       if (!record) return <Plain>Changes something.</Plain>;

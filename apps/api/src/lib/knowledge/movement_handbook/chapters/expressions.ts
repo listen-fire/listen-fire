@@ -52,9 +52,9 @@ Long prompts read best bound once at file scope under a name of their own, then 
 \`Suggested Action\` = AI("a brief, actionable next step — only if one is
   genuinely needed — suggested by this email: \${msg.bodyText}")
 if EXISTS(\`Suggested Action\`) {
-  team-[ch:Channels WHERE \`Name\` == "follow-ups"]-> {
-    write ch-[:Messages]-> { Message: \`Suggested Action\` }
-  }
+  channel = ONLY(team-[ch:Channels WHERE \`Name\` == "follow-ups"]->)
+  if channel == null { ERROR("no #follow-ups channel") }
+  write channel-[:Messages]-> { Message: \`Suggested Action\` }
 }
 \`\`\`
 
@@ -247,9 +247,9 @@ team  = slack(credentials: acme_slack)
 function \`Follow Up\`(m: <inbox-[:Email]->>) {
   \`Suggested Action\` = AI("a brief, actionable next step — only if one is genuinely needed")
   if EXISTS(\`Suggested Action\`) {
-    team-[ch:Channels WHERE \`Name\` == "follow-ups"]-> {
-      write ch-[:Messages]-> { Message: \`Suggested Action\` }
-    }
+    channel = ONLY(team-[ch:Channels WHERE \`Name\` == "follow-ups"]->)
+    if channel == null { ERROR("no #follow-ups channel") }
+    write channel-[:Messages]-> { Message: \`Suggested Action\` }
   }
 }
 `,

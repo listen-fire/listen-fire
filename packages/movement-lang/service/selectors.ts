@@ -29,6 +29,7 @@ import type {
   Program,
   CombinatorExpression,
   Statement,
+  MatchExpression,
   WriteExpression,
   WriteTarget,
 } from '../parser/ast';
@@ -290,7 +291,12 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     visitExpression(parsed, aliasScope);
   };
 
-  const visitWrite = (write: WriteExpression, aliasScope: Map<string, AliasGrounding>): void => {
+  // A match's body is a write body (target, identity, fields), so it demands
+  // exactly what the same write would.
+  const visitWrite = (
+    write: WriteExpression | MatchExpression,
+    aliasScope: Map<string, AliasGrounding>,
+  ): void => {
     // First spelling wins on a repeated name — the same rule the checker's own
     // body lookups follow, so the two read one body the same way.
     const body: Record<string, string> = {};
@@ -366,7 +372,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
    * already documented this case; the walk simply never registered it.
    */
   const writeHandleGrounding = (
-    write: WriteExpression,
+    write: WriteExpression | MatchExpression,
     aliasScope: Map<string, AliasGrounding>,
   ): AliasGrounding | undefined => {
     // Only a `linked` target names ONE record. A tuple write yields several,
@@ -499,6 +505,10 @@ export function scanInstanceChains(source: string): InstanceChain[] {
             visitWrite(statement.value.write, aliasScope);
             const handle = writeHandleGrounding(statement.value.write, aliasScope);
             if (handle) aliasScope.set(statement.name, handle);
+          } else if (statement.value.kind === 'match') {
+            visitWrite(statement.value.match, aliasScope);
+            const handle = writeHandleGrounding(statement.value.match, aliasScope);
+            if (handle) aliasScope.set(statement.name, handle);
           } else if (statement.value.kind === 'expr') {
             visitSlot(statement.value.expr, aliasScope);
           } else if (statement.value.kind === 'extract') {
@@ -545,6 +555,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           if (value.kind === 'expr') visitSlot(value.expr, aliasScope);
           else if (value.kind === 'node') visitNode(value.node, aliasScope);
           else if (value.kind === 'write') visitWrite(value.write, aliasScope);
+          else if (value.kind === 'match') visitWrite(value.match, aliasScope);
           else if (value.kind === 'block') {
             visitHead(value.block.head, aliasScope);
             walk(value.block.body, blockScope(value.block.head, aliasScope));
@@ -569,6 +580,9 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           break;
         case 'write':
           visitWrite(statement.write, aliasScope);
+          break;
+        case 'match':
+          visitWrite(statement.match, aliasScope);
           break;
         case 'call':
           for (const arg of statement.args) visitCallArg(arg, aliasScope);

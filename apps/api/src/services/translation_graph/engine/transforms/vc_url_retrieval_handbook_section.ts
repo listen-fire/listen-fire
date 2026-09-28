@@ -11,9 +11,9 @@ export const VC_URL_RETRIEVAL_HANDBOOK_SECTION: HandbookSection = {
   title: 'URL retrieval — the links a message carries',
   content: `## URL retrieval — the links a message carries
 
-\`vc_url_retrieval\` reads a piece of text, finds every link in it, works out what each one is, and loads the ones worth loading. It is a stage: it runs inside an extract's \`through [ … ]\` and nowhere else.
+\`vc_url_retrieval\` reads a piece of text, finds every link in it, works out what each one is, and loads the ones worth loading. Run it as a stage inside an extract's \`through [ … ]\`, or call it on its own for a list of what it loaded.
 
-Every page it loads arrives as one entry carrying the link, a name, the downloaded file, and the page text. It takes the text it scans from the extraction itself, so a bare \`through [vc_url_retrieval]\` is the whole call.
+Inside a stage it takes the text it scans from the extraction itself, so a bare \`through [vc_url_retrieval]\` is the whole call. The page text reaches the extraction, and every document it downloads lands on the extracted records' \`_resources\`.
 
 ### where-to-put-it
 
@@ -29,6 +29,28 @@ extract from [msg.\`Text\`] through [vc_url_retrieval] {
 At the top of an extract the stage runs ONCE, over the whole source text, and the pages it loads are shared by every record the extract produces. That is where it belongs: the links are in the message, not in any one record, so the message is what it should read.
 
 A slide deck link, a shared folder, a write-up someone linked to — all of them reach the extraction this way, and any record may draw on any of them.
+
+### the-downloaded-files
+
+\`\`\`
+mentions-[c:company]-> {
+  record = write crm-[:Companies]-> { unique by (\`Name\`) Name: c.name }
+  c-[r:_resources WHERE type == "FILE"]-> {
+    write record-[:Files]-> { File: r.\`file\` }
+  }
+}
+\`\`\`
+
+A slide deck behind a link arrives on \`_resources\` as a \`"FILE"\`, next to the files listed in \`from [ … ]\`. It has the same fields they have, plus \`url\`, the link it came from, so the same block attaches either kind to a record. A link that was a page rather than a document adds its text and no file.
+
+### called-on-its-own
+
+\`\`\`
+pages = vc_url_retrieval(text: m.\`Body\`)
+deck  = FIRST(pages)
+\`\`\`
+
+The call returns a list with one record per link it loaded, in the order it found them. Each has \`name\`, \`url\`, \`file\` and \`text\`. \`file\` is there only when the link was a document, and \`text\` only when something could be read. No link worth loading gives an empty list. Read one record with \`FIRST\`, or every one at once with \`pages.text\`.
 
 ### scan-or-load
 
@@ -70,10 +92,13 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
     }
   }
   mentions-[c:company]-> {
-    write crm-[:Companies]-> {
+    record = write crm-[:Companies]-> {
       unique by (\`Name\`)
       Name:        c.name
       Description: c.summary
+    }
+    c-[r:_resources WHERE type == "FILE"]-> {
+      write record-[:Files]-> { File: r.\`file\` }
     }
   }
 }

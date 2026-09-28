@@ -26,7 +26,6 @@ import {
   type CallStatement,
   type CollectionOp,
   type ExprSlot,
-  type FieldEntry,
   type IfStatement,
   type ListenDeclaration,
   type MovementParam,
@@ -39,6 +38,7 @@ import {
   type Span,
   type Statement,
   type TypeRef,
+  type MatchExpression,
   type WriteExpression,
 } from '../parser/ast';
 import { constructionAsCall, pathRootName, spellPathHead } from '../parser/ast';
@@ -348,7 +348,7 @@ export interface StoryRecord {
   id: string;
   binding?: string;
   target: { adapterType?: string; instance?: string; recordType?: string };
-  /** `find` is the criteria `link` target: identified, never written. */
+  /** `find` is a `match`: identified, never written. */
   action: 'create' | 'update' | 'find';
   fields: Record<string, Chip>;
   /** Per-field write precedence, where the author set one (`?:`, `+:`, `+?:`). */
@@ -516,6 +516,9 @@ export type Step =
       at: Span;
     }
   | { kind: 'write'; record: string; at: Span }
+  /** `match`: a record FOUND by identity — a row of the graph (action
+   *  `find`), never written. The rest of its scope runs only when found. */
+  | { kind: 'match'; record: string; binding?: string; at: Span }
   | { kind: 'link'; edge: string; from: StoryEndpoint; to: StoryEndpoint; at: Span }
   | { kind: 'unlink'; edge: string; from: StoryEndpoint; to: StoryEndpoint; at: Span }
   | { kind: 'extract'; binding?: string; from: Chip[]; tree?: StoryExtractNode; at: Span }
@@ -1479,7 +1482,10 @@ class Projection {
 
   // ── Records ──
 
-  private addRecord(write: WriteExpression, recorded: RecordedWrite | undefined): string {
+  private addRecord(
+    write: WriteExpression | MatchExpression,
+    recorded: RecordedWrite | undefined,
+  ): string {
     const id = recordId(write.span);
     const scope = recorded?.scope;
     const fields: Record<string, Chip> = {};
@@ -1510,8 +1516,9 @@ class Projection {
     });
     if (recorded?.binding !== undefined) this.recordByBinding.set(recorded.binding, id);
     // The write FORM is the parent edge: a linked or tuple write mints the
-    // record and the edge that reaches it in one move.
-    if (scope !== undefined) {
+    // record and the edge that reaches it in one move. A match only looks
+    // along the edge, so it draws none.
+    if (scope !== undefined && recorded?.action !== 'find') {
       const paths: PathHead[] =
         write.target.kind === 'linked' ? [write.target.path]
         : write.target.kind === 'tuple' ? write.target.paths
@@ -1602,8 +1609,10 @@ class Projection {
           at: statement.span,
         };
       }
+      case 'match':
+        return this.matchStep(statement.match, statement.span);
       case 'link':
-        return this.linkStep(statement.link.span, undefined);
+        return this.linkStep(statement.link.span);
       case 'unlink': {
         const scope = this.scopeOfNearest(statement.span);
         return {
@@ -1655,8 +1664,8 @@ class Projection {
           record: this.addRecord(value.write, this.writes.get(spanKey(value.write.span))),
           at,
         };
-      case 'link':
-        return this.linkStep(value.link.span, undefined);
+      case 'match':
+        return this.matchStep(value.match, at);
       case 'call':
         return this.callStep(value.call, undefined);
       case 'block': {
@@ -1681,8 +1690,8 @@ class Projection {
           record: this.addRecord(value.write, this.writes.get(spanKey(value.write.span))),
           at,
         };
-      case 'link':
-        return this.linkStep(value.link.span, binding);
+      case 'match':
+        return this.matchStep(value.match, at);
       case 'extract':
         return this.extractStep(value.extract.span, value.extract.from, binding, at);
       case 'await': {
@@ -1836,60 +1845,26 @@ class Projection {
     return { fields, children };
   }
 
-  private linkStep(span: Span, binding: string | undefined): Step | undefined {
+  private linkStep(span: Span): Step | undefined {
     const recorded = this.nodes.get(`link:${spanKey(span)}`);
     if (recorded?.kind !== 'link') return undefined;
     const node: RecordedLink = recorded;
     const from = this.endpoint(node.from, node.scope);
-    let to: StoryEndpoint;
-    if (node.target.kind === 'handle') {
-      to = this.endpoint(node.target.name, node.scope);
-    } else {
-      // A criteria link FINDS a record — a row of the graph, never written.
-      const linkStatement = this.criteriaFieldsAt(span);
-      const id = recordId(span);
-      this.records.push({
-        id,
-        ...(binding !== undefined ? { binding } : {}),
-        target: {
-          ...(this.adapterTypeOf(node.target.instance) !== undefined
-            ? { adapterType: this.adapterTypeOf(node.target.instance) }
-            : {}),
-          ...(node.target.instance !== undefined ? { instance: node.target.instance } : {}),
-          ...(node.target.recordType !== undefined ? { recordType: node.target.recordType } : {}),
-        },
-        action: 'find',
-        fields: Object.fromEntries(
-          (linkStatement ?? []).map((f) => [f.name, this.chip(f.value, node.scope)]),
-        ),
-        fieldModes: {},
-        uniqueBy: [],
-        at: span,
-      });
-      if (binding !== undefined) this.recordByBinding.set(binding, id);
-      to = { kind: 'record', id };
-    }
+    const to = this.endpoint(node.to, node.scope);
     this.edges.push({ from, to, edge: node.edge, kind: 'link' });
     return { kind: 'link', edge: node.edge, from, to, at: span };
   }
 
-  /** The criteria body at a link's span (the AST holds the fields; the checker
-   *  had no reason to copy them). */
-  private criteriaFieldsAt(span: Span): FieldEntry[] | undefined {
-    let found: FieldEntry[] | undefined;
-    const key = spanKey(span);
-    walkStatements(this.input.program.statements, (statement) => {
-      if (statement.kind === 'link' && spanKey(statement.link.span) === key) {
-        if (statement.link.target.kind === 'criteria') found = statement.link.target.fields;
-      }
-      if (statement.kind === 'assign' && statement.value.kind === 'link') {
-        const link = statement.value.link;
-        if (spanKey(link.span) === key && link.target.kind === 'criteria') {
-          found = link.target.fields;
-        }
-      }
-    });
-    return found;
+  /** A `match` finds a row of the graph — recorded by the checker exactly as a
+   *  write body is, with action `find`. */
+  private matchStep(match: MatchExpression, at: Span): Step {
+    const recorded = this.writes.get(spanKey(match.span));
+    return {
+      kind: 'match',
+      record: this.addRecord(match, recorded),
+      ...(recorded?.binding !== undefined ? { binding: recorded.binding } : {}),
+      at,
+    };
   }
 
   private extractStep(

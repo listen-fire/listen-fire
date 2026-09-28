@@ -30,6 +30,9 @@ import {
   LinkExpression,
   LinkStatement,
   ListenDeclaration,
+  MatchExpression,
+  MatchStatement,
+  MatchTarget,
   Loc,
   CallbackExpression,
   CallbackSubject,
@@ -79,7 +82,7 @@ type MovementKeyword = 'movement' | 'function';
 /** The statement forms that ACT. None of them is an expression, so none can
  *  appear as a node-literal entry — this list exists to say that by name
  *  (a node literal is effect-free) rather than by syntax error. */
-const NODE_ENTRY_EFFECTS = new Set(['write', 'link', 'unlink', 'delete', 'extract', 'await', 'race', 'parallel', 'callback']);
+const NODE_ENTRY_EFFECTS = new Set(['write', 'match', 'link', 'unlink', 'delete', 'extract', 'await', 'race', 'parallel', 'callback']);
 
 /** The orders a declared entry may claim — the language's existing three
  *  sequencing words, no new one. `arrival` is what a run-local edge actually
@@ -767,6 +770,16 @@ class Parser {
         this.expectStatementEnd();
         return { kind: 'write', write, span: write.span };
       }
+      case 'match':
+        // Contextual: only a target after the word makes it the keyword, so a
+        // name spelled `match` still binds and reads.
+        if (this.atMatchKeyword()) {
+          this.pos += word.length;
+          const match = this.parseMatchExpression(start);
+          this.expectStatementEnd();
+          return { kind: 'match', match, span: match.span } satisfies MatchStatement;
+        }
+        break;
       case 'link':
         return this.parseLinkStatement();
       case 'edge':
@@ -1010,16 +1023,15 @@ class Parser {
       this.pos += word.length;
       return { kind: 'write', write: this.parseWriteExpression(start) };
     }
-    if (word === 'link') {
+    if (word === 'match' && this.atMatchKeyword()) {
       this.pos += word.length;
-      const link = this.parseLinkExpression(start);
-      if (link.target.kind !== 'criteria') {
-        this.error(
-          "Binding a link takes the criteria form — `p = link c-[:edge]-> { …criteria… }` binds the FOUND target's handle; `link a -[:e]-> b` connects two already-bound handles and binds nothing",
-          start,
-        );
-      }
-      return { kind: 'link', link };
+      return { kind: 'match', match: this.parseMatchExpression(start) };
+    }
+    if (word === 'link') {
+      this.error(
+        "A link binds nothing — 'link a -[:e]-> b' connects two records you already hold. To find a record, match it: 'x = match p-[:Edge]-> { unique by (…) … }', then 'link p -[:Edge]-> x' if you want the edge",
+        start,
+      );
     }
     if (word === 'extract') {
       this.pos += word.length;
@@ -1351,14 +1363,56 @@ class Parser {
   // ── Writes ──
 
   private parseWriteExpression(start: number): WriteExpression {
+    const target = this.parseWriteTarget('write');
+    const bind = this.tryParseBindClause();
+    const { uniqueBy, fields } = this.parseWriteBody('write');
+    return { target, uniqueBy, fields, ...(bind ? { bind } : {}), span: this.spanFrom(start) };
+  }
+
+  /**
+   * `match <path> { unique by (…) … }` — after the keyword. The target is what
+   * a write addresses, less the bare position (a record already in hand has
+   * nothing left to find); the body is a write body whose fields are
+   * assertions only.
+   */
+  private parseMatchExpression(start: number): MatchExpression {
+    const target = this.parseWriteTarget('match');
+    if (target.kind === 'position') {
+      throw new MovementParseError(
+        `'${target.alias}' is already a record — a match FINDS one, from where records are: a hop ('match ${target.alias}-[:Edge]-> { … }') or an instance's collection ('match crm-[:companies]-> { … }')`,
+        target.span.start,
+      );
+    }
+    const matchTarget: MatchTarget = target;
+    const { uniqueBy, fields } = this.parseWriteBody('match');
+    for (const field of fields) {
+      if (field.semantics === undefined) continue;
+      const op = field.semantics === 'fill' ? '?:' : field.semantics === 'append' ? '+:' : '+?:';
+      throw new MovementParseError(
+        `'${field.name} ${op}' writes, and a match never writes — its fields are the values it looks the record up by. Use '${field.name}: …', or 'write' when the record should be created or changed`,
+        field.span.start,
+      );
+    }
+    return { target: matchTarget, uniqueBy, fields, span: this.spanFrom(start) };
+  }
+
+  /** `match` is CONTEXTUAL, like `node` and `type`: the keyword only where a
+   *  target follows it on the same line (a name, a backticked name, or the
+   *  tuple's `(`), so a value named `match` still binds and reads. */
+  private atMatchKeyword(): boolean {
+    if (this.peekIdent() !== 'match') return false;
+    let i = this.pos + 'match'.length;
+    if (this.src[i] !== ' ' && this.src[i] !== '\t') return false;
+    while (this.src[i] === ' ' || this.src[i] === '\t') i++;
+    return this.src[i] === '(' || scanName(this.src, i) !== null;
+  }
+
+  /** The target a write — or a match — addresses: a tuple of parent paths, a
+   *  linked path, or a bare position. */
+  private parseWriteTarget(keyword: 'write' | 'match'): WriteTarget {
     this.skipInlineWs();
     const targetStart = this.pos;
-    if (this.peekCh() === '(') {
-      const target = this.parseTupleWriteTarget(targetStart);
-      const bind = this.tryParseBindClause();
-      const { uniqueBy, fields } = this.parseWriteBody();
-      return { target, uniqueBy, fields, ...(bind ? { bind } : {}), span: this.spanFrom(start) };
-    }
+    if (this.peekCh() === '(') return this.parseTupleWriteTarget(targetStart, keyword);
     // A traversal head may start at an EXPRESSION; a write's parent may not. A
     // write attaches to ONE record whose identity it has to carry — the graph
     // it lands in, a `bind` counterpart, who it is attributed to — and an
@@ -1368,18 +1422,17 @@ class Parser {
     const exprParentEnd = this.scanExpressionRootEnd();
     if (exprParentEnd !== undefined) {
       this.error(
-        `A write's parent is a NAMED record — bind it first ('parent = ${this.src.slice(this.pos, exprParentEnd)}', then 'write parent-[:edge]-> { … }'). A write attaches to one record whose identity it carries (the graph it lands in, its 'bind' counterpart, who it is attributed to), and an expression has no name to carry.`,
+        `A ${keyword}'s parent is a NAMED record — bind it first ('parent = ${this.src.slice(this.pos, exprParentEnd)}', then '${keyword} parent-[:edge]-> { … }'). A ${keyword} starts from one record whose identity it carries (the graph it lands in, its 'bind' counterpart, who it is attributed to), and an expression has no name to carry.`,
       );
     }
     const scannedFirst = scanName(this.src, this.pos);
     if (!scannedFirst) {
       this.error(
-        `Expected a write target after 'write' — a linked path like '<instance>-[:edge]->' or 'parent-[:edge]->', or a tuple '(a-[:e]->, b-[:f]->)' — found ${this.describeHere()}`,
+        `Expected a ${keyword} target after '${keyword}' — a linked path like '<instance>-[:edge]->' or 'parent-[:edge]->', or a tuple '(a-[:e]->, b-[:f]->)' — found ${this.describeHere()}`,
       );
     }
     const first = scannedFirst.name;
     this.pos = scannedFirst.end;
-    let target: WriteTarget;
     if (this.peekCh() === '.') {
       const dotStart = this.pos;
       this.pos++;
@@ -1389,10 +1442,11 @@ class Parser {
       // `write crm-[:company]-> { … }` — the linked write mints the record and
       // its edge in one move.
       this.error(
-        `Write targets name the edge, not the type — use 'write ${first}-[:${type}]-> { … }'. The flat '${first}.${type}' form is no longer a write target.`,
+        `${keyword === 'write' ? 'Write' : 'Match'} targets name the edge, not the type — use '${keyword} ${first}-[:${type}]-> { … }'. The flat '${first}.${type}' form is no longer a ${keyword} target.`,
         dotStart,
       );
-    } else if (this.peekCh() === '-' && this.peekCh(1) === '[') {
+    }
+    if (this.peekCh() === '-' && this.peekCh(1) === '[') {
       const hopsStart = this.pos;
       do {
         this.scanHop();
@@ -1404,16 +1458,12 @@ class Parser {
         hopsRaw,
         span: this.spanFrom(targetStart),
       };
-      target = { kind: 'linked', path, explicitType, span: this.spanFrom(targetStart) };
-    } else {
-      // A bare name → update the record at the bound position `first` in
-      // place (`write a { … }`). The write body follows; the checker
-      // validates that `first` is a writable stable record.
-      target = { kind: 'position', alias: first, span: this.spanFrom(targetStart) };
+      return { kind: 'linked', path, explicitType, span: this.spanFrom(targetStart) };
     }
-    const bind = this.tryParseBindClause();
-    const { uniqueBy, fields } = this.parseWriteBody();
-    return { target, uniqueBy, fields, ...(bind ? { bind } : {}), span: this.spanFrom(start) };
+    // A bare name → update the record at the bound position `first` in
+    // place (`write a { … }`). The write body follows; the checker
+    // validates that `first` is a writable stable record.
+    return { kind: 'position', alias: first, span: this.spanFrom(targetStart) };
   }
 
   /**
@@ -1439,8 +1489,11 @@ class Parser {
    * (root + hop chain); an optional explicit type after the `)` names
    * the written type for polymorphic edges, like linked writes.
    */
-  private parseTupleWriteTarget(targetStart: number): Extract<WriteTarget, { kind: 'tuple' }> {
-    this.expect('(', 'to open the tuple write target');
+  private parseTupleWriteTarget(
+    targetStart: number,
+    keyword: 'write' | 'match',
+  ): Extract<WriteTarget, { kind: 'tuple' }> {
+    this.expect('(', `to open the tuple ${keyword} target`);
     const paths: PathHead[] = [];
     for (;;) {
       this.skipAllWs();
@@ -1451,7 +1504,7 @@ class Parser {
       const path = this.tryParsePathHead();
       if (!path) {
         this.error(
-          `Expected a linked path like 'parent-[:edge]->' in the tuple write target, found ${this.describeHere()}`,
+          `Expected a linked path like 'parent-[:edge]->' in the tuple ${keyword} target, found ${this.describeHere()}`,
         );
       }
       if (path.root === undefined || path.root.kind === 'expression') {
@@ -1464,12 +1517,12 @@ class Parser {
         continue;
       }
       if (this.peekCh() !== ')') {
-        this.error(`Expected ',' or ')' in the tuple write target, found ${this.describeHere()}`);
+        this.error(`Expected ',' or ')' in the tuple ${keyword} target, found ${this.describeHere()}`);
       }
     }
     if (paths.length < 2) {
       this.error(
-        "A tuple write target takes two or more parent paths — for one parent, write the linked form 'write parent-[:edge]-> { … }'",
+        `A tuple ${keyword} target takes two or more parent paths — for one parent, use the linked form '${keyword} parent-[:edge]-> { … }'`,
         targetStart,
       );
     }
@@ -1499,15 +1552,18 @@ class Parser {
     return undefined;
   }
 
-  private parseWriteBody(): { uniqueBy: UniqueClause[]; fields: FieldEntry[] } {
+  private parseWriteBody(keyword: 'write' | 'match'): {
+    uniqueBy: UniqueClause[];
+    fields: FieldEntry[];
+  } {
     this.skipInlineWs();
     const braceOffset = this.pos;
-    this.expect('{', 'to open the write body');
+    this.expect('{', `to open the ${keyword} body`);
     const uniqueBy: UniqueClause[] = [];
     const fields: FieldEntry[] = [];
     for (;;) {
       this.skipAllWs();
-      if (this.eof()) this.error("Expected '}' to close the write body", braceOffset);
+      if (this.eof()) this.error(`Expected '}' to close the ${keyword} body`, braceOffset);
       if (this.peekCh() === '}') {
         this.pos++;
         return { uniqueBy, fields };
@@ -1525,7 +1581,7 @@ class Parser {
         uniqueBy.push(this.parseUniqueClause(entryStart));
         continue;
       }
-      const name = this.readName("a field name or 'unique by' in the write body");
+      const name = this.readName(`a field name or 'unique by' in the ${keyword} body`);
       this.skipInlineWs();
       // Write-precedence operator before the colon (longest match first):
       //   `+?:` append-if-missing · `+:` append · `?:` set-if-empty · `:` replace.
@@ -2050,11 +2106,9 @@ class Parser {
   }
 
   /**
-   * After the `link` keyword: `from -[:edge]->` then either a bound name
-   * (handle form) or — optionally type-named for polymorphic edges — an
-   * identity-criteria body (criteria form). Criteria are match values
-   * ONLY: they ARE the identity, so a `unique by` inside the body is
-   * rejected.
+   * After the `link` keyword: `from -[:edge]-> to`, both bound names. A body
+   * after the arrow is the retired criteria form — finding a record is
+   * `match`'s job, and the refusal spells the two statements that replace it.
    */
   private parseLinkExpression(start: number): LinkExpression {
     this.skipInlineWs();
@@ -2067,53 +2121,27 @@ class Parser {
     this.expect('->', 'to complete the link arrow');
     this.skipInlineWs();
     const targetStart = this.pos;
-    let explicitType: string | undefined;
-    if (this.peekCh() === '<') {
-      // Criteria form with an explicit found type (polymorphic edges):
-      // `link a -[:related]-> <company> { … }` — bracketed like every type.
-      explicitType = this.readTypeMarker('for the found type').text;
-      this.skipInlineWs();
-    } else {
-      const scannedIdent = scanName(this.src, this.pos);
-      if (scannedIdent) {
-        const ident = scannedIdent.name;
-        this.pos = scannedIdent.end;
-        this.skipInlineWs();
-        if (this.peekCh() === '{') {
-          // The pre-bracket spelling of the criteria form's explicit type.
-          this.error(
-            `Types are written in angle brackets — wrap the type in angle brackets: <${ident}>`,
-            targetStart,
-          );
-        }
-        // Bare-handle form: `link a -[:e]-> b`.
-        return {
-          from,
-          edge,
-          target: { kind: 'handle', name: ident },
-          span: this.spanFrom(start),
-        };
-      }
-    }
-    if (this.peekCh() !== '{') {
+    const refuseBody = (): never =>
       this.error(
-        `Expected a bound handle or an identity-criteria body '{ … }' after the link arrow, found ${this.describeHere()}`,
+        `A link connects two records you already hold — to find one, match it first: 'x = match ${from}-[:${edge}]-> { unique by (…) … }', then 'link ${from} -[:${edge}]-> x'`,
+        targetStart,
+      );
+    if (this.peekCh() === '{' || this.peekCh() === '<') refuseBody();
+    const scanned = scanName(this.src, this.pos);
+    if (!scanned) {
+      this.error(
+        `Expected a bound handle after the link arrow, found ${this.describeHere()}`,
         targetStart,
       );
     }
-    const { uniqueBy, fields } = this.parseWriteBody();
-    if (uniqueBy.length > 0) {
-      throw new MovementParseError(
-        "A link body takes identity criteria only — the criteria ARE the identity, so 'unique by' doesn't belong here",
-        uniqueBy[0].span.start,
-      );
-    }
-    return {
-      from,
-      edge,
-      target: { kind: 'criteria', explicitType, fields, span: this.spanFrom(targetStart) },
-      span: this.spanFrom(start),
-    };
+    this.pos = scanned.end;
+    const end = this.pos;
+    this.skipInlineWs();
+    // `link c -[:e]->company { … }` — the pre-bracket type spelling of the
+    // same retired body.
+    if (this.peekCh() === '{') refuseBody();
+    this.pos = end;
+    return { from, edge, to: scanned.name, span: this.spanFrom(start) };
   }
 
   private parseLinkStatement(): LinkStatement {

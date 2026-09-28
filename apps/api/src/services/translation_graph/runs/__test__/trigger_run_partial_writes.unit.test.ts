@@ -160,6 +160,41 @@ describe('a failed movement step carries the writes that landed', () => {
     ]);
   });
 
+  it('a record a match FOUND is persisted for the reader but never counted as written', async () => {
+    const ledger = partialLedger();
+    ledger.writes.unshift({
+      bindingName: 'known',
+      kind: 'match',
+      adapterType: 'hubspot',
+      recordType: 'company',
+      created: false,
+      committed: false,
+      externalId: 'found-1',
+      writtenValues: {},
+      provenance: {},
+    });
+    const recorder = makeRecorder();
+    recorder.recordStepFailure({
+      tgId: 'movement:mov-1',
+      tgName: 'intake',
+      sourceAdapterType: 'email',
+      message: 'boom',
+      partial: ledger,
+    });
+    await recorder.finish();
+
+    const terminal = insertedRows[insertedRows.length - 1];
+    expect(terminal.nodes_written).toBe(1);
+    const [step] = persistedSteps();
+    // The system the run WROTE to, not the one it only looked in.
+    expect(step.targetAdapterType).toBe('attio');
+    const plans = flattenTriggerRunPlans(JSON.parse(String(terminal.steps)));
+    expect(plans).toEqual([
+      expect.objectContaining({ nodeId: 'known', kind: 'match', externalId: 'found-1' }),
+      expect.objectContaining({ nodeId: 'co', externalId: 'co-1' }),
+    ]);
+  });
+
   it('a failure with no ledger records nothing — the pre-existing shape is unchanged', async () => {
     const recorder = makeRecorder();
     recorder.recordStepFailure({
