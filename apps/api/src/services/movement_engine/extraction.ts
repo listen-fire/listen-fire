@@ -2149,6 +2149,32 @@ function addResources(
   emission.resources = [...(emission.resources ?? []), ...fetched];
 }
 
+/**
+ * The fields a program reads as PRESENT text: those declared plain text — the
+ * inline `name: "…"` shortcut, or `<text>` — by the stage that last declares
+ * them (a later stage re-declaring a field transforms it, type included).
+ *
+ * Text has a value that means "nothing found", `""`, so the program is handed
+ * that and never has to discharge an absence it would only print or write
+ * (the checker types these reads `text`, not `text | absent`). A typed field —
+ * a number, a date, a choice from a set — has no such value and stays absent.
+ *
+ * Applied only here, where a result leaves for the program: inside the
+ * extraction a blank is still absent, so an all-blank record is still dropped
+ * and still counted empty.
+ */
+function presentTextFields(spec: ExtractNodeSpec): Set<string> {
+  const typeOf = new Map<string, FieldType | undefined>();
+  for (const stage of spec.stages) {
+    for (const field of stage.fields) typeOf.set(field.name, field.type);
+  }
+  const text = new Set<string>();
+  for (const [name, type] of typeOf) {
+    if (type === undefined || type === 'text') text.add(name);
+  }
+  return text;
+}
+
 /** The source content (`from [...]` resources) is shared by every emission of
  *  one `extract` — it rides the root and every descendant unchanged. A record
  *  whose own stage fetched files adds them, for itself and everything beneath
@@ -2158,8 +2184,10 @@ function exportEmission(working: WorkingEmission, inherited: Resource[]): Extrac
     working.resources !== undefined ? [...inherited, ...working.resources] : inherited;
   const fields: Record<string, unknown> = {};
   const provenance: Record<string, ProvenanceOrigin> = {};
+  const textFields = presentTextFields(working.spec);
   for (const name of working.spec.exported) {
-    fields[name] = working.context[name] ?? null;
+    const value = working.context[name] ?? null;
+    fields[name] = value === null && textFields.has(name) ? '' : value;
     const origin = working.provenance[name];
     if (origin) provenance[name] = origin;
   }
