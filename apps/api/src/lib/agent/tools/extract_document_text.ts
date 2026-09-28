@@ -5,6 +5,7 @@ import { DocumentWithContentOutput, EmptyOutput, Tool } from './types';
 import { getPptxText } from '../../utils/powerpoint';
 import { getXlsxContent } from '../../utils/excel';
 import { services } from '../../../adapters/registry';
+import { extractPdfText } from '../../../services/movement_engine/file_text';
 
 type ExtractDocumentTextParams = {
   documentId: string;
@@ -68,7 +69,9 @@ async function getDocumentContent({
   const doc = await DocumentService.getById(documentId);
   const docStream = await services.document.getFileNodeStream({ objectUri: doc.objectUri });
   if (filename.endsWith('.pdf')) {
-    return services.ocr.extractPdf(docStream, { size: docStream.size });
+    const text = await extractPdfText(docStream, { name: filename, size: docStream.size });
+    if (text === null || typeof text === 'string') return text;
+    throw new Error(text.detail ?? `the PDF could not be read (${text.unreadable})`);
   } else if (filename.endsWith('.pptx')) {
     return getPptxText(docStream);
   } else if (filename.endsWith('.xlsx')) {

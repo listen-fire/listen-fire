@@ -87,12 +87,29 @@ async function fetchPitchDeckUrl({
   };
 }
 
+// The downloaded document is the fetch's result even when none of its text can
+// be read: a deck that is all images, on a deployment with no OCR, is still the
+// deck, and whoever receives it can store it or read it later. Unreadable text
+// costs the text, never the file.
 async function extractDocumentText(
   documentId: string,
   resourceId: ResourceId,
 ): Promise<FetchedSegment> {
-  const extracted = await extractDocumentTextTool({ documentId });
-  const rawTextId = extracted?.type === 'DOCUMENT_WITH_CONTENT' ? extracted.rawTextId : null;
+  let rawTextId: string | null = null;
+  try {
+    const extracted = await extractDocumentTextTool({ documentId });
+    if (extracted?.type === 'DOCUMENT_WITH_CONTENT') rawTextId = extracted.rawTextId;
+    else {
+      logger.warn('[transform:url-fetch] no readable text; unsupported document type', {
+        documentId,
+      });
+    }
+  } catch (error) {
+    logger.warn('[transform:url-fetch] no readable text; keeping the document without it', {
+      documentId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
   await ResourceService.update(resourceId, { rawTextId });
   return { resourceId, rawTextId, documentId };
 }
