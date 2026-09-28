@@ -251,6 +251,7 @@ const STDLIB_COMPLETIONS: MovementCompletionItem[] = [
 const RVALUE_KEYWORDS: MovementCompletionItem[] = [
   { label: 'write', insert: 'write ', kind: 'keyword', detail: 'bind the write handle' },
   { label: 'match', insert: 'match ', kind: 'keyword', detail: 'find an existing record by identity and bind it; never creates' },
+  { label: 'link', insert: 'link ', kind: 'keyword', detail: 'match a record by a body, link it, and bind it' },
   { label: 'extract from', insert: 'extract from [', kind: 'keyword', detail: 'materialise an extraction' },
   { label: 'callback', insert: 'callback({', kind: 'keyword', detail: 'mint a deferred invocation: bind its .id into a button, await its Called edge' },
 ];
@@ -270,7 +271,7 @@ const KEYWORD_HOVERS: Record<string, string> = {
   else: 'else — taken when the preceding if conditions are all false',
   parallel: 'parallel — run the enclosed statements concurrently; their bindings come into scope after the block',
   match: 'match — find an existing record by its unique by identity and bind it; never creates or writes. On a miss the rest of the block is skipped',
-  link: 'link — connect two records you already hold with an edge',
+  link: 'link — connect two records with an edge: one you hold (`link a -[:e]-> b`), or one a match body finds (`link a -[:e]-> { … }`, which is match then link)',
   unlink: 'unlink — remove an edge between two records',
   bind: 'bind — deprecated, under review; identify a record by unique by instead',
   run: 'run — invoke a movement directly',

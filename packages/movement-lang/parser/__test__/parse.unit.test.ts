@@ -180,19 +180,57 @@ describe('§B writes, handles, identity', () => {
   it('parses the bare-handle link statement', () => {
     const program = parseProgram(B3);
     const link = as(program.statements[0], 'link').link;
-    expect(link).toMatchObject({ from: 'champion', edge: 'led', to: 'part' });
+    expect(link).toMatchObject({ from: 'champion', edge: 'led', to: { kind: 'handle', name: 'part' } });
   });
 
-  it('retires the criteria form of link, naming match + link as the replacement', () => {
-    const pointer = /match it first: 'x = match c-\[:portfolio\]-> \{ unique by \(…\) … \}', then 'link c -\[:portfolio\]-> x'/;
-    expectParseError('link c -[:portfolio]-> { name: "Fund III" }', pointer);
-    expectParseError('p = link c -[:portfolio]-> { name: "Fund III" }', /A link binds nothing[\s\S]*x = match p-\[:Edge\]->/);
-    expectParseError('link c -[:portfolio]-> <company> { name: "Fund III" }', pointer);
-    expectParseError('link c -[:portfolio]->company { name: "Fund III" }', pointer);
+  it('parses a link body as the match of the hop, identified by its unique by', () => {
+    const program = parseProgram(
+      'link c -[:portfolio]-> { unique by (FUZZY `name`), name: "Fund III", city: "Berlin" }',
+    );
+    const link = as(program.statements[0], 'link').link;
+    expect(link).toMatchObject({ from: 'c', edge: 'portfolio' });
+    if (link.to.kind !== 'match') throw new Error('expected a match body');
+    expect(link.to.impliedIdentity).toBe(false);
+    const match = link.to.match;
+    expect(match.target).toMatchObject({
+      kind: 'linked',
+      path: { root: { kind: 'name', name: 'c' }, hopsRaw: '-[:portfolio]->' },
+    });
+    expect(match.uniqueBy.map(pred)).toEqual(['FUZZY `name`']);
+    expect(match.fields.map((f) => f.name)).toEqual(['name', 'city']);
   });
 
-  it('rejects binding a link (it binds nothing)', () => {
-    expectParseError('p = link a -[:e]-> b', /A link binds nothing/);
+  it('a link body with no unique by identifies by all of its fields, exactly', () => {
+    const program = parseProgram('link c -[:portfolio]-> { name: "Fund III", `Legal Name`: n }');
+    const link = as(program.statements[0], 'link').link;
+    if (link.to.kind !== 'match') throw new Error('expected a match body');
+    expect(link.to.impliedIdentity).toBe(true);
+    expect(link.to.match.uniqueBy.map(pred)).toEqual(['name, `Legal Name`']);
+  });
+
+  it('binds the record a link body finds; a polymorphic edge takes the type in brackets', () => {
+    const program = parseProgram('p = link c -[:related]-> <company> { name: "Fund III" }');
+    const assign = as(program.statements[0], 'assign');
+    expect(assign.name).toBe('p');
+    const link = rv(assign.value, 'link').link;
+    expect(link.to.match.target).toMatchObject({ kind: 'linked', explicitType: 'company' });
+    expectParseError('p = link c -[:related]->company { name: "x" }', /wrap the type in angle brackets: <company>/);
+  });
+
+  it('keeps the edge spelling of a backticked hop', () => {
+    const program = parseProgram('link entry -[:`Owners`]-> { `Full name`: o.name }');
+    const link = as(program.statements[0], 'link').link;
+    if (link.to.kind !== 'match') throw new Error('expected a match body');
+    expect(link.edge).toBe('Owners');
+    expect(link.to.match.target).toMatchObject({ path: { hopsRaw: '-[:`Owners`]->' } });
+  });
+
+  it.each(['?:', '+:', '+?:'])("refuses the '%s' operator in a link body — it never writes", (op) => {
+    expectParseError(`link c -[:portfolio]-> { name ${op} "x" }`, /a link body never writes/);
+  });
+
+  it('refuses binding the handle form: only a body finds something to bind', () => {
+    expectParseError('p = link a -[:e]-> b', /A link binds only the record it finds/);
   });
 
   it("retires the 'edge' statement keyword, pointing at link and at nesting", () => {
@@ -1821,7 +1859,7 @@ describe('backtick-quoted names — the general rule', () => {
     );
     const link = as(program.statements[3], 'link').link;
     expect(link.from).toBe('my channel');
-    expect(link.to).toBe('my deal');
+    expect(link.to).toEqual({ kind: 'handle', name: 'my deal' });
     const unlink = as(program.statements[4], 'unlink');
     expect(unlink).toMatchObject({ from: 'my channel', edge: 'owns', to: 'my deal' });
     const listen = as(program.statements[5], 'listen');

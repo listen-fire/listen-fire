@@ -3389,9 +3389,9 @@ describe('match — find, arbitrate, bind the FOUND handle; link it with link', 
     return { fake, resolveCalls, linkCalls };
   }
 
-  async function runFind(adapters: { attio: Adapter; slack: Adapter }) {
+  async function runFind(adapters: { attio: Adapter; slack: Adapter }, source = FIND_AND_LINK) {
     return runMovement({
-      source: FIND_AND_LINK,
+      source,
       event: webhookEvent('slack', { user: 'Acme' }),
       teamId: TEAM_ID,
       catalog,
@@ -3478,6 +3478,84 @@ describe('match — find, arbitrate, bind the FOUND handle; link it with link', 
     expect(fake.updates).toEqual([]);
     expect(linkCalls).toEqual([]);
     expect(slack.creates).toEqual([]);
+  });
+
+  describe('a link body is match then link', () => {
+    const TWO = [
+      '  fund = match co-[:portfolio]-> { unique by (`name`), name: "Fund III" }',
+      '  link co -[:portfolio]-> fund',
+    ].join('\n');
+    const sugared = (statement: string) => FIND_AND_LINK.replace(TWO, statement);
+
+    async function runBoth(statement: string) {
+      const run = async (source: string) => {
+        const { fake, resolveCalls, linkCalls } = fundAttio();
+        const constraints: unknown[] = [];
+        const resolve = fake.adapter.resolveEntity.bind(fake.adapter);
+        fake.adapter.resolveEntity = async (input) => {
+          if (input.recordType === 'fund') constraints.push(input.constraints);
+          return resolve(input);
+        };
+        const slack = makeFakeAdapter('slack');
+        const result = await runFind({ attio: fake.adapter, slack: slack.adapter }, source);
+        return { result, resolveCalls, linkCalls, constraints, messages: slack.creates };
+      };
+      return { twoStatements: await run(FIND_AND_LINK), sugar: await run(sugared(statement)) };
+    }
+
+    it('bound, with no unique by: identifies by all of its fields, then links and binds exactly as the two statements do', async () => {
+      const { twoStatements, sugar } = await runBoth('  fund = link co -[:portfolio]-> { name: "Fund III" }');
+      // The body's one field IS the identity: the same AND-group the
+      // two-statement form spells as `unique by (\`name\`)`.
+      expect(sugar.constraints).toEqual(twoStatements.constraints);
+      expect(JSON.stringify(sugar.constraints)).toContain('"field":"name"');
+      // Same run log (the match row, then the link row), same adapter calls,
+      // and the bound handle reads the found record downstream.
+      // (The message after them differs only in the source lines its
+      // provenance points at: the sugar is one line shorter.)
+      expect(sugar.result.writes.slice(0, 3)).toEqual(twoStatements.result.writes.slice(0, 3));
+      expect(sugar.result.writes.map((w) => w.kind ?? 'write')).toEqual(['write', 'match', 'link', 'write']);
+      const joined = (calls: typeof sugar.linkCalls) => calls.map(({ from, edgeName, to }) => ({ from, edgeName, to }));
+      expect(joined(sugar.linkCalls)).toEqual(joined(twoStatements.linkCalls));
+      expect(sugar.messages).toEqual([
+        { recordType: 'message', fields: { channel: '#funds', text: '2024 Fund III' } },
+      ]);
+    });
+
+    it('unbound, with a unique by: the match row carries no binding and the link still joins what it found', async () => {
+      const { sugar } = await runBoth(
+        '  link co -[:portfolio]-> { unique by (`name`), name: "Fund III" }\n  fund = match co-[:portfolio]-> { unique by (`name`), name: "Fund III" }',
+      );
+      const [company, found, linked] = sugar.result.writes;
+      expect(company.kind ?? 'write').toBe('write');
+      expect(found).toMatchObject({ kind: 'match', externalId: 'fund-7' });
+      expect(found.bindingName).toBeUndefined();
+      expect(linked).toMatchObject({
+        kind: 'link',
+        link: { edgeName: 'portfolio', toRecordType: 'fund', toExternalId: 'fund-7' },
+        provenance: { to: [{ kind: 'write', write: 1, externalId: 'fund-7' }] },
+      });
+      expect(sugar.linkCalls).toHaveLength(1);
+    });
+
+    it('on a miss, ends the enclosing scope quietly and links nothing', async () => {
+      const fake = makeFakeAdapter('attio'); // no fund candidates ever
+      const linkCalls: Parameters<NonNullable<Adapter['linkRecords']>>[0][] = [];
+      fake.adapter.linkRecords = async (input) => {
+        linkCalls.push(input);
+        return { created: true };
+      };
+      const slack = makeFakeAdapter('slack');
+      const result = await runFind(
+        { attio: fake.adapter, slack: slack.adapter },
+        sugared('  fund = link co -[:portfolio]-> { name: "Fund III" }'),
+      );
+      expect(result.writes.map((w) => [w.recordType, w.kind ?? 'write'])).toEqual([['company', 'write']]);
+      expect(fake.creates.map((c) => c.recordType)).toEqual(['company']);
+      expect(fake.updates).toEqual([]);
+      expect(linkCalls).toEqual([]);
+      expect(slack.creates).toEqual([]);
+    });
   });
 
   it('on missing inside a fan-out, THAT iteration skips and the next proceeds', async () => {

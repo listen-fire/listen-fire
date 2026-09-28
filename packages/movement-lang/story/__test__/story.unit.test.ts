@@ -327,6 +327,38 @@ describe('edges — the record graph', () => {
     });
   });
 
+  it('a link body projects as its two statements: the find, then the link onto what it found', () => {
+    const TWO = 'lead = match c-[:Owner]-> { unique by (`Name`) Name: "sam" }\n  link c -[:Owner]-> lead';
+    expect(SOURCE).toContain(TWO);
+    const project = (source: string) => {
+      const result = storyOf({ source, catalog, name: 'Deal intake' });
+      if (!result.ok) throw new Error(`expected a story, got ${result.reason}`);
+      const ir = result.story;
+      const found = ir.records.filter((r) => r.action === 'find');
+      expect(found).toHaveLength(1);
+      const steps = intakeSteps(ir);
+      const at = steps.findIndex((s) => s.kind === 'match');
+      return {
+        find: { binding: found[0].binding, fields: found[0].fields.Name.source, uniqueBy: found[0].uniqueBy.map((c) => c.source) },
+        order: steps.slice(at, at + 2).map((s) => s.kind),
+        link: ir.edges.filter((e) => e.kind === 'link' && e.to.kind === 'record' && e.to.id === found[0].id).map((e) => e.edge),
+      };
+    };
+    const twoStatements = project(SOURCE);
+    expect(twoStatements).toEqual({
+      find: { binding: 'lead', fields: '"sam"', uniqueBy: ['`Name`'] },
+      order: ['match', 'link'],
+      link: ['Owner'],
+    });
+    expect(project(SOURCE.replace(TWO, 'lead = link c -[:Owner]-> { unique by (`Name`) Name: "sam" }'))).toEqual(twoStatements);
+    // Unbound, with no unique by: the body's fields are its identity.
+    expect(project(SOURCE.replace(TWO, 'link c -[:Owner]-> { Name: "sam" }'))).toEqual({
+      find: { binding: undefined, fields: '"sam"', uniqueBy: ['Name'] },
+      order: ['match', 'link'],
+      link: ['Owner'],
+    });
+  });
+
   it("an ask's awaited resolution is a response edge off the record we raised", () => {
     const ir = story();
     const ask = ir.records.find((r) => r.binding === 'a')!;
