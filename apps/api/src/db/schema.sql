@@ -4922,6 +4922,8 @@ CREATE INDEX legal_entity_acquired_by_legal_entity_id_idx ON valuations.legal_en
 CREATE UNIQUE INDEX legal_entity_company_metrics_id_key ON valuations.legal_entity USING btree (company_metrics_id);
 CREATE INDEX legal_entity_identifiers_idx ON valuations.legal_entity USING gin (identifiers);
 CREATE UNIQUE INDEX legal_entity_invitation_code_key ON valuations.legal_entity USING btree (invitation_code);
+CREATE INDEX legal_entity_legal_name_trgm_idx ON valuations.legal_entity USING gin (legal_name public.gin_trgm_ops);
+CREATE INDEX legal_entity_name_trgm_idx ON valuations.legal_entity USING gin (name public.gin_trgm_ops);
 CREATE INDEX legal_entity_search_vector_idx ON valuations.legal_entity USING gin (search_vector);
 CREATE UNIQUE INDEX legal_entity_slug_key ON valuations.legal_entity USING btree (slug);
 CREATE UNIQUE INDEX legal_entity_word_identifier_key ON valuations.legal_entity USING btree (word_identifier);
