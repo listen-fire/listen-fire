@@ -19,6 +19,7 @@ company = write crm-[:Companies]-> {
 
 - The body maps the target's **writable fields** to expressions — only fields it declares, so read the schema rather than guess. Fill every one the source supports, and never invent a value to fill a slot.
 - \`unique by (…)\` gives the record its identity, so a repeat event updates instead of duplicating.
+- \`...e\` writes every **field** of the extracted record \`e\` as if each were its own line (\`name: e.name\`, \`stage: e.stage\`, …) — never its nested nodes, which are writes of their own. A field the target lacks is flagged by name, and so is one that may be absent (use \`?...e\`, below). An explicit line for a field wins over the spread's value for it.
 - The assignment gives you a **handle**: a position in the target's graph carrying the written fields plus results like \`externalId\` and \`url\`, read like any position (\`company.url\`).
 - A target may declare fields and connections its type **cannot exist without**; omit one and the write is flagged before it runs. Fix a missing connection by moving that parent into the write target (linked or tuple form, below); wrap a required field's \`AI()\` in \`COALESCE\`, since it can resolve to null.
 
@@ -46,6 +47,8 @@ write crm-[:Companies]-> {
 \`\`\`
 
 Use it for defaults and one-time stamps — owners, "first seen" — and plain \`:\` where the source stays authoritative. \`?:\` also takes a value that may not be there, no guard needed: \`Description ?: FIRST(company.Domains)\`.
+
+\`?...e\` applies \`?:\` to every field of the extracted record \`e\` — the whole record merged into what the target already holds, filling only what is empty: \`write crm-[:Companies]-> { unique by (FUZZY \`Name\`), ?...e }\`.
 
 ### append-to-a-multi-value-field
 

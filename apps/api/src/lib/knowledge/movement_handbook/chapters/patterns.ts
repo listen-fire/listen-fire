@@ -154,6 +154,29 @@ Two things here you cannot derive:
 - **Where a plugin sits decides when it runs.** \`through\` on the top-level \`from\` works over the whole body *before* extraction — it fetches the pages the message links to, so \`website\` comes from the page rather than a guess. \`through\` between a node's stages runs *after* that node is extracted, enriching what was just pulled out. The trap: a per-node plugin works out who to look up from the fields the earlier stage produced, so the first stage must extract an identifying field. Without one it quietly finds nothing.
 - **Which side declares the edge decides the shape of the write.** Where the parent declares it — as here — a linked write off the parent's handle is the one idiomatic form. Where only the child declares a reference back, write the child at the root and connect it with \`link\`. Read your catalog: that is the system's choice, not yours.
 
+### declare-once
+
+The same record extracted in several places, written the same way each time — declare it once, with its words, and reuse it:
+
+\`\`\`
+node Entry: "each company named in this text" {
+  Name:        <text> "the company's name"
+  Description: <text> "what the company does, in one sentence"
+  node person: "each person at the company" { Name: <text> "their full name" }
+}
+
+function \`Intake\`(go: <runs-[:Invocation]->>) {
+  found = extract "careful" from [go.\`Text\`] { node entry: <Entry> }
+  found-[e:entry]-> {
+    company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), ?...e }
+    e-[p:person]-> { write company-[:Team]-> { unique by (FUZZY \`Name\`), ?...p } }
+  }
+}
+\`\`\`
+
+- The declaration is the one place the record's fields and words live; every \`extract\` that names it reads it the same way.
+- \`?...e\` writes each field set-if-empty, so the declaration's field names are the target's. It carries only fields — \`person\` is its own write — and a field the target lacks is flagged by name.
+
 ### human-reviewed-intake
 
 "Let me paste something in, but let me check it before it's saved."
@@ -180,6 +203,35 @@ Two things make it this shape rather than a thinner one:
 - **The review happens inside.** The person approves the automation's *own* extracted values, not a rendering of them made somewhere else. The tempting alternative — read the pasted text outside, pull the records out yourself, show a tidied-up version, then run a write-only automation — throws the real input away and reviews the wrong thing.
 `,
   engineClaims: [
+    {
+      construct: 'declare-once (a described node declaration as the extract shape, `?...e` spread writes)',
+      status: 'runs',
+      probe: `
+import { manual, attio } from adapters
+import { acme } from credentials
+
+runs = manual()
+crm  = attio(credentials: acme)
+
+rules = "a company counts only if it is named as the subject"
+
+node Entry: "each company named in this text" {
+  Name:        <text> "the company's name. \${rules}"
+  Description: <text> "what the company does, in one sentence"
+  node person: "each person at the company" { Name: <text> "their full name" }
+}
+
+function \`Intake\`(go: <runs-[:Invocation]->>) {
+  found = extract "careful" from [go.\`Text\`] { node entry: <Entry> }
+  found-[e:entry]-> {
+    company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), ?...e }
+    e-[p:person]-> { write company-[:Team]-> { unique by (FUZZY \`Name\`), ?...p } }
+  }
+}
+
+listen to runs {} fire \`Intake\`
+`,
+    },
     {
       construct: 'sections from a type (GROUPBY over dict rows, MEMBERS in declared order, AT per member)',
       status: 'runs',

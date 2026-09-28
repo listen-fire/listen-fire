@@ -26,6 +26,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) { … }  # declaration; one typed par
 movement \`Intake\`(m: <inbox-[:Email]->>) { … } # the same declaration, spelled the other way — \`function\` and \`movement\` are interchangeable (prefer \`function\`)
 export function \`Log Lead\`(l: <Lead>) { … }    # shared across files
 export node Lead { Name: <text> }              # a named structure; nest \`node <edge> { … }\` for related records
+node Lead: "each lead" { Name: <text> "their name" }   # described: \`extract … { node lead: <Lead> }\` reuses its fields and words
 type Thesis = <"Consumer" | "Infra">           # a written set of values: an annotation, and an extract constraint
 
 listen to inbox { key: "intake" } fire intake  # the ONLY way an automation runs
@@ -94,6 +95,7 @@ company = write crm-[:Companies]-> {
   Owner   ?: @user_email      # set-if-empty — leaves an existing value alone
   Tags    +: ["inbound"]      # append to a multi-value field (duplicates allowed)
   Sources +?:["email"]        # append only what's missing (set-union)
+  ?...e                       # every field of extracted record e, set-if-empty (\`...e\`: plain)
   unique by (Domain)          # identity — repeats update instead of duplicate
 }
 \`\`\`
