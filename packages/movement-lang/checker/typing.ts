@@ -381,6 +381,13 @@ export const TypedDiagnosticCodes = {
    *  boundaries a key crosses: `GROUPBY`/`KEYBY`'s key function, and `AT(dict,
    *  key)`. */
   DICT_KEY_NOT_TEXT: 'MOV_DICT_KEY_NOT_TEXT',
+  /** `AT(d, "key")` with a LITERAL key the dict literal never wrote down. The
+   *  dict's keys are known (it was written as a literal), so a key it lacks is
+   *  a typo rather than an everyday miss — the enum did-you-mean
+   *  (`ENUM_UNKNOWN_VALUE`), one door over, and TypeScript's "property does
+   *  not exist on type". A dict whose keys are data (`GROUPBY`, a system's
+   *  json) has no such list and stays a lookup that may miss. */
+  DICT_UNKNOWN_KEY: 'MOV_DICT_UNKNOWN_KEY',
 } as const;
 
 // ── Tiers ──
@@ -1238,6 +1245,11 @@ function literalIndex(expr: Expression): number | undefined {
   return Number.isInteger(expr.value) ? expr.value : undefined;
 }
 
+/** The text a dict key expression is FIXED at, when it is written down. */
+function literalKey(expr: Expression): string | undefined {
+  return expr.type === 'static' && typeof expr.value === 'string' ? expr.value : undefined;
+}
+
 function baseKind(
   type: FieldType,
 ): 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' | 'record' {
@@ -1859,7 +1871,23 @@ export function unifyValueTypes(types: Array<FieldType | undefined>): FieldType 
   if (first === undefined || types.length === 0) return undefined;
   if (types.every(t => t !== undefined && fieldTypeEquals(t, first))) return first;
   if (types.every(t => isRecordType(t))) return { kind: 'record' };
+  // Dicts that hold the same thing under different written keys are still a
+  // dict of that thing — only the keys stop being knowable, so the shape goes
+  // and a lookup falls back to one that may miss.
+  const unshaped = types.map(t => (t !== undefined && isDictType(stripAbsent(t)) ? withoutShape(t) : t));
+  const head = unshaped[0];
+  if (head !== undefined && unshaped.every(t => t !== undefined && fieldTypeEquals(t, head))) {
+    return head;
+  }
   return undefined;
+}
+
+/** A dict with its written keys forgotten — what it holds, looked up by data. */
+function withoutShape(type: FieldType): FieldType {
+  const present = stripAbsent(type);
+  if (!isDictType(present)) return type;
+  const unshaped: FieldType = { kind: 'dict', of: present.of };
+  return isMaybeAbsent(type) ? maybeAbsent(unshaped)! : unshaped;
 }
 
 /** Strict sameness (number vs text IS different; enum options compared).
@@ -1895,9 +1923,29 @@ export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
           return fieldTypeEquals(slot, other);
         })
       );
-    // Two dicts agree when what they hold agrees — the keys are data, not type.
-    case 'dict':
-      return right.kind === 'dict' && fieldTypeEquals(left.of, right.of);
+    // Two dicts agree when what they hold agrees. Where the keys were written
+    // down they ARE type, so two shaped dicts also agree key by key — an
+    // untyped key matching only another untyped one, as a tuple's slot does —
+    // and a shaped dict is not the same type as one whose keys are data.
+    case 'dict': {
+      if (right.kind !== 'dict' || !fieldTypeEquals(left.of, right.of)) return false;
+      if (left.shape === undefined || right.shape === undefined) {
+        return left.shape === undefined && right.shape === undefined;
+      }
+      const leftShape = left.shape;
+      const rightShape = right.shape;
+      const keys = Object.keys(leftShape);
+      return (
+        keys.length === Object.keys(rightShape).length
+        && keys.every(key => {
+          if (!Object.hasOwn(rightShape, key)) return false;
+          const slot = leftShape[key] ?? null;
+          const other = rightShape[key] ?? null;
+          if (slot === null || other === null) return slot === other;
+          return fieldTypeEquals(slot, other);
+        })
+      );
+    }
     // Two records are the same type when they are the same place to start a
     // walk from — both directions of the fit, so neither stands in for a wider
     // one. Two records nobody can name agree too: "a record, unknown which" is
@@ -2819,23 +2867,29 @@ export class ExpressionTyping {
         return element !== undefined ? { kind: 'list', of: element } : undefined;
       }
       case 'object': {
-        // `{ k: v, … }` — a DICT when its values agree on a type, and `json`
-        // when they do not. Both answers are the honest one for what was
-        // written: a dict is homogeneous (that is what makes `AT` on one type
-        // exactly), and a literal whose values disagree describes a structured
-        // value nothing here has a shape for — which is what `json` means, and
-        // is how such a literal already reached the API surface it mirrors.
-        // Every value is walked either way, since a traversal inside one must
-        // be validated like any other.
+        // `{ k: v, … }` — typed by its keys, as TypeScript types an object
+        // literal: the keys were written down, so each one carries its own
+        // value's type (`shape`), and a lookup by a written key reads exactly
+        // that. `of` answers a key nobody wrote down — the values' shared type
+        // where they agree, and `json` where they do not, since there is no
+        // union to name and json is where every value flows. Every value is
+        // walked either way, since a traversal inside one must be validated
+        // like any other.
         const valueTypes = expr.entries.map(e => this.inferAt(e.value, position));
+        const shape: Record<string, FieldType | null> = {};
+        expr.entries.forEach((entry, i) => {
+          shape[entry.key] = valueTypes[i] ?? null;
+        });
         const first = valueTypes[0];
-        if (first === undefined || valueTypes.length === 0) return 'json';
-        if (!valueTypes.every(t => t !== undefined && fieldTypeEquals(t, first))) return 'json';
+        const agree =
+          first !== undefined && valueTypes.every(t => t !== undefined && fieldTypeEquals(t, first));
         // Sameness is transparent to absence, so it has to be carried
         // separately: one entry that may not answer makes every read of this
         // dict one that may not answer.
-        const of = valueTypes.some(isMaybeAbsent) ? maybeAbsent(first)! : first;
-        return { kind: 'dict', of };
+        const of: FieldType = agree
+          ? valueTypes.some(isMaybeAbsent) ? maybeAbsent(first)! : first
+          : 'json';
+        return { kind: 'dict', of, shape };
       }
       case 'concat': {
         const parts = expr.parts.map(p => this.inferAt(p, position));
@@ -2885,7 +2939,17 @@ export class ExpressionTyping {
         // not there is the everyday case, not an error.
         if (innerShape !== undefined && isDictType(innerShape)) {
           this.requireDictKey(indexType, 'looked up in a dict');
-          return maybeAbsent(innerShape.of);
+          const key = literalKey(expr.index);
+          if (innerShape.shape === undefined || key === undefined) return maybeAbsent(innerShape.of);
+          // A written key off a literal-shaped dict: the key is there or it is
+          // a typo, and both are known now. Present unless the dict itself may
+          // not be.
+          if (!Object.hasOwn(innerShape.shape, key)) {
+            this.reportUnknownDictKey(key, Object.keys(innerShape.shape));
+            return undefined;
+          }
+          const slot = innerShape.shape[key] ?? undefined;
+          return isMaybeAbsent(inner) ? maybeAbsent(slot) : slot;
         }
         this.checkFoldOrder('at', expr.expression, position);
         if (inner === undefined) return undefined;
@@ -3108,6 +3172,15 @@ export class ExpressionTyping {
     this.report(
       TypedDiagnosticCodes.LIST_MIXED,
       `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(records[0]!))} is a record, and another member is ${describeFieldType(values[0]!)}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
+    );
+  }
+
+  private reportUnknownDictKey(key: string, keys: string[]): void {
+    const closest = closestByEditDistance(key, keys);
+    this.report(
+      TypedDiagnosticCodes.DICT_UNKNOWN_KEY,
+      `this dict has no key "${key}" — it was written with: ${keys.length > 0 ? keys.map(k => `"${k}"`).join(', ') : 'no keys at all'}.`
+        + (closest !== undefined ? ` Did you mean "${closest}"?` : ''),
     );
   }
 
@@ -4492,13 +4565,17 @@ export class ExpressionTyping {
           field.span,
         );
       }
-      // R14: an extract field is ALWAYS optional — the model was asked for it
-      // and may not have found it, and there is no marker that says otherwise.
-      // So a read is `T | absent`, and the absence discipline fires where the
-      // value is REQUIRED (a plain write field, an ordered comparison), not at
-      // the read. This is the checker catching up with the runtime, which
-      // resolves such a field to absent rather than to an empty string.
-      return maybeAbsent(field.explicit);
+      // R14: a TYPED extract field is optional — the model was asked for it
+      // and may not have found it, and a number, a date, a choice from a set
+      // has no value that means "nothing found". So a read is `T | absent`, and
+      // the absence discipline fires where the value is REQUIRED (a plain
+      // write field, an ordered comparison), not at the read.
+      //
+      // Text is the exception, because text HAS such a value: the runtime
+      // hands a text field nobody found over as `""` (`presentText` in the
+      // engine's extraction export), so the read is present, and a text a
+      // program only prints or writes needs no discharge.
+      return field.explicit === 'text' ? 'text' : maybeAbsent(field.explicit);
     }
     // Backward adoption is DEMOTED (explicit over implicit): a typed write
     // target no longer silently types the extraction — it earns an

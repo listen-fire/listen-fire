@@ -452,15 +452,22 @@ export type FieldType =
    * key that arrives as some other type is a save error demanding the author
    * write the coercion down, never a silent stringification.
    *
-   * Homogeneous, like a list: `of` is what EVERY key holds. A literal whose
-   * values disagree has no such type and stays `json` — structured data whose
-   * shape nothing describes, which is exactly what `json` means.
+   * `of` is what a key nobody wrote down may hold: the value type every key
+   * shares, or `json` when they disagree — the model has no unions, and json
+   * is the data type every value flows into.
+   *
+   * `shape` is the TypeScript object literal's type: a dict WRITTEN as a
+   * literal knows its keys, so a lookup by a literal key reads that key's own
+   * type, present, and a literal key it does not have is refused. A key is
+   * `null` where its value could not be typed — "we could not see", as a
+   * tuple's slot is. Absent on every dict whose keys are data rather than
+   * program text: `GROUPBY`/`KEYBY`'s answers, and every adapter surface.
    *
    * There is no order: a dict is looked up, never folded, so the set/list
    * discipline has nothing to say about one. What `GROUPBY` puts INSIDE it —
    * a list per key — carries the source's ordering as any other list does.
    */
-  | { kind: 'dict'; of: FieldType }
+  | { kind: 'dict'; of: FieldType; shape?: Record<string, FieldType | null> }
   /** `open` marks a KNOWN-VALUES field, not a closed enum: the options are
    *  what the adapter could enumerate live (Slack channels, select options),
    *  but other values remain legal — ids matching `allowPattern`, runtime
@@ -686,7 +693,15 @@ export function describeFieldType(type: FieldType): string {
     // checker knows, not a type it is claiming.
     case 'tuple':
       return `[${variant.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
+    // A shaped dict IS its keys — the literal's own spelling, the way a tuple
+    // reads as its slots.
     case 'dict':
+      if (variant.shape !== undefined) {
+        const keys = Object.entries(variant.shape).map(
+          ([key, slot]) => `${key}: ${slot === null ? '?' : describeFieldType(slot)}`,
+        );
+        return `{ ${keys.join(', ')} }`;
+      }
       return `dict of ${describeFieldType(variant.of)}`;
     // A record reads as the record it IS, in the arrow plane's own words. A
     // record nobody can name is still definitely a record, which is what the
