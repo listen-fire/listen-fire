@@ -121,7 +121,7 @@ Iterate a collection with these five, each given a function that runs once per m
 - \`rows = MAP(ch-[m:Messages]->, (t) => { return t })\` hands the records back as records, so a block head walks the answer: \`rows-[a:Author]-> { … }\`. Return a map instead — \`{ who: t }\` — and the answer is a list of maps, one key of each holding a record.
 - Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
-A function written in place takes its parameter's type from the collection, so there is nothing to annotate. It must \`return\` something, and it may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`).
+A function written in place takes its parameter's type from the collection, so there is nothing to annotate. It may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`). \`FILTER\` and \`REDUCE\` must \`return\` something — a filter needs a boolean, a reduce needs the value it is carrying. \`MAP\` alone allows a function with no \`return\`: each slot is then absent, and the writes inside it still run — \`MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })\` is legal on its own, with no binding, run purely for what it writes.
 
 \`\`\`
 theses = MEMBERS(<Thesis>)

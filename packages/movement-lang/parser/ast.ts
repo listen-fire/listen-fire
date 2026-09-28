@@ -121,6 +121,7 @@ export type Statement =
   | IfStatement
   | AwaitStatement
   | CombinatorStatement
+  | CollectionStatement
   | ReturnStatement
   | ErrorStatement;
 
@@ -770,6 +771,18 @@ export interface MembersExpression {
 export interface CombinatorStatement {
   kind: 'combinator';
   combinator: CombinatorExpression;
+  span: Span;
+}
+
+/** `MAP(xs, f)` (and its siblings) run bare, without a binding — legal for
+ *  `MAP` in particular, whose function may write for its own sake and answer
+ *  nothing anyone reads (`f`'s slot is then absent per member, discarded
+ *  here). `FILTER` / `REDUCE` / `GROUPBY` / `KEYBY` still need their function
+ *  to return (the checker's rule, not the parser's — this parses any of them
+ *  bare so the refusal, where there is one, can name it). */
+export interface CollectionStatement {
+  kind: 'collection';
+  collection: CollectionOpExpression;
   span: Span;
 }
 

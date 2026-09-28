@@ -605,8 +605,12 @@ export type Step =
    *  A COLLECTION OP says the two things it can say without opening the
    *  function: which op it is (`op`) and what it ran over (`over`). The body
    *  stays where every function's body is — shown where it is called — but the
-   *  card stops reading as an anonymous "sets this aside". */
-  | { kind: 'bind'; binding: string; of: RValue['kind']; op?: CollectionOp; over?: Chip; at: Span }
+   *  card stops reading as an anonymous "sets this aside".
+   *
+   *  `binding` is absent for a collection op run BARE, as a statement — `MAP`
+   *  in particular, whose function may run for its own effects and answer
+   *  nothing anyone reads. */
+  | { kind: 'bind'; binding?: string; of: RValue['kind']; op?: CollectionOp; over?: Chip; at: Span }
   /**
    * `return <value>` — the body handing its value back. `value` is the chip
    * when the returned expression has one; `of` says what kind of thing was
@@ -1646,6 +1650,14 @@ class Projection {
       }
       case 'combinator':
         return this.combinatorStep(statement.combinator, undefined, statement.span);
+      case 'collection':
+        return {
+          kind: 'bind',
+          of: 'collection',
+          op: statement.collection.op,
+          over: this.chip(statement.collection.source, this.scopeOfNearest(statement.span)),
+          at: statement.span,
+        };
       case 'error': {
         const scope = this.scopeOfNearest(statement.span);
         return { kind: 'error', message: this.chip(statement.message, scope), at: statement.span };

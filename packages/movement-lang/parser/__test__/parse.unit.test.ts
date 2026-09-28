@@ -456,6 +456,35 @@ describe('§C traversal-headed blocks', () => {
   });
 });
 
+describe('a bare collection-op statement (no binding)', () => {
+  it('MAP(...) run bare parses — the function runs for its effects, the answer unbound', () => {
+    const program = parseProgram(
+      ['xs = [1, 2, 3]', 'MAP(xs, (n) => { write crm-[:note]-> { text: "x" } })'].join('\n'),
+    );
+    expect(program.statements).toHaveLength(2);
+    const statement = as(program.statements[1], 'collection');
+    expect(statement.collection.op).toBe('map');
+  });
+
+  it('FILTER(...) and REDUCE(...) parse bare too — the checker, not the parser, decides whether the function must return', () => {
+    const filterProgram = parseProgram(
+      ['xs = [1, 2, 3]', 'FILTER(xs, (n) => { return n > 1 })'].join('\n'),
+    );
+    expect(as(filterProgram.statements[1], 'collection').collection.op).toBe('filter');
+
+    const reduceProgram = parseProgram(
+      ['xs = [1, 2, 3]', 'REDUCE(xs, 0, (acc, n) => { return acc + n })'].join('\n'),
+    );
+    expect(as(reduceProgram.statements[1], 'collection').collection.op).toBe('reduce');
+  });
+
+  it('a name that merely happens to be spelled MAP but is not called stays an ordinary name', () => {
+    const program = parseProgram(['MAP = 3', 'y = MAP + 1'].join('\n'));
+    expect(program.statements).toHaveLength(2);
+    expect(as(program.statements[0], 'assign').name).toBe('MAP');
+  });
+});
+
 // ── §D — extraction with through stages ──
 
 const D1 = [

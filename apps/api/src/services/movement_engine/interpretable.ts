@@ -403,6 +403,15 @@ class InterpretabilityScan {
         case 'movement':
           this.flag('nested movement declarations inside a movement body');
           break;
+        case 'collection': {
+          // A bare collection-op statement (unbound — MAP in particular, run
+          // for its function's effects) — same scan as the bound form.
+          const op = statement.collection;
+          this.scanSlot(op.source);
+          if (op.init !== undefined) this.scanSlot(op.init);
+          if (op.fn.kind === 'closure') this.scanBody(op.fn.closure.body);
+          break;
+        }
         default:
           break;
       }

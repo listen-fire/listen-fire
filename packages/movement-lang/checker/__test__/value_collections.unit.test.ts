@@ -145,10 +145,35 @@ describe('MAP / FILTER over a value collection', () => {
     expect(messages(body)).toContain('one member at a time');
   });
 
-  it('a function that hands nothing back is refused', () => {
-    expect(codes(`${NAMES}  x = MAP(names, (t) => { y = t })`)).toContain(
+  // MAP alone lets its function skip `return` — each slot is then absent,
+  // the same shape an extracted field with no value has. FILTER/REDUCE keep
+  // requiring one: a filter needs a boolean to decide by, a reduce needs the
+  // carried value, and neither has an "absent" that means anything.
+  it('a MAP function that hands nothing back is legal — no diagnostic', () => {
+    expect(codes(`${NAMES}  x = MAP(names, (t) => { y = t })`)).toEqual([]);
+  });
+
+  it('MAP with no return types the list as absent per slot', () => {
+    const body = [
+      NAMES,
+      '  x = MAP(names, (t) => { y = t })',
+      '  write chat-[:note]-> { Body: AT(x, 0) }',
+    ].join('\n');
+    // AT(list-of-absent, 0) is absent, unguarded into a required field —
+    // MOV_ABSENT_REQUIRED is the type-level proof the slot really is absent
+    // (not silently unknown, which would say nothing here).
+    expect(codes(body)).toContain('MOV_ABSENT_REQUIRED');
+  });
+
+  it('FILTER still requires a return (unlike MAP)', () => {
+    expect(codes(`${NAMES}  x = FILTER(names, (t) => { y = t })`)).toContain(
       'MOV_COLLECTION_OP_RETURNS_NOTHING',
     );
+  });
+
+  it('REDUCE still requires a return (unlike MAP)', () => {
+    const body = `${NAMES}  x = REDUCE(names, "", (carried, t) => { y = t })`;
+    expect(codes(body)).toContain('MOV_COLLECTION_OP_RETURNS_NOTHING');
   });
 
   it('a function that waits is refused, naming where waiting belongs', () => {
@@ -193,6 +218,28 @@ describe('MAP / FILTER over a value collection', () => {
         '  joined = JOIN(kept, "\\n")',
       ].join('\n')),
     ).toEqual([]);
+  });
+});
+
+describe('a bare collection-op statement (no binding)', () => {
+  const NAMES = '  names = COLLECT(c-[m:Messages]->.`Text`)\n';
+
+  it('MAP run bare, for its writes, is legal', () => {
+    expect(
+      codes(`${NAMES}  MAP(names, (t) => { write chat-[:note]-> { Body: t } })`),
+    ).toEqual([]);
+  });
+
+  it('FILTER run bare still requires a return (the rule is the op’s, not the binding’s)', () => {
+    expect(
+      codes(`${NAMES}  FILTER(names, (t) => { write chat-[:note]-> { Body: t } })`),
+    ).toContain('MOV_COLLECTION_OP_RETURNS_NOTHING');
+  });
+
+  it('REDUCE run bare still requires a return', () => {
+    expect(
+      codes(`${NAMES}  REDUCE(names, "", (carried, t) => { write chat-[:note]-> { Body: t } })`),
+    ).toContain('MOV_COLLECTION_OP_RETURNS_NOTHING');
   });
 });
 
