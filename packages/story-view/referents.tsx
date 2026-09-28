@@ -271,7 +271,9 @@ function leakedNames(view: StoryView): Set<string> {
           leaked.add(step.subject.name);
           break;
         case "bind":
-          leaked.add(step.binding);
+          // A collection op run bare (`MAP(...)` as a statement) binds
+          // nothing anyone reads, so there is no name to leak.
+          if (step.binding !== undefined) leaked.add(step.binding);
           break;
         case "write":
         case "match":
