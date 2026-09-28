@@ -1300,6 +1300,16 @@ export interface InstanceSchema {
    */
   selectedMembers?: Record<string, string>;
   /**
+   * The fields a `WHERE` may test to narrow a type to one of its members, keyed
+   * by the type — the same `narrowBy` a connection's describe shows on the
+   * polymorphic edge, recorded by the host for the types this program's hops
+   * land on. A type that has none is not narrowable.
+   *
+   * Read only to say how to fix a refusal: a field the type itself does not
+   * carry may belong to one member, and narrowing is how it becomes readable.
+   */
+  narrowBy?: Record<string, string[]>;
+  /**
    * Construction-site landings (2026-07-30): positions synthesized from ONE
    * write's own literals, keyed by `genericLandingKey`. The refinements
    * mechanism one door over — there the program's WHERE selects a position the

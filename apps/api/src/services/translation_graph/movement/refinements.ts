@@ -41,7 +41,7 @@ import { refinementKey } from 'movement-lang';
 import type { InstanceChain, InstanceSchema, PositionSchema } from 'movement-lang';
 import type { Expression } from '#shared/expression/types';
 import type { SchemaTypeDescriptor } from '../types';
-import { decidableConjuncts, selectMember } from './narrowing';
+import { decidableConjuncts, narrowByOf, selectMember } from './narrowing';
 import { instanceSchemaFromDescriptors } from './schema_projection';
 
 export interface RefinableInstance {
@@ -264,12 +264,30 @@ export async function refineInstanceSchema(input: {
    *  guard below and silently not narrow, and must record the same member type
    *  without paying for the describe that names it. */
   const grafted = new Map<string, string>();
+  /** How each narrowable type this program's hops land on narrows — the same
+   *  `narrowBy` a describe shows. The checker reads it only to say how to fix a
+   *  refused read of a field the unnarrowed type does not carry, so it is
+   *  recorded whether or not this hop's WHERE selected anything. */
+  let narrowBy = schema.narrowBy ?? {};
+  const recordNarrowBy = async (typeName: string) => {
+    if (narrowBy[typeName] !== undefined) return;
+    let fields: string[];
+    try {
+      fields = narrowByOf(await instance.membersOf(typeName));
+    } catch {
+      return; // the selection below meets the same failure and notes it
+    }
+    if (fields.length === 0) return;
+    narrowBy = { ...narrowBy, [typeName]: fields };
+    schema = { ...schema, narrowBy };
+  };
 
   const graft = async (typeName: string, filter: Expression) => {
     const key = refinementKey({ type: typeName, filter });
     if (refinements[key] !== undefined) return refinements[key];
     if (attempted.has(key)) return undefined;
     attempted.add(key);
+    await recordNarrowBy(typeName);
 
     // Which member does this predicate select, and what does it look like? The
     // candidates are the ones the META WALK published — narrowing is discovered

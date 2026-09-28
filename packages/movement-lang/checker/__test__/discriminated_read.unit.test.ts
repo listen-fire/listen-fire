@@ -55,6 +55,9 @@ const crmSchema: InstanceSchema = {
   },
   collections: { Organization: { target: 'Organization' } },
   writableRoots: {},
+  // What the host records from the members' labels — Affinity labels each list
+  // with its name, id and `listName`.
+  narrowBy: { [ENTRIES]: ['Name', 'Id', 'listName'] },
   refinements: {
     [keyFor(ENTRIES, '`listName` == "Deal Pipeline"')]: MASTER,
     [keyFor(ENTRIES, '`listName` == "Deal Pipeline" AND `Deal Created` >= cutoff')]: MASTER,
@@ -76,6 +79,7 @@ const helpdeskSchema: InstanceSchema = {
   },
   collections: { [TICKETS]: { target: TICKETS } },
   writableRoots: {},
+  narrowBy: { [TICKETS]: ['queue'] },
   refinements: {
     [keyFor(TICKETS, '`queue` == "Billing"')]: BILLING,
     [keyFor(TICKETS, '`queue` == "Billing" AND `refundAmount` > 100')]: BILLING,
@@ -250,5 +254,45 @@ describe('an edge that can carry inline properties keeps its WHERE names open', 
     expect(codes('  desk-[t:Ticket WHERE `since` > "2020"]-> { }')).toEqual([
       'MOV_UNKNOWN_PROPERTY',
     ]);
+  });
+});
+
+// A refusal on a type that NARROWS says how to narrow it. The type carries only
+// what its members share, so a field of one member is refused until the hop is
+// narrowed — and the WHERE narrows as a whole, so the test may go anywhere in it.
+describe('a refused field on a narrowable type names the narrowing that admits it', () => {
+  it('list entries: names the list-labelling fields', () => {
+    const [diagnostic, ...rest] = diagnose(
+      onMasterDeals('`listName` == cutoff AND `Deal Created` >= cutoff'),
+    );
+    expect(rest).toEqual([]);
+    expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
+    expect(diagnostic.message).toBe(
+      "sales.List Entry has no field 'Deal Created' — it has: listName. If it is a field of one List Entry only, narrow the hop that lands here to it: test `Name` == \"…\" (or `Id`, `listName`) in its WHERE",
+    );
+  });
+
+  it('tickets: names the queue', () => {
+    const [diagnostic] = diagnose('  desk-[t:Ticket WHERE `refundAmount` > 100]-> { }');
+    expect(diagnostic.message).toContain(
+      'narrow the hop that lands here to it: test `queue` == "…" in its WHERE',
+    );
+  });
+
+  it('an alias read off the unnarrowed hop gets the same fix', () => {
+    const [diagnostic] = diagnose(
+      '  desk-[t:Ticket WHERE `queue` == "Support"]-> {\n    n = t.`refundAmount`\n  }',
+    );
+    expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
+    expect(diagnostic.message).toContain('test `queue` == "…" in its WHERE');
+  });
+
+  it('a narrowed hop, or a type with nothing to narrow by, says nothing of the kind', () => {
+    const [narrowed] = diagnose(
+      onMasterDeals('`listName` == "Deal Pipeline" AND `Made Up Field` >= cutoff'),
+    );
+    expect(narrowed.message).not.toContain('narrow the hop');
+    const [closed] = diagnose('  sales-[o:Organization WHERE `Made Up` == "x"]-> { }');
+    expect(closed.message).not.toContain('narrow the hop');
   });
 });
