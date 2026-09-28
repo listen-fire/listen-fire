@@ -64,6 +64,7 @@ import {
   type AwaitDescription,
 } from '../../movement_engine/await_description';
 import { callbackUrl, listRunCallbacks } from '../../movement_engine/callback_store';
+import { isWriteEffect } from '../../movement_engine/expression';
 import {
   describeExecutedVersion,
   type ExecutedMovementVersion,
@@ -518,6 +519,8 @@ export interface MovementRunWrite {
    * field sent), `attach` (nothing but the parent association sent — a
    * matched record whose own fields were unchanged), `noop` (nothing sent
    * at all), or `link` / `unlink` / `delete` for the standalone statements.
+   * `match` is a record a `match` FOUND: listed so a reader sees what the run
+   * resolved to, never written and never counted as a write.
    */
   action: string;
   /** Whether this write actually landed in the target system. False when it
@@ -606,7 +609,7 @@ function appliedPlanToWrite(
   const created = plan.created === true;
   const kind = typeof plan.kind === 'string' ? plan.kind : undefined;
   const outcome = typeof plan.outcome === 'string' ? plan.outcome : undefined;
-  // `kind` (link | unlink | delete) IS the action. For a record write the
+  // `kind` (link | unlink | delete | match) IS the action. For a record write the
   // engine states its own outcome — create | update | attach | noop — because
   // `created` alone cannot separate a field update from a parent-only attach
   // from a write that sent nothing. Runs recorded before `outcome` existed
@@ -650,8 +653,11 @@ export function projectRunWrites(
   const writes = flattenTriggerRunPlans(steps)
     .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')
     .map((p) => appliedPlanToWrite(p, !runDryRun));
-  const committed = writes.filter((w) => w.committed).length;
-  return { writes, committed, captured: writes.length - committed };
+  // A record a `match` found is listed (the reader sees what the run resolved
+  // to) but was not written, so neither count includes it.
+  const effects = writes.filter((w) => isWriteEffect({ kind: w.action }));
+  const committed = effects.filter((w) => w.committed).length;
+  return { writes, committed, captured: effects.length - committed };
 }
 
 /**

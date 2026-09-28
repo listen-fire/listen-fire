@@ -104,18 +104,18 @@ movement sync(e: <crm-[:\`Organization\`]->>) {
       \`Next Step\`: "Partner call"
     }
     d-[o:owners]-> {
-      link entry -[:\`Owners\`]-> { \`Full name\`: o.name }
+      owner = match entry-[:\`Owners\`]-> { \`Full name\`: o.name }
+      link entry -[:\`Owners\`]-> owner
     }
   }
 }`;
 
-/** Taking one back off: the found handle the link binds is what `unlink`
- *  severs, so the same criteria name the person both times. */
+/** Taking one back off: the handle `match` binds is what `unlink` severs. */
 const DROP_ONE = `${HEAD}
 movement sync(e: <crm-[:\`Organization\`]->>) {
   crm-[org:\`Organization\` WHERE \`Domain\` == "graphredesign.co"]-> {
     entry = write org-[:\`List Entries\`]-> { listName: "Pipeline", \`Next Step\`: "Partner call" }
-    leaving = link entry -[:\`Owners\`]-> { \`Full name\`: "Ivan Internal" }
+    leaving = match entry-[:\`Owners\`]-> { \`Full name\`: "Ivan Internal" }
     unlink entry -[:\`Owners\`]-> leaving
   }
 }`;

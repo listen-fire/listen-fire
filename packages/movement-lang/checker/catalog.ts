@@ -1172,14 +1172,16 @@ export interface WritableRootSchema {
    */
   fieldDocs?: Record<string, string>;
   /**
-   * Whether this target's adapter can resolve identity by SIMILARITY, not just
+   * Which fields this target's adapter can resolve by SIMILARITY, not just
    * equality — surfacing close candidates for the engine to arbitrate. Gates
    * the `FUZZY` modifier on a `unique by` component: an author may only mark a
    * component fuzzy where the target can honour it (the KG's pg_trgm search,
-   * Attio's `$contains`). Absent/false ⇒ the adapter matches exactly only, and
+   * Attio's `$contains`). `true` ⇒ every field; a list ⇒ only those fields (by
+   * their names in `fields`), since a system that searches names by
+   * similarity may still compare a city exactly. Absent ⇒ exact only, and
    * FUZZY is rejected at author time.
    */
-  fuzzyResolution?: boolean;
+  fuzzyResolution?: true | readonly string[];
   /**
    * Whether a movement may author `unique by` on this root. Default (absent) ⇒
    * yes. `false` ⇒ the target decides record identity ITSELF and doesn't accept

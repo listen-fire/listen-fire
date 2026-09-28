@@ -129,15 +129,16 @@ Each path is a handle plus one edge its type declares, and the written type must
 
 ### link
 
-\`link\` connects records **without creating or modifying either one**.
+\`link\` connects two records you already hold, **without creating or modifying either one**.
 
 \`\`\`
 link champion -[:led]-> part
 
-c = link p -[:Company]-> { Name: "Acme" }
+c = match p-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
+link p -[:Company]-> c
 \`\`\`
 
-The first form takes two handles in the same graph, over an edge the from-side declares. The second finds a record that already exists: its body is **match criteria only** — no \`unique by\`, and the record found is never written (\`Name\` selects Acme, it doesn't rename anything). Binding the statement gives you the found handle; a polymorphic edge takes the type explicitly (\`link a-[:related]-><Companies> { … }\`).
+Both ends are handles in the same graph, over an edge the from-side declares. To connect a record that exists but that you don't hold yet, \`match\` it first: it takes a write's target and \`unique by\`, finds the record, and never writes it (\`Name\` selects Acme, it doesn't rename anything). A polymorphic edge takes the type explicitly (\`match a-[:related]-><Companies> { … }\`).
 
 **On a miss the enclosing scope ends quietly** — that iteration skips, or the run stops after the work already done. Absence is a non-event, not a failure.
 
@@ -153,7 +154,7 @@ crm-[company:Companies WHERE \`Domains\` CONTAINS "acme.com"]-> {
 
 The hop's \`WHERE\` is the criteria and \`company\` is readable inside the block; on a miss the block runs zero times, so there is nothing to guard. The head roots at any instance in scope, not only the one whose event fired the automation.
 
-So: a lookup only finds, and skips on a miss; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold.
+So: a lookup only finds, and skips on a miss; \`match … unique by\` only finds, by identity, and skips on a miss; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold.
 
 ### updating-a-record-in-place
 
@@ -192,7 +193,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'criteria-form link statements (find-and-link, binding the found handle)',
+      construct: 'match statements (find by identity, binding the found handle), then link',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -203,7 +204,8 @@ crm   = attio(credentials: acme)
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
   person = write crm-[:People]-> { unique by (\`Job Title\`), Name: m.\`From\` }
-  employer = link person -[:Company]-> { Name: "Acme" }
+  employer = match person-[:Company]-> { unique by (\`Name\`), Name: "Acme" }
+  link person -[:Company]-> employer
   write employer-[:Notes]-> { Title: "Introduced", Content: m.\`Subject\` }
 }
 `,

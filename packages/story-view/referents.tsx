@@ -274,6 +274,7 @@ function leakedNames(view: StoryView): Set<string> {
           leaked.add(step.binding);
           break;
         case "write":
+        case "match":
         case "link":
         case "unlink":
         case "ask":

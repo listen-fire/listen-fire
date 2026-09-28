@@ -5,7 +5,8 @@
 // silent" contract.
 
 import { parseProgram } from '../../parser/parse';
-import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
+import { checkProgram, checkProgramWithLink, Diagnostic, DiagnosticCodes as C } from '../check';
+import { effectRowOf } from '../effects';
 import { SchemaFieldType, InstanceSchema, mockCatalog, unionDisplay, unionKey } from '../catalog';
 import { fieldAssignable } from '../typing';
 
@@ -347,8 +348,33 @@ const hubspotSchema: InstanceSchema = {
   writableRoots: {
     company: {
       fields: { name: 'text', domain: 'text', city: 'text', nickname: 'text' },
-      resultShape: { externalId: 'text', name: 'text', domain: 'text', city: 'text' },
+      // As the adapter projection declares every write shape: the write-event
+      // facts ride the result beside the record's own fields.
+      resultShape: {
+        externalId: 'text',
+        created: 'boolean',
+        committed: 'boolean',
+        name: 'text',
+        domain: 'text',
+        city: 'text',
+      },
       nativeUniqueness: [['domain'], ['name', 'city']],
+    },
+  },
+};
+
+/** A registry that resolves only its NAME fields by similarity — the per-field
+ *  shape of `fuzzyResolution`, beside the KG's every-field `true`. */
+const registrySchema: InstanceSchema = {
+  positions: {
+    entity: { properties: { Name: 'text', 'Legal Name': 'text', City: 'text' }, edges: {} },
+  },
+  collections: { entities: { target: 'entity' } },
+  writableRoots: {
+    entity: {
+      fields: { Name: 'text', 'Legal Name': 'text', City: 'text' },
+      resultShape: { externalId: 'text', Name: 'text', 'Legal Name': 'text', City: 'text' },
+      fuzzyResolution: ['Name', 'Legal Name'],
     },
   },
 };
@@ -382,6 +408,10 @@ const catalog = mockCatalog({
       constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
       schema: kgSchema,
     },
+    registry: {
+      constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
+      schema: registrySchema,
+    },
   },
   credentials: {
     dealflow_inbox: { adapter: 'email' },
@@ -392,6 +422,7 @@ const catalog = mockCatalog({
     team_drive: { adapter: 'dropbox' },
     team_chat: { adapter: 'messaging' },
     native_knowledge: { adapter: 'kg' },
+    public_registry: { adapter: 'registry' },
   },
   plugins: {
     scrub_sensitive: { args: [] },
@@ -1753,10 +1784,10 @@ describe('the instance-param door (MOV_WRITE_TARGET_NOT_GRAPH)', () => {
     expect(diagnostics[0].message).toContain(DOOR_PHRASE);
   });
 
-  it('a meta-typed parameter as a criteria-link root errors', () => {
+  it('a meta-typed parameter as a match root errors', () => {
     expect(
       codes(
-        `${PRELUDE}\nmovement publish(root: <crm>) {\n  link root -[:companies]-> { name: "Acme" }\n}`,
+        `${PRELUDE}\nmovement publish(root: <crm>) {\n  match root-[:companies]-> { unique by (\`name\`), name: "Acme" }\n}`,
       ),
     ).toEqual([C.WRITE_TARGET_NOT_GRAPH]);
   });
@@ -3175,6 +3206,37 @@ describe('FUZZY uniqueness modifier', () => {
     expect(found[0].message).toMatch(/similarity|fuzzy/i);
   });
 
+  describe('per field: a target may resolve only some fields by similarity', () => {
+    const inRegistry = (clause: string) =>
+      [
+        'import { email, registry } from adapters',
+        'import { dealflow_inbox, public_registry } from credentials',
+        'inbox = email(credentials: dealflow_inbox)',
+        'reg   = registry(credentials: public_registry)',
+        'movement main(msg: <inbox-[:message]->>) {',
+        `  match reg-[:entities]-> { unique by (${clause}), Name: msg.\`subject\`, \`Legal Name\`: msg.\`subject\`, City: "Berlin" }`,
+        '}',
+      ].join('\n');
+
+    it('a listed field is accepted', () => {
+      expectClean(inRegistry('FUZZY `Name`'));
+      expectClean(inRegistry('FUZZY `Legal Name`, `City`'));
+    });
+
+    it('an unlisted field is refused, naming it and the fields that do support it', () => {
+      const found = check(inRegistry('FUZZY `City`'));
+      expect(found.map((d) => d.code)).toEqual([C.UNIQUE_FUZZY_UNSUPPORTED]);
+      expect(found[0].message).toContain('FUZZY isn\'t available for `City`');
+      expect(found[0].message).toContain('Similarity covers `Name`, `Legal Name`');
+    });
+
+    it('`true` admits any field', () => {
+      expect(
+        codes(inFuzzy('write graph-[:companies]-> { unique by (FUZZY `domains`)\n  name: msg.`subject` }')),
+      ).not.toContain(C.UNIQUE_FUZZY_UNSUPPORTED);
+    });
+  });
+
   it('comma is the component separator — each component is validated on its own', () => {
     // `nope` is not a hubspot field; a comma split surfaces it as an unknown
     // field (rather than the whole predicate failing to parse).
@@ -3243,15 +3305,15 @@ describe('bind against an unupdatable target (WRITE_BIND_NO_UPDATE)', () => {
   });
 });
 
-// ── Link statements (the edge-only write — bare-handle and criteria forms) ──
+// ── match — the identity half of a write, on its own ──
 
-describe('link statements', () => {
-  it('a clean criteria link binds the FOUND handle, usable downstream', () => {
+describe('match', () => {
+  it('a clean match binds the FOUND handle, usable downstream', () => {
     expectClean(
       inMovement(
         [
           '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-          '  fr = link co -[:rounds]-> { stage: "Seed" }',
+          '  fr = match co-[:rounds]-> { unique by (`stage`), stage: "Seed" }',
           '  write fr-[:participants]-> {',
           '    unique by (fr AND `investor_name`)',
           '    investor_name: msg.`subject`',
@@ -3261,65 +3323,160 @@ describe('link statements', () => {
     );
   });
 
-  it('an unbound criteria link is a plain statement', () => {
+  it('an unbound match is a plain statement (a gate)', () => {
     expectClean(
       inMovement(
         [
           '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-          '  link co -[:rounds]-> { stage: "Seed" }',
+          '  match co-[:rounds]-> { unique by (`stage`), stage: "Seed" }',
         ].join('\n'),
       ),
     );
   });
 
-  it('MOV_WRITE_UNKNOWN_FIELD for a criteria field the found type lacks', () => {
+  it('matches over a root collection, with two OR-ed clauses', () => {
+    expectClean(
+      inMovement(
+        [
+          '  co = match graph-[:companies]-> {',
+          '    unique by (FUZZY `name`)',
+          '    unique by (`domains`)',
+          '    name: msg.`subject`',
+          '  }',
+          '  write co-[:rounds]-> { stage: co.name }',
+        ].join('\n'),
+      ),
+    );
+  });
+
+  it('MOV_MATCH_NO_IDENTITY when neither the author nor the target says what identifies the record', () => {
+    const found = check(inMovement('  match graph-[:companies]-> { name: msg.`subject` }'));
+    expect(found.map((d) => d.code)).toEqual([C.MATCH_NO_IDENTITY]);
+    expect(found[0].message).toContain("add 'unique by (…)'");
+  });
+
+  it("a target that decides identity itself needs no 'unique by' — and refuses one", () => {
+    expectClean(inMovement('  match aff-[:organizations]-> { name: msg.`subject` }'));
+    expect(codes(inMovement('  match aff-[:organizations]-> { unique by (`name`), name: msg.`subject` }'))).toEqual([
+      C.UNIQUE_NOT_AUTHORABLE,
+    ]);
+  });
+
+  it('native uniqueness is identity enough', () => {
+    const source = [
+      'import { email, hubspot } from adapters',
+      'import { dealflow_inbox, acme_hubspot } from credentials',
+      'inbox = email(credentials: dealflow_inbox)',
+      'crm2  = hubspot(credentials: acme_hubspot)',
+      'movement main(msg: <inbox-[:message]->>) {',
+      '  match crm2-[:companies]-> { domain: msg.`subject` }',
+      '}',
+    ].join('\n');
+    expectClean(source);
+  });
+
+  it('UNIQUE_FUZZY_UNSUPPORTED on a target that matches exactly', () => {
     const source = inMovement(
       [
         '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-        '  link co -[:rounds]-> { ghost: "Seed" }',
+        '  match co-[:rounds]-> { unique by (FUZZY `stage`), stage: "Seed" }',
+      ].join('\n'),
+    );
+    expect(codes(source)).toEqual([C.UNIQUE_FUZZY_UNSUPPORTED]);
+  });
+
+  it('MOV_UNIQUE_UNKNOWN_FIELD / MOV_WRITE_UNKNOWN_FIELD for names the found type lacks', () => {
+    const source = inMovement(
+      [
+        '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
+        '  match co-[:rounds]-> { unique by (`ghost`), ghost: "Seed" }',
       ].join('\n'),
     );
     const found = check(source);
-    expect(found.map(d => d.code)).toEqual([C.WRITE_UNKNOWN_FIELD]);
-    expect(found[0].message).toContain('identity fields of the record being found');
+    expect(found.map((d) => d.code)).toEqual([C.UNIQUE_UNKNOWN_FIELD, C.WRITE_UNKNOWN_FIELD]);
+    expect(found[1].message).toContain("a match's fields are fields of the record it finds");
   });
 
-  it("MOV_LINKED_UNKNOWN_EDGE with link phrasing when the source's type lacks the edge", () => {
+  it('skips the create gates: a required field may be left out', () => {
+    // `person` requires `name` on CREATE; a match creates nothing.
+    expectClean(inMovement('  match graph-[:people]-> { unique by (`company`), company: "Acme" }'));
+    expect(codes(inMovement('  write graph-[:people]-> { unique by (`company`), company: "Acme" }'))).toContain(
+      C.WRITE_MISSING_REQUIRED_FIELD,
+    );
+  });
+
+  it('only LOOKS along the edge: a read-only edge is fine, where a write is refused', () => {
+    const body = (verb: string) =>
+      inMovement(
+        [
+          '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
+          `  ${verb} co-[:attachments]-> { unique by (\`name\`), name: "deck.pdf" }`,
+        ].join('\n'),
+      );
+    expectClean(body('match'));
+    expect(codes(body('write'))).toContain(C.WRITE_READ_ONLY_EDGE);
+  });
+
+  it("the handle is the record: 'created' / 'committed' are a write's, not a match's", () => {
+    const read = (verb: string, field: string) =>
+      [
+        'import { email, hubspot } from adapters',
+        'import { dealflow_inbox, acme_hubspot } from credentials',
+        'inbox = email(credentials: dealflow_inbox)',
+        'crm2  = hubspot(credentials: acme_hubspot)',
+        'movement main(msg: <inbox-[:message]->>) {',
+        `  co = ${verb} crm2-[:companies]-> { domain: msg.\`subject\` }`,
+        `  write crm2-[:companies]-> { domain: "x", name: co.${field} }`,
+        '}',
+      ].join('\n');
+    for (const field of ['created', 'committed']) {
+      expectClean(read('write', field));
+      const found = check(read('match', field));
+      expect(found.map((d) => d.code)).toEqual([C.UNKNOWN_PROPERTY]);
+      expect(found[0].message).toContain(`no field '${field}'`);
+    }
+    expectClean(read('match', 'name'));
+  });
+
+  it("MOV_LINKED_UNKNOWN_EDGE with match phrasing when the parent's type lacks the edge", () => {
     const source = inMovement(
       [
         '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-        '  link co -[:ghost_edge]-> { stage: "Seed" }',
+        '  match co-[:ghost_edge]-> { unique by (`stage`), stage: "Seed" }',
       ].join('\n'),
     );
     const found = check(source);
     expect(found.map(d => d.code)).toEqual([C.LINKED_UNKNOWN_EDGE]);
-    expect(found[0].message).toContain('a link asserts an edge');
+    expect(found[0].message).toContain('a match looks along an edge');
   });
 
-  it('MOV_LINKED_NEEDS_TYPE for a criteria link over a polymorphic edge', () => {
-    expect(
-      codes(
-        inMovement(
-          [
-            '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-            '  link co -[:related]-> { name: "Acme" }',
-          ].join('\n'),
-        ),
-      ),
-    ).toEqual([C.LINKED_NEEDS_TYPE]);
+  it('MOV_LINKED_NEEDS_TYPE for a match over a polymorphic edge; the explicit type is clean', () => {
+    const co = '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }';
+    expect(codes(inMovement([co, '  match co-[:related]-> { unique by (`name`), name: "Acme" }'].join('\n')))).toEqual([
+      C.LINKED_NEEDS_TYPE,
+    ]);
+    expectClean(inMovement([co, '  p = match co-[:related]-><person> { unique by (`name`), name: "Ada" }'].join('\n')));
   });
 
-  it('a polymorphic criteria link names the found type explicitly', () => {
-    expectClean(
-      inMovement(
-        [
-          '  co = write graph-[:companies]-> { unique by (`name`), name: msg.`subject` }',
-          '  p = link co -[:related]-><person> { name: "Ada" }',
-        ].join('\n'),
-      ),
-    );
+  it('notes a READ of the graph it looks in, never a write', () => {
+    const rowOf = (verb: string) => {
+      const { recording } = checkProgramWithLink(
+        parseProgram(inMovement(`  ${verb} graph-[:companies]-> { unique by (\`name\`), name: msg.\`subject\` }`)),
+        catalog,
+        { recordAnalysis: true },
+      );
+      const main = recording?.frames.find((frame) => frame.kind === 'file')?.scope.symbols.get('main');
+      if (main === undefined) throw new Error("'main' is not declared");
+      const row = effectRowOf(main);
+      if (row === undefined) throw new Error("'main' has no inferred row");
+      return { read: row.read.map((s) => s.name), write: row.write.map((s) => s.name) };
+    };
+    expect(rowOf('match')).toEqual({ read: ['graph'], write: [] });
+    expect(rowOf('write')).toEqual({ read: [], write: ['graph'] });
   });
+});
 
+describe('link statements', () => {
   // A `writable` edge promises two things — create the target along it, or
   // join one that is already there — and a system can keep the first without
   // the second. It says so per edge, and the refusal lands at check time
@@ -3341,10 +3498,8 @@ describe('link statements', () => {
       expect(found[0].message).toContain('write co-[:entries]->');
     });
 
-    it('refuses the criteria link too', () => {
-      expect(codes(withRecords('  link co -[:entries]-> { stage: "Seed" }'))).toEqual([
-        C.LINK_UNSUPPORTED_EDGE,
-      ]);
+    it('a match along it is clean — a match joins nothing', () => {
+      expectClean(withRecords('  match co-[:entries]-> { unique by (`stage`), stage: "Seed" }'));
     });
 
     it('refuses unlink — a relationship it cannot make, it cannot sever', () => {

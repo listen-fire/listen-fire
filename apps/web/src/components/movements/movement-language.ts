@@ -33,6 +33,7 @@ const STATEMENT_KEYWORDS = new Set([
   "fire",
   "extract",
   "write",
+  "match",
   "unique",
   "by",
   "bind",

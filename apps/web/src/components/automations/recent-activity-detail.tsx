@@ -17,6 +17,9 @@ interface AppliedPlan {
   adapterType: string;
   recordType: string;
   created: boolean;
+  /** `match` marks a record the run FOUND and did not write; absent for a
+   *  record write. */
+  kind?: string;
   /** False when the run REHEARSED this write — the effect was captured, never
    *  sent. A rehearsal that read like a completed write was the whole problem. */
   committed?: boolean;
@@ -451,6 +454,7 @@ export function RecentActivityDetail({ runId }: { runId: string }) {
       ) : (
         plans.map((plan, i) => {
           const fields = Object.entries(plan.writtenValues ?? {});
+          const found = plan.kind === "match";
           return (
             <div
               key={`${plan.nodeId}-${i}`}
@@ -459,17 +463,19 @@ export function RecentActivityDetail({ runId }: { runId: string }) {
               <div className="mb-1 flex items-center gap-2">
                 <span
                   className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                    plan.created
-                      ? "bg-emerald-50 text-emerald-600"
-                      : "bg-blue-50 text-blue-600"
+                    found
+                      ? "bg-gray-100 text-gray-600"
+                      : plan.created
+                        ? "bg-emerald-50 text-emerald-600"
+                        : "bg-blue-50 text-blue-600"
                   }`}
                 >
-                  {plan.created ? "Created" : "Updated"}
+                  {found ? "Found" : plan.created ? "Created" : "Updated"}
                 </span>
                 <span className="text-[12px] font-medium text-gray-800">
                   {prettyRecordType(plan.recordType)}
                 </span>
-                {plan.committed === false && (
+                {plan.committed === false && !found && (
                   <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
                     Rehearsed
                   </span>
@@ -488,7 +494,9 @@ export function RecentActivityDetail({ runId }: { runId: string }) {
                 </div>
               )}
               {fields.length === 0 ? (
-                <div className="text-[11px] text-gray-400">No fields written.</div>
+                <div className="text-[11px] text-gray-400">
+                  {found ? "Nothing written — the run looked this record up." : "No fields written."}
+                </div>
               ) : (
                 <dl className="grid grid-cols-[minmax(0,9rem)_1fr] gap-x-3 gap-y-0.5">
                   {fields.map(([field, value]) => (

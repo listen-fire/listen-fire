@@ -28,6 +28,7 @@ import { consultEchoSuppression } from './echo_suppression';
 import { consultActorGate } from './actor_gate';
 import { markTriggerEventSuppressed } from './event_store';
 import * as loopGuard from '../../loop_guard';
+import { isWriteEffect } from '../../movement_engine/expression';
 import { notifyBreach } from '../../loop_guard/notify';
 import { resolveThresholds } from '../../loop_guard/thresholds';
 import { neverAsAny } from '../../../lib/utils/types';
@@ -314,11 +315,13 @@ export async function dispatchTriggerByIdEvent(
       // budget (multi-dimensional floor). Fire-and-forget + fail-open — never
       // block dispatch on guard accounting. Skipped under dry-run (no writes
       // actually landed).
-      if (!dryRun && firing.result.writes.length > 0) {
+      // A record a `match` found is on the run log but wrote nothing.
+      const written = firing.result.writes.filter(isWriteEffect).length;
+      if (!dryRun && written > 0) {
         loopGuard
           .recordExternalWrites({
             teamId: input.teamId,
-            count: firing.result.writes.length,
+            count: written,
           })
           .catch(handleError);
       }
@@ -327,7 +330,7 @@ export async function dispatchTriggerByIdEvent(
         movementFirings: [
           {
             movementName: firing.result.movementName,
-            writes: firing.result.writes.length,
+            writes: written,
             dryRun,
           },
         ],
