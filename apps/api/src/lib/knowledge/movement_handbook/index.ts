@@ -111,7 +111,6 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Exact spelling of an operator or function; when a name needs backticks', chapter: 'reference', section: 'operators-and-functions' },
   { intent: 'Write field modifiers and unique by forms; traversal and query clauses', chapter: 'reference', section: 'writes' },
   { intent: 'Common authoring mistakes in one place', chapter: 'reference', section: 'pitfalls' },
-  { intent: 'One built-in function or helper family, in full: signature, presence, ordering, example', chapter: 'builtins' },
 ];
 
 const CHAPTERS: Record<ChapterId, Chapter> = {

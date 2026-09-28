@@ -480,7 +480,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   if EXISTS(m-[:Attachments]-> WHERE \`Name\` CONTAINS "pdf") {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
-      Name: COALESCE(m-[:Sender]->.\`Name\`, m-[:Sender]->.\`Email\`, "unknown")
+      Name: COALESCE(m.\`From\`, "unknown")
     }
   }
 }
@@ -548,13 +548,14 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   d = { bucket: "a", packed: 3 }
   first = AT(d, "bucket")
 
-  rows   = crm-[p:People]-> { return { name: p.\`Name\`, title: p.\`Job Title\` } }
+  rows   = crm-[p:People ORDER BY \`Name\`]-> { return { name: p.\`Name\`, title: p.\`Job Title\` } }
   lines  = MAP(rows, (r) => { return AT(r, "name") })
   kept   = FILTER(lines, (t) => { return LENGTH(t) > 0 })
   total  = REDUCE(kept, 0, (carried, t) => { return carried + LENGTH(t) })
   by     = GROUPBY(rows, (r) => { return AT(r, "title") })
   byName = KEYBY(rows, (r) => { return AT(r, "name") })
   own    = AT(byName, "founder@acme.com")
+  ceos   = AT(by, "CEO")
 
   MAP(rows, (r) => {
     write crm-[:Companies]-> {
@@ -566,7 +567,7 @@ function \`Roster\`(go: <runs-[:Invocation]->>) {
   write crm-[:Companies]-> {
     unique by (\`Name\`)
     Name:        first
-    Description: "\${JOIN(kept, ", ")} (\${total} chars, has a founder entry: \${EXISTS(own)}, groups: \${EXISTS(AT(by, "CEO"))})"
+    Description: "\${JOIN(kept, ", ")} (\${total} chars, has a founder entry: \${EXISTS(own)}, groups: \${EXISTS(ceos)})"
   }
 }
 
@@ -590,7 +591,8 @@ function \`Recap\`(go: <runs-[:Invocation]->>) {
   before = 10
   after  = 4
   delta  = -(after - before)
-  line   = IF EXISTS(AT(theses, 0)) THEN "\${AT(theses, 0)}" ELSE "" END
+  first  = AT(theses, 0)
+  line   = IF EXISTS(first) THEN "\${first}" ELSE "" END
 
   ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
   if ops == null { ERROR("no #ops channel") }

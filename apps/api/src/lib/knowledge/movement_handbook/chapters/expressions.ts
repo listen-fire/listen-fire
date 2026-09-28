@@ -134,9 +134,9 @@ theses = MEMBERS(<Thesis>)
 
 \`\`\`
 roster = [
-  node { Name: "Ada",   Theme: "Consumer" },
-  node { Name: "Grace", Theme: "Infra" },
-  node { Name: "Alan",  Theme: "Health" },
+  { Name: "Ada",   Theme: "Consumer" },
+  { Name: "Grace", Theme: "Infra" },
+  { Name: "Alan",  Theme: "Health" },
 ]
 
 function \`Match Mentions\`(m: <inbox-[:Email]->>) {
@@ -157,7 +157,7 @@ function \`Match Mentions\`(m: <inbox-[:Email]->>) {
 }
 \`\`\`
 
-A file-scope list of \`node { … }\` records is a small table any function in the file can read, declared once rather than rebuilt per call. \`MAP\` turns each row into a line and \`JOIN\` turns the lines into one string — the same string that goes into a prompt (here, an extraction's own description) or into code: \`KEYBY\` turns the table into a dict keyed by one of its own fields, so a later lookup (\`AT(byName, "Ada")\`) is a plain read rather than a search — a computed key still needs the ordinary guard, since \`KEYBY\`'s keys are data, not a written literal.
+A file-scope list of dict literals is a small table any function in the file can read, declared once rather than rebuilt per call. \`MAP\` turns each row into a line and \`JOIN\` turns the lines into one string — the same string that goes into a prompt (here, an extraction's own description) or into code: \`KEYBY\` turns the table into a dict keyed by one of its own fields, so a later lookup (\`AT(byName, "Ada")\`) is a plain read rather than a search — a computed key still needs the ordinary guard, since \`KEYBY\`'s keys are data, not a written literal.
 
 ### values-that-may-not-be-there
 
@@ -251,9 +251,9 @@ inbox = email()
 crm   = attio(credentials: acme)
 
 roster = [
-  node { Name: "Ada",   Theme: "Consumer" },
-  node { Name: "Grace", Theme: "Infra" },
-  node { Name: "Alan",  Theme: "Health" },
+  { Name: "Ada",   Theme: "Consumer" },
+  { Name: "Grace", Theme: "Infra" },
+  { Name: "Alan",  Theme: "Health" },
 ]
 
 function \`Match Mentions\`(m: <inbox-[:Email]->>) {
@@ -267,6 +267,7 @@ function \`Match Mentions\`(m: <inbox-[:Email]->>) {
   }
 
   owner = AT(byName, "Ada")
+  if owner == null { ERROR("no such teammate on the roster") }
   found-[c:company]-> {
     write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: "flagged by \${owner.Name}" }
   }
