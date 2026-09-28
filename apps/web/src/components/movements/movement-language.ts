@@ -224,7 +224,9 @@ export const movementHighlightStyle = HighlightStyle.define([
   { tag: tags.operatorKeyword, color: "#5242A8", fontWeight: "600" },
   { tag: tags.macroName, color: "#0e7490" },
   { tag: tags.typeName, color: "#1d4ed8", fontWeight: "500" },
-  { tag: tags.string, color: "#15803d" },
+  // A pale wash behind string tokens so a multi-line prompt reads as one
+  // block of text and the code around it stays visually distinct.
+  { tag: tags.string, color: "#15803d", backgroundColor: "rgba(21, 128, 61, 0.07)" },
   { tag: tags.meta, color: "#8778F7", fontWeight: "600" },
   { tag: tags.comment, color: "#9ca3af", fontStyle: "italic" },
   { tag: tags.angleBracket, color: "#a21caf" },
