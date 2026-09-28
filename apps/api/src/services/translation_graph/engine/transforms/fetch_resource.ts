@@ -24,8 +24,10 @@ const FETCH_URL_TIMEOUT_MS = 7 * 60 * 1000;
 
 export interface FetchedResource {
   url: string;
+  /** Empty when the fetch downloaded a document none of whose text could be
+   *  read — the document itself still rides on `documentId`. */
   content: string;
-  rawTextId: string;
+  rawTextId: string | null;
   resourceId: ResourceId;
   /** Document id when the fetch produced a binary artefact (PDFs, etc.).
    *  Null otherwise. Carried into the ephemeral record's `file` field. */
@@ -36,7 +38,17 @@ async function toFetchedResource(
   url: string,
   fetched: FetchedSegment | null,
 ): Promise<FetchedResource | null> {
-  if (!fetched?.rawTextId) return null;
+  if (!fetched) return null;
+  if (!fetched.rawTextId) {
+    if (!fetched.documentId) return null;
+    return {
+      url,
+      content: '',
+      rawTextId: null,
+      resourceId: fetched.resourceId,
+      documentId: fetched.documentId,
+    };
+  }
   const rawText = await RawTextService.getById(fetched.rawTextId);
   return {
     url,

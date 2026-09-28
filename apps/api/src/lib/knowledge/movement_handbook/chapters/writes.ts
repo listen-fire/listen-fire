@@ -127,9 +127,9 @@ The edge may be declared on **either side**: where only the child references bac
 Posting to a chat system needs no special "send": a message is a record written along an edge, the same one you read coming in. What changes is only **what it hangs under** — its channel or thread comes from its parent, never from a field you fill in.
 
 \`\`\`
-chat-[ch:Channels WHERE \`Name\` == "deals"]-> {
-  write ch-[:Messages]-> { Message: "A new company just landed." }
-}
+deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
+if deals == null { ERROR("no #deals channel") }
+write deals-[:Messages]-> { Message: "A new company just landed." }
 
 write msg-[:Replies]-> { Message: "Got it — taking a look now." }
 \`\`\`
@@ -164,17 +164,17 @@ Both ends are handles in the same graph, over an edge the from-side declares. To
 
 ### looking-up-existing-records
 
-To act on a record that already exists *without* writing it, traverse to it:
+Look up a record that must already exist with \`ONLY\`, and guard it:
 
 \`\`\`
-crm-[company:Companies WHERE \`Domains\` CONTAINS "acme.com"]-> {
-  write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
-}
+company = ONLY(crm-[c:Companies WHERE \`Domains\` CONTAINS "acme.com"]->)
+if company == null { ERROR("no company at acme.com") }
+write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
 \`\`\`
 
-The hop's \`WHERE\` is the criteria and \`company\` is readable inside the block; on a miss the block runs zero times, so there is nothing to guard. The head roots at any instance in scope, not only the one whose event fired the automation.
+The hop's \`WHERE\` is the criteria, rooted at any instance in scope. The guard ends the run with a reason when nothing matches.
 
-So: a lookup only finds; \`match\` finds by identity; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold. The first two skip on a miss.
+So: a lookup finds a record that must be there, and a miss fails the run; \`match\` finds one that may not be, and a miss skips the rest of the scope; \`write … unique by\` finds *or creates*; \`write <alias>\` updates the exact record you already hold.
 
 ### updating-a-record-in-place
 
@@ -334,7 +334,7 @@ listen to runs {} fire \`Reactivate\`
 `,
     },
     {
-      construct: 'WHERE-filtered lookup traversals over the source graph (the exact-lookup idiom)',
+      construct: 'a WHERE-filtered lookup over the source graph, bound with ONLY and guarded (the exact-lookup idiom)',
       status: 'runs',
       probe: `
 import { manual, attio } from adapters
@@ -344,9 +344,9 @@ runs = manual()
 crm  = attio(credentials: acme)
 
 function \`Enrich\`(go: <runs-[:Invocation]->>) {
-  crm-[company:Companies WHERE \`Domains\` CONTAINS "acme.com"]-> {
-    write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
-  }
+  company = ONLY(crm-[c:Companies WHERE \`Domains\` CONTAINS "acme.com"]->)
+  if company == null { ERROR("no company at acme.com") }
+  write company-[:Notes]-> { Title: "Enriched", Content: "found \${company.Name}" }
 }
 
 listen to runs {} fire \`Enrich\`

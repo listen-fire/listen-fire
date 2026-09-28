@@ -85,6 +85,7 @@ import type { ContextDependentInput, PreExtractionInput } from '../engine/transf
 import type { SourcePosition } from '../types';
 import { makeStablePosition } from '../types';
 import { services } from '../../../adapters/registry';
+import { logger } from '../../logger';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -178,9 +179,9 @@ describe('vc-url-retrieval signature', () => {
     expect(fields.text).toEqual({ kind: 'string' });
   });
 
-  it('declares a required content param', () => {
+  it('declares a required text param', () => {
     const sig = vcUrlRetrievalImpl.signature;
-    const param = sig.params.find((p) => p.name === 'content');
+    const param = sig.params.find((p) => p.name === 'text');
     expect(param).toBeDefined();
     expect(param?.required).toBe(true);
     expect(param?.type.kind).toBe('string');
@@ -242,7 +243,7 @@ describe('linkedin-enrichment signature', () => {
 
 describe('vc-url-retrieval.run — behavioural parity', () => {
   function preInput(content: string): PreExtractionInput {
-    return { kind: 'pre-extraction', sourceNode, config: { content } };
+    return { kind: 'pre-extraction', sourceNode, config: { text: content } };
   }
 
   it('returns no edges when there are no URLs in the content', async () => {
@@ -251,7 +252,7 @@ describe('vc-url-retrieval.run — behavioural parity', () => {
     expect(mockAnthropicChat).not.toHaveBeenCalled();
   });
 
-  it('returns no edges when config.content is missing', async () => {
+  it('returns no edges when config.text is missing', async () => {
     const out = await vcUrlRetrievalImpl.run({
       kind: 'pre-extraction',
       sourceNode,
@@ -303,6 +304,35 @@ describe('vc-url-retrieval.run — behavioural parity', () => {
     ]);
     expect(mockPitchDeckUrlTool).toHaveBeenCalledWith(
       expect.objectContaining({ url, password: 'SECRET' }),
+    );
+  });
+
+  it('keeps a fetched document whose text cannot be read, with empty text and a warning', async () => {
+    const url = 'https://docsend.com/view/scan';
+
+    mockAnthropicChat.mockResolvedValueOnce(
+      JSON.stringify({ type: 'pitch_deck', password: null }),
+    );
+    mockIsSupportedUrl.mockReturnValue(true);
+    mockResourceGetOrCreate.mockResolvedValue({ id: 'res-s', documentId: null });
+    mockPitchDeckUrlTool.mockResolvedValue({ type: 'DOCUMENT', documentId: 'doc-scan' });
+    mockExtractDocumentTextTool.mockRejectedValue(
+      new Error('no text layer; OCR is not configured, so text cannot be extracted from this PDF.'),
+    );
+
+    const out = await vcUrlRetrievalImpl.run(preInput(`Deck ${url}`));
+
+    expect(out.edges?.vcUrl).toEqual([
+      { data: { name: url, url, file: 'doc-scan', text: '' } },
+    ]);
+    expect(mockResourceUpdate).toHaveBeenCalledWith('res-s', { rawTextId: null });
+    expect(mockGetById).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no readable text'),
+      expect.objectContaining({
+        documentId: 'doc-scan',
+        reason: expect.stringContaining('OCR is not configured'),
+      }),
     );
   });
 
