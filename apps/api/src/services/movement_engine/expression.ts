@@ -2988,21 +2988,32 @@ async function evalScopedFilter(
   if (!isPurePredicate(filter)) {
     return evaluateMovementExpression(filter, scopedCtx);
   }
+  // `evalMovementExpr` resolves every leaf form — including a zero-step
+  // traverse (`t.firedAt`) via its alias-rooted read seam — so the value (and
+  // therefore the decision) is identical to the full async evaluator.
+  return decidePurePredicate(filter, async (leaf) => (await evalMovementExpr(leaf, scopedCtx)).value);
+}
+
+/**
+ * Decide a PURE predicate, reading each leaf only when the conjunct that needs
+ * it is reached: a top-level AND is taken one conjunct at a time, in the order
+ * written, and a false one ends it. That is the full evaluator's short-circuit,
+ * and every place that decides a WHERE by pre-reading leaves goes through here
+ * so none of them reads a field a false conjunct already ruled out — a field
+ * the record may not have at all. Each leaf is read at most once.
+ */
+export async function decidePurePredicate(
+  filter: Expression,
+  readLeaf: (leaf: LeafRead) => Promise<unknown>,
+): Promise<unknown> {
   const reads = new Map<string, unknown>();
-  const decide = async (conjunct: Expression): Promise<unknown> => {
-    for (const leaf of pureLeafReads(conjunct)) {
-      const name = leafReadKey(leaf);
-      if (reads.has(name)) continue;
-      // `evalMovementExpr` resolves every leaf form — including a zero-step
-      // traverse (`t.firedAt`) via its alias-rooted read seam — so the value
-      // (and therefore the decision) is identical to the full async evaluator.
-      reads.set(name, (await evalMovementExpr(leaf, scopedCtx)).value);
-    }
-    return evaluatePredicate(conjunct, { read: (name) => reads.get(name) });
-  };
   let last: unknown = true;
   for (const conjunct of flattenAndConjuncts(filter)) {
-    last = await decide(conjunct);
+    for (const leaf of pureLeafReads(conjunct)) {
+      const name = leafReadKey(leaf);
+      if (!reads.has(name)) reads.set(name, await readLeaf(leaf));
+    }
+    last = evaluatePredicate(conjunct, { read: (name) => reads.get(name) });
     if (!last) return last;
   }
   return last;

@@ -199,6 +199,7 @@ import {
   applyHopOrderLimit,
   bindingOf,
   closedHopPushdown,
+  decidePurePredicate,
   describeBinding,
   evalMovementExpr,
   evaluateMovementExpression,
@@ -1113,9 +1114,40 @@ function awaitHopFilter(head: PathHead): Expression | undefined {
   return last !== undefined && last.type === 'edge' ? last.expressionFilter : undefined;
 }
 
-// The awaited-hop WHERE (B.1) is evaluated per candidate in
-// `AbstractMovementInterpreter.awaitLandingMatches` — THROUGH the adapter's
-// getFieldValue, so a candidate reads exactly as it will post-bind.
+/**
+ * Does one candidate landing satisfy the awaited hop's pure WHERE (B.1)? The
+ * predicate is checker-guaranteed PURE, so its leaf reads resolve THROUGH the
+ * adapter's `getFieldValue` for the landing's own type — the same read path the
+ * bound body uses. Reading candidates the same way they'll be read post-bind is
+ * what keeps an adapter that translates field names (Slack: `User` → `user`)
+ * honest under a WHERE without the engine knowing any adapter's internal keys.
+ *
+ * Decided as a hop WHERE is (`decidePurePredicate`): an AND stops at its first
+ * false conjunct, so a field the rest of the WHERE names is never asked of a
+ * candidate that has already failed — an adapter may rightly refuse to read it.
+ */
+export async function awaitLandingMatches(input: {
+  filter: Expression;
+  adapter: Adapter;
+  adapterType: string;
+  landing: { recordType?: string; fields: Record<string, unknown> };
+}): Promise<boolean> {
+  const position = makeUnstablePosition({
+    adapterType: input.adapterType,
+    recordType: input.landing.recordType ?? 'Response',
+    data: input.landing.fields,
+  });
+  return Boolean(
+    await decidePurePredicate(input.filter, (leaf) => {
+      const key = leafReadKey(leaf);
+      const dot = key.indexOf('.');
+      // A leaf reads `<alias>.field` or a bare `field` — the alias IS the
+      // landing, so strip it to the field name the adapter keys by.
+      const field = dot >= 0 ? key.slice(dot + 1) : key;
+      return input.adapter.getFieldValue({ position, fieldId: field });
+    }),
+  );
+}
 
 // ── The interpreter ─────────────────────────────────────────────────────────
 
@@ -4094,7 +4126,7 @@ class Interpreter {
       for (const landing of resolution.landings) {
         if (
           hopFilter === undefined ||
-          (await this.awaitLandingMatches(hopFilter, adapter, adapterType, landing))
+          (await awaitLandingMatches({ filter: hopFilter, adapter, adapterType, landing }))
         ) {
           matched = landing;
           break;
@@ -4482,38 +4514,6 @@ class Interpreter {
     // binding name) — the identity a rehydrated read seam re-resolves through.
     const read: SourceRead = { adapter, instanceName };
     env.declare(bindingName, { kind: 'sourcePosition', position, read });
-  }
-
-  /**
-   * Does one candidate landing satisfy the awaited hop's pure WHERE (B.1)? The
-   * predicate is checker-guaranteed PURE, so its leaf reads resolve THROUGH the
-   * adapter's `getFieldValue` for the landing's own type — the same read path the
-   * bound body uses — pre-resolved into a map, then evaluated synchronously.
-   * Reading candidates the same way they'll be read post-bind is what keeps an
-   * adapter that translates field names (Slack: `User` → `user`) honest under a
-   * WHERE without the engine knowing any adapter's internal keys.
-   */
-  private async awaitLandingMatches(
-    filter: Expression,
-    adapter: Adapter,
-    adapterType: string,
-    landing: { recordType?: string; fields: Record<string, unknown> },
-  ): Promise<boolean> {
-    const position = makeUnstablePosition({
-      adapterType,
-      recordType: landing.recordType ?? 'Response',
-      data: landing.fields,
-    });
-    const reads = new Map<string, unknown>();
-    for (const leaf of pureLeafReads(filter)) {
-      const key = leafReadKey(leaf);
-      const dot = key.indexOf('.');
-      // A leaf reads `<alias>.field` or a bare `field` — the alias IS the
-      // landing, so strip it to the field name the adapter keys by.
-      const field = dot >= 0 ? key.slice(dot + 1) : key;
-      reads.set(key, await adapter.getFieldValue({ position, fieldId: field }));
-    }
-    return Boolean(evaluatePredicate(filter, { read: (name) => reads.get(name) }));
   }
 
   // ── refresh (asks-as-adapter F5/F22) ──
