@@ -175,9 +175,9 @@ Construct \`ask()\`, **write** a question along a family edge (the record mints 
 \`\`\`
 asks = ask()
 q = write asks-[:Check]-> { Prompt: "Pursue this?" }
-team-[ch:Channels WHERE \`Name\` == "ops"]-> {
-  write ch-[:Messages]-> { Message: "Decide: \${q.Url}" }   # deliver the link
-}
+ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+if ops == null { ERROR("no #ops channel") }
+write ops-[:Messages]-> { Message: "Decide: \${q.Url}" }    # deliver the link
 answer = await FIRST(q-[:Response]->)                       # park until answered
 if answer.Answer { … }
 
