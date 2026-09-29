@@ -1,33 +1,51 @@
+import { sql } from 'kysely';
 import { currentPrincipal } from 'principal';
 
 import { AssetId } from '../../../generated/kysely/valuations/Asset';
-import { getQb, getValuationsQb } from '../../kysely';
+import { getValuationsQb } from '../../kysely';
 import { AssetPrice } from './types';
 import AssetType from '../../../generated/kysely/valuations/AssetType';
-import { LegalEntityId } from '../../../generated/kysely/valuations/LegalEntity';
 import { TeamId } from '../../../generated/kysely/core/Team';
 import CurrencyIsoCode from '../../../generated/kysely/valuations/CurrencyIsoCode';
 import PriceType from '../../../generated/kysely/valuations/PriceType';
 import { getAssetTrackedEntities } from '../trackedEntities';
-import { requestMemo, requestScopedMap } from '../requestCache';
-
-/** One asset's price as of one date, memoised for the life of the request. */
-const priceByAssetAndDate = requestScopedMap<Promise<AssetPrice | undefined>>();
-
-function priceKey(assetId: string, date: Date): string {
-  return `${assetId}@${date.toISOString()}`;
-}
+import { requestBatchLoader, requestMemo } from '../requestCache';
 
 /**
  * The latest price on or before `date` for each asset that has one.
  *
  * An asset's answer depends on the asset and the date and nothing else — the
  * equity leg resolves a price for the whole issuing entity, from every asset
- * that entity issued rather than from the ones asked about — so it is memoised
- * per (asset, date) and a repeat ask costs nothing. Assets with no price at all
- * are memoised as such too, so an unpriced holding is not re-queried once per
- * company on the list.
+ * that entity issued rather than from the ones asked about — so it is asked per
+ * asset and answered per batch, and a repeat ask costs nothing. Assets with no
+ * price at all are answered as such too, so an unpriced holding is not
+ * re-queried once per company on the list.
  */
+const loadLatestPrice = requestBatchLoader<{ assetId: string; date: Date }, AssetPrice>({
+  identity: ({ assetId, date }) => `${assetId}@${date.toISOString()}`,
+  fetch: async (batch) => {
+    const byDate = new Map<string, { date: Date; assetIds: Set<string> }>();
+    for (const { assetId, date } of batch) {
+      const key = date.toISOString();
+      const group = byDate.get(key) ?? { date, assetIds: new Set<string>() };
+      group.assetIds.add(assetId);
+      byDate.set(key, group);
+    }
+
+    const found = new Map<string, AssetPrice>();
+    await Promise.all(
+      Array.from(byDate.values()).map(async ({ date, assetIds }) => {
+        const prices = await fetchLatestPrices({ assetIds: Array.from(assetIds), date });
+        for (const [assetId, price] of Object.entries(prices)) {
+          found.set(`${assetId}@${date.toISOString()}`, price);
+        }
+      }),
+    );
+
+    return found;
+  },
+});
+
 async function getLatestPrices({
   assetIds,
   date,
@@ -39,30 +57,14 @@ async function getLatestPrices({
     return {};
   }
 
-  const cache = priceByAssetAndDate();
   const wanted = Array.from(new Set(assetIds));
-  const misses = wanted.filter((assetId) => !cache.has(priceKey(assetId, date)));
-
-  if (misses.length) {
-    const fetched = fetchLatestPrices({ assetIds: misses, date });
-    // Unobserved rejections take the process down; every caller awaits its own
-    // read of the same promise below.
-    fetched.catch(() => {});
-    for (const assetId of misses) {
-      cache.set(
-        priceKey(assetId, date),
-        fetched.then((prices) => prices[assetId]),
-      );
-    }
-  }
+  const found = await Promise.all(wanted.map((assetId) => loadLatestPrice({ assetId, date })));
 
   const prices: Record<string, AssetPrice> = {};
-  await Promise.all(
-    wanted.map(async (assetId) => {
-      const price = await cache.get(priceKey(assetId, date));
-      if (price) prices[assetId] = price;
-    }),
-  );
+  wanted.forEach((assetId, i) => {
+    const price = found[i];
+    if (price) prices[assetId] = price;
+  });
   return prices;
 }
 
@@ -96,82 +98,17 @@ async function fetchLatestPrices({
     }
   });
 
-  // Get prices for non-equity assets normally
-  const nonEquityPrices = await getPricesForAssets(nonEquityAssets, date);
+  const [nonEquityPrices, pricePerShareByEntity] = await Promise.all([
+    getPricesForAssets(nonEquityAssets, date),
+    getEntityPricesPerShare({ entityIds: Array.from(equityAssetsByEntity.keys()), date, teamId }),
+  ]);
 
-  // Get prices for equity assets by entity
   const equityPrices = new Map<string, AssetPrice>();
-
   for (const [entityId, entityAssets] of equityAssetsByEntity) {
-    // Get all equity assets issued by this entity
-    const allEntityAssets = await getValuationsQb(['asset'])
-      .selectFrom('asset')
-      .select('id')
-      .where('type', '=', AssetType.EQUITY)
-      .where('issued_by_legal_entity_id', '=', entityId as LegalEntityId)
-      .execute();
-
-    const allEntityAssetIds = allEntityAssets.map((a) => a.id);
-
-    // Get the latest price for any asset from this entity.
-    // CONVERSION prices are suppressed when a uniform PPS — any FROM_PRICED_ROUND
-    // or FROM_ASSET_HOLDER price scoped to this entity (either asset-less or on
-    // any of the entity's equity assets) — exists on the same date or earlier.
-    // Such prices represent the company's per-share value; a same-day conversion
-    // at a discounted/capped price shouldn't override or tie with it.
-    const latestEquityPrice = await getValuationsQb(['price'])
-      .selectFrom('price')
-      .select(['asset_id', 'price', 'currency', 'date'])
-      .where('price.team_id', '=', teamId as TeamId)
-      .where(($) =>
-        $.or([
-          $.and([$('price.asset_id', 'in', allEntityAssetIds)]),
-          $.and([
-            $('price.asset_id', 'is', null),
-            $('legal_entity_id', '=', entityId as LegalEntityId),
-          ]),
-        ]),
-      )
-      .where('price.date', '<=', date)
-      .where(($) =>
-        $.or([
-          $('price.type', '!=', PriceType.CONVERSION),
-          $.not(
-            $.exists(
-              $.selectFrom('price as shadowing_price')
-                .select('shadowing_price.id')
-                .where('shadowing_price.team_id', '=', teamId as TeamId)
-                .where('shadowing_price.type', 'in', [
-                  PriceType.FROM_PRICED_ROUND,
-                  PriceType.FROM_ASSET_HOLDER,
-                ])
-                .where(($$) =>
-                  $$.or([
-                    $$.and([$$('shadowing_price.asset_id', 'in', allEntityAssetIds)]),
-                    $$.and([
-                      $$('shadowing_price.asset_id', 'is', null),
-                      $$('shadowing_price.legal_entity_id', '=', entityId as LegalEntityId),
-                    ]),
-                  ]),
-                )
-                .whereRef('shadowing_price.date', '<=', 'price.date'),
-            ),
-          ),
-        ]),
-      )
-      .orderBy('price.date', 'desc')
-      .limit(1)
-      .executeTakeFirst();
-    if (latestEquityPrice) {
-      // Apply this price to all requested assets from this entity
-      entityAssets.forEach((assetId) => {
-        equityPrices.set(assetId, {
-          price: latestEquityPrice.price,
-          currency: latestEquityPrice.currency,
-          date: latestEquityPrice.date,
-        });
-      });
-    }
+    const pricePerShare = pricePerShareByEntity.get(entityId);
+    if (!pricePerShare) continue;
+    // Apply this price to all requested assets from this entity
+    for (const assetId of entityAssets) equityPrices.set(assetId, pricePerShare);
   }
 
   // Combine both sets of prices
@@ -207,6 +144,94 @@ async function fetchLatestPrices({
   }
 
   return prices;
+}
+
+/**
+ * What a share in each of these companies was last worth on or before `date` —
+ * the price every EQUITY asset the company issued is valued at.
+ *
+ * A company's price is the latest price scoped to it: on any equity asset it
+ * issued, or on the company itself. CONVERSION prices are suppressed when a
+ * uniform price per share — any FROM_PRICED_ROUND or FROM_ASSET_HOLDER price
+ * scoped to the same company — exists on the same date or earlier: such a price
+ * represents the company's per-share value, and a same-day conversion at a
+ * discounted or capped price shouldn't override or tie with it.
+ *
+ * One company's answer is its own, so the whole portfolio's companies are asked
+ * in a single statement — a lateral over the company list, each arm the same
+ * "latest one" the company would have been asked on its own.
+ */
+async function getEntityPricesPerShare({
+  entityIds,
+  date,
+  teamId,
+}: {
+  entityIds: string[];
+  date: Date;
+  teamId: string;
+}): Promise<Map<string, AssetPrice>> {
+  const perEntity = new Map<string, AssetPrice>();
+  if (!entityIds.length) return perEntity;
+
+  const rows = await sql<{
+    entity_id: string;
+    price: number;
+    currency: CurrencyIsoCode;
+    date: Date;
+  }>`
+    with scoped as (
+      -- Priced on one of the company's own equity assets…
+      select issuer.issued_by_legal_entity_id as entity_id,
+             p.id, p.price, p.currency, p.date, p.type, true as on_an_asset
+      from valuations.asset as issuer
+      join valuations.price as p on p.asset_id = issuer.id
+      where issuer.issued_by_legal_entity_id = any(${sql.val(entityIds)}::uuid[])
+        and issuer.type = ${sql.lit(AssetType.EQUITY)}
+        and p.team_id = ${sql.val(teamId)}::uuid
+        and p.date <= ${sql.val(date)}
+      union all
+      -- …or on the company itself.
+      select p.legal_entity_id as entity_id,
+             p.id, p.price, p.currency, p.date, p.type, false as on_an_asset
+      from valuations.price as p
+      where p.asset_id is null
+        and p.legal_entity_id = any(${sql.val(entityIds)}::uuid[])
+        and p.team_id = ${sql.val(teamId)}::uuid
+        and p.date <= ${sql.val(date)}
+    ),
+    -- The first date a uniform price per share exists from. On and after it a
+    -- conversion price is shadowed.
+    uniform as (
+      select entity_id, min(date) as from_date
+      from scoped
+      where type in (${sql.lit(PriceType.FROM_PRICED_ROUND)}, ${sql.lit(
+        PriceType.FROM_ASSET_HOLDER,
+      )})
+      group by entity_id
+    )
+    select distinct on (scoped.entity_id)
+      scoped.entity_id, scoped.price, scoped.currency, scoped.date
+    from scoped
+    left join uniform on uniform.entity_id = scoped.entity_id
+    where scoped.type <> ${sql.lit(PriceType.CONVERSION)}
+      or uniform.from_date is null
+      or scoped.date < uniform.from_date
+    -- A price on the company itself is its price per share; one on a single
+    -- equity asset prices that asset. Where both were recorded on the same day
+    -- the company's own is the answer, and the row's id settles anything left,
+    -- so the same data always gives the same price.
+    order by scoped.entity_id, scoped.date desc, scoped.on_an_asset asc, scoped.id asc
+  `.execute(getValuationsQb(['price', 'asset']));
+
+  for (const row of rows.rows) {
+    perEntity.set(row.entity_id, {
+      price: row.price,
+      currency: row.currency,
+      date: row.date,
+    });
+  }
+
+  return perEntity;
 }
 
 async function getPricesForAssets(
@@ -250,20 +275,62 @@ async function getPricesForAssets(
  * for the same handful of pairs and dates thousands of times, so the answer is
  * memoised for the life of the request.
  */
-const getExchangeRate = requestMemo({
-  identity: ({
-    fromCurrency,
-    toCurrency,
-    date,
-  }: {
-    fromCurrency: CurrencyIsoCode;
-    toCurrency: CurrencyIsoCode;
-    date: Date;
-  }) => `${fromCurrency}:${toCurrency}@${date.toISOString()}`,
-  compute: fetchExchangeRate,
+const loadExchangeRate = requestBatchLoader<
+  { fromCurrency: CurrencyIsoCode; toCurrency: CurrencyIsoCode; date: Date },
+  number
+>({
+  identity: ({ fromCurrency, toCurrency, date }) =>
+    `${fromCurrency}:${toCurrency}@${date.toISOString()}`,
+  fetch: async (batch) => {
+    const froms = batch.map((r) => r.fromCurrency as string);
+    const tos = batch.map((r) => r.toCurrency as string);
+    const dates = batch.map((r) => r.date.toISOString());
+
+    // One arm of the lateral per asked-for rate, each the same "latest on or
+    // before" the pair would have been asked on its own. The table holds a rate
+    // per pair per day, so pulling the history for every pair a portfolio
+    // touches and picking in memory would be far more than it is worth.
+    const rows = await sql<{
+      position: string;
+      from_currency: CurrencyIsoCode;
+      rate: number;
+    }>`
+      select asked.position, found.from_currency, found.rate
+      from unnest(
+        ${sql.val(froms)}::text[],
+        ${sql.val(tos)}::text[],
+        ${sql.val(dates)}::date[]
+      ) with ordinality as asked(from_currency, to_currency, date, position)
+      join lateral (
+        select r.from_currency, r.rate
+        from valuations.exchange_rate as r
+        where (
+          (r.from_currency::text = asked.from_currency and r.to_currency::text = asked.to_currency)
+          or (r.from_currency::text = asked.to_currency and r.to_currency::text = asked.from_currency)
+        )
+          and r.date <= asked.date
+        order by r.date desc
+        limit 1
+      ) as found on true
+    `.execute(getValuationsQb(['exchange_rate']));
+
+    const rates = new Map<string, number>();
+    for (const row of rows.rows) {
+      const asked = batch[Number(row.position) - 1];
+      if (!asked) continue;
+      const rate = Number(row.rate);
+      rates.set(
+        `${asked.fromCurrency}:${asked.toCurrency}@${asked.date.toISOString()}`,
+        // Found the other way round: the rate is the reciprocal.
+        row.from_currency === asked.fromCurrency ? rate : 1 / rate,
+      );
+    }
+
+    return rates;
+  },
 });
 
-async function fetchExchangeRate({
+async function getExchangeRate({
   fromCurrency,
   toCurrency,
   date,
@@ -274,36 +341,14 @@ async function fetchExchangeRate({
 }): Promise<number> {
   if (fromCurrency === toCurrency) return 1;
 
-  // Try to find the rate in either direction
-  const result = await getValuationsQb(['exchange_rate'])
-    .selectFrom('exchange_rate')
-    .select(['from_currency', 'to_currency', 'rate'])
-    .where((eb) =>
-      eb.or([
-        eb.and({
-          from_currency: fromCurrency,
-          to_currency: toCurrency,
-        }),
-        eb.and({
-          from_currency: toCurrency,
-          to_currency: fromCurrency,
-        }),
-      ]),
-    )
-    .where('date', '<=', date)
-    .orderBy('date', 'desc')
-    .limit(1)
-    .executeTakeFirst();
-
-  if (!result) {
+  const rate = await loadExchangeRate({ fromCurrency, toCurrency, date });
+  if (rate === undefined) {
     throw new Error(
       `No exchange rate found for ${fromCurrency}/${toCurrency} on or before ${date.toISOString()}`,
     );
   }
 
-  // If we found the rate in reverse, return the reciprocal
-  const rate = Number(result.rate);
-  return result.from_currency === fromCurrency ? rate : 1 / rate;
+  return rate;
 }
 
 /**

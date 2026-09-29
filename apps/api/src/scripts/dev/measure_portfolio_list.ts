@@ -21,8 +21,8 @@
  *   --rows F   write every row's invested / retained / realised / value / MOIC
  *              to F, so a change can be proved to move no number
  */
-import { writeFileSync } from 'fs';
-import { gzipSync } from 'zlib';
+import { writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 
 import Pg from 'pg';
 
@@ -30,18 +30,32 @@ import Pg from 'pg';
 // asked — one tick per statement, whoever built it.
 let statements = 0;
 let counting = false;
-const byStatement = new Map<string, number>();
+const byStatement = new Map<string, { count: number; ms: number }>();
 const clientQuery = Pg.Client.prototype.query;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 Pg.Client.prototype.query = function (this: any, ...args: any[]) {
-  if (counting) {
-    statements += 1;
-    const text: string = typeof args[0] === 'string' ? args[0] : (args[0]?.text ?? '?');
-    const signature = text.replace(/\s+/g, ' ').slice(0, 110);
-    byStatement.set(signature, (byStatement.get(signature) ?? 0) + 1);
+  if (!counting) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (clientQuery as any).apply(this, args);
   }
+
+  statements += 1;
+  const text: string = typeof args[0] === 'string' ? args[0] : (args[0]?.text ?? '?');
+  const signature = text.replace(/\s+/g, ' ').slice(0, 110);
+  const tally = byStatement.get(signature) ?? { count: 0, ms: 0 };
+  tally.count += 1;
+  byStatement.set(signature, tally);
+
+  const startedAt = process.hrtime.bigint();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (clientQuery as any).apply(this, args);
+  const running = (clientQuery as any).apply(this, args);
+  if (running && typeof running.then === 'function') {
+    const done = () => {
+      tally.ms += Number(process.hrtime.bigint() - startedAt) / 1e6;
+    };
+    running.then(done, done);
+  }
+  return running;
 };
 
 import { runInContext } from '../../services/context/utils';
@@ -143,9 +157,12 @@ async function measureResolver(rowsOut: string | undefined) {
       }
 
       const breakdown = Array.from(byStatement.entries())
-        .sort((a, b) => b[1] - a[1])
+        .sort((a, b) => b[1].ms - a[1].ms)
         .slice(0, 12)
-        .map(([signature, count]) => `${String(count).padStart(5)}  ${signature}`);
+        .map(
+          ([signature, tally]) =>
+            `${String(tally.count).padStart(5)}x ${String(Math.round(tally.ms)).padStart(6)}ms  ${signature}`,
+        );
 
       return {
         rows: items.length,
