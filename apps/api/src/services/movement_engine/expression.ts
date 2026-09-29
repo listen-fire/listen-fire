@@ -156,6 +156,7 @@ import {
   type SummarisedOrigin,
 } from './provenance';
 import { MovementEngineError, type MovementEngineErrorCode } from './errors';
+import { neverAsAny } from '../../lib/utils/types';
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 // The error type lives in the dependency-free `./errors` module (so the
@@ -397,17 +398,20 @@ export type NodeEdge =
   | { kind: 'deferred'; walk: DeferredWalk };
 
 /**
- * The nested nodes a declared landing carries, as a tree — `{ founder: {
- * profile: {} } }` for a declaration that nests twice.
+ * What a declared landing carries, as a tree — its own field names and the
+ * nested nodes under it, each with its own.
  *
  * A node declaration IS a tree, so a landing written into one of its edges is a
  * whole node of that shape: it carries the declaration's nested nodes as empty
  * appendable edges, and each of those carries its own. Nothing here is a type —
- * the landing type is a checker-side fact — only the NAMES the run has to mint
- * an edge for, so a `link` has somewhere to append.
+ * the landing type is a checker-side fact — only the NAMES the run needs: the
+ * edges to mint, so a `link` has somewhere to append, and the fields in
+ * declaration order, which is the order the landing's dot plane reads in
+ * whichever order writes happened to fill it.
  */
 export interface LocalLandingShape {
-  [edge: string]: LocalLandingShape;
+  fields: string[];
+  edges: { [edge: string]: LocalLandingShape };
 }
 
 /**
@@ -547,6 +551,13 @@ export type Binding =
   | {
       kind: 'nodePosition';
       fields: Record<string, unknown>;
+      /** The dot plane's names in DECLARATION order — the literal's entries as
+       *  written, or the declared node's fields for a landing the run built on
+       *  a declared edge. It names every field the record declares, present or
+       *  not, and it is what a whole-record read (`recordFields`) walks: a
+       *  field map's own key order is neither (a merge appends, and a park
+       *  round-trips through jsonb, which reorders keys). */
+      fieldOrder: string[];
       fieldProvenance: Record<string, Provenance>;
       /** The arrow plane: one entry per edge the literal declared, LANDED
        *  (synthesised literals, or a walk already run) or DEFERRED (a `lazy`
@@ -1516,7 +1527,13 @@ export async function evalMovementExpr(
       const stdlib = stdlibFunctionById(expr.fn);
       if (stdlib) {
         const stdlibArgs: MovementEvalResult[] = [];
-        for (const a of expr.args) stdlibArgs.push(await evalMovementExpr(a, ctx));
+        for (const [index, a] of expr.args.entries()) {
+          stdlibArgs.push(
+            index === stdlib.recordArg?.index
+              ? await evalRecordArgument(a, ctx)
+              : await evalMovementExpr(a, ctx),
+          );
+        }
         return {
           value: applyStdlib(stdlib, stdlibArgs.map((a) => a.value), pinnedNow(ctx)),
           provenance: transformed(unionProvenance(stdlibArgs.map((a) => a.provenance))),
@@ -3599,6 +3616,89 @@ function readEmissionField(emission: ExtractEmission, field: string): MovementEv
     value: emission.fields[field] ?? null,
     provenance: origin ? fromOrigin(origin) : NO_PROVENANCE,
   };
+}
+
+/**
+ * A stdlib argument declared `recordArg` (`TEXT.PAIRS`'s first), evaluated as
+ * the RECORD it names rather than as a value. A dict literal is already its
+ * fields; a record reached by a walk or held in a name (a landing, an extracted
+ * node, a `FIRST(…)` answer, a write handle) is a binding, and a pure function
+ * over keys would otherwise enumerate the engine's own internals.
+ */
+async function evalRecordArgument(
+  expr: Expression,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
+  const result = await evalValueMember(expr, ctx);
+  const record = bindingOf(result.value);
+  if (record === undefined) return result;
+  return { value: recordFields(record), provenance: result.provenance };
+}
+
+/**
+ * A record's whole dot plane as a plain field map, keys in DECLARATION order —
+ * the one dereference any function taking a whole record reads through. Every
+ * declared field is a key (absent reads null, as a field read does); nested
+ * nodes and edges live on the arrow plane and are not here at all.
+ *
+ * Declaration order is what each kind holds: an extracted node's exported
+ * fields; a synthesised node's `fieldOrder`; a shape position's written body;
+ * a write handle's written fields, then what the system handed back. A kind
+ * with no field list in hand refuses, named, rather than rendering nothing.
+ */
+export function recordFields(binding: Binding): Record<string, unknown> {
+  switch (binding.kind) {
+    case 'nodePosition':
+      return Object.fromEntries(binding.fieldOrder.map((f) => [f, binding.fields[f] ?? null]));
+    case 'shapePosition':
+      return { ...binding.fields };
+    case 'extractPosition':
+    case 'extractRoot':
+      return { ...binding.emission.fields };
+    case 'handle':
+      return {
+        ...binding.handle.writtenValues,
+        ...omitKeys(binding.handle.resultData, binding.handle.writtenValues),
+      };
+    case 'resource':
+      return { ...((binding.resource.data as Record<string, unknown> | undefined) ?? {}) };
+    case 'callback':
+      return { id: readCallbackField(binding, 'id'), url: readCallbackField(binding, 'url') };
+    case 'value': {
+      const held = bindingOf(binding.value);
+      if (held !== undefined) return recordFields(held);
+      if (isDictValue(binding.value)) return { ...binding.value };
+      throw unsupported(`reading every field of ${describeHeldValue(binding.value)}`);
+    }
+    case 'sourcePosition':
+    case 'event':
+      // A system's record: its fields are read one by one through the adapter,
+      // and nothing here says which ones it has.
+      throw unsupported(
+        `reading every field of ${describeBinding[binding.kind]}`,
+        'a system record has no field list in hand — build a dict of the fields you want, `{ name: r.name, … }`',
+      );
+    case 'positions':
+    case 'blockMeta':
+    case 'lazyWalk':
+    case 'tuple':
+    case 'instance':
+    case 'closure':
+    case 'shape':
+    case 'movement':
+    case 'plugin':
+    case 'opaque':
+      throw unsupported(`reading every field of ${describeBinding[binding.kind]}`);
+    default:
+      return neverAsAny(binding);
+  }
+}
+
+function omitKeys(
+  from: Record<string, unknown> | undefined,
+  keys: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(from ?? {}).filter(([k]) => !(k in keys)));
 }
 
 /** A field read against one accumulated meta-node binding. */

@@ -947,16 +947,19 @@ function spreadFields(spread: WriteSpread): readonly string[] {
 
 /**
  * What a landing on a `<Entry>`-typed edge starts with — the declaration's
- * nested nodes, as a tree.
+ * fields and nested nodes, as a tree.
  *
  * The nesting IS the edge (`shapeToSchema` composes a child's key the same
  * way), so this is that same fact in the interpreter's currency: the names an
- * appendable edge has to exist under for a `link` to have somewhere to append.
- * Nothing but a node DECLARATION says it, so anything else resolves to nothing.
+ * appendable edge has to exist under for a `link` to have somewhere to append,
+ * and the field names in the order the declaration wrote them. Nothing but a
+ * node DECLARATION says it, so anything else resolves to nothing.
  */
-function declaredLandingShape(root: ShapeNode): LocalLandingShape | undefined {
-  const shape = nestedEdgeNames(root);
-  return Object.keys(shape).length > 0 ? shape : undefined;
+function declaredLandingShape(node: ShapeNode): LocalLandingShape {
+  return {
+    fields: node.fields.map((f) => f.name),
+    edges: Object.fromEntries(node.children.map((child) => [child.name, declaredLandingShape(child)])),
+  };
 }
 
 type ShapeBinding = Extract<Binding, { kind: 'shape' }>;
@@ -973,10 +976,6 @@ function libraryShape(file: LinkedFile, name: string): ShapeBinding | undefined 
   return imported?.kind === 'shape'
     ? { kind: 'shape', declaration: imported.declaration, library: imported.file }
     : undefined;
-}
-
-function nestedEdgeNames(node: ShapeNode): LocalLandingShape {
-  return Object.fromEntries(node.children.map((child) => [child.name, nestedEdgeNames(child)]));
 }
 
 /** What a `link` may append to a run-local node's edge: the binding kinds that
@@ -6984,11 +6983,13 @@ class Interpreter {
    */
   private async synthesiseNode(literal: NodeLiteral, env: Environment): Promise<Binding> {
     const fields: Record<string, unknown> = {};
+    const fieldOrder: string[] = [];
     const fieldProvenance: Record<string, Provenance> = {};
     const edges: Record<string, NodeEdge> = {};
     for (const entry of literal.entries) {
       switch (entry.kind) {
         case 'value': {
+          fieldOrder.push(entry.name);
           const { value, provenance } = await this.evaluateSlot(entry.value, { env });
           // An entry that evaluated to nothing is ABSENT rather than present-
           // and-empty — the same rule a shape write applies, so a callee
@@ -7040,7 +7041,7 @@ class Interpreter {
         }
       }
     }
-    return { kind: 'nodePosition', fields, fieldProvenance, edges };
+    return { kind: 'nodePosition', fields, fieldOrder, fieldProvenance, edges };
   }
 
   /**
@@ -9235,7 +9236,13 @@ function pluginCallBinding(
       const landings = (result.records ?? []).map((record): Binding => {
         const fieldProvenance: Record<string, Provenance> = {};
         for (const name of Object.keys(record)) fieldProvenance[name] = provenance;
-        return { kind: 'nodePosition', fields: { ...record }, fieldProvenance, edges: {} };
+        return {
+          kind: 'nodePosition',
+          fields: { ...record },
+          fieldOrder: Object.keys(record),
+          fieldProvenance,
+          edges: {},
+        };
       });
       return { binding: { kind: 'positions', landings }, handedBack: landings.length > 0 };
     }
@@ -9258,7 +9265,7 @@ function recordCallBinding(
   Object.assign(fields, result.data ?? {});
   for (const name of Object.keys(fields)) fieldProvenance[name] = provenance;
   return {
-    binding: { kind: 'nodePosition', fields, fieldProvenance, edges: {} },
+    binding: { kind: 'nodePosition', fields, fieldOrder: Object.keys(fields), fieldProvenance, edges: {} },
     handedBack: Object.keys(fields).length > 0,
   };
 }

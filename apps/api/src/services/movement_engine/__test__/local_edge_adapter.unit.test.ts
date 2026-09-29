@@ -22,7 +22,7 @@ import {
 const MUTATION_CONTEXT = { source: { adapterType: 'local' } } as never;
 
 function landing(fields: Record<string, unknown>): Binding {
-  return { kind: 'nodePosition', fields, fieldProvenance: {}, edges: {} };
+  return { kind: 'nodePosition', fields, fieldOrder: Object.keys(fields), fieldProvenance: {}, edges: {} };
 }
 
 function store(...initial: Binding[]) {

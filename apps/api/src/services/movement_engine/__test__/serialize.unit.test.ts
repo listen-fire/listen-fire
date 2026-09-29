@@ -292,6 +292,7 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       const binding: Binding = {
         kind: 'nodePosition',
         fields: { title: 'Acme' },
+        fieldOrder: ['title'],
         fieldProvenance: {},
         edges: {
           people: { kind: 'landed', landings: [{ kind: 'value', value: 'ada' }] },
@@ -305,6 +306,7 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       const binding: Binding = {
         kind: 'nodePosition',
         fields: {},
+        fieldOrder: [],
         fieldProvenance: {},
         edges: {
           companies: {
@@ -328,6 +330,46 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       ]);
     });
 
+    it("a node's field order survives the park's jsonb, which reorders keys", async () => {
+      const descriptor = serializeBinding({
+        kind: 'nodePosition',
+        fields: { name: 'Acme', raised: 5 },
+        fieldOrder: ['name', 'stage', 'raised'],
+        fieldProvenance: {},
+        edges: {},
+      });
+      if (descriptor.kind !== 'nodePosition') throw new Error('unreachable');
+      // What jsonb hands back: the same keys, shortest first.
+      const out = await rehydrateBinding(
+        { ...descriptor, fields: { raised: 5, name: 'Acme' } },
+        makeCtx(),
+      );
+      if (out.kind !== 'nodePosition') throw new Error('unreachable');
+      expect(out.fieldOrder).toEqual(['name', 'stage', 'raised']);
+      expect(Object.keys(out.fields)).toEqual(['name', 'raised']);
+    });
+
+    it('a park written before field order was kept still mints nested edges', async () => {
+      const out = await rehydrateBinding(
+        {
+          kind: 'nodePosition',
+          fields: {},
+          fieldProvenance: {},
+          edges: {
+            entries: { kind: 'landed', landings: [], landingShape: { founder: { profile: {} } } },
+          },
+        },
+        makeCtx(),
+      );
+      if (out.kind !== 'nodePosition') throw new Error('unreachable');
+      expect(out.fieldOrder).toEqual([]);
+      const edge = out.edges.entries;
+      expect(edge?.kind === 'landed' && edge.landingShape).toEqual({
+        fields: [],
+        edges: { founder: { fields: [], edges: { profile: { fields: [], edges: {} } } } },
+      });
+    });
+
     it('a DEFERRED edge serialises the WALK, never landings', async () => {
       const walk: DeferredWalk = {
         head: { root: { kind: 'name', name: 'msg' }, hopsRaw: '-[a:files]->', span: SPAN },
@@ -336,6 +378,7 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       const binding: Binding = {
         kind: 'nodePosition',
         fields: {},
+        fieldOrder: [],
         fieldProvenance: {},
         edges: { files: { kind: 'deferred', walk } },
       };

@@ -88,6 +88,9 @@ export interface FileRefDescriptor {
 export interface ExtractEmissionDescriptor {
   nodeName: string;
   fields: Record<string, unknown>;
+  /** `fields`' keys in declaration order — the parked state is jsonb, which
+   *  reorders an object's keys. Absent on a park written before it was kept. */
+  fieldOrder?: string[];
   provenance: ExtractEmission['provenance'];
   origin?: ExtractEmission['origin'];
   /** Layer-5 source resources — `fileRef` closures stripped to descriptors
@@ -154,6 +157,9 @@ export type BindingDescriptor =
   | {
       kind: 'nodePosition';
       fields: Record<string, unknown>;
+      /** Absent on a park written before the order was kept — the stored
+       *  map's own keys stand in, in whatever order jsonb returned them. */
+      fieldOrder?: string[];
       fieldProvenance: Extract<Binding, { kind: 'nodePosition' }>['fieldProvenance'];
       edges: Record<string, NodeEdgeDescriptor>;
     }
@@ -178,8 +184,47 @@ export type NodeEdgeDescriptor =
    *  mints its landing's edges from — dropping it would make the same write
    *  build a landing with no nested edges, which a later `link` could not
    *  append to. */
-  | { kind: 'landed'; landings: BindingDescriptor[]; landingShape?: LocalLandingShape }
+  | {
+      kind: 'landed';
+      landings: BindingDescriptor[];
+      landing?: LocalLandingShape;
+      /** The earlier spelling — nested edge names only, `{ founder: {} }` —
+       *  which a park written before field order was kept still carries. */
+      landingShape?: LegacyLandingShape;
+    }
   | { kind: 'deferred'; walk: DeferredWalkDescriptor };
+
+interface LegacyLandingShape {
+  [edge: string]: LegacyLandingShape;
+}
+
+function fromLegacyLandingShape(legacy: LegacyLandingShape): LocalLandingShape {
+  return {
+    fields: [],
+    edges: Object.fromEntries(
+      Object.entries(legacy).map(([edge, nested]) => [edge, fromLegacyLandingShape(nested)]),
+    ),
+  };
+}
+
+function landingShapeOf(
+  edge: Extract<NodeEdgeDescriptor, { kind: 'landed' }>,
+): { landingShape?: LocalLandingShape } {
+  if (edge.landing !== undefined) return { landingShape: edge.landing };
+  return edge.landingShape !== undefined
+    ? { landingShape: fromLegacyLandingShape(edge.landingShape) }
+    : {};
+}
+
+/** `fields` rebuilt in `order` — the parked state is jsonb, whose objects come
+ *  back with their keys reordered. */
+function inOrder(fields: Record<string, unknown>, order: readonly string[] | undefined): Record<string, unknown> {
+  if (order === undefined) return fields;
+  const ordered: Record<string, unknown> = {};
+  for (const key of order) if (key in fields) ordered[key] = fields[key];
+  for (const [key, value] of Object.entries(fields)) if (!(key in ordered)) ordered[key] = value;
+  return ordered;
+}
 
 /**
  * A stored walk, serialised: the traversal's own text plus the scope it
@@ -301,6 +346,7 @@ function serializeEmission(emission: ExtractEmission): ExtractEmissionDescriptor
   return {
     nodeName: emission.nodeName,
     fields: emission.fields,
+    fieldOrder: Object.keys(emission.fields),
     provenance: emission.provenance,
     ...(emission.origin !== undefined ? { origin: emission.origin } : {}),
     resources: emission.resources.map(serializeResource),
@@ -372,13 +418,14 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
             ? {
                 kind: 'landed',
                 landings: edge.landings.map(serializeBinding),
-                ...(edge.landingShape !== undefined ? { landingShape: edge.landingShape } : {}),
+                ...(edge.landingShape !== undefined ? { landing: edge.landingShape } : {}),
               }
             : { kind: 'deferred', walk: serializeDeferredWalk(edge.walk) };
       }
       return {
         kind: 'nodePosition',
         fields: binding.fields,
+        fieldOrder: binding.fieldOrder,
         fieldProvenance: binding.fieldProvenance,
         edges,
       };
@@ -466,7 +513,7 @@ function rehydrateEmission(
   }
   return {
     nodeName: descriptor.nodeName,
-    fields: descriptor.fields,
+    fields: inOrder(descriptor.fields, descriptor.fieldOrder),
     provenance: descriptor.provenance,
     ...(descriptor.origin !== undefined ? { origin: descriptor.origin } : {}),
     resources: (descriptor.resources ?? []).map((r) => rehydrateResource(r, ctx)),
@@ -563,13 +610,14 @@ export async function rehydrateBinding(
             ? {
                 kind: 'landed',
                 landings: await Promise.all(edge.landings.map((l) => rehydrateBinding(l, ctx))),
-                ...(edge.landingShape !== undefined ? { landingShape: edge.landingShape } : {}),
+                ...landingShapeOf(edge),
               }
             : { kind: 'deferred', walk: await rehydrateDeferredWalk(edge.walk, ctx) };
       }
       return {
         kind: 'nodePosition',
-        fields: descriptor.fields,
+        fields: inOrder(descriptor.fields, descriptor.fieldOrder),
+        fieldOrder: descriptor.fieldOrder ?? Object.keys(descriptor.fields),
         fieldProvenance: descriptor.fieldProvenance,
         edges,
       };

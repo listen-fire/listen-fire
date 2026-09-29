@@ -100,14 +100,17 @@ type LocalLanding = Extract<Binding, { kind: 'nodePosition' }>;
  */
 function landingEdges(shape: LocalLandingShape | undefined): Record<string, NodeEdge> {
   const edges: Record<string, NodeEdge> = {};
-  for (const [name, nested] of Object.entries(shape ?? {})) {
-    edges[name] = {
-      kind: 'landed',
-      landings: [],
-      ...(Object.keys(nested).length > 0 ? { landingShape: nested } : {}),
-    };
+  for (const [name, nested] of Object.entries(shape?.edges ?? {})) {
+    edges[name] = { kind: 'landed', landings: [], landingShape: nested };
   }
   return edges;
+}
+
+/** A landing's field names in declaration order: what its declaration names,
+ *  then anything a write carried beyond it (an ADDRESS-typed edge declares
+ *  nothing, so there the writes' own order is the only order there is). */
+function landingFieldOrder(declared: readonly string[], written: Record<string, unknown>): string[] {
+  return [...declared, ...Object.keys(written).filter((f) => !declared.includes(f))];
 }
 
 /** Trim, case fold, collapse whitespace. A multi-valued field folds to its
@@ -290,6 +293,7 @@ export function localEdgeAdapter(input: {
       const landing: LocalLanding = {
         kind: 'nodePosition',
         fields: { ...write.fields },
+        fieldOrder: landingFieldOrder(input.edge.landingShape?.fields ?? [], write.fields),
         fieldProvenance: {},
         edges: landingEdges(input.edge.landingShape),
       };
@@ -304,6 +308,7 @@ export function localEdgeAdapter(input: {
       // holds, so a merge is visible to the whole run without anything being
       // re-read or re-bound.
       Object.assign(landing.fields, write.fields);
+      landing.fieldOrder = landingFieldOrder(landing.fieldOrder, write.fields);
       return {
         ...refFor(Number(write.externalId), landing, write.recordType),
         association: unsupportedAssociation(write),

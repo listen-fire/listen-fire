@@ -444,7 +444,7 @@ slug = TEXT.SLUG("Acme Corp Ltd.")   # "acme-corp-ltd"
 
 ### TEXT.PAIRS
 
-\`TEXT.PAIRS(record, separator?)\` → \`text\`, always present — a record or a dict rendered as \`key=value\` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by \`separator\` (default \`" | "\`). Each value renders exactly as \`\${…}\` interpolation would: absent is empty, a boolean is \`true\`/\`false\`, a number is \`TOSTRING\`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on \`<json>\`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
+\`TEXT.PAIRS(record, separator?)\` → \`text\`, always present — a record or a dict rendered as \`key=value\` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by \`separator\` (default \`" | "\`). It takes a record from a walk or a name — \`TEXT.PAIRS(e)\` inside \`deduped-[e:entries]-> { … }\`, an extracted node, a \`FIRST(…)\` answer — as well as a literal. Each value renders exactly as \`\${…}\` interpolation would: absent is empty, a boolean is \`true\`/\`false\`, a number is \`TOSTRING\`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on \`<json>\`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
 
 Project A's composer posts one Slack line per candidate row:
 
