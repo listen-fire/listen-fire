@@ -594,6 +594,8 @@ export async function evalExpr(
           return bare(left * right);
         case '/':
           return bare(right === 0 ? null : left / right);
+        case '%':
+          return bare(right === 0 ? null : left % right);
       }
       // exhaustive
       return bare(null);

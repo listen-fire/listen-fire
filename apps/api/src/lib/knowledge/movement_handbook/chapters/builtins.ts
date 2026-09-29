@@ -297,6 +297,14 @@ line = IF EXISTS(domain) THEN "\${domain}" ELSE "" END
 delta = -(after - before)
 \`\`\`
 
+### remainder
+
+\`a % b\` → \`number\` — same precedence as \`*\` and \`/\`, left-associative. TypeScript semantics: the sign follows the dividend (\`-7 % 20\` is \`-7\`, not \`13\`). Both operands must already be numbers, the same rule every arithmetic operator has; division by zero answers \`null\`.
+
+\`\`\`
+leftover = amount % batch_size
+\`\`\`
+
 ### FILE
 
 \`FILE(content, "pdf" | "text")\` → a \`file\` value, always present — turns a composed string into a file for a file-typed field. \`type\` is a literal; the content renders as plain text, line breaks preserved.

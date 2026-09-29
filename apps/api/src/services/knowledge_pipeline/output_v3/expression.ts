@@ -85,7 +85,7 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
     // Operations
     z.object({
       type: z.literal('arithmetic'),
-      op: z.enum(['+', '-', '*', '/']),
+      op: z.enum(['+', '-', '*', '/', '%']),
       left: _expressionSchema,
       right: _expressionSchema,
     }),

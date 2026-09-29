@@ -11,7 +11,7 @@
  *   not_expr   = ('NOT' | '!') not_expr | compare
  *   compare    = additive (comp_op additive)?
  *   additive   = mult (('+' | '-') mult)*
- *   mult       = unary (('*' | '/') unary)*
+ *   mult       = unary (('*' | '/' | '%') unary)*
  *   unary      = '-' unary | primary
  *   primary    = '(' expr ')' | if_expr | fn_call | literal | identifier
  *   if_expr    = 'IF' expr 'THEN' expr ('ELSE' 'IF' expr 'THEN' expr)* 'ELSE' expr 'END'
@@ -146,7 +146,7 @@ const OP_TEXT: Record<FilterOperator, string> = {
   exists: 'exists', in: 'in', within: 'WITHIN',
 };
 
-const MATH_TEXT: Record<string, string> = { '+': '+', '-': '-', '*': '*', '/': '/' };
+const MATH_TEXT: Record<string, string> = { '+': '+', '-': '-', '*': '*', '/': '/', '%': '%' };
 
 const AGG_NAMES: Record<string, string> = {
   first: 'FIRST', last: 'LAST', only: 'ONLY', count: 'COUNT', sum: 'SUM', avg: 'AVG',
@@ -283,7 +283,7 @@ export function serialize(
       return parentPrec > prec ? `(${inner})` : inner;
     }
     case 'arithmetic': {
-      const prec = expr.op === '*' || expr.op === '/' ? 5 : 4;
+      const prec = expr.op === '*' || expr.op === '/' || expr.op === '%' ? 5 : 4;
       const inner = `${ser(expr.left, prec)} ${MATH_TEXT[expr.op]} ${ser(expr.right, prec + 1)}`;
       return parentPrec > prec ? `(${inner})` : inner;
     }
@@ -1304,7 +1304,7 @@ function tokenize(input: string): Token[] {
     }
 
     // Single-char operators and parens
-    if ('=><+-*/'.includes(input[i])) {
+    if ('=><+-*/%'.includes(input[i])) {
       tokens.push({ type: 'op', value: input[i], pos, end: i + 1 }); i++; continue;
     }
     if ('(),'.includes(input[i])) {
@@ -1364,7 +1364,6 @@ const UNRECOGNISED_HINTS: Record<string, string> = {
   '?': 'write IF … THEN … ELSE … END (there is no ? : conditional)',
   ';': 'an expression takes no ; separator',
   '\\': 'a backslash escapes only inside a quoted string',
-  '%': 'there is no % operator',
   '\u2013': "write the ASCII minus '-' (this is an en dash)",
   '\u2014': "write the ASCII minus '-' (this is an em dash)",
   '\u2212': "write the ASCII minus '-' (this is a typographic minus sign)",
@@ -1626,8 +1625,8 @@ class Parser {
     let left = this.parseUnary();
     while (true) {
       const t = this.peek();
-      if (t.type === 'op' && (t.value === '*' || t.value === '/')) {
-        const op = this.advance().value as '*' | '/';
+      if (t.type === 'op' && (t.value === '*' || t.value === '/' || t.value === '%')) {
+        const op = this.advance().value as '*' | '/' | '%';
         const right = this.parseUnary();
         left = { type: 'arithmetic', op, left, right };
       } else {
@@ -2712,6 +2711,7 @@ const NUMERIC_OPS: Completion[] = [
   { label: '-', insert: '-', kind: 'operator' },
   { label: '*', insert: '*', kind: 'operator' },
   { label: '/', insert: '/', kind: 'operator' },
+  { label: '%', insert: '%', kind: 'operator' },
 ];
 const BOOLEAN_OPS: Completion[] = [
   { label: '=', insert: '=', kind: 'operator' },
@@ -2731,6 +2731,7 @@ const ALL_OPS: Completion[] = [
   { label: '-', insert: '-', kind: 'operator' },
   { label: '*', insert: '*', kind: 'operator' },
   { label: '/', insert: '/', kind: 'operator' },
+  { label: '%', insert: '%', kind: 'operator' },
 ];
 const LOGICAL_OPS: Completion[] = [
   { label: 'AND', insert: 'AND', kind: 'keyword' },

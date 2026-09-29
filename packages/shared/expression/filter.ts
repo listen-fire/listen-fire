@@ -327,6 +327,8 @@ export function evaluatePredicate(expr: Expression, scope: FilterScope): unknown
           return l * r;
         case '/':
           return r === 0 ? null : l / r;
+        case '%':
+          return r === 0 ? null : l % r;
       }
       return null;
     }
