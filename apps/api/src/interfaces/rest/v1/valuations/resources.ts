@@ -16,6 +16,7 @@ import InvestmentRoundType from '../../../../generated/kysely/valuations/Investm
 
 import { paginationQuery } from './shared';
 import { buildCrudRouter } from './crud';
+import { mintUniqueSlug } from '../../../../lib/valuations/slug';
 import { type Router } from 'express';
 
 // ── Legal Entities ──
@@ -132,6 +133,14 @@ const legalEntitiesRouter: Router = buildCrudRouter({
     underlying_company_id: z.string().uuid().nullable().optional(),
     acquired_by_legal_entity_id: z.string().uuid().nullable().optional(),
   }),
+  // A company with no slug is unreachable in the app — `/portfolio/c/[slug]`
+  // is how it is addressed. `slug` above is optional, so mint one for every
+  // caller that does not supply it rather than leaving dead rows behind.
+  beforeCreate: async (values, qb) => {
+    if (typeof values.slug === 'string' && values.slug !== '') return {};
+    const slug = await mintUniqueSlug(qb, values.name as string);
+    return slug === undefined ? {} : { slug };
+  },
 });
 
 // ── Investments ──
