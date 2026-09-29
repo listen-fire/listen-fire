@@ -159,17 +159,18 @@ class Scenario {
    *  explicit causal link a dividend carries when the source recorded which
    *  holding it was paid on. */
   async transaction({
+    id = randomUUID(),
     date,
     investmentId = null,
     dueToRightsFromAssetId = null,
     transfers,
   }: {
+    id?: string;
     date: string;
     investmentId?: string | null;
     dueToRightsFromAssetId?: string | null;
     transfers: { assetId: string; num: number; from: string; to: string }[];
   }): Promise<string> {
-    const id = randomUUID();
     await getValuationsQb(['transaction'])
       .insertInto('transaction')
       .values(
@@ -803,5 +804,55 @@ describe('lots re-aggregate to the holdings the walk produced', () => {
     });
 
     await expectParity(investment);
+  });
+});
+
+describe('walk order', () => {
+  let scenario: Scenario;
+  afterEach(async () => {
+    await scenario.cleanup();
+  });
+
+  // Same-day rows must walk in one fixed order: a payout split depends on what
+  // is held at the instant the cash row is walked, so an order left to the
+  // query plan lets the same company value differently depending on what else
+  // was asked alongside it.
+  it('walks same-day transactions by transaction id, whatever order they were recorded in', async () => {
+    scenario = await Scenario.create();
+    const usd = await scenario.usd();
+    const companyA = await scenario.entity({ name: 'Company A' });
+    const aShares = await scenario.asset({ issuerId: companyA, name: 'A Shares', type: AssetType.EQUITY });
+    const investment = await scenario.investment({ investeeId: companyA });
+
+    await scenario.transaction({
+      date: '2024-01-01',
+      investmentId: investment,
+      transfers: [
+        { assetId: usd, num: 50000, from: scenario.fundId, to: companyA },
+        { assetId: aShares, num: 20, from: companyA, to: scenario.fundId },
+      ],
+    });
+
+    const [lowId, highId] = [randomUUID(), randomUUID()].sort();
+    // Recorded high id first, so insertion order disagrees with id order.
+    await scenario.transaction({
+      id: highId,
+      date: '2024-11-02',
+      transfers: [{ assetId: usd, num: 1000, from: companyA, to: scenario.fundId }],
+    });
+    await scenario.transaction({
+      id: lowId,
+      date: '2024-11-02',
+      transfers: [{ assetId: aShares, num: 20, from: scenario.fundId, to: companyA }],
+    });
+
+    const { classifiedTransactionFlows } = await withTeamContext(scenario.teamId, () =>
+      rollUpHoldings({ investmentIds: [investment], asOfDate: AS_OF_DATE }),
+    );
+    const sameDay = classifiedTransactionFlows
+      .filter((flow) => flow.date.toISOString().startsWith('2024-11-02'))
+      .map((flow) => flow.transactionId);
+
+    expect(sameDay).toEqual([lowId, highId]);
   });
 });
