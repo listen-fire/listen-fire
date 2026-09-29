@@ -284,7 +284,10 @@ const loadExchangeRate = requestBatchLoader<
   fetch: async (batch) => {
     const froms = batch.map((r) => r.fromCurrency as string);
     const tos = batch.map((r) => r.toCurrency as string);
-    const dates = batch.map((r) => r.date.toISOString());
+    // The dates go across as Dates, not as ISO strings: a rate is filed under a
+    // calendar day, and west of Greenwich a local midnight read as UTC is the
+    // day before — which silently values every flow at the previous day's rate.
+    const dates = batch.map((r) => r.date);
 
     // One arm of the lateral per asked-for rate, each the same "latest on or
     // before" the pair would have been asked on its own. The table holds a rate
