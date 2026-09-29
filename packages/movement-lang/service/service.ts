@@ -20,7 +20,7 @@ import {
 } from '@listen-fire/shared/expression/formula';
 import type { Loc, Span } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
-import type { LanguageVersion } from '../language_version';
+import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import { scanName } from '../parser/scan';
 import {
   checkProgram,
@@ -87,6 +87,8 @@ export function getMovementDiagnostics(
   options?: {
     /** The saved movement's pin. Absent ⇒ the current version. */
     languageVersion?: LanguageVersion;
+    /** See `CheckOptions.upgradingFrom`. */
+    upgradingFrom?: LanguageVersion;
   },
 ): MovementDiagnostic[] {
   const lineStarts = lineStartsOf(source);
@@ -115,6 +117,7 @@ export function getMovementDiagnostics(
     diagnostics = checkProgram(program, catalog, {
       ...(resolveFile ? { resolveFile } : {}),
       ...(languageVersion !== undefined ? { languageVersion } : {}),
+      ...(options?.upgradingFrom !== undefined ? { upgradingFrom: options.upgradingFrom } : {}),
     });
   } catch (e) {
     if (!(e instanceof MovementParseError)) throw e;
@@ -941,7 +944,9 @@ function chainPositionAt(
   try {
     const parsed = parseMovementExpression(`${chain[1]}${chain[2]}.\`__probe__\``);
     if (parsed.type !== 'traverse') return undefined;
+    // A completion walks hops only; nothing a version changes is read here.
     const typing = new ExpressionTyping({
+      languageVersion: CURRENT_LANGUAGE_VERSION,
       resolveRoot: name => {
         const s = scope.get(name);
         return s ? positionTypeOf(s) : undefined;

@@ -8,7 +8,7 @@
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
 // for the expression bridge (existing formula grammar).
 
-import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
+import { before, CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import {
   BindClause,
   BlockStatement,
@@ -235,7 +235,7 @@ class Parser {
   constructor(
     private readonly src: string,
     /** Read by `since`/`before` conditionals where the grammar differs by
-     *  version; none do yet. */
+     *  version. */
     readonly languageVersion: LanguageVersion,
   ) {
     this.lineStarts = [0];
@@ -2264,6 +2264,14 @@ class Parser {
     const targetSpan = this.spanFrom(fromStart);
     const bodyStart = this.pos;
     const { uniqueBy, fields } = this.parseMatchBody('link');
+    // Version 1's link body was identity criteria only: its fields ARE the
+    // identity, so a `unique by` there was refused.
+    if (before(this.languageVersion, 2) && uniqueBy.length > 0) {
+      throw new MovementParseError(
+        "A link body takes identity criteria only — the criteria ARE the identity, so 'unique by' doesn't belong here",
+        uniqueBy[0].span.start,
+      );
+    }
     const path: PathHead = { root: { kind: 'name', name: from }, hopsRaw, span: pathSpan };
     const impliedIdentity = uniqueBy.length === 0 && fields.length > 0;
     const match: MatchExpression = {

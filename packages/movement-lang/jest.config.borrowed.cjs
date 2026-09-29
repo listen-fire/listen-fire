@@ -12,6 +12,9 @@ const API_NODE_MODULES = path.resolve(__dirname, '../../apps/api/node_modules');
 module.exports = {
   rootDir: __dirname,
   testMatch: ['**/*.unit.test.ts'],
+  // Older language versions' corpora run under their own version, via
+  // jest.conformance.v<n>.cjs — never under the current one.
+  testPathIgnorePatterns: ['/node_modules/', '/__conformance__/'],
   testEnvironment: 'node',
   maxWorkers: 1,
   clearMocks: true,

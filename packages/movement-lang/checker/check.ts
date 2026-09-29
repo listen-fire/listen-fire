@@ -129,7 +129,9 @@ import {
   InstanceSchema,
   declaredTypeOf,
   parseFieldTypeName,
+  type PluginOutput,
   type PluginSpec,
+  pluginOutputUnder,
   type PositionSchema,
   SUPPRESS_SELF_KEY,
   surfaceNotEnumerated,
@@ -170,8 +172,12 @@ import {
 } from './effects';
 import { neverAsAny } from '../never';
 import {
+  before,
+  changedBetween,
   CURRENT_LANGUAGE_VERSION,
+  describeLanguageVersion,
   languageVersionDiagnostic,
+  since,
   type LanguageVersion,
 } from '../language_version';
 import { terminates } from './flow';
@@ -203,6 +209,7 @@ import {
   isMaybeAbsent,
   maybeAbsent,
   narrowPresent,
+  directFieldRead,
   narrowPresentNode,
   negativePresenceProofs,
   PositionTypeRef,
@@ -348,6 +355,19 @@ export const DiagnosticCodes = {
    *  no type; a call's output is bound to a name, and a name whose type nothing
    *  describes is silence every read downstream inherits. */
   PLUGIN_OUTPUT_UNDECLARED: 'MOV_PLUGIN_OUTPUT_UNDECLARED',
+  /** Warning, on a check for a move up (`CheckOptions.upgradingFrom`): a
+   *  plain call to a plugin whose output changed shape between the two
+   *  versions. A program written for the older shape may still validate
+   *  against the new one while meaning something else, so it is said rather
+   *  than left for a run to find out. */
+  PLUGIN_OUTPUT_CHANGED: 'MOV_PLUGIN_OUTPUT_CHANGED',
+  /** Warning, on a check for a move up across version 2 (which made an empty
+   *  identity key no key): a `unique by` field whose value is text that may
+   *  be `""` — a system's or a program's text, not an extracted one (whose ""
+   *  was absent before, and no key either way). The record it identifies
+   *  matches nothing when the value is empty, where version 1 matched "" like
+   *  any other value. */
+  UNIQUE_KEY_MAY_BE_BLANK: 'MOV_UNIQUE_KEY_MAY_BE_BLANK',
   /** The same field name declared twice in one extract stage — within a
    *  stage, `buildExtractGraph` keeps the last one and the other silently
    *  vanishes. A LATER stage redeclaring a field is the documented
@@ -919,6 +939,15 @@ export interface CheckOptions {
    * does not support is an error diagnostic; a deprecated one a warning.
    */
   languageVersion?: LanguageVersion;
+  /**
+   * The version the program is pinned to, when it is being checked for a
+   * move up to `languageVersion` (the deploy check, an explicit upgrade).
+   * Turns on the warnings for constructs whose meaning changed between the
+   * two and that the new version would otherwise accept in silence — so
+   * "clean for the move" means "behaves the same, or is refused". Absent ⇒
+   * an ordinary check, and no such warnings.
+   */
+  upgradingFrom?: LanguageVersion;
 }
 
 export function checkProgram(
@@ -949,6 +978,7 @@ export function checkProgramWithLink(
     options?.recordAnalysis === true ? { frames: [], writes: [], nodes: [] } : undefined;
   const checker = new Checker(catalog, {
     languageVersion,
+    ...(options?.upgradingFrom !== undefined ? { upgradingFrom: options.upgradingFrom } : {}),
     ...(link ? { linkContext: { link, checked: new Map() } } : {}),
     ...(recording ? { recording } : {}),
   });
@@ -2099,6 +2129,21 @@ const UNKNOWN_RETURN: ReturnShape = { returns: true };
  *  absent` rather than falling silent. */
 const MAP_SLOT_ABSENT: ReturnShape = { returns: true, fieldType: 'absent' };
 
+/** A plugin output's shape in words, for a diagnostic. */
+function describePluginOutput(output: PluginOutput): string {
+  const fields = (of: Record<string, SchemaFieldType>): string => Object.keys(of).map(f => `\`${f}\``).join(', ');
+  switch (output.kind) {
+    case 'value':
+      return `one ${describeFieldType(output.type)}`;
+    case 'record':
+      return `one record (${fields(output.fields)})`;
+    case 'records':
+      return `a list of records, one per thing it found (${fields(output.fields)})`;
+    default:
+      return neverAsAny(output);
+  }
+}
+
 /** Which plane a return sits on — `undefined` for a return whose value the
  *  checker could not type (unknown is not a plane). */
 function returnPlane(shape: ReturnShape): 'node' | 'scalar' | undefined {
@@ -2123,8 +2168,10 @@ interface LinkContext {
 
 interface CheckerOptions {
   /** The compile context's language version — what every `since`/`before`
-   *  conditional in the checker reads (none do yet). */
+   *  conditional in the checker reads. */
   languageVersion: LanguageVersion;
+  /** See `CheckOptions.upgradingFrom`. */
+  upgradingFrom?: LanguageVersion;
   linkContext?: LinkContext;
   /** The file being checked, when it is an imported library (its imports
    *  resolve through `file.imports` rather than `link.imports`). */
@@ -2168,6 +2215,13 @@ class Checker {
 
   private get languageVersion(): LanguageVersion {
     return this.options.languageVersion;
+  }
+
+  /** This check is for a move up across the change version `n` made — see
+   *  `CheckOptions.upgradingFrom`. */
+  private upgradeCrosses(n: LanguageVersion): boolean {
+    const from = this.options.upgradingFrom;
+    return from !== undefined && changedBetween(from, this.languageVersion, n);
   }
 
   /** Notes a scope the editor may resolve a cursor inside. Every `new Scope`
@@ -2329,6 +2383,7 @@ class Checker {
    *  re-reporting would duplicate every diagnostic. */
   private silentTyping(scope: Scope, span: Span): ExpressionTyping {
     return new ExpressionTyping({
+      languageVersion: this.languageVersion,
       resolveRoot: name => {
         const resolution = scope.resolve(name);
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
@@ -2370,6 +2425,7 @@ class Checker {
    *  path would claim something happened. */
   private reportingTyping(scope: Scope, span: Span): ExpressionTyping {
     return new ExpressionTyping({
+      languageVersion: this.languageVersion,
       resolveRoot: name => {
         const resolution = scope.resolve(name);
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
@@ -2390,6 +2446,7 @@ class Checker {
   /** A typed expression walker rooted at `scope`, reporting at `span`. */
   private slotTyping(scope: Scope, span: Span): ExpressionTyping {
     return new ExpressionTyping({
+      languageVersion: this.languageVersion,
       resolveRoot: name => {
         const resolution = scope.resolve(name);
         return resolution.kind === 'found' ? this.symbolPositionType(resolution.symbol) : undefined;
@@ -3052,6 +3109,7 @@ class Checker {
     if (cached) return cached;
     const checker = new Checker(this.catalog, {
       languageVersion: this.languageVersion,
+      ...(this.options.upgradingFrom !== undefined ? { upgradingFrom: this.options.upgradingFrom } : {}),
       linkContext: context,
       currentFile: file,
       library: true,
@@ -4173,12 +4231,12 @@ class Checker {
         suppliedParams: supplied,
       });
       this.absorbCollectionRow(effects, spelling, expr.fn.span);
-      if (expr.op === 'map' && !returns.returns) return MAP_SLOT_ABSENT;
+      if (this.mapMayHandBackNothing(expr.op, returns)) return MAP_SLOT_ABSENT;
       this.requireCollectionReturn(returns, spelling, expr.fn.span);
       return returns;
     }
     const named = this.checkArm(expr.fn, spelling, scope, undefined, arity);
-    if (expr.op === 'map' && !named.returns) return MAP_SLOT_ABSENT;
+    if (this.mapMayHandBackNothing(expr.op, named)) return MAP_SLOT_ABSENT;
     this.requireCollectionReturn(named, spelling, expr.fn.span);
     return named;
   }
@@ -4193,6 +4251,12 @@ class Checker {
       );
     }
     this.effects?.absorb(row);
+  }
+
+  /** A `MAP` run for its writes alone hands back nothing, and may — since
+   *  version 2. Version 1 required a `return` of every collection function. */
+  private mapMayHandBackNothing(op: string, shape: ReturnShape): boolean {
+    return op === 'map' && !shape.returns && since(this.languageVersion, 2);
   }
 
   private requireCollectionReturn(shape: ReturnShape, spelling: string, span: Span): void {
@@ -5378,6 +5442,7 @@ class Checker {
         );
       }
       if (field.semantics === 'fill' && isMaybeAbsent(valueType)) omittableFields += 1;
+      this.reportBlankableIdentityKey({ uniqueBy: write.uniqueBy, field, valueType, rootDescription, scope });
       this.reportFieldValueType(field.name, rootDescription, targetType, valueType, field.value.span, {
         // The field NAMES a relationship of the written type, so a record is
         // what belongs in it — the adapter exposes the reference as a writable
@@ -5509,6 +5574,44 @@ class Checker {
       }
     }
     this.checkNativeUniqueness(uniqueBy, root, rootDescription);
+  }
+
+  /**
+   * An identity key whose value is text that may be `""`, on a check for a
+   * move up across the version that made an empty key no key. Only where the checker cannot rule
+   * the blank out: a non-empty literal cannot be blank, and an extracted text
+   * that was not found is no key under either version (absent before, `""`
+   * now). A value the checker could not type says nothing.
+   */
+  private reportBlankableIdentityKey(input: {
+    uniqueBy: UniqueClause[];
+    field: FieldEntry;
+    valueType: FieldType | undefined;
+    rootDescription: string;
+    scope: Scope;
+  }): void {
+    const { field, valueType, scope } = input;
+    if (!this.upgradeCrosses(2)) return;
+    if (valueType === undefined || stripAbsent(valueType) !== 'text') return;
+    if (!input.uniqueBy.some(clause => uniqueClauseRefs(clause)?.includes(field.name) === true)) return;
+    let value: Expression;
+    try {
+      value = parseMovementExpression(field.value.raw);
+    } catch (e) {
+      if (e instanceof BridgeError) return;
+      throw e;
+    }
+    if (value.type === 'static' && typeof value.value === 'string' && value.value.trim() !== '') return;
+    const read = directFieldRead(value);
+    if (read !== undefined) {
+      const resolution = scope.resolve(read.root);
+      if (resolution.kind === 'found' && positionTypeOf(resolution.symbol)?.kind === 'extract') return;
+    }
+    this.reportWarning(
+      DiagnosticCodes.UNIQUE_KEY_MAY_BE_BLANK,
+      `'${field.name}' identifies ${input.rootDescription}, and its value may be "" — since language version ${describeLanguageVersion(2)} an empty key is no key, so when it is "" nothing is matched by it (a write creates a new record each time). Before it, "" matched another record whose '${field.name}' was "". If that matters here, guard the write on '${field.name}' != "".`,
+      field.value.span,
+    );
   }
 
   /**
@@ -5666,6 +5769,7 @@ class Checker {
       const { valueType } = this.checkExprSlot(field.value, scope, {
         ...(targetType !== undefined ? { writeTarget: { type: targetType } } : {}),
       });
+      this.reportBlankableIdentityKey({ uniqueBy: match.uniqueBy, field, valueType, rootDescription, scope });
       this.reportFieldValueType(field.name, rootDescription, targetType, valueType, field.value.span);
       this.checkEnumLiteralWrite(field.value, {
         targetType,
@@ -8367,6 +8471,9 @@ class Checker {
     scope: Scope,
   ): void {
     for (const field of node.fields) {
+      // Version 1 resolved only borrowed paths here; any other name kept the
+      // type `shapeToSchema` gave it at hoist, an unknown one reading as text.
+      if (before(this.languageVersion, 2) && borrowedTypeSegments(field.type) === undefined) continue;
       const resolved = this.resolveExtractFieldType(
         { type: field.type, span: field.span },
         scope,
@@ -8572,7 +8679,8 @@ class Checker {
     // unknown — true, and it refuses nothing: binding one stays silent rather
     // than MOV_CALL_RETURNS_NOTHING, which would be a claim.
     if (stageOnly || spec?.output === undefined) return UNKNOWN_RETURN;
-    const output = spec.output;
+    this.reportPluginOutputChanged(statement, spec);
+    const output = pluginOutputUnder(spec, this.languageVersion) ?? spec.output;
     const found = (fields: Record<string, SchemaFieldType>): PositionTypeRef => ({
       kind: 'local',
       label: `what '${statement.callee}' found`,
@@ -8590,6 +8698,24 @@ class Checker {
       default:
         return neverAsAny(output);
     }
+  }
+
+  /**
+   * A plugin whose output changed shape between the pin and the version
+   * being checked, on a check for a move up: the call validates against the
+   * new shape, but a program written against the
+   * old one may validate too and read something else (all page text as one
+   * string, say, where there is now a list of records). Said once per call.
+   */
+  private reportPluginOutputChanged(statement: CallStatement, spec: PluginSpec): void {
+    const changed = spec.earlierOutputs?.find(entry => this.upgradeCrosses(entry.before));
+    const now = pluginOutputUnder(spec, this.languageVersion);
+    if (changed === undefined || now === undefined) return;
+    this.reportWarning(
+      DiagnosticCodes.PLUGIN_OUTPUT_CHANGED,
+      `'${statement.callee}' called on its own hands back ${describePluginOutput(now)} since language version ${describeLanguageVersion(changed.before)}; before it, ${describePluginOutput(changed.output)}. Check that this call reads its result as the new shape.`,
+      statement.span,
+    );
   }
 
   /**

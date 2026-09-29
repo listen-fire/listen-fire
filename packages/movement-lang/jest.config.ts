@@ -2,6 +2,7 @@ export default {
   clearMocks: true,
   maxWorkers: 1,
   testMatch: ['**/*.unit.test.ts'],
+  testPathIgnorePatterns: ['/node_modules/', '/__conformance__/'],
   preset: 'ts-jest',
   testEnvironment: 'node',
   rootDir: '.',
