@@ -3529,6 +3529,12 @@ CREATE TABLE automations.movement (
     -- current version and never moved by an edit or re-save. The default is the
     -- backfill: a row nobody stamped predates versioning, so it is version 1.
     language_version integer DEFAULT 1 NOT NULL,
+    -- What stands between this movement and the release's current language
+    -- version: the diagnostics (errors AND warnings) the deploy check or an
+    -- upgrade attempt found validating it under `upgrade_checked_against`.
+    -- NULL = nothing recorded (never checked, or the pin is already current).
+    upgrade_diagnostics jsonb,
+    upgrade_checked_against integer,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT movement_validity_status_check CHECK (validity_status IN ('valid', 'invalid', 'unverified'))
@@ -3570,6 +3576,10 @@ CREATE TABLE automations.movement_version (
     version_number integer NOT NULL,             -- monotonic per movement (human-facing; identity/pinning is by id)
     source text NOT NULL,                        -- immutable snapshot of the .mvt program text at this version
     content_hash text NOT NULL,                  -- hash of source; dedups identical re-saves (D1)
+    -- The movement's language version when this snapshot was minted. A run pins
+    -- the snapshot, so a parked run resumes under the version it STARTED with,
+    -- even after the deploy check advances the movement's pin.
+    language_version integer NOT NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
@@ -3625,6 +3635,42 @@ ALTER TABLE ONLY automations.movement_issue
 
 CREATE INDEX movement_issue_movement_id_idx ON automations.movement_issue USING btree (movement_id);
 CREATE INDEX movement_issue_team_state_idx ON automations.movement_issue USING btree (team_id, state);
+
+-- system_event — the platform's own events that no other table already
+-- records, for the `system` adapter's poll source to deliver (`Validation
+-- Issue`, `Deprecated Version`, `Release Applied`; `Run Failed` is read from
+-- trigger_run). Append-only; written by the deploy check. `payload` is the
+-- adapter's one record shape (SystemEventPayload).
+CREATE TABLE automations.system_event (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    team_id uuid NOT NULL,
+    kind text NOT NULL,                          -- the kind's type id: 'validation_issue' | 'deprecated_version' | 'release_applied'
+    payload jsonb NOT NULL,
+    occurred_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+ALTER TABLE ONLY automations.system_event
+    ADD CONSTRAINT system_event_pkey PRIMARY KEY (id);
+
+CREATE INDEX system_event_team_occurred_idx ON automations.system_event USING btree (team_id, occurred_at, id);
+
+-- deploy_check — one row per release the deploy check has swept. Its presence
+-- is what makes the check idempotent (a second run on the same release does
+-- nothing); `summary` is what `deploy/up.sh` prints (advanced / warned /
+-- refused, by automation name).
+CREATE TABLE automations.deploy_check (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    release_tag text NOT NULL,                   -- LISTEN_FIRE_VERSION ('dev' for an untagged build)
+    language_release text NOT NULL,              -- the release's language versions: current, supported, deprecated
+    summary jsonb NOT NULL,
+    ran_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+ALTER TABLE ONLY automations.deploy_check
+    ADD CONSTRAINT deploy_check_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY automations.deploy_check
+    ADD CONSTRAINT deploy_check_release_unique UNIQUE (release_tag, language_release);
 
 -- movement_story_token — the capability link a movement's STORY is served on
 -- (`GET /api/story/<token>`, pre-auth: the token is the authorisation, the asks

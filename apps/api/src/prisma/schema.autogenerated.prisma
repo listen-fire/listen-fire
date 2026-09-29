@@ -151,6 +151,18 @@ model ConnectToken {
   @@schema("automations")
 }
 
+model DeployCheck {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  releaseTag      String   @map("release_tag")
+  languageRelease String   @map("language_release")
+  summary         Json
+  ranAt           DateTime @default(now()) @map("ran_at") @db.Timestamptz(6)
+
+  @@unique([releaseTag, languageRelease], map: "deploy_check_release_unique")
+  @@map("deploy_check")
+  @@schema("automations")
+}
+
 model ExposedFile {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   teamId      String?  @map("team_id") @db.Uuid
@@ -265,10 +277,12 @@ model Movement {
   validitySourceHash                                       String?              @map("validity_source_hash")
   validityCheckedAt                                        DateTime?            @map("validity_checked_at") @db.Timestamptz(6)
   validityConsentedAt                                      DateTime?            @map("validity_consented_at") @db.Timestamptz(6)
-  validityCheckedAgainst                                   Int?                 @map("validity_checked_against")
-  languageVersion                                          Int                  @default(1) @map("language_version")
   createdAt                                                DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                                                DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  validityCheckedAgainst                                   Int?                 @map("validity_checked_against")
+  languageVersion                                          Int                  @default(1) @map("language_version")
+  upgradeDiagnostics                                       Json?                @map("upgrade_diagnostics")
+  upgradeCheckedAgainst                                    Int?                 @map("upgrade_checked_against")
   movementVersionMovementCurrentVersionIdTomovementVersion MovementVersion?     @relation("movement_current_version_idTomovement_version", fields: [currentVersionId], references: [id])
   triggerMovementTriggerIdTotrigger                        Trigger?             @relation("movement_trigger_idTotrigger", fields: [triggerId], references: [id])
   movementIssues                                           MovementIssue[]
@@ -330,6 +344,7 @@ model MovementVersion {
   source                                             String
   contentHash                                        String       @map("content_hash")
   createdAt                                          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  languageVersion                                    Int          @map("language_version")
   movementMovementCurrentVersionIdTomovementVersions Movement[]   @relation("movement_current_version_idTomovement_version")
   movementMovementVersionMovementIdTomovement        Movement     @relation("movement_version_movement_idTomovement", fields: [movementId], references: [id], onDelete: Cascade)
   triggerRuns                                        TriggerRun[]
@@ -463,6 +478,18 @@ model RemoteAdapter {
 
   @@unique([teamId, adapterType])
   @@map("remote_adapter")
+  @@schema("automations")
+}
+
+model SystemEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  teamId     String   @map("team_id") @db.Uuid
+  kind       String
+  payload    Json
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([teamId, occurredAt, id], map: "system_event_team_occurred_idx")
+  @@map("system_event")
   @@schema("automations")
 }
 

@@ -22,6 +22,8 @@ export default interface MovementVersionTable {
   content_hash: ColumnType<string, string, string>;
 
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+
+  language_version: ColumnType<number, number, number>;
 }
 
 export type MovementVersion = Selectable<MovementVersionTable>;
