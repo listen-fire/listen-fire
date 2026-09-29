@@ -107,15 +107,3 @@ export function findSameDayPriceConflicts(
 
   return conflicts.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
-
-/**
- * The price the valuation uses out of a collision, restated in plain words
- * from the engine's resolution: the company-level row when one is present
- * (it prices every equity asset for the company), else the first
- * asset-level row.
- */
-export function resolvedConflictPrice(
-  conflict: SameDayPriceConflict,
-): SameDayConflictPrice {
-  return conflict.prices.find((price) => price.scope === "company") ?? conflict.prices[0];
-}

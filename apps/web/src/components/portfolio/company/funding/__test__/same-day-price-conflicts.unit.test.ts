@@ -1,6 +1,5 @@
 import {
   findSameDayPriceConflicts,
-  resolvedConflictPrice,
   type SameDayConflictSourceRow,
 } from "../same-day-price-conflicts";
 
@@ -90,25 +89,5 @@ describe("findSameDayPriceConflicts", () => {
     const conflicts = findSameDayPriceConflicts(rows);
 
     expect(conflicts.map((c) => c.date)).toEqual(["2024-06-01", "2024-01-01"]);
-  });
-});
-
-describe("resolvedConflictPrice", () => {
-  it("picks the company-level price when one is present", () => {
-    const [conflict] = findSameDayPriceConflicts([
-      row({ id: "shares", asset_id: "asset-1", name: "Shares", price: 40 }),
-      row({ id: "company", asset_id: null, price: 6.59 }),
-    ]);
-
-    expect(resolvedConflictPrice(conflict).id).toBe("company");
-  });
-
-  it("falls back to the first asset-level price otherwise", () => {
-    const [conflict] = findSameDayPriceConflicts([
-      row({ id: "a", asset_id: "asset-1", name: "Shares", price: 40 }),
-      row({ id: "b", asset_id: "asset-1", name: "Shares", price: 42 }),
-    ]);
-
-    expect(resolvedConflictPrice(conflict).id).toBe("a");
   });
 });
