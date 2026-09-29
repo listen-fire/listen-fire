@@ -59,7 +59,7 @@ The compose file runs migrations as a one-shot service that must exit 0 before t
 **A pre-deploy command**, which is what the Blueprint uses, if your Render plan has one as of this writing (check their documentation — it is not available on every plan):
 
 ```
-pnpm schema:migrate "$DATABASE_URL" && node build/scripts/deploy_check.js
+pnpm deploy:render-pre
 ```
 
 The second half is the deploy check: once per release it re-validates every saved automation, and moves each one that validates cleanly under the release's current language version onto it. It always exits 0, so it never blocks a deploy; `node build/scripts/deploy_check.js --summary` prints what it did.
