@@ -37,7 +37,7 @@ import { positionData } from '../../translation_graph/types';
 import type { Adapter, RuntimeCapabilities } from '../../translation_graph/adapter';
 import { containerAssociation } from '../../translation_graph/adapter';
 import type { Catalog, InstanceSchema, PositionSchema } from 'movement-lang';
-import { eventAddressKey } from 'movement-lang';
+import { eventAddressKey, CURRENT_LANGUAGE_VERSION } from 'movement-lang';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import { resumeTimerParkedRuns } from '../timer_resume';
 
@@ -234,7 +234,7 @@ async function seedMovement(
     .execute();
 
   // Pin a runnable version + set current_version_id (the resume re-parses THIS).
-  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source });
+  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source, languageVersion: CURRENT_LANGUAGE_VERSION });
 
   const triggerId = randomUUID() as TriggerId;
   await getAutomationsQb(['trigger'])

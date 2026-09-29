@@ -51,7 +51,7 @@ import { makeStablePosition, positionData } from '../../translation_graph/types'
 import type { Adapter, RuntimeCapabilities } from '../../translation_graph/adapter';
 import { containerAssociation } from '../../translation_graph/adapter';
 import type { Catalog, InstanceSchema, PositionSchema } from 'movement-lang';
-import { eventAddressKey } from 'movement-lang';
+import { eventAddressKey, CURRENT_LANGUAGE_VERSION } from 'movement-lang';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import { resumeTimerParkedRuns } from '../timer_resume';
 
@@ -386,7 +386,7 @@ async function seedMovement(
     .values({ id: movementId, team_id: teamId, name: opts.name, source: opts.source } as any)
     .execute();
 
-  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source });
+  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source, languageVersion: CURRENT_LANGUAGE_VERSION });
 
   const triggerId = randomUUID() as TriggerId;
   await getAutomationsQb(['trigger'])
