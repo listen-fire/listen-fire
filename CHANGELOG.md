@@ -6,6 +6,12 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
+<!-- add merged PRs here -->
+
+## [v0.9.0] - 2026-09-29
+
+Language version stays **Bright Otter** (2): everything here is an addition or a refusal that became an acceptance, so no saved automation changes behaviour. Highlights: `node X extends Y`, `%`, `TEXT.PAIRS`, a scheme-less `URL.HOST`, a parameter typed on a declaration accepts any record with its fields, and the editor renders multi-line strings as one block.
+
 ### Added
 
 - `%` remainder in the formula grammar (`a % b`), same precedence as `*` and `/`, TypeScript semantics — the sign follows the dividend (`-7 % 20` is `-7`).
@@ -307,7 +313,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.9.0...HEAD
+[v0.9.0]: https://github.com/listen-fire/listen-fire/compare/v0.8.5...v0.9.0
 [v0.8.5]: https://github.com/listen-fire/listen-fire/compare/v0.8.4...v0.8.5
 [v0.8.4]: https://github.com/listen-fire/listen-fire/compare/v0.8.3...v0.8.4
 [v0.8.3]: https://github.com/listen-fire/listen-fire/compare/v0.8.2...v0.8.3
