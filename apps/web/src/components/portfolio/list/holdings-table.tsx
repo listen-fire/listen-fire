@@ -16,7 +16,7 @@ import { formatDate, formatMoney, formatTvpi } from "@/components/portfolio";
 import { CompanyLogo } from "./company-logo";
 import { OwnerPicker } from "./owner-picker";
 import { InvestmentDetailModal } from "./investment-detail-modal";
-import type { Aggregation, Investment } from "./types";
+import type { Aggregation, Investment, PortfolioConfig } from "./types";
 
 function hostnameOf(url: string): string {
   return url.replace(/^(https?:\/\/)?(www\.)?/, "").replace(/\/$/, "");
@@ -45,10 +45,14 @@ export function HoldingsTable({
   investments,
   aggregation,
   showDetails,
+  config,
 }: {
   investments: Investment[];
   aggregation: Aggregation;
   showDetails: boolean;
+  /** What the list was asked for — the modal re-runs the same valuation to
+   *  narrate one line of it, so it has to ask on the same terms. */
+  config: PortfolioConfig;
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-gray-100">
@@ -74,6 +78,7 @@ export function HoldingsTable({
               investment={investment}
               aggregation={aggregation}
               showDetails={showDetails}
+              config={config}
             />
           ))}
         </tbody>
@@ -86,10 +91,12 @@ function HoldingRow({
   investment,
   aggregation,
   showDetails,
+  config,
 }: {
   investment: Investment;
   aggregation: Aggregation;
   showDetails: boolean;
+  config: PortfolioConfig;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const isExited = Boolean(investment.is_exited);
@@ -171,7 +178,8 @@ function HoldingRow({
       <InvestmentDetailModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        messages={investment.message}
+        investments={investment.investments}
+        config={config}
       />
     </>
   );

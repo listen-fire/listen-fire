@@ -115,6 +115,7 @@ export default function PortfolioPage() {
             investments={investments}
             aggregation={config.aggregation}
             showDetails={config.showDetails}
+            config={config}
           />
         )}
       </PageBody>

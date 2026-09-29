@@ -11,7 +11,8 @@ import { CurrencyIsoCode } from "#trpc";
 export type Investment =
   RouterOutputs["views"]["investments"]["getPortfolioInvestments"]["items"][number];
 
-export type ProcessMessage = Exclude<Investment["message"], undefined>[number];
+export type ProcessMessage =
+  RouterOutputs["views"]["investments"]["getInvestmentCalculation"]["message"][number];
 
 export type ChangelogEntry =
   RouterOutputs["views"]["portfolio"]["company"]["getChangelogList"]["items"][number];

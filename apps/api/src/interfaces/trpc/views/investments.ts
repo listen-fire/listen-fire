@@ -565,17 +565,13 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
             holdsRetainedAssets: false,
             holdsTrackingAssets: false,
             carriesSwapValue: false,
-            message: undefined as ProcessMessage[] | undefined,
           };
         });
 
         await Promise.all(
           investments.map(async (investment) => {
-            const messageCollector = new MessageCollector();
-
             const {
               totalValuationDateValue,
-              totalTransactionDateValue,
               retainedValue,
               unrealizedValuationDateValue,
               realizedCashTransactionDateValue,
@@ -585,7 +581,6 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
             } = await getInvestmentsValuation({
               investments: investment.investments,
               targetCurrency: (input.config.currency as CurrencyIsoCode) ?? CurrencyIsoCode.USD,
-              messageCollector,
               asOfDate: input.config.valuationDate
                 ? new Date(input.config.valuationDate)
                 : new Date(),
@@ -596,30 +591,6 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
             investment.moic = investedTransactionDateValue
               ? totalValuationDateValue / investedTransactionDateValue
               : null;
-            messageCollector.header('MOIC');
-            messageCollector.text(
-              `Calculated as total value / total invested (${totalValuationDateValue.toFixed(2)} / ${investedTransactionDateValue?.toFixed(2)})`,
-            );
-            messageCollector.text(`MOIC: ${investment.moic}`);
-            messageCollector.header('Movement');
-            const totalMovement =
-              investedTransactionDateValue === null
-                ? null
-                : totalValuationDateValue - investedTransactionDateValue;
-            const fxMovement = totalValuationDateValue - totalTransactionDateValue;
-            const fairValueMovement = totalMovement === null ? null : totalMovement - fxMovement;
-            messageCollector.text(
-              `Total Movement: ${totalMovement?.toFixed(2)} ${input.config.currency ?? 'USD'}`,
-            );
-            messageCollector.text(
-              `FX Movement: ${fxMovement.toFixed(2)} ${input.config.currency ?? 'USD'}`,
-            );
-            messageCollector.text(
-              `Fair Value Movement: ${fairValueMovement?.toFixed(2)} ${input.config.currency ?? 'USD'}`,
-            );
-            messageCollector.text(
-              `Total Movement: ${totalMovement?.toFixed(2)} ${input.config.currency ?? 'USD'}`,
-            );
             investment.totalInvested = investedTransactionDateValue;
             // The list headlines the full pair: everything still held (in the
             // company or in what it became) against every pound taken out.
@@ -631,7 +602,6 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
             investment.realizedValue = realizedCashTransactionDateValue;
             investment.realizedCash = realizedCashTransactionDateValue;
             investment.totalValue = totalValuationDateValue;
-            investment.message = messageCollector.getMessages();
           }),
         );
 
@@ -671,7 +641,6 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
           holdsRetainedAssets: false,
           holdsTrackingAssets: false,
           carriesSwapValue: false,
-          message: undefined,
         });
 
         const items = applyPortfolioLens({
@@ -699,6 +668,69 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
         }
 
         return { items };
+      }),
+    /**
+     * How one line of the portfolio list got its numbers — the same walk the
+     * list runs, narrated. The narration is four times the size of every number
+     * on the page put together, and a reader opens it for one company at a
+     * time, so it is asked for when the "How this was calculated" panel opens
+     * rather than carried on every row of every load.
+     */
+    getInvestmentCalculation: userProcedure
+      .input(
+        z.object({
+          investments: z.array(
+            z.object({
+              id: z.string(),
+              date: z.coerce.date().nullable(),
+            }),
+          ),
+          config: z.object({
+            currency: z.enum(currencyOptions).nullish(),
+            valuationDate: z.string().date().nullish(),
+          }),
+        }),
+      )
+      .query(async ({ input }) => {
+        if (!input.investments.length) return { message: [] as ProcessMessage[] };
+
+        const messageCollector = new MessageCollector();
+        const currency = input.config.currency ?? 'USD';
+        const at = input.config.valuationDate ? new Date(input.config.valuationDate) : new Date();
+
+        const {
+          totalValuationDateValue,
+          totalTransactionDateValue,
+          investedTransactionDateValue,
+        } = await getInvestmentsValuation({
+          investments: input.investments,
+          targetCurrency: (input.config.currency as CurrencyIsoCode) ?? CurrencyIsoCode.USD,
+          messageCollector,
+          asOfDate: at,
+          fxDate: at,
+        });
+
+        const moic = investedTransactionDateValue
+          ? totalValuationDateValue / investedTransactionDateValue
+          : null;
+        messageCollector.header('MOIC');
+        messageCollector.text(
+          `Calculated as total value / total invested (${totalValuationDateValue.toFixed(2)} / ${investedTransactionDateValue?.toFixed(2)})`,
+        );
+        messageCollector.text(`MOIC: ${moic}`);
+        messageCollector.header('Movement');
+        const totalMovement =
+          investedTransactionDateValue === null
+            ? null
+            : totalValuationDateValue - investedTransactionDateValue;
+        const fxMovement = totalValuationDateValue - totalTransactionDateValue;
+        const fairValueMovement = totalMovement === null ? null : totalMovement - fxMovement;
+        messageCollector.text(`Total Movement: ${totalMovement?.toFixed(2)} ${currency}`);
+        messageCollector.text(`FX Movement: ${fxMovement.toFixed(2)} ${currency}`);
+        messageCollector.text(`Fair Value Movement: ${fairValueMovement?.toFixed(2)} ${currency}`);
+        messageCollector.text(`Total Movement: ${totalMovement?.toFixed(2)} ${currency}`);
+
+        return { message: messageCollector.getMessages() };
       }),
     getPortfolioTotals: userProcedure
       .input(
