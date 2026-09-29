@@ -196,11 +196,30 @@ services:
           sleep 2
         done
         pnpm schema:migrate "$$DATABASE_URL"
+        # The deploy check: once per release, re-validate every saved automation
+        # and advance the language version pins that are clean under this
+        # release (apps/api/src/scripts/deploy_check.ts). HERE because this
+        # one-shot runs exactly once per deployment however many api replicas
+        # follow, after the schema and before the api takes traffic. It exits 0
+        # even when it cannot finish: a pin it did not reach stays put.
+        node build/scripts/deploy_check.js
     environment:
       LISTEN_FIRE_DEMO: ${LISTEN_FIRE_DEMO:-0}
       # See the api's own note on these two.
       DATABASE_URL:
       DATABASE_URL_READONLY:
+      # The deploy check validates automations against their connected systems
+      # exactly as the api does, so it reads what the api reads to reach them.
+      LISTEN_FIRE_PRODUCTS: ${LISTEN_FIRE_PRODUCTS:-all}
+      LISTEN_FIRE_PRINCIPAL: ${LISTEN_FIRE_PRINCIPAL:-core}
+      NODE_ENV: ${LISTEN_FIRE_NODE_ENV:-production}
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8081}
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:8080}
+      MESSAGE_QUEUE_REDIS_HOSTNAME: ${MESSAGE_QUEUE_REDIS_HOSTNAME:-redis}
+      MESSAGE_QUEUE_REDIS_PORT: ${MESSAGE_QUEUE_REDIS_PORT:-6379}
+      FAKE_CHANNELS_URL: ${FAKE_CHANNELS_URL:-}
+      MOCK_OUTPUT_ADAPTERS: ${MOCK_OUTPUT_ADAPTERS:-}
+      AWS_S3_ENDPOINT:
     # Not postgres — that one may not exist. `init` is what mints the database
     # URL a bundled installation uses, so it still has to have finished.
     depends_on:

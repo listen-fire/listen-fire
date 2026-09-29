@@ -358,6 +358,16 @@ for i in $(seq 1 90); do
   fi
 done
 
+# What the deploy check (run by `migrate`, once per release) did to each saved
+# automation's language version: moved to the current one, kept with warnings,
+# or no longer validating. READ from the record it wrote — never re-run here.
+echo
+if ! compose run --rm --no-deps --entrypoint /usr/local/bin/with-generated-env api \
+    node build/scripts/deploy_check.js --summary 2>/dev/null; then
+  echo "[up] could not read the deploy check's summary — see: docker compose logs migrate" >&2
+fi
+echo
+
 echo -n "[up] waiting for the web app"
 for i in $(seq 1 60); do
   if curl -fsS "${WEB_LOCAL}/login" >/dev/null 2>&1; then

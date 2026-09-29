@@ -178,7 +178,10 @@ services:
     healthCheckPath: /.well-known/health-check
     # The migration runner takes the database as an ARGUMENT — it does not
     # read the ambient environment (deploy/guides/render.md, "Migrations").
-    preDeployCommand: pnpm schema:migrate "$DATABASE_URL"
+    # Then the deploy check, once per release: it re-validates every saved
+    # automation and advances the language version pins that are clean under
+    # this release. It exits 0 even when it cannot finish.
+    preDeployCommand: pnpm schema:migrate "$DATABASE_URL" && node build/scripts/deploy_check.js
     envVars:
       # ---- composition: part of the service definition, not operator input.
       # deploy/guides/render.md: "treat as part of the service definition

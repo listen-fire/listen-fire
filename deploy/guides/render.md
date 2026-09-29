@@ -59,12 +59,14 @@ The compose file runs migrations as a one-shot service that must exit 0 before t
 **A pre-deploy command**, which is what the Blueprint uses, if your Render plan has one as of this writing (check their documentation — it is not available on every plan):
 
 ```
-pnpm schema:migrate "$DATABASE_URL"
+pnpm schema:migrate "$DATABASE_URL" && node build/scripts/deploy_check.js
 ```
+
+The second half is the deploy check: once per release it re-validates every saved automation, and moves each one that validates cleanly under the release's current language version onto it. It always exits 0, so it never blocks a deploy; `node build/scripts/deploy_check.js --summary` prints what it did.
 
 It runs inside the API image, which carries the migration files and `pnpm`, after the image is pulled and before the new process serves. The migration runner takes the database as an **argument**. It does not read the ambient environment, which is why the URL is passed explicitly here and in the compose file.
 
-**Or by hand**, from a shell on the service, before the first deploy and before every upgrade. Migrations are forward-only, applied by file name, tracked in `_migrations.migrations`. Back up before an upgrade; there is no down-migration path.
+**Or by hand**, from a shell on the service, before the first deploy and before every upgrade (both commands, in that order). Migrations are forward-only, applied by file name, tracked in `_migrations.migrations`. Back up before an upgrade; there is no down-migration path.
 
 Whichever you choose, the ordering is the point: the schema must be current before the new process serves a request.
 
