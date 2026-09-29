@@ -2236,7 +2236,21 @@ async function evaluateTraverse(
       `'${name}' is not in scope — the checker should have caught this`,
     );
   }
+  return traverseFrom(expr, name, binding, ctx);
+}
 
+/**
+ * A traversal read from the binding its root NAMES. Split from
+ * `evaluateTraverse` so a name that HOLDS a record (`top = FIRST(rows)`, a
+ * value on the value plane) reads as that record — the same walk, the same
+ * terminal — rather than as a second, narrower reading of the name.
+ */
+async function traverseFrom(
+  expr: Extract<Expression, { type: 'traverse' }>,
+  name: string,
+  binding: Binding,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
   switch (binding.kind) {
     case 'event': {
       if (!ctx.source) {
@@ -2289,17 +2303,13 @@ async function evaluateTraverse(
     }
 
     case 'handle': {
-      if (expr.steps.length > 0) {
+      // `EXISTS(co-[:notes]->)` arrives as an exists TERMINAL with no steps of
+      // its own (the bridge lifts the path into it), so it walks too.
+      if (expr.steps.length > 0 || expr.expression.type === 'exists') {
         // A hopped read off the handle — resolve the handle to a { start, read }
         // pair (graphRead is wired to graphReadFor, handle-aware since Task 1)
         // and traverse through the same walker instance/kg reads use.
-        const resolved = await ctx.graphRead?.(name, binding);
-        if (!resolved) {
-          throw unsupported(
-            `traversing from a write handle ('${name}')`,
-            "the handle bound no readable record to traverse from",
-          );
-        }
+        const resolved = await handleRecord(binding, name, ctx);
         return readAdapterTraverse(expr, name, 'a write handle', {
           start: resolved.start,
           read: resolved.read,
@@ -2421,6 +2431,12 @@ async function evaluateTraverse(
     }
 
     case 'value': {
+      // A RECORD held on the value plane (`top = FIRST(rows)`, a list a
+      // collection op handed back) is a position like any other: a walk off it
+      // is that walk off the record — the reading a block head rooted here
+      // already gives it (run.ts `headIterationsFrom`).
+      const held = heldRecords(binding.value, expr);
+      if (held !== undefined) return traverseFrom(expr, name, held, ctx);
       // EXISTS(x) on a value binding asks "does it hold a value?" —
       // null/undefined (an AI() that declared has_value: false, an
       // absent field projection) and empty lists answer false. This is
@@ -2428,7 +2444,9 @@ async function evaluateTraverse(
       const existsTerminal = existsTerminalOf(expr, name);
       if (existsTerminal) {
         if (existsTerminal.steps.length > 0 || existsTerminal.where) {
-          throw unsupported(`traversing inside EXISTS() from the value binding '${name}'`);
+          throw unsupported(
+            `traversing inside EXISTS() from '${name}', which holds ${describeHeldValue(binding.value)} rather than a record`,
+          );
         }
         const present = Array.isArray(binding.value)
           ? binding.value.length > 0
@@ -2448,6 +2466,45 @@ async function evaluateTraverse(
     default:
       throw unsupported(`reading '${name}' (${describeBinding[binding.kind]}) in an expression`);
   }
+}
+
+/**
+ * The record(s) a value-plane binding holds, as the binding a walk starts
+ * from — or undefined where the read is the value plane's own. One record reads
+ * as itself on both planes. A LIST of records reads as landings only when the
+ * read walks (a hop, or an EXISTS that hops or filters): a bare field read or a
+ * bare EXISTS over a list keeps its value-plane meaning (a projection, "is the
+ * list non-empty"), which is what the checker typed it as.
+ */
+function heldRecords(
+  value: unknown,
+  expr: Extract<Expression, { type: 'traverse' }>,
+): Binding | undefined {
+  const held = heldBinding(value);
+  if (held === undefined || !Array.isArray(value)) return held;
+  const walks =
+    expr.steps.length > 0 ||
+    (expr.expression.type === 'exists' &&
+      (expr.expression.steps.length > 0 || expr.expression.where !== undefined));
+  return walks ? held : undefined;
+}
+
+/** The binding a value-plane value IS, when it is records: one record as
+ *  itself, a non-empty list of nothing but records as their landings. */
+function heldBinding(value: unknown): Binding | undefined {
+  if (!Array.isArray(value)) return bindingOf(value);
+  if (value.length === 0) return undefined;
+  const members = value.map(bindingOf);
+  return members.every((m): m is Binding => m !== undefined)
+    ? { kind: 'positions', landings: members }
+    : undefined;
+}
+
+/** What a value that holds no record IS, for a message. */
+function describeHeldValue(value: unknown): string {
+  if (value === null || value === undefined) return 'nothing';
+  if (Array.isArray(value)) return 'a list that is not all records';
+  return `a ${typeof value}`;
 }
 
 /**
@@ -2798,11 +2855,28 @@ async function stepExistsCursor(
       return (
         await Promise.all(cursor.landings.map((landing) => stepExistsCursor(landing, step, ctx)))
       ).flat();
-    default:
-      throw unsupported(
-        `traversing '${step.edgeTypeId}' from ${describeBinding[cursor.kind]} inside EXISTS()`,
+    case 'handle': {
+      // A written or matched record IS a record in its graph: the hop is that
+      // graph's hop from it, the same seam a hopped read off the handle takes.
+      const record = await handleRecord(cursor, describeBinding.handle, ctx);
+      return stepExistsCursor(
+        { kind: 'sourcePosition', position: record.start, read: record.read },
+        step,
+        ctx,
       );
+    }
+    case 'value': {
+      // A record held on the value plane walks as the record it is.
+      const held = heldBinding(cursor.value);
+      if (held !== undefined) return stepExistsCursor(held, step, ctx);
+      break;
+    }
+    default:
+      break;
   }
+  throw unsupported(
+    `traversing '${step.edgeTypeId}' from ${describeBinding[cursor.kind]} inside EXISTS()`,
+  );
 }
 
 /** The position scope a reached cursor provides to WHERE evaluation. */
@@ -3369,6 +3443,23 @@ async function walkMetaSteps(
       reached.push(...(await resolveDeferred(binding.walk, steps, ctx, name)));
       continue;
     }
+    // A landing that is a RECORD in a graph (a block's returned records, a
+    // record held on the value plane) walks the rest of the chain in that
+    // graph, through the one adapter walker — its WHERE / ORDER BY / LIMIT
+    // included, exactly as a read rooted at the record would.
+    const record = await graphRecordOf(binding, name, ctx);
+    if (record !== undefined) {
+      reached.push(
+        ...(await walkAdapterPositions({ start: record.start, read: record.read, steps, name, ctx })),
+      );
+      continue;
+    }
+    const held = binding.kind === 'value' ? heldBinding(binding.value) : undefined;
+    if (held !== undefined) {
+      const landings = held.kind === 'positions' ? held.landings : [held];
+      reached.push(...(await walkMetaSteps(landings, steps, name, ctx)));
+      continue;
+    }
     if (binding.kind === 'nodePosition') {
       const edge = binding.edges[step.edgeTypeId];
       if (edge?.kind === 'deferred') {
@@ -3407,6 +3498,37 @@ async function walkMetaSteps(
     );
   }
   return reached;
+}
+
+/** Where a walk off this landing starts in its graph, when the landing is a
+ *  record there: a traversed source record or a write / match handle.
+ *  Undefined for the in-memory planes. */
+async function graphRecordOf(
+  binding: Binding,
+  name: string,
+  ctx: MovementExprContext,
+): Promise<{ start: SourcePosition; read: SourceRead } | undefined> {
+  if (binding.kind === 'sourcePosition') {
+    return { start: binding.position, read: binding.read ?? ctx.source ?? missingRead(name) };
+  }
+  if (binding.kind === 'handle') return handleRecord(binding, name, ctx);
+  return undefined;
+}
+
+/** The record a write / match handle bound, as a walk's start in its graph. */
+async function handleRecord(
+  binding: Extract<Binding, { kind: 'handle' }>,
+  name: string,
+  ctx: MovementExprContext,
+): Promise<{ start: SourcePosition; read: SourceRead }> {
+  const resolved = await ctx.graphRead?.(name, binding);
+  if (!resolved) {
+    throw unsupported(
+      `traversing from a write handle ('${name}')`,
+      'the handle bound no readable record to traverse from',
+    );
+  }
+  return resolved;
 }
 
 /** A synthesised edge's landings are what the literal declared or what its
