@@ -99,6 +99,7 @@ async function evaluate(expr: Expression, ctx: EvalContext): Promise<unknown> {
         case '-': return l - r;
         case '*': return l * r;
         case '/': return r === 0 ? null : l / r;
+        case '%': return r === 0 ? null : l % r;
       }
       break;
     }
