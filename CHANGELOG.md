@@ -6,6 +6,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
+<!-- add merged PRs here -->
+
+## [v0.8.5] - 2026-09-29
+
 ### Added
 
 - The company page warns when two prices apply to the same equity on the same day, and says which one the valuation uses.
@@ -292,7 +296,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.5...HEAD
+[v0.8.5]: https://github.com/listen-fire/listen-fire/compare/v0.8.4...v0.8.5
 [v0.8.4]: https://github.com/listen-fire/listen-fire/compare/v0.8.3...v0.8.4
 [v0.8.3]: https://github.com/listen-fire/listen-fire/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/listen-fire/listen-fire/compare/v0.8.1...v0.8.2
