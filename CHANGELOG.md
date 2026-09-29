@@ -6,7 +6,9 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
-<!-- add merged PRs here -->
+### Added
+
+- The company page warns when two prices apply to the same equity on the same day, and says which one the valuation uses.
 
 ## [v0.8.4] - 2026-09-29
 

@@ -53,6 +53,8 @@ import { AddPrice, PriceItem } from "./price-item";
 import { InvestmentItem } from "./investment-item";
 import { TransactionItem } from "./transaction-item";
 import { AddFundDrawdown } from "./funds";
+import { dateKey, findSameDayPriceConflicts } from "./same-day-price-conflicts";
+import { SameDayPriceWarning } from "./same-day-price-warning";
 
 import { CurrencyIsoCode } from "#trpc";
 
@@ -381,6 +383,11 @@ function EventHistory({
     },
   });
 
+  const priceConflictsByDate = useMemo(() => {
+    const conflicts = findSameDayPriceConflicts(data?.prices ?? []);
+    return new Map(conflicts.map((conflict) => [conflict.date, conflict]));
+  }, [data?.prices]);
+
   const dates = new Set<string | null>();
   for (const event of data?.events ?? []) {
     dates.add(event.date);
@@ -464,6 +471,11 @@ function EventHistory({
                   companyId={companyId}
                 />
               ))}
+              {item.date && priceConflictsByDate.has(dateKey(item.date)) ? (
+                <SameDayPriceWarning
+                  conflict={priceConflictsByDate.get(dateKey(item.date))!}
+                />
+              ) : null}
               {item.prices.map((price) => (
                 <PriceItem key={price.id} price={price} />
               ))}
