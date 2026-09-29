@@ -488,6 +488,20 @@ movement guarded(m: <inbox-[:message]->>) {
     expect(colleague.fields.map((f) => f.description)).toEqual(['their full name']);
   });
 
+  it('a field annotated `<text | null>` is said as written: text, or nothing', () => {
+    const source = SOURCE.replace('domain: <text> "the web domain"', 'domain: <text | null> "the web domain"');
+    const result = storyOf({ source, catalog, name: 'Deal intake' });
+    if (!result.ok) throw new Error(`expected a story, got ${result.reason}`);
+    const tree = stepsOfKind(intakeSteps(result.story), 'extract')[0].tree!;
+    expect(tree.children[0].fields.map((f) => [f.name, f.type])).toEqual([
+      ['domain', { kind: 'maybeAbsent', of: 'text' }],
+    ]);
+    expect(tree.fields.map((f) => [f.name, f.type])).toEqual([
+      ['name', 'text'],
+      ['amount', 'number'],
+    ]);
+  });
+
   it('a call names the movement and says whether the name resolved to one', () => {
     const calls = stepsOfKind(intakeSteps(story()), 'call');
     expect(calls).toHaveLength(1);

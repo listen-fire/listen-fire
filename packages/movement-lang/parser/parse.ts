@@ -395,8 +395,8 @@ class Parser {
    */
   private readTypeMarker(
     context: string,
-    options: { allowHops?: boolean; allowFieldTail?: boolean } = {},
-  ): { text: string; hopsRaw?: string; position?: string; span: Span } {
+    options: { allowHops?: boolean; allowFieldTail?: boolean; allowNull?: boolean } = {},
+  ): { text: string; hopsRaw?: string; position?: string; nullable?: true; span: Span } {
     const start = this.pos;
     if (this.peekCh() !== '<') {
       if (this.peekIdent()) {
@@ -427,6 +427,12 @@ class Parser {
     this.skipInlineWs();
     const rootStart = this.pos;
     const root = this.readName(`a type name inside '<…>' ${context}`);
+    if (root === 'null') {
+      this.error(
+        `'null' is not a type on its own — it only marks an extraction field that may be missing, after the field's type: \`name: <text | null> "…"\``,
+        rootStart,
+      );
+    }
     if (this.peekCh() === '.') {
       this.reportRetiredDottedType(root, this.src.slice(rootStart, this.pos), start, options);
     }
@@ -434,10 +440,12 @@ class Parser {
     if (this.startsHop()) {
       if (options.allowFieldTail === true) {
         const text = this.readBorrowedFieldTail(root, context);
+        const nullable = this.readNullSuffix(`${root}-[:…]->.…`, options);
         this.expect('>', `to close the type '<${root}-[:…]->.…'`);
-        return { text, span: this.spanFrom(start) };
+        return { text, ...(nullable ? { nullable } : {}), span: this.spanFrom(start) };
       }
       const { hopsRaw, position } = this.readTypeAddressHops(root, context, options);
+      this.readNullSuffix(`${root}${hopsRaw}`, {});
       this.expect('>', `to close the type '<${root}'`);
       return {
         text: root,
@@ -446,8 +454,49 @@ class Parser {
         span: this.spanFrom(start),
       };
     }
+    const nullable = this.readNullSuffix(root, options);
     this.expect('>', `to close the type '<${root}'`);
-    return { text: root, span: this.spanFrom(start) };
+    return { text: root, ...(nullable ? { nullable } : {}), span: this.spanFrom(start) };
+  }
+
+  /**
+   * `<text | null>` — an extraction field that may be missing. Only a field's
+   * annotation takes it (an extraction block's, or a declared node's), and only
+   * the one spelling: `null` is a VALUE the field may hold, not a type of its
+   * own, so it is never a union member anywhere else.
+   */
+  private readNullSuffix(type: string, options: { allowNull?: boolean }): true | undefined {
+    const mark = this.pos;
+    this.skipInlineWs();
+    if (this.peekCh() !== '|') {
+      this.pos = mark;
+      return undefined;
+    }
+    const barStart = this.pos;
+    this.pos++;
+    this.skipInlineWs();
+    const memberStart = this.pos;
+    const member = this.peekIdent();
+    if (member !== 'null') {
+      this.error(
+        member === 'absent'
+          ? `Write a field that may be missing as <${type} | null> — 'null' is the spelling, not 'absent'`
+          : `Only '| null' may follow a type in angle brackets — a field that may be missing is <${type} | null>; a closed set of values is declared as its own type (\`type Thesis = <"A" | "B">\`)`,
+        memberStart,
+      );
+    }
+    if (options.allowNull !== true) {
+      this.error(
+        `'<${type} | null>' is written only on an extraction field's annotation (\`name: <text | null> "…"\`) or a declared node's field (\`name: <text | null>\`) — nowhere else does a type take '| null'`,
+        barStart,
+      );
+    }
+    this.pos += member.length;
+    this.skipInlineWs();
+    if (this.peekCh() === '|') {
+      this.error(`A field annotation takes one '| null' and nothing more: <${type} | null>`);
+    }
+    return true;
   }
 
   /**
@@ -3153,7 +3202,7 @@ class Parser {
       // extract fields take: `crm_stage: <crm-[:companies]->.\`funding_stage\`>`.
       const marker = this.readTypeMarker(
         `for the field '${fieldName}' (e.g. <text>, <number>)`,
-        { allowFieldTail: true },
+        { allowFieldTail: true, allowNull: true },
       );
       // `name: <text> "the company's name"` — the type stays explicit here;
       // only an inline extract block may drop `<text>`.
@@ -3165,6 +3214,7 @@ class Parser {
       fields.push({
         name: fieldName,
         type: marker.text,
+        ...(marker.nullable ? { nullable: marker.nullable } : {}),
         ...(fieldDescription !== undefined ? { description: fieldDescription } : {}),
         span: this.spanFrom(fieldStart),
       });
@@ -3530,24 +3580,32 @@ class Parser {
       this.expect(':', `after '${name}'`);
       this.skipInlineWs();
       let type: string | undefined;
+      let nullable: true | undefined;
       if (this.peekCh() !== '"') {
         // An explicit annotation wears angle brackets: a primitive
         // (`amount: <number> "…"`) or a borrowed path into another graph's
         // schema (`stage: <crm-[:companies]->.\`funding_stage\`> "…"`).
         const marker = this.readTypeMarker(
           `or a double-quoted description for the extract field '${name}'`,
-          { allowFieldTail: true },
+          { allowFieldTail: true, allowNull: true },
         );
         type = marker.text;
+        nullable = marker.nullable;
         this.skipAllWs();
         if (this.peekCh() !== '"') {
           this.error(
-            `Expected a double-quoted description for the extract field '${name}' after the type '<${type}>', found ${this.describeHere()}`,
+            `Expected a double-quoted description for the extract field '${name}' after the type '<${type}${nullable ? ' | null' : ''}>', found ${this.describeHere()}`,
           );
         }
       }
       const description = this.readStringSlot(`for the extract field '${name}'`);
-      fields.push({ name, type, description, span: this.spanFrom(fieldStart) });
+      fields.push({
+        name,
+        type,
+        ...(nullable ? { nullable } : {}),
+        description,
+        span: this.spanFrom(fieldStart),
+      });
       this.expectStatementEnd();
     }
     return { through, fields, children, span: this.spanFrom(braceOffset) };

@@ -50,7 +50,12 @@ import { EMPTY_ROW, instanceNames, type EffectRow } from '../checker/effects';
 import { terminates } from '../checker/flow';
 import type { ResolveFile } from '../checker/link';
 import type { LanguageVersion } from '../language_version';
-import { EXTRACT_ROOT_NAME, type ExtractNodeType, type PositionTypeRef } from '../checker/typing';
+import {
+  EXTRACT_ROOT_NAME,
+  maybeAbsent,
+  type ExtractNodeType,
+  type PositionTypeRef,
+} from '../checker/typing';
 import type { Scope, ScopeSymbol } from '../checker/scopes';
 import {
   type CheckRecording,
@@ -851,7 +856,9 @@ function shapeNodeOf(node: ShapeNode, position: string): StoryShapeNode {
     name: node.name,
     position,
     fields: node.fields.map((field) => {
-      const type = parseFieldTypeName(field.type);
+      // Said as written: `<text | null>` shows as text, or nothing.
+      const named = parseFieldTypeName(field.type);
+      const type = field.nullable ? maybeAbsent(named) : named;
       return { name: field.name, ...(type !== undefined ? { type } : {}) };
     }),
     children: node.children.map((child) => shapeNodeOf(child, `${position}.${child.name}`)),
@@ -2106,7 +2113,9 @@ function projectExtractNode(node: ExtractNodeType): StoryExtractNode {
     fields: [...node.properties.entries()].map(([name, info]) => ({
       name,
       ...(info.description !== undefined ? { description: info.description } : {}),
-      ...(info.explicit !== undefined ? { type: info.explicit } : {}),
+      ...(info.explicit !== undefined
+        ? { type: info.nullable ? (maybeAbsent(info.explicit) ?? info.explicit) : info.explicit }
+        : {}),
       at: info.span,
     })),
     children: [...node.children.values()].map(projectExtractNode),

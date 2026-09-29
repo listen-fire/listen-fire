@@ -150,6 +150,8 @@ function tokenize(stream: StringStream, state: MvtState): string | null {
   // IS a walk, so it reads like one. The expression `<` (comparison) never
   // abuts an identifier this way.
   if (stream.match(/^<[A-Za-z_]\w*>/)) return "typeName";
+  // `<text | null>` — an extraction field that may be missing, one marker.
+  if (stream.match(/^<[A-Za-z_]\w*[ \t]*\|[ \t]*null>/)) return "typeName";
   if (stream.match(/^<[A-Za-z_]\w*(?=\s*-\[)/)) return "typeName";
 
   // Traversal punctuation.

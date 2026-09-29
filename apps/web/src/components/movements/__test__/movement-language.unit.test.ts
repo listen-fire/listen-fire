@@ -120,6 +120,9 @@ describe("movement language tokenizer", () => {
     // A single-name marker stays one token.
     const scalar = tokenizeDocument("movement m(x: <number>) {\n}\n");
     expect(styleOf(scalar, "<number>", 0)).toBe("typeName");
+    // `<text | null>` is one marker too, as written.
+    const nullable = tokenizeDocument('  name: <text | null> "the name"\n');
+    expect(styleOf(nullable, "<text | null>", 0)).toBe("typeName");
   });
 
   describe("full-span fixture (multiline strings, interpolation, every statement clause)", () => {

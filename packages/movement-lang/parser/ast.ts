@@ -1050,7 +1050,14 @@ export interface ShapeNode {
    */
   description?: ExprSlot;
   /** A field's `description` is its extraction words, on the same terms. */
-  fields: Array<{ name: string; type: string; description?: ExprSlot; span: Span }>;
+  fields: Array<{
+    name: string;
+    type: string;
+    /** `<text | null>`, on the terms an extraction field's is (`ExtractField`). */
+    nullable?: true;
+    description?: ExprSlot;
+    span: Span;
+  }>;
   children: ShapeNode[];
   /**
    * `order by arrival` after this node's closing `}` — the author saying the
@@ -1224,6 +1231,10 @@ export interface ExtractField {
    *  flowing into a typed write target gets a checker SUGGESTION to
    *  annotate, never a silent adopted type. */
   type?: string;
+  /** `<text | null>` — the author's word that a field the model did not find
+   *  arrives null. Only text changes by it (an unfound text is otherwise `""`);
+   *  every other type is already maybe-absent. The prompt never sees it. */
+  nullable?: true;
   /**
    * The words the extractor is given for this field — an ORDINARY string
    * expression, so it interpolates wherever it is written, exactly as a write

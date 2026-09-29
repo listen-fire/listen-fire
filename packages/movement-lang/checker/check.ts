@@ -1810,6 +1810,7 @@ function shapeExtractGraph(
         : {}),
       ...(explicit !== undefined ? { explicit } : {}),
       annotationRaw: field.type,
+      ...(field.nullable ? { nullable: field.nullable } : {}),
     });
   }
   return graph;
@@ -1839,6 +1840,7 @@ function applyExtractStages(
         description: authoredStringText(field.description.raw),
         ...(explicit !== undefined ? { explicit } : {}),
         ...(field.type !== undefined ? { annotationRaw: field.type } : {}),
+        ...(field.nullable ? { nullable: field.nullable } : {}),
       });
     }
   }

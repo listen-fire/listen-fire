@@ -1969,3 +1969,52 @@ describe('match — the identity half of a write, on its own', () => {
     expectParseError('n = node { co: match crm-[:companies]-> { unique by (`name`) } }', /'match' acts/);
   });
 });
+
+describe('`<T | null>` — an extraction field that may be missing', () => {
+  const field = (annotation: string) => {
+    const program = parseProgram(`d = extract from [x] {\n  name: ${annotation} "the name"\n}`);
+    return rv(as(program.statements[0], 'assign').value, 'extract').extract.stages[0].fields[0];
+  };
+
+  it('parses on an inline extraction field, the type kept bare beside the mark', () => {
+    expect(field('<text | null>')).toMatchObject({ name: 'name', type: 'text', nullable: true });
+    expect(field('<text|null>')).toMatchObject({ type: 'text', nullable: true });
+    expect(field('<text>').nullable).toBeUndefined();
+  });
+
+  it('parses on every type an annotation takes — a primitive, a declared set, a borrowed field', () => {
+    for (const type of ['number', 'date', 'boolean', 'Thesis']) {
+      expect(field(`<${type} | null>`)).toMatchObject({ type, nullable: true });
+    }
+    expect(field('<crm-[:companies]->.funding_stage | null>')).toMatchObject({
+      type: 'crm.companies.funding_stage',
+      nullable: true,
+    });
+  });
+
+  it('parses on a declared node\'s field', () => {
+    const shape = as(parseProgram('node Entry {\n  name: <text | null> "its name"\n  label: <text>\n}').statements[0], 'shape');
+    expect(shape.root.fields).toMatchObject([
+      { name: 'name', type: 'text', nullable: true },
+      { name: 'label', type: 'text' },
+    ]);
+    expect(shape.root.fields[1].nullable).toBeUndefined();
+  });
+
+  it('refuses `null` on its own, naming where it goes', () => {
+    expectParseError('d = extract from [x] {\n  name: <null> "the name"\n}', /'null' is not a type on its own .*<text \| null>/);
+  });
+
+  it('refuses anything but one `| null`', () => {
+    expectParseError('d = extract from [x] {\n  name: <text | null | x> "the name"\n}', /takes one '\| null' and nothing more/);
+    expectParseError('d = extract from [x] {\n  name: <text | number> "the name"\n}', /Only '\| null' may follow a type/);
+    expectParseError('d = extract from [x] {\n  name: <text | absent> "the name"\n}', /'null' is the spelling, not 'absent'/);
+  });
+
+  it('refuses it outside a field annotation, naming where it is allowed', () => {
+    const where = /written only on an extraction field's annotation .* or a declared node's field/;
+    expectParseError('movement m(x: <text | null>) {\n}', where);
+    expectParseError('d = extract from [x] {\n  node e: <Entry | null>\n}', where);
+    expectParseError('t = MEMBERS(<Thesis | null>)', where);
+  });
+});

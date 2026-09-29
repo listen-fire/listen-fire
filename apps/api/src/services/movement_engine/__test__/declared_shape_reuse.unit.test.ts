@@ -673,3 +673,50 @@ describe('a spread of a declared structure, or of a record built in memory', () 
     ]);
   });
 });
+
+describe('`<text | null>` — a text nobody found arrives null', () => {
+  const NULLABLE_ENTRY = ENTRY.replace('stage: <text> "the funding stage"', 'stage: <text | null> "the funding stage"');
+  const NULLABLE_INLINE = INLINE_ENTRY.map((line) =>
+    line.replace('stage: <text> "the funding stage"', 'stage: <text | null> "the funding stage"'),
+  );
+  /** Neither the name (`<text>`) nor the stage (`<text | null>`) was found. */
+  const BLANK = {
+    'x:extract_result#1': [{ entry: [{ name: null, stage: null, thesis: wrap('Infra'), founder: [] }] }],
+  };
+  /** The stage is null, the name "", in the same record; a found stage is its text. */
+  const AFTER = [
+    '  found-[e:entry]-> {',
+    '    write crm-[:companies]-> { name: e.name, thesis ?: e.thesis, stage ?: e.stage }',
+    '    if e.stage == null { write crm-[:companies]-> { name: "no stage", thesis: e.name } }',
+    '  }',
+  ];
+
+  it('while `<text>` in the same extraction arrives "" — inline and declared alike', async () => {
+    for (const source of [
+      movement('', NULLABLE_INLINE, AFTER),
+      movement(NULLABLE_ENTRY, ['    node entry: <Entry>'], AFTER),
+    ]) {
+      const { writes } = await run(source, { reply: BLANK });
+      expect(writes).toEqual([
+        expect.objectContaining({ kind: 'create', fields: { name: '', thesis: 'Infra', stage: null } }),
+        expect.objectContaining({ kind: 'create', fields: { name: 'no stage', thesis: '' } }),
+      ]);
+    }
+  });
+
+  it('a found value is the text', async () => {
+    const { writes } = await run(movement(NULLABLE_ENTRY, ['    node entry: <Entry>'], AFTER));
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', thesis: 'Infra', stage: 'Seed' } }),
+    ]);
+  });
+
+  it('the model is asked exactly what `<text>` asks', async () => {
+    const plain = await run(movement(ENTRY, ['    node entry: <Entry>']));
+    const nullable = await run(movement(NULLABLE_ENTRY, ['    node entry: <Entry>']));
+    expect(nullable.calls[0].system).toEqual(plain.calls[0].system);
+    expect(nullable.calls[0].userMessage).toEqual(plain.calls[0].userMessage);
+    const inline = await run(movement('', NULLABLE_INLINE));
+    expect(inline.calls[0].system).toEqual(plain.calls[0].system);
+  });
+});

@@ -146,6 +146,9 @@ export interface ExtractFieldSpec {
   /** The explicit annotation's resolved type — primitive, or borrowed
    *  from a live instance schema (`crm.companies.funding_stage`). */
   type?: FieldType;
+  /** `<text | null>` — a value nobody found is handed over null rather than
+   *  `""`. The author's side only: the prompt never sees it. */
+  nullable?: true;
 }
 
 export interface ExtractStageSpec {
@@ -304,6 +307,7 @@ async function buildNodeSpec(
               name: f.name,
               description: await describeSlot(f.description, options),
               ...(type !== undefined ? { type } : {}),
+              ...(f.nullable ? { nullable: f.nullable } : {}),
             };
           }),
         ),
@@ -373,6 +377,7 @@ async function buildShapeNodeSpec(
               name: f.name,
               description: await describeOptional(f.description, options),
               ...(type !== undefined ? { type } : {}),
+              ...(f.nullable ? { nullable: f.nullable } : {}),
             };
           }),
         ),
@@ -2250,7 +2255,8 @@ function addResources(
  * inline `name: "…"` shortcut, or `<text>`, whether inline or from a node
  * declaration (`node entry: <Entry>`, whose spec is the inline block's) — by
  * the stage that last declares them (a later stage re-declaring a field
- * transforms it, type included). The checker's half of this rule is
+ * transforms it, type included). A field annotated `<text | null>` is not: its
+ * author asked for the absence. The checker's half of this rule is
  * `readsAsPresentText`.
  *
  * Text has a value that means "nothing found", `""`, so the program is handed
@@ -2265,13 +2271,14 @@ function addResources(
 function presentTextFields(spec: ExtractNodeSpec): Set<string> {
   // Version 1 hands an unfound text over absent, like every other field.
   if (before(currentLanguageVersion(), 2)) return new Set();
-  const typeOf = new Map<string, FieldType | undefined>();
+  const declared = new Map<string, ExtractFieldSpec>();
   for (const stage of spec.stages) {
-    for (const field of stage.fields) typeOf.set(field.name, field.type);
+    for (const field of stage.fields) declared.set(field.name, field);
   }
   const text = new Set<string>();
-  for (const [name, type] of typeOf) {
-    if (type === undefined || type === 'text') text.add(name);
+  for (const [name, field] of declared) {
+    if (field.nullable === true) continue;
+    if (field.type === undefined || field.type === 'text') text.add(name);
   }
   return text;
 }

@@ -750,6 +750,9 @@ export interface ExtractFieldInfo {
    *  even when it didn't resolve to a type here (missing schema / bad borrow),
    *  so we never suggest annotating a field that's already annotated. */
   annotationRaw?: string;
+  /** `<text | null>` — the author asked for a missing field to arrive null,
+   *  so even a text field reads `text | absent`. */
+  nullable?: true;
   /** Annotation suggestions already emitted for this field (dedupe key:
    *  the suggested annotation text). */
   suggested?: Set<string>;
@@ -759,10 +762,12 @@ export interface ExtractFieldInfo {
  * Does this extracted field read as PRESENT text? Plain text is — the inline
  * `name: "…"` shortcut or `<text>`, inline or from a node declaration alike —
  * because the engine hands a text nobody found over as `""` (its
- * `presentTextFields`, the runtime half of this rule). A typed field, or one
- * whose annotation did not resolve here, is not.
+ * `presentTextFields`, the runtime half of this rule). A typed field, one
+ * whose annotation did not resolve here, or one annotated `<text | null>`, is
+ * not.
  */
 export function readsAsPresentText(field: ExtractFieldInfo): boolean {
+  if (field.nullable === true) return false;
   return field.explicit === 'text' || (field.explicit === undefined && field.annotationRaw === undefined);
 }
 
@@ -3538,7 +3543,7 @@ export class ExpressionTyping {
         : ['always false', `\`${label} == ""\``];
     this.report(
       TypedDiagnosticCodes.PRESENCE_TEST_ON_TEXT,
-      `'${label}' is extracted text, and a text the model did not find is "" — never absent — so testing it for null is ${verdict}. Test whether it is empty instead: ${fix}.`,
+      `'${label}' is extracted text, and a text the model did not find is "" — never absent — so testing it for null is ${verdict}. Annotate it \`<text | null>\` to keep the null test, or test whether it is empty instead: ${fix}.`,
     );
     return true;
   }

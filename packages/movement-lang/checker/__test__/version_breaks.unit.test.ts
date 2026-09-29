@@ -105,6 +105,14 @@ describe('extracted text', () => {
     expect(errors(body, V2)).toEqual([]);
   });
 
+  it('`<text | null>` is no break: under both, a read may be absent and a null test is meaningful', () => {
+    const nullable = EXTRACT.replace('title: <text> "the title"', 'title: <text | null> "the title"');
+    for (const version of [V1, V2]) {
+      expect(errors(`${nullable}  write chat-[:note]-> { Body: r.title }`, version)).toEqual(['MOV_ABSENT_REQUIRED']);
+      expect(errors(`${nullable}  if EXISTS(r.title) { write chat-[:note]-> { Body: r.title } }`, version)).toEqual([]);
+    }
+  });
+
   it('an unannotated field into a number is a suggestion under 1 and refused under 2', () => {
     const body = `${EXTRACT}  write chat-[:note]-> { Body: "x", Count: r.note }`;
     expect(errors(body, V1)).toEqual([]);

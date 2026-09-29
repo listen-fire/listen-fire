@@ -196,6 +196,80 @@ describe('an extracted text field is present', () => {
   });
 });
 
+const NULLABLE = [
+  '  r = extract from [c.`Name`] {',
+  '    title: <text | null> "the title"',
+  '    plain: <text> "a plain title"',
+  '    note: "a note"',
+  '    size: <number | null> "how many"',
+  '    verdict: <Verdict | null> "yes or no"',
+  '  }',
+  '',
+].join('\n');
+
+describe('an extracted field annotated `<text | null>`', () => {
+  it('reads text | absent, so a plain write is refused until discharged', () => {
+    const body = `${NULLABLE}  write chat-[:note]-> { Body: r.title }`;
+    expect(codes(body)).toEqual(['MOV_ABSENT_REQUIRED']);
+    expect(messages(body)).toContain('(text (or absent))');
+    expect(codes(`${NULLABLE}  write chat-[:note]-> { Body ?: r.title }`)).toEqual([]);
+  });
+
+  it('may be tested for null, in every spelling — no MOV_PRESENCE_TEST_ON_TEXT', () => {
+    for (const test of ['r.title == null', 'r.title != null', 'ISNULL(r.title)', 'EXISTS(r.title)']) {
+      expect(codes(`${NULLABLE}  if ${test} { write chat-[:note]-> { Body: "y" } }`)).toEqual([]);
+    }
+  });
+
+  it('a guard narrows it inside the arm, and a guard clause for everything after', () => {
+    const write = 'write chat-[:note]-> { Body: r.title }';
+    expect(codes(`${NULLABLE}  if EXISTS(r.title) { ${write} }`)).toEqual([]);
+    expect(codes(`${NULLABLE}  if r.title != null { ${write} }`)).toEqual([]);
+    expect(codes(`${NULLABLE}  if r.title == null { ERROR("no title") }\n  ${write}`)).toEqual([]);
+    expect(codes(`${NULLABLE}  if EXISTS(r.title) { }\n  ${write}`)).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('leaves its neighbours as they were: `<text>` and the shortcut stay present', () => {
+    expect(codes(`${NULLABLE}  write chat-[:note]-> { Body: r.plain }`)).toEqual([]);
+    expect(codes(`${NULLABLE}  write chat-[:note]-> { Body: r.note }`)).toEqual([]);
+    expect(codes(`${NULLABLE}  if EXISTS(r.plain) { }`)).toEqual(['MOV_PRESENCE_TEST_ON_TEXT']);
+  });
+
+  it('on a typed field means what the type already did', () => {
+    expect(codes(`${NULLABLE}  write chat-[:note]-> { Count: r.size }`)).toEqual(['MOV_ABSENT_REQUIRED']);
+    expect(codes(`${NULLABLE}  if EXISTS(r.size) { write chat-[:note]-> { Count: r.size } }`)).toEqual([]);
+    expect(codes(`${NULLABLE}  write chat-[:note]-> { Body ?: r.verdict }`)).toEqual([]);
+  });
+
+  it('on a declared node\'s field, used as an extraction shape, types the same', () => {
+    const source = `${PRELUDE}
+node Entry: "each item" {
+  name: <text | null> "its name"
+  label: <text> "its label"
+}
+movement m(c: <chat-[:channel]->>) {
+  r = extract from [c.\`Name\`] {
+    node entry: <Entry>
+  }
+  r-[e:entry]-> {
+    write chat-[:note]-> { Body: e.label }
+    write chat-[:note]-> { Body: e.name }
+    if EXISTS(e.name) { write chat-[:note]-> { Body: e.name } }
+  }
+}`;
+    const found = checkProgram(parseProgram(source), catalog).filter((d) => (d.severity ?? 'error') === 'error');
+    expect(found.map((d) => d.code)).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('is what the refusal on a plain text field names first', () => {
+    const body = `${EXTRACT}  if EXISTS(r.note) { }`;
+    expect(codes(body)).toEqual(['MOV_PRESENCE_TEST_ON_TEXT']);
+    const message = messages(body);
+    expect(message).toContain('Annotate it `<text | null>` to keep the null test');
+    expect(message.indexOf('<text | null>')).toBeLessThan(message.indexOf('r.note != ""'));
+  });
+});
+
 describe('a dict literal is typed by its keys', () => {
   it('a written key that exists reads its own type, present', () => {
     expect(codes('  d = { bucket: "a", packed: 3 }\n  write chat-[:note]-> { Body: AT(d, "bucket") }')).toEqual([]);
