@@ -15,9 +15,33 @@
 // here is the pure half — type ids, descriptors, entry points, and payload
 // normalizers; the client-backed reads live on the adapter.
 
+import type { EdgeCapability } from '#shared/expression/types';
 import type { SchemaEntryPoint, SchemaTypeDescriptor } from '../../types';
 
 export const SLACK_CHANNEL_TYPE_ID = 'slack:channel';
+
+/** The surface name of a message's `ts` — named once, because the channel's
+ *  `Messages` edge declares its natural order by it. */
+export const SLACK_MESSAGE_TIMESTAMP_NAME = 'Timestamp';
+
+/**
+ * A channel's `Messages`. BOUNDED, not native: a time bound on `Timestamp`
+ * narrows the fetch at Slack (the adapter turns it into a history window), but
+ * every other predicate — and every other ORDER BY — is satisfied over the
+ * page-bounded set the hop yields. Declaring it native would tell the checker
+ * that only the server-filterable fields may appear in a WHERE, which is both
+ * untrue here and a step backwards for authors.
+ *
+ * `conversations.history` takes no sort argument and answers newest first, so
+ * `Timestamp` descending is the natural order — the one ORDER BY whose LIMIT
+ * may bound the page (`channelMessages`).
+ */
+export const SLACK_CHANNEL_MESSAGES_CAPABILITY = {
+  filter: 'bounded',
+  order: 'bounded',
+  supportsLimit: true,
+  naturalOrder: { field: SLACK_MESSAGE_TIMESTAMP_NAME, direction: 'desc' },
+} satisfies EdgeCapability;
 export const SLACK_USER_TYPE_ID = 'slack:user';
 
 /** Collection names off the meta root — what block heads hop. */
@@ -98,13 +122,7 @@ export function describeChannel(input: { messageTypeId: string }): SchemaTypeDes
         direction: 'outgoing',
         name: SLACK_CHANNEL_EDGE_NAMES.messages,
         writable: true,
-        // BOUNDED, not native: a time bound on `Timestamp` narrows the fetch at
-        // Slack (the adapter turns it into a history window), but every other
-        // predicate — and every ORDER BY — is satisfied over the page-bounded
-        // set the hop yields. Declaring it native would tell the checker that
-        // only the server-filterable fields may appear in a WHERE, which is
-        // both untrue here and a step backwards for authors.
-        capability: { filter: 'bounded', order: 'bounded', supportsLimit: true },
+        capability: SLACK_CHANNEL_MESSAGES_CAPABILITY,
         // Inherently sequenced, which is a separate fact from the `order`
         // above: `conversations.history` takes no sort argument and answers
         // newest-first, and the hop returns that page as it came.

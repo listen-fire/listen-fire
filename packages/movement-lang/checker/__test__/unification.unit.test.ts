@@ -511,6 +511,28 @@ describe('a root collection declares its own capability', () => {
       expect(codes(source, schema).sort()).toEqual([T.HOP_FILTER_RESIDUAL, T.HOP_ORDER_ENGINE].sort());
     });
 
+    it(`${shape.collection}: the order the source already delivers costs nothing`, () => {
+      // A source that answers sorted by one field in one direction satisfies
+      // exactly that ORDER BY itself — nothing to sort here, so no cost to
+      // name. The residual field is the natural one on purpose: a field the
+      // source cannot sort BY ON REQUEST can still be the order it answers in.
+      const schema = rootShape({
+        ...shape,
+        capability: {
+          filter: 'native',
+          order: 'bounded',
+          supportsLimit: true,
+          naturalOrder: { field: shape.residual, direction: 'desc' },
+        },
+      });
+      expect(codes(program(`ORDER BY \`${shape.residual}\` DESC LIMIT 3`), schema)).toEqual([]);
+      // The reverse direction, another field, and the ASC default are sorts
+      // the source was never asked for: each still runs here and says so.
+      expect(codes(program(`ORDER BY \`${shape.residual}\` ASC LIMIT 3`), schema)).toEqual([T.HOP_ORDER_ENGINE]);
+      expect(codes(program(`ORDER BY \`${shape.residual}\` LIMIT 3`), schema)).toEqual([T.HOP_ORDER_ENGINE]);
+      expect(codes(program(`ORDER BY \`${shape.pushable}\` DESC LIMIT 3`), schema)).toEqual([T.HOP_ORDER_ENGINE]);
+    });
+
     it(`${shape.collection}: a bounded RECORD edge orders in silence`, () => {
       // The set is already in hand, bounded by the record the hop left — there
       // is no bigger fetch to warn about, so the warning is the ROOT's alone.

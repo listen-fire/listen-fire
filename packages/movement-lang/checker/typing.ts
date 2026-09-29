@@ -26,7 +26,7 @@ import {
   type TraversalStep,
 } from '@listen-fire/shared/expression/types';
 import { isNullLiteral, isPurePredicate } from '@listen-fire/shared/expression/filter';
-import { orderKeyProperty } from '@listen-fire/shared/expression/order_limit';
+import { isNaturalOrder, orderKeyProperty } from '@listen-fire/shared/expression/order_limit';
 import { quoteName } from '@listen-fire/shared/expression/formula';
 import { POSITION_SENTINEL } from '../expression/bridge';
 import {
@@ -4189,6 +4189,12 @@ export class ExpressionTyping {
             'warning',
           );
         }
+      } else if (
+        isNaturalOrder(cap, { field, direction: step.cardinality?.orderDirection ?? 'asc' })
+      ) {
+        // The order the source already delivers: satisfied there, so there is
+        // no sort to run here and no cost to name — and the LIMIT reaches the
+        // fetch. The adapter asks the same question before taking the LIMIT.
       } else if (cap.order === undefined) {
         this.report(
           TypedDiagnosticCodes.HOP_ORDER_UNSUPPORTED,

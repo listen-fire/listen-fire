@@ -10,6 +10,7 @@
 // Everything here is STATIC — no credential, no network — so `describe` is free
 // and the walk hydrates every target rather than stubbing.
 
+import type { EdgeCapability } from '#shared/expression/types';
 import type { SchemaEntryPoint, SchemaTypeDescriptor } from '../../types';
 import { META_RECORD_TYPE } from '../../types';
 import {
@@ -47,20 +48,33 @@ export const GMAIL_WRITE_RULE =
  *  wants more narrows the search rather than paging the mailbox. */
 export const GMAIL_SEARCH_CEILING = 100;
 
+/** The field Gmail's search is sorted by — named once, because the mailbox
+ *  search declares its natural order by it. */
+const DATE_FIELD_NAME = 'Date';
+
 const MESSAGES_DESCRIPTION =
   'Messages in the connected mailbox, newest first. A WHERE on `Subject`, ' +
   '`From`, `To`, `Cc`, `Labels`, `Date` or `Body` becomes a Gmail search, so a narrow ' +
   'walk costs one search rather than a scan; anything else is applied after the ' +
   `fetch. A walk stops at ${GMAIL_SEARCH_CEILING} messages — narrow it or give ` +
-  'it a LIMIT rather than expecting the whole mailbox.';
+  'it a LIMIT rather than expecting the whole mailbox. Every message is its own ' +
+  'request, so `ORDER BY Date DESC LIMIT n` — the order Gmail already answers ' +
+  `in — costs n requests; any other ORDER BY fetches up to ${GMAIL_SEARCH_CEILING} ` +
+  'and sorts them here.';
 
 /**
  * The root collection, served by Gmail's own search. The WHERE reaches the `q`
- * query and the LIMIT reaches the page size. The ORDER is NOT pushable: Gmail
- * returns newest first and takes no sort, so an author who wants another order
- * says so and the engine sorts what came back.
+ * query and the LIMIT reaches the page size. Gmail takes no sort and always
+ * answers newest first, so `Date` descending is satisfied at the source (the
+ * LIMIT rides with it) and every other order is `bounded`: fetched up to the
+ * ceiling and sorted by the engine.
  */
-const MAILBOX_SEARCH = { filter: 'native', order: 'bounded', supportsLimit: true } as const;
+export const GMAIL_MAILBOX_SEARCH = {
+  filter: 'native',
+  order: 'bounded',
+  supportsLimit: true,
+  naturalOrder: { field: DATE_FIELD_NAME, direction: 'desc' },
+} satisfies EdgeCapability;
 
 /**
  * The entry surface. `Attachment` is reachable ONLY through its message, so it
@@ -130,7 +144,7 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
       writable: true,
       // Nothing to link: a mail already in the mailbox cannot be "added" to it.
       linkable: false,
-      capability: MAILBOX_SEARCH,
+      capability: GMAIL_MAILBOX_SEARCH,
     },
     {
       fieldId: `fires:${GMAIL_MESSAGE_TYPE_ID}`,
@@ -162,7 +176,7 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: 'from', displayName: 'From', kind: 'string', writable: false, required: false, description: 'The "From" header whole, display name included ("Rita Okoye" <rita@…>). Read-only on a send too: mail always leaves as the connected mailbox, which is the only address this deployment is allowed to be. A WHERE reaches Gmail as a `from:` search.', capability: { filterOperators: ['eq', 'contains'] } },
     { fieldId: 'to', displayName: 'To', kind: 'string', cardinality: 'many', writable: true, required: false, description: 'The addresses on the "To" header — a list, each either a bare address or `"Name" <address>`. Required on a new message; a reply that leaves it unset answers whoever sent the parent. A WHERE reaches Gmail as a `to:` search.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
     { fieldId: 'cc', displayName: 'Cc', kind: 'string', cardinality: 'many', writable: true, required: false, description: 'The addresses on the "Cc" header, written the same way as `To`. A reply does NOT inherit the parent’s Cc — copy people in deliberately. A WHERE reaches Gmail as a `cc:` search.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
-    { fieldId: 'date', displayName: 'Date', kind: 'date', writable: false, required: false, description: 'When Gmail received the message. Bounds reach the search as `after:` / `before:`, which are whole-second and inclusive over there — the engine narrows the edges.', capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'], orderable: true } },
+    { fieldId: 'date', displayName: DATE_FIELD_NAME, kind: 'date', writable: false, required: false, description: 'When Gmail received the message. Bounds reach the search as `after:` / `before:`, which are whole-second and inclusive over there — the engine narrows the edges.', capability: { filterOperators: ['gt', 'gte', 'lt', 'lte'], orderable: true } },
     { fieldId: 'snippet', displayName: 'Snippet', kind: 'string', writable: false, required: false, description: "Gmail's own short preview." },
     { fieldId: 'body', displayName: 'Body', kind: 'string', writable: true, uiHint: 'textarea', required: false, description: 'On a read, the normalised body — plain text, derived from the HTML when only HTML arrived; use this for "what it says", and a `contains` reaches Gmail as a word search. On a send, the plain-text body. Every send needs a `Body` or an `HTML Body`.', capability: { filterOperators: ['contains'] } },
     { fieldId: 'bodyText', displayName: 'Plain Body', kind: 'string', writable: false, required: false, description: 'The plain-text alternative exactly as it arrived, or nothing when the message was HTML only. Read-only — `Body` is what a send sets.' },
@@ -243,4 +257,11 @@ export const GMAIL_MAILBOX_DESCRIPTOR: SchemaTypeDescriptor = {
  *  adapter does not own. */
 export function describeGmailType(typeId: string): SchemaTypeDescriptor | null {
   return DESCRIPTORS[typeId] ?? null;
+}
+
+/** The surface name of a Message field, from either spelling a hop may carry
+ *  (the internal fieldId or the display name). Undefined for no such field. */
+export function gmailMessageFieldName(name: string): string | undefined {
+  return MESSAGE_DESCRIPTOR.fields.find((f) => f.fieldId === name || f.displayName === name)
+    ?.displayName;
 }

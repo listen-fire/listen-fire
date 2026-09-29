@@ -12,6 +12,7 @@ jest.mock('../../../../logger', () => ({
 
 import type { TeamId } from '../../../../../generated/kysely/core/Team';
 import type { Expression } from '#shared/expression/types';
+import { applyHopOrderLimit, hopPushdown } from '#shared/expression/order_limit';
 import {
   ADAPTER_META_TYPE_ID,
   makeMetaPosition,
@@ -333,6 +334,12 @@ describe('describe', () => {
     // The send itself hangs off the MAILBOX, not off a position — the root's
     // own collection is where a new message is created.
     expect(Object.keys(agentSchema.writableRoots)).toEqual(['Message']);
+    // The order Gmail answers in names a real, orderable Message field by the
+    // name an ORDER BY writes — or the checker could never match it.
+    const natural = schema.collections['Messages']?.capability?.naturalOrder;
+    expect(natural).toEqual({ field: 'Date', direction: 'desc' });
+    expect(schema.positions['Message']?.properties['Date']).toBeDefined();
+    expect(schema.positions['Message']?.propertyCapabilities?.['Date']?.orderable).toBe(true);
   });
 });
 
@@ -389,24 +396,59 @@ describe('searching the mailbox', () => {
     expect(calls.list[0].query).toBeUndefined();
   });
 
-  it('takes a LIMIT only when no ORDER BY came with it', async () => {
+  it('takes a LIMIT only when no ORDER BY came with it, or the one Gmail answers in', async () => {
     const { adapter, calls } = adapterWith({ messages: [wireMessage({ id: 'm1' })] });
-    await adapter.getRelated({
-      position: makeMetaPosition('gmail'),
-      fieldId: 'Messages',
-      direction: 'outgoing',
-      limit: 3,
-    });
+    const walk = (extra: Partial<Parameters<typeof adapter.getRelated>[0]>) =>
+      adapter.getRelated({
+        position: makeMetaPosition('gmail'),
+        fieldId: 'Messages',
+        direction: 'outgoing',
+        limit: 3,
+        ...extra,
+      });
+
+    await walk({});
     expect(calls.list[0].maxResults).toBe(3);
 
-    await adapter.getRelated({
+    // Newest first IS the order Gmail answers in, whichever spelling of the
+    // field the hop carries: the LIMIT reaches the request.
+    await walk({ orderBy: { fieldId: 'Date', direction: 'desc' } });
+    expect(calls.list[1].maxResults).toBe(3);
+    await walk({ orderBy: { fieldId: 'date', direction: 'desc' } });
+    expect(calls.list[2].maxResults).toBe(3);
+
+    // Any other order is the engine's sort, so the fetch runs to the ceiling.
+    await walk({ orderBy: { fieldId: 'Date', direction: 'asc' } });
+    expect(calls.list[3].maxResults).toBe(100);
+    await walk({ orderBy: { fieldId: 'Subject', direction: 'desc' } });
+    expect(calls.list[4].maxResults).toBe(100);
+  });
+
+  it('answers ORDER BY `Date` ASC LIMIT n with the OLDEST n, not the first n newest', async () => {
+    // Gmail hands the search back newest first; the oldest two are at the END.
+    const day = (d: number) => Date.UTC(2026, 8, d, 9, 0);
+    const messages = [5, 4, 3, 2, 1].map((d) => wireMessage({ id: `m${d}`, at: day(d) }));
+    const { adapter, calls } = adapterWith({ messages });
+    const cardinality = {
+      mode: 'n' as const,
+      limit: 2,
+      orderBy: property('Date'),
+      orderDirection: 'asc' as const,
+    };
+    const pushed = hopPushdown({ cardinality });
+    const fetched = await adapter.getRelated({
       position: makeMetaPosition('gmail'),
       fieldId: 'Messages',
       direction: 'outgoing',
-      limit: 3,
-      orderBy: { fieldId: 'Date', direction: 'asc' },
+      ...pushed,
     });
-    expect(calls.list[1].maxResults).toBe(100);
+    expect(calls.list[0].maxResults).toBe(100);
+    expect(fetched).toHaveLength(5);
+    // The engine's sort over the bounded fetch — the walker's own last step.
+    const answered = await applyHopOrderLimit(fetched, cardinality, {
+      value: (r) => adapter.getFieldValue({ position: r.position, fieldId: 'Date' }),
+    });
+    expect(answered.map((r) => positionRecordId(r.position))).toEqual(['m1', 'm2']);
   });
 });
 

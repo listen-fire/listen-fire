@@ -564,6 +564,9 @@ describe('Slack channel history pushdown', () => {
       filter: 'bounded',
       order: 'bounded',
       supportsLimit: true,
+      // Newest first is what `conversations.history` answers — the one order
+      // whose LIMIT may bound the page.
+      naturalOrder: { field: 'Timestamp', direction: 'desc' },
     });
   });
 });

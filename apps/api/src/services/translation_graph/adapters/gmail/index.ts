@@ -13,6 +13,8 @@
 
 import { Readable } from 'node:stream';
 
+import { isNaturalOrder } from '#shared/expression/order_limit';
+
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import ExternalServiceType from '../../../../generated/kysely/automations/ExternalServiceType';
 import type {
@@ -47,11 +49,13 @@ import { resolveGmailClient, type GmailApiClient } from './client';
 import { gmailQueryFromWhere } from './filter';
 import {
   GMAIL_MAILBOX_DESCRIPTOR,
+  GMAIL_MAILBOX_SEARCH,
   GMAIL_ROOT,
   GMAIL_SEARCH_CEILING,
   GMAIL_WRITE_RULE,
   describeGmailType,
   gmailEntryPoints,
+  gmailMessageFieldName,
 } from './schema';
 import {
   GMAIL_ADAPTER_TYPE,
@@ -106,7 +110,7 @@ movement triage(msg: <gmail-[:Message]->>) {
 recent = gmail-[m:Messages WHERE \`From\` contains "acme.com" AND \`Date\` >= DATE.TODAY - 7 DAYS]->
 \`\`\`
 
-\`Subject\`, \`From\`, \`To\`, \`Cc\`, \`Labels\`, \`Date\` and \`Body\` reach Gmail's own search; everything else is applied after the fetch, so the result is the same either way and only the amount fetched changes. A walk stops at ${GMAIL_SEARCH_CEILING} messages, because every message costs its own request — narrow it or give it a \`LIMIT\` rather than expecting the whole mailbox.
+\`Subject\`, \`From\`, \`To\`, \`Cc\`, \`Labels\`, \`Date\` and \`Body\` reach Gmail's own search; everything else is applied after the fetch, so the result is the same either way and only the amount fetched changes. A walk stops at ${GMAIL_SEARCH_CEILING} messages, because every message costs its own request — narrow it or give it a \`LIMIT\` rather than expecting the whole mailbox. Gmail answers newest first, so \`ORDER BY Date DESC LIMIT n\` costs n requests; any other \`ORDER BY\` fetches up to ${GMAIL_SEARCH_CEILING} and sorts them here.
 
 ### attachments
 
@@ -328,10 +332,17 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
   private async searchMessages(input: GetRelatedInput): Promise<RelatedResult[]> {
     const client = await this.client();
     const query = gmailQueryFromWhere(input.where);
-    // A LIMIT rides along only when no ORDER BY came with it: a limit taken
-    // without the sort it came with answers a different question.
+    // A LIMIT rides along only when the order it came with is the one Gmail
+    // answers in (or none was asked for): a limit taken without the sort it
+    // came with answers a different question — the newest n, not the oldest.
+    const inSourceOrder =
+      input.orderBy === undefined ||
+      isNaturalOrder(GMAIL_MAILBOX_SEARCH, {
+        field: gmailMessageFieldName(input.orderBy.fieldId) ?? input.orderBy.fieldId,
+        direction: input.orderBy.direction,
+      });
     const cap = Math.min(
-      input.orderBy === undefined ? (input.limit ?? GMAIL_SEARCH_CEILING) : GMAIL_SEARCH_CEILING,
+      inSourceOrder ? (input.limit ?? GMAIL_SEARCH_CEILING) : GMAIL_SEARCH_CEILING,
       GMAIL_SEARCH_CEILING,
     );
 

@@ -1050,6 +1050,9 @@ export interface AuthoringDiagnostic {
     endCol: number;
     /** The offending source line, verbatim — repair context without re-reading. */
     sourceLine: string;
+    /** Marks a construct whose meaning changed between the pin and the version
+     *  checked, on an upgrade check (the checker's `Diagnostic.upgrade`). */
+    upgrade?: true;
 }
 export interface MovementValidityAssessment {
     status: MovementValidityStatus;
@@ -4784,6 +4787,10 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                         supportsLimit: boolean;
                         filter?: "bounded" | "native" | undefined;
                         order?: "bounded" | "native" | undefined;
+                        naturalOrder?: {
+                            field: string;
+                            direction: "asc" | "desc";
+                        } | undefined;
                     } | undefined;
                     sequenced?: "document" | "chronological" | "arrival" | undefined;
                     readable?: boolean | undefined;

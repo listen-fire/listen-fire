@@ -1122,6 +1122,9 @@ export const edgeCapabilitySchema = z.object({
   filter: edgePushModeSchema.optional(),
   order: edgePushModeSchema.optional(),
   supportsLimit: z.boolean(),
+  naturalOrder: z
+    .object({ field: z.string(), direction: z.enum(['asc', 'desc']) })
+    .optional(),
 }) satisfies z.ZodType<EdgeCapability>;
 
 /**

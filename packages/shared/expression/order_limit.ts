@@ -6,7 +6,7 @@
 // adapters can import it to self-service ordering/limiting over a bounded set.
 
 import { isPurePredicate } from './filter';
-import type { EdgeStep, Expression } from './types';
+import type { EdgeCapability, EdgeStep, Expression, NaturalOrder } from './types';
 
 /** Total order for ORDER BY keys: numbers numerically, else lexicographically;
  *  empty (null/undefined) sorts last regardless of direction. */
@@ -38,6 +38,24 @@ export function hopOrderKey(cardinality: HopCardinality): Expression | undefined
  */
 export function orderKeyProperty(key: Expression | undefined): string | undefined {
   return key !== undefined && key.type === 'property' ? key.propertyTypeId : undefined;
+}
+
+/**
+ * Whether an ORDER BY asks for exactly the order the edge already delivers its
+ * records in (`EdgeCapability.naturalOrder`) — same field, same direction. Such
+ * an ORDER BY is satisfied at the source: nothing to sort afterwards, so a
+ * LIMIT taken there keeps the right records. Anything else — another field, the
+ * opposite direction, an edge that declares no natural order — is not.
+ *
+ * `order.field` must already be in the surface spelling the declaration uses;
+ * the checker holds that spelling, an adapter resolves to it first.
+ */
+export function isNaturalOrder(
+  capability: Pick<EdgeCapability, 'naturalOrder'> | undefined,
+  order: NaturalOrder,
+): boolean {
+  const natural = capability?.naturalOrder;
+  return natural !== undefined && natural.field === order.field && natural.direction === order.direction;
 }
 
 /** The ORDER BY property a hop cardinality names, when its key is a bare

@@ -30,6 +30,7 @@ import { parseSlackEvents } from '../../../webhook_sync/providers/slack';
 import { webhookEventToDiscriminable } from '../../../webhook_sync/event_conversion';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 
+import { isNaturalOrder } from '#shared/expression/order_limit';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import ExternalServiceType from '../../../../generated/kysely/automations/ExternalServiceType';
 import type {
@@ -116,6 +117,8 @@ import {
   readChannelField,
   readGraphEntryPoints,
   readUserField,
+  SLACK_CHANNEL_MESSAGES_CAPABILITY,
+  SLACK_MESSAGE_TIMESTAMP_NAME,
   type SlackChannelRecord,
   type SlackUserRecord,
 } from './read_graph';
@@ -701,7 +704,7 @@ export class SlackAdapter extends BaseAdapter {
           },
           {
             fieldId: SLACK_MESSAGE_FIELDS.ts,
-            displayName: 'Timestamp',
+            displayName: SLACK_MESSAGE_TIMESTAMP_NAME,
             // A real instant, not the raw `ts` string — so a movement can
             // compare it to `@current_date` or ask for `WITHIN 7d` and have
             // Slack itself narrow the fetch (see `channelMessages`). The raw
@@ -1415,7 +1418,12 @@ export class SlackAdapter extends BaseAdapter {
     // is about to take, and the messages the author asked for are simply gone.
     const slackOrder =
       input.orderBy === undefined
-      || (isTimestampRead(input.orderBy.fieldId) && input.orderBy.direction === 'desc');
+      || isNaturalOrder(SLACK_CHANNEL_MESSAGES_CAPABILITY, {
+        field: isTimestampRead(input.orderBy.fieldId)
+          ? SLACK_MESSAGE_TIMESTAMP_NAME
+          : input.orderBy.fieldId,
+        direction: input.orderBy.direction,
+      });
     const messages = await this.pageHistory({
       client,
       channelId,

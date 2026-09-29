@@ -78,6 +78,31 @@ export interface EdgeCapability {
   order?: EdgePushMode;
   /** Whether a LIMIT can be applied to this edge's results. */
   supportsLimit: boolean;
+  /**
+   * The order the source ALREADY delivers this edge's records in, when that
+   * order is one ORDER BY can name: sorted by one field of the landed record,
+   * in one direction. Gmail's search answers newest first, so its `Messages`
+   * edge delivers `Date` descending without being asked.
+   *
+   * It refines `order` rather than adding a second push mode: an ORDER BY that
+   * names exactly this field and direction is satisfied AT THE SOURCE whatever
+   * `order` says — no engine sort, and its LIMIT may bound the fetch — while
+   * every other ORDER BY is satisfied the way `order` says. The checker's cost
+   * note and the adapter's LIMIT pushdown both ask `isNaturalOrder`.
+   *
+   * `field` is the SURFACE name (what an ORDER BY writes and what
+   * `GetRelatedInput.orderBy.fieldId` carries), because both consumers compare
+   * against that. Declare it only where the provider documents the order or
+   * the adapter sorts before returning — the same rule as `EdgeSequencing`,
+   * which an edge declaring this should also carry.
+   */
+  naturalOrder?: NaturalOrder;
+}
+
+/** One field and one direction — the order an edge's records arrive in. */
+export interface NaturalOrder {
+  field: string;
+  direction: 'asc' | 'desc';
 }
 
 // ── Inherent sequencing (a DIFFERENT fact from `EdgeCapability.order`) ──
