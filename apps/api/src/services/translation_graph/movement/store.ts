@@ -156,6 +156,17 @@ export async function getMovementRowByName(input: {
   return row ? toMovementRow(row) : null;
 }
 
+/** What keeps a movement off the release's current language version, as last
+ *  recorded — null when it is already on it, when nothing was recorded, or
+ *  when what was recorded was checked against an older current version. */
+export function pendingUpgradeDiagnostics(
+  row: Pick<MovementRow, 'languageVersion' | 'upgradeDiagnostics' | 'upgradeCheckedAgainst'>,
+): AuthoringDiagnostic[] | null {
+  if (row.languageVersion === CURRENT_LANGUAGE_VERSION) return null;
+  if (row.upgradeCheckedAgainst !== CURRENT_LANGUAGE_VERSION) return null;
+  return row.upgradeDiagnostics;
+}
+
 /** Every team's movements — the deploy check's sweep, oldest first. */
 export async function listAllMovementRows(): Promise<MovementRow[]> {
   const rows = await getAutomationsQb(['movement'])

@@ -241,6 +241,23 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         annotations: { readOnlyHint: true },
         endpoint: { method: 'POST', path: '/v1/automation/automations/validate' },
       },
+      upgradeAutomation: {
+        description:
+          "Move a saved automation onto the current version of the automation language. Every automation is written in a language version (listAutomations' `languageVersion`); an older one keeps running exactly as it always has, and `upgradeDiagnostics` in listAutomations lists what stands between it and the current version. This validates it under the current version and returns `status`, `from`, `to`, `diagnostics` and a `message`: `blocked` — repair the diagnostics (validateAutomation with `languageVersion` set to `to.version`), save, and call again; `needs_acknowledgement` — it is clean, and a second call with acknowledge: true moves it; `upgraded`; `already_current`; `unverified` — a connected system could not be read. Nothing changes without acknowledge: true. A warning blocks as surely as an error: it marks something whose meaning changed between versions.",
+        inputSchema: {
+          automation: z.string().describe('The automation id (from listAutomations).'),
+          acknowledge: z
+            .boolean()
+            .optional()
+            .describe(
+              'Move it once the check is clean. Without it, the call only reports. Pass it after telling the user what upgrading changes (nothing, when the result is clean).',
+            ),
+          team: z.string().optional().describe('Team id (see instructions).'),
+        },
+        title: 'Upgrade an automation to the current language version',
+        annotations: { destructiveHint: false },
+        endpoint: { method: 'POST', path: '/v1/automation/automations/upgrade' },
+      },
       saveAutomation: {
         description:
           'Save an automation program and provision its listeners (authoring → live). If it is valid, it goes live. If it cannot be verified or has errors, your text is still saved but nothing new goes live — the result comes back as needsConfirmation so you can fix it, or check with the user, first. Pass acknowledgeErrors: true to ship it anyway: it then replaces whatever was running (even broken) and will run and fail visibly. There is no "draft" that quietly keeps the last good version running — what goes live is what you save and confirm. When updating an EXISTING automation, pass expectedRevision so a concurrent edit is caught rather than silently overwritten. Returns needsConfirmation/diagnostics, the provisioned listeners (each channel and the inbound address for email), whether an on-demand run is possible (runnable), storyUrl, and `warnings` — things that saved fine but would surprise the user (a movement name another automation already fires; listeners retired because the saved source could not be read). Always relay a warning to the user in your own words. storyUrl is a link to a picture of what the automation does — its triggers, steps, and the records it touches — for a person to look at, not something you can open yourself; hand it out as a labelled link once the save goes live. Anyone holding it can view with no login, until the automation is deleted. Pass id to re-save/rename. Run validateAutomation first. For a small, targeted change to an existing automation — one line, one field — editAutomation is cheaper: it anchors the change on a snippet instead of resending the whole program.',
@@ -286,7 +303,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       listAutomations: {
         description:
-          "List the saved automations across every team this connection covers: each one's id, name, status, listeners, storyUrl, the team it lives in (teamId, teamName), its `languageVersion` (the version of the automation language it is written in, as { version, name }) and `checkedAgainst` (the version its last check ran under). Use the id with getAutomation, saveAutomation, or runAutomation. storyUrl is a link to a picture of what an automation does, for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see one. Anyone holding a link can view it with no login, until that automation is deleted.",
+          "List the saved automations across every team this connection covers: each one's id, name, status, listeners, storyUrl, the team it lives in (teamId, teamName), its `languageVersion` (the version of the automation language it is written in, as { version, name }), `checkedAgainst` (the version its last check ran under), and `upgradeDiagnostics` — when it is on an older language version, what stands between it and the current one (null when nothing does or nothing is recorded; see upgradeAutomation). Use the id with getAutomation, saveAutomation, or runAutomation. storyUrl is a link to a picture of what an automation does, for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see one. Anyone holding a link can view it with no login, until that automation is deleted.",
         annotations: { readOnlyHint: true },
         inputSchema: {},
         title: 'List automations',

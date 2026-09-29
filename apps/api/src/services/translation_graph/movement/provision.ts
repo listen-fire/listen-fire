@@ -103,6 +103,7 @@ import {
   listDerivedTriggerRowsForMovements,
   listMovementRows,
   listenersFiringMovementNames,
+  pendingUpgradeDiagnostics,
   recordDerivedTriggerLink,
   recordValidityOutcome,
   upsertMovementRow,
@@ -117,6 +118,7 @@ import { revokeCallbacksForRuns } from '../../movement_engine/callback_store';
 import {
   assessMovementValidity,
   diagnoseMovementSource,
+  type AuthoringDiagnostic,
   type MovementValidityAssessment,
 } from './authoring';
 
@@ -1324,6 +1326,10 @@ export interface MovementListItem {
   validityCheckedAgainst: LanguageVersion | null;
   /** The language version the movement is written against (its pin). */
   languageVersion: LanguageVersion;
+  /** What keeps it off the current language version — the errors and warnings
+   *  validating it under that version found (pendingUpgradeDiagnostics). Null
+   *  when it is on it, or nothing is recorded. */
+  upgradeDiagnostics: AuthoringDiagnostic[] | null;
   /** First listener's channel (null for libraries). */
   kind: string | null;
   /** Derived listeners — one per `listen` statement of the last shipped save. */
@@ -1364,6 +1370,7 @@ export async function listMovements(teamId: string): Promise<MovementListItem[]>
       validityCheckedAt: row.validityCheckedAt,
       validityCheckedAgainst: row.validityCheckedAgainst,
       languageVersion: row.languageVersion,
+      upgradeDiagnostics: pendingUpgradeDiagnostics(row),
       kind: listeners[0]?.kind ?? null,
       listeners,
       runnable: isRunnable(row),
@@ -1400,6 +1407,8 @@ export async function getMovement(input: {
   const listeners = (await listDerivedTriggerRows(row.id)).map(toListenerInfo);
   return {
     ...row,
+    // Only what still stands between it and the current version.
+    upgradeDiagnostics: pendingUpgradeDiagnostics(row),
     listeners,
     kind: listeners[0]?.kind ?? null,
     inboundAddress: listeners[0]?.inboundAddress ?? null,

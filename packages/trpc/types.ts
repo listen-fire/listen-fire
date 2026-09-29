@@ -1039,6 +1039,25 @@ export interface DescribedInstance {
     capability?: string;
 }
 
+export interface AuthoringDiagnostic {
+    code: string;
+    message: string;
+    severity: 'error' | 'warning' | 'info';
+    /** 1-based line/col into the source. */
+    line: number;
+    col: number;
+    endLine: number;
+    endCol: number;
+    /** The offending source line, verbatim — repair context without re-reading. */
+    sourceLine: string;
+}
+export interface MovementValidityAssessment {
+    status: MovementValidityStatus;
+    /** Structured `validity_reason`: `{ diagnostics }` for invalid,
+     *  `{ gaps }` for unverified, `null` for valid. */
+    reason: unknown;
+}
+
 /** Runtime validity of the CURRENT source against the adapters' CURRENT live
  *  shape. Null = never checked.
  *  See plans/2026-07-13-movement-validity-lifecycle. */
@@ -1067,6 +1086,11 @@ export interface MovementRow {
     /** The language version this movement is written against — stamped at first
      *  save, never moved by an edit. Validation and runs of it use this. */
     languageVersion: LanguageVersion;
+    /** What stands between this movement and `upgradeCheckedAgainst`: the error
+     *  and warning diagnostics validating it under that version found. Null =
+     *  nothing recorded (never checked, or already on that version). */
+    upgradeDiagnostics: AuthoringDiagnostic[] | null;
+    upgradeCheckedAgainst: LanguageVersion | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -1097,13 +1121,6 @@ export interface DependentCheckResult {
     ok: boolean;
     /** Error-severity diagnostics found (0 when ok). */
     problemCount: number;
-}
-
-export interface MovementValidityAssessment {
-    status: MovementValidityStatus;
-    /** Structured `validity_reason`: `{ diagnostics }` for invalid,
-     *  `{ gaps }` for unverified, `null` for valid. */
-    reason: unknown;
 }
 
 export interface ProvisionedListener {
@@ -1206,6 +1223,10 @@ export interface MovementListItem {
     validityCheckedAgainst: LanguageVersion | null;
     /** The language version the movement is written against (its pin). */
     languageVersion: LanguageVersion;
+    /** What keeps it off the current language version — the errors and warnings
+     *  validating it under that version found (pendingUpgradeDiagnostics). Null
+     *  when it is on it, or nothing is recorded. */
+    upgradeDiagnostics: AuthoringDiagnostic[] | null;
     /** First listener's channel (null for libraries). */
     kind: string | null;
     /** Derived listeners — one per `listen` statement of the last shipped save. */
