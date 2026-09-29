@@ -442,6 +442,21 @@ ref = TEXT.REGEX_EXTRACT(m.\`Subject\`, "(DEAL-\\\\d+)")
 slug = TEXT.SLUG("Acme Corp Ltd.")   # "acme-corp-ltd"
 \`\`\`
 
+### TEXT.PAIRS
+
+\`TEXT.PAIRS(record, separator?)\` → \`text\`, always present — a record or a dict rendered as \`key=value\` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by \`separator\` (default \`" | "\`). Each value renders exactly as \`\${…}\` interpolation would: absent is empty, a boolean is \`true\`/\`false\`, a number is \`TOSTRING\`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on \`<json>\`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
+
+Project A's composer posts one Slack line per candidate row:
+
+\`\`\`
+summary = TEXT.PAIRS({ name: c.\`Name\`, url: c.\`Website\`, stage: c.\`Stage\` })
+# "name=Acme | url=acme.com | stage=Series A"
+\`\`\`
+\`\`\`
+line = "candidate — \${TEXT.PAIRS({ name: c.\`Name\`, url: c.\`Website\` }, ", ")}"
+# "candidate — name=Acme, url=acme.com"
+\`\`\`
+
 ### URL.HOST
 
 \`URL.HOST(text)\` → \`text | absent\` — the host, lowercased and otherwise verbatim (\`www.\` kept, no port, no path). Takes a full URL (\`https://acme.com\`) or a scheme-less address (\`acme.com\`, \`acme.com:8080\`, \`www.Acme.com/path\`) — the bare form is read as if \`http://\` were in front of it. Absent for an email (\`joe@acme.com\` names an account, not a host) and for text that names no address at all.

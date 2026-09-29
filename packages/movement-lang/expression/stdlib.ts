@@ -103,6 +103,17 @@ interface StdlibFunctionCommon {
     /** A message when the literal is wrong, undefined when it is fine. */
     check: (value: string) => string | undefined;
   }>;
+  /**
+   * The one argument that has to be KEYED — a dict, or a typed extracted
+   * record — rather than an ordinary value (`TEXT.PAIRS`'s first). The
+   * registry otherwise has no way to say "this argument's shape is a
+   * record": arity is a count and `literalArgs` is about parsed strings,
+   * neither says anything about a value's structure, so this is the
+   * smallest addition that lets the checker refuse `<json>` (a system's
+   * opaque data looks keyed at the write layer, but the checker cannot see
+   * its keys) while accepting a dict literal or a positioned record.
+   */
+  recordArg?: { index: number };
 }
 
 /** The ordinary member: its arguments are everything it sees. */
@@ -820,6 +831,32 @@ function textSlug(args: unknown[]): unknown {
     .replace(/^-+|-+$/g, '');
 }
 
+/** A single field's value, rendered exactly as `${\u2026}` interpolation renders
+ *  one \u2014 absent is empty, everything else is `String(value)` (a boolean
+ *  prints `true`/`false`, a number is what `TOSTRING` gives it). */
+function textPairsScalar(value: unknown): string {
+  return value === null || value === undefined ? '' : String(value);
+}
+
+/** `record` is a plain keyed object at this layer whatever it came from \u2014 a
+ *  dict literal's own `Object.fromEntries`, or a materialised extracted
+ *  record \u2014 so own-key order IS the written order the checker promises
+ *  (`shape`'s key order for a dict literal, the declaration's field order
+ *  for a record). A value that is itself an object or an array is a nested
+ *  node/edge, not a scalar field, and is skipped rather than stringified \u2014
+ *  `[object Object]` helps nobody. */
+function textPairs(args: unknown[]): unknown {
+  const [record, separator] = args;
+  if (record == null || typeof record !== 'object' || Array.isArray(record)) return null;
+  const sep = typeof separator === 'string' ? separator : ' | ';
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+    if (value !== null && typeof value === 'object') continue; // nested node/edge \u2014 skip
+    parts.push(`${key}=${textPairsScalar(value)}`);
+  }
+  return parts.join(sep);
+}
+
 // ── URL ──────────────────────────────────────────────────────────────────────
 
 // This package declares no DOM/Node lib (`tsconfig.json`'s `lib: ["es2022"]`
@@ -881,6 +918,7 @@ function spec(
     returns: StdlibFunctionSpec['returns'];
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
+    recordArg?: StdlibFunctionCommon['recordArg'];
     apply: StdlibPureFunctionSpec['apply'];
   },
 ): StdlibPureFunctionSpec {
@@ -915,6 +953,7 @@ function common(
     returns: StdlibFunctionSpec['returns'];
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
+    recordArg?: StdlibFunctionCommon['recordArg'];
   },
 ): StdlibFunctionCommon {
   return {
@@ -927,6 +966,7 @@ function common(
     returns: options.returns,
     ...(options.maybeAbsent !== undefined ? { maybeAbsent: options.maybeAbsent } : {}),
     ...(options.literalArgs !== undefined ? { literalArgs: options.literalArgs } : {}),
+    ...(options.recordArg !== undefined ? { recordArg: options.recordArg } : {}),
   };
 }
 
@@ -1041,6 +1081,15 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         arity: { min: 1, max: 1 },
         returns: 'text',
         apply: textSlug,
+      }),
+      spec('TEXT', 'PAIRS', {
+        args: 'record, separator?',
+        summary:
+          'a record or dict rendered as key=value pairs, keys in written order, joined by `separator` (default " | ") — TEXT.PAIRS({ name: "Acme", url: "acme.com" }) is "name=Acme | url=acme.com"; a nested node/edge field is skipped, not stringified',
+        arity: { min: 1, max: 2 },
+        returns: 'text',
+        recordArg: { index: 0 },
+        apply: textPairs,
       }),
     ],
   },

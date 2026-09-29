@@ -623,6 +623,40 @@ describe('URL.HOST', () => {
   });
 });
 
+describe('TEXT.PAIRS', () => {
+  it('the worked example — the Project A composer row', () => {
+    expect(apply('text.pairs', { name: 'Acme', url: 'acme.com' })).toBe('name=Acme | url=acme.com');
+  });
+
+  it('a custom separator', () => {
+    expect(apply('text.pairs', { a: 1, b: 2 }, ', ')).toBe('a=1, b=2');
+  });
+
+  it('keys in written order', () => {
+    expect(apply('text.pairs', { z: 1, a: 2, m: 3 })).toBe('z=1 | a=2 | m=3');
+  });
+
+  it('renders each value exactly as interpolation would', () => {
+    expect(apply('text.pairs', { present: 'x', gone: null, on: true, off: false, n: 3 })).toBe(
+      'present=x | gone= | on=true | off=false | n=3',
+    );
+  });
+
+  it('skips a nested node/edge field — only scalar fields render', () => {
+    expect(apply('text.pairs', { name: 'Acme', address: { city: 'NYC' } })).toBe('name=Acme');
+    expect(apply('text.pairs', { name: 'Acme', tags: ['a', 'b'] })).toBe('name=Acme');
+  });
+
+  it('an empty record is an empty string', () => {
+    expect(apply('text.pairs', {})).toBe('');
+  });
+
+  it('defaults the separator to " | "', () => {
+    const spec = stdlibFunctionById('text.pairs');
+    expect(spec?.signature).toBe('TEXT.PAIRS(record, separator?)');
+  });
+});
+
 // The coercers DATE / DATETIME / NUMBER are BARE built-in functions (like
 // COALESCE / TRIM): the formula grammar parses them straight to a flat
 // `{ fn: 'date' | 'datetime' | 'number' }` node — NOT a namespaced family
