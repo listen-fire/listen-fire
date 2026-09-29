@@ -46,6 +46,9 @@ export interface AuthoringDiagnostic {
   endCol: number;
   /** The offending source line, verbatim — repair context without re-reading. */
   sourceLine: string;
+  /** Marks a construct whose meaning changed between the pin and the version
+   *  checked, on an upgrade check (the checker's `Diagnostic.upgrade`). */
+  upgrade?: true;
 }
 
 export interface MovementValidation {
@@ -72,6 +75,7 @@ function toAuthoringDiagnostic(
     endLine: span.end.line,
     endCol: span.end.col,
     sourceLine: lines[span.start.line - 1] ?? '',
+    ...(diagnostic.upgrade === true ? { upgrade: true } : {}),
   };
 }
 

@@ -39,9 +39,10 @@ is written in the current version. So check an edit to an existing automation
 as the version it is written in, not as the current one.
 
 A warning on an automation says something keeps it on an older version: the
-current version reports errors or warnings for its text. A warning there marks a
-construct whose meaning differs between the two versions, so it blocks the move
-as surely as an error. The automation keeps running as it always has.
+current version reports errors for its text, or marks a construct whose meaning
+differs between the two versions, which blocks the move as surely as an error.
+Other warnings, such as cost notes, never block. The automation keeps running as
+it always has.
 
 To upgrade one, repair what the current version reports — in text that still
 validates as the older version — then upgrade it: the check runs again, shows

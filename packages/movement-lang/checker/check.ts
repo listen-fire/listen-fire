@@ -247,6 +247,12 @@ export interface Diagnostic {
   /** Absent means 'error'. 'warning' and 'info' diagnostics never gate a
    *  compile — warnings flag likely-unintended-but-legal authoring. */
   severity?: DiagnosticSeverity;
+  /** Set on a diagnostic the checker emits only BECAUSE this is a check for a
+   *  move up (`CheckOptions.upgradingFrom`): it marks a construct whose
+   *  meaning changed between the two versions. What keeps a pin where it is,
+   *  alongside errors — every other warning (a cost note, say) reads the same
+   *  under either version and says nothing about the move. */
+  upgrade?: true;
 }
 
 export function diagnosticSeverity(diagnostic: Diagnostic): DiagnosticSeverity {
@@ -2325,6 +2331,14 @@ class Checker {
     this.diagnostics.push({ code, message, span, severity: 'warning' });
   }
 
+  /** A warning for a construct whose meaning changed across the move up this
+   *  check is for — the only way such a diagnostic is emitted, so it always
+   *  carries the tag the deploy check and an upgrade block on. */
+  private reportUpgradeWarning(code: string, message: string, span: Span): void {
+    if (this.typeOnly) return;
+    this.diagnostics.push({ code, message, span, severity: 'warning', upgrade: true });
+  }
+
   /**
    * Declares a binding the AUTHOR wrote, refusing a name an enclosing scope
    * already binds. Shadowing is the one remaining place a name could silently
@@ -3100,7 +3114,8 @@ class Checker {
    * through its own `LinkedFile`. The library's errors and warnings surface
    * ONCE, prefixed with the import path, at the import site that first
    * pulled it in, keeping their severity — a warning inside a library (an
-   * upgrade's meaning-changed construct, say) is the importer's concern too.
+   * upgrade's meaning-changed construct, say) is the importer's concern too,
+   * and keeps its `upgrade` tag, so it holds the importer's pin as surely.
    * Its info diagnostics belong to the library's own editing session and
    * are dropped here.
    */
@@ -5603,7 +5618,7 @@ class Checker {
       const resolution = scope.resolve(read.root);
       if (resolution.kind === 'found' && positionTypeOf(resolution.symbol)?.kind === 'extract') return;
     }
-    this.reportWarning(
+    this.reportUpgradeWarning(
       DiagnosticCodes.UNIQUE_KEY_MAY_BE_BLANK,
       `'${field.name}' identifies ${input.rootDescription}, and its value may be "" — since language version ${describeLanguageVersion(2)} an empty key is no key, so when it is "" nothing is matched by it (a write creates a new record each time). Before it, "" matched another record whose '${field.name}' was "". If that matters here, guard the write on '${field.name}' != "".`,
       field.value.span,
@@ -8707,7 +8722,7 @@ class Checker {
     const changed = spec.earlierOutputs?.find(entry => this.upgradeCrosses(entry.before));
     const now = pluginOutputUnder(spec, this.languageVersion);
     if (changed === undefined || now === undefined) return;
-    this.reportWarning(
+    this.reportUpgradeWarning(
       DiagnosticCodes.PLUGIN_OUTPUT_CHANGED,
       `'${statement.callee}' called on its own hands back ${describePluginOutput(now)} since language version ${describeLanguageVersion(changed.before)}; before it, ${describePluginOutput(changed.output)}. Check that this call reads its result as the new shape.`,
       statement.span,

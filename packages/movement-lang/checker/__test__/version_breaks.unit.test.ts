@@ -150,6 +150,13 @@ describe('a plugin whose output changed shape', () => {
     expect(message).toContain('"Bright Otter" (2)');
     expect(message).toContain('a list of records');
   });
+
+  it('tags the warning as an upgrade diagnostic — what holds a pin, unlike an ordinary warning', () => {
+    const records = '  pages = scan_web(url: c.`Name`)\n  first = FIRST(pages)\n  write chat-[:note]-> { Body ?: first.text }';
+    const changed = all(records, MOVING_UP).find((d) => d.code === C.PLUGIN_OUTPUT_CHANGED);
+    expect(changed?.upgrade).toBe(true);
+    expect(all(records, V2).filter((d) => d.upgrade === true)).toEqual([]);
+  });
 });
 
 describe('an identity key that may be ""', () => {
@@ -158,6 +165,7 @@ describe('an identity key that may be ""', () => {
 
   it('warns on a check for the move up across 2, where "" stopped matching ""', () => {
     expect(ofSeverity('warning', keyed('c.`Name`'), MOVING_UP)).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    expect(all(keyed('c.`Name`'), MOVING_UP).find((d) => d.code === C.UNIQUE_KEY_MAY_BE_BLANK)?.upgrade).toBe(true);
   });
 
   it('says nothing on an ordinary check', () => {
@@ -192,7 +200,11 @@ export movement scan_channel(c: <chat-[:channel]->>) {
   it("surfaces as the importer's warning on a check for the move up", () => {
     const surfaced = check(MOVING_UP).filter((d) => d.code === C.PLUGIN_OUTPUT_CHANGED);
     expect(surfaced).toEqual([
-      expect.objectContaining({ severity: 'warning', message: expect.stringContaining('"lib/scan" line') }),
+      expect.objectContaining({
+        severity: 'warning',
+        upgrade: true,
+        message: expect.stringContaining('"lib/scan" line'),
+      }),
     ]);
   });
 

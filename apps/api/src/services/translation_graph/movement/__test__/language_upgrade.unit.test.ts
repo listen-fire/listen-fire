@@ -74,6 +74,12 @@ function diagnostic(severity: AuthoringDiagnostic['severity'], message: string):
   return { code: 'X', message, severity, line: 3, col: 1, endLine: 3, endCol: 2, sourceLine: '' };
 }
 
+/** A warning the checker raised because the check is a move up: a construct
+ *  whose meaning changed between the versions. */
+function meaningChanged(message: string): AuthoringDiagnostic {
+  return { ...diagnostic('warning', message), code: 'MOV_PLUGIN_OUTPUT_CHANGED', upgrade: true };
+}
+
 /** What each movement validates to, under each version. */
 type Verdicts = Record<string, Partial<Record<LanguageVersion, AuthoringDiagnostic[]>>>;
 
@@ -144,18 +150,41 @@ describe('the deploy check', () => {
     expect(store.events.map((e) => e.kind)).toEqual([RELEASE_APPLIED.typeId]);
   });
 
-  it('keeps the pin on a warning under the current version, stores it, and emits a Validation Issue', async () => {
-    const warning = diagnostic('warning', 'extracted text is never null under this version');
+  it('advances a pin whose only warning is a cost note, and prints the note', async () => {
+    const note = {
+      ...diagnostic('warning', "WHERE on 'Searches' runs here, not at the source"),
+      code: 'MOV_HOP_WHERE_ENGINE',
+    };
+    const store = fakeStore({ movements: [movement({ id: 'noted' })], verdicts: { noted: { 2: [note] } } });
+
+    const summary = await runDeployCheck(store.deps);
+
+    expect(store.pins.get('noted')).toBe(2);
+    expect(store.upgradeDiagnostics.get('noted')).toEqual([]);
+    expect(store.events.map((e) => e.kind)).toEqual([RELEASE_APPLIED.typeId]);
+    expect(summary?.automations[0]).toEqual(
+      expect.objectContaining({
+        outcome: 'advanced',
+        notes: "line 3: WHERE on 'Searches' runs here, not at the source",
+      }),
+    );
+  });
+
+  it('keeps the pin on a meaning-changed warning, stores it, and emits a Validation Issue', async () => {
+    const warning = meaningChanged('extracted text is never null under this version');
+    const note = diagnostic('warning', "ORDER BY on 'Messages' runs here");
     const store = fakeStore({
       movements: [movement({ id: 'warns' })],
-      verdicts: { warns: { 2: [warning, diagnostic('info', 'just advice')] } },
+      verdicts: { warns: { 2: [warning, note, diagnostic('info', 'just advice')] } },
     });
 
     const summary = await runDeployCheck(store.deps);
 
     expect(store.pins.get('warns')).toBe(1);
-    // Only what blocks the move is stored — the info is advice.
+    // Only what blocks the move is stored — the cost note and the info say
+    // nothing about it.
     expect(store.upgradeDiagnostics.get('warns')).toEqual([warning]);
+    expect(summary?.automations[0]?.notes).toBe("line 3: ORDER BY on 'Messages' runs here");
     expect(summary?.counts).toEqual(
       expect.objectContaining({ advanced: 0, warned: 1, refused: 0 }),
     );
@@ -217,7 +246,7 @@ describe('the deploy check', () => {
   it('does nothing the second time on the same release', async () => {
     const store = fakeStore({
       movements: [movement({ id: 'clean' }), movement({ id: 'warns' })],
-      verdicts: { warns: { 2: [diagnostic('warning', 'changed meaning')] } },
+      verdicts: { warns: { 2: [meaningChanged('changed meaning')] } },
     });
 
     expect(await runDeployCheck(store.deps)).not.toBeNull();
@@ -235,7 +264,7 @@ describe('the deploy check', () => {
         movement({ id: 'b', teamId: 'team-2' }),
         movement({ id: 'c', teamId: 'team-2' }),
       ],
-      verdicts: { c: { 2: [diagnostic('warning', 'changed meaning')] } },
+      verdicts: { c: { 2: [meaningChanged('changed meaning')] } },
     });
 
     await runDeployCheck(store.deps);
@@ -319,6 +348,29 @@ describe('which checks are upgrade checks', () => {
   });
 });
 
+describe('an explicit upgrade blocks on what the sweep blocks on', () => {
+  const upgradeWith = async (diagnostics: AuthoringDiagnostic[]) => {
+    jest.mocked(getMovementRow).mockResolvedValueOnce(movement({ id: 'old' }));
+    return upgradeMovement({
+      teamId: 'team-1',
+      id: 'old',
+      acknowledge: false,
+      validate: async () => ({ diagnostics, gaps: [] }),
+    });
+  };
+
+  it('a cost note alone is clean', async () => {
+    const result = await upgradeWith([diagnostic('warning', "ORDER BY on 'Messages' runs here")]);
+    expect(result).toEqual(expect.objectContaining({ status: 'needs_acknowledgement', diagnostics: [] }));
+  });
+
+  it('a meaning-changed warning blocks, and is what it reports', async () => {
+    const warning = meaningChanged('changed meaning');
+    const result = await upgradeWith([warning, diagnostic('warning', 'a cost note')]);
+    expect(result).toEqual(expect.objectContaining({ status: 'blocked', diagnostics: [warning] }));
+  });
+});
+
 describe('a meaning-changed construct inside an imported library', () => {
   // The real checker behind the validation seam: the movement is clean itself,
   // and only the library it imports uses a plugin whose output changed at 2.
@@ -368,6 +420,7 @@ describe('a meaning-changed construct inside an imported library', () => {
       code: d.code,
       message: d.message,
       severity: d.severity ?? 'error',
+      ...(d.upgrade === true ? { upgrade: true as const } : {}),
       line: d.span.start.line,
       col: d.span.start.col,
       endLine: d.span.end.line,
@@ -392,6 +445,7 @@ describe('a meaning-changed construct inside an imported library', () => {
       expect.objectContaining({
         code: 'MOV_PLUGIN_OUTPUT_CHANGED',
         severity: 'warning',
+        upgrade: true,
         message: expect.stringContaining('"lib/scan" line'),
       }),
     ]);

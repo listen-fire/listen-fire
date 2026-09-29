@@ -71,6 +71,7 @@ export function renderSummary(summary: DeployCheckSummary): string {
           : `"${entry.from.name}" -> "${entry.to.name}"`;
       const detail = entry.detail === '' ? '' : ` — ${entry.detail}`;
       lines.push(`    - ${entry.name} (${move}${entry.deprecated ? ', deprecated' : ''})${detail}`);
+      if (entry.notes !== undefined) lines.push(`      note (does not block): ${entry.notes}`);
     }
   }
   if (summary.automations.length === 0) lines.push('  No saved automations.');

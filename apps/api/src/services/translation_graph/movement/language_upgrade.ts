@@ -4,10 +4,12 @@
 //      (`runDeployCheck`). Each movement is validated under its own pin, which
 //      must pass (the release preserves every supported version's behaviour, so
 //      a failure there is a bug in that preservation), then under the release's
-//      current version. Clean there — no errors AND no warnings, because a
-//      warning under a newer version marks a construct whose meaning changed —
-//      advances the pin. Anything else keeps the pin, stores what stood in the
-//      way on the movement, and tells the team through a `Validation Issue`.
+//      current version. Clean there — no errors, and no diagnostic the checker
+//      raised because the check is a move up (one marking a construct whose
+//      meaning changed) — advances the pin. Any other warning (a cost note,
+//      say) reads the same under either version: it is printed as a note and
+//      never blocks. Anything else keeps the pin, stores what stood in the way
+//      on the movement, and tells the team through a `Validation Issue`.
 //   2. AN EXPLICIT UPGRADE of one movement (`upgradeMovement`): the same
 //      validation under the current version, shown to the caller first; the pin
 //      moves only when the caller acknowledges a clean result.
@@ -63,10 +65,18 @@ import { movementSourceHash } from './version_store';
 
 // ── What a validation says about a pin ──────────────────────────────────────
 
-/** The diagnostics that keep a pin where it is: errors, and warnings. An info
- *  is advice, not a changed meaning. */
+/** The diagnostics that keep a pin where it is: errors, and the ones the
+ *  checker tagged as marking a construct whose meaning changed between the
+ *  versions. Any other warning or info says nothing about the move. */
 export function blockingDiagnostics(diagnostics: AuthoringDiagnostic[]): AuthoringDiagnostic[] {
-  return diagnostics.filter((d) => d.severity === 'error' || d.severity === 'warning');
+  return diagnostics.filter((d) => d.severity === 'error' || d.upgrade === true);
+}
+
+/** The warnings under the newer version that do NOT block the move — shown
+ *  beside the outcome so nothing is hidden, never stored as upgrade
+ *  diagnostics. */
+function noteDiagnostics(diagnostics: AuthoringDiagnostic[]): AuthoringDiagnostic[] {
+  return diagnostics.filter((d) => d.severity === 'warning' && d.upgrade !== true);
 }
 
 function errorsOf(diagnostics: AuthoringDiagnostic[]): AuthoringDiagnostic[] {
@@ -148,6 +158,9 @@ export interface DeployCheckEntry {
   deprecated: boolean;
   /** Why it did not advance: the blocking diagnostics, or what went wrong. */
   detail: string;
+  /** Warnings under the current version that did not block the move. Absent
+   *  when there were none (and on summaries recorded before v0.8.1). */
+  notes?: string;
 }
 
 export interface DeployCheckSummary {
@@ -323,6 +336,9 @@ async function checkOne(input: {
   const underCurrent = await deps.validate(validationUnder(movement, current));
   const blocking = blockingDiagnostics(underCurrent.diagnostics);
   await deps.recordUpgradeCheck({ movement, diagnostics: blocking, checkedAgainst: current });
+  const notes = noteDiagnostics(underCurrent.diagnostics);
+  const withNotes = (entry: DeployCheckEntry): DeployCheckEntry =>
+    notes.length > 0 ? { ...entry, notes: diagnosticsText(notes) } : entry;
 
   if (blocking.length > 0) {
     const detail = diagnosticsText(blocking);
@@ -336,17 +352,17 @@ async function checkOne(input: {
       }),
     }));
     await emitDeprecation(deps, movement, pin, at);
-    return entryFor(movement, 'warned', pin, releaseLanguage, detail);
+    return withNotes(entryFor(movement, 'warned', pin, releaseLanguage, detail));
   }
   if (underCurrent.gaps.length > 0) {
     await emitDeprecation(deps, movement, pin, at);
-    return entryFor(movement, 'unverified', pin, releaseLanguage, gapsText(underCurrent.gaps));
+    return withNotes(entryFor(movement, 'unverified', pin, releaseLanguage, gapsText(underCurrent.gaps)));
   }
 
   await deps.advance({ movement, to: current });
   await deps.recordValidity({ movement, validation: underCurrent, checkedAgainst: current });
   await emitDeprecation(deps, movement, current, at);
-  return entryFor(movement, 'advanced', current, releaseLanguage, '');
+  return withNotes(entryFor(movement, 'advanced', current, releaseLanguage, ''));
 }
 
 /** A movement left on a deprecated version is told so, once per release. */
