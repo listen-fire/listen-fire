@@ -11,9 +11,14 @@ Entries are written for two readers: an operator running a self-hosted installat
 - The company page warns when two prices apply to the same equity on the same day, and says which one the valuation uses.
 - A company acquired for shares shows the position on the acquirer's page: shares received, cost carried over, value now. Fund totals are unchanged.
 
+### Changed
+
+- The portfolio list loads several times faster on a large portfolio. The valuation walk and the pricing ask the database once for every company at a level instead of once per company, the list returns its totals itself instead of valuing the portfolio a second time, the "How this was calculated" panel fetches its narration when opened instead of shipping it with every row, and API responses over a kilobyte are compressed (brotli or gzip, whichever the client accepts). Every figure on the list is unchanged. Where a company has a price recorded on itself and one on its equity on the same day, the valuation now always uses the price on the company; before, which one it used could vary between loads. The company page still warns about such a pair, since only one of them can be right.
+
 ### Fixed
 
 - A payout to a fund holding several cheques in one company is split between them by the shares each cheque held just before the event. Before, a wind-down recorded as a share return and a cash payment on the same day, or a later distribution with nothing left held, could land wholly on one cheque. Transactions on the same day are now walked in a fixed order, so a cheque's figures no longer depend on what else is on the page.
+- A company created through the REST API gets a slug, so it is reachable in the app. Before, only companies created by the seed script had one.
 
 ## [v0.8.4] - 2026-09-29
 
