@@ -181,7 +181,12 @@ services:
     # Then the deploy check, once per release: it re-validates every saved
     # automation and advances the language version pins that are clean under
     # this release. It exits 0 even when it cannot finish.
-    preDeployCommand: pnpm schema:migrate "$DATABASE_URL" && node build/scripts/deploy_check.js
+    # One package script, not two commands joined by `&&`: Render splits the
+    # pre-deploy line on whitespace and does not run it through a shell, so a
+    # bare `&&` reaches pnpm as an argument and the deploy check silently never
+    # runs. pnpm runs the script under sh, where `&&` and `$DATABASE_URL` mean
+    # what they say, and the expanded URL is no longer echoed into the deploy log.
+    preDeployCommand: pnpm deploy:render-pre
     envVars:
       # ---- composition: part of the service definition, not operator input.
       # deploy/guides/render.md: "treat as part of the service definition
