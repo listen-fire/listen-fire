@@ -45,6 +45,19 @@ do?"* — plus the corollaries that keep costing us when ignored (structural not
 nominal; a magic string is one that's PARSED rather than compared; silent
 degradation is the absence of a guarantee, not a weaker one).
 
+## Language versions (breaking changes never break a saved movement)
+
+Every saved movement is pinned to the language version it was written against (an integer with a two-word name, e.g. 1 "Quiet Heron" = the language as of v0.6.0). The pin governs syntax AND semantics, and every layer honours it:
+
+- A breaking change — a spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened — lands as a version conditional (`since(v, n)` / `before(v, n)` on the compile or run context's `languageVersion`) at the point of difference in the parser, checker, engine, plugin or adapter. Never a forked parser, never a second engine.
+- The old behaviour is proved by the older version's own test corpus run against the current code under that version. Add a version = add its fixtures; remove a version = delete its conditionals and its fixtures.
+- Any construct whose meaning changed gets a checker diagnostic under the new version, so "validates clean under the new version" can never hide a silent behaviour change.
+- A release names the versions it supports and deprecates. Unsupported: validate and run refuse, loudly. Deprecated: runs, with a warning.
+- The pin moves only by the deploy check (auto-advance when clean under the newer version) or an explicit upgrade; never by an ordinary edit.
+- The CHANGELOG entry for a break says which version introduces it and why.
+
+Plan: `plans/language-versioning-2026-09-29/` (gitignored, on Henry's machine).
+
 ## TypeScript & Code Quality
 
 This project uses TypeScript strictly. Before submitting changes:

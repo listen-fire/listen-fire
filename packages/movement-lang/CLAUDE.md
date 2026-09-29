@@ -73,6 +73,15 @@ If a design question feels novel, check whether TS already answered it.
 up in everyone's movements."* Weighing churn against correctness is weighing the
 wrong thing. Never leave a conflation in place to avoid updating fixtures.
 
+### Be right, then break — behind a version conditional
+A breaking change is still welcome, but a saved movement never sees it: it lands as a
+`since`/`before` conditional on the context's `languageVersion` at the point of
+difference (parser, checker, engine, plugin), the old behaviour is proved by the
+older version's own test corpus run under that version, and any construct whose
+meaning changed gets a diagnostic under the new version. Cleanup of a retired
+version is the deletion of its conditionals and fixtures. Repo CLAUDE.md,
+"Language versions", carries the full rule.
+
 ## Before you build a mechanism
 
 **Search first.** Three times in one day the answer was already in the tree and
