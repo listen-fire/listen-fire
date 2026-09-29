@@ -15,9 +15,12 @@ const chatSchema: InstanceSchema = {
   positions: {
     channel: {
       properties: { Name: 'text' },
-      edges: { Members: { target: 'person', readable: true } },
+      edges: {
+        Members: { target: 'person', readable: true },
+        Owners: { target: 'person', readable: true, writable: true },
+      },
     },
-    person: { properties: { Name: 'text', Age: 'number' }, edges: {} },
+    person: { properties: { Name: 'text', Age: 'number', Email: 'text' }, edges: {} },
     note: { properties: { Body: 'text' }, edges: {} },
   },
   collections: { Channels: { target: 'channel' }, note: { target: 'note' } },
@@ -60,7 +63,7 @@ const MOVING_UP: CheckOptions = { languageVersion: 2, upgradingFrom: 1 };
 
 function all(body: string, options: CheckOptions, fileLevel = ''): Diagnostic[] {
   const source = `${PRELUDE}${fileLevel}
-movement m(c: <chat-[:channel]->>) {
+movement scan(c: <chat-[:channel]->>) {
 ${body}
 }`;
   const languageVersion: LanguageVersion = options.languageVersion ?? 2;
@@ -186,6 +189,84 @@ describe('an identity key that may be ""', () => {
     expect(ofSeverity('warning', keyed('"Acme"'), MOVING_UP)).toEqual([]);
     // An extracted text nobody found was absent under 1 and "" under 2: no key both ways.
     expect(ofSeverity('warning', keyed('r.note'), MOVING_UP)).toEqual([]);
+  });
+});
+
+describe('an identity key a guard proved not ""', () => {
+  const guarded = (condition: string): string =>
+    `  if ${condition} {\n    write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }\n  }`;
+  const warnings = (body: string): string[] => ofSeverity('warning', body, MOVING_UP);
+
+  it('clears the warning inside an arm whose condition proves it', () => {
+    expect(warnings(guarded('c.`Name` != ""'))).toEqual([]);
+    expect(warnings(guarded('"" != c.`Name`'))).toEqual([]);
+    expect(warnings(guarded('LENGTH(c.`Name`) > 0'))).toEqual([]);
+    expect(warnings(guarded('0 < LENGTH(c.`Name`)'))).toEqual([]);
+    expect(warnings(guarded('NOT c.`Name` == ""'))).toEqual([]);
+    expect(warnings(guarded('c.`Name` == "Acme"'))).toEqual([]);
+    expect(warnings(guarded('c.`Name` != "" AND LENGTH(c.`Name`) < 80'))).toEqual([]);
+  });
+
+  it('clears it below an early exit on the blank value', () => {
+    const body = (condition: string): string =>
+      `  if ${condition} { ERROR("no name") }\n  write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }`;
+    expect(warnings(body('c.`Name` == ""'))).toEqual([]);
+    expect(warnings(body('LENGTH(c.`Name`) == 0'))).toEqual([]);
+    expect(warnings(body('c.`Name` == "" OR c.`Name` == null'))).toEqual([]);
+  });
+
+  it('clears it for a bound value, not only a field read', () => {
+    const body = '  name = c.`Name`\n  if name != "" {\n    write chat-[:note]-> { unique by (`Body`) Body: name }\n  }';
+    expect(warnings(body)).toEqual([]);
+  });
+
+  it('still warns where nothing proved it', () => {
+    // No guard at all.
+    expect(warnings(`  write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }`)).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    // A disjunction proves neither side.
+    expect(warnings(guarded('c.`Name` != "" OR c.`Age` > 3'))).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    // A negated proof proves the opposite.
+    expect(warnings(guarded('NOT c.`Name` != ""'))).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    // A guard on a different read.
+    expect(
+      warnings(`  n = c.\`Name\`\n  if n != "" {\n    write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }\n  }`),
+    ).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    // An early exit that does not always exit.
+    expect(
+      warnings(`  if c.\`Name\` == "" { write chat-[:note]-> { Body: "x" } }\n  write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }`),
+    ).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+  });
+
+  it('only inside the arm — the continuation of a plain if is unguarded', () => {
+    const body = `${guarded('c.`Name` != ""')}\n  write chat-[:note]-> { unique by (\`Body\`) Body: c.\`Name\` }`;
+    expect(warnings(body)).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+  });
+
+  // The shape the deploy check flagged on a live movement: the suggested guard
+  // must be the one that clears the warning.
+  it('clears the link body the diagnostic itself suggested guarding', () => {
+    const roster = [
+      '  roster = node { members: [node { name: "Ada", email: "ada@example.com" }, node { name: "Bo", email: "bo@example.com" }] }',
+      '  d = node { owners: ["Ada"] }',
+      '  roster-[m:members]-> {',
+    ];
+    const guardedLink = [
+      ...roster,
+      '    if d.owners CONTAINS m.name AND m.email != "" {',
+      '      link c -[:`Owners`]-> { Email: m.email }',
+      '    }',
+      '  }',
+    ].join('\n');
+    const unguardedLink = [
+      ...roster,
+      '    if d.owners CONTAINS m.name {',
+      '      link c -[:`Owners`]-> { Email: m.email }',
+      '    }',
+      '  }',
+    ].join('\n');
+    expect(errors(guardedLink, MOVING_UP)).toEqual([]);
+    expect(warnings(unguardedLink)).toEqual([C.UNIQUE_KEY_MAY_BE_BLANK]);
+    expect(warnings(guardedLink)).toEqual([]);
   });
 });
 

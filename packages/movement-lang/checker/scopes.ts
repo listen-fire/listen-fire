@@ -107,6 +107,11 @@ export interface ScopeSymbol {
    *  `type`: the closed enum the declaration names — the same shape a borrowed
    *  option set resolves to, so an annotation cannot tell the two apart. */
   fieldType?: FieldType;
+  /** The text reads through this binding that a guard in scope has proven
+   *  not `""` (`x.F != ""`, `LENGTH(x) > 0`) — a narrowing, declared by the
+   *  same shadowing move as a presence proof. `value` is the binding's own
+   *  value; `fields` its dot-plane reads, by property id. */
+  nonBlank?: { value?: true; fields?: ReadonlySet<string> };
   /** For `movement`: the declaration + declaring scope, so call sites can type parameters lazily. */
   movement?: {
     decl: MovementDeclaration;

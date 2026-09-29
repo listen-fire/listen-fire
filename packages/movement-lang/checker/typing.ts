@@ -2318,7 +2318,15 @@ export function lookupPropertyType(
  */
 export type PresenceProof =
   | { kind: 'field'; root: string; propertyId: string }
-  | { kind: 'binding'; root: string };
+  | { kind: 'binding'; root: string }
+  /**
+   * The read proven not `""` — `x.F` (`propertyId` set) or the binding `x`
+   * itself. Text's one blank value ruled out, which TS would spell by
+   * narrowing `"" | …` to `…`; here it is carried on the symbol (`nonBlank`)
+   * and consulted where a blank changes meaning (an identity key since
+   * version 2). Says nothing about presence: an absent read is `!= ""` too.
+   */
+  | { kind: 'nonBlank'; root: string; propertyId?: string };
 
 /** `x.`F`` as authored — the bridge folds a rooted property read into an
  *  alias-rooted traverse with no steps. */
@@ -2398,6 +2406,52 @@ function subjectLabel(expr: Expression): string | undefined {
   return field !== undefined ? `${field.root}.${quoteName(field.propertyId)}` : undefined;
 }
 
+/** What a TRUE comparison says about its subject's blankness — `x.F != ""`,
+ *  `LENGTH(x) > 0`, `x == "Acme"` prove it non-blank; `x == ""`,
+ *  `LENGTH(x) == 0` prove it blank (so their FALSITY proves it non-blank).
+ *  Undefined for any other comparison, and for a subject that is not a
+ *  direct read. */
+function blankTest(
+  expr: Extract<Expression, { type: 'compare' }>,
+): { subject: Expression; whenTrue: 'blank' | 'nonBlank' } | undefined {
+  for (const [subject, other] of comparisonSides(expr)) {
+    if (other.type !== 'static' || typeof other.value !== 'string') continue;
+    if (presenceSubject(subject) === undefined) continue;
+    if (other.value === '') {
+      if (expr.op === 'eq') return { subject, whenTrue: 'blank' };
+      if (expr.op === 'neq') return { subject, whenTrue: 'nonBlank' };
+      continue;
+    }
+    if (expr.op === 'eq' && other.value.trim() !== '') return { subject, whenTrue: 'nonBlank' };
+  }
+  const flipped: Partial<Record<FilterOperator, FilterOperator>> = { lt: 'gt', lte: 'gte', gt: 'lt', gte: 'lte', eq: 'eq', neq: 'neq' };
+  const sides: Array<[Expression, Expression, FilterOperator | undefined]> = [
+    [expr.left, expr.right, expr.op],
+    [expr.right, expr.left, flipped[expr.op]],
+  ];
+  for (const [length, bound, op] of sides) {
+    if (length.type !== 'function' || length.fn !== 'length' || length.args.length !== 1) continue;
+    if (bound.type !== 'static' || typeof bound.value !== 'number') continue;
+    const subject = length.args[0];
+    if (presenceSubject(subject) === undefined) continue;
+    const n = bound.value;
+    if ((op === 'gt' && n >= 0) || (op === 'gte' && n >= 1) || (op === 'neq' && n === 0) || (op === 'eq' && n >= 1)) {
+      return { subject, whenTrue: 'nonBlank' };
+    }
+    if ((op === 'eq' && n === 0) || (op === 'lt' && n === 1) || (op === 'lte' && n === 0)) {
+      return { subject, whenTrue: 'blank' };
+    }
+  }
+  return undefined;
+}
+
+/** `subject` proven not `""`, in the proof's own shape. */
+function nonBlankProof(subject: Expression): PresenceProof[] {
+  const read = presenceSubject(subject);
+  if (read === undefined) return [];
+  return [{ kind: 'nonBlank', root: read.root, ...(read.kind === 'field' ? { propertyId: read.propertyId } : {}) }];
+}
+
 /** The two operand orders of a comparison — every rule here is symmetric. */
 function comparisonSides(
   expr: Extract<Expression, { type: 'compare' }>,
@@ -2429,6 +2483,9 @@ function comparisonSides(
  * proves presence directly, and `EXISTS(x)` asks the same question in the
  * language's older spelling. `x == null` proves presence in its FALSE branch —
  * see `negativePresenceProofs`.
+ *
+ * Blankness rides the same algebra (`blankTest`): `x != ""` and
+ * `LENGTH(x) > 0` prove `x` non-blank when true, `x == ""` when false.
  */
 export function presenceProofs(
   expr: Expression,
@@ -2444,8 +2501,9 @@ export function presenceProofs(
   const exists = existsSubject(expr);
   if (exists !== undefined) return [{ kind: 'binding', root: exists }];
   if (expr.type !== 'compare') return [];
-  if (expr.op !== 'eq' && expr.op !== 'neq') return [];
-  const proofs: PresenceProof[] = [];
+  const blank = blankTest(expr);
+  const proofs: PresenceProof[] = blank?.whenTrue === 'nonBlank' ? nonBlankProof(blank.subject) : [];
+  if (expr.op !== 'eq' && expr.op !== 'neq') return proofs;
   for (const [subject, other] of comparisonSides(expr)) {
     // `x != null` — the direct presence test. `x != <a value>` proves nothing
     // (an absent x is unequal to it too), and `x == null` proves the opposite.
@@ -2490,8 +2548,11 @@ export function negativePresenceProofs(
     const proof = presenceSubject(expr.args[0]);
     return proof !== undefined ? [proof] : [];
   }
-  if (expr.type !== 'compare' || expr.op !== 'eq') return [];
-  const proofs: PresenceProof[] = [];
+  if (expr.type !== 'compare') return [];
+  // `x == ""` false ⟹ x is not "" — the guard clause `if x == "" { ERROR(…) }`.
+  const blank = blankTest(expr);
+  const proofs: PresenceProof[] = blank?.whenTrue === 'blank' ? nonBlankProof(blank.subject) : [];
+  if (expr.op !== 'eq') return proofs;
   for (const [subject, other] of comparisonSides(expr)) {
     if (!isNullLiteral(other)) continue;
     const proof = presenceSubject(subject);

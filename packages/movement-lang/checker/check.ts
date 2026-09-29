@@ -5592,7 +5592,8 @@ class Checker {
   /**
    * An identity key whose value is text that may be `""`, on a check for a
    * move up across the version that made an empty key no key. Only where the checker cannot rule
-   * the blank out: a non-empty literal cannot be blank, and an extracted text
+   * the blank out: a non-empty literal cannot be blank, a read a guard in
+   * scope proved not "" is not (`if x.F != "" { … }`), and an extracted text
    * that was not found is no key under either version (absent before, `""`
    * now). A value the checker could not type says nothing.
    */
@@ -5619,6 +5620,13 @@ class Checker {
     if (read !== undefined) {
       const resolution = scope.resolve(read.root);
       if (resolution.kind === 'found' && positionTypeOf(resolution.symbol)?.kind === 'extract') return;
+      // A guard in scope proved it not "" (`if x.F != "" { … }`).
+      if (resolution.kind === 'found' && resolution.symbol.nonBlank?.fields?.has(read.propertyId) === true) return;
+    }
+    const name = bareName(value);
+    if (name !== undefined) {
+      const resolution = scope.resolve(name);
+      if (resolution.kind === 'found' && resolution.symbol.nonBlank?.value === true) return;
     }
     this.reportUpgradeWarning(
       DiagnosticCodes.UNIQUE_KEY_MAY_BE_BLANK,
@@ -9108,6 +9116,16 @@ class Checker {
       const resolution = scope.resolve(proof.root);
       if (resolution.kind !== 'found') continue;
       const symbol = resolution.symbol;
+      if (proof.kind === 'nonBlank') {
+        // Only a value binding narrows: an instance or a declaration is an
+        // identity (a graph token), never a value read.
+        if (symbol.kind !== 'param' && symbol.kind !== 'alias' && symbol.kind !== 'binding') continue;
+        const nonBlank = proof.propertyId === undefined
+          ? { ...symbol.nonBlank, value: true as const }
+          : { ...symbol.nonBlank, fields: new Set([...(symbol.nonBlank?.fields ?? []), proof.propertyId]) };
+        narrowInto.declare({ ...symbol, nonBlank }, options);
+        continue;
+      }
       if (proof.kind === 'field') {
         const posType = this.symbolPositionType(symbol);
         if (posType === undefined) continue;
