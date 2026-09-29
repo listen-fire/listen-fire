@@ -222,8 +222,10 @@ compose() { docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$@"; }
 # the post-success pruning below needs this to name a rollback target, and the
 # tag alone can't tell current from previous across a --build or --no-build
 # run that never changes it. Empty when nothing answers yet (first boot).
+# `|| true`: under `set -eo pipefail` a failed curl (nothing running) would
+# otherwise end the whole script right here, without a word.
 PRIOR_VERSION="$(curl -fsS "${API_LOCAL}/healthz/workers" 2>/dev/null \
-  | grep -o '"version":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')"
+  | grep -o '"version":"[^"]*"' | head -1 | sed 's/.*:"//;s/"$//')" || true
 
 # Where images actually land. The classic overlay2 graphdriver keeps them
 # under Docker's own root (`docker info`'s DockerRootDir); the containerd
@@ -340,7 +342,57 @@ esac
 UP_ARGS=(-d --remove-orphans)
 if [ "$DEMO" -eq 1 ]; then UP_ARGS+=(--scale seed=0); fi
 
-compose up "${UP_ARGS[@]}"
+# A failed `compose up` must never end the script silently: under `set -e` it
+# used to exit 1 with nothing after compose's own last line, which for a failed
+# one-shot is only "service X didn't complete successfully" — the WHY was in a
+# log nobody was shown. So name the service, show its log, and say where the
+# installation stands.
+ONE_SHOTS=(init migrate seed)
+is_one_shot() { for s in "${ONE_SHOTS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
+
+# The services this composition left exited non-zero, unhealthy, or dead.
+failed_services() {
+  compose ps -a --format '{{.Service}}|{{.State}}|{{.ExitCode}}|{{.Health}}' 2>/dev/null \
+    | while IFS='|' read -r service state code health; do
+        if { [ "$state" = "exited" ] && [ "${code:-0}" != "0" ]; } \
+          || [ "$state" = "dead" ] || [ "$state" = "restarting" ] || [ "$health" = "unhealthy" ]; then
+          echo "$service"
+        fi
+      done
+}
+
+report_up_failure() {
+  local failed
+  failed="$(failed_services | sort -u)" || true
+  echo >&2
+  if [ -z "$failed" ]; then
+    echo "[up] docker compose up failed, and no service shows as failed. Service states:" >&2
+    compose ps -a >&2 || true
+    echo "[up] last 30 log lines of every service:" >&2
+    compose logs --no-color --tail 30 >&2 || true
+  else
+    for service in $failed; do
+      if is_one_shot "$service"; then
+        echo "[up] the '$service' one-shot failed. Its whole run:" >&2
+        compose logs --no-color --no-log-prefix "$service" >&2 || true
+      else
+        echo "[up] the '$service' service failed. Its last 30 log lines:" >&2
+        compose logs --no-color --no-log-prefix --tail 30 "$service" >&2 || true
+      fi
+      echo >&2
+    done
+  fi
+  if [ -n "$PRIOR_VERSION" ]; then
+    echo "[up] the installation is still on ${PRIOR_VERSION}; see deploy/UPGRADING.md, Rolling back." >&2
+  else
+    echo "[up] nothing was answering before this run, so there is no earlier version to fall back to; see deploy/UPGRADING.md, Rolling back, if this was an upgrade." >&2
+  fi
+}
+
+if ! compose up "${UP_ARGS[@]}"; then
+  report_up_failure
+  exit 1
+fi
 
 echo -n "[up] waiting for the API"
 for i in $(seq 1 90); do
@@ -460,7 +512,10 @@ fi
 
 if [ "$DEMO" -eq 1 ]; then
   echo "[up] seeding the demo dataset…"
-  compose run --rm seed
+  if ! compose run --rm seed; then
+    echo "[up] the demo seed failed (its output is above). The stack itself is up on $IMAGE_TAG; rerun: docker compose ${PROFILE_ARGS[*]} run --rm seed" >&2
+    exit 1
+  fi
 fi
 
 # Every caller assigns the result, so `exit 1` in this subshell is the whole
