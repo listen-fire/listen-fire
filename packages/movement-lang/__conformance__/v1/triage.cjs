@@ -41,4 +41,14 @@ exports.triage = [
     test: 'a criteria body is refused — a node this run built has no system to search',
     reason: 'still refused; the diagnostic was renamed MOV_NODE_LINK_CRITERIA → MOV_NODE_LINK_BODY, and the test reads the retired constant (undefined)',
   },
+  {
+    file: 'service/__test__/service.unit.test.ts',
+    test: 'offers DATETIME as both, NUMBER as a function only, CURRENCY/TEXT as namespaces only',
+    reason: ACCEPTED,
+  },
+  {
+    file: 'service/__test__/service.unit.test.ts',
+    test: 'hover on NUMBER before `(` mentions the coercer (no namespace duality)',
+    reason: ACCEPTED,
+  },
 ];

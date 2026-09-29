@@ -1188,15 +1188,15 @@ movement m(msg: <inbox-[:message]->>) {
     expect(all).toContain('DATE.'); // the namespace gateway
   });
 
-  it('offers DATETIME as both, NUMBER as a function only, CURRENCY/TEXT as namespaces only', () => {
+  it('offers DATETIME and NUMBER as both, CURRENCY/TEXT as namespaces only', () => {
     const all = labels(completionsAt(exprFixture('¦')));
     expect(all).toContain('DATETIME(…)');
     expect(all).toContain('DATETIME.');
     expect(all).toContain('NUMBER(…)');
+    expect(all).toContain('NUMBER.');
     expect(all).toContain('CURRENCY.');
     expect(all).toContain('TEXT.');
-    // NUMBER has no namespace family; CURRENCY / TEXT have no bare coercer.
-    expect(all).not.toContain('NUMBER.');
+    // CURRENCY / TEXT have no bare coercer.
     expect(all).not.toContain('CURRENCY(…)');
     expect(all).not.toContain('TEXT(…)');
   });
@@ -1268,10 +1268,11 @@ movement m(msg: <inbox-[:message]->>) {
     expect(text.toLowerCase()).toContain('iso date');
   });
 
-  it('hover on NUMBER before `(` mentions the coercer (no namespace duality)', () => {
+  it('hover on NUMBER before `(` mentions the coercer AND the namespace duality', () => {
     const text = hoverAt(exprFixture('NUMB¦ER(msg.\`text\`)'))?.contents.join(' ') ?? '';
     expect(text.toLowerCase()).toContain('coerce a value to a number');
-    expect(text.toLowerCase()).not.toContain('namespace');
+    expect(text.toLowerCase()).toContain('namespace');
+    expect(text).toContain('NUMBER.format');
   });
 });
 
