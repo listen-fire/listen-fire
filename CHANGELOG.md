@@ -6,18 +6,18 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
+<!-- add merged PRs here -->
+
+## [v0.8.3] - 2026-09-29
+
 ### Added
 
 - `NUMBER.FORMAT(number, "compact" | "grouped")` writes a number out — `"compact"` abbreviates with K/M/B/T (`1200000` → `"1.2M"`), `"grouped"` adds thousands separators (`1200000` → `"1,200,000"`). `CURRENCY.FORMAT_FIGURE(number, code)`, the inverse of `CURRENCY.GET_NUMBER_FROM_FIGURE`, writes a money figure with its symbol (`"€1.2M"`) or, for a code with none, the ISO code after the amount (`"1.2M CHF"`).
 
 ### Fixed
-
 - A walk from a record held in a name now runs: `EXISTS(company-[:Notes WHERE …]->)`, `COUNT(…)`, `ONLY(…)` and hopped reads off a `FIRST(…)` result, a `match` result, a write handle or a block's returned records. These previously saved cleanly and then failed every run with MOVENG_UNSUPPORTED; `x = match …` / `x = link …` and a call spelled `x = plugin(…)` at file scope are now refused at save instead of at run.
 - `!` is negation; it used to be dropped silently, so a condition written with it ran inverted. `!x` is `NOT x` (same precedence, so `!a == b` is `NOT (a == b)`), `!!x` is double negation, and `!=` is unchanged. This applies under every language version rather than behind a version gate: a saved automation that wrote `if !EXISTS(…)` was running the opposite of what it said, and now runs what it says.
 - A character an expression has no meaning for (`&`, `&&`, `|`, `||`, `?`, `;`, `%`, a backslash outside a string, an en or em dash, a curly quote, …) is refused at save with its position, instead of being skipped. `&&` and `||` point at `AND` and `OR`; a typographic dash points at `-`.
-
-### Fixed
-
 - A source-built deployment names its release `dev+<short commit>` when the host supplies the commit (`RENDER_GIT_COMMIT`, `SOURCE_COMMIT`), so the deploy check runs once per deployed commit instead of once ever under a fixed `dev`; the health endpoint reports the same name.
 
 ## [v0.8.2] - 2026-09-29
@@ -270,7 +270,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.3...HEAD
+[v0.8.3]: https://github.com/listen-fire/listen-fire/compare/v0.8.2...v0.8.3
 [v0.8.2]: https://github.com/listen-fire/listen-fire/compare/v0.8.1...v0.8.2
 [v0.8.1]: https://github.com/listen-fire/listen-fire/compare/v0.8.0...v0.8.1
 [v0.8.0]: https://github.com/listen-fire/listen-fire/compare/v0.7.0...v0.8.0
