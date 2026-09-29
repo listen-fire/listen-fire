@@ -12,7 +12,10 @@
 // dependent rejections (a block head over a binding of the wrong kind,
 // WHERE filters on a particular hop) are not statically decidable here
 // and still surface as failed runs — the list below is the honest
-// construct-level gate, not a proof of interpretability.
+// construct-level gate, not a proof of interpretability. Every engine
+// site that throws MOVENG_UNSUPPORTED, with what covers it (this scan, a
+// checker diagnostic, or a named gap), is registered in
+// __test__/interpretable_unsupported_sites.unit.test.ts.
 
 import {
   BridgeError,
@@ -143,6 +146,9 @@ class InterpretabilityScan {
   /** Declared node names — a write to one has no adapter, so its
    *  fields are NOT a field-function context (see scanWrite). */
   private readonly shapeNames = new Set<string>();
+  /** Names a file-scope `x = f(…)` would CALL rather than construct: the
+   *  file's own movements and its imported plugins. */
+  private readonly callableNames = new Set<string>();
   /** > 0 while scanning the field slots of an adapter-target write —
    *  the only place a non-built-in function can resolve at runtime. */
   private writeFieldDepth = 0;
@@ -155,6 +161,14 @@ class InterpretabilityScan {
       if (statement.kind === 'shape') {
         this.graphRoots.add(statement.name);
         this.shapeNames.add(statement.name);
+      }
+      if (statement.kind === 'movement') this.callableNames.add(statement.name);
+      if (
+        statement.kind === 'import'
+        && statement.source.kind === 'builtin'
+        && statement.source.namespace === 'plugins'
+      ) {
+        for (const { name, alias } of statement.names) this.callableNames.add(alias ?? name);
       }
       if (statement.kind === 'import' && statement.source.kind === 'file') {
         // An imported name may be a shape (a valid movement root) —
@@ -198,6 +212,12 @@ class InterpretabilityScan {
           case 'write':
             this.flag('file-level writes');
             return;
+          case 'match':
+            this.flag('file-level matches');
+            return;
+          case 'link':
+            this.flag('file-level links');
+            return;
           case 'expr':
             this.scanSlot(statement.value.expr);
             return;
@@ -207,6 +227,11 @@ class InterpretabilityScan {
             // callback lives inside a movement body).
             return;
           case 'construct':
+            // The construction spelling of a CALL (`page = fetch_url(url: …)`)
+            // is a call, and the engine refuses it at file scope like one.
+            if (this.callableNames.has(statement.value.construct.callee)) {
+              this.flag('file-level calls');
+            }
             return;
           case 'call':
             this.flag('file-level calls');

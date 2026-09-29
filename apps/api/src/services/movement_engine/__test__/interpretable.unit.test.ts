@@ -215,6 +215,40 @@ movement intake(m: <inbox-[:message]->>) {
     expect(listUnsupportedConstructs(source)).toContain('file-level extract expressions');
   });
 
+  it('names file-level matches and links — the engine runs neither outside a movement body', () => {
+    const source = `${PRELUDE}
+co = match crm-[:companies]-> { unique by (\`name\`), name: "Acme" }
+
+movement intake(m: <inbox-[:message]->>) {
+  write crm-[:companies]-> { name: m.\`subject\` }
+}
+`;
+    expect(listUnsupportedConstructs(source)).toEqual(['file-level matches']);
+    const linked = source.replace(
+      'co = match crm-[:companies]-> { unique by (`name`), name: "Acme" }',
+      'co = link crm -[:companies]-> { name: "Acme" }',
+    );
+    expect(listUnsupportedConstructs(linked)).toEqual(['file-level links']);
+  });
+
+  it('names a file-level call spelled as a construction — a plugin or a movement, not an adapter', () => {
+    const plugin = `${PRELUDE}
+import { fetch_url } from plugins
+page = fetch_url(url: "https://example.com")
+
+movement intake(m: <inbox-[:message]->>) {
+  write crm-[:companies]-> { name: m.\`subject\` }
+}
+`;
+    expect(listUnsupportedConstructs(plugin)).toEqual(['file-level calls']);
+    const movement = plugin
+      .replace('import { fetch_url } from plugins\n', '')
+      .replace('page = fetch_url(url: "https://example.com")', 'page = intake(m: "x")');
+    expect(listUnsupportedConstructs(movement)).toEqual(['file-level calls']);
+    // The PRELUDE's own constructions (`crm = attio(…)`) are constructions.
+    expect(listUnsupportedConstructs(plugin.replace(/page = .*\n/, ''))).toEqual([]);
+  });
+
   it('built-in pure function calls (COALESCE, TRIM, …) pass — the evaluator mirrors them', () => {
     const source = `${PRELUDE}
 movement intake(m: <inbox-[:message]->>) {
