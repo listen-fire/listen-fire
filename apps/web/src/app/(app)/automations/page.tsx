@@ -144,7 +144,7 @@ function ListensOnCell({ movement }: { movement: MovementListItem }) {
 
 function AutomationsTable({ movements }: { movements: MovementListItem[] }) {
   return (
-    <MovementsTable columns={["Name", "Status", "Listens on", "Language", "Last run"]}>
+    <MovementsTable columns={["Name", "Status", "Listens on", "Version", "Last run"]}>
       {movements.map((m) => {
         const latest = mostRecentRun(m.listeners);
         return (

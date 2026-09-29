@@ -26,6 +26,11 @@ function issuesText(count: number): string {
   return count === 1 ? "1 issue" : `${count} issues`;
 }
 
+/** The version's name, wherever it's shown: a tag, not prose. */
+function VersionTag({ name }: { name: string }) {
+  return <Badge tone="mono">{name}</Badge>;
+}
+
 /** The automations list's cell: the version's name, and a warning badge when
  *  something keeps the automation off the current version. */
 export function LanguageVersionCell({
@@ -39,7 +44,7 @@ export function LanguageVersionCell({
   return (
     <td className="py-3 pr-4 text-gray-500">
       <span className="flex items-center gap-1.5">
-        {versionName(languageVersion)}
+        <VersionTag name={versionName(languageVersion)} />
         {count > 0 && (
           <Badge
             tone="amber"
@@ -69,19 +74,24 @@ export function LanguageVersionNotice({
   return (
     <section data-testid="language-version-notice">
       <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-400">
-        Language version
+        Version
       </h2>
       <p className="text-[12.5px] leading-relaxed text-gray-600">
-        Written in <span className="font-medium text-gray-800">{name}</span>
+        Written in <VersionTag name={name} />
         {languageVersion === CURRENT_LANGUAGE_VERSION
           ? ", the current version."
-          : `. The current version is ${current}.`}
+          : (
+            <>
+              . The current version is <VersionTag name={current} />.
+            </>
+          )}
       </p>
       {issues.length > 0 && (
         <>
           <p className="mt-2 text-[12.5px] leading-relaxed text-gray-600">
-            It keeps running as {name}. {current} reports the issues below; fix
-            them, then ask your assistant to upgrade it.
+            It keeps running as <VersionTag name={name} />.{" "}
+            <VersionTag name={current} /> reports the issues below; fix them,
+            then ask your assistant to upgrade it.
           </p>
           <ul className="mt-2 space-y-1.5">
             {issues.map((d, i) => (

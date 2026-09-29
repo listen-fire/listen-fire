@@ -211,6 +211,10 @@ const BADGE_TONES = {
   violet: "bg-violet-50 text-violet-600",
   sky: "bg-sky-50 text-sky-700",
   primary: "bg-primary-50 text-primary-700",
+  // A named value (e.g. a language version) rather than a status — borders
+  // read as "this is a literal tag", not a state, and the mono font makes
+  // it scan as an identifier.
+  mono: "border border-gray-200 bg-gray-50 font-mono text-gray-600",
 } as const;
 
 export function Badge({
