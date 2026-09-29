@@ -764,6 +764,39 @@ export type AssetTransferId = string & {
     __brand: 'valuations.asset_transfer';
 };
 
+export interface Acquisition {
+    investmentId: string;
+    fund: {
+        id: string;
+        name: string;
+    };
+    acquiredCompany: {
+        id: string;
+        name: string;
+        slug: string | null;
+    };
+    date: string;
+    sharesReceived: {
+        assetId: string;
+        assetName: string;
+        quantity: number;
+    }[];
+    /**
+     * What the fund paid for the acquired company in total, in `currency`. The
+     * engine keeps no cost per share, so this is not the cost of just the shares
+     * handed over in this swap: it equals that only when the swap took the
+     * fund's whole holding, which is the usual acquisition.
+     */
+    acquiredCompanyCost: number | null;
+    /** Shares received at the latest price, in `currency`; null if any is unpriced. */
+    valueNow: number | null;
+    /** Cash paid alongside the shares, at the rate on the day it arrived; null if none. */
+    cashReceived: number | null;
+    /** (value now + cash received) / acquired company cost. */
+    multiple: number | null;
+    currency: CurrencyIsoCode;
+}
+
 export interface HoldingRow {
     fundId: string;
     fundName: string;
@@ -1050,6 +1083,9 @@ export interface AuthoringDiagnostic {
     endCol: number;
     /** The offending source line, verbatim — repair context without re-reading. */
     sourceLine: string;
+    /** Marks a construct whose meaning changed between the pin and the version
+     *  checked, on an upgrade check (the checker's `Diagnostic.upgrade`). */
+    upgrade?: true;
 }
 export interface MovementValidityAssessment {
     status: MovementValidityStatus;
@@ -11151,6 +11187,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     firstInvested: string | null;
                     moic: number | null;
                     holdings: HoldingRow[];
+                    acquisitions: Acquisition[];
                     id: LegalEntityId;
                     description: string | null;
                     type: LegalEntityType | null;
