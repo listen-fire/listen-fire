@@ -43,7 +43,7 @@ const sourceWithEdge = (edge: string) => `import { manual, \`${FAKE_CRM_ADAPTER_
 runs = manual()
 df = crm()
 
-movement probe(go: <runs-[:\`invocation\`]->>) {
+movement probe(go: <runs-[:\`Invocation\`]->>) {
   write df-[:\`${edge}\`]-> {
     Name: "Vireo Robotics"
   }
