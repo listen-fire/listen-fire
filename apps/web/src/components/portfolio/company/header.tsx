@@ -132,6 +132,7 @@ export function CompanyHeader({ company }: { company: Company }) {
           Acquired by
           <Link
             href={`/portfolio/c/${company.acquirer.slug}`}
+            prefetch={false}
             className="font-semibold text-gray-900 hover:underline"
           >
             {company.acquirer.name}

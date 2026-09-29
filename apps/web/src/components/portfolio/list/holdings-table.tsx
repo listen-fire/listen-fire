@@ -16,7 +16,7 @@ import { formatDate, formatMoney, formatTvpi } from "@/components/portfolio";
 import { CompanyLogo } from "./company-logo";
 import { OwnerPicker } from "./owner-picker";
 import { InvestmentDetailModal } from "./investment-detail-modal";
-import type { Aggregation, Investment } from "./types";
+import type { Aggregation, Investment, PortfolioConfig } from "./types";
 
 function hostnameOf(url: string): string {
   return url.replace(/^(https?:\/\/)?(www\.)?/, "").replace(/\/$/, "");
@@ -45,10 +45,14 @@ export function HoldingsTable({
   investments,
   aggregation,
   showDetails,
+  config,
 }: {
   investments: Investment[];
   aggregation: Aggregation;
   showDetails: boolean;
+  /** What the list was asked for — the modal re-runs the same valuation to
+   *  narrate one line of it, so it has to ask on the same terms. */
+  config: PortfolioConfig;
 }) {
   return (
     <div className="overflow-x-auto rounded-xl border border-gray-100">
@@ -74,6 +78,7 @@ export function HoldingsTable({
               investment={investment}
               aggregation={aggregation}
               showDetails={showDetails}
+              config={config}
             />
           ))}
         </tbody>
@@ -86,10 +91,12 @@ function HoldingRow({
   investment,
   aggregation,
   showDetails,
+  config,
 }: {
   investment: Investment;
   aggregation: Aggregation;
   showDetails: boolean;
+  config: PortfolioConfig;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
   const isExited = Boolean(investment.is_exited);
@@ -108,6 +115,7 @@ function HoldingRow({
                 {investment.slug ? (
                   <Link
                     href={`/portfolio/c/${investment.slug}`}
+                    prefetch={false}
                     className="truncate font-medium text-gray-900 hover:underline"
                   >
                     {investment.name}
@@ -171,7 +179,8 @@ function HoldingRow({
       <InvestmentDetailModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        messages={investment.message}
+        investments={investment.investments}
+        config={config}
       />
     </>
   );
@@ -200,7 +209,11 @@ function FundsCell({ investment }: { investment: Investment }) {
     return (
       <span>
         acquired by{" "}
-        <Link href={`/portfolio/c/${investment.acquirer.slug}`} className="text-primary hover:underline">
+        <Link
+          href={`/portfolio/c/${investment.acquirer.slug}`}
+          prefetch={false}
+          className="text-primary hover:underline"
+        >
           {investment.acquirer.name}
         </Link>
       </span>
@@ -219,7 +232,7 @@ function FundsCell({ investment }: { investment: Investment }) {
           <span key={a.id}>
             {i > 0 && ", "}
             {a.slug ? (
-              <Link href={`/portfolio/c/${a.slug}`} className="text-primary hover:underline">
+              <Link href={`/portfolio/c/${a.slug}`} prefetch={false} className="text-primary hover:underline">
                 {a.name}
               </Link>
             ) : (

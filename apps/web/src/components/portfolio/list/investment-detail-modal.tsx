@@ -1,14 +1,17 @@
 "use client";
 
 /**
- * "How this was calculated" modal — renders the `message[]` trace the
- * valuation engine attaches to each row (ported from apps/app's
- * Investments.tsx MessageRenderer). Clicking any of the money/MOIC cells
- * opens this.
+ * "How this was calculated" modal — renders the valuation engine's trace of
+ * one line (ported from apps/app's Investments.tsx MessageRenderer). Clicking
+ * any of the money/MOIC cells opens this.
+ *
+ * The trace is asked for when the modal opens: it is far bigger than the rest
+ * of the list put together, and a reader looks at one company's at a time.
  */
 
 import { FormModal } from "@/components/portfolio";
-import type { ProcessMessage } from "./types";
+import { trpc } from "@/lib/trpc";
+import type { Investment, PortfolioConfig, ProcessMessage } from "./types";
 
 function MessageRenderer({ message }: { message: ProcessMessage }) {
   if (message.type === "header") {
@@ -53,15 +56,32 @@ function MessageRenderer({ message }: { message: ProcessMessage }) {
 export function InvestmentDetailModal({
   isOpen,
   onClose,
-  messages,
+  investments,
+  config,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  messages: ProcessMessage[] | undefined;
+  investments: Investment["investments"];
+  config: PortfolioConfig;
 }) {
+  const rowInvestments = (investments ?? []).map((i) => ({ id: i.id, date: i.date }));
+  const { data, isLoading } = trpc.views.investments.getInvestmentCalculation.useQuery(
+    {
+      investments: rowInvestments,
+      config: {
+        currency: config.currency ?? undefined,
+        valuationDate: config.valuationDate ?? undefined,
+      },
+    },
+    { enabled: isOpen && rowInvestments.length > 0 },
+  );
+  const messages = data?.message;
+
   return (
     <FormModal isOpen={isOpen} onClose={onClose} title="How this was calculated" size="xl">
-      {messages?.length ? (
+      {isLoading && rowInvestments.length > 0 ? (
+        <div className="text-[13px] text-gray-400">Working it out…</div>
+      ) : messages?.length ? (
         messages.map((msg, i) => <MessageRenderer key={i} message={msg} />)
       ) : (
         <div className="text-[13px] text-gray-400">No calculation detail available.</div>

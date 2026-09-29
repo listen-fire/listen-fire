@@ -43,4 +43,20 @@ function matchOption(candidate: unknown, options: readonly string[]): string | u
   return options.find((option) => option.toLowerCase() === lowered);
 }
 
-export { toTitleCase, customJoin, startCase, matchOption };
+/**
+ * A lowercase, hyphen-separated form of `text`, safe for a URL path segment.
+ *
+ * Lives here rather than in `file_generation` (its first home) because a
+ * company's `slug` is minted on the REST create path, and that module pulls in
+ * OpenAI, jsPDF, ExcelJS and the adapter registry — far too much to drag into
+ * a request for five lines of string work.
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+}
+
+export { toTitleCase, customJoin, startCase, matchOption, slugify };
