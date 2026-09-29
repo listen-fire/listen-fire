@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- A path inside `EXISTS(…)` now narrows like the same path heading a block. `` EXISTS(crm-[o:Organization WHERE …]->-[le:`List Entries` WHERE `listName` == "Master Deals List" AND `Deal Created` >= cutoff]->) `` validates, and at run time it considers only that list's entries. Before, the checker refused `Deal Created` (`… has no field 'Deal Created' — it has: listName`), or said nothing described the landing, because the path inside `EXISTS` was never narrowed. This applies to an `EXISTS` rooted at a system or at a block alias, in an assignment, an `IF … THEN` or an `if` condition. Paths inside `COUNT`, `FIRST`, `ONLY` and the other aggregates already narrowed. The language version does not change. The one new refusal is one a block already gave: a field or edge the named member does not have, read later in the same `EXISTS` path.
+
 ## [v0.9.0] - 2026-09-29
 
 Language version stays **Bright Otter** (2): everything here is an addition or a refusal that became an acceptance, so no saved automation changes behaviour. Highlights: `node X extends Y`, `%`, `TEXT.PAIRS`, a scheme-less `URL.HOST`, a parameter typed on a declaration accepts any record with its fields, and the editor renders multi-line strings as one block.

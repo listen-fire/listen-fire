@@ -20,7 +20,7 @@
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic } from '../check';
 import { InstanceSchema, mockCatalog, refinementKey } from '../catalog';
-import { parseTraversalPath } from '../../service/selectors';
+import { parseTraversalPath, scanInstanceChains } from '../../service/selectors';
 
 const ENTRIES = 'List Entry';
 const MASTER = 'List Entry "Deal Pipeline"';
@@ -294,5 +294,84 @@ describe('a refused field on a narrowable type names the narrowing that admits i
     expect(narrowed.message).not.toContain('narrow the hop');
     const [closed] = diagnose('  sales-[o:Organization WHERE `Made Up` == "x"]-> { }');
     expect(closed.message).not.toContain('narrow the hop');
+  });
+});
+
+// A path wrapped in a function narrows exactly as a block hop does. The host
+// narrows the hops the program walks, and learns which ones those are from the
+// chain scan — which read the path out of `COUNT(…)` / `FIRST(…)` / `ONLY(…)`
+// (a traverse carrying its own hops) but lost the one in `EXISTS(…)`: the
+// bridge lifts that into a zero-step traverse whose terminal carries the hops,
+// so the scan saw a path of length zero. Nothing narrowed, the landing was never
+// described, and a member's field in the WHERE was refused.
+describe('a path wrapped in a function narrows like a block hop', () => {
+  const program = (body: string) =>
+    `${prelude}\nmovement m(x: <runner-[:invocation]->>) {\n  cutoff = "2026-01-01"\n${body}\n}`;
+  /** Each chain the scan yields: its hops, and whether the last one carries its WHERE. */
+  const chainsOf = (body: string) =>
+    scanInstanceChains(program(body)).map((chain) => ({
+      adapter: chain.adapter,
+      edges: chain.steps.map((s) => (s.type === 'edge' ? s.edgeTypeId : s.type)),
+      lastFiltered: (() => {
+        const last = chain.steps[chain.steps.length - 1];
+        return last?.type === 'edge' && last.expressionFilter !== undefined;
+      })(),
+    }));
+
+  const TICKET_PATH = 'desk-[t:Ticket WHERE `queue` == "Billing" AND `refundAmount` > 100]->';
+  const ENTRY_PATH =
+    'sales-[o:Organization WHERE `Name` == "Acme"]->-[le:`List Entries` WHERE `listName` == "Deal Pipeline" AND `Deal Created` >= cutoff]->';
+  const ticketChain = [{ adapter: 'helpdesk', edges: [TICKETS], lastFiltered: true }];
+  const entryChain = [
+    { adapter: 'crm', edges: ['Organization', 'List Entries'], lastFiltered: true },
+  ];
+
+  it.each([
+    ['EXISTS', `  hit = EXISTS(${TICKET_PATH})`],
+    ['EXISTS in an IF condition', `  n = IF EXISTS(${TICKET_PATH}) THEN 1 ELSE 0 END`],
+    ['EXISTS as an if statement condition', `  if EXISTS(${TICKET_PATH}) { }`],
+    ['COUNT', `  n = COUNT(${TICKET_PATH})`],
+    ['FIRST', `  n = FIRST(${TICKET_PATH})`],
+    ['ONLY', `  n = ONLY(${TICKET_PATH})`],
+  ])('the scan yields the path inside %s (a root collection)', (_form, body) => {
+    expect(chainsOf(body)).toEqual(ticketChain);
+  });
+
+  it.each([
+    ['EXISTS', `  hit = EXISTS(${ENTRY_PATH})`],
+    ['COUNT', `  n = COUNT(${ENTRY_PATH})`],
+  ])('the scan yields the whole chained path inside %s (a record edge)', (_form, body) => {
+    expect(chainsOf(body)).toEqual(entryChain);
+  });
+
+  it('an EXISTS rooted at a block alias grounds through the block', () => {
+    expect(
+      chainsOf(
+        '  sales-[o:Organization WHERE `Name` == "Acme"]-> {\n    hit = EXISTS(o-[le:`List Entries` WHERE `listName` == "Deal Pipeline"]->)\n  }',
+      ),
+    ).toEqual([
+      { adapter: 'crm', edges: ['Organization'], lastFiltered: true },
+      { adapter: 'crm', edges: ['Organization', 'List Entries'], lastFiltered: true },
+    ]);
+  });
+
+  it('a relative EXISTS inside a WHERE has no root to ground, and yields nothing new', () => {
+    expect(
+      chainsOf('  desk-[t:Ticket WHERE EXISTS(-[:Comments]->)]-> { }'),
+    ).toEqual([{ adapter: 'helpdesk', edges: [TICKETS], lastFiltered: true }]);
+  });
+
+  it('the checker narrows the path inside EXISTS, on both shapes', () => {
+    expect(codes(`  hit = EXISTS(${TICKET_PATH})`)).toEqual([]);
+    expect(codes(`  cutoff = "2026-01-01"\n  hit = EXISTS(${ENTRY_PATH})`)).toEqual([]);
+  });
+
+  it('without the discriminant, the member field inside EXISTS is refused with the narrowing test', () => {
+    const [diagnostic, ...rest] = diagnose(
+      '  cutoff = "2026-01-01"\n  hit = EXISTS(sales-[o:Organization WHERE `Name` == "Acme"]->-[le:`List Entries` WHERE `Deal Created` >= cutoff]->)',
+    );
+    expect(rest).toEqual([]);
+    expect(diagnostic.code).toBe('MOV_UNKNOWN_PROPERTY');
+    expect(diagnostic.message).toContain('test `Name` == "…" (or `Id`, `listName`) in its WHERE');
   });
 });

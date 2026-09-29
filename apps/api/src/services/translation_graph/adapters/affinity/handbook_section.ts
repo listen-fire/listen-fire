@@ -27,6 +27,12 @@ entry = write company-[:\`List Entries\`]-> {
 
 \`listName\` is the list's own name, written as a fixed value rather than computed. Fields are spelled the way that list shows them, with no list name in front.
 
+Reading a company's entries narrows by list in the WHERE: testing \`listName\` there makes them that list's entries, so the list's own fields can be tested beside it, in a block or inside \`EXISTS(…)\`:
+
+\`\`\`
+open = EXISTS(company-[e:\`List Entries\` WHERE \`listName\` == "Priority Accounts" AND Status == "Open"]->)
+\`\`\`
+
 A company sits on a list once, so the row is identified by the pair — the company, and the list. Running this again updates the row already there: \`?:\` fills only what is still empty, and a value that has not changed is not written at all.
 
 ### attaching-people-to-a-row

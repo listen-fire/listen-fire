@@ -209,8 +209,15 @@ export function scanInstanceChains(source: string): InstanceChain[] {
   const visitExpression = (expr: Expression, aliasScope: Map<string, AliasGrounding>): void => {
     switch (expr.type) {
       case 'traverse': {
-        if (expr.aliasRoot !== undefined && expr.steps.length > 0) {
-          const grounded = groundRoot(expr.aliasRoot, expr.steps, aliasScope);
+        // The path a rooted traverse walks is its own steps followed by those
+        // of an EXISTS it wraps: the bridge lifts `EXISTS(crm-[…]->)` into a
+        // zero-step traverse rooted at `crm` whose terminal carries the hops.
+        // Scanning the traverse's own steps alone lost that whole chain, so
+        // its hops were never narrowed nor their landings described.
+        const walked =
+          expr.expression.type === 'exists' ? [...expr.steps, ...expr.expression.steps] : expr.steps;
+        if (expr.aliasRoot !== undefined && walked.length > 0) {
+          const grounded = groundRoot(expr.aliasRoot, walked, aliasScope);
           if (grounded) emitChain(grounded.binding, grounded.steps, grounded.startPosition);
         }
         for (const step of expr.steps) {

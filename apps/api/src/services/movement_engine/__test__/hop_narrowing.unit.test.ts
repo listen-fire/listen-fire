@@ -483,6 +483,73 @@ describe('a narrowed polymorphic hop drops the members it did not select', () =>
     expect(fake.fieldReads.some((r) => r.recordType === LIST_ENTRY)).toBe(true);
   });
 
+  // The production shape: the whole path inside `EXISTS(…)`, rooted at the
+  // instance. The host learns which hops to narrow from the chain scan, and the
+  // bridge hands this path over as a zero-step traverse whose EXISTS carries the
+  // hops — so until the scan read them, nothing was selected, every list's
+  // entries faced the WHERE, and the other list's entry drifted on `Added On`.
+  // Resolved here by the REAL scan and the REAL host pass, not hand-authored.
+  it('an instance-rooted EXISTS is narrowed by the host and drops the other member', async () => {
+    const body = (cutoff: string) =>
+      `  if EXISTS(graph-[o:organization]->-[le:${LIST_ENTRIES} WHERE \`listName\` == "Portfolio" AND \`Added On\` >= "${cutoff}"]->) {
+    write graph-[:note]-> { text: "on the list since ${cutoff}" }
+  }`;
+    // Nothing resolved yet: no refinement, no selection, no refined position.
+    const unresolved: InstanceSchema = {
+      ...crmSchema,
+      positions: Object.fromEntries(
+        Object.entries(crmSchema.positions).filter(([name]) => name !== REFINED_POSITION),
+      ),
+      refinements: {},
+      selectedMembers: {},
+    };
+    // What the META WALK publishes, and what walking to a member describes.
+    const instance = {
+      adapterType: KG,
+      schema: unresolved,
+      entryPoints: [
+        { typeId: 'organization', displayName: 'organization', writable: false, readable: true },
+        { typeId: LIST_ENTRY, displayName: LIST_ENTRY, writable: false, readable: false },
+      ],
+      membersOf: async (recordType: string) =>
+        recordType === LIST_ENTRY
+          ? [
+              { name: MASTER_LIST, data: { listName: MASTER_LIST } },
+              { name: HANDOVER_LIST, data: { listName: HANDOVER_LIST } },
+            ]
+          : [],
+      describeType: async (member: string) => ({
+        typeId: `List Entry — ${member}`,
+        displayName: `List Entry — ${member}`,
+        fields: ['listName', 'Added On'].map((name) => ({
+          fieldId: name,
+          displayName: name,
+          kind: 'string' as const,
+          writable: false,
+          required: false,
+        })),
+        references: [],
+      }),
+    };
+
+    for (const [cutoff, expected] of [
+      ['2026-01-01', ['on the list since 2026-01-01']],
+      ['2027-01-01', []],
+    ] as const) {
+      const { schema } = await refineInstanceSchema({
+        instance,
+        chains: scanInstanceChains(sourceFor(body(cutoff))),
+      });
+      expect(Object.values(schema.selectedMembers ?? {})).toEqual([MASTER]);
+
+      const fake = makeCrmFake();
+      const { run, writes } = await runWith({ schema, fake, body: body(cutoff) });
+      await run;
+      expect(writes.map((w) => w.fields?.text)).toEqual(expected);
+      expect(fake.fieldReads.filter((r) => r.recordType === HANDOVER)).toEqual([]);
+    }
+  });
+
   it('a hop the host did not narrow keeps its existing behaviour', async () => {
     const fake = makeCrmFake();
     // No `selectedMembers` entry: nothing was resolved, so nothing is dropped
