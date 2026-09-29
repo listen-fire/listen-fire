@@ -158,7 +158,7 @@ x = IF EXISTS(d) THEN "\${d}" ELSE "" END   # narrows d present in THEN only
 Field ?: d                                 # '?:' takes a maybe-absent value, no guard needed
 \`\`\`
 
-\`FIRST\`/\`LAST\`/\`MIN\`/\`MAX\`/\`at\` over anything that can come up empty type \`T | absent\`, same as an \`await FIRST(…)\` on a landing a cancel can settle empty. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing) — every other comparison still needs both sides present and matching in kind. \`EXISTS(…)\` and \`ISNULL(…)\` take a bound name or a field read off one (\`EXISTS(x.\`Field\`)\`), and a proven field proves the record it came off.
+\`FIRST\`/\`LAST\`/\`MIN\`/\`MAX\`/\`at\` over anything that can come up empty type \`T | absent\`, same as an \`await FIRST(…)\` on a landing a cancel can settle empty. Using such a value where a present one is required — a write or traversal target, a dot-plane field read, an ordered comparison (\`<\` \`<=\` \`>\` \`>=\`) — is refused until narrowed, naming the fix. \`==\`/\`!=\` against \`null\` is the presence test (loose: \`null\` and absent mean the same thing); against any other value a maybe-absent side needs no guard (absent is never equal to a present value), and a condition (\`if\`, \`IF … THEN\`, \`AND\`/\`OR\`/\`NOT\`) reads a missing boolean as false. Both sides must still match in kind. \`EXISTS(…)\` and \`ISNULL(…)\` take a bound name or a field read off one (\`EXISTS(x.\`Field\`)\`), and a proven field proves the record it came off.
 
 ### listeners
 

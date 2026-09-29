@@ -17,7 +17,7 @@ function \`Inbound Intake\`(msg: <inbox-[:Email]->>) {
 }
 \`\`\`
 
-No \`else\` means the other cases simply do nothing. The statement \`if\` is lowercase, like the rest of the statement layer; the value-level conditional inside field expressions stays \`IF … THEN … ELSE … END\`.
+No \`else\` means the other cases simply do nothing. A condition may read a value that might not be there — \`if o.viable { … }\` on an extracted \`<boolean>\`, or \`o.stage == "Seed"\` — and a missing one counts as false, in \`AND\`, \`OR\`, \`NOT\` and \`IF … THEN\` alike. The statement \`if\` is lowercase, like the rest of the statement layer; the value-level conditional inside field expressions stays \`IF … THEN … ELSE … END\`.
 
 ### narrowing
 
