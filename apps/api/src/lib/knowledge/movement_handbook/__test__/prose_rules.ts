@@ -15,6 +15,7 @@ const AUTHORING_TOOL_NAMES = [
   'connectSystem',
   'grantAccess',
   'validateAutomation',
+  'upgradeAutomation',
   'saveAutomation',
   'listAutomations',
   'getAutomation',

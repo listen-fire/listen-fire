@@ -30,6 +30,25 @@ captured or written, and it lives only as long as the automation it pictures —
 delete the automation and the link goes with it (it can also be revoked on its
 own, without deleting anything).
 
+### language-versions
+
+Read the two-word name on an automation — "Quiet Heron", "Bright Otter" — as
+the version of this language its text is written in. The automation validates,
+saves and runs as that version, and an edit never changes it; a new automation
+is written in the current version. So check an edit to an existing automation
+as the version it is written in, not as the current one.
+
+A warning on an automation says something keeps it on an older version: the
+current version reports errors or warnings for its text. A warning there marks a
+construct whose meaning differs between the two versions, so it blocks the move
+as surely as an error. The automation keeps running as it always has.
+
+To upgrade one, repair what the current version reports — in text that still
+validates as the older version — then upgrade it: the check runs again, shows
+what it finds, and moves the automation only when that is clean and the move is
+confirmed. Each new release moves every automation that is clean under its
+current version by itself.
+
 ### the-cardinal-rule
 
 Inbound data is rarely loose facts — it is several things that belong together:
