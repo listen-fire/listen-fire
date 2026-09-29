@@ -79,6 +79,7 @@
     "schema:compare": "bash src/db/compare.sh",
     "schema:generate": "bash src/db/generate.sh",
     "schema:migrate": "bash src/db/migrate.sh",
+    "deploy:render-pre": "bash src/db/migrate.sh \"$DATABASE_URL\" && node build/scripts/deploy_check.js",
     "schema:apply": "NODE_ENV=development bash src/db/migrate.sh",
     "generate:kysely": "kanel",
     "dev:measure-write": "TZ=utc ts-node --project tsconfig.dev.json --transpile-only -r dotenv/config -r tsconfig-paths/register src/scripts/dev/measure_write_calls.ts",
