@@ -63,6 +63,7 @@ import {
   type CatalogSnapshot,
   type CompletionKind,
   type DefinitionTarget,
+  type LanguageVersion,
   type MovementDiagnostic,
 } from "movement-lang";
 
@@ -84,6 +85,9 @@ export interface MovementEditorHandle {
 export interface MovementEditorProps {
   initialValue: string;
   snapshot: CatalogSnapshot;
+  /** The saved movement's language version — the text is checked as the
+   *  version it is written in. Absent (a new movement) ⇒ the current one. */
+  languageVersion?: LanguageVersion;
   onChange?: (source: string) => void;
   /** Fires with each lint pass — drives the page's diagnostics panel. */
   onDiagnostics?: (diagnostics: MovementDiagnostic[]) => void;
@@ -486,6 +490,7 @@ export const MovementEditor = forwardRef<
   {
     initialValue,
     snapshot,
+    languageVersion,
     onChange,
     onDiagnostics,
     vimEnabled,
@@ -513,6 +518,8 @@ export const MovementEditor = forwardRef<
     onConnectAction,
   };
   const snapshotRef = useRef(snapshot);
+  const languageVersionRef = useRef(languageVersion);
+  languageVersionRef.current = languageVersion;
   const vimCompartmentRef = useRef(new Compartment());
   const wrapCompartmentRef = useRef(new Compartment());
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -732,9 +739,11 @@ export const MovementEditor = forwardRef<
 
     const movementLinter = linter(
       (view) => {
+        const pinned = languageVersionRef.current;
         const diagnostics = getMovementDiagnostics(
           view.state.doc.toString(),
           snapshotRef.current,
+          pinned !== undefined ? { languageVersion: pinned } : undefined,
         );
         callbacksRef.current.onDiagnostics?.(diagnostics);
         return diagnostics.map((d) => ({
