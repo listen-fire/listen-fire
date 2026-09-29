@@ -764,6 +764,39 @@ export type AssetTransferId = string & {
     __brand: 'valuations.asset_transfer';
 };
 
+export interface Acquisition {
+    investmentId: string;
+    fund: {
+        id: string;
+        name: string;
+    };
+    acquiredCompany: {
+        id: string;
+        name: string;
+        slug: string | null;
+    };
+    date: string;
+    sharesReceived: {
+        assetId: string;
+        assetName: string;
+        quantity: number;
+    }[];
+    /**
+     * What the fund paid for the acquired company in total, in `currency`. The
+     * engine keeps no cost per share, so this is not the cost of just the shares
+     * handed over in this swap: it equals that only when the swap took the
+     * fund's whole holding, which is the usual acquisition.
+     */
+    acquiredCompanyCost: number | null;
+    /** Shares received at the latest price, in `currency`; null if any is unpriced. */
+    valueNow: number | null;
+    /** Cash paid alongside the shares, at the rate on the day it arrived; null if none. */
+    cashReceived: number | null;
+    /** (value now + cash received) / acquired company cost. */
+    multiple: number | null;
+    currency: CurrencyIsoCode;
+}
+
 export interface HoldingRow {
     fundId: string;
     fundName: string;
@@ -5434,7 +5467,6 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     holdsRetainedAssets: boolean;
                     holdsTrackingAssets: boolean;
                     carriesSwapValue: boolean;
-                    message: ProcessMessage[] | undefined;
                     name: string;
                     slug: string | null;
                     image_url: string | null;
@@ -5493,6 +5525,56 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     } | null | undefined;
                     matches_name_filter?: boolean | undefined;
                 }[];
+                totals: {
+                    moic: number | null;
+                    currency: "CHF" | "EUR" | "GBP" | "NOK" | "SEK" | "USD" | "DKK";
+                    totalInvested: number;
+                    unrealizedValue: number;
+                    realizedValue: number;
+                    totalValue: number;
+                };
+            }>;
+            getInvestmentCalculation: _trpc_server.BuildProcedure<"query", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    investments: {
+                        id: string;
+                        date: unknown;
+                    }[];
+                    config: {
+                        currency?: "CHF" | "EUR" | "GBP" | "NOK" | "SEK" | "USD" | "DKK" | null | undefined;
+                        valuationDate?: string | null | undefined;
+                    };
+                };
+                _input_out: {
+                    investments: {
+                        id: string;
+                        date: Date | null;
+                    }[];
+                    config: {
+                        currency?: "CHF" | "EUR" | "GBP" | "NOK" | "SEK" | "USD" | "DKK" | null | undefined;
+                        valuationDate?: string | null | undefined;
+                    };
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                message: ProcessMessage[];
             }>;
             getPortfolioTotals: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{
@@ -11158,6 +11240,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     firstInvested: string | null;
                     moic: number | null;
                     holdings: HoldingRow[];
+                    acquisitions: Acquisition[];
                     id: LegalEntityId;
                     description: string | null;
                     type: LegalEntityType | null;

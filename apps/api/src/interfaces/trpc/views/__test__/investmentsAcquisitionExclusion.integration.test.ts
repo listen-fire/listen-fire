@@ -741,6 +741,29 @@ describe('company-detail surfaces — reportable investments only', () => {
     expect(acquirer!.firstInvested).toBeNull();
   });
 
+  // The consideration is kept out of the figures, not out of sight: the
+  // acquirer's page lists it separately, against what the fund paid for the
+  // company it gave up.
+  it('(a) the acquirer overview lists the consideration as an acquisition', async () => {
+    const acquirer = await overview(s.acquirerCompanyId);
+    const source = await overview(s.sourceCompanyId);
+
+    expect(acquirer!.investments).toHaveLength(0);
+    expect(acquirer!.acquisitions).toHaveLength(1);
+    const [acquisition] = acquirer!.acquisitions;
+    expect(acquisition.investmentId).toBe(s.consideration.investmentId);
+    expect(acquisition.fund).toEqual({ id: s.fundId, name: 'Our Fund' });
+    expect(acquisition.acquiredCompany.id).toBe(s.sourceCompanyId);
+    expect(acquisition.sharesReceived).toEqual([
+      expect.objectContaining({ assetName: 'B Shares', quantity: B_SHARES }),
+    ]);
+    expect(acquisition.acquiredCompanyCost).toBeCloseTo(INVESTED_CASH, 6);
+    expect(acquisition.valueNow).toBeCloseTo(B_SHARES * B_SHARE_PRICE, 6);
+    expect(acquisition.cashReceived).toBeCloseTo(DEAL_CASH, 6);
+
+    expect(source!.acquisitions).toEqual([]);
+  });
+
   it('(a) the acquired company keeps every figure the fix was not about', async () => {
     const source = await overview(s.sourceCompanyId);
 

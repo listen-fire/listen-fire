@@ -116,6 +116,7 @@ function InvestmentItem({
                 <Link
                   key="distribution"
                   href={`/portfolio/c/${investment.eventLegalEntitySlug}`}
+                  prefetch={false}
                   className="inline-flex shrink-0 items-center rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[12px] text-violet-600"
                 >
                   Acquisition: {investment.eventLegalEntityName}

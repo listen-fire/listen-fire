@@ -45,6 +45,7 @@ import { preAuthRouter } from './interfaces/rest/capabilities';
 import { contextTransactionHandler } from './lib/middleware/context_transaction';
 import { customHeadersExtractor } from './lib/middleware/custom_request_headers';
 import { jsonBodyParser, urlencodedBodyParser } from './lib/middleware/body_parser';
+import { compressResponses } from './lib/middleware/compression';
 import { expressLogger } from './lib/middleware/logging';
 import { contextInjector } from './lib/middleware/context';
 import { authorisationHandler } from './lib/middleware/authorisation';
@@ -210,6 +211,7 @@ async function main() {
   app.use(sentryScopeHandler);
   app.use(
     '/api/trpc',
+    compressResponses(),
     trpcExpress.createExpressMiddleware({
       router: trpcRouter,
       createContext: () => ({

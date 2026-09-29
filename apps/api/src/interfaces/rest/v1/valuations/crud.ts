@@ -1,5 +1,6 @@
 import { Router, type RequestHandler } from 'express';
 import { z, type ZodType } from 'zod';
+import type { Kysely } from 'kysely';
 
 import { currentContext } from '../../../../services/context';
 import { valuationsQb, teamId, internalError, fkConflictError, paginationQuery, uuidParam } from './shared';
@@ -17,6 +18,14 @@ interface CrudConfig {
   listFilters?: (query: any, params: Record<string, unknown>) => any;
   // Transform row for response (camelCase → snake_case, field subsetting, etc.)
   transformRow?: (row: Record<string, unknown>) => Record<string, unknown>;
+  // Derive columns the caller did not supply, on the way in. Runs inside the
+  // create transaction with the same query builder, so a hook may read the
+  // table it is about to write (minting a unique slug, say). Whatever it
+  // returns is merged over the parsed body.
+  beforeCreate?: (
+    values: Record<string, unknown>,
+    qb: Kysely<any>,
+  ) => Promise<Record<string, unknown>>;
 }
 
 function buildCrudRouter(config: CrudConfig): ReturnType<typeof Router> {
@@ -30,6 +39,7 @@ function buildCrudRouter(config: CrudConfig): ReturnType<typeof Router> {
     sortableColumns,
     listFilters,
     transformRow = (r) => r,
+    beforeCreate,
   } = config;
   const teamIdColumn = config.teamIdColumn === undefined ? 'team_id' : config.teamIdColumn;
 
@@ -117,9 +127,12 @@ function buildCrudRouter(config: CrudConfig): ReturnType<typeof Router> {
       try {
         await currentContext().enterTransaction();
         const qb = valuationsQb();
-        const values = { ...(parseResult.data as Record<string, unknown>) };
+        let values = { ...(parseResult.data as Record<string, unknown>) };
         if (teamIdColumn) {
           values[teamIdColumn] = teamId();
+        }
+        if (beforeCreate) {
+          values = { ...values, ...(await beforeCreate(values, qb)) };
         }
 
         const row = await qb

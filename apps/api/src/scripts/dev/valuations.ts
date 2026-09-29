@@ -26,11 +26,11 @@
  */
 import './_profile_loader';
 
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { getAutomationsQb, getCoreQb, getValuationsQb } from '../../lib/kysely';
 import { encryptToken, decryptToken } from '../../lib/credentials';
-import { slugify } from '../../lib/file_generation';
+import { mintUniqueSlug } from '../../lib/valuations/slug';
 import type { TeamId } from '../../generated/kysely/core/Team';
 import type { UserId } from '../../generated/kysely/core/User';
 import type { ExternalServiceCredentialsId } from '../../generated/kysely/automations/ExternalServiceCredentials';
@@ -289,21 +289,13 @@ interface RecordEnvelope {
   data: Row;
 }
 
-/** `legal_entity.slug` is unique GLOBALLY, not per-team (`legal_entity_slug_key`),
- *  so a slug that's free for this team can still collide with another team's
- *  row (including leftovers from another dev-loop run). Mint one that's
- *  actually free, appending a short suffix on collision. */
-async function mintUniqueSlug(name: string, excludeId?: string): Promise<string> {
-  const base = slugify(name);
-  const qb = getValuationsQb(['legal_entity']);
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const candidate = attempt === 0 ? base : `${base}-${randomBytes(3).toString('hex')}`;
-    let query = qb.selectFrom('legal_entity').where('slug', '=', candidate).select(['id']);
-    if (excludeId) query = query.where('id', '!=', excludeId as LegalEntityId);
-    const collision = await query.executeTakeFirst();
-    if (!collision) return candidate;
-  }
-  throw new Error(`Could not mint a unique slug for '${name}' after 10 attempts`);
+/** The seed's own slug minting, for REPAIRING a company that predates the
+ *  create path minting one (`lib/valuations/slug.ts`). A create no longer
+ *  needs to pass `slug` at all — the API fills it in. */
+async function mintSeedSlug(name: string, excludeId?: string): Promise<string> {
+  const slug = await mintUniqueSlug(getValuationsQb(['legal_entity']), name, { excludeId });
+  if (slug === undefined) throw new Error(`'${name}' does not slugify to anything`);
+  return slug;
 }
 
 /** A small but complete portfolio: every parent-first edge has something to
@@ -321,7 +313,7 @@ async function seed(apiKey: string): Promise<unknown> {
     const existingCompany = existing.data[0];
     // Repair slug if missing
     if (!existingCompany.slug) {
-      const newSlug = await mintUniqueSlug('NewCo', existingCompany.id);
+      const newSlug = await mintSeedSlug('NewCo', existingCompany.id);
       await rest<RecordEnvelope>({
         apiKey,
         method: 'PATCH',
@@ -351,7 +343,7 @@ async function seed(apiKey: string): Promise<unknown> {
     .set({ is_deprecated: false })
     .where('id', '=', fund.data.id as LegalEntityId)
     .execute();
-  const companySlug = await mintUniqueSlug('NewCo');
+  const companySlug = await mintSeedSlug('NewCo');
   const company = await create('/api/v1/valuations/legal-entities', {
     type: 'COMPANY',
     name: 'NewCo',

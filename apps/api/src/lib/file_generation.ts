@@ -5,14 +5,7 @@ import ExcelJS from 'exceljs';
 
 import { services } from '../adapters/registry';
 import { generateImage as drawImage } from './models/image';
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
-}
+import { slugify } from './utils/string';
 
 interface GeneratedFile {
   objectUri: string;
@@ -280,7 +273,6 @@ export {
   generatePdf,
   generateChart,
   generateSpreadsheet,
-  slugify,
   FORMAT_METADATA,
   type FileFormat,
   type GeneratedFile,

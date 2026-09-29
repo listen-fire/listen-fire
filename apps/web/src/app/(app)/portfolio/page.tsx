@@ -104,7 +104,7 @@ export default function PortfolioPage() {
           <ConfigPanel filter={filter} setFilter={setFilter} config={config} setConfig={setConfig} />
         </div>
 
-        {config.showTotals && <TotalsRow filter={filter} config={config} />}
+        {config.showTotals && <TotalsRow totals={data?.totals} />}
 
         {isLoading ? (
           <div className="py-20 text-center text-[13px] text-gray-400">Loading…</div>
@@ -115,6 +115,7 @@ export default function PortfolioPage() {
             investments={investments}
             aggregation={config.aggregation}
             showDetails={config.showDetails}
+            config={config}
           />
         )}
       </PageBody>

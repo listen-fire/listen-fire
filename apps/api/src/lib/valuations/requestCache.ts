@@ -66,4 +66,75 @@ function requestMemo<A, V>({
   };
 }
 
-export { requestScopedMap, requestMemo };
+/**
+ * A lookup that answers one key at a time but asks the database in batches.
+ *
+ * The portfolio list values every company separately, so the same handful of
+ * lookups — what an asset's transactions are, what it is priced at — are asked
+ * once per row. Each ask is cheap to execute and expensive to plan, and six
+ * hundred of them is six hundred round trips. Every ask made before the current
+ * batch flushes joins it instead: the callers still write a single-key lookup,
+ * and the database sees one query per level of the walk rather than one per
+ * company.
+ *
+ * The batch closes at the end of the current microtask drain, which is when the
+ * row valuations running under one `Promise.all` have all taken their next step.
+ * A key already asked for in this request is answered from the batch it was in,
+ * exactly as `requestMemo` would.
+ *
+ * Outside a request there is no context to hang a batch on, so every call
+ * flushes on its own — correct, just uncoalesced.
+ */
+function requestBatchLoader<A, V>({
+  identity,
+  fetch,
+}: {
+  identity: (argument: A) => string;
+  /** Answers a whole batch, keyed by `identity`. A key the fetch has no answer
+   *  for is simply absent from the map, and its caller gets `undefined`. */
+  fetch: (batch: A[]) => Promise<Map<string, V>>;
+}): (argument: A) => Promise<V | undefined> {
+  type Scope = {
+    /** The batch still taking callers, if one is. */
+    open?: { queue: A[]; result: Promise<Map<string, V>> };
+    /** Every key this request has ever asked for, and its answer. */
+    answers: Map<string, Promise<V | undefined>>;
+  };
+  const scopeStore = requestScopedMap<Scope>();
+
+  return (argument) => {
+    const store = scopeStore();
+    let scope = store.get('scope');
+    if (!scope) {
+      scope = { answers: new Map() };
+      store.set('scope', scope);
+    }
+    const current = scope;
+
+    const key = identity(argument);
+    const answered = current.answers.get(key);
+    if (answered) return answered;
+
+    if (!current.open) {
+      const queue: A[] = [];
+      const result = new Promise<Map<string, V>>((resolve, reject) => {
+        queueMicrotask(() => {
+          current.open = undefined;
+          fetch(queue).then(resolve, reject);
+        });
+      });
+      // Every caller awaits its own read of this promise; the copy held here is
+      // unobserved, and an unobserved rejection takes the process down.
+      result.catch(() => {});
+      current.open = { queue, result };
+    }
+
+    current.open.queue.push(argument);
+    const answer = current.open.result.then((answers) => answers.get(key));
+    answer.catch(() => {});
+    current.answers.set(key, answer);
+    return answer;
+  };
+}
+
+export { requestScopedMap, requestMemo, requestBatchLoader };
