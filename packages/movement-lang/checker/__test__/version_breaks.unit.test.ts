@@ -8,6 +8,7 @@
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, DiagnosticCodes as C, type CheckOptions, type Diagnostic } from '../check';
 import { mockCatalog, type InstanceSchema, type PluginSpec } from '../catalog';
+import type { ResolveFile } from '../link';
 import { changedBetween, type LanguageVersion } from '../../language_version';
 
 const chatSchema: InstanceSchema = {
@@ -169,5 +170,34 @@ describe('an identity key that may be ""', () => {
     expect(ofSeverity('warning', keyed('"Acme"'), MOVING_UP)).toEqual([]);
     // An extracted text nobody found was absent under 1 and "" under 2: no key both ways.
     expect(ofSeverity('warning', keyed('r.note'), MOVING_UP)).toEqual([]);
+  });
+});
+
+describe('a meaning-changed construct inside an imported library', () => {
+  const LIBRARY = `${PRELUDE}
+export movement scan_channel(c: <chat-[:channel]->>) {
+  pages = scan_web(url: c.\`Name\`)
+  first = FIRST(pages)
+  write chat-[:note]-> { Body ?: first.text }
+}`;
+  const resolveFile: ResolveFile = (path) => (path === 'lib/scan' ? { source: LIBRARY } : undefined);
+  const importer = 'import { scan_channel } from "lib/scan"\n';
+  const check = (options: CheckOptions): Diagnostic[] =>
+    checkProgram(
+      parseProgram(importer, { languageVersion: options.languageVersion ?? 2 }),
+      catalog,
+      { ...options, resolveFile },
+    );
+
+  it("surfaces as the importer's warning on a check for the move up", () => {
+    const surfaced = check(MOVING_UP).filter((d) => d.code === C.PLUGIN_OUTPUT_CHANGED);
+    expect(surfaced).toEqual([
+      expect.objectContaining({ severity: 'warning', message: expect.stringContaining('"lib/scan" line') }),
+    ]);
+  });
+
+  it('says nothing about the move on an ordinary check', () => {
+    expect(check(V2).map((d) => d.code)).not.toContain(C.PLUGIN_OUTPUT_CHANGED);
+    expect(check(V2).filter((d) => (d.severity ?? 'error') === 'error')).toEqual([]);
   });
 });

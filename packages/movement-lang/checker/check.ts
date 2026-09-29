@@ -2152,10 +2152,11 @@ function returnPlane(shape: ReturnShape): 'node' | 'scalar' | undefined {
 }
 
 /** One checked library: its file scope (the exported symbols live there)
- *  and its error diagnostics (raw, library-file spans). */
+ *  and the diagnostics its importer must see — errors and warnings (raw,
+ *  library-file spans). */
 interface CheckedLibrary {
   scope: Scope;
-  errors: Diagnostic[];
+  surfaced: Diagnostic[];
 }
 
 /** Shared across the root checker and every nested library checker of one
@@ -3096,10 +3097,12 @@ class Checker {
   /**
    * Check (and memoize) one imported library in its OWN scope: same
    * catalog, library mode (no invoker advice), its imports resolved
-   * through its own `LinkedFile`. The library's ERROR diagnostics surface
+   * through its own `LinkedFile`. The library's errors and warnings surface
    * ONCE, prefixed with the import path, at the import site that first
-   * pulled it in; its info diagnostics belong to the library's own
-   * editing session and are dropped here.
+   * pulled it in, keeping their severity — a warning inside a library (an
+   * upgrade's meaning-changed construct, say) is the importer's concern too.
+   * Its info diagnostics belong to the library's own editing session and
+   * are dropped here.
    */
   private checkLibrary(file: LinkedFile, at: Span): CheckedLibrary {
     const context = this.options.linkContext;
@@ -3114,15 +3117,15 @@ class Checker {
       library: true,
     });
     const scope = checker.run(file.program);
-    const errors = checker.diagnostics.filter(d => diagnosticSeverity(d) === 'error');
-    const result: CheckedLibrary = { scope, errors };
+    const surfaced = checker.diagnostics.filter(d => diagnosticSeverity(d) !== 'info');
+    const result: CheckedLibrary = { scope, surfaced };
     context.checked.set(file.path, result);
-    for (const error of errors) {
-      this.report(
-        error.code,
-        `"${file.path}" line ${error.span.start.line}: ${error.message}`,
-        at,
-      );
+    for (const diagnostic of this.typeOnly ? [] : surfaced) {
+      this.diagnostics.push({
+        ...diagnostic,
+        message: `"${file.path}" line ${diagnostic.span.start.line}: ${diagnostic.message}`,
+        span: at,
+      });
     }
     return result;
   }

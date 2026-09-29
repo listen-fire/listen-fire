@@ -21,14 +21,23 @@ jest.mock('../store', () => ({
 }));
 jest.mock('../version_store', () => ({ movementSourceHash: () => 'hash' }));
 
-import type { LanguageRelease, LanguageVersion } from 'movement-lang';
+import {
+  checkProgram,
+  mockCatalog,
+  parseProgram,
+  type LanguageRelease,
+  type LanguageVersion,
+  type ResolveFile,
+} from 'movement-lang';
 
 import type { AuthoringDiagnostic } from '../authoring';
-import type { MovementRow } from '../store';
+import { getMovementRow, type MovementRow } from '../store';
 import {
   runDeployCheck,
+  upgradeMovement,
   type DeployCheckDeps,
   type DeployCheckSummary,
+  type ValidateUnder,
 } from '../language_upgrade';
 import { DEPRECATED_VERSION, RELEASE_APPLIED, VALIDATION_ISSUE } from '../../adapters/system/types';
 
@@ -79,6 +88,7 @@ function fakeStore(input: {
   const validity = new Map<string, LanguageVersion>();
   const events: Array<{ teamId: string; kind: string; reason: string; version: string }> = [];
   const runs: Array<{ tag: string; languageRelease: string; summary: DeployCheckSummary }> = [];
+  const validations: Array<Parameters<ValidateUnder>[0]> = [];
 
   const deps: DeployCheckDeps = {
     release: { tag: 'v0.8.0', language: input.release ?? RELEASE },
@@ -88,10 +98,13 @@ function fakeStore(input: {
     listMovements: async () =>
       input.movements.map((m) => ({ ...m, languageVersion: pins.get(m.id) ?? m.languageVersion })),
     sourceHash: (source) => `hash:${source}`,
-    validate: async ({ movement: m, languageVersion }) => ({
-      diagnostics: input.verdicts[m.id]?.[languageVersion] ?? [],
-      gaps: [],
-    }),
+    validate: async (validation) => {
+      validations.push(validation);
+      return {
+        diagnostics: input.verdicts[validation.movement.id]?.[validation.languageVersion] ?? [],
+        gaps: [],
+      };
+    },
     recordValidity: async ({ movement: m, checkedAgainst }) => {
       validity.set(m.id, checkedAgainst);
     },
@@ -109,7 +122,7 @@ function fakeStore(input: {
     },
     now: () => new Date('2026-09-29T12:00:00.000Z'),
   };
-  return { deps, pins, upgradeDiagnostics, validity, events, runs };
+  return { deps, pins, upgradeDiagnostics, validity, events, runs, validations };
 }
 
 describe('the deploy check', () => {
@@ -265,5 +278,122 @@ describe('the deploy check', () => {
       ['clean', 'advanced'],
     ]);
     expect(store.pins.get('flaky')).toBe(1);
+  });
+});
+
+describe('which checks are upgrade checks', () => {
+  const told = (validations: Array<Parameters<ValidateUnder>[0]>) =>
+    validations.map((v) => [v.movement.id, v.languageVersion, v.upgradingFrom]);
+
+  it('the sweep tells the checker the pin when checking under the newer version, and only then', async () => {
+    const store = fakeStore({
+      movements: [movement({ id: 'old' }), movement({ id: 'now', languageVersion: 2 })],
+      verdicts: {},
+    });
+
+    await runDeployCheck(store.deps);
+
+    expect(told(store.validations)).toEqual([
+      ['old', 1, undefined],
+      ['old', 2, 1],
+      ['now', 2, undefined],
+    ]);
+  });
+
+  it('an explicit upgrade tells the checker the pin it is moving from', async () => {
+    jest.mocked(getMovementRow).mockResolvedValueOnce(movement({ id: 'old' }));
+    const validations: Array<Parameters<ValidateUnder>[0]> = [];
+
+    const result = await upgradeMovement({
+      teamId: 'team-1',
+      id: 'old',
+      acknowledge: false,
+      validate: async (validation) => {
+        validations.push(validation);
+        return { diagnostics: [], gaps: [] };
+      },
+    });
+
+    expect(result.status).toBe('needs_acknowledgement');
+    expect(told(validations)).toEqual([['old', 2, 1]]);
+  });
+});
+
+describe('a meaning-changed construct inside an imported library', () => {
+  // The real checker behind the validation seam: the movement is clean itself,
+  // and only the library it imports uses a plugin whose output changed at 2.
+  const catalog = mockCatalog({
+    adapters: {
+      slack: {
+        constructionArgs: [],
+        schema: {
+          positions: {
+            channel: { properties: { Name: 'text' }, edges: {} },
+            note: { properties: { Body: 'text' }, edges: {} },
+          },
+          collections: { Channels: { target: 'channel' }, note: { target: 'note' } },
+          writableRoots: {
+            note: { fields: { Body: 'text' }, resultShape: { Body: 'text' }, edges: {} },
+          },
+        },
+      },
+    },
+    plugins: {
+      scan_web: {
+        args: ['url'],
+        effects: { reads: ['the web'], ai: true },
+        output: { kind: 'records', fields: { url: 'text', text: 'text' } },
+        earlierOutputs: [{ before: 2, output: { kind: 'value', type: 'text' } }],
+      },
+    },
+  });
+  const LIBRARY = [
+    'import { slack } from adapters',
+    'import { scan_web } from plugins',
+    'chat = slack()',
+    'export movement scan_channel(c: <chat-[:channel]->>) {',
+    '  pages = scan_web(url: c.`Name`)',
+    '  first = FIRST(pages)',
+    '  write chat-[:note]-> { Body: first.text }',
+    '}',
+  ].join('\n');
+  const resolveFile: ResolveFile = (path) => (path === 'lib/scan' ? { source: LIBRARY } : undefined);
+
+  const checkWithLibrary: ValidateUnder = async ({ movement: m, languageVersion, upgradingFrom }) => ({
+    diagnostics: checkProgram(parseProgram(m.source, { languageVersion }), catalog, {
+      languageVersion,
+      resolveFile,
+      ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
+    }).map((d) => ({
+      code: d.code,
+      message: d.message,
+      severity: d.severity ?? 'error',
+      line: d.span.start.line,
+      col: d.span.start.col,
+      endLine: d.span.end.line,
+      endCol: d.span.end.col,
+      sourceLine: '',
+    })),
+    gaps: [],
+  });
+
+  it('keeps the importer on its pin and stores the warning', async () => {
+    const store = fakeStore({
+      movements: [movement({ id: 'importer', source: 'import { scan_channel } from "lib/scan"\n' })],
+      verdicts: {},
+    });
+    store.deps.validate = checkWithLibrary;
+
+    const summary = await runDeployCheck(store.deps);
+
+    expect(store.pins.get('importer')).toBe(1);
+    expect(summary?.automations[0]?.outcome).toBe('warned');
+    expect(store.upgradeDiagnostics.get('importer')).toEqual([
+      expect.objectContaining({
+        code: 'MOV_PLUGIN_OUTPUT_CHANGED',
+        severity: 'warning',
+        message: expect.stringContaining('"lib/scan" line'),
+      }),
+    ]);
   });
 });

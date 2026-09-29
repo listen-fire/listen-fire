@@ -19,6 +19,7 @@
 import {
   CURRENT_LANGUAGE_VERSION,
   THIS_RELEASE,
+  before,
   describeLanguageVersion,
   languageVersionDiagnostic,
   languageVersionStanding,
@@ -73,11 +74,27 @@ function errorsOf(diagnostics: AuthoringDiagnostic[]): AuthoringDiagnostic[] {
 }
 
 /** The validation seam the check and the upgrade share — the real one checks
- *  against the team's live catalog. */
+ *  against the team's live catalog. `upgradingFrom` is set exactly when this
+ *  is an UPGRADE check (see `validationUnder`). */
 export type ValidateUnder = (input: {
   movement: MovementRow;
   languageVersion: LanguageVersion;
+  upgradingFrom?: LanguageVersion;
 }) => Promise<Pick<TeamMovementValidation, 'diagnostics' | 'gaps'>>;
+
+/** A validation of `movement` under `languageVersion`. A version newer than
+ *  the movement's pin makes it an UPGRADE check: the checker is told the pin
+ *  and then also warns on the constructs whose meaning changed between the
+ *  two — which is what keeps an unsafe pin from advancing. A check under the
+ *  pin itself is an ordinary one. */
+export function validationUnder(
+  movement: MovementRow,
+  languageVersion: LanguageVersion,
+): Parameters<ValidateUnder>[0] {
+  return before(movement.languageVersion, languageVersion)
+    ? { movement, languageVersion, upgradingFrom: movement.languageVersion }
+    : { movement, languageVersion };
+}
 
 /** At most this many diagnostics are spelled out in an event's reason; the
  *  automation's page shows them all. */
@@ -254,7 +271,7 @@ async function checkOne(input: {
   const pin = movement.languageVersion;
 
   // (a) Under its own pin — what it runs as today. It must pass.
-  const underPin = await deps.validate({ movement, languageVersion: pin });
+  const underPin = await deps.validate(validationUnder(movement, pin));
   await deps.recordValidity({ movement, validation: underPin, checkedAgainst: pin });
   const pinErrors = errorsOf(underPin.diagnostics);
   if (pinErrors.length > 0) {
@@ -303,7 +320,7 @@ async function checkOne(input: {
   }
 
   // (b) Under the current version — whether the pin may move.
-  const underCurrent = await deps.validate({ movement, languageVersion: current });
+  const underCurrent = await deps.validate(validationUnder(movement, current));
   const blocking = blockingDiagnostics(underCurrent.diagnostics);
   await deps.recordUpgradeCheck({ movement, diagnostics: blocking, checkedAgainst: current });
 
@@ -433,9 +450,16 @@ function releaseAppliedReason(
 // ── The real dependencies ───────────────────────────────────────────────────
 
 /** Validate against the team's live catalog, inside the team. */
-export const validateUnderLiveCatalog: ValidateUnder = ({ movement, languageVersion }) =>
+export const validateUnderLiveCatalog: ValidateUnder = ({ movement, languageVersion, upgradingFrom }) =>
   withTeamContext(movement.teamId as TeamId, () =>
-    validateMovementForTeam({ teamId: movement.teamId, source: movement.source, languageVersion }),
+    validateMovementForTeam({
+      teamId: movement.teamId,
+      source: movement.source,
+      languageVersion,
+      // Reaches imported library files too: the checker checks them under the
+      // importer's version and move, and surfaces their warnings.
+      ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
+    }),
   );
 
 export function liveDeployCheckDeps(release: DeployCheckRelease): DeployCheckDeps {
@@ -529,10 +553,9 @@ export async function upgradeMovement(input: {
     return { status: 'already_current', ...base, diagnostics: [] };
   }
 
-  const validation = await (input.validate ?? validateUnderLiveCatalog)({
-    movement,
-    languageVersion: to,
-  });
+  const validation = await (input.validate ?? validateUnderLiveCatalog)(
+    validationUnder(movement, to),
+  );
   const diagnostics = blockingDiagnostics(validation.diagnostics);
   await recordUpgradeCheck({ id: movement.id, diagnostics, checkedAgainst: to });
   if (diagnostics.length > 0) return { status: 'blocked', ...base, diagnostics };
