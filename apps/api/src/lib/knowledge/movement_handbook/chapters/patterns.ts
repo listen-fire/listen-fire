@@ -175,6 +175,7 @@ function \`Intake\`(go: <runs-[:Invocation]->>) {
 \`\`\`
 
 - The declaration is the one place the record's fields and words live; every \`extract\` that names it reads it the same way.
+- A step that needs one field more extends the declaration rather than copying it: \`node <name> extends Entry { … }\` (anatomy chapter, *declared-structures*).
 - \`?...e\` writes each field set-if-empty, so the declaration's field names are the target's. It carries only fields — \`person\` is its own write — and a field the target lacks is flagged by name.
 - Identity needs no line of its own: \`unique by (FUZZY \`Name\`)\` matches on the \`Name\` the spread writes.
 - The same spread takes a parameter typed on a declaration (\`d: <Entry>\`) or a \`node { … }\` you built — any record whose fields the automation spells out. A record read from a system is written field by field.

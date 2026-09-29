@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Added
+
+- `node X extends Y { … }` declares a node that is every field and nested node of `Y` (with `Y`'s types, words and `order by`), then its own, like TypeScript's `interface X extends Y`. `X` goes anywhere a declaration does: an extraction's shape, a parameter's type, a collecting node's type, `IS`, a spread, `export`. Its own record-level words follow the base: `node X extends Y: "…" { … }`. The base is a node declaration in scope, declared in the file or imported, and its words and types still read the file that declared it. Refused, by name: restating a field or nested node `Y` already has, a base that is not a node declaration, and a chain that comes back round. New syntax, so no language version changes.
+
 ## [v0.8.5] - 2026-09-29
 
 ### Added

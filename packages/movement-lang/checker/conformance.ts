@@ -73,6 +73,74 @@ export function shapeToSchema(
 }
 
 /**
+ * `node X extends Y { … }` as the tree it stands for: Y's fields and nested
+ * nodes, then X's own — exactly the declaration an author could have written
+ * out inline. `base` is Y already resolved (its own base folded in). Words X
+ * gives the record replace Y's; without them X keeps Y's.
+ *
+ * The inherited words stay the ones Y's file wrote, and they mean what they
+ * mean THERE: a reader that evaluates them (the engine's extraction spec)
+ * walks the chain rather than reading them off this tree.
+ */
+export function inheritDeclaration(decl: ShapeDeclaration, base: ShapeDeclaration): ShapeDeclaration {
+  const description = decl.root.description ?? base.root.description;
+  return {
+    kind: 'shape',
+    name: decl.name,
+    root: {
+      name: decl.root.name,
+      ...(description !== undefined ? { description } : {}),
+      fields: [...base.root.fields, ...decl.root.fields],
+      children: [...base.root.children, ...decl.root.children],
+      span: decl.root.span,
+    },
+    ...(decl.exported === true ? { exported: true } : {}),
+    span: decl.span,
+  };
+}
+
+/**
+ * `node X extends Y`'s schema: X's own (`shapeToSchema` of X as parsed) with
+ * Y's folded under X's name. `base` is Y's schema resolved where Y was
+ * DECLARED, so an inherited field keeps the type Y's file gave it whichever
+ * file X sits in. Y's positions are re-keyed from `Y…` to `X…` (a key is the
+ * path from the root, and the root is now X), and X's root carries Y's fields
+ * and edges ahead of its own.
+ */
+export function inheritSchema(
+  own: InstanceSchema,
+  name: string,
+  base: { name: string; schema: InstanceSchema },
+): InstanceSchema {
+  const rekey = (key: string): string =>
+    key === base.name ? name : key.startsWith(`${base.name}.`) ? `${name}${key.slice(base.name.length)}` : key;
+  const schema: InstanceSchema = { positions: {}, collections: {}, writableRoots: {} };
+  const put = (key: string, position: PositionSchema): void => {
+    schema.positions[key] = position;
+    schema.writableRoots[key] = { fields: position.properties, resultShape: position.properties };
+    schema.collections[key] = { target: key };
+  };
+  for (const [key, position] of Object.entries(base.schema.positions)) {
+    const edges = Object.fromEntries(
+      Object.entries(position.edges).map(([edge, schemaEdge]) => [
+        edge,
+        { ...schemaEdge, target: rekey(schemaEdge.target) },
+      ]),
+    );
+    const mine = key === base.name ? own.positions[name] : undefined;
+    put(rekey(key), {
+      ...position,
+      properties: { ...position.properties, ...mine?.properties },
+      edges: { ...edges, ...mine?.edges },
+    });
+  }
+  for (const [key, position] of Object.entries(own.positions)) {
+    if (key !== name) put(key, position);
+  }
+  return schema;
+}
+
+/**
  * What a supplied position OFFERS, as a plane pair — the only view structural
  * comparison needs.
  *

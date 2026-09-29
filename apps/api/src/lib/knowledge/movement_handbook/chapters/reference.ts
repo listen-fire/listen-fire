@@ -27,6 +27,7 @@ movement \`Intake\`(m: <inbox-[:Email]->>) { … } # the same declaration, spell
 export function \`Log Lead\`(l: <Lead>) { … }    # shared across files
 export node Lead { Name: <text> }              # a named structure; nest \`node <edge> { … }\` for related records
 node Lead: "each lead" { Name: <text> "their name" }   # described: \`extract … { node lead: <Lead> }\` reuses its fields and words
+node Contact extends Lead { Email: <text> }    # Lead's fields and nested nodes, then its own; redefining one is refused
 type Thesis = <"Consumer" | "Infra">           # a written set of values: an annotation, and an extract constraint
 
 listen to inbox { key: "intake" } fire intake  # the ONLY way an automation runs

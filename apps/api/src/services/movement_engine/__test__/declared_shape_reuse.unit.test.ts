@@ -720,3 +720,117 @@ describe('`<text | null>` — a text nobody found arrives null', () => {
     expect(inline.calls[0].system).toEqual(plain.calls[0].system);
   });
 });
+
+describe('`node X extends Y` as an extraction shape', () => {
+  /** Entry, with one field the first prompt must not see. */
+  const RECAP = [
+    ENTRY,
+    'node `Recap Entry` extends Entry {',
+    '  diverse_founder: <text | null> "whether a founder is from an under-represented group"',
+    '}',
+  ].join('\n');
+  /** The same tree as one declaration — what `extends` stands for. */
+  const RECAP_FLAT = [
+    'node `Recap Entry`: "each company pitched in this message" {',
+    '  name: <text> "the company\'s name"',
+    '  stage: <text> "the funding stage"',
+    '  thesis: <Thesis> "the thesis it routes to. ${rules}"',
+    '  node founder: "each founder named" { first: <text> "given names" }',
+    '  diverse_founder: <text | null> "whether a founder is from an under-represented group"',
+    '}',
+  ].join('\n');
+
+  it('assembles the SAME prompt as the flattened declaration', async () => {
+    const inherited = await run(movement(RECAP, ['    node entry: <`Recap Entry`>']));
+    const flat = await run(movement(RECAP_FLAT, ['    node entry: <`Recap Entry`>']));
+    expect(inherited.calls).toHaveLength(1);
+    expect(inherited.calls[0].system).toEqual(flat.calls[0].system);
+    expect(inherited.calls[0].userMessage).toEqual(flat.calls[0].userMessage);
+    // Y's words — interpolation and refinement included — reached the model,
+    // and so did X's own field.
+    expect(inherited.calls[0].system).toContain('each company pitched in this message');
+    expect(inherited.calls[0].system).toContain('the thesis it routes to. route infra to Infra');
+    expect(inherited.calls[0].system).toContain('`thesis` (enum: Consumer | Infra)');
+    expect(inherited.calls[0].system).toContain('under-represented group');
+    // …while the base alone still asks nothing about it.
+    const base = await run(movement(RECAP, ['    node entry: <Entry>']));
+    expect(base.calls[0].system).not.toContain('under-represented group');
+  });
+
+  it("walks records carrying the base's fields and nested nodes", async () => {
+    const { writes } = await run(
+      movement(RECAP, ['    node entry: <`Recap Entry`>'], [
+        '  found-[e:entry]-> {',
+        '    e-[f:founder]-> {',
+        '      write crm-[:companies]-> { name: COALESCE(f.first, "?"), stage ?: e.stage }',
+        '    }',
+        '  }',
+      ]),
+    );
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Ada', stage: 'Seed' } }),
+    ]);
+  });
+
+  /** `node entry: <Recap>`, with `library` at lib/entries and the importer's
+   *  own declarations. */
+  async function extractFrom(library: string, importerLines: string[]) {
+    const source = [
+      PRELUDE,
+      ...importerLines,
+      'movement m(msg: <inbox-[:message]->>) {',
+      '  found = extract from [msg.`text`] {',
+      '    node entry: <Recap>',
+      '  }',
+      '}',
+    ].join('\n');
+    const llm = queuedMovementLlm([{ 'x:extract_result#1': [{ entry: [] }] }]);
+    await runMovement({
+      source,
+      event: webhookEvent('email', { subject: 'Deals', text: 'Acme is raising.' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveFile: (path) => (path === 'lib/entries' ? { source: library } : undefined),
+      resolveAdapter: makeResolver({
+        email: makeFakeAdapter('email').adapter,
+        attio: makeFakeAdapter('attio').adapter,
+      }),
+      llm: llm.client,
+      dryRun: true,
+    });
+    return llm.calls[0].system;
+  }
+
+  const LIBRARY = [
+    'lens = "the library\'s lens"',
+    'type Verdict = <"Keep" | "Drop">',
+    'export node Entry: "each company, by ${lens}" {',
+    '  name: <text> "the name, by ${lens}"',
+    '  verdict: <Verdict> "whether to keep it"',
+    '}',
+  ].join('\n');
+
+  it("reads an IMPORTED base's words and types in ITS file, and X's own in X's", async () => {
+    const system = await extractFrom(LIBRARY, [
+      'import { Entry } from "lib/entries"',
+      'lens = "the importer\'s lens"',
+      'node Recap extends Entry { note: <text> "a note, by ${lens}" }',
+    ]);
+    expect(system).toContain("each company, by the library's lens");
+    expect(system).toContain("the name, by the library's lens");
+    expect(system).toContain('`verdict` (enum: Keep | Drop)');
+    expect(system).toContain("a note, by the importer's lens");
+    expect(system).not.toContain("the name, by the importer's lens");
+  });
+
+  it('extracts an imported X whose base its library keeps private', async () => {
+    const library = [
+      'lens = "the library\'s lens"',
+      'node Base: "each company" { name: <text> "the name, by ${lens}" }',
+      'export node Recap extends Base { note: <text> "a note" }',
+    ].join('\n');
+    const system = await extractFrom(library, ['import { Recap } from "lib/entries"']);
+    expect(system).toContain("the name, by the library's lens");
+    expect(system).toContain('a note');
+  });
+});
