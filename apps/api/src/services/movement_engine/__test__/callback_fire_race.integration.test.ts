@@ -17,6 +17,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { CURRENT_LANGUAGE_VERSION } from 'movement-lang';
+
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import type { TriggerRunId } from '../../../generated/kysely/automations/TriggerRun';
 import type { TriggerId } from '../../../generated/kysely/automations/Trigger';
@@ -97,6 +99,7 @@ beforeAll(async () => {
       version_number: 1,
       source: SOURCE,
       content_hash: 'race-fixture',
+      language_version: CURRENT_LANGUAGE_VERSION,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     .execute();
