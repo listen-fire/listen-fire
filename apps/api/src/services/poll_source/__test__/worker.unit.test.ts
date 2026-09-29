@@ -119,7 +119,13 @@ describe('pollDueSources', () => {
 
     await pollDueSources(NOW);
 
-    expect(getEventsMock).toHaveBeenCalledWith({ config: {}, checkpoint: undefined });
+    // The listener's automation rides along, so a source whose events concern
+    // automations can keep one from being told about itself.
+    expect(getEventsMock).toHaveBeenCalledWith({
+      config: {},
+      checkpoint: undefined,
+      movementId: 'mov-1',
+    });
     expect(dispatchMock).toHaveBeenCalledTimes(2);
     // checkpoint + poll_last_at advanced once, after the pull.
     expect(updates).toHaveLength(1);

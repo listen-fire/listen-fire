@@ -33,6 +33,10 @@ export interface PollSource {
   getEvents(input: {
     config: unknown;
     checkpoint?: unknown;
+    /** The automation the polled listener belongs to. A source whose events
+     *  can concern automations themselves (the platform's own) needs it to
+     *  keep an automation from being told about itself; the rest ignore it. */
+    movementId?: string;
   }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }>;
 }
 

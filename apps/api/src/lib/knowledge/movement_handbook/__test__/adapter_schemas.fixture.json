@@ -107,6 +107,25 @@
       "defaultEvents": [
         "message"
       ]
+    },
+    "system": {
+      "constructionArgs": [],
+      "canFire": true,
+      "triggerConfig": [
+        "events",
+        "pollIntervalSeconds"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "Run Failed",
+          "Validation Issue",
+          "Deprecated Version",
+          "Release Applied"
+        ]
+      },
+      "defaultEvents": [
+        "Run Failed"
+      ]
     }
   },
   "schemas": {
@@ -2469,6 +2488,66 @@
           "position": "Location",
           "on": [
             "location"
+          ]
+        }
+      ]
+    },
+    "system": {
+      "positions": {
+        "Run Failed": {
+          "properties": {
+            "Automation": "text",
+            "Automation Id": "text",
+            "Run Id": "text",
+            "Version": "text",
+            "Reason": "text",
+            "Url": "text",
+            "At": "date"
+          },
+          "edges": {}
+        },
+        "Validation Issue": {
+          "properties": {},
+          "edges": {},
+          "undescribed": true
+        },
+        "Deprecated Version": {
+          "properties": {},
+          "edges": {},
+          "undescribed": true
+        },
+        "Release Applied": {
+          "properties": {},
+          "edges": {},
+          "undescribed": true
+        }
+      },
+      "collections": {},
+      "writableRoots": {},
+      "eventPosition": "Run Failed",
+      "eventPositions": [
+        {
+          "position": "Run Failed",
+          "on": [
+            "Run Failed"
+          ]
+        },
+        {
+          "position": "Validation Issue",
+          "on": [
+            "Validation Issue"
+          ]
+        },
+        {
+          "position": "Deprecated Version",
+          "on": [
+            "Deprecated Version"
+          ]
+        },
+        {
+          "position": "Release Applied",
+          "on": [
+            "Release Applied"
           ]
         }
       ]

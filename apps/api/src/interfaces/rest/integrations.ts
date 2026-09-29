@@ -39,6 +39,7 @@ const READ_METHODS = ['readRecord', 'getFieldValue', 'getRelated'] as const;
 const HIDDEN_FROM_GRID = new Set([
   'manual',
   'cron',
+  'system',
   'kg',
   'native-valuations',
 ]);
