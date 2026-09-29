@@ -45,7 +45,9 @@ function makeQb() {
       get(_t, prop) {
         if (prop === 'executeTakeFirst') {
           return async () => {
-            if (ctx.table === 'movement_version') return { source: 'PINNED SOURCE' };
+            // The run's snapshot was minted under version 1; the movement's pin may
+            // have moved since — the snapshot's is the one a resume honours.
+            if (ctx.table === 'movement_version') return { source: 'PINNED SOURCE', language_version: 1 };
             if (ctx.table === 'trigger_run') {
               return {
                 trigger_id: 't-1',
@@ -241,5 +243,17 @@ describe('await-resume driver — a WHERE-narrowed branch inside a race (deferRa
     // …and the race frame is never settled: resumeMovementFiring ran once for the
     // branch and there is NO post-batch settlement pass (no deferred frame).
     expect(resumeMovementFiringMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('await-resume driver — the language version a resume runs under', () => {
+  it('is the one copied onto the run\'s pinned snapshot, never the movement\'s pin now', async () => {
+    resumeMovementFiringMock.mockResolvedValue(completed());
+
+    await fireCandidate();
+
+    expect(resumeMovementFiringMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pinnedSource: 'PINNED SOURCE', pinnedLanguageVersion: 1 }),
+    );
   });
 });

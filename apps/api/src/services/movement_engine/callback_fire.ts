@@ -13,6 +13,8 @@ import type { TriggerRunId } from '../../generated/kysely/automations/TriggerRun
 import type { TriggerRunTriggerType } from '../translation_graph/runs/trigger_run';
 
 import { getQb, getAutomationsQb } from '../../lib/kysely';
+import type { LanguageVersion } from 'movement-lang';
+import { loadPinnedVersion } from '../translation_graph/movement/version_store';
 import { logger } from '../logger';
 import { loadTriggerById } from '../translation_graph/storage/tg_table';
 import { triggerEventSchema, type TriggerEvent } from '../translation_graph/triggers/types';
@@ -198,6 +200,7 @@ async function executeFire(callback: CallbackRecord, callIndex: number): Promise
           ? { firedMovementName: context.firedMovementName }
           : {}),
         pinnedSource: context.pinnedSource,
+        pinnedLanguageVersion: context.pinnedLanguageVersion,
         movementVersionId: context.movementVersionId,
         runId: callback.runId,
         movementId: context.movementId,
@@ -242,6 +245,7 @@ interface RunContext {
   movementId: string;
   movementVersionId: string | null;
   pinnedSource: string;
+  pinnedLanguageVersion: LanguageVersion;
   event: TriggerEvent;
   triggerType: TriggerRunTriggerType;
 }
@@ -258,12 +262,8 @@ async function loadRunContext(runId: TriggerRunId): Promise<RunContext | null> {
   const trigger = await loadTriggerById(run.trigger_id);
   if (!trigger || !trigger.movementId) return null;
   if (!run.movement_version_id) return null;
-  const version = await getAutomationsQb(['movement_version'])
-    .selectFrom('movement_version')
-    .where('id', '=', run.movement_version_id)
-    .select('source')
-    .executeTakeFirst();
-  if (!version?.source) return null;
+  const version = await loadPinnedVersion(run.movement_version_id);
+  if (!version) return null;
   return {
     triggerId: run.trigger_id,
     triggerName: trigger.name,
@@ -271,6 +271,7 @@ async function loadRunContext(runId: TriggerRunId): Promise<RunContext | null> {
     movementId: trigger.movementId,
     movementVersionId: run.movement_version_id,
     pinnedSource: version.source,
+    pinnedLanguageVersion: version.languageVersion,
     event: triggerEventSchema.parse(run.trigger_payload) as TriggerEvent,
     triggerType: run.trigger_type as TriggerRunTriggerType,
   };

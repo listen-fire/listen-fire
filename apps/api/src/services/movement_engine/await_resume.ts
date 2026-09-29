@@ -17,6 +17,7 @@
 
 import { SECOND } from '../../constants';
 import { getQb, getAutomationsQb } from '../../lib/kysely';
+import { loadPinnedVersion } from '../translation_graph/movement/version_store';
 import { worker } from '../../lib/worker';
 import { logger } from '../logger';
 import { settleCancelledRun } from '../interaction/run_failure';
@@ -169,10 +170,10 @@ async function resumeAwaitRun(runId: TriggerRunId, leaves: ResolvableAwait[]): P
     logger.error('[AwaitResume] trigger gone or not movement-derived', { runId });
     return;
   }
-  const pinnedSource = run.movement_version_id
-    ? await loadVersionSource(run.movement_version_id)
+  const pinned = run.movement_version_id
+    ? await loadPinnedVersion(run.movement_version_id)
     : null;
-  if (!pinnedSource) {
+  if (!pinned) {
     logger.error('[AwaitResume] no pinned movement_version source — cannot resume (P11)', { runId });
     return;
   }
@@ -206,7 +207,8 @@ async function resumeAwaitRun(runId: TriggerRunId, leaves: ResolvableAwait[]): P
       triggerId: run.trigger_id,
       triggerName: trigger.name,
       ...(trigger.firedMovementName !== null ? { firedMovementName: trigger.firedMovementName } : {}),
-      pinnedSource,
+      pinnedSource: pinned.source,
+      pinnedLanguageVersion: pinned.languageVersion,
       movementVersionId: run.movement_version_id,
       runId,
       movementId: trigger.movementId,
@@ -270,7 +272,8 @@ async function resumeAwaitRun(runId: TriggerRunId, leaves: ResolvableAwait[]): P
         ...(trigger.firedMovementName !== null
           ? { firedMovementName: trigger.firedMovementName }
           : {}),
-        pinnedSource,
+        pinnedSource: pinned.source,
+        pinnedLanguageVersion: pinned.languageVersion,
         movementVersionId: run.movement_version_id,
         runId,
         movementId: trigger.movementId,
@@ -338,15 +341,6 @@ async function settleFailure(runId: TriggerRunId): Promise<void> {
   await dropAwaitCorrelationsForRun(runId);
   await getAutomationsQb(['parked_run']).deleteFrom('parked_run').where('run_id', '=', runId).execute();
   await clearJoins(runId);
-}
-
-async function loadVersionSource(versionId: string): Promise<string | null> {
-  const row = await getAutomationsQb(['movement_version'])
-    .selectFrom('movement_version')
-    .where('id', '=', versionId as never)
-    .select('source')
-    .executeTakeFirst();
-  return row?.source ?? null;
 }
 
 export function startAwaitResumeWorker(): void {

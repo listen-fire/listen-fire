@@ -1174,6 +1174,7 @@ async function runSave(
       teamId: input.teamId,
       movementId: row.id,
       source: input.source,
+      languageVersion: row.languageVersion,
     }),
   );
 

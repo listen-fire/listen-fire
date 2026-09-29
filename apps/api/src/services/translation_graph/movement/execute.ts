@@ -30,7 +30,6 @@ import {
   type ParkSink,
 } from '../../movement_engine/run';
 import type { MovementTraceEntry } from '../../movement_engine/expression';
-import { MovementEngineError } from '../../movement_engine/errors';
 import { makeRecorderParkSink } from '../../movement_engine/park_sink';
 import {
   makeRecorderCallbackSink,
@@ -193,29 +192,6 @@ async function refreshValidityOnContradiction(input: {
       error: err instanceof Error ? err.message : String(err),
     });
   }
-}
-
-/**
- * The language version a parked run's movement is pinned to. A resume or a
- * callback segment runs under the same pin as the firing that started it; with
- * the movement gone there is no pin to honour, so the segment is refused rather
- * than run as the current version.
- */
-async function pinnedLanguageVersion(input: {
-  teamId: TeamId;
-  movementId: string;
-}): Promise<LanguageVersion> {
-  const row = await getMovementRow({
-    teamId: input.teamId as unknown as string,
-    id: input.movementId,
-  });
-  if (!row) {
-    throw new MovementEngineError(
-      'MOVENG_NOT_FOUND',
-      `the automation this run belongs to (${input.movementId}) no longer exists, so the language version it is written against is unknown`,
-    );
-  }
-  return row.languageVersion;
 }
 
 type MovementFiringInput = {
@@ -441,6 +417,10 @@ type ResumeFiringInput = {
   firedMovementName?: string;
   /** The pinned version's source (P11) — what resume re-parses + executes. */
   pinnedSource: string;
+  /** The pinned version's language version — the one the run STARTED under,
+   *  never the movement's pin now (the deploy check may have advanced it
+   *  while the run was parked). */
+  pinnedLanguageVersion: LanguageVersion;
   movementVersionId: string | null;
   /** The parked run's id — the recorder adopts it so the resume settles the
    *  same row. */
@@ -511,7 +491,7 @@ async function resumeMovementFiringInContext(
   // adopted run id (runs-and-cancel spec §cancel).
   const cancelGate = makeDbCancelGate(recorder.triggerRunId);
   try {
-    const languageVersion = await pinnedLanguageVersion(input);
+    const languageVersion = input.pinnedLanguageVersion;
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
     });
@@ -674,6 +654,8 @@ type CallbackFiringInput = {
   firedMovementName?: string;
   /** The pinned version's source (P11) — what the stored entry point addresses. */
   pinnedSource: string;
+  /** The language version the run started under (see ResumeFiringInput). */
+  pinnedLanguageVersion: LanguageVersion;
   movementVersionId: string | null;
   runId: TriggerRunId;
   movementId: string;
@@ -714,7 +696,7 @@ async function fireCallbackFiringInContext(
   const callbackSink = makeRecorderCallbackSink(recorder, input.teamId);
   const cancelGate = makeDbCancelGate(recorder.triggerRunId);
   try {
-    const languageVersion = await pinnedLanguageVersion(input);
+    const languageVersion = input.pinnedLanguageVersion;
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
     });

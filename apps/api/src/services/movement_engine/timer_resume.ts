@@ -27,6 +27,7 @@
 
 import { SECOND } from '../../constants';
 import { getQb, getAutomationsQb } from '../../lib/kysely';
+import { loadPinnedVersion } from '../translation_graph/movement/version_store';
 import { worker } from '../../lib/worker';
 import { logger } from '../logger';
 import { settleCancelledRun } from '../interaction/run_failure';
@@ -153,10 +154,10 @@ async function resumeTimerParkedRun(run: TimerParkedRunRow, now: Date): Promise<
     return;
   }
 
-  const pinnedSource = triggerRun.movement_version_id
-    ? await loadVersionSource(triggerRun.movement_version_id)
+  const pinned = triggerRun.movement_version_id
+    ? await loadPinnedVersion(triggerRun.movement_version_id)
     : null;
-  if (!pinnedSource) {
+  if (!pinned) {
     logger.error('[TimerResume] no pinned movement_version source — cannot resume (P11)', {
       runId,
       movementVersionId: triggerRun.movement_version_id,
@@ -195,7 +196,8 @@ async function resumeTimerParkedRun(run: TimerParkedRunRow, now: Date): Promise<
       ...(trigger.firedMovementName !== null
         ? { firedMovementName: trigger.firedMovementName }
         : {}),
-      pinnedSource,
+      pinnedSource: pinned.source,
+      pinnedLanguageVersion: pinned.languageVersion,
       movementVersionId: triggerRun.movement_version_id,
       runId,
       movementId: trigger.movementId,
@@ -277,16 +279,6 @@ async function settleBranchComplete(
     .select('id')
     .executeTakeFirst();
   return { runComplete: otherParked === undefined };
-}
-
-/** The pinned version's immutable source (P11). */
-async function loadVersionSource(versionId: string): Promise<string | null> {
-  const row = await getAutomationsQb(['movement_version'])
-    .selectFrom('movement_version')
-    .where('id', '=', versionId as never)
-    .select('source')
-    .executeTakeFirst();
-  return row?.source ?? null;
 }
 
 /**
