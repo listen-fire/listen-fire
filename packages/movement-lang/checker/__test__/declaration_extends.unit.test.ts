@@ -298,6 +298,89 @@ describe('everywhere else a declaration goes', () => {
   });
 });
 
+// A parameter typed on a declaration is fitted STRUCTURALLY, whatever made the
+// argument — the comparison `IS <Entry>` makes: every field the declaration
+// names, with a compatible type; extras allowed; a nested node never gates it.
+describe('a parameter typed on a declaration takes any record carrying it', () => {
+  const withCallee = (body: string[], declarations = `${ENTRY}\n${RECAP}`): Diagnostic[] =>
+    errors(
+      [
+        PRELUDE,
+        declarations,
+        'function takes_entry(d: <Entry>) { n = d.name }',
+        'movement main(msg: <graph-[:message]->>) {',
+        ...body,
+        '}',
+      ].join('\n'),
+    );
+
+  it('an extracted <Entry> record', () => {
+    expect(
+      withCallee([
+        '  found = extract from [msg.`Body`] { node entry: <Entry> }',
+        '  found-[e:entry]-> { takes_entry(d: e) }',
+      ]).map((d) => d.message),
+    ).toEqual([]);
+  });
+
+  it('an extracted record of a declaration that extends it', () => {
+    expect(
+      withCallee([...extractRecaps, '  found-[e:entry]-> { takes_entry(d: e) }']).map((d) => d.message),
+    ).toEqual([]);
+  });
+
+  it('a record of an identical declaration', () => {
+    const source = [
+      PRELUDE,
+      'node Entry {',
+      '  name: <text>',
+      '  stage: <text>',
+      '}',
+      'node Other {',
+      '  name: <text>',
+      '  stage: <text>',
+      '}',
+      'function takes_entry(d: <Entry>) { n = d.name }',
+      'function takes_other(o: <Other>) { takes_entry(d: o) }',
+      'function back(d: <Entry>) { takes_other(o: d) }',
+    ].join('\n');
+    expect(errors(source).map((d) => d.message)).toEqual([]);
+  });
+
+  it("a system's record that carries the fields", () => {
+    const named = ['node Entry {', '  name: <text>', '  stage: <text>', '}'].join('\n');
+    expect(
+      withCallee(['  graph-[c:company]-> { takes_entry(d: c) }'], named).map((d) => d.message),
+    ).toEqual([]);
+  });
+
+  it('a record missing a field is refused, naming it', () => {
+    const named = ['node Entry {', '  name: <text>', '}'].join('\n');
+    const diagnostics = withCallee(['  takes_entry(d: msg)'], named);
+    expect(diagnostics.map((d) => d.code)).toEqual([C.CALL_ARG_TYPE]);
+    expect(diagnostics[0].message).toBe("'takes_entry' expects a <Entry> record, and it has no `name`");
+  });
+
+  it('a record with a field of another type is refused, naming it', () => {
+    const counted = ['node Entry {', '  name: <text>', '  stage: <number>', '}'].join('\n');
+    const diagnostics = withCallee(['  graph-[c:company]-> { takes_entry(d: c) }'], counted);
+    expect(diagnostics.map((d) => d.code)).toEqual([C.CALL_ARG_TYPE]);
+    expect(diagnostics[0].message).toContain('its `stage` is text, not number');
+  });
+
+  it('an extracted record lacking a field is refused, naming it', () => {
+    const diagnostics = withCallee(
+      [
+        '  found = extract from [msg.`Body`] { node entry: "each company" { name: "its name" } }',
+        '  found-[e:entry]-> { takes_entry(d: e) }',
+      ],
+      ['node Entry {', '  name: <text>', '  stage: <text>', '}'].join('\n'),
+    );
+    expect(diagnostics.map((d) => d.code)).toEqual([C.CALL_ARG_TYPE]);
+    expect(diagnostics[0].message).toContain('it has no `stage`');
+  });
+});
+
 describe('across files', () => {
   const libEntry = [
     'type Verdict = <"Keep" | "Drop">',

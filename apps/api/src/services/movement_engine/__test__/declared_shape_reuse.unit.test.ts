@@ -823,6 +823,28 @@ describe('`node X extends Y` as an extraction shape', () => {
     expect(system).not.toContain("the name, by the importer's lens");
   });
 
+  it('hands an extracted X record to a callee typed on the base, which writes it', async () => {
+    const { writes } = await run(
+      [
+        PRELUDE,
+        RECAP,
+        'function record_entry(d: <Entry>) {',
+        '  write crm-[:companies]-> { name: d.name, stage: d.stage }',
+        '}',
+        'movement m(msg: <inbox-[:message]->>) {',
+        '  found = extract from [msg.`text`] {',
+        '    node entry: <`Recap Entry`>',
+        '  }',
+        '  found-[e:entry]-> { record_entry(d: e) }',
+        '}',
+      ].join('\n'),
+      { movementName: 'm' },
+    );
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: 'Seed' } }),
+    ]);
+  });
+
   it('extracts an imported X whose base its library keeps private', async () => {
     const library = [
       'lens = "the library\'s lens"',

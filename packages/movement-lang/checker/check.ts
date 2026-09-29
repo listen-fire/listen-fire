@@ -1965,6 +1965,81 @@ function suppliedSurface(type: PositionTypeRef): SuppliedSurface | undefined {
   }
 }
 
+/** Is this graph a node DECLARATION (rather than a constructed system)? */
+function isDeclaredNode(instance: InstanceRef): boolean {
+  const { token } = instance;
+  return 'kind' in token && token.kind === 'shape';
+}
+
+/**
+ * Why an argument does not fit a parameter typed on a declared node, or
+ * undefined when it does. Every kind of record is judged by what it carries —
+ * a system's record, an extracted one, one of another declaration, one built
+ * here — so two declarations spelling the same structure fit each other, and
+ * `node X extends Y`'s records fit `<Y>`. A union fits only when EVERY member
+ * does: the callee reads the parameter without narrowing it.
+ */
+function declaredParamMisfit(
+  arg: PositionTypeRef,
+  param: Extract<PositionTypeRef, { kind: 'position' }>,
+): string | undefined {
+  const required: RequiredPosition = { schema: param.instance.schema, position: param.position };
+  switch (arg.kind) {
+    case 'union': {
+      for (const variant of arg.variants) {
+        const misfit = surfaceMisfit(schemaSurface(arg.instance.schema, variant), required);
+        if (misfit !== undefined) {
+          return `${displayNameOf(arg.instance, variant)}, one of what this argument may be, does not fit: ${misfit}`;
+        }
+      }
+      return undefined;
+    }
+    case 'meta':
+    case 'closure':
+      return `this argument is ${describePosition(arg)}, not a record`;
+    case 'position':
+    case 'handle':
+    case 'extract':
+    case 'local':
+    case 'maybeEmpty':
+      return surfaceMisfit(recordSurface(arg), required);
+    default:
+      return neverAsAny(arg);
+  }
+}
+
+/**
+ * What a record OFFERS, whatever made it. `suppliedSurface` plus the two kinds
+ * only a declared parameter compares: a write's handle (the record it wrote)
+ * and an extracted record (its fields as annotated — an unannotated one is
+ * text — and its nested nodes as edges).
+ */
+function recordSurface(type: PositionTypeRef): SuppliedSurface | undefined {
+  switch (type.kind) {
+    case 'handle':
+      return type.position !== undefined
+        ? schemaSurface(type.instance.schema, type.position)
+        : { properties: type.resultShape, edges: {} };
+    case 'extract':
+      return extractSurface(type.node);
+    case 'maybeEmpty':
+      return recordSurface(type.of);
+    default:
+      return suppliedSurface(type);
+  }
+}
+
+function extractSurface(node: ExtractNodeType): SuppliedSurface {
+  return {
+    properties: Object.fromEntries(
+      [...node.properties].map(([name, field]) => [name, field.explicit ?? 'text']),
+    ),
+    edges: Object.fromEntries(
+      [...node.children].map(([name, child]) => [name, () => extractSurface(child)]),
+    ),
+  };
+}
+
 /**
  * Does `supplied` carry everything the required position declares? The
  * checker's doorway into the shared comparator.
@@ -7431,6 +7506,20 @@ class Checker {
         this.report(
           DiagnosticCodes.NODE_ARG_SHAPE,
           `'${callee}' expects ${describePosition(paramType)}, and ${misfit}`,
+          span,
+        );
+      }
+      return;
+    }
+    if (paramType.kind === 'position' && isDeclaredNode(paramType.instance)) {
+      // A declared node belongs to no system, so there is no identity to
+      // match: the argument fits when it CARRIES the structure — whatever
+      // made it — judged by the comparison `x IS <Doc>` makes.
+      const misfit = declaredParamMisfit(argType, paramType);
+      if (misfit !== undefined) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `'${callee}' expects a <${paramType.position}> record, and ${misfit}`,
           span,
         );
       }
