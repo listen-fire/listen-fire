@@ -1799,7 +1799,10 @@ class Parser {
       try {
         this.readName('a name');
         this.skipInlineWs();
-        if (this.peekCh() === ':') {
+        if (this.peekIdent() === 'extends') {
+          // `node Recap Entry extends Entry { … }` — an inheriting declaration.
+          named = true;
+        } else if (this.peekCh() === ':') {
           // `node Entry: "…" { … }` — a described declaration.
           this.pos++;
           this.skipInlineWs();
@@ -3095,8 +3098,41 @@ class Parser {
     this.pos += 'node'.length;
     this.skipInlineWs();
     const name = this.readName("a name after 'node'");
+    const base = this.parseExtendsClause(name);
     const root = this.parseDeclaredNode(name, start);
-    return { kind: 'shape', name, root, span: this.spanFrom(start) };
+    return {
+      kind: 'shape',
+      name,
+      root,
+      ...(base !== undefined ? { extends: base } : {}),
+      span: this.spanFrom(start),
+    };
+  }
+
+  /**
+   * `extends Entry` after a declaration's name — TypeScript's `interface X
+   * extends Y`, and in the same place: the header says what the node IS, and
+   * its own words (`: "…"`) and body follow exactly as they do without one.
+   * One base: a node that wants two structures' fields declares the one it
+   * shares and extends that.
+   */
+  private parseExtendsClause(name: string): ShapeDeclaration['extends'] {
+    this.skipInlineWs();
+    if (this.peekIdent() !== 'extends') return undefined;
+    const start = this.pos;
+    this.pos += 'extends'.length;
+    this.skipInlineWs();
+    const base = this.readName(
+      `the node declaration '${name}' extends, after 'extends' (\`node ${name} extends Entry { … }\`)`,
+    );
+    const span = this.spanFrom(start);
+    this.skipInlineWs();
+    if (this.peekCh() === ',' || this.peekIdent() === 'extends') {
+      this.error(
+        `'${name}' extends one node declaration — declare the fields '${base}' shares with the other one as a node of their own, and extend that`,
+      );
+    }
+    return { name: base, span };
   }
 
   /** Is `type <name> = …` — a REFINEMENT declaration — next? Consumes nothing. */
@@ -3155,6 +3191,15 @@ class Parser {
       this.skipInlineWs();
       description = this.readStringSlot(`describing the node '${name}'`);
       this.skipInlineWs();
+    }
+    if (this.peekIdent() === 'extends') {
+      // The header names what the node is before its words describe it, so
+      // the base goes with the name: `node X extends Y: "…" { … }`.
+      this.error(
+        description !== undefined
+          ? `'extends' comes straight after the name, before the node's words — write 'node ${name} extends <base>: ${description.raw} { … }'`
+          : `'extends' belongs to a node declared at the top level of the file — a nested node is spelled out where it is nested`,
+      );
     }
     const braceOffset = this.pos;
     this.expect('{', `to open the node '${name}'`);

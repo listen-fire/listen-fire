@@ -935,11 +935,18 @@ class Projection {
   }
 
   /** The file's node declarations. File-level statements, so this is a sweep of
-   *  the program rather than part of the flow walk. */
+   *  the program rather than part of the flow walk. A declaration that extends
+   *  another is shown whole — the tree the checker resolved, its base's members
+   *  first — since that is what a `<Recap Entry>` carries. */
   private shapes(): StoryShapeNode[] {
+    const file = this.input.recording.frames[0]?.scope;
     const shapes: StoryShapeNode[] = [];
     for (const statement of this.input.program.statements) {
-      if (statement.kind === 'shape') shapes.push(shapeNodeOf(statement.root, statement.name));
+      if (statement.kind !== 'shape') continue;
+      const symbol = file?.symbols.get(statement.name);
+      const resolved =
+        symbol?.kind === 'shape' && symbol.span === statement.span ? symbol.declaration : undefined;
+      shapes.push(shapeNodeOf((resolved ?? statement).root, statement.name));
     }
     return shapes;
   }

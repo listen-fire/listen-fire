@@ -1032,6 +1032,16 @@ export interface ShapeDeclaration {
   name: string;
   /** The declaration's own node — `name` is the declaration's name. */
   root: ShapeNode;
+  /**
+   * `node Recap Entry extends Entry { … }` — TypeScript's `interface X extends
+   * Y`: the declaration is the base's fields and nested nodes (with the base's
+   * types, words and order), then its own. As PARSED, `root` holds only the
+   * declaration's own members. The checker and the engine each resolve the
+   * base in the scope the declaration was written in, and what they hand on
+   * (a checker symbol's `declaration`, the engine's resolved shape) is the
+   * whole tree `inheritDeclaration` builds — the inline spelling of it.
+   */
+  extends?: { name: string; span: Span };
   /** Declared with the `export` prefix — offered to other files. A file
    *  with at least one export is a LIBRARY. */
   exported?: boolean;

@@ -1074,6 +1074,37 @@ describe('a fold over a walk — the call composes over the walk’s structure',
   });
 });
 
+describe('a node declaration that extends another', () => {
+  it("is shown whole — the base's fields and nested nodes first, then its own", () => {
+    const source = [
+      'node Entry {',
+      '  name: <text>',
+      '  node founder { first: <text> } order by arrival',
+      '}',
+      'node `Recap Entry` extends Entry { diverse_founder: <text | null> }',
+    ].join('\n');
+    const result = storyOf({ source, catalog });
+    if (!result.ok) throw new Error('expected a story');
+    expect(result.story.shapes.find((s) => s.name === 'Recap Entry')).toEqual({
+      name: 'Recap Entry',
+      position: 'Recap Entry',
+      fields: [{ name: 'name', type: 'text' }, expect.objectContaining({ name: 'diverse_founder' })],
+      children: [
+        {
+          name: 'founder',
+          position: 'Recap Entry.founder',
+          fields: [{ name: 'first', type: 'text' }],
+          children: [],
+        },
+      ],
+    });
+    // The base is shown as it was written.
+    expect(result.story.shapes.find((s) => s.name === 'Entry')?.fields).toEqual([
+      { name: 'name', type: 'text' },
+    ]);
+  });
+});
+
 describe('the receipt is read by SLOT — the timeout branch is one null check', () => {
   it('the branch condition names the race binding and the slot it reads', () => {
     const [branch] = stepsOfKind(approveSteps(), 'branch');

@@ -170,6 +170,17 @@ function \`Process Deal\`(d: <Deal>) { … }
 - A declaration may say what it, each field and each nested node **is**, in the words an extraction is given: \`node Deal: "each deal in the message" { Title: <text> "its headline"; node company: "the company raising" { … } }\`. Undescribed parts stay allowed. Words may use file-scope values bound **above** the declaration (\`"\${rules}"\`); an extraction then reuses the whole tree as \`node deal: <Deal>\` (extraction chapter, *basics*).
 - A declaration is not a place records live. There is nothing to write into \`Deal\` itself — build the record with a \`node { … }\` literal, or write into an entry typed by it (see *collect-what-you-wrote*).
 
+Extend a declaration when a later step needs more than an earlier one may see — an enrichment stage adds one field the first extraction must not be asked:
+
+\`\`\`
+node \`Recap Entry\` extends Entry {
+  diverse_founder: <text | null> "whether any founder is from an under-represented group"
+}
+\`\`\`
+
+- \`Recap Entry\` is every field and nested node of \`Entry\` — their types, their words and their \`order by\` — then its own, and it goes anywhere \`Entry\` does. Its own record-level words follow the base: \`node X extends Y: "…" { … }\`.
+- It only adds. Restating something \`Entry\` already has is refused, by name. The base is declared in this file or imported, and the base's words still read the file that wrote them.
+
 ### automations
 
 An automation is a function over a **position** — the graph point a triggering event hands it:

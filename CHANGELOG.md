@@ -9,8 +9,11 @@ Entries are written for two readers: an operator running a self-hosted installat
 <!-- add merged PRs here -->
 
 ### Changed
-
 - The handbook now says what the checker and engine already do with a value that may be missing, such as an extracted `<boolean>` or `<text | null>` field. `==` and `!=` take one on either side with no guard: a missing value equals only `null`, so `o.stage == "Seed"` is false and `!=` is true. `if`, `IF … THEN`, `AND`, `OR` and `NOT` read a missing boolean as false, so `if o.viable { … }` needs no `COALESCE`. Ordered comparisons (`<`, `<=`, `>`, `>=`) still refuse one. Before, the reference chapter said every comparison other than `== null` needed both sides present. Nothing a movement does changes, under either language version. A `WHERE` done at a source may treat a record missing the tested field differently from one done here; the query section says so.
+### Added
+
+- `node X extends Y { … }` declares a node that is every field and nested node of `Y` (with `Y`'s types, words and `order by`), then its own, like TypeScript's `interface X extends Y`. `X` goes anywhere a declaration does: an extraction's shape, a parameter's type, a collecting node's type, `IS`, a spread, `export`. Its own record-level words follow the base: `node X extends Y: "…" { … }`. The base is a node declaration in scope, declared in the file or imported, and its words and types still read the file that declared it. Refused, by name: restating a field or nested node `Y` already has, a base that is not a node declaration, and a chain that comes back round. New syntax, so no language version changes.
+- A parameter typed on a node declaration (`d: <Entry>`) accepts any record carrying every field the declaration names, with a compatible type: an extracted record, a record of another declaration (an identical one, or one that `extends` it), a record built with `node { … }`, or a system's record. This is the same comparison `x IS <Entry>` makes: extra fields are fine, and a nested node never decides the fit. Before, a record that arrived typed was accepted only when it named the same declaration, so an extracted `<Entry>` record was refused by an `<Entry>` parameter. A record that does not fit is refused with a message naming the missing or mistyped field. Only refusals became acceptances, so no language version changes.
 
 ## [v0.8.5] - 2026-09-29
 

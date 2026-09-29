@@ -219,9 +219,12 @@ export interface ExtractSpecOptions {
 }
 
 export interface DeclaredNodeShape {
+  /** The declaration as written — its own members only when it extends one. */
   root: ShapeNode;
   resolveDeclaredType: (name: string) => FieldType | undefined;
   resolveDescription: (slot: ExprSlot) => Promise<string>;
+  /** `node X extends Y`: Y, with the resolvers of the scope Y was declared in. */
+  base?: DeclaredNodeShape;
 }
 
 export async function buildExtractSpec(
@@ -340,12 +343,7 @@ async function buildDeclaredNodeSpec(
       `'${node.declared.type}' is not a node declaration in scope, so '${node.name}' has no shape to extract (the checker should have caught this)`,
     );
   }
-  const declaredOptions: ExtractSpecOptions = {
-    ...options,
-    resolveDeclaredType: declared.resolveDeclaredType,
-    resolveDescription: declared.resolveDescription,
-  };
-  const shape = await buildShapeNodeSpec(node.name, declared.root, declaredOptions);
+  const shape = await buildDeclarationSpec(node.name, declared, options);
   const following = await buildNodeSpec(node.name, '', node.stages, options);
   return {
     name: node.name,
@@ -353,6 +351,39 @@ async function buildDeclaredNodeSpec(
       node.description !== undefined ? await describeSlot(node.description, options) : shape.description,
     exported: [...new Set([...shape.exported, ...following.exported])],
     stages: [...shape.stages, ...following.stages],
+  };
+}
+
+/**
+ * A declaration as the single-stage spec its inline spelling builds. With a
+ * base, that spelling is the base's members first, then its own (the checker's
+ * `inheritDeclaration`), and the record's words are its own or else the
+ * base's — but each part is built with the resolvers of the declaration that
+ * WROTE it, so an inherited word interpolates in its own file.
+ */
+async function buildDeclarationSpec(
+  name: string,
+  declared: DeclaredNodeShape,
+  options: ExtractSpecOptions | undefined,
+): Promise<ExtractNodeSpec> {
+  const own = await buildShapeNodeSpec(name, declared.root, {
+    ...options,
+    resolveDeclaredType: declared.resolveDeclaredType,
+    resolveDescription: declared.resolveDescription,
+  });
+  if (declared.base === undefined) return own;
+  const base = await buildDeclarationSpec(name, declared.base, options);
+  return {
+    name,
+    description: declared.root.description !== undefined ? own.description : base.description,
+    exported: [...base.exported, ...own.exported],
+    stages: [
+      {
+        through: [],
+        fields: [...base.stages[0].fields, ...own.stages[0].fields],
+        children: [...base.stages[0].children, ...own.stages[0].children],
+      },
+    ],
   };
 }
 

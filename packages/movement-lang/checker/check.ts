@@ -157,6 +157,8 @@ import {
   listenNarrowing,
 } from './event_address';
 import {
+  inheritDeclaration,
+  inheritSchema,
   type RequiredPosition,
   schemaSurface,
   shapeToSchema,
@@ -382,6 +384,13 @@ export const DiagnosticCodes = {
   /** `node entry: <X>` where `X` is not a node declaration — an extraction
    *  node's shape is a declared structure, never a system's record type. */
   EXTRACT_SHAPE_NOT_DECLARED: 'MOV_EXTRACT_SHAPE_NOT_DECLARED',
+  /** `node X extends Y` where `Y` is not a node declaration in scope. */
+  EXTENDS_NOT_A_NODE: 'MOV_EXTENDS_NOT_A_NODE',
+  /** `node A extends B` where `B` extends `A` — directly or further up. */
+  EXTENDS_CYCLE: 'MOV_EXTENDS_CYCLE',
+  /** `node X extends Y { f: … }` where `Y` already has `f` (a field, or a
+   *  nested node): X inherits Y's members whole and cannot restate one. */
+  EXTENDS_REDEFINES: 'MOV_EXTENDS_REDEFINES',
   /** `...x` in a write body where `x`'s fields are not known — a spread
    *  writes every field of an extracted record, so it needs one. */
   WRITE_SPREAD_SOURCE: 'MOV_WRITE_SPREAD_SOURCE',
@@ -1727,6 +1736,14 @@ function knownFieldsOf(type: PositionTypeRef): string[] | undefined {
   }
 }
 
+/** `target` takes `source`'s positions — in place, so every holder of the
+ *  schema object reads the new ones. */
+function adoptSchema(target: InstanceSchema, source: InstanceSchema): void {
+  target.positions = source.positions;
+  target.collections = source.collections;
+  target.writableRoots = source.writableRoots;
+}
+
 function declaredExtractShape(resolution: Resolution): DeclaredExtractShape | undefined {
   if (resolution.kind !== 'found' || resolution.symbol.kind !== 'shape') return undefined;
   const { declaration, schema } = resolution.symbol;
@@ -1946,6 +1963,81 @@ function suppliedSurface(type: PositionTypeRef): SuppliedSurface | undefined {
     default:
       return undefined;
   }
+}
+
+/** Is this graph a node DECLARATION (rather than a constructed system)? */
+function isDeclaredNode(instance: InstanceRef): boolean {
+  const { token } = instance;
+  return 'kind' in token && token.kind === 'shape';
+}
+
+/**
+ * Why an argument does not fit a parameter typed on a declared node, or
+ * undefined when it does. Every kind of record is judged by what it carries —
+ * a system's record, an extracted one, one of another declaration, one built
+ * here — so two declarations spelling the same structure fit each other, and
+ * `node X extends Y`'s records fit `<Y>`. A union fits only when EVERY member
+ * does: the callee reads the parameter without narrowing it.
+ */
+function declaredParamMisfit(
+  arg: PositionTypeRef,
+  param: Extract<PositionTypeRef, { kind: 'position' }>,
+): string | undefined {
+  const required: RequiredPosition = { schema: param.instance.schema, position: param.position };
+  switch (arg.kind) {
+    case 'union': {
+      for (const variant of arg.variants) {
+        const misfit = surfaceMisfit(schemaSurface(arg.instance.schema, variant), required);
+        if (misfit !== undefined) {
+          return `${displayNameOf(arg.instance, variant)}, one of what this argument may be, does not fit: ${misfit}`;
+        }
+      }
+      return undefined;
+    }
+    case 'meta':
+    case 'closure':
+      return `this argument is ${describePosition(arg)}, not a record`;
+    case 'position':
+    case 'handle':
+    case 'extract':
+    case 'local':
+    case 'maybeEmpty':
+      return surfaceMisfit(recordSurface(arg), required);
+    default:
+      return neverAsAny(arg);
+  }
+}
+
+/**
+ * What a record OFFERS, whatever made it. `suppliedSurface` plus the two kinds
+ * only a declared parameter compares: a write's handle (the record it wrote)
+ * and an extracted record (its fields as annotated — an unannotated one is
+ * text — and its nested nodes as edges).
+ */
+function recordSurface(type: PositionTypeRef): SuppliedSurface | undefined {
+  switch (type.kind) {
+    case 'handle':
+      return type.position !== undefined
+        ? schemaSurface(type.instance.schema, type.position)
+        : { properties: type.resultShape, edges: {} };
+    case 'extract':
+      return extractSurface(type.node);
+    case 'maybeEmpty':
+      return recordSurface(type.of);
+    default:
+      return suppliedSurface(type);
+  }
+}
+
+function extractSurface(node: ExtractNodeType): SuppliedSurface {
+  return {
+    properties: Object.fromEntries(
+      [...node.properties].map(([name, field]) => [name, field.explicit ?? 'text']),
+    ),
+    edges: Object.fromEntries(
+      [...node.children].map(([name, child]) => [name, () => extractSurface(child)]),
+    ),
+  };
 }
 
 /**
@@ -2195,6 +2287,16 @@ interface CheckerOptions {
 
 class Checker {
   readonly diagnostics: Diagnostic[] = [];
+
+  /** Node declarations made in the files being checked, by the symbol that
+   *  declares them — how `extends` reaches a base declared in the same file,
+   *  whose own statement may not have been checked yet. */
+  private readonly localShapes = new WeakMap<
+    ScopeSymbol,
+    { statement: ShapeDeclaration; scope: Scope }
+  >();
+  /** Declarations `settleShape` has already settled. */
+  private readonly settledShapes = new WeakSet<ShapeDeclaration>();
 
   /** Listens seen anywhere in the file (any listen suppresses LISTEN_MISSING). */
   private listenCount = 0;
@@ -2973,7 +3075,204 @@ class Checker {
           `'${statement.name}' is already declared as ${describeKind[existing.kind]}`,
           statement.span,
         );
+      } else if (statement.kind === 'shape') {
+        this.localShapes.set(symbol, { statement, scope });
       }
+    }
+    const visited = new Set<ShapeDeclaration>();
+    for (const statement of statements) {
+      if (statement.kind === 'shape') this.inheritAtHoist(statement, scope, visited);
+    }
+  }
+
+  /**
+   * `node X extends Y` — X's whole tree, as early as it can be known, so a use
+   * of `<X>` checked before X's own statement already sees Y's members. Only a
+   * base declared in this list is in reach here (an imported one binds when its
+   * `import` statement is checked), and nothing is reported: `settleShape`
+   * does it again at X's statement, with Y's types settled, and says what is
+   * wrong.
+   */
+  private inheritAtHoist(
+    statement: ShapeDeclaration,
+    scope: Scope,
+    visited: Set<ShapeDeclaration>,
+  ): void {
+    if (statement.extends === undefined || visited.has(statement)) return;
+    visited.add(statement);
+    if (this.extendsCycle(statement, scope) !== undefined) return;
+    const base = this.extendsTarget(statement, scope);
+    if (base?.local === undefined) return;
+    this.inheritAtHoist(base.local.statement, base.local.scope, visited);
+    const symbol = scope.symbols.get(statement.name);
+    if (symbol === undefined || this.localShapes.get(symbol)?.statement !== statement) return;
+    this.adoptInheritance(
+      symbol,
+      statement,
+      base.symbol,
+      shapeToSchema(statement, name => this.declaredTypeIn(name, scope)),
+    );
+  }
+
+  /** The node declaration `statement` extends, where its base names one in
+   *  scope — with its statement when it was declared in this file. */
+  private extendsTarget(
+    statement: ShapeDeclaration,
+    scope: Scope,
+  ): { symbol: ScopeSymbol; local?: { statement: ShapeDeclaration; scope: Scope } } | undefined {
+    if (statement.extends === undefined) return undefined;
+    const resolution = scope.resolve(statement.extends.name);
+    if (resolution.kind !== 'found' || resolution.symbol.kind !== 'shape') return undefined;
+    const local = this.localShapes.get(resolution.symbol);
+    return { symbol: resolution.symbol, ...(local !== undefined ? { local } : {}) };
+  }
+
+  /**
+   * The names around an `extends` cycle `statement` sits on (`A`, `B`, `A`),
+   * or undefined. Only this file's declarations are walked: an imported base
+   * was settled in its own file, and files cannot import each other in a
+   * circle, so no cycle passes through one.
+   */
+  private extendsCycle(statement: ShapeDeclaration, scope: Scope): string[] | undefined {
+    const path = [statement.name];
+    const seen = new Set<ShapeDeclaration>([statement]);
+    let current = { statement, scope };
+    for (;;) {
+      const next = this.extendsTarget(current.statement, current.scope)?.local;
+      if (next === undefined) return undefined;
+      path.push(next.statement.name);
+      if (next.statement === statement) return path;
+      // A cycle further up that does not come back here is reported on the
+      // declarations that ARE on it.
+      if (seen.has(next.statement)) return undefined;
+      seen.add(next.statement);
+      current = next;
+    }
+  }
+
+  /** X's symbol takes the whole tree: `own` (X's schema as parsed, its types
+   *  resolved) with the base's folded in. The schema object is updated in
+   *  place, so anything that took it from the symbol earlier reads the result. */
+  private adoptInheritance(
+    symbol: ScopeSymbol,
+    statement: ShapeDeclaration,
+    base: ScopeSymbol,
+    own: InstanceSchema,
+  ): void {
+    if (symbol.schema === undefined || base.schema === undefined || base.declaration === undefined) {
+      return;
+    }
+    adoptSchema(
+      symbol.schema,
+      inheritSchema(own, statement.name, { name: base.declaration.name, schema: base.schema }),
+    );
+    symbol.declaration = inheritDeclaration(statement, base.declaration);
+  }
+
+  /**
+   * A node declaration at its own statement: its field types resolve here (a
+   * borrowed one's graph is bound by now), its words are checked in this scope,
+   * and an `extends` is resolved — the base settled first, so what X inherits
+   * carries the base's final types — and refused, naming the problem, when the
+   * base is not a node declaration, when the chain comes back round, or when X
+   * restates a member the base already has.
+   *
+   * Once per declaration: a base declared further down is settled early, when
+   * the declaration extending it is reached.
+   */
+  private settleShape(statement: ShapeDeclaration, scope: Scope): void {
+    if (this.settledShapes.has(statement)) return;
+    this.settledShapes.add(statement);
+    const found = scope.symbols.get(statement.name);
+    const symbol =
+      found?.kind === 'shape' && this.localShapes.get(found)?.statement === statement
+        ? found
+        : undefined;
+    if (statement.extends === undefined) {
+      // Borrowed field types (`crm_stage: crm.companies.funding_stage`)
+      // resolve at the declaration's source position — the same dotted
+      // paths extract annotations take — and patch the hoisted schema in
+      // place (positions/writableRoots/resultShape alias one object).
+      if (symbol?.schema) {
+        this.resolveShapeFieldTypes(statement.root, statement.name, symbol.schema, scope);
+      }
+      this.checkShapeDescriptions(statement.root, scope);
+      return;
+    }
+    const own = shapeToSchema(statement, name => this.declaredTypeIn(name, scope));
+    this.resolveShapeFieldTypes(statement.root, statement.name, own, scope);
+    this.checkShapeDescriptions(statement.root, scope);
+    const base = this.settledBase(statement, scope);
+    if (base?.declaration === undefined) {
+      // Nothing to inherit: X is what it says itself, and a use of `<X>` is
+      // checked against that rather than against a guess.
+      if (symbol?.schema) {
+        adoptSchema(symbol.schema, own);
+        symbol.declaration = statement;
+      }
+      return;
+    }
+    this.refuseRedefinitions(statement, base.declaration);
+    if (symbol !== undefined) this.adoptInheritance(symbol, statement, base, own);
+  }
+
+  /** The base `statement` extends, settled — or undefined, reported, when it
+   *  names no node declaration in scope or the chain comes back round. */
+  private settledBase(statement: ShapeDeclaration, scope: Scope): ScopeSymbol | undefined {
+    if (statement.extends === undefined) return undefined;
+    const { name, span } = statement.extends;
+    const resolution = scope.resolve(name);
+    if (resolution.kind !== 'found') {
+      this.reportResolutionFailure(name, span, resolution);
+      return undefined;
+    }
+    if (resolution.symbol.kind !== 'shape') {
+      this.report(
+        DiagnosticCodes.EXTENDS_NOT_A_NODE,
+        `'${name}' is ${describeKind[resolution.symbol.kind]}, not a node declaration — '${statement.name}' extends a node declared with 'node ${name} { … }', in this file or imported`,
+        span,
+      );
+      return undefined;
+    }
+    const cycle = this.extendsCycle(statement, scope);
+    if (cycle !== undefined) {
+      this.report(
+        DiagnosticCodes.EXTENDS_CYCLE,
+        cycle.length === 2
+          ? `'${statement.name}' extends itself — a node declaration extends a different one`
+          : `'${statement.name}' extends itself through ${cycle
+              .slice(1, -1)
+              .map(n => `'${n}'`)
+              .join(', ')} (${cycle.join(' extends ')}) — one of them has to stand on its own`,
+        span,
+      );
+      return undefined;
+    }
+    const local = this.localShapes.get(resolution.symbol);
+    if (local !== undefined) this.settleShape(local.statement, local.scope);
+    return resolution.symbol;
+  }
+
+  /** X inherits its base's members whole — with their types, their words and a
+   *  nested node's order — so restating one is refused rather than read as an
+   *  override. */
+  private refuseRedefinitions(statement: ShapeDeclaration, base: ShapeDeclaration): void {
+    const baseName = statement.extends?.name ?? base.name;
+    for (const field of statement.root.fields) {
+      if (!base.root.fields.some(f => f.name === field.name)) continue;
+      this.report(
+        DiagnosticCodes.EXTENDS_REDEFINES,
+        `'${field.name}' is already a field of '${baseName}' — '${statement.name}' inherits it, with its type and its words, and cannot redefine it; a field of its own needs a name '${baseName}' does not use`,
+        field.span,
+      );
+    }
+    for (const child of statement.root.children) {
+      if (!base.root.children.some(c => c.name === child.name)) continue;
+      this.report(
+        DiagnosticCodes.EXTENDS_REDEFINES,
+        `'${child.name}' is already a nested node of '${baseName}' — '${statement.name}' inherits it whole, with its fields, its words and its order, and cannot restate it; a nested node of its own needs a name '${baseName}' does not use`,
+        child.span,
+      );
     }
   }
 
@@ -3008,27 +3307,17 @@ class Checker {
         // Hoisted normally. When reached outside a hoisted list (e.g. as a
         // parallel sibling), declare here with its derived schema.
         if (!scope.symbols.has(statement.name)) {
-          this.declareAuthored(
-            scope,
-            {
-              name: statement.name,
-              kind: 'shape',
-              span: statement.span,
-              schema: shapeToSchema(statement, name => this.declaredTypeIn(name, scope)),
-              declaration: statement,
-            },
-            statement.span,
-          );
+          const symbol: ScopeSymbol = {
+            name: statement.name,
+            kind: 'shape',
+            span: statement.span,
+            schema: shapeToSchema(statement, name => this.declaredTypeIn(name, scope)),
+            declaration: statement,
+          };
+          this.declareAuthored(scope, symbol, statement.span);
+          this.localShapes.set(symbol, { statement, scope });
         }
-        // Borrowed field types (`crm_stage: crm.companies.funding_stage`)
-        // resolve at the declaration's source position — the same dotted
-        // paths extract annotations take — and patch the hoisted schema in
-        // place (positions/writableRoots/resultShape alias one object).
-        const symbol = scope.symbols.get(statement.name);
-        if (symbol?.kind === 'shape' && symbol.schema) {
-          this.resolveShapeFieldTypes(statement.root, statement.name, symbol.schema, scope);
-        }
-        this.checkShapeDescriptions(statement.root, scope);
+        this.settleShape(statement, scope);
         return;
       }
       case 'movement':
@@ -7217,6 +7506,20 @@ class Checker {
         this.report(
           DiagnosticCodes.NODE_ARG_SHAPE,
           `'${callee}' expects ${describePosition(paramType)}, and ${misfit}`,
+          span,
+        );
+      }
+      return;
+    }
+    if (paramType.kind === 'position' && isDeclaredNode(paramType.instance)) {
+      // A declared node belongs to no system, so there is no identity to
+      // match: the argument fits when it CARRIES the structure — whatever
+      // made it — judged by the comparison `x IS <Doc>` makes.
+      const misfit = declaredParamMisfit(argType, paramType);
+      if (misfit !== undefined) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `'${callee}' expects a <${paramType.position}> record, and ${misfit}`,
           span,
         );
       }

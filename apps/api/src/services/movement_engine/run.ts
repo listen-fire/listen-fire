@@ -101,6 +101,8 @@ import {
   schemaSurface,
   declaredTypesIn,
   expandWriteSpreads,
+  inheritDeclaration,
+  inheritSchema,
   shapeToSchema,
   surfaceMisfit,
 } from 'movement-lang';
@@ -138,6 +140,7 @@ import type {
   Program,
   ProgramLink,
   ResolveFile,
+  ShapeDeclaration,
   ShapeNode,
   Statement,
   TraversalBlock,
@@ -247,6 +250,7 @@ import {
   materializeExtract,
   registryTransformInvoker,
   tracedUrl,
+  type DeclaredNodeShape,
   type ExtractEmission,
   type FileTextResolution,
   type MovementTransformInvoker,
@@ -950,10 +954,25 @@ function spreadFields(spread: WriteSpread): readonly string[] {
  * appendable edge has to exist under for a `link` to have somewhere to append.
  * Nothing but a node DECLARATION says it, so anything else resolves to nothing.
  */
-function declaredLandingShape(binding: Binding | undefined): LocalLandingShape | undefined {
-  if (binding?.kind !== 'shape') return undefined;
-  const shape = nestedEdgeNames(binding.declaration.root);
+function declaredLandingShape(root: ShapeNode): LocalLandingShape | undefined {
+  const shape = nestedEdgeNames(root);
   return Object.keys(shape).length > 0 ? shape : undefined;
+}
+
+type ShapeBinding = Extract<Binding, { kind: 'shape' }>;
+
+/** `name` as a library file sees it, when it names a node declaration there:
+ *  one the file declares, or one it imported (which then belongs to ITS file). */
+function libraryShape(file: LinkedFile, name: string): ShapeBinding | undefined {
+  for (const statement of file.program.statements) {
+    if (statement.kind === 'shape' && statement.name === name) {
+      return { kind: 'shape', declaration: statement, library: file };
+    }
+  }
+  const imported = file.imports.get(name);
+  return imported?.kind === 'shape'
+    ? { kind: 'shape', declaration: imported.declaration, library: imported.file }
+    : undefined;
 }
 
 function nestedEdgeNames(node: ShapeNode): LocalLandingShape {
@@ -2913,8 +2932,89 @@ class Interpreter {
 
   /** A node declaration's refinements: those of the scope it was DECLARED in —
    *  the same scope its descriptions read. */
-  private shapeTypes(shape: Extract<Binding, { kind: 'shape' }>): Map<string, SchemaFieldType> {
+  private shapeTypes(shape: ShapeBinding): Map<string, SchemaFieldType> {
     return shape.library !== undefined ? this.typesOfLibrary(shape.library) : this.typesIn(shape.fileEnv);
+  }
+
+  /**
+   * `node X extends Y` — Y, as a binding that knows where IT was declared. `Y`
+   * is a name in the scope X was declared in (a sibling declaration or an
+   * import there), and from then on Y's words and types read Y's own file.
+   */
+  private shapeBase(shape: ShapeBinding): ShapeBinding | undefined {
+    const base = shape.declaration.extends;
+    if (base === undefined) return undefined;
+    const found =
+      shape.library !== undefined
+        ? libraryShape(shape.library, base.name)
+        : (shape.fileEnv ?? this.fileEnv)?.resolve(base.name);
+    if (found?.kind === 'shape') return found;
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `'${shape.declaration.name}' extends '${base.name}', which is not a node declaration in scope — the checker should have caught this`,
+    );
+  }
+
+  /** The `extends` chain from `shape` down to the declaration that stands on
+   *  its own, `shape` first. */
+  private shapeChain(shape: ShapeBinding): ShapeBinding[] {
+    const chain: ShapeBinding[] = [];
+    for (let at: ShapeBinding | undefined = shape; at !== undefined; at = this.shapeBase(at)) {
+      if (chain.some((c) => c.declaration === at!.declaration)) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `'${shape.declaration.name}' extends itself — the checker should have caught this`,
+        );
+      }
+      chain.push(at);
+    }
+    return chain;
+  }
+
+  /**
+   * A node declaration as the whole tree it stands for, with its schema —
+   * every `extends` folded in, and each declaration's field types resolved in
+   * the file that wrote it. The checker builds the same fold (`inheritSchema`),
+   * so a `<Recap Entry>` predicate is compared at run time against the
+   * structure it was checked against.
+   */
+  private resolvedShape(shape: ShapeBinding): { declaration: ShapeDeclaration; schema: InstanceSchema } {
+    let resolved: { declaration: ShapeDeclaration; schema: InstanceSchema } | undefined;
+    for (const link of this.shapeChain(shape).reverse()) {
+      const types = this.shapeTypes(link);
+      const own = shapeToSchema(link.declaration, (name) => types.get(name));
+      resolved =
+        resolved === undefined
+          ? { declaration: link.declaration, schema: own }
+          : {
+              declaration: inheritDeclaration(link.declaration, resolved.declaration),
+              schema: inheritSchema(own, link.declaration.name, {
+                name: resolved.declaration.name,
+                schema: resolved.schema,
+              }),
+            };
+    }
+    return resolved!;
+  }
+
+  /** What an extraction taking `shape` as its node reads: each declaration in
+   *  the chain with the resolvers of the scope IT was declared in — Y's words
+   *  in Y's file even when X, in another file, imported Y. */
+  private declaredNodeShape(shape: ShapeBinding, env: Environment): DeclaredNodeShape {
+    let declared: DeclaredNodeShape | undefined;
+    for (const link of this.shapeChain(shape).reverse()) {
+      const { library } = link;
+      const declaredIn = link.fileEnv ?? this.fileEnv ?? env;
+      const types = this.shapeTypes(link);
+      declared = {
+        root: link.declaration.root,
+        resolveDeclaredType: (name) => types.get(name),
+        resolveDescription: async (slot) =>
+          this.describeIn(slot, library !== undefined ? await this.libraryEnv(library) : declaredIn),
+        ...(declared !== undefined ? { base: declared } : {}),
+      };
+    }
+    return declared!;
   }
 
   private instanceBinding(name: string, construct: ConstructionCall): Binding {
@@ -5016,7 +5116,7 @@ class Interpreter {
   private evaluateDeclaredNodeTest(
     subjectName: string,
     subject: Binding,
-    graph: Extract<Binding, { kind: 'shape' }>,
+    graph: ShapeBinding,
     env: Environment,
   ): boolean {
     const subjectSurface = this.subjectSurface(subject, env);
@@ -5024,8 +5124,7 @@ class Interpreter {
     if (subjectSurface.kind === 'unknown') {
       throw this.undiscriminatedIsTest(subjectName, subjectSurface.reason);
     }
-    const types = this.shapeTypes(graph);
-    const declared = shapeToSchema(graph.declaration, (name) => types.get(name));
+    const declared = this.resolvedShape(graph).schema;
     return (
       surfaceMisfit(subjectSurface.surface, {
         schema: declared,
@@ -5065,10 +5164,7 @@ class Interpreter {
       case 'shapePosition': {
         const declaration = env.resolve(subject.shape);
         return declaration?.kind === 'shape'
-          ? positionSurface(
-              shapeToSchema(declaration.declaration, (name) => this.shapeTypes(declaration).get(name)),
-              subject.node,
-            )
+          ? positionSurface(this.resolvedShape(declaration).schema, subject.node)
           : { kind: 'unknown', reason: UNKNOWN_STRUCTURE };
       }
       // The synthesised planes carry their own structure — the literal's
@@ -5159,16 +5255,7 @@ class Interpreter {
       // A reused declaration's words and types read the scope it was declared in.
       resolveDeclaredNode: (type) => {
         const binding = env.resolve(type);
-        if (binding?.kind !== 'shape') return undefined;
-        const { library } = binding;
-        const declaredIn = binding.fileEnv ?? this.fileEnv ?? env;
-        const types = this.shapeTypes(binding);
-        return {
-          root: binding.declaration.root,
-          resolveDeclaredType: (name) => types.get(name),
-          resolveDescription: async (slot) =>
-            this.describeIn(slot, library !== undefined ? await this.libraryEnv(library) : declaredIn),
-        };
+        return binding?.kind === 'shape' ? this.declaredNodeShape(binding, env) : undefined;
       },
     });
     // Where this extract's own trace entries start — the materialiser
@@ -6848,7 +6935,7 @@ class Interpreter {
    */
   private async materializeShapeWrite(
     write: WriteExpression,
-    shape: Extract<Binding, { kind: 'shape' }>,
+    shape: ShapeBinding,
     bindingName: string | undefined,
     env: Environment,
   ): Promise<Binding> {
@@ -6927,9 +7014,11 @@ class Interpreter {
           // along, and a write into this edge mints them on its landing. The
           // ADDRESS spelling carries none: those landings are one system's
           // records, whose edges are that system's to offer.
+          const declared =
+            entry.type.hopsRaw === undefined ? env.resolve(entry.type.graph) : undefined;
           const shape =
-            entry.type.hopsRaw === undefined
-              ? declaredLandingShape(env.resolve(entry.type.graph))
+            declared?.kind === 'shape'
+              ? declaredLandingShape(this.resolvedShape(declared).declaration.root)
               : undefined;
           edges[entry.name] = {
             kind: 'landed',
