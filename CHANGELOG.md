@@ -8,7 +8,16 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.8.1] - 2026-09-29
+
+### Changed
+
+- The automations list's column is **Version**, and the version name renders as a monospace tag on the list and the automation page.
+
 ### Fixed
+
+- The `migrate` one-shot carries every variable the api derives (the OAuth redirect origin among them), so the deploy check it runs can load. On v0.8.0 a missing one crashed the check and blocked the api from starting after the upgrade.
+- Two integration tests: a saved run version is written with its language version; an automation source spells `Invocation` as the manual adapter does.
 
 - The deploy check no longer keeps an automation on its older language version over a routine cost note (`WHERE on '…' runs here, not at the source`, `ORDER BY on '…' runs here`). An automation now moves up when the newer version reports no errors and nothing whose meaning changed between the versions; other warnings are printed as notes in the summary and never block. Only what blocks is stored, so the **Review** badge and `upgradeDiagnostics` mean there is something to look at. `upgradeAutomation` applies the same rule.
 - `up.sh` never exits silently. When `docker compose up` fails it names the failed service, prints its log (the whole run for a one-shot such as `migrate`, the last 30 lines otherwise), and says which version the installation is still on, pointing at `deploy/UPGRADING.md`, Rolling back. It also no longer dies without a word on a machine where nothing is running yet.
@@ -238,7 +247,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.1...HEAD
+[v0.8.1]: https://github.com/listen-fire/listen-fire/compare/v0.8.0...v0.8.1
 [v0.8.0]: https://github.com/listen-fire/listen-fire/compare/v0.7.0...v0.8.0
 [v0.7.0]: https://github.com/listen-fire/listen-fire/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/listen-fire/listen-fire/compare/v0.6.1...v0.6.2
