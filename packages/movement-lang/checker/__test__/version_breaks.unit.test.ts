@@ -5,7 +5,7 @@
 // something else. Version 1's full definition is its own corpus
 // (`__conformance__/v1`); this file pins each conditional by name.
 
-import { parseProgram, MovementParseError } from '../../parser/parse';
+import { parseProgram } from '../../parser/parse';
 import { checkProgram, DiagnosticCodes as C, type CheckOptions, type Diagnostic } from '../check';
 import { mockCatalog, type InstanceSchema, type PluginSpec } from '../catalog';
 import { changedBetween, type LanguageVersion } from '../../language_version';
@@ -123,32 +123,11 @@ describe('a dict literal', () => {
   });
 });
 
-describe('a MAP function with no return', () => {
-  it('is refused under 1 and runs for its writes under 2', () => {
-    const body = '  names = COLLECT(c-[p:Members]->.`Name`)\n  x = MAP(names, (t) => { y = t })';
-    expect(errors(body, V1)).toEqual([C.COLLECTION_OP_RETURNS_NOTHING]);
-    expect(errors(body, V2)).toEqual([]);
-  });
-});
-
 describe("a declared node's field type", () => {
   it('an unknown name reads as text under 1 and is refused under 2', () => {
     const declaration = 'node Entry {\n  thesis: <Thesiss>\n}\n';
     expect(errors('  x = 1', V1, declaration)).toEqual([]);
     expect(errors('  x = 1', V2, declaration)).toEqual([C.UNKNOWN_TYPE_NAME]);
-  });
-});
-
-describe('a link body', () => {
-  const source = 'movement m(a: <x-[:y]->>) {\n  link a -[:e]-> { unique by (`Name`) Name: "n" }\n}\n';
-
-  it("takes no 'unique by' under 1 — its fields are the identity", () => {
-    expect(() => parseProgram(source, { languageVersion: 1 })).toThrow(MovementParseError);
-    expect(() => parseProgram(source, { languageVersion: 1 })).toThrow(/criteria ARE the identity/);
-  });
-
-  it("takes one under 2, as the match it stands for", () => {
-    expect(() => parseProgram(source, { languageVersion: 2 })).not.toThrow();
   });
 });
 

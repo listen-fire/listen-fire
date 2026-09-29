@@ -177,7 +177,6 @@ import {
   CURRENT_LANGUAGE_VERSION,
   describeLanguageVersion,
   languageVersionDiagnostic,
-  since,
   type LanguageVersion,
 } from '../language_version';
 import { terminates } from './flow';
@@ -4231,12 +4230,12 @@ class Checker {
         suppliedParams: supplied,
       });
       this.absorbCollectionRow(effects, spelling, expr.fn.span);
-      if (this.mapMayHandBackNothing(expr.op, returns)) return MAP_SLOT_ABSENT;
+      if (expr.op === 'map' && !returns.returns) return MAP_SLOT_ABSENT;
       this.requireCollectionReturn(returns, spelling, expr.fn.span);
       return returns;
     }
     const named = this.checkArm(expr.fn, spelling, scope, undefined, arity);
-    if (this.mapMayHandBackNothing(expr.op, named)) return MAP_SLOT_ABSENT;
+    if (expr.op === 'map' && !named.returns) return MAP_SLOT_ABSENT;
     this.requireCollectionReturn(named, spelling, expr.fn.span);
     return named;
   }
@@ -4251,12 +4250,6 @@ class Checker {
       );
     }
     this.effects?.absorb(row);
-  }
-
-  /** A `MAP` run for its writes alone hands back nothing, and may — since
-   *  version 2. Version 1 required a `return` of every collection function. */
-  private mapMayHandBackNothing(op: string, shape: ReturnShape): boolean {
-    return op === 'map' && !shape.returns && since(this.languageVersion, 2);
   }
 
   private requireCollectionReturn(shape: ReturnShape, spelling: string, span: Span): void {

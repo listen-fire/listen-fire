@@ -1,5 +1,6 @@
 // Version 1's corpus tests ruled out: each asserted an internal shape that has
-// since been refactored, with no difference an author can observe in what a
+// since been refactored, a reworded message, or a refusal that version 2
+// turned into acceptance — none a difference in what a valid version-1
 // movement does. Anything that changes what a movement does is a version
 // conditional instead, never an entry here.
 // `file` is relative to this directory; `test` is the test's (or describe's)
@@ -8,7 +9,12 @@ const PARSE = 'parser/__test__/parse.unit.test.ts';
 const LINK_AST =
   "AST shape only: a link's target moved from `link.target` ({handle} | {criteria}) to `link.to` ({handle} | {match}); the same source parses, and the program means the same";
 
+const ACCEPTED =
+  'refusal became acceptance; no valid v1 program observes it';
+
 exports.triage = [
+  { file: PARSE, test: "rejects 'unique by' inside a link body (criteria ARE the identity)", reason: ACCEPTED },
+  { file: 'checker/__test__/value_collections.unit.test.ts', test: 'a function that hands nothing back is refused', reason: ACCEPTED },
   { file: PARSE, test: 'parses the bare-handle link statement', reason: LINK_AST },
   { file: PARSE, test: 'parses the criteria-form link statement (identity-criteria body)', reason: LINK_AST },
   { file: PARSE, test: 'parses a bound criteria link with an explicit type for a polymorphic edge', reason: LINK_AST },

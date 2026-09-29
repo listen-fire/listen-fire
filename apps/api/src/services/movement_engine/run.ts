@@ -7080,7 +7080,11 @@ class Interpreter {
     }
     // Version 1's body form was its own statement: criteria find the record
     // and the link lands as ONE run-log row, with no match row before it.
-    if (link.to.kind === 'match' && before(this.languageVersion, 2)) {
+    // A body with an authored `unique by` never parsed under v0.6.0, so it has
+    // no version-1 meaning to keep and runs as the match it is.
+    const authoredIdentity =
+      link.to.kind === 'match' && !link.to.impliedIdentity && link.to.match.uniqueBy.length > 0;
+    if (link.to.kind === 'match' && !authoredIdentity && before(this.languageVersion, 2)) {
       await this.executeCriteriaLink(link, link.to.match, bindingName, env);
       return;
     }
@@ -7111,7 +7115,7 @@ class Interpreter {
   /**
    * Version 1's `link c -[:portfolio]-> { name: "Fund III" }` — the target is
    * FOUND, never created and never written. The body's fields are identity
-   * criteria ONLY (the parser refuses `unique by` under version 1): the
+   * criteria ONLY (a body with an authored `unique by` runs as a match): the
    * criteria AND-group merged with the target's native rules, resolved and
    * arbitrated like a write's identity, the found type inferred from the edge.
    * On a miss the enclosing scope ends quietly.
