@@ -20,6 +20,13 @@
  *              bytes actually transferred, plain and with `Accept-Encoding`
  *   --rows F   write every row's invested / retained / realised / value / MOIC
  *              to F, so a change can be proved to move no number
+ *
+ * The page waits on more than the list, so `--procedure <name>` points the
+ * resolver mode at any one of the calls it makes on load:
+ *
+ *   list           the holdings themselves (the default)
+ *   year-options   the filter bar's year range
+ *   user-context   the signed-in user, their teams and their permissions
  */
 import { writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
@@ -31,6 +38,10 @@ import Pg from 'pg';
 let statements = 0;
 let counting = false;
 const byStatement = new Map<string, { count: number; ms: number }>();
+// Start/end of every statement, so the time the resolver spent with at least
+// one query outstanding can be told apart from the sum of query times — which
+// counts a fan-out of twenty parallel queries twenty times over.
+const intervals: Array<[number, number]> = [];
 const clientQuery = Pg.Client.prototype.query;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 Pg.Client.prototype.query = function (this: any, ...args: any[]) {
@@ -51,7 +62,9 @@ Pg.Client.prototype.query = function (this: any, ...args: any[]) {
   const running = (clientQuery as any).apply(this, args);
   if (running && typeof running.then === 'function') {
     const done = () => {
-      tally.ms += Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const endedAt = process.hrtime.bigint();
+      tally.ms += Number(endedAt - startedAt) / 1e6;
+      intervals.push([Number(startedAt) / 1e6, Number(endedAt) / 1e6]);
     };
     running.then(done, done);
   }
@@ -137,43 +150,90 @@ async function callTotals() {
   );
 }
 
+type Caller = ReturnType<typeof trpcRouter.createCaller>;
+
+/** The calls the portfolio page makes on load, each with the input the page
+ *  itself sends. */
+const PROCEDURES = {
+  list: (caller: Caller) => caller.views.investments.getPortfolioInvestments(PAGE_INPUT as never),
+  'year-options': (caller: Caller) =>
+    caller.views.investments.getYearOptions({
+      filter: PAGE_INPUT.filter,
+      config: {
+        currency: PAGE_INPUT.config.currency,
+        showDetails: PAGE_INPUT.config.showDetails,
+      },
+      scope: PAGE_INPUT.config.aggregation,
+    } as never),
+  'user-context': (caller: Caller) => caller.models.user.context(),
+} as const;
+
+type ProcedureName = keyof typeof PROCEDURES;
+
+function procedureName(raw: string | undefined): ProcedureName {
+  if (raw === undefined) {
+    return 'list';
+  }
+  if (!(raw in PROCEDURES)) {
+    throw new Error(`unknown --procedure '${raw}' (expected: ${Object.keys(PROCEDURES).join(', ')})`);
+  }
+  return raw as ProcedureName;
+}
+
 /** One call, in its own Context — which is the scope every per-request memo
  *  and batch lives in, so two calls sharing one would flatter the second. */
-async function callList() {
+async function callOnce(procedure: ProcedureName) {
   return runInContext(
     async () => {
       const caller = trpcRouter.createCaller({ authorise: async () => {} });
-      return caller.views.investments.getPortfolioInvestments(PAGE_INPUT as never);
+      return PROCEDURES[procedure](caller);
     },
     { email: USER_EMAIL },
     { teamId: TEAM_ID },
   );
 }
 
-async function measureResolver(rowsOut: string | undefined) {
+async function measureResolver(procedure: ProcedureName, rowsOut: string | undefined) {
   // One warm pass first: the first call of the process pays for pools,
   // prepared statements and JIT, and that cost is not the page's.
-  await callList();
+  await callOnce(procedure);
 
   return runInContext(
     async () => {
       const caller = trpcRouter.createCaller({ authorise: async () => {} });
 
       statements = 0;
+      intervals.length = 0;
       counting = true;
+
+      // A timer that should fire every 2ms fires late by exactly as long as
+      // something else held the loop. Summed, that is the time this one call
+      // makes every OTHER request on the server wait.
+      const TICK_MS = 2;
+      let blockedMs = 0;
+      let tickedAt = process.hrtime.bigint();
+      const ticker = setInterval(() => {
+        const now = process.hrtime.bigint();
+        const late = Number(now - tickedAt) / 1e6 - TICK_MS;
+        if (late > 0) {
+          blockedMs += late;
+        }
+        tickedAt = now;
+      }, TICK_MS);
+
+      const cpuAtStart = process.cpuUsage();
       const startedAt = process.hrtime.bigint();
-      const result = await caller.views.investments.getPortfolioInvestments(PAGE_INPUT as never);
+      const result = (await PROCEDURES[procedure](caller)) as { items?: Row[]; totals?: unknown };
       const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const cpu = process.cpuUsage(cpuAtStart);
+      clearInterval(ticker);
       counting = false;
 
       const body = JSON.stringify(result);
       const gzipped = gzipSync(Buffer.from(body)).length;
-      const items = result.items as unknown as Row[];
-      const withoutTrace = JSON.stringify({
-        items: items.map(({ ...row }) => ({ ...row, message: undefined })),
-      }).length;
+      const items = result.items;
 
-      if (rowsOut) {
+      if (items && rowsOut) {
         writeFileSync(rowsOut, `${JSON.stringify(comparableRows(items), null, 1)}\n`);
       }
 
@@ -186,14 +246,21 @@ async function measureResolver(rowsOut: string | undefined) {
         );
 
       return {
-        rows: items.length,
+        procedure,
+        rows: items?.length,
         totals: result.totals,
         resolverMs: Math.round(ms),
+        // This process does nothing else while the resolver runs, so its CPU
+        // over the window is the resolver's own — including the pg driver's
+        // parsing of everything the database sent back, and the garbage
+        // collection that parsing causes, both of which run off the loop.
+        cpuMs: Math.round((cpu.user + cpu.system) / 1000),
+        eventLoopBlockedMs: Math.round(blockedMs),
+        databaseWallMs: Math.round(databaseWallMs()),
         statements,
         bytes: body.length,
-        bytesWithoutTrace: withoutTrace,
         bytesGzipped: gzipped,
-        rowsFile: rowsOut,
+        rowsFile: items ? rowsOut : undefined,
         breakdown,
       };
     },
@@ -236,6 +303,31 @@ async function measureHttp() {
   };
 }
 
+/** Wall-clock time with at least one statement in flight — the part of the
+ *  resolver the database was actually being waited on for. */
+function databaseWallMs(): number {
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let openedAt: number | null = null;
+  let closesAt = 0;
+  for (const [from, to] of sorted) {
+    if (openedAt === null) {
+      openedAt = from;
+      closesAt = to;
+    } else if (from > closesAt) {
+      total += closesAt - openedAt;
+      openedAt = from;
+      closesAt = to;
+    } else if (to > closesAt) {
+      closesAt = to;
+    }
+  }
+  if (openedAt !== null) {
+    total += closesAt - openedAt;
+  }
+  return total;
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -243,7 +335,7 @@ async function main() {
     ? { mode: 'http', ...(await measureHttp()) }
     : {
         mode: 'resolver',
-        ...(await measureResolver(flag(args, 'rows'))),
+        ...(await measureResolver(procedureName(flag(args, 'procedure')), flag(args, 'rows'))),
         ...(args.includes('--check-totals') ? { separateTotalsRequest: await callTotals() } : {}),
       };
 
