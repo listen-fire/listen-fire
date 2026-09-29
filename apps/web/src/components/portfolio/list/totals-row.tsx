@@ -1,23 +1,12 @@
 "use client";
 
 import { formatMoney, formatTvpi } from "@/components/portfolio";
-import { trpc } from "@/lib/trpc";
-import { toApiFilter, toApiConfig } from "./api-params";
-import type { PortfolioConfig, PortfolioFilter } from "./types";
+import type { PortfolioTotals } from "./types";
 
-export function TotalsRow({
-  filter,
-  config,
-}: {
-  filter: PortfolioFilter;
-  config: PortfolioConfig;
-}) {
-  const { data: totals, isLoading } = trpc.views.investments.getPortfolioTotals.useQuery(
-    { filter: toApiFilter(filter), config: toApiConfig(config) },
-    { keepPreviousData: true },
-  );
-
-  if (isLoading || !totals) return null;
+/** The totals come back with the list that they total, so showing them costs
+ *  no second pass over the portfolio. */
+export function TotalsRow({ totals }: { totals: PortfolioTotals | undefined }) {
+  if (!totals) return null;
 
   const currency = totals.currency;
 

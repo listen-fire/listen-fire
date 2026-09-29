@@ -605,6 +605,22 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
           }),
         );
 
+        // The totals row adds up the very atoms this list just valued, so it
+        // comes back with the list rather than as a second pass over the same
+        // portfolio. Summed BEFORE the projection, deliberately: moving
+        // retained value from a company to its acquirer moves it between lines
+        // and never changes what they add up to — the same invariance
+        // `getPortfolioTotals` relies on, and the same rows it reads.
+        const totals = investments.reduce(
+          (running, investment) => ({
+            totalInvested: running.totalInvested + (investment.totalInvested ?? 0),
+            unrealizedValue: running.unrealizedValue + investment.retainedAll,
+            realizedValue: running.realizedValue + investment.realizedCash,
+            totalValue: running.totalValue + investment.totalValue,
+          }),
+          { totalInvested: 0, unrealizedValue: 0, realizedValue: 0, totalValue: 0 },
+        );
+
         type ListRow = (typeof investments)[number];
 
         // A line for value we hold in an acquirer we never invested into: the
@@ -653,21 +669,21 @@ const investmentsRouter = (procedure: typeof trpc.procedure) => {
           row.unrealizedValue = row.retainedAll;
         }
 
+        const portfolioTotals = {
+          ...totals,
+          moic: totals.totalInvested ? totals.totalValue / totals.totalInvested : null,
+          currency: input.config.currency ?? 'USD',
+        };
+
         if (input.grouping === 'moic') {
-          return { items: items.sort((a, b) => (b.moic ?? 0) - (a.moic ?? 0)) };
+          items.sort((a, b) => (b.moic ?? 0) - (a.moic ?? 0));
+        } else if (input.grouping === 'fair_value') {
+          items.sort((a, b) => (b.unrealizedValue ?? 0) - (a.unrealizedValue ?? 0));
+        } else if (input.grouping === 'total_value') {
+          items.sort((a, b) => (b.totalValue ?? 0) - (a.totalValue ?? 0));
         }
 
-        if (input.grouping === 'fair_value') {
-          return {
-            items: items.sort((a, b) => (b.unrealizedValue ?? 0) - (a.unrealizedValue ?? 0)),
-          };
-        }
-
-        if (input.grouping === 'total_value') {
-          return { items: items.sort((a, b) => (b.totalValue ?? 0) - (a.totalValue ?? 0)) };
-        }
-
-        return { items };
+        return { items, totals: portfolioTotals };
       }),
     /**
      * How one line of the portfolio list got its numbers — the same walk the

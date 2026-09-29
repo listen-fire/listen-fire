@@ -116,6 +116,27 @@ function comparableRows(items: Row[]) {
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
+/** The totals row as its own request, which is how the page used to get it —
+ *  kept so the totals the list now returns can be shown to agree with it. */
+async function callTotals() {
+  return runInContext(
+    async () => {
+      const caller = trpcRouter.createCaller({ authorise: async () => {} });
+      const startedAt = process.hrtime.bigint();
+      const totals = await caller.views.investments.getPortfolioTotals({
+        filter: PAGE_INPUT.filter,
+        config: {
+          currency: PAGE_INPUT.config.currency,
+          aggregation: PAGE_INPUT.config.aggregation,
+        },
+      } as never);
+      return { totals, ms: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6) };
+    },
+    { email: USER_EMAIL },
+    { teamId: TEAM_ID },
+  );
+}
+
 /** One call, in its own Context — which is the scope every per-request memo
  *  and batch lives in, so two calls sharing one would flatter the second. */
 async function callList() {
@@ -166,6 +187,7 @@ async function measureResolver(rowsOut: string | undefined) {
 
       return {
         rows: items.length,
+        totals: result.totals,
         resolverMs: Math.round(ms),
         statements,
         bytes: body.length,
@@ -219,7 +241,11 @@ async function main() {
 
   const result = args.includes('--http')
     ? { mode: 'http', ...(await measureHttp()) }
-    : { mode: 'resolver', ...(await measureResolver(flag(args, 'rows'))) };
+    : {
+        mode: 'resolver',
+        ...(await measureResolver(flag(args, 'rows'))),
+        ...(args.includes('--check-totals') ? { separateTotalsRequest: await callTotals() } : {}),
+      };
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

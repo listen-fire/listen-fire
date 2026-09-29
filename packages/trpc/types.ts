@@ -5521,6 +5521,14 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                     } | null | undefined;
                     matches_name_filter?: boolean | undefined;
                 }[];
+                totals: {
+                    moic: number | null;
+                    currency: "CHF" | "EUR" | "GBP" | "NOK" | "SEK" | "USD" | "DKK";
+                    totalInvested: number;
+                    unrealizedValue: number;
+                    realizedValue: number;
+                    totalValue: number;
+                };
             }>;
             getInvestmentCalculation: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{
