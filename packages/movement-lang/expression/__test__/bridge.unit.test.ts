@@ -151,6 +151,105 @@ describe('parseMovementExpression', () => {
       });
     });
 
+    it('! is NOT: !x parses to the same not node NOT x does', () => {
+      const not = { type: 'not', expression: { type: 'property', propertyTypeId: 'x' } };
+      expect(parseMovementExpression('!x')).toEqual(not);
+      expect(parseMovementExpression('NOT x')).toEqual(not);
+    });
+
+    it('!EXISTS(path) is the negation of EXISTS(path), identical to NOT EXISTS(path)', () => {
+      const exists = parseMovementExpression('EXISTS(x-[:e]->)');
+      expect(parseMovementExpression('!EXISTS(x-[:e]->)')).toEqual({ type: 'not', expression: exists });
+      expect(parseMovementExpression('!EXISTS(x-[:e]->)')).toEqual(parseMovementExpression('NOT EXISTS(x-[:e]->)'));
+    });
+
+    it('!!x is double negation', () => {
+      expect(parseMovementExpression('!!x')).toEqual({
+        type: 'not',
+        expression: { type: 'not', expression: { type: 'property', propertyTypeId: 'x' } },
+      });
+    });
+
+    it('! sits at NOT precedence: !a = b is NOT (a = b), and a AND !b negates only b', () => {
+      expect(parseMovementExpression('!a = b')).toEqual(parseMovementExpression('NOT a = b'));
+      expect(parseMovementExpression('a AND !b')).toEqual(parseMovementExpression('a AND NOT b'));
+    });
+
+    it('!= is still the not-equal operator, spaced or not', () => {
+      const neq = {
+        type: 'compare',
+        op: 'neq',
+        left: { type: 'property', propertyTypeId: 'a' },
+        right: { type: 'property', propertyTypeId: 'b' },
+      };
+      expect(parseMovementExpression('a != b')).toEqual(neq);
+      expect(parseMovementExpression('a!=b')).toEqual(neq);
+    });
+
+    it('! inside a hop WHERE negates there too', () => {
+      expect(parseMovementExpression('EXISTS(x-[n:e WHERE !`done`]->)')).toEqual(
+        parseMovementExpression('EXISTS(x-[n:e WHERE NOT `done`]->)'),
+      );
+    });
+
+    it('! as a character inside a string or a backtick name is text, not an operator', () => {
+      expect(parseMovementExpression('"hi!"')).toEqual({ type: 'static', value: 'hi!' });
+      expect(parseMovementExpression('`wow!`')).toEqual({ type: 'property', propertyTypeId: 'wow!' });
+    });
+
+    it('serialize prints ! back as NOT, which re-parses to the same tree', () => {
+      const tree = parseMovementExpression('!a');
+      expect(parseMovementExpression(serialize(tree, (id) => id))).toEqual(tree);
+    });
+
+    describe('an unrecognised character is refused, never skipped', () => {
+      const refusal = (raw: string): BridgeError => {
+        try {
+          parseMovementExpression(raw);
+        } catch (e) {
+          if (e instanceof BridgeError) return e;
+          throw e;
+        }
+        throw new Error(`expected '${raw}' to be refused`);
+      };
+
+      it.each([
+        ['a & b', '&', 2, 'AND'],
+        ['a && b', '&', 2, 'AND'],
+        ['a | b', '|', 2, 'OR'],
+        ['a || b', '|', 2, 'OR'],
+        ['a ? b : c', '?', 2, 'IF'],
+        ['a \\ b', '\\', 2, 'quoted string'],
+        ['a ; b', ';', 2, ';'],
+        ['a % b', '%', 2, '%'],
+        ['a \u2013 b', '\u2013', 2, 'en dash'],
+        ['a \u2014 b', '\u2014', 2, 'em dash'],
+        ['a \u2212 b', '\u2212', 2, 'minus sign'],
+        ['\u201Chi\u201D', '\u201C', 0, 'curly quote'],
+        ['a ^ b', '^', 2, undefined],
+        ['a ~ b', '~', 2, undefined],
+        ['a $ b', '$', 2, undefined],
+        ['caf\u00e9', '\u00e9', 3, undefined],
+      ])('%s → refuses %s at %d', (raw, ch, pos, hint) => {
+        const e = refusal(raw);
+        expect(e.message).toContain(`Unrecognised character '${ch}'`);
+        expect(e.pos).toBe(pos);
+        if (hint !== undefined) expect(e.message).toContain(hint);
+      });
+
+      it('a trailing stray character is refused too (it used to vanish)', () => {
+        expect(refusal('a = 1;').message).toContain("Unrecognised character ';'");
+      });
+
+      it('inside a hop WHERE as well', () => {
+        expect(refusal('EXISTS(x-[n:e WHERE `a` && `b`]->)').message).toContain("Unrecognised character '&'");
+      });
+
+      it('the same characters inside a string are text', () => {
+        expect(parseMovementExpression('"a && b; c? d | e"')).toEqual({ type: 'static', value: 'a && b; c? d | e' });
+      });
+    });
+
     it('wraps formula ParseError as BridgeError with a position', () => {
       try {
         parseMovementExpression('COALESCE(');
@@ -593,6 +692,14 @@ describe('parseMovementCondition', () => {
 
   it('rejects IS under NOT (not yet supported)', () => {
     expect(() => parseMovementCondition('NOT rec IS <crm-[:company]->>')).toThrow(/not yet supported/);
+  });
+
+  it('rejects IS under ! the same way — ! is NOT', () => {
+    expect(() => parseMovementCondition('!rec IS <crm-[:company]->>')).toThrow(/not yet supported/);
+  });
+
+  it('!= beside an IS conjunct is a comparison, not a negation', () => {
+    expect(parseMovementCondition('rec IS <crm-[:company]->> AND rec.`name` != "x"')).toMatchObject({ kind: 'and' });
   });
 
   it('rejects a malformed IS right-hand side', () => {

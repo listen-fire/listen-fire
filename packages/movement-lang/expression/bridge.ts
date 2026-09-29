@@ -1178,6 +1178,14 @@ function findWordAtDepth0(blanked: string, depths: number[], word: string): numb
   return null;
 }
 
+/** A prefix `!` (NOT's other spelling), never the `!` of `!=`. */
+function findBangAtDepth0(blanked: string, depths: number[]): number | null {
+  for (let i = 0; i < blanked.length; i++) {
+    if (blanked[i] === '!' && blanked[i + 1] !== '=' && depths[i] === 0) return i;
+  }
+  return null;
+}
+
 function parseConjunct(text: string, offset: number): MovementCondition {
   const blanked = blankLiterals(text);
   const depths = bracketDepths(blanked);
@@ -1189,7 +1197,7 @@ function parseConjunct(text: string, offset: number): MovementCondition {
 
   const topLevelIs = findWordAtDepth0(blanked, depths, 'IS');
   const topLevelOr = findWordAtDepth0(blanked, depths, 'OR');
-  const topLevelNot = findWordAtDepth0(blanked, depths, 'NOT');
+  const topLevelNot = findWordAtDepth0(blanked, depths, 'NOT') ?? findBangAtDepth0(blanked, depths);
   if (topLevelIs === null || topLevelOr !== null || topLevelNot !== null) {
     throw new BridgeError(
       'IS type tests under OR/NOT (or nested in parentheses) are not yet supported — '

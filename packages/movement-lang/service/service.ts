@@ -1043,7 +1043,7 @@ function hopWhereFieldContext(
   const before = afterWhere.slice(0, tail.index).trimEnd();
   // A field is expected at the start of the clause or right after a boolean
   // connective / open paren — NOT after a comparison operator (that's a value).
-  const atFieldPosition = before === '' || /(?:\bWHERE\b|\bAND\b|\bOR\b|\bNOT\b|\()$/i.test(before);
+  const atFieldPosition = before === '' || /(?:\bWHERE\b|\bAND\b|\bOR\b|\bNOT\b|\(|!)$/i.test(before);
   if (!atFieldPosition) return undefined;
   return { root: lineBefore.slice(0, lastOpen), edge, partial: tail[2] ?? '', tickTyped: tail[1] === '`' };
 }

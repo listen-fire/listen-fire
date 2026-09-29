@@ -273,3 +273,29 @@ describe('a walk from a name holding many records', () => {
     expect(await answers(body)).toEqual(['two', 'brief', 'Memo']);
   });
 });
+
+// `!` is NOT. The formula tokenizer used to drop it, so `if !EXISTS(…)` ran as
+// `if EXISTS(…)` — the arm fired exactly when it should not have.
+describe('!EXISTS() runs inverted relative to EXISTS()', () => {
+  const pick = (name: string) =>
+    `  top = FIRST(graph-[c:company WHERE \`name\` == "${name}" ORDER BY \`name\`]->)\n`;
+  const both = [
+    '  if EXISTS(top-[:notes]->) { write graph-[:note]-> { text: "has" } }',
+    '  if !EXISTS(top-[:notes]->) { write graph-[:note]-> { text: "none" } }',
+    '  if !EXISTS(top-[n:notes WHERE `text` == "Nope"]->) { write graph-[:note]-> { text: "no nope" } }',
+    '  if !!EXISTS(top-[:notes]->) { write graph-[:note]-> { text: "twice" } }',
+  ].join('\n');
+
+  it('a record with notes: EXISTS fires, !EXISTS does not', async () => {
+    expect(await answers(pick('Acme') + both)).toEqual(['has', 'no nope', 'twice']);
+  });
+
+  it('a record with none: !EXISTS fires, EXISTS does not', async () => {
+    expect(await answers(pick('Globex') + both)).toEqual(['none', 'no nope']);
+  });
+
+  it('as a value, IF !EXISTS(…) takes the other branch', async () => {
+    const body = pick('Acme') + '  shown = IF !EXISTS(top-[:notes]->) THEN "empty" ELSE "has" END\n  write graph-[:note]-> { text: shown }';
+    expect(await answers(body)).toEqual(['has']);
+  });
+});

@@ -8,7 +8,7 @@
  *   expr       = or_expr
  *   or_expr    = and_expr ('OR' and_expr)*
  *   and_expr   = not_expr ('AND' not_expr)*
- *   not_expr   = 'NOT' not_expr | compare
+ *   not_expr   = ('NOT' | '!') not_expr | compare
  *   compare    = additive (comp_op additive)?
  *   additive   = mult (('+' | '-') mult)*
  *   mult       = unary (('*' | '/') unary)*
@@ -491,7 +491,7 @@ function serializeConditional(expr: Expression & { type: 'conditional' }, ser: (
 // Hand-rolled Pratt parser for performance and small bundle size.
 
 interface Token {
-  type: 'ident' | 'string' | 'number' | 'op' | 'paren' | 'comma' | 'keyword' | 'special' | 'traverse' | 'lbracket' | 'rbracket' | 'lbrace' | 'rbrace' | 'colon' | 'eof';
+  type: 'ident' | 'string' | 'number' | 'op' | 'paren' | 'comma' | 'keyword' | 'special' | 'traverse' | 'lbracket' | 'rbracket' | 'lbrace' | 'rbrace' | 'colon' | 'unknown' | 'eof';
   value: string;
   pos: number;
   end: number;
@@ -1285,6 +1285,11 @@ function tokenize(input: string): Token[] {
     if (input[i] === '!' && input[i + 1] === '=') {
       tokens.push({ type: 'op', value: '!=', pos, end: i + 2 }); i += 2; continue;
     }
+    // A lone `!` is TypeScript's spelling of NOT — the parser folds it into
+    // the same `not` node, so `!x` and `NOT x` are one expression.
+    if (input[i] === '!') {
+      tokens.push({ type: 'keyword', value: 'NOT', pos, end: i + 1 }); i++; continue;
+    }
     if (input[i] === '>' && input[i + 1] === '=') {
       tokens.push({ type: 'op', value: '>=', pos, end: i + 2 }); i += 2; continue;
     }
@@ -1333,8 +1338,12 @@ function tokenize(input: string): Token[] {
       tokens.push({ type: 'op', value: '.', pos, end: i + 1 }); i++; continue;
     }
 
-    // Unknown character — skip
-    i++;
+    // Anything else has no meaning here. It is kept as a token rather than
+    // skipped — a dropped character silently changes what the expression
+    // says (a skipped `!` inverted a condition) — and the parser refuses it.
+    // Completion tokenizes half-typed text too, so the refusal belongs to the
+    // parser, not here.
+    tokens.push({ type: 'unknown', value: input[i], pos, end: i + 1 }); i++;
   }
 
   tokens.push({ type: 'eof', value: '', pos: input.length, end: input.length });
@@ -1345,6 +1354,35 @@ export class ParseError extends Error {
   constructor(message: string, public pos: number) {
     super(message);
   }
+}
+
+/** Characters an author plausibly reaches for from another language, with
+ *  what this grammar spells them as. */
+const UNRECOGNISED_HINTS: Record<string, string> = {
+  '&': "write AND (not & or &&)",
+  '|': "write OR (not | or ||)",
+  '?': 'write IF … THEN … ELSE … END (there is no ? : conditional)',
+  ';': 'an expression takes no ; separator',
+  '\\': 'a backslash escapes only inside a quoted string',
+  '%': 'there is no % operator',
+  '\u2013': "write the ASCII minus '-' (this is an en dash)",
+  '\u2014': "write the ASCII minus '-' (this is an em dash)",
+  '\u2212': "write the ASCII minus '-' (this is a typographic minus sign)",
+  '\u201C': 'write a straight double quote " (this is a curly quote)',
+  '\u201D': 'write a straight double quote " (this is a curly quote)',
+  '\u2018': "write a straight single quote ' (this is a curly quote)",
+  '\u2019': "write a straight single quote ' (this is a curly quote)",
+};
+
+/** The position rides on the error (a movement diagnostic's span points at
+ *  the character), not in the text: a caller may have rewritten the slot
+ *  before parsing, so an offset in the message could name the wrong column. */
+function unrecognisedCharacter(token: Token): ParseError {
+  const hint = UNRECOGNISED_HINTS[token.value];
+  return new ParseError(
+    `Unrecognised character '${token.value}'${hint !== undefined ? ` — ${hint}` : ''}`,
+    token.pos,
+  );
 }
 
 class Parser {
@@ -1390,6 +1428,8 @@ class Parser {
     this.allEdges = allEdges;
     this.currentNodeTypeId = startNodeTypeId;
     this.tgMode = tgMode ?? false;
+    const unknown = tokens.find(t => t.type === 'unknown');
+    if (unknown !== undefined) throw unrecognisedCharacter(unknown);
   }
 
   /**
@@ -1490,6 +1530,9 @@ class Parser {
     return left;
   }
 
+  /** `NOT x` and `!x` are one operator (the tokenizer folds `!` to NOT), at
+   *  NOT's precedence — so `!a = b` is `NOT (a = b)`, not TypeScript's
+   *  `(!a) === b`, and `serialize`'s `NOT` spelling round-trips either. */
   private parseNot(): Expression {
     if (this.match('keyword', 'NOT')) {
       return { type: 'not', expression: this.parseNot() };
