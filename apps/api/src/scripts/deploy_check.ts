@@ -44,7 +44,7 @@ function outcomeHeading(outcome: DeployCheckOutcome): string {
     case 'warned':
       return 'Kept on an older version — not clean under the current one';
     case 'refused':
-      return 'NO LONGER VALIDATING under their own version (a bug — report it)';
+      return 'NOT VALIDATING under their own version (unless marked already failing, a bug — report it)';
     case 'unverified':
       return 'Could not be checked — kept where they were';
     default:

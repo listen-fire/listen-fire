@@ -87,6 +87,7 @@ function fakeStore(input: {
     // Read the pins fresh, as the real store does.
     listMovements: async () =>
       input.movements.map((m) => ({ ...m, languageVersion: pins.get(m.id) ?? m.languageVersion })),
+    sourceHash: (source) => `hash:${source}`,
     validate: async ({ movement: m, languageVersion }) => ({
       diagnostics: input.verdicts[m.id]?.[languageVersion] ?? [],
       gaps: [],
@@ -166,6 +167,29 @@ describe('the deploy check', () => {
       expect.objectContaining({ outcome: 'refused', detail: 'line 3: unknown field' }),
     );
     expect(store.events.map((e) => e.kind)).toEqual([VALIDATION_ISSUE.typeId, RELEASE_APPLIED.typeId]);
+  });
+
+  it('says so when a refused movement was already failing under its pin before the release', async () => {
+    const store = fakeStore({
+      movements: [
+        movement({
+          id: 'was-broken',
+          validityStatus: 'invalid',
+          validityCheckedAgainst: 1,
+          validitySourceHash: 'hash:source of was-broken',
+        }),
+      ],
+      verdicts: { 'was-broken': { 1: [diagnostic('error', 'unknown field')] } },
+    });
+
+    const summary = await runDeployCheck(store.deps);
+
+    expect(summary?.automations[0]).toEqual(
+      expect.objectContaining({
+        outcome: 'refused',
+        detail: 'already failing before this release: line 3: unknown field',
+      }),
+    );
   });
 
   it('leaves a movement already on the current version alone', async () => {

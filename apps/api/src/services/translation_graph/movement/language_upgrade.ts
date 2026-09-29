@@ -161,6 +161,8 @@ export interface DeployCheckDeps {
   alreadyRan(input: { tag: string; languageRelease: string }): Promise<boolean>;
   listMovements(): Promise<MovementRow[]>;
   validate: ValidateUnder;
+  /** The content hash validity records name their source by. */
+  sourceHash(source: string): string;
   /** Store a validation as the movement's validity under `checkedAgainst`. */
   recordValidity(input: {
     movement: MovementRow;
@@ -256,17 +258,30 @@ async function checkOne(input: {
   await deps.recordValidity({ movement, validation: underPin, checkedAgainst: pin });
   const pinErrors = errorsOf(underPin.diagnostics);
   if (pinErrors.length > 0) {
-    logger.error(
-      '[DeployCheck] PRESERVATION FAILURE: an automation no longer validates under its own language version',
-      {
-        movementId: movement.id,
-        teamId: movement.teamId,
-        name: movement.name,
-        languageVersion: pin,
-        diagnostics: pinErrors,
-      },
-    );
-    const detail = diagnosticsText(pinErrors);
+    // Text already recorded as failing under this same version was broken
+    // before the release (saved with errors, or a connected system changed
+    // shape) — the release preserved it faithfully. Anything else is a
+    // release that failed to preserve a version's behaviour.
+    const alreadyFailing =
+      movement.validityStatus === 'invalid' &&
+      movement.validityCheckedAgainst === pin &&
+      movement.validitySourceHash === deps.sourceHash(movement.source);
+    const log = {
+      movementId: movement.id,
+      teamId: movement.teamId,
+      name: movement.name,
+      languageVersion: pin,
+      diagnostics: pinErrors,
+    };
+    if (alreadyFailing) {
+      logger.warn('[DeployCheck] an automation that already failed validation still does', log);
+    } else {
+      logger.error(
+        '[DeployCheck] PRESERVATION FAILURE: an automation no longer validates under its own language version',
+        log,
+      );
+    }
+    const detail = `${alreadyFailing ? 'already failing before this release: ' : ''}${diagnosticsText(pinErrors)}`;
     await emitSafely(deps, () => ({
       teamId: movement.teamId,
       kind: VALIDATION_ISSUE,
@@ -411,7 +426,7 @@ function releaseAppliedReason(
   return (
     `Release ${tag} applied. Moved to ${describeLanguageVersion(current)}: ${counts.advanced}. ` +
     `Already on it: ${counts.current}. Stayed on an older version with warnings: ${counts.warned}. ` +
-    `No longer validating: ${counts.refused}. Could not be checked: ${counts.unverified}.`
+    `Not validating: ${counts.refused}. Could not be checked: ${counts.unverified}.`
   );
 }
 
@@ -437,6 +452,7 @@ export function liveDeployCheckDeps(release: DeployCheckRelease): DeployCheckDep
     },
     listMovements: listAllMovementRows,
     validate: validateUnderLiveCatalog,
+    sourceHash: movementSourceHash,
     recordValidity: async ({ movement, validation, checkedAgainst }) => {
       const assessment = assessMovementValidity({
         diagnostics: validation.diagnostics,
