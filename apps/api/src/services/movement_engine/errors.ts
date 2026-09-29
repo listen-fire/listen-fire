@@ -7,6 +7,9 @@
 export type MovementEngineErrorCode =
   | 'MOVENG_PARSE'
   | 'MOVENG_CHECK'
+  // The movement is pinned to a language version this release does not
+  // support. Refused before parsing — never run as the current version.
+  | 'MOVENG_LANGUAGE_VERSION'
   | 'MOVENG_NOT_FOUND'
   | 'MOVENG_UNSUPPORTED'
   | 'MOVENG_RUNTIME'

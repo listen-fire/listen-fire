@@ -159,6 +159,7 @@ export async function runMovementTestRun(
   try {
     await runMovement({
       source: movementRow.source,
+      languageVersion: movementRow.languageVersion,
       ...(trigger.firedMovementName !== null
         ? { movementName: trigger.firedMovementName }
         : {}),

@@ -72,6 +72,9 @@ import {
   DiagnosticCodes,
   MovementParseError,
   checkProgramWithLink,
+  CURRENT_LANGUAGE_VERSION,
+  languageVersionDiagnostic,
+  diagnosticSeverity,
   credentialArgOf,
   aggregatedBarePath,
   bareName,
@@ -103,6 +106,7 @@ import {
 import type {
   AwaitExpression,
   AwaitSource,
+  LanguageVersion,
   ClosureExpression,
   DurationLiteral,
   RValue,
@@ -286,6 +290,14 @@ const CALLBACK_LANDING_SHAPE = 'callback';
 export interface RunMovementInput {
   /** The movement program text (`.mvt` source). */
   source: string;
+  /**
+   * The language version the movement is pinned to — the run compiles and
+   * executes under it, and it is the run context's `languageVersion` for every
+   * plugin and adapter the run calls (`currentLanguageVersion()`). Absent ⇒
+   * the current version. A version this release does not support is refused
+   * (MOVENG_LANGUAGE_VERSION), never run as the current one.
+   */
+  languageVersion?: LanguageVersion;
   /** Which movement to run; optional when the program declares exactly one. */
   movementName?: string;
   /** The triggering event — the movement parameter's position. */
@@ -601,7 +613,12 @@ export async function runMovement(input: RunMovementInput): Promise<MovementRunR
   // third-party call ceiling (run_scope.ts). A fifth entry point that
   // forgets `withRunCallLedger` loses the safeguard silently, so they all
   // wrap here rather than deeper.
-  return withRunCallLedger(() => new Interpreter(input, link).run(program));
+  return withRunCallLedger(() => new Interpreter(input, link).run(program), runScopeOf(input));
+}
+
+/** The run context every entry point opens its segment under. */
+function runScopeOf(input: RunMovementInput): { languageVersion: LanguageVersion } {
+  return { languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION };
 }
 
 /**
@@ -620,20 +637,30 @@ const RETIRED_BUT_STILL_RUNNABLE = new Set<string>([DiagnosticCodes.WRITE_SHAPE_
  *  errors `runMovement` does. Shared by run + resume so a resume re-validates
  *  the pinned source exactly as a fresh run did. */
 function parseAndCheck(input: RunMovementInput): { program: Program; link?: ProgramLink } {
+  const languageVersion = input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  // The pin is answered before the source is read: a version this release
+  // cannot honour must fail as exactly that, not as whatever the current
+  // grammar makes of the text.
+  const versionDiagnostic = languageVersionDiagnostic(languageVersion);
+  if (versionDiagnostic !== undefined && diagnosticSeverity(versionDiagnostic) === 'error') {
+    throw new MovementEngineError('MOVENG_LANGUAGE_VERSION', versionDiagnostic.message, [
+      versionDiagnostic,
+    ]);
+  }
   let program: Program;
   try {
-    program = parseProgram(input.source);
+    program = parseProgram(input.source, { languageVersion });
   } catch (e) {
     if (e instanceof MovementParseError) {
       throw new MovementEngineError('MOVENG_PARSE', e.message);
     }
     throw e;
   }
-  const { diagnostics: allDiagnostics, link } = checkProgramWithLink(
-    program,
-    input.catalog,
-    input.resolveFile !== undefined ? { resolveFile: input.resolveFile } : undefined,
-  );
+  const { diagnostics: allDiagnostics, link } = checkProgramWithLink(program, input.catalog, {
+    languageVersion,
+    ...(input.resolveFile !== undefined ? { resolveFile: input.resolveFile } : {}),
+  });
+
   const diagnostics = allDiagnostics.filter(
     (d) => (d.severity ?? 'error') === 'error' && !RETIRED_BUT_STILL_RUNNABLE.has(d.code),
   );
@@ -708,6 +735,7 @@ export async function resumeMovement(input: ResumeMovementInput): Promise<Moveme
         ? { deferRaceSettlement: input.deferRaceSettlement }
         : {}),
     }),
+    runScopeOf(input),
   );
 }
 
@@ -730,6 +758,7 @@ export async function settleRaceFrame(
       state: input.state,
       frameAddress: input.frameAddress,
     }),
+    runScopeOf(input),
   );
 }
 
@@ -751,6 +780,7 @@ export async function fireCallbackBody(
       values: input.values,
       callIndex: input.callIndex,
     }),
+    runScopeOf(input),
   );
 }
 
@@ -1574,6 +1604,14 @@ class Interpreter {
     private readonly link?: ProgramLink,
   ) {
     this.trace = input.trace ?? [];
+    // A deprecated pin runs, and says so on the run's own record. (An
+    // unsupported one never gets this far — parseAndCheck refused it.)
+    const versionWarning = languageVersionDiagnostic(
+      input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
+    );
+    if (versionWarning !== undefined) {
+      this.trace.push({ kind: 'warning', code: versionWarning.code, message: versionWarning.message });
+    }
     this.pinnedNow = input.firedAt ?? new Date();
     this.resolveAdapterFn =
       input.resolveAdapter ??

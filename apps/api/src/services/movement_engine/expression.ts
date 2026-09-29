@@ -1147,6 +1147,12 @@ export type MovementTraceEntry =
       expectedEntities?: number[];
     }
   | { kind: 'ai'; prompt: string; hasValue: boolean }
+  /**
+   * A warning about the run as a whole that did not stop it — today, a
+   * movement pinned to a deprecated language version. `code` is the
+   * diagnostic's; `message` names the version and what to do.
+   */
+  | { kind: 'warning'; code: string; message: string }
   | { kind: 'gate'; outcome: boolean }
   | { kind: 'block'; root: string; positions: number };
 

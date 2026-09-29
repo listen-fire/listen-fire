@@ -14,6 +14,7 @@
 // interpretability check (movement_engine/interpretable.ts) makes that a
 // last line of defence, not the discovery mechanism.
 
+import type { LanguageVersion } from 'movement-lang';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { describeError } from '../../../lib/utils/error';
 import { logger } from '../../logger';
@@ -29,6 +30,7 @@ import {
   type ParkSink,
 } from '../../movement_engine/run';
 import type { MovementTraceEntry } from '../../movement_engine/expression';
+import { MovementEngineError } from '../../movement_engine/errors';
 import { makeRecorderParkSink } from '../../movement_engine/park_sink';
 import {
   makeRecorderCallbackSink,
@@ -89,6 +91,8 @@ async function interpretMovementFiring(input: {
   });
   return runMovement({
     source: input.movementRow.source,
+    // Compile and run under the movement's pin, never the current version.
+    languageVersion: input.movementRow.languageVersion,
     ...(input.movementName !== undefined ? { movementName: input.movementName } : {}),
     event: input.event,
     teamId: input.teamId,
@@ -170,6 +174,7 @@ async function refreshValidityOnContradiction(input: {
     const validation = await validateMovementForTeam({
       teamId: input.teamId as unknown as string,
       source: fresh.source,
+      languageVersion: fresh.languageVersion,
     });
     const assessment = assessMovementValidity({
       diagnostics: validation.diagnostics,
@@ -180,6 +185,7 @@ async function refreshValidityOnContradiction(input: {
       status: assessment.status,
       reason: assessment.reason,
       sourceHash: movementSourceHash(fresh.source),
+      checkedAgainst: fresh.languageVersion,
     });
   } catch (err) {
     logger.warn('[MovementEngine] validity re-check failed', {
@@ -187,6 +193,29 @@ async function refreshValidityOnContradiction(input: {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * The language version a parked run's movement is pinned to. A resume or a
+ * callback segment runs under the same pin as the firing that started it; with
+ * the movement gone there is no pin to honour, so the segment is refused rather
+ * than run as the current version.
+ */
+async function pinnedLanguageVersion(input: {
+  teamId: TeamId;
+  movementId: string;
+}): Promise<LanguageVersion> {
+  const row = await getMovementRow({
+    teamId: input.teamId as unknown as string,
+    id: input.movementId,
+  });
+  if (!row) {
+    throw new MovementEngineError(
+      'MOVENG_NOT_FOUND',
+      `the automation this run belongs to (${input.movementId}) no longer exists, so the language version it is written against is unknown`,
+    );
+  }
+  return row.languageVersion;
 }
 
 type MovementFiringInput = {
@@ -482,11 +511,13 @@ async function resumeMovementFiringInContext(
   // adopted run id (runs-and-cancel spec §cancel).
   const cancelGate = makeDbCancelGate(recorder.triggerRunId);
   try {
+    const languageVersion = await pinnedLanguageVersion(input);
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
     });
     const commonInput = {
       source: input.pinnedSource,
+      languageVersion,
       ...(movementName !== undefined ? { movementName } : {}),
       event: input.event,
       teamId: input.teamId,
@@ -683,12 +714,14 @@ async function fireCallbackFiringInContext(
   const callbackSink = makeRecorderCallbackSink(recorder, input.teamId);
   const cancelGate = makeDbCancelGate(recorder.triggerRunId);
   try {
+    const languageVersion = await pinnedLanguageVersion(input);
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
     });
     const fire = () =>
       fireCallbackBody({
         source: input.pinnedSource,
+        languageVersion,
         ...(movementName !== undefined ? { movementName } : {}),
         event: input.event,
         teamId: input.teamId,

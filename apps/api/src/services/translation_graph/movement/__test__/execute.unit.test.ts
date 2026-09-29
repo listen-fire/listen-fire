@@ -365,7 +365,53 @@ describe('runMovementFiring', () => {
   });
 });
 
+describe('a firing runs under the movement\'s language version pin', () => {
+  it('hands the engine the saved row\'s pin, not the current version', async () => {
+    runMovement.mockResolvedValue({ movementName: 'intake', writes: [], extractionSites: {}, trace: [] });
+    await runMovementFiring({
+      teamId: TEAM,
+      triggerId: 't-1',
+      triggerName: 'movement/intake_file/intake',
+      movementRow: movementRow({ languageVersion: 1 }) as never,
+      event,
+      recordingTriggerType: 'webhook',
+    });
+    expect(runMovement).toHaveBeenCalledWith(expect.objectContaining({ languageVersion: 1 }));
+  });
+});
+
 describe('resumeMovementFiring', () => {
+  // A resume reads its movement's language version pin off the movement row.
+  beforeEach(() => {
+    getMovementRow.mockResolvedValue(movementRow({ languageVersion: 1 }));
+  });
+
+  const resumeInput = {
+    teamId: TEAM,
+    triggerId: 't-1',
+    triggerName: 'movement/intake_file/intake',
+    pinnedSource: CLEAN_SOURCE,
+    movementVersionId: 'mv-1',
+    runId: 'run-1' as never,
+    movementId: 'mov-1',
+    event,
+    recordingTriggerType: 'webhook' as const,
+    state: { address: 'stmt 0', scopeChain: [] } as never,
+  };
+
+  it('resumes under the movement\'s language version pin', async () => {
+    resumeMovement.mockResolvedValue({ movementName: 'intake', writes: [], extractionSites: {}, trace: [] });
+    await resumeMovementFiring({ ...resumeInput, answer: true });
+    expect(resumeMovement).toHaveBeenCalledWith(expect.objectContaining({ languageVersion: 1 }));
+  });
+
+  it('refuses to resume when the movement (and so its pin) is gone — never the current version', async () => {
+    getMovementRow.mockResolvedValue(null);
+    const outcome = await resumeMovementFiring({ ...resumeInput, answer: true });
+    expect(resumeMovement).not.toHaveBeenCalled();
+    expect(outcome.error).toMatch(/MOVENG_NOT_FOUND: .*language version it is written against is unknown/);
+  });
+
   it('a resumed run that failed after writing records those writes too', async () => {
     const partial = {
       movementName: 'intake',

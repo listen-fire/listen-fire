@@ -71,7 +71,10 @@ import {
   saveMovement,
   deleteMovement,
 } from '../../../services/translation_graph/movement/provision';
-import { listMovementRows } from '../../../services/translation_graph/movement/store';
+import {
+  getMovementRow,
+  listMovementRows,
+} from '../../../services/translation_graph/movement/store';
 import { movementSourceHash } from '../../../services/translation_graph/movement/version_store';
 import { applyContentEdit } from '../../../services/translation_graph/movement/edit';
 import {
@@ -88,7 +91,13 @@ import {
 import { abortRun } from '../../../services/interaction/operator';
 import { MovementEngineError } from '../../../services/movement_engine/errors';
 import { UserService } from '../../../services/user';
-import { getMovementCompletions } from 'movement-lang';
+import {
+  CURRENT_LANGUAGE_VERSION,
+  getMovementCompletions,
+  languageVersionView,
+  type LanguageVersion,
+  type LanguageVersionView,
+} from 'movement-lang';
 
 import { registerRoute } from '../../mcp/registry';
 import {
@@ -662,7 +671,7 @@ const listMovementsHandler: RequestHandler = async (_req, res) => {
       movements: movements.map((m) => {
         const token = tokens.get(m.id);
         if (!token) throw new Error(`storyTokensForMovements did not mint a token for movement ${m.id}`);
-        return { ...m, storyUrl: storyUrl(token) };
+        return { ...withLanguageVersionView(m), storyUrl: storyUrl(token) };
       }),
     });
   } catch (err) {
@@ -697,21 +706,64 @@ const getMovementHandler: RequestHandler = jsonHandler(getMovementSchema, 'param
  * exists because someone asked for it is one fewer thing lying around. Reused
  * once minted, so the link an agent hands out is stable across conversations.
  */
-async function withStoryUrl<T extends { id: string }>(
-  teamId: string,
-  movement: T,
-): Promise<T & { storyUrl: string }> {
+async function withStoryUrl<
+  T extends { id: string; languageVersion: LanguageVersion; validityCheckedAgainst: LanguageVersion | null },
+>(teamId: string, movement: T) {
   const token = await storyTokenForMovement({ teamId, movementId: movement.id });
-  return { ...movement, storyUrl: storyUrl(token) };
+  return { ...withLanguageVersionView(movement), storyUrl: storyUrl(token) };
 }
 
-const validateMovementSchema = z.object({ source: z.string(), team: z.string().optional() });
+/**
+ * An automation's language version as an agent reads it: the pin and the
+ * version its last validation ran under, each by integer and name.
+ */
+function withLanguageVersionView<
+  T extends { languageVersion: LanguageVersion; validityCheckedAgainst: LanguageVersion | null },
+>(
+  movement: T,
+): Omit<T, 'languageVersion' | 'validityCheckedAgainst'> & {
+  languageVersion: LanguageVersionView;
+  checkedAgainst: LanguageVersionView | null;
+} {
+  const { languageVersion, validityCheckedAgainst, ...rest } = movement;
+  return {
+    ...rest,
+    languageVersion: languageVersionView(languageVersion),
+    checkedAgainst:
+      validityCheckedAgainst === null ? null : languageVersionView(validityCheckedAgainst),
+  };
+}
+
+const validateMovementSchema = z.object({
+  source: z.string(),
+  team: z.string().optional(),
+  automation: z.string().optional(),
+  languageVersion: z.number().int().optional(),
+});
 
 const validateMovementHandler: RequestHandler = jsonHandler(
   validateMovementSchema,
   'body',
-  async (input) =>
-    validateMovementForTeam({ teamId: await resolveToolTeam(input.team), source: input.source }),
+  async (input) => {
+    const teamId = await resolveToolTeam(input.team);
+    // An explicit version wins; else a saved automation validates under its
+    // pin; else new text validates under the current version.
+    let languageVersion = input.languageVersion;
+    if (languageVersion === undefined && input.automation !== undefined) {
+      const row = await getMovementRow({ teamId, id: input.automation }).catch(() => null);
+      if (!row) return { error: `No automation '${input.automation}' in this team.` };
+      languageVersion = row.languageVersion;
+    }
+    const validation = await validateMovementForTeam({
+      teamId,
+      source: input.source,
+      ...(languageVersion !== undefined ? { languageVersion } : {}),
+    });
+    return {
+      ...validation,
+      validatedUnder: languageVersionView(languageVersion ?? CURRENT_LANGUAGE_VERSION),
+    };
+  },
 );
 
 const completionsAtSchema = z.object({ source: z.string(), team: z.string().optional() });
