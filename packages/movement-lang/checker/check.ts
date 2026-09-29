@@ -164,6 +164,7 @@ import {
   shapeToSchema,
   type SuppliedSurface,
   surfaceMisfit,
+  textRepair,
 } from './conformance';
 import {
   EffectFrame,
@@ -1819,7 +1820,10 @@ function shapeExtractGraph(
     );
   }
   for (const field of shape.fields) {
-    const explicit = properties[field.name];
+    // The schema carries `<T | null>` as `T | absent`; an extraction keeps the
+    // surface type and the author's `| null` apart, as an inline field does.
+    const declared = properties[field.name];
+    const explicit = declared !== undefined ? stripAbsent(declared) : undefined;
     graph.properties.set(field.name, {
       span: field.span,
       ...(field.description !== undefined
@@ -4623,10 +4627,23 @@ class Checker {
     targetType: FieldType | undefined,
     valueType: FieldType | undefined,
     span: Span,
-    options?: { relationship?: boolean },
+    options?: { relationship?: boolean; declared?: boolean },
   ): void {
     if (targetType === undefined || valueType === undefined) return;
     if (isRecordType(valueType) && options?.relationship === true) return;
+    // A field a node DECLARATION types holds what it says, as a parameter
+    // typed on the declaration does (`surfaceMisfit`): the program wrote the
+    // type, so there is no system on the far side to render a number or a
+    // yes/no into text. A system's field keeps the lenient write rule.
+    if (options?.declared === true && valueType !== 'absent' && !isRecordType(valueType)) {
+      if (fieldAssignable(valueType, targetType)) return;
+      this.report(
+        DiagnosticCodes.WRITE_FIELD_TYPE,
+        `'${fieldName}' on ${subject} is ${describeFieldType(targetType)}, and this is ${describeFieldType(valueType)}${textRepair(valueType, targetType)}`,
+        span,
+      );
+      return;
+    }
     if (fieldTypeCompatible(valueType, targetType)) return;
     if (isRecordType(valueType)) {
       this.report(
@@ -5590,6 +5607,9 @@ class Checker {
     let handle: PositionTypeRef | undefined;
     /** The target is an edge of a node this run built — the run's own graph. */
     let local = false;
+    /** …whose landings are a node declaration's records (a collecting node's
+     *  `<Entry>` entries): their fields are this program's own types. */
+    let declaredTarget = false;
     /** The write form's parent paths (linked / tuple) — required-edge satisfaction. */
     const parents: Array<{ type?: string; edge: string }> = [];
 
@@ -5607,6 +5627,7 @@ class Checker {
       root = linked.root;
       handle = linked.handle;
       local = linked.local === true;
+      declaredTarget = linked.declared === true;
       if (linked.description !== undefined) rootDescription = linked.description;
       if (linked.resolved) {
         parents.push({
@@ -5771,7 +5792,9 @@ class Checker {
       // one legal home (S21): fill tolerates a missing source (it only writes
       // when the value is there). A traversal-as-gate discharges it upstream
       // instead. This is the checker firing at the REQUIRED-VALUE site, per F13.
-      if (isMaybeAbsent(valueType) && field.semantics !== 'fill') {
+      // A field that may itself be absent (a declaration's `<T | null>`) takes
+      // one as-is — TS's `x: T | undefined` accepting `T | undefined`.
+      if (isMaybeAbsent(valueType) && field.semantics !== 'fill' && !isMaybeAbsent(targetType)) {
         this.report(
           DiagnosticCodes.ABSENT_REQUIRED,
           field.spread !== undefined
@@ -5789,6 +5812,7 @@ class Checker {
         // above already says; refusing it here would be a second, harsher word
         // about the same line.
         relationship: writtenSchema?.edges[field.name] !== undefined,
+        declared: declaredTarget,
       });
       this.checkEnumLiteralWrite(field.value, {
         targetType,
@@ -6220,7 +6244,14 @@ class Checker {
     edgeName: string,
     span: Span,
     subject?: string,
-  ): { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string; local?: true } {
+  ): {
+    root?: WritableRootSchema;
+    handle?: PositionTypeRef;
+    description?: string;
+    local?: true;
+    /** The landing is a node declaration's (`<Entry>`), not a system's. */
+    declared?: true;
+  } {
     const edge = from.edges?.[edgeName];
     if (edge === undefined) {
       this.reportUndeclaredLocalEdge({ from, edgeName, span, ...(subject !== undefined ? { subject } : {}) });
@@ -6241,8 +6272,10 @@ class Checker {
     // happens, and silence is the honest answer for what it may set.
     if (schema === undefined || landing === undefined) return { local: true, description };
     const nested = edge.structural === true ? this.nestedLocalEdges(landing, schema) : undefined;
+    const landingInstance = instanceOfType(landing);
     return {
       local: true,
+      ...(landingInstance !== undefined && isDeclaredNode(landingInstance) ? { declared: true as const } : {}),
       description,
       root: {
         fields: schema.properties,
@@ -6355,6 +6388,8 @@ class Checker {
      *  it, so the write touches nothing the effect row carries and no bound
      *  parent can stand in for a component of its identity. */
     local?: true;
+    /** …and that node's edge lands on a node declaration's records. */
+    declared?: true;
     /** The fully-typed resolution — tuple agreement and required-edge satisfaction. */
     resolved?: {
       instanceToken: object;
@@ -8841,7 +8876,7 @@ class Checker {
       );
       if (resolved !== undefined) {
         const properties = schema.positions[key]?.properties;
-        if (properties) properties[field.name] = resolved;
+        if (properties) properties[field.name] = field.nullable === true ? (maybeAbsent(resolved) ?? resolved) : resolved;
       }
     }
     for (const child of node.children) {
@@ -9146,7 +9181,12 @@ class Checker {
   ): { valueType?: FieldType; parsed?: Expression } {
     const trimmed = slot.raw.trim();
     if (BARE_IDENT.test(trimmed)) {
-      if (EXPR_LITERALS.has(trimmed.toUpperCase())) return {};
+      if (EXPR_LITERALS.has(trimmed.toUpperCase())) {
+        // `TRUE` is a boolean on this road as on every other: a slot that
+        // compares types (a declared text field) must see it as one.
+        const literal = scalarLiteralType(trimmed);
+        return literal !== undefined ? { valueType: literal } : {};
+      }
       this.resolveNameWithFields(trimmed, slot.span, scope, options?.fields);
       // A bare name short-circuits the parse, but it still HAS a value type —
       // the binding's own. Without this its absence would die here, at the very

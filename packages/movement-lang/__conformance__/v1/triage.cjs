@@ -51,4 +51,10 @@ exports.triage = [
     test: 'hover on NUMBER before `(` mentions the coercer (no namespace duality)',
     reason: ACCEPTED,
   },
+  {
+    file: 'checker/__test__/block_returns.unit.test.ts',
+    test: "the same over a local node's entries",
+    reason:
+      "the test uses COALESCE as its stand-in for a call the checker cannot type; COALESCE now types as the kind its arguments share (a bug fix under every version, so a yes/no reaching a declared text field is refused), and a typed return over a lazy entry meets the order rule exactly as `return f.`Name`` already did under v1",
+  },
 ];

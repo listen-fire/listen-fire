@@ -506,6 +506,8 @@ export type PositionTypeRef =
       narrowsEvent?: string;
       display?: string;
       address?: EventAddress;
+      /** Fields a guard in scope has proven present — as on `extract`. */
+      present?: ReadonlySet<string>;
     }
   /** A union-typed position (`crm.record`); narrowed by `IS` tests. */
   | {
@@ -902,7 +904,10 @@ export function maybeAbsent(type: FieldType | undefined): FieldType | undefined 
   }
 }
 
-/** The present component of a possibly-absent type — `T | absent → T`, `T → T`. */
+/** The present component of a possibly-absent type — `T | absent → T`, `T → T`.
+ *  A surface type in is a surface type out, as with `maybeAbsent`. */
+export function stripAbsent(type: SchemaFieldType): SchemaFieldType;
+export function stripAbsent(type: FieldType): FieldType;
 export function stripAbsent(type: FieldType): FieldType {
   const variant = variantOf(type);
   switch (variant.kind) {
@@ -955,34 +960,37 @@ export function isMaybeAbsent(type: FieldType | undefined): boolean {
 }
 
 /**
- * COALESCE on the ABSENCE axis — the one axis this layer types it on.
+ * COALESCE, typed as TypeScript types `a ?? b`.
  *
- * It answers the first argument that HAS a value, so it discharges absence
- * exactly when one argument definitely has one: a literal, or any present-typed
- * expression. `null` is not such an argument — it IS the absence — so
- * `COALESCE(x, null)` may still be absent.
+ * ABSENCE: it answers the first argument that HAS a value, so it discharges
+ * absence exactly when one argument definitely has one: a literal, or any
+ * present-typed expression. `null` is not such an argument — it IS the
+ * absence — so `COALESCE(x, null)` may still be absent. When EVERY argument may
+ * be absent, so may the result: `COALESCE(FIRST(x))` is `FIRST(x)` with a
+ * longer name, and it is refused wherever the bare form is. Answering
+ * "untyped" there was laundering — information destruction reading as a
+ * guarantee.
  *
- * When EVERY argument may be absent, so may the result: `COALESCE(FIRST(x))` is
- * `FIRST(x)` with a longer name, and it is refused wherever the bare form is.
- * Answering "untyped" there was laundering — information destruction reading as
- * a guarantee.
+ * KIND: the kind the arguments share (`null` aside), so
+ * `COALESCE(e.diverse, FALSE)` is a boolean wherever it goes — a text field
+ * declared on a node refuses it, as it refuses `FALSE`. Arguments of different
+ * kinds have no one kind (the model has no unions), and the result is then
+ * untyped, as it always was.
  *
- * An UNTYPED argument is the third answer, and it leaves the result unknown:
- * nothing here knows whether it answers, so this manufactures neither a
- * presence nor an absence (unknown stays unknown, as in TS).
- *
- * The value KIND is not inferred — a discharged result is untyped, exactly as
- * every other bare built-in's is, and a maybe-absent one carries the first
- * maybe-absent argument's shape (a real COALESCE's arguments agree).
+ * An UNTYPED argument leaves the result unknown: nothing here knows whether it
+ * answers, or what, so this manufactures neither a presence nor a kind
+ * (unknown stays unknown, as in TS).
  */
-function coalesceAbsence(args: Array<FieldType | undefined>): FieldType | undefined {
-  const definitelyPresent = (type: FieldType | undefined): boolean =>
-    type !== undefined && type !== 'absent' && !isMaybeAbsent(type);
-  if (args.some(definitelyPresent)) return undefined;
+function coalesceType(args: Array<FieldType | undefined>): FieldType | undefined {
   if (args.some(type => type === undefined)) return undefined;
-  // Every argument may be absent; `absent` is what is left when they were all
-  // the `null` literal — the value that is never there.
-  return args.find(isMaybeAbsent) ?? 'absent';
+  const typed = args as FieldType[];
+  const valued = typed.filter(type => type !== 'absent');
+  // Every argument is the `null` literal — the value that is never there.
+  if (valued.length === 0) return 'absent';
+  const kinds = valued.map(stripAbsent);
+  const shared = kinds.every(kind => fieldTypeEquals(kind, kinds[0]!)) ? kinds[0] : undefined;
+  if (valued.some(type => !isMaybeAbsent(type))) return shared;
+  return shared !== undefined ? maybeAbsent(shared) : valued.find(isMaybeAbsent);
 }
 
 function unwrapList(type: FieldType): FieldType {
@@ -2285,9 +2293,12 @@ export function lookupPropertyType(
 ): FieldType | undefined {
   if (position === undefined) return undefined;
   switch (position.kind) {
-    case 'position':
+    case 'position': {
+      const declared = positionSchemaOfRef(position)?.properties[propertyId];
+      return declared !== undefined && position.present?.has(propertyId) ? stripAbsent(declared) : declared;
+    }
     case 'handle': {
-      const fromShape = position.kind === 'handle' ? position.resultShape[propertyId] : undefined;
+      const fromShape = position.resultShape[propertyId];
       if (fromShape !== undefined) return fromShape;
       return positionSchemaOfRef(position)?.properties[propertyId];
     }
@@ -2599,11 +2610,18 @@ export function narrowPresent(
       if (read === undefined || !isMaybeAbsent(read)) return undefined;
       return { ...position, reads: { ...position.reads, [propertyId]: stripAbsent(read) } };
     }
+    // - a field its schema types `T | absent` (a declaration's `<T | null>`,
+    //   a system's optional field) on a record that is there: the proof
+    //   discharges just that field, as on an extracted record.
+    case 'position': {
+      if (position.present?.has(propertyId)) return undefined;
+      if (!isMaybeAbsent(lookupPropertyType(position, propertyId))) return undefined;
+      return { ...position, present: new Set([...(position.present ?? []), propertyId]) };
+    }
     // Every other position type is unconditionally present — nothing to
     // discharge. Listed rather than defaulted so a new kind that CAN be absent
     // has to say so here.
     case 'meta':
-    case 'position':
     case 'union':
     case 'handle':
     case 'closure':
@@ -3236,9 +3254,9 @@ export class ExpressionTyping {
         // FILE(content, "pdf"|"text") yields a file value; the bare
         // coercers DATE/DATETIME/NUMBER retype their argument to the named
         // category (this is what lets a cross-category comparison clear by
-        // wrapping a side in one); COALESCE is typed on the ABSENCE axis alone
-        // (it is the value-level fallback, so it discharges `T | absent` — and
-        // only when something always answers); namespaced stdlib calls
+        // wrapping a side in one); COALESCE is `a ?? b` — the kind its
+        // arguments share, discharging `T | absent` only when something always
+        // answers (`coalesceType`); namespaced stdlib calls
         // (bridge-folded dotted ids) declare their returns. Additive only —
         // every other bare function stays untyped (silent).
         if (expr.fn === 'isnull' && expr.args.length === 1) {
@@ -3248,7 +3266,7 @@ export class ExpressionTyping {
         if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);
         if (expr.fn === CHUNKS_FUNCTION_ID) return this.typeChunksCall(args);
         if (expr.fn in BARE_COERCER_RETURNS) return BARE_COERCER_RETURNS[expr.fn];
-        if (expr.fn === COALESCE_FUNCTION_ID) return coalesceAbsence(args);
+        if (expr.fn === COALESCE_FUNCTION_ID) return coalesceType(args);
         const stdlibSpec = stdlibFunctionById(expr.fn);
         if (stdlibSpec === undefined) return undefined;
         this.checkStdlibLiteralArgs(stdlibSpec, expr.args);
@@ -4721,7 +4739,7 @@ export class ExpressionTyping {
         const declared = schema.properties[propertyId];
         if (declared !== undefined) {
           this.reportAmbiguousProperty(position, schema, propertyId);
-          return declared;
+          return position.present?.has(propertyId) ? stripAbsent(declared) : declared;
         }
         if (this.reportWriteOnlyProperty(position, schema, propertyId)) return undefined;
         if (this.reportUndescribed(position, schema, `the field '${propertyId}'`)) return undefined;
