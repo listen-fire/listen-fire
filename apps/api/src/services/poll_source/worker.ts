@@ -121,7 +121,11 @@ async function pollOne(
     return { eventCount: 0 }; // not due
   }
 
-  const result = await source.getEvents({ config: row.config, checkpoint: row.checkpoint });
+  const result = await source.getEvents({
+    config: row.config,
+    checkpoint: row.checkpoint,
+    ...(row.movementId !== null ? { movementId: row.movementId } : {}),
+  });
 
   // The Adapter (same slug) supplies the event-type union for discrimination.
   const adapter = hasAdapter(row.kind)

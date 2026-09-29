@@ -54,6 +54,8 @@ import { createDealroomPollSource } from './dealroom/poll';
 import { GMAIL_ADAPTER_TYPE, GMAIL_MANIFEST, createGmailAdapter } from './gmail';
 import { createGmailPollSource } from './gmail/poll';
 import { ASK_ADAPTER_TYPE, ASK_MANIFEST, createAskAdapter } from './ask';
+import { SYSTEM_ADAPTER_TYPE, SYSTEM_MANIFEST, createSystemAdapter } from './system';
+import { createSystemPollSource } from './system/poll';
 
 /**
  * Factory signature: takes per-team + per-consumer context. Adapters that
@@ -164,6 +166,10 @@ const ADAPTER_FACTORIES: Record<string, AdapterFactory> = {
   [GMAIL_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
     createGmailAdapter({ teamId, credentialsId }),
   [ASK_ADAPTER_TYPE]: ({ teamId }) => createAskAdapter({ teamId }),
+  // System — the platform itself as a source (a run failed, …). Credential-
+  // free and read-only; event production lives on its PollSource, which reads
+  // the run table (POLL_SOURCE_FACTORIES below).
+  [SYSTEM_ADAPTER_TYPE]: ({ teamId }) => createSystemAdapter({ teamId }),
 };
 
 /**
@@ -182,6 +188,7 @@ const POLL_SOURCE_FACTORIES: Record<string, PollSourceFactory> = {
     createDealroomPollSource({ teamId, credentialsId }),
   [GMAIL_ADAPTER_TYPE]: ({ teamId, credentialsId }) =>
     createGmailPollSource({ teamId, credentialsId }),
+  [SYSTEM_ADAPTER_TYPE]: ({ teamId }) => createSystemPollSource({ teamId }),
 };
 
 /** Whether a slug (or trigger-kind alias) has a registered PollSource. */
@@ -233,6 +240,7 @@ const ADAPTER_MANIFESTS: Record<string, AdapterManifest> = {
   [DEALROOM_ADAPTER_TYPE]: DEALROOM_MANIFEST,
   [GMAIL_ADAPTER_TYPE]: GMAIL_MANIFEST,
   [ASK_ADAPTER_TYPE]: ASK_MANIFEST,
+  [SYSTEM_ADAPTER_TYPE]: SYSTEM_MANIFEST,
 };
 
 /**

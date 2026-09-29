@@ -101,6 +101,7 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Defer a walk until it is read', chapter: 'traversal', section: 'deferring-a-walk' },
   { intent: 'Run ad hoc: pasted text, files, backfills', chapter: 'system:manual' },
   { intent: 'Run on a schedule (digest, nightly mirror)', chapter: 'system:cron' },
+  { intent: 'Run when another automation fails (post it to Slack)', chapter: 'system:system' },
   { intent: 'Store records in the graph, or run on its changes', chapter: 'system:kg' },
   { intent: 'Query a graph: filter, order, take the top N', chapter: 'traversal', section: 'query-a-graph' },
   { intent: 'Which relationships come back in order; why a filter or sort is refused', chapter: 'traversal', section: 'record-order' },
