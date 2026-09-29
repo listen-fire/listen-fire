@@ -49,6 +49,7 @@ import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../check
 import { EMPTY_ROW, instanceNames, type EffectRow } from '../checker/effects';
 import { terminates } from '../checker/flow';
 import type { ResolveFile } from '../checker/link';
+import type { LanguageVersion } from '../language_version';
 import { EXTRACT_ROOT_NAME, type ExtractNodeType, type PositionTypeRef } from '../checker/typing';
 import type { Scope, ScopeSymbol } from '../checker/scopes';
 import {
@@ -653,6 +654,8 @@ export interface StoryInput {
    */
   validityStatus?: StoryValidityStatus;
   resolveFile?: ResolveFile;
+  /** The saved movement's pin. Absent ⇒ the current version. */
+  languageVersion?: LanguageVersion;
 }
 
 /**
@@ -662,7 +665,10 @@ export interface StoryInput {
 export function storyOf(input: StoryInput): StoryResult {
   let program: Program;
   try {
-    program = parseProgram(input.source);
+    program = parseProgram(
+      input.source,
+      input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : undefined,
+    );
   } catch (e) {
     if (!(e instanceof MovementParseError)) throw e;
     const span: Span = { start: e.loc, end: e.loc };
@@ -675,6 +681,7 @@ export function storyOf(input: StoryInput): StoryResult {
   const { diagnostics, recording } = checkProgramWithLink(program, input.catalog, {
     recordAnalysis: true,
     ...(input.resolveFile ? { resolveFile: input.resolveFile } : {}),
+    ...(input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : {}),
   });
   return {
     ok: true,

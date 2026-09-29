@@ -22,3 +22,4 @@ export * from './service/snapshot';
 export * from './service/constructions';
 export * from './service/selectors';
 export * from './service/service';
+export * from './language_version';

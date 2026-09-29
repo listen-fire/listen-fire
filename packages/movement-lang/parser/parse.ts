@@ -8,6 +8,7 @@
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
 // for the expression bridge (existing formula grammar).
 
+import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import {
   BindClause,
   BlockStatement,
@@ -125,8 +126,15 @@ function linkBodyIdentity(fields: FieldEntry[], span: Span): UniqueClause {
   return { predicate: { raw, span }, span };
 }
 
-export function parseProgram(source: string): Program {
-  return new Parser(source).parseProgram();
+/** The compile context a parse runs under. */
+export interface ParseOptions {
+  /** The language version the source is written against — what a version
+   *  conditional in the grammar reads. Absent ⇒ the current version. */
+  languageVersion?: LanguageVersion;
+}
+
+export function parseProgram(source: string, options?: ParseOptions): Program {
+  return new Parser(source, options?.languageVersion ?? CURRENT_LANGUAGE_VERSION).parseProgram();
 }
 
 /**
@@ -224,7 +232,12 @@ class Parser {
   private pos = 0;
   private readonly lineStarts: number[];
 
-  constructor(private readonly src: string) {
+  constructor(
+    private readonly src: string,
+    /** Read by `since`/`before` conditionals where the grammar differs by
+     *  version; none do yet. */
+    readonly languageVersion: LanguageVersion,
+  ) {
     this.lineStarts = [0];
     for (let i = 0; i < src.length; i++) {
       if (src[i] === '\n') this.lineStarts.push(i + 1);
