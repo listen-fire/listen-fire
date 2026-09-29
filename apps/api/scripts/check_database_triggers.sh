@@ -119,9 +119,14 @@ audit_triggers=`psql -v ON_ERROR_STOP=ON "$DATABASE_URL" <<-EOSQL
       -- live park machinery a run suspends into — all system-written, none of
       -- it editable, so there is no user mistake for an audit trail to undo.
       -- record_binding and exposed_file are engine bookkeeping likewise.
+      -- system_event (the event receipt behind the system adapter poll
+      -- source) and deploy_check (the per-release sweep ledger written by
+      -- the deploy check) are the same shape: only ever INSERTed, by the
+      -- deploy check and the poll source, never edited or deleted by a user.
       'automations.trigger_event', 'automations.trigger_run', 'automations.parked_run',
       'automations.join_pending', 'automations.join_branch_export', 'automations.adapter_await',
       'automations.callback', 'automations.record_binding', 'automations.exposed_file',
+      'automations.system_event', 'automations.deploy_check',
       -- automations vault + channel identity: single-use links and handshake
       -- tokens, a picker's grant records, echo-recognition tokens, and the
       -- append-only send ledger. The credential rows themselves, the phone
@@ -158,7 +163,8 @@ EOSQL
 `
 
 if ! grep -q "(0 rows)" <<<$audit_triggers; then
-  printf '%s\n' "Some tables are missing the audit log trigger" >&2
+  printf '%s\n' "Some tables are missing the audit log trigger:" >&2
+  printf '%s\n' "$audit_triggers" >&2
   exit 1
 fi;
 
