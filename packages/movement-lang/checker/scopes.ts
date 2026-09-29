@@ -95,6 +95,17 @@ export interface ScopeSymbol {
   /** For `param` / `alias` / `binding`: the bound position's type (when derivable). */
   posType?: PositionTypeRef;
   /**
+   * True for a `binding` on the ARROW plane whose value is a whole traversal
+   * BLOCK's return (`all = graph-[c:companies]-> { return c }`) — the
+   * accumulation across every iteration, not the one record a hop alias
+   * lands (`-[c:companies]-> { … }`'s own `c`). `posType` carries the SAME
+   * type either way (plurality lives in the traversal, not a second type —
+   * see `planeOfReturn`), so this is the one place that fact survives past
+   * the assignment. A `recordArg` stdlib function (`TEXT.PAIRS`) reads it to
+   * refuse a collection it would otherwise mistake for one record.
+   */
+  plural?: true;
+  /**
    * The ACCESS PLANE of this binding (asks-as-adapter F13) — set on assignments
    * so a race receipt / block meta can route a name to the right plane. A `node`
    * binding (write / await / block / extract / race — anything producing a

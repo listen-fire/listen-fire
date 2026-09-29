@@ -2297,6 +2297,20 @@ class Checker {
   >();
   /** Declarations `settleShape` has already settled. */
   private readonly settledShapes = new WeakSet<ShapeDeclaration>();
+  /**
+   * Graph IDENTITY tokens (`InstanceRef.token`) minted for a `node X {…}`
+   * declaration — compared by reference only, never parsed, same discipline
+   * as `token` itself. The one reader is `checkStdlibRecordArg`
+   * (`TEXT.PAIRS`'s argument): a declared shape's landings are the program's
+   * own words (a `node {…}` literal, a write into it), never a live system
+   * read one field at a time, and the schema the two share carries no other
+   * way to tell them apart (`InstanceSchema` describes both alike, by
+   * design — a graph is a graph). An imported shape's token is its LIBRARY's
+   * declaring symbol, minted in that library's own `Checker`, so it is not a
+   * member here — a cross-file `TEXT.PAIRS` on one refuses rather than risks
+   * accepting a live position it mistook for a declared one.
+   */
+  private readonly declaredShapeTokens = new WeakSet<object>();
 
   /** Listens seen anywhere in the file (any listen suppresses LISTEN_MISSING). */
   private listenCount = 0;
@@ -2508,6 +2522,8 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
+      isPluralName: name => this.isPluralSymbol(name, scope),
+      isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: () => {},
       span,
@@ -2550,6 +2566,8 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
+      isPluralName: name => this.isPluralSymbol(name, scope),
+      isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
@@ -2571,6 +2589,8 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
+      isPluralName: name => this.isPluralSymbol(name, scope),
+      isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
         severity === 'info'
@@ -3077,6 +3097,7 @@ class Checker {
         );
       } else if (statement.kind === 'shape') {
         this.localShapes.set(symbol, { statement, scope });
+        this.declaredShapeTokens.add(symbol);
       }
     }
     const visited = new Set<ShapeDeclaration>();
@@ -3316,6 +3337,7 @@ class Checker {
           };
           this.declareAuthored(scope, symbol, statement.span);
           this.localShapes.set(symbol, { statement, scope });
+          this.declaredShapeTokens.add(symbol);
         }
         this.settleShape(statement, scope);
         return;
@@ -3685,7 +3707,7 @@ class Checker {
           );
           break;
         }
-        symbol = this.planeOfReturn(symbol, returned, returned.headOrdering);
+        symbol = this.planeOfReturn(symbol, returned, returned.headOrdering, true);
         break;
       }
       case 'await': {
@@ -3858,6 +3880,10 @@ class Checker {
     symbol: Partial<ScopeSymbol>,
     returned: ReturnShape,
     collectAs?: CollectionOrder,
+    /** True from a traversal BLOCK specifically — see `ScopeSymbol.plural`. A
+     *  bound call never sets it: its return is the one value the callee handed
+     *  back, whatever that callee's own body did internally. */
+    plural?: true,
   ): Partial<ScopeSymbol> {
     const { fieldType, posType } = returned;
     if (fieldType !== undefined) {
@@ -3867,7 +3893,9 @@ class Checker {
         bindingPlane: 'scalar',
       };
     }
-    if (posType !== undefined) return { ...symbol, posType, bindingPlane: 'node' };
+    if (posType !== undefined) {
+      return { ...symbol, posType, bindingPlane: 'node', ...(plural ? { plural } : {}) };
+    }
     return symbol;
   }
 
@@ -4013,6 +4041,15 @@ class Checker {
     if (resolution.kind !== 'found') return undefined;
     const { symbol } = resolution;
     return symbol.posType !== undefined || symbol.bindingPlane === 'node' ? symbol : undefined;
+  }
+
+  /** Is `name` bound to a whole traversal block's return (`ScopeSymbol.plural`)
+   *  — a collection, not the one record its type says? Read by
+   *  `checkStdlibRecordArg` (`TEXT.PAIRS`'s argument), the one place that
+   *  distinction matters: the type is silent on it by design. */
+  private isPluralSymbol(name: string, scope: Scope): boolean {
+    const resolution = scope.resolve(name);
+    return resolution.kind === 'found' && resolution.symbol.plural === true;
   }
 
   /**

@@ -4,6 +4,12 @@
 // smallest addition that lets the checker refuse `<json>` (a system's
 // opaque data looks keyed at the write layer, but the checker cannot see
 // its keys) while accepting the two shapes that ARE keyed.
+//
+// A record clearing that bar can still be refused: the engine's `recordArg`
+// dereference (`recordFields`) reads a record's fields off what its BINDING
+// holds, never off a live system (an adapter hands back one field at a time,
+// with no "every field" to ask for) — see `text_pairs_record_arg.unit.test.ts`
+// for that half of the rule.
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic } from '../check';
@@ -64,8 +70,14 @@ describe('TEXT.PAIRS argument typing', () => {
     expectClean(onDeal('  write c-[:deals]-> { Name: TEXT.PAIRS({ a: "1", b: "2" }) }'));
   });
 
-  it('a typed extracted record is accepted', () => {
-    expectClean(onDeal('  write c-[:deals]-> { Name: TEXT.PAIRS(d) }'));
+  it("the movement's own record parameter is refused: it is a live system read, not a spelled record", () => {
+    const source = onDeal('  write c-[:deals]-> { Name: TEXT.PAIRS(d) }');
+    expect(codes(source)).toContain(CODE);
+    expect(errors(source).find(e => e.code === CODE)?.message).toBe(
+      '`TEXT.PAIRS` takes a record whose fields the program spells out — a dict literal, a '
+        + '`node { … }` literal, an extracted record or a declared one; build a dict of the '
+        + 'fields you want from this record',
+    );
   });
 
   it('<json> is refused, naming what it takes', () => {

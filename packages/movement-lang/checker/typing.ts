@@ -2797,6 +2797,21 @@ export class ExpressionTyping {
        *  and a record is a VALUE type now, so the difference decides whether
        *  reading the name yields `record` or nothing. */
       isRecordName?: (name: string) => boolean;
+      /** Is this name bound to a whole traversal block's return — a
+       *  COLLECTION, even though its type is the one record a member of it
+       *  carries (plurality lives in the traversal, never in a second type —
+       *  `ScopeSymbol.plural`)? The one reader is `checkStdlibRecordArg`
+       *  (`TEXT.PAIRS`'s argument): the engine reads a record's fields off
+       *  ONE landing, never a fan-out of them. */
+      isPluralName?: (name: string) => boolean;
+      /** Is this graph identity token (`PositionTypeRef.instance.token`, a
+       *  `position` / `union` ref) a declared shape (`node X {…}`) rather than
+       *  a real adapter instance? The schema itself does not say — a graph is
+       *  a graph, described alike either way — so this is the one place that
+       *  fact survives to the value layer. `checkStdlibRecordArg` reads it:
+       *  a shape's landings are the program's own words; an adapter's are
+       *  read one field at a time, with no field list to hand over. */
+      isDeclaredGraphToken?: (token: object) => boolean;
       report: TypingReporter;
       /** The span diagnostics point at (the slot / head). */
       span: Span;
@@ -3237,7 +3252,7 @@ export class ExpressionTyping {
         const stdlibSpec = stdlibFunctionById(expr.fn);
         if (stdlibSpec === undefined) return undefined;
         this.checkStdlibLiteralArgs(stdlibSpec, expr.args);
-        this.checkStdlibRecordArg(stdlibSpec, args);
+        this.checkStdlibRecordArg(stdlibSpec, args, expr.args);
         // `DATE.TODAY(zone)` reads the run's clock, exactly as `@current_date`
         // does — same effect, so the row says so from the registry rather than
         // from a second list of names.
@@ -3949,21 +3964,73 @@ export class ExpressionTyping {
    * keys, so folding over one would fold over nothing the author wrote.
    * Unknown stays silent, as everywhere else in this file; an ABSENT record
    * is not this error either — absence propagates through the call.
+   *
+   * A record clears that bar and can still be refused: `recordFields` (the
+   * engine's one dereference for a `recordArg`) reads a record's fields off
+   * what the BINDING itself holds — a `node {…}` literal's entries, an
+   * extraction's exported fields, a write's result — never off a live system
+   * (fields come back one adapter call at a time; there is no "give me all of
+   * them" to ask for) and never off a fan-out (it reads ONE landing, not
+   * many). `holdsSpelledFields` refuses the first; `isPluralName` the second
+   * — both checked here so the engine's `MOVENG_UNSUPPORTED` for either is
+   * one a saved movement can never reach.
    */
   private checkStdlibRecordArg(
     spec: StdlibFunctionSpec,
     args: ReadonlyArray<FieldType | undefined>,
+    rawArgs: ReadonlyArray<Expression>,
   ): void {
     const declared = spec.recordArg;
     if (declared === undefined) return;
     const type = args[declared.index];
     if (type === undefined) return; // unknown stays silent
     const stripped = stripAbsent(type);
-    if (isRecordType(stripped) || isDictType(stripped)) return;
-    this.report(
-      TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
-      `${spec.signature} takes a record or a dict, and this is ${describeFieldType(stripped)}.`,
-    );
+    if (!isRecordType(stripped) && !isDictType(stripped)) {
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+        `${spec.signature} takes a record or a dict, and this is ${describeFieldType(stripped)}.`,
+      );
+      return;
+    }
+    if (isDictType(stripped)) return; // a dict's keys are the ones the author wrote
+    const raw = rawArgs[declared.index];
+    const name = raw !== undefined ? bareName(raw) : undefined;
+    const plural = name !== undefined && this.options.isPluralName?.(name) === true;
+    if (plural || !this.holdsSpelledFields(recordIn(stripped)?.position)) {
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+        `\`${spec.namespace}.${spec.name}\` takes a record whose fields the program spells out — a dict literal, a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
+      );
+    }
+  }
+
+  /** Does the checker hold this record's fields IN HAND — a `node {…}`
+   *  literal or a declared node's landing (`local`), an extraction
+   *  (`extract`), a write's own result (`handle`), or a POSITION in a
+   *  declared shape's own graph (`isDeclaredGraphToken`) — rather than
+   *  resolved from a live system's schema (`position` / `union` in an
+   *  ADAPTER's graph: the record a SYSTEM describes, read one field at a
+   *  time, not the program's own words) or the bare instance root (`meta`)?
+   *  A closure has no fields to spell out. `maybeEmpty` reads through to
+   *  what it wraps — a gate changes presence, not which fields exist. */
+  private holdsSpelledFields(position: PositionTypeRef | undefined): boolean {
+    if (position === undefined) return false;
+    switch (position.kind) {
+      case 'extract':
+      case 'handle':
+      case 'local':
+        return true;
+      case 'maybeEmpty':
+        return this.holdsSpelledFields(position.of);
+      case 'position':
+      case 'union':
+        return this.options.isDeclaredGraphToken?.(position.instance.token) === true;
+      case 'meta':
+      case 'closure':
+        return false;
+      default:
+        return neverAsAny(position);
+    }
   }
 
   /**
