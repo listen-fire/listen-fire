@@ -219,6 +219,15 @@ services:
       MESSAGE_QUEUE_REDIS_PORT: ${MESSAGE_QUEUE_REDIS_PORT:-6379}
       FAKE_CHANNELS_URL: ${FAKE_CHANNELS_URL:-}
       MOCK_OUTPUT_ADAPTERS: ${MOCK_OUTPUT_ADAPTERS:-}
+      # The deploy check loads the api's service graph, so the one-shot needs
+      # every variable the api derives below; a missing one crashed the check
+      # on load and blocked the api from starting (v0.8.0 upgrade, 2026-09-29).
+      OAUTH_REDIRECT_BASE_URL: ${OAUTH_REDIRECT_BASE_URL:-${WEB_BASE_URL:-http://localhost:8080}}
+      EXPOSED_FILE_PUBLIC_BASE_URL: ${EXPOSED_FILE_PUBLIC_BASE_URL:-${API_BASE_URL:-http://localhost:8081}}
+      KNOWLEDGE_MUTATION_DELIVERY: ${KNOWLEDGE_MUTATION_DELIVERY:-local}
+      ASKS_SETTLE_DELIVERY: ${ASKS_SETTLE_DELIVERY:-local}
+      INBOUND_EMAIL_ADDRESS:
+      RESEND_API_BASE_URL:
       AWS_S3_ENDPOINT:
     # Not postgres — that one may not exist. `init` is what mints the database
     # URL a bundled installation uses, so it still has to have finished.
