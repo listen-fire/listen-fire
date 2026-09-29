@@ -12,9 +12,18 @@ export const HEALTH_CHECK_ENDPOINT = '/.well-known/health-check';
 
 // The release this build is, baked into the image at build time
 // (`--build-arg LISTEN_FIRE_VERSION`, which the release workflow sets from the
-// git tag). A tree nobody tagged — a source build, a dev loop — is `dev`, and
-// that is the honest answer rather than a version number nothing produced.
-export const LISTEN_FIRE_VERSION = process.env.LISTEN_FIRE_VERSION || 'dev';
+// git tag). A tree nobody tagged is named by the commit the platform built it
+// from when one is known (Render sets RENDER_GIT_COMMIT; other hosts set
+// SOURCE_COMMIT), as `dev+<short sha>`, so two source builds are two releases
+// — the deploy check runs once per release, and a fixed `dev` would run it
+// once ever. With no commit to hand the honest answer is `dev`.
+const sourceCommit = process.env.RENDER_GIT_COMMIT || process.env.SOURCE_COMMIT;
+export const LISTEN_FIRE_VERSION =
+  process.env.LISTEN_FIRE_VERSION && process.env.LISTEN_FIRE_VERSION !== 'dev'
+    ? process.env.LISTEN_FIRE_VERSION
+    : sourceCommit
+      ? `dev+${sourceCommit.slice(0, 7)}`
+      : 'dev';
 
 // Worker liveness per mounted product. Separate from the probe above, whose
 // 201-with-no-body is a deploy platform's contract.
