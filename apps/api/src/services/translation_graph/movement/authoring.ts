@@ -111,6 +111,10 @@ export function diagnoseMovementSource(
     /** The language version to validate under — a saved movement's pin.
      *  Absent ⇒ the current version. */
     languageVersion?: LanguageVersion;
+    /** The movement's pin, when this validation asks whether it can move up
+     *  to `languageVersion` — adds the checker's warnings for constructs whose
+     *  meaning changed between the two (`CheckOptions.upgradingFrom`). */
+    upgradingFrom?: LanguageVersion;
   },
 ): MovementValidation {
   const lines = source.split('\n');
@@ -149,6 +153,7 @@ export function diagnoseMovementSource(
   const collected: Diagnostic[] = [
     ...checkProgram(program, options.catalog, {
       languageVersion,
+      ...(options.upgradingFrom !== undefined ? { upgradingFrom: options.upgradingFrom } : {}),
       ...(options.resolveFile !== undefined ? { resolveFile: options.resolveFile } : {}),
     }),
   ];
@@ -228,6 +233,9 @@ export async function validateMovementForTeam(input: {
   /** The language version to validate under — a saved movement's pin, or an
    *  explicit request. Absent ⇒ the current version. */
   languageVersion?: LanguageVersion;
+  /** The movement's pin, when validating it for a move up to
+   *  `languageVersion` — see `diagnoseMovementSource`. */
+  upgradingFrom?: LanguageVersion;
 }): Promise<TeamMovementValidation> {
   // Catalog assembly scopes itself to the source by scanning its constructions
   // and expression slots. A malformed expression can make one of those scans
@@ -244,7 +252,12 @@ export async function validateMovementForTeam(input: {
 }
 
 async function runValidate(
-  input: { teamId: string; source: string; languageVersion?: LanguageVersion },
+  input: {
+    teamId: string;
+    source: string;
+    languageVersion?: LanguageVersion;
+    upgradingFrom?: LanguageVersion;
+  },
   timer: StepTimer,
 ): Promise<TeamMovementValidation> {
   let teamCatalog;
@@ -273,6 +286,7 @@ async function runValidate(
       resolveCredentialId: teamCatalog.resolveCredentialId,
       resolveFile: teamCatalog.resolveFile,
       ...(input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : {}),
+      ...(input.upgradingFrom !== undefined ? { upgradingFrom: input.upgradingFrom } : {}),
     }),
   );
   const notes = [...teamCatalog.notes];

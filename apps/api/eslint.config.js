@@ -12,6 +12,8 @@ module.exports = tseslint.config(
       'build/**',
       'knip.ts',
       'src/generated/kysely/types.ts',
+      // An older release's tests, verbatim — linted as that release's tree.
+      'src/__conformance__/**',
     ],
   },
   eslint.configs.recommended,

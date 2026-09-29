@@ -41,6 +41,7 @@ import {
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
 import { neverAsAny } from '../never';
+import { before, type LanguageVersion } from '../language_version';
 import { Span } from '../parser/ast';
 import {
   describeFieldType,
@@ -2316,7 +2317,7 @@ export type PresenceProof =
 
 /** `x.`F`` as authored — the bridge folds a rooted property read into an
  *  alias-rooted traverse with no steps. */
-function directFieldRead(
+export function directFieldRead(
   expr: Expression,
 ): Extract<PresenceProof, { kind: 'field' }> | undefined {
   if (expr.type !== 'traverse') return undefined;
@@ -2700,6 +2701,9 @@ export class ExpressionTyping {
 
   constructor(
     private readonly options: {
+      /** The compile context's language version — what this walker's
+       *  `since`/`before` conditionals read. */
+      languageVersion: LanguageVersion;
       /** Statement-scope resolution: bound name → its position type (undefined = untyped/unknown). */
       resolveRoot: (name: string) => PositionTypeRef | undefined;
       /** Statement-scope resolution of the SCALAR plane: bound name → the value
@@ -2952,6 +2956,16 @@ export class ExpressionTyping {
         // walked either way, since a traversal inside one must be validated
         // like any other.
         const valueTypes = expr.entries.map(e => this.inferAt(e.value, position));
+        // Version 1 typed a literal as its values alone: a dict when they
+        // agree, `json` when they do not (or there are none), and its keys
+        // unknown — so every lookup may miss, and no key is a typo.
+        if (before(this.options.languageVersion, 2)) {
+          const head = valueTypes[0];
+          if (head === undefined || !valueTypes.every(t => t !== undefined && fieldTypeEquals(t, head))) {
+            return 'json';
+          }
+          return { kind: 'dict', of: valueTypes.some(isMaybeAbsent) ? maybeAbsent(head)! : head };
+        }
         const shape: Record<string, FieldType | null> = {};
         expr.entries.forEach((entry, i) => {
           shape[entry.key] = valueTypes[i] ?? null;
@@ -3507,6 +3521,9 @@ export class ExpressionTyping {
    * so a guard on one stays legal. Returns true when it fired.
    */
   private refuseTextPresenceTest(subject: Expression, asks: 'present' | 'absent'): boolean {
+    // Version 1 hands an unfound text over as absent, so there the test is
+    // the meaningful one.
+    if (before(this.options.languageVersion, 2)) return false;
     const field = directFieldRead(subject);
     if (field === undefined) return false;
     const position = this.rootType(field.root);
@@ -4686,6 +4703,9 @@ export class ExpressionTyping {
           field.span,
         );
       }
+      // Version 1: EVERY annotated field is optional, text included — an
+      // unfound text is handed over absent there.
+      if (before(this.options.languageVersion, 2)) return maybeAbsent(field.explicit);
       // R14: a TYPED extract field is optional — the model was asked for it
       // and may not have found it, and a number, a date, a choice from a set
       // has no value that means "nothing found". So a read is `T | absent`, and
@@ -4711,6 +4731,18 @@ export class ExpressionTyping {
     // bad borrow) is neither: the author already annotated it and the engine
     // re-resolves live, so it stays untyped and unremarked.
     if (field.annotationRaw !== undefined) return undefined;
+    // Version 1: an unannotated field is untyped, and a write into a typed
+    // target only earns the suggestion to annotate it (a plain-text or json
+    // target has nothing an annotation would add).
+    if (before(this.options.languageVersion, 2)) {
+      if (writeTarget !== undefined) {
+        const target = stripAbsent(writeTarget.type);
+        if (target !== 'text' && target !== 'json') {
+          this.suggestAnnotation(field, propertyId, nodeLabel, writeTarget);
+        }
+      }
+      return undefined;
+    }
     if (writeTarget === undefined) return 'text';
     const targetBase = baseKind(writeTarget.type);
     if (targetBase === 'text' || targetBase === 'json' || targetBase === 'absent') {
@@ -4731,7 +4763,8 @@ export class ExpressionTyping {
   }
 
   /** The info nudge toward an annotation that would ADD a constraint (an
-   *  option set) without the write being wrong without it. Deduped per
+   *  option set; under version 1, any typed target) without the write being
+   *  wrong without it. Deduped per
    *  (field, target) so repeated writes say it once. */
   private suggestAnnotation(
     field: ExtractFieldInfo,

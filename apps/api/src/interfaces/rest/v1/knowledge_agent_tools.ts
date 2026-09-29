@@ -97,6 +97,7 @@ import { abortRun } from '../../../services/interaction/operator';
 import { MovementEngineError } from '../../../services/movement_engine/errors';
 import { UserService } from '../../../services/user';
 import {
+  before,
   CURRENT_LANGUAGE_VERSION,
   getMovementCompletions,
   languageVersionView,
@@ -752,17 +753,22 @@ const validateMovementHandler: RequestHandler = jsonHandler(
   async (input) => {
     const teamId = await resolveToolTeam(input.team);
     // An explicit version wins; else a saved automation validates under its
-    // pin; else new text validates under the current version.
+    // pin; else new text validates under the current version. A saved
+    // automation checked under a version newer than its pin is a check for
+    // the move, and hears what changed meaning on the way.
     let languageVersion = input.languageVersion;
-    if (languageVersion === undefined && input.automation !== undefined) {
+    let upgradingFrom: LanguageVersion | undefined;
+    if (input.automation !== undefined) {
       const row = await getMovementRow({ teamId, id: input.automation }).catch(() => null);
       if (!row) return { error: `No automation '${input.automation}' in this team.` };
-      languageVersion = row.languageVersion;
+      if (languageVersion === undefined) languageVersion = row.languageVersion;
+      else if (before(row.languageVersion, languageVersion)) upgradingFrom = row.languageVersion;
     }
     const validation = await validateMovementForTeam({
       teamId,
       source: input.source,
       ...(languageVersion !== undefined ? { languageVersion } : {}),
+      ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
     });
     return {
       ...validation,

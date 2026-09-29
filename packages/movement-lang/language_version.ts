@@ -67,6 +67,13 @@ export function before(version: LanguageVersion, n: LanguageVersion): boolean {
   return version < n;
 }
 
+/** Moving a program from version `from` to `to` crosses the behaviour
+ *  version `n` introduced — where a warning that a construct changed meaning
+ *  belongs. */
+export function changedBetween(from: LanguageVersion, to: LanguageVersion, n: LanguageVersion): boolean {
+  return before(from, n) && since(to, n);
+}
+
 export function languageVersionInfo(version: LanguageVersion): LanguageVersionInfo | undefined {
   return LANGUAGE_VERSIONS.find((info) => info.version === version);
 }

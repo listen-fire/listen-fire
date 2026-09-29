@@ -72,6 +72,7 @@ import {
   DiagnosticCodes,
   MovementParseError,
   checkProgramWithLink,
+  before,
   CURRENT_LANGUAGE_VERSION,
   languageVersionDiagnostic,
   diagnosticSeverity,
@@ -192,7 +193,8 @@ import {
   positionRecordId,
   type SchemaFieldDescriptor,
   type SourcePosition,
-  type TransformOutputShape,
+  type TransformOutputKind,
+  transformOutputUnder,
 } from '../translation_graph/types';
 import { isBlankIdentityValue, mergeUniqueness, type UniquenessConstraints } from '../translation_graph/uniqueness';
 import type { LlmClient } from '../translation_graph/engine/batched_extraction';
@@ -1599,6 +1601,12 @@ class Interpreter {
    *  its instance constructions stay per-file. */
   private readonly libraryEnvs = new Map<string, Environment>();
 
+  /** The movement's pin — what the engine's `since`/`before` conditionals
+   *  read (a plugin or adapter reads the same value off the run scope). */
+  private get languageVersion(): LanguageVersion {
+    return this.input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  }
+
   constructor(
     private readonly input: RunMovementInput,
     private readonly link?: ProgramLink,
@@ -1606,9 +1614,7 @@ class Interpreter {
     this.trace = input.trace ?? [];
     // A deprecated pin runs, and says so on the run's own record. (An
     // unsupported one never gets this far — parseAndCheck refused it.)
-    const versionWarning = languageVersionDiagnostic(
-      input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
-    );
+    const versionWarning = languageVersionDiagnostic(this.languageVersion);
     if (versionWarning !== undefined) {
       this.trace.push({ kind: 'warning', code: versionWarning.code, message: versionWarning.message });
     }
@@ -3745,8 +3751,8 @@ class Interpreter {
     body: BodyContext,
   ): Promise<Binding | undefined> {
     const invoker = this.input.transformInvoker ?? registryTransformInvoker;
-    const output = invoker.declaredOutput?.(plugin);
-    if (output === undefined) {
+    const declared = invoker.declaredOutput?.(plugin);
+    if (declared === undefined) {
       // The checker refuses a plain call to a plugin that declared no output,
       // so reaching here means the two disagree — which is worth saying, not
       // guessing past.
@@ -3775,8 +3781,10 @@ class Interpreter {
     const result = await invoker.invoke({ plugin, config, extractedContext: {} });
     // What the plugin brought back is no longer justified by the quote that
     // pointed at it, so the origins survive and the direct citation does not.
+    // The shape the movement's pin gets — a plugin whose output changed keeps
+    // its older shape for movements pinned before the change.
     const { binding, handedBack } = pluginCallBinding(
-      output,
+      transformOutputUnder(declared, this.languageVersion),
       result,
       transformed(unionProvenance(trails)),
     );
@@ -7070,6 +7078,16 @@ class Interpreter {
       this.appendLocalLanding({ ...link, to: link.to }, fromBinding, env);
       return;
     }
+    // Version 1's body form was its own statement: criteria find the record
+    // and the link lands as ONE run-log row, with no match row before it.
+    // A body with an authored `unique by` never parsed under v0.6.0, so it has
+    // no version-1 meaning to keep and runs as the match it is.
+    const authoredIdentity =
+      link.to.kind === 'match' && !link.to.impliedIdentity && link.to.match.uniqueBy.length > 0;
+    if (link.to.kind === 'match' && !authoredIdentity && before(this.languageVersion, 2)) {
+      await this.executeCriteriaLink(link, link.to.match, bindingName, env);
+      return;
+    }
     // The body form is `match` then `link`: the match runs exactly as the
     // statement would (its own run-log row, a quiet end of the scope on a
     // miss), and the link then connects the record it found.
@@ -7092,6 +7110,128 @@ class Interpreter {
       mutationContext: this.mutationContext,
     });
     this.recordLinkStatement({ kind: 'link', resolved, changed: linked.created });
+  }
+
+  /**
+   * Version 1's `link c -[:portfolio]-> { name: "Fund III" }` — the target is
+   * FOUND, never created and never written. The body's fields are identity
+   * criteria ONLY (a body with an authored `unique by` runs as a match): the
+   * criteria AND-group merged with the target's native rules, resolved and
+   * arbitrated like a write's identity, the found type inferred from the edge.
+   * On a miss the enclosing scope ends quietly.
+   *
+   * What makes it version 1's rather than `match` then `link`: the run log
+   * gets the LINK alone (from-keyed, `foundTarget`), and the bound handle is
+   * not a log entry of its own — its `origin` chains to the link's row.
+   */
+  private async executeCriteriaLink(
+    link: LinkExpression,
+    body: MatchExpression,
+    bindingName: string | undefined,
+    env: Environment,
+  ): Promise<void> {
+    const at = `link ${link.from} -[:${link.edge}]-> { … }`;
+    const from = this.resolveEdgeEndpoint(link.from, env.resolve(link.from), at);
+    const graph = from.graph;
+    const recordType = this.inferLinkedSurfaceType({
+      graph,
+      parentSurfaceType: from.targetType,
+      edgeName: link.edge,
+      explicitType: body.target.kind === 'linked' ? body.target.explicitType : undefined,
+      rootName: link.from,
+      verb: 'link',
+    });
+    const fromId = from.handle.externalId;
+    if (fromId === undefined) {
+      throw new MovementEngineError('MOVENG_RUNTIME', `${at}: '${link.from}' carries no written record id to link`);
+    }
+    const adapter = await this.targetAdapterFor(graph.instance);
+
+    const criteria: Record<string, unknown> = {};
+    for (const field of body.fields) {
+      const { value } = await this.evaluateSlot(field.value, { env });
+      if (value === undefined) continue;
+      criteria[field.name] = value;
+    }
+    const descriptor = await adapter.describe(recordType);
+    const constraints = mergeUniqueness(descriptor?.uniquenessConstraints, {
+      any:
+        Object.keys(criteria).length > 0
+          ? [{ all: Object.keys(criteria).map((field) => ({ field })) }]
+          : [],
+    });
+    const { matched } = await this.resolveIdentity({
+      adapter,
+      recordType,
+      resolveRecord: criteria,
+      constraints,
+      asserted: criteria,
+    });
+    if (matched === undefined) {
+      throw new ScopeEndedQuietly(`${at}: no existing ${recordType} matched the criteria`);
+    }
+    if (typeof adapter.linkRecords !== 'function') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `${at}: the '${adapter.adapterType}' adapter cannot link two existing records (no linkRecords capability)`,
+      );
+    }
+    const fromRecordType = from.targetType;
+    const linked = await adapter.linkRecords({
+      from: { recordType: fromRecordType, externalId: fromId },
+      edgeName: link.edge,
+      to: { recordType, externalId: matched.externalId },
+      mutationContext: this.mutationContext,
+    });
+
+    let resultData: Record<string, unknown> = {
+      ...(matched.url !== undefined ? { url: matched.url } : {}),
+      ...matched.data,
+    };
+    if (typeof adapter.readRecord === 'function') {
+      const current = await adapter.readRecord({ recordType, externalId: matched.externalId });
+      if (current) resultData = { ...resultData, ...current };
+    }
+    const writeIndex = this.writes.length;
+    this.writes.push({
+      kind: 'link',
+      adapterType: adapter.adapterType,
+      recordType: fromRecordType,
+      created: linked.created,
+      committed: this.committedThrough(adapter),
+      externalId: fromId,
+      writtenValues: {},
+      link: {
+        edgeName: link.edge,
+        toRecordType: recordType,
+        toExternalId: matched.externalId,
+        foundTarget: true,
+      },
+      provenance: {
+        from: this.summariser.summariseTrail(handleTrail(from.handle)),
+        // The to side was FOUND, not written — no write origin to chain.
+        to: [],
+      },
+      ...(bindingName !== undefined ? { bindingName } : {}),
+    });
+    if (bindingName !== undefined) {
+      env.declare(bindingName, {
+        kind: 'handle',
+        handle: {
+          adapterType: adapter.adapterType,
+          recordType,
+          created: false,
+          committed: this.committedThrough(adapter),
+          externalId: matched.externalId,
+          writtenValues: {},
+          resultData,
+          provenance: {},
+          origin: { kind: 'write', writeIndex, externalId: matched.externalId },
+        },
+        targetType: recordType,
+        graph,
+      });
+    }
   }
 
   /**
@@ -7880,7 +8020,7 @@ class Interpreter {
     edgeName: string;
     explicitType: string | undefined;
     rootName: string;
-    verb: 'write' | 'match';
+    verb: 'write' | 'match' | 'link';
   }): string {
     const { graph, edgeName } = input;
     const keyword = input.verb;
@@ -8990,7 +9130,7 @@ const PLUGIN_FETCHED_TEXT_FIELD = 'text';
  * separate question, and it is the trace's, not the program's.
  */
 function pluginCallBinding(
-  output: TransformOutputShape,
+  output: TransformOutputKind,
   result: TransformInvocationResult,
   provenance: Provenance,
 ): { binding: Binding; handedBack: boolean } {

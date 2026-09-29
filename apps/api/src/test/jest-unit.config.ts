@@ -28,6 +28,9 @@ export default {
 
   // The glob patterns Jest uses to detect test files
   testMatch: ['**/*.unit.test.ts'],
+  // Older language versions' corpora run under their own version, via
+  // jest-conformance-v<n>.config.ts — never under the current one.
+  testPathIgnorePatterns: ['/node_modules/', '/__conformance__/'],
   // ts-jest required for Prisma >= 5.10.x
   preset: 'ts-jest',
   testEnvironment: 'node',

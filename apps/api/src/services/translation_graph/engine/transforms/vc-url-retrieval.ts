@@ -115,6 +115,20 @@ export const VC_URL_RETRIEVAL_SIGNATURE: TransformSignature = {
       },
     },
     description: 'Every link it fetched, one record each. Empty when there was no link worth following.',
+    // Language version 1: every page it fetched as one text.
+    previously: [
+      {
+        before: 2,
+        output: {
+          kind: 'value',
+          type: { kind: 'string' },
+          optional: true,
+          description:
+            'The text of every page it fetched, run together. Nothing when there was no link '
+            + 'worth following.',
+        },
+      },
+    ],
   },
 };
 

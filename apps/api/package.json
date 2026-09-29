@@ -73,6 +73,7 @@
     "test": "pnpm test:unit && pnpm test:integration",
     "test:integration": "NODE_OPTIONS=--max-old-space-size=8192 jest --config src/test/jest-integration.config.ts",
     "test:unit": "jest --config src/test/jest-unit.config.ts",
+    "test:conformance:v1": "jest --config src/test/jest-conformance-v1.config.ts",
     "db:restore": ". ./scripts/restore_db_snapshot.sh",
     "db:dump": ". ./scripts/dump_db_snapshot.sh",
     "schema:compare": "bash src/db/compare.sh",

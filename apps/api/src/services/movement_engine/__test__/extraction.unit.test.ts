@@ -2663,7 +2663,7 @@ describe('Layer 5 — files a `through` plugin fetched join `_resources`', () =>
   });
   afterEach(() => run.mockRestore());
 
-  async function runFetched(emissions: Array<Record<string, unknown>>) {
+  async function runFetched(emissions: Array<Record<string, unknown>>, languageVersion?: number) {
     run.mockResolvedValue({ edges: { vcUrl: emissions.map((data) => ({ data })) } });
     const email = makeFakeAdapter('email');
     const attio = makeCapturingAttio();
@@ -2675,6 +2675,7 @@ describe('Layer 5 — files a `through` plugin fetched join `_resources`', () =>
       catalog: carryFileSchema().catalog,
       resolveAdapter: makeResolver({ email: email.adapter, attio: attio.adapter }),
       llm: llm.client,
+      ...(languageVersion !== undefined ? { languageVersion } : {}),
     });
     return { creates: attio.creates, llm };
   }
@@ -2710,6 +2711,17 @@ describe('Layer 5 — files a `through` plugin fetched join `_resources`', () =>
     // The carry block reads it exactly as it reads an attached file.
     expect(creates[1].fields.name).toBe('https://docsend.example/acme');
     expect(creates[1].fields.deck).toBe(fileResource.fileRef);
+  });
+
+  it('under language version 1, a fetched file stays off `_resources` — they held the sources alone', async () => {
+    const { creates, llm } = await runFetched(
+      [{ name: 'Acme deck.pdf', url: 'https://docsend.example/acme', file: 'doc-1', text: 'Acme builds rockets.' }],
+      1,
+    );
+
+    expect(llm.calls[0].userMessage).toContain('Acme builds rockets.');
+    expect(creates).toHaveLength(1);
+    expect((creates[0].resources ?? []).filter((r) => r.type === 'FILE')).toEqual([]);
   });
 
   it('a page that stored no file adds no resource, and its text still reaches the model', async () => {

@@ -22,6 +22,7 @@ import type {
   FieldCapability,
 } from '@listen-fire/shared/expression/types';
 import { neverAsAny } from '../never';
+import { before, type LanguageVersion } from '../language_version';
 import type { Program, TypeDeclaration } from '../parser/ast';
 import type { DeclaredEffectRow } from './effects';
 // A record is a value, so `FieldType` names the arrow plane's own type and
@@ -357,6 +358,13 @@ export interface PluginSpec {
    * goes to the extractor, not to a name.
    */
   output?: PluginOutput;
+  /**
+   * The shapes `output` had before it changed: each is what a plain call hands
+   * back to a program pinned before language version `before`, earliest
+   * first. A call is typed under its program's pin (`pluginOutputUnder`);
+   * removing a language version removes its entries.
+   */
+  earlierOutputs?: ReadonlyArray<{ before: LanguageVersion; output: PluginOutput }>;
 }
 
 /** One `fedArgs` entry: the argument's name, and whether a PLAIN call must
@@ -385,6 +393,14 @@ export type PluginOutput =
   | { kind: 'value'; type: SchemaFieldType }
   | { kind: 'record'; fields: Record<string, SchemaFieldType> }
   | { kind: 'records'; fields: Record<string, SchemaFieldType> };
+
+/** What a plain call to `spec`'s plugin hands back to a program pinned to
+ *  `languageVersion` — its current output, or an older shape it kept for
+ *  programs pinned before the change (`PluginSpec.earlierOutputs`). */
+export function pluginOutputUnder(spec: PluginSpec, languageVersion: LanguageVersion): PluginOutput | undefined {
+  const earlier = spec.earlierOutputs?.find((entry) => before(languageVersion, entry.before));
+  return earlier !== undefined ? earlier.output : spec.output;
+}
 
 // ── Field value types ──
 

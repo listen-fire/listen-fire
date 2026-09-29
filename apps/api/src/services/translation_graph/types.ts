@@ -15,7 +15,7 @@ import type { FieldEvidence, Resource } from './adapter';
 import type { FilterExpression, TraversalStep } from '../knowledge_pipeline/output_v3/schemas';
 import type { Expression } from '../knowledge_pipeline/output_v3/expression';
 import type { EdgeCapability, EdgeSequencing, FieldCapability } from '#shared/expression/types';
-import type { DeclaredEffectRow } from 'movement-lang';
+import { before, type DeclaredEffectRow, type LanguageVersion } from 'movement-lang';
 
 // The `translation_graph` / `schema_type` tables were dropped (kill-tg phase
 // 6), so their kysely id brands are gone. These TG-body schemas are vestigial
@@ -2130,7 +2130,7 @@ export const transformOutputFieldSchema = z.object({
  * reaches a NAME. Absent means nobody has said, and the language keeps such a
  * plugin to stages.
  */
-export const transformOutputSchema = z.discriminatedUnion('kind', [
+const transformOutputKindSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('value'),
     type: expressionTypeSchema,
@@ -2148,7 +2148,33 @@ export const transformOutputSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
+/**
+ * A plugin whose output changed shape keeps its older shapes beside the
+ * current one: `previously` lists what a call handed back to a movement pinned
+ * before language version `before`, earliest first. A call runs, and is typed,
+ * under its movement's pin (`transformOutputUnder`). Removing a language
+ * version removes its entries.
+ */
+export const transformOutputSchema = transformOutputKindSchema.and(
+  z.object({
+    previously: z
+      .array(z.object({ before: z.number().int(), output: transformOutputKindSchema }))
+      .optional(),
+  }),
+);
+
 export type TransformOutputShape = z.infer<typeof transformOutputSchema>;
+export type TransformOutputKind = z.infer<typeof transformOutputKindSchema>;
+
+/** What a plain call to a plugin declaring `output` hands back to a movement
+ *  pinned to `languageVersion`. */
+export function transformOutputUnder(
+  output: TransformOutputShape,
+  languageVersion: LanguageVersion,
+): TransformOutputKind {
+  const earlier = output.previously?.find((entry) => before(languageVersion, entry.before));
+  return earlier !== undefined ? earlier.output : output;
+}
 
 export const transformSignatureSchema = z.object({
   /** Unique transform identifier — the value an author writes in

@@ -289,6 +289,10 @@ export interface WriteRecord {
     edgeName: string;
     toRecordType: string;
     toExternalId: string;
+    /** Version 1's link body: the to side was FOUND by the body's criteria
+     *  in the same statement — never created, never written — rather than a
+     *  bound handle. */
+    foundTarget?: boolean;
   };
 
   // ── Firing-log provenance ────────────────────────────────────────────────
