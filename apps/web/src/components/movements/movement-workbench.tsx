@@ -49,10 +49,15 @@ import {
   type ConstructionRef,
   type DefinitionTarget,
   type InstanceSchema,
+  type LanguageVersion,
   type MovementDiagnostic,
 } from "movement-lang";
 
 import { trpc } from "@/lib/trpc";
+import {
+  LanguageVersionNotice,
+  type UpgradeDiagnostic,
+} from "@/components/movements/language-version";
 import { TAB_ORIGIN_ID } from "@/lib/tab-origin";
 import { usePublishPageContext } from "@/components/page-context";
 import {
@@ -215,6 +220,12 @@ export interface MovementWorkbenchProps {
   /** Scripts that import this file (edit page) — shown near the header so
    *  an edit to a shared library is made knowing who depends on it. */
   dependents?: Array<{ id: string; name: string }>;
+  /** The saved movement's language version (edit page) — the editor checks
+   *  the text as that version. Absent on `/movements/new` (the current one). */
+  languageVersion?: LanguageVersion;
+  /** What keeps the saved movement off the current language version (edit
+   *  page); null when nothing does. */
+  upgradeDiagnostics?: UpgradeDiagnostic[] | null;
   /** Which starter script `/movements/new` seeds: an automation with a
    *  listener, or a library with an exported movement + shape. */
   starter?: "automation" | "library";
@@ -1322,6 +1333,9 @@ export function MovementWorkbench(props: MovementWorkbenchProps) {
                 ref={editorRef}
                 initialValue={initialSource}
                 snapshot={snapshot}
+                {...(props.languageVersion !== undefined
+                  ? { languageVersion: props.languageVersion }
+                  : {})}
                 onChange={handleEditorChange}
                 onDiagnostics={setDiagnostics}
                 vimEnabled={vimEnabled}
@@ -1616,6 +1630,13 @@ export function MovementWorkbench(props: MovementWorkbenchProps) {
               </ul>
             )}
           </section>
+
+          {props.languageVersion !== undefined && (
+            <LanguageVersionNotice
+              languageVersion={props.languageVersion}
+              upgradeDiagnostics={props.upgradeDiagnostics ?? null}
+            />
+          )}
 
           {/* How saving works */}
           <p className="mt-auto text-[12px] leading-relaxed text-gray-400">

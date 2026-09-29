@@ -52,6 +52,8 @@ export default function MovementPage() {
       initialValidityStatus={movement.validityStatus}
       initialListeners={movement.listeners}
       initialRunnable={movement.runnable}
+      languageVersion={movement.languageVersion}
+      upgradeDiagnostics={movement.upgradeDiagnostics}
       dependents={movement.dependents}
     />
   );

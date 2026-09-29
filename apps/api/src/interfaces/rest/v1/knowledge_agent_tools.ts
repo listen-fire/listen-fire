@@ -75,6 +75,11 @@ import {
   getMovementRow,
   listMovementRows,
 } from '../../../services/translation_graph/movement/store';
+import {
+  upgradeMovement,
+  type UpgradeMovementResult,
+} from '../../../services/translation_graph/movement/language_upgrade';
+import { neverAsAny } from '../../../lib/utils/types';
 import { movementSourceHash } from '../../../services/translation_graph/movement/version_store';
 import { applyContentEdit } from '../../../services/translation_graph/movement/edit';
 import {
@@ -766,6 +771,47 @@ const validateMovementHandler: RequestHandler = jsonHandler(
   },
 );
 
+const upgradeMovementSchema = z.object({
+  automation: z.string(),
+  acknowledge: z.boolean().optional(),
+  team: z.string().optional(),
+});
+
+/** What an agent is told for each upgrade outcome, in the user's terms. */
+function upgradeMessage(result: Exclude<UpgradeMovementResult, { status: 'not_found' }>): string {
+  const to = `"${result.to.name}" (${result.to.version})`;
+  switch (result.status) {
+    case 'already_current':
+      return `Already written in ${to}, the current language version. Nothing to do.`;
+    case 'blocked':
+      return `Not upgraded: under ${to} it reports the diagnostics listed. Repair them (validate the edited text under languageVersion ${result.to.version}), save, and call this again.`;
+    case 'unverified':
+      return `Not upgraded: a connected system it uses could not be read, so it cannot be shown to be clean under ${to}. Try again once the connection works.`;
+    case 'needs_acknowledgement':
+      return `Clean under ${to}. Call again with acknowledge: true to move it there; it keeps running as it does now until then.`;
+    case 'upgraded':
+      return `Upgraded to ${to}. New runs use it; runs already in progress finish under the version they started with.`;
+    default:
+      return neverAsAny(result.status);
+  }
+}
+
+const upgradeMovementHandler: RequestHandler = jsonHandler(
+  upgradeMovementSchema,
+  'body',
+  async (input) => {
+    const result = await upgradeMovement({
+      teamId: await resolveToolTeam(input.team),
+      id: input.automation,
+      acknowledge: input.acknowledge === true,
+    });
+    if (result.status === 'not_found') {
+      return { error: `No automation '${input.automation}' in this team.` };
+    }
+    return { ...result, message: upgradeMessage(result) };
+  },
+);
+
 const completionsAtSchema = z.object({ source: z.string(), team: z.string().optional() });
 
 const completionsAtHandler: RequestHandler = jsonHandler(
@@ -1272,6 +1318,7 @@ function mountAutomationToolRoutes(router: ReturnType<typeof Router>): void {
   router.post('/automations/:idOrName/edit', editAutomationHandler);
   router.get('/automations/:idOrName', getMovementHandler);
   router.post('/automations/validate', validateMovementHandler);
+  router.post('/automations/upgrade', upgradeMovementHandler);
   router.post('/automations/completions', completionsAtHandler);
   router.post('/automations/save', saveMovementHandler);
   router.post('/automations/delete', deleteMovementHandler);
@@ -1369,6 +1416,7 @@ function registerAutomationToolRoutes(): void {
   reg('POST', '/automations/:idOrName/edit', 'Change one saved automation by splicing a snippet, without resending the whole program: pass the automation\'s id or name and { oldString, newString, replaceAll?, expectedRevision?, acknowledgeErrors? }. oldString must appear in the CURRENT source exactly once (read it first — readAutomation or getAutomation — and quote enough surrounding text to pin one spot), or the edit is refused with a 400 explaining why: not found, or found more than once (pass replaceAll: true to change every match instead of widening the anchor). Once the anchor resolves, this is exactly saveAutomation with the spliced result as the new source — same expectedRevision conflict check, same validity gate, same acknowledgeErrors consent, and the edit ships (or is held back) on identical terms. Returns save\'s result plus the new `revision`.', { latency: 'medium' });
   reg('GET', '/automations/grep', 'Search across a team\'s automations for a literal snippet (or, with isRegex: true, a regular expression) and get back every matching line: { matches: [{ id, name, teamId, line, text, before, after }], truncated }. Query: pattern, isRegex?, contextLines? (lines of surrounding context per match, default 0), team? (default: every team the connection covers). Capped at 200 matches. Use it to find where something is defined or imported before editing it.', { inputSchema: grepAutomationsSchema, readOnly: true, latency: 'fast' });
   reg('POST', '/automations/validate', 'Typecheck an automation program against the live connected systems WITHOUT saving. Returns diagnostics (code, message, severity, line/col). A clean validation predicts a live save. Acts in your default team unless you pass `team`. Also the top-level "validateAutomation" tool.', { inputSchema: validateMovementSchema, latency: 'medium' });
+  reg('POST', '/automations/upgrade', 'Move a saved automation onto the current language version. Body: { automation, acknowledge?, team? }. Validates it under the current version and returns { status, from, to, diagnostics, message }: `blocked` (diagnostics to repair), `needs_acknowledgement` (clean — call again with acknowledge: true to move it), `upgraded`, `already_current`, or `unverified`. Without acknowledge nothing changes. Also the top-level "upgradeAutomation" tool.', { inputSchema: upgradeMovementSchema, latency: 'medium' });
   reg('POST', '/automations/completions', 'Given an automation program with a `<|>` cursor marker, return the valid next tokens at that point (writable fields, edges, enum options). Body: { source, team? }.', { inputSchema: completionsAtSchema, latency: 'medium' });
   reg('POST', '/automations/save', 'Save an automation program and provision its listeners (authoring → live). A valid save goes live; one that has errors or can\'t be verified saves the text but goes live only once you confirm — it comes back as needsConfirmation, and acknowledgeErrors: true ships it anyway (replacing whatever ran, even broken). No "draft" quietly keeps the last good version running. Returns needsConfirmation/diagnostics, per-listener details, runnable, `warnings` (saved fine, but would surprise the user — a movement name another automation already fires, or listeners retired because the saved source could not be read; always relay these), and `storyUrl` — a login-free link to a picture of what the automation does, worth offering as a labelled link once a save goes live. Body: { source, name?, description?, id?, acknowledgeErrors?, expectedRevision?, team? } — pass id to re-save, expectedRevision (the `revision` from your last getAutomation read) when updating an EXISTING automation so a concurrent edit can\'t be silently clobbered — a stale expectedRevision is rejected with { ok: false, conflict } instead of overwriting; call getAutomation again, merge, and re-save with the new revision. Omit expectedRevision for today\'s behaviour (no precondition — last write wins); it\'s ignored when creating a new automation. `team` files it in a specific team. Also the top-level "saveAutomation" tool.', { inputSchema: saveMovementSchema, latency: 'medium' });
   reg('POST', '/automations/delete', 'Permanently delete a saved automation and every listener it derives (a hard delete — the automation and its run triggers are gone, and any now-orphaned external subscriptions are torn down). Body: { automation, team? } — the automation id (from listAutomations); pass `team` when you belong to more than one. Returns { deleted } — false if no automation with that id lives in the resolved team. Also the top-level "deleteAutomation" tool.', { inputSchema: deleteMovementSchema, latency: 'fast' });
@@ -1428,6 +1476,7 @@ export {
   describeInstanceHandler,
   connectCredentialHandler,
   validateMovementHandler,
+  upgradeMovementHandler,
   saveMovementHandler,
   readAutomationHandler,
   editAutomationHandler,

@@ -4,6 +4,7 @@
 import type { default as JoinPendingTable } from './JoinPending';
 import type { default as TelegramTokenTable } from './TelegramToken';
 import type { default as MovementStoryTokenTable } from './MovementStoryToken';
+import type { default as SystemEventTable } from './SystemEvent';
 import type { default as ExposedFileTable } from './ExposedFile';
 import type { default as InboundEmailRouteTable } from './InboundEmailRoute';
 import type { default as ExternalServiceCredentialsTable } from './ExternalServiceCredentials';
@@ -25,6 +26,7 @@ import type { default as RecordBindingTable } from './RecordBinding';
 import type { default as ParkedRunTable } from './ParkedRun';
 import type { default as PlatformOwnedTokenTable } from './PlatformOwnedToken';
 import type { default as ConnectTokenTable } from './ConnectToken';
+import type { default as DeployCheckTable } from './DeployCheck';
 import type { default as GoogleGrantedItemTable } from './GoogleGrantedItem';
 import type { default as TelegramIdentityTable } from './TelegramIdentity';
 import type { default as OutboundEmailTable } from './OutboundEmail';
@@ -36,6 +38,8 @@ export default interface AutomationsSchema {
   telegram_token: TelegramTokenTable;
 
   movement_story_token: MovementStoryTokenTable;
+
+  system_event: SystemEventTable;
 
   exposed_file: ExposedFileTable;
 
@@ -78,6 +82,8 @@ export default interface AutomationsSchema {
   platform_owned_token: PlatformOwnedTokenTable;
 
   connect_token: ConnectTokenTable;
+
+  deploy_check: DeployCheckTable;
 
   google_granted_item: GoogleGrantedItemTable;
 

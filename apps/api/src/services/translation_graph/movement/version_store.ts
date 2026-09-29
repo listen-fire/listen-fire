@@ -8,10 +8,17 @@
 // pinned version's source — never the live `movement.source`, which may have
 // drifted while the run waited (P11).
 //
+// A version also carries the movement's LANGUAGE version when it was minted,
+// so a parked run resumes under the version it started with even after the
+// deploy check advances the movement's pin. A pin that moves mints a fresh
+// snapshot of the same text, so new runs pin a version carrying the new one.
+//
 // See plans/2026-06-21-movement-versioning/1_decisions.md and
 // plans/2026-06-19-async-user-interaction/ (Layer 5, the durable engine).
 
 import { createHash, randomUUID } from 'node:crypto';
+
+import type { LanguageVersion } from 'movement-lang';
 
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import type { MovementId } from '../../../generated/kysely/automations/Movement';
@@ -25,6 +32,8 @@ export interface MovementVersionRow {
   versionNumber: number;
   source: string;
   contentHash: string;
+  /** The language version runs of this snapshot compile and execute under. */
+  languageVersion: LanguageVersion;
 }
 
 /** The content-address of a movement's source — the equivalence that decides
@@ -37,9 +46,9 @@ export function movementSourceHash(source: string): string {
 
 /**
  * Mint a new version for a movement IF its source differs from the current
- * version (by content hash), and repoint `movement.current_version_id` at it.
- * A no-op when the source is byte-identical to the current version — returns
- * the existing version, `minted: false`. Called from the shipped-save path;
+ * version (by content hash) or its language version does, and repoint
+ * `movement.current_version_id` at it. A no-op when both match the current
+ * version — returns the existing version, `minted: false`. Called from the shipped-save path;
  * an unshipped (needsConfirmation) save mints nothing (a version is a
  * runnable snapshot).
  */
@@ -47,6 +56,8 @@ export async function mintMovementVersionIfChanged(input: {
   teamId: string;
   movementId: string;
   source: string;
+  /** The movement's pin at mint time. */
+  languageVersion: LanguageVersion;
 }): Promise<{ versionId: string; versionNumber: number; minted: boolean }> {
   const hash = movementSourceHash(input.source);
 
@@ -60,9 +71,13 @@ export async function mintMovementVersionIfChanged(input: {
     const current = await getAutomationsQb(['movement_version'])
       .selectFrom('movement_version')
       .where('id', '=', movement.current_version_id)
-      .select(['id', 'version_number', 'content_hash'])
+      .select(['id', 'version_number', 'content_hash', 'language_version'])
       .executeTakeFirst();
-    if (current && current.content_hash === hash) {
+    if (
+      current &&
+      current.content_hash === hash &&
+      current.language_version === input.languageVersion
+    ) {
       return {
         versionId: current.id as unknown as string,
         versionNumber: current.version_number,
@@ -93,6 +108,7 @@ export async function mintMovementVersionIfChanged(input: {
       version_number: versionNumber,
       source: input.source,
       content_hash: hash,
+      language_version: input.languageVersion,
     })
     .execute();
 
@@ -113,7 +129,15 @@ export async function getMovementVersion(input: {
   const row = await getAutomationsQb(['movement_version'])
     .selectFrom('movement_version')
     .where('id', '=', input.id as MovementVersionId)
-    .select(['id', 'movement_id', 'team_id', 'version_number', 'source', 'content_hash'])
+    .select([
+      'id',
+      'movement_id',
+      'team_id',
+      'version_number',
+      'source',
+      'content_hash',
+      'language_version',
+    ])
     .executeTakeFirst();
   if (!row) return null;
   return {
@@ -123,7 +147,47 @@ export async function getMovementVersion(input: {
     versionNumber: row.version_number,
     source: row.source,
     contentHash: row.content_hash,
+    languageVersion: row.language_version,
   };
+}
+
+/**
+ * Re-mint the movement's current snapshot under a moved pin: same text, new
+ * language version. A no-op for a movement with no snapshot yet (its first
+ * clean save mints one under whatever the pin is then).
+ */
+export async function repinCurrentVersion(input: {
+  teamId: string;
+  movementId: string;
+  languageVersion: LanguageVersion;
+}): Promise<void> {
+  const current = await getAutomationsQb(['movement', 'movement_version'])
+    .selectFrom('movement')
+    .innerJoin('movement_version', 'movement_version.id', 'movement.current_version_id')
+    .where('movement.id', '=', input.movementId as MovementId)
+    .select('movement_version.source as source')
+    .executeTakeFirst();
+  if (!current) return;
+  await mintMovementVersionIfChanged({
+    teamId: input.teamId,
+    movementId: input.movementId,
+    source: current.source,
+    languageVersion: input.languageVersion,
+  });
+}
+
+/** What a parked run re-enters: the snapshot's source (P11 — the stored
+ *  addresses name THAT AST) and the language version it runs under. Null when
+ *  the id doesn't resolve. */
+export async function loadPinnedVersion(
+  versionId: string,
+): Promise<{ source: string; languageVersion: LanguageVersion } | null> {
+  const row = await getAutomationsQb(['movement_version'])
+    .selectFrom('movement_version')
+    .where('id', '=', versionId as MovementVersionId)
+    .select(['source', 'language_version'])
+    .executeTakeFirst();
+  return row ? { source: row.source, languageVersion: row.language_version } : null;
 }
 
 /** Which saved version a run executed, against the one that would run
@@ -174,7 +238,15 @@ export async function listMovementVersions(input: {
   const rows = await getAutomationsQb(['movement_version'])
     .selectFrom('movement_version')
     .where('movement_id', '=', input.movementId as MovementId)
-    .select(['id', 'movement_id', 'team_id', 'version_number', 'source', 'content_hash'])
+    .select([
+      'id',
+      'movement_id',
+      'team_id',
+      'version_number',
+      'source',
+      'content_hash',
+      'language_version',
+    ])
     .orderBy('version_number', 'desc')
     .execute();
   return rows.map((row) => ({
@@ -184,5 +256,6 @@ export async function listMovementVersions(input: {
     versionNumber: row.version_number,
     source: row.source,
     contentHash: row.content_hash,
+    languageVersion: row.language_version,
   }));
 }

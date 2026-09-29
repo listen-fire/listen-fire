@@ -14,6 +14,7 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { TAB_ORIGIN_ID } from "@/lib/tab-origin";
 import { usePageTitle } from "@/components/page-title";
 import { ValidityBadge } from "@/components/movements/movement-workbench";
+import { LanguageVersionCell } from "@/components/movements/language-version";
 import {
   Badge,
   ButtonLink,
@@ -143,7 +144,7 @@ function ListensOnCell({ movement }: { movement: MovementListItem }) {
 
 function AutomationsTable({ movements }: { movements: MovementListItem[] }) {
   return (
-    <MovementsTable columns={["Name", "Status", "Listens on", "Last run"]}>
+    <MovementsTable columns={["Name", "Status", "Listens on", "Language", "Last run"]}>
       {movements.map((m) => {
         const latest = mostRecentRun(m.listeners);
         return (
@@ -151,6 +152,10 @@ function AutomationsTable({ movements }: { movements: MovementListItem[] }) {
             <NameCell movement={m} />
             <StatusCell movement={m} />
             <ListensOnCell movement={m} />
+            <LanguageVersionCell
+              languageVersion={m.languageVersion}
+              upgradeDiagnostics={m.upgradeDiagnostics}
+            />
             <td className="py-3 pr-4 text-gray-400">
               {latest ? formatRelativeTime(latest.startedAt) : "—"}
             </td>
