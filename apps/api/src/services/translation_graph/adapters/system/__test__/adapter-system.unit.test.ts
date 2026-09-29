@@ -19,7 +19,14 @@ import {
   type FailedRunReader,
   type SystemCheckpoint,
 } from '../poll';
-import { RUN_FAILED, SYSTEM_EVENT_KINDS, type SystemEventPayload } from '../types';
+import type { StoredSystemEvent, StoredSystemEventReader } from '../events';
+import {
+  RELEASE_APPLIED,
+  RUN_FAILED,
+  SYSTEM_EVENT_KINDS,
+  VALIDATION_ISSUE,
+  type SystemEventPayload,
+} from '../types';
 
 const TEAM = 'team-1' as TeamId;
 const NOW = new Date('2026-09-29T12:00:00.000Z');
@@ -84,10 +91,10 @@ describe('SystemAdapter surface', () => {
     }
   });
 
-  it('says in the schema that three kinds wait on the deploy check', async () => {
+  it('says in the schema that three kinds come from the deploy check', async () => {
     for (const kind of SYSTEM_EVENT_KINDS.filter((k) => k !== RUN_FAILED)) {
       expect((await adapter.describe(kind.typeId))?.description).toContain(
-        'Emitted by the deploy check from the next release',
+        'Emitted by the check that runs as a new release is deployed',
       );
     }
   });
@@ -194,13 +201,91 @@ describe('Run Failed emission', () => {
     expect((result.checkpoint as SystemCheckpoint).runFailed).toEqual(MARK);
   });
 
-  it('reads nothing for a listen on a kind nothing emits yet', async () => {
-    const { poll, reader } = source([failedRun()]);
+  it('does not read failed runs for a listen that selected only a deploy kind', async () => {
+    const { poll, failed } = storedSource([]);
+    await poll.getEvents({
+      config: { events: ['Validation Issue'] },
+      checkpoint: { runFailed: MARK, stored: STORED_MARK },
+    });
+    expect(failed).not.toHaveBeenCalled();
+  });
+});
+
+const STORED_MARK = { occurredAt: '2026-09-29T11:50:00.000Z', id: '00000000-0000-0000-0000-000000000000' };
+
+function storedEvent(over: Partial<StoredSystemEvent> = {}): StoredSystemEvent {
+  return {
+    id: 'evt-1',
+    kind: VALIDATION_ISSUE.typeId,
+    payload: {
+      automation: 'Sync CRM',
+      automationId: 'mov-crm',
+      runId: '',
+      version: 'Quiet Heron',
+      reason: 'line 4: `EXISTS(x.Notes)` never holds for extracted text',
+      url: 'http://localhost:3003/movements/mov-crm',
+      at: '2026-09-29T11:55:00.000Z',
+    },
+    occurredAt: new Date('2026-09-29T11:55:00.000Z'),
+    ...over,
+  };
+}
+
+function storedSource(events: StoredSystemEvent[]) {
+  const failed = jest.fn<ReturnType<FailedRunReader>, Parameters<FailedRunReader>>(async () => []);
+  const stored = jest.fn<ReturnType<StoredSystemEventReader>, Parameters<StoredSystemEventReader>>(
+    async () => events,
+  );
+  return { poll: new SystemPollSource(TEAM, failed, () => NOW, stored), failed, stored };
+}
+
+describe('deploy check kinds emission', () => {
+  it('first poll sets the stored-event mark and emits nothing', async () => {
+    const { poll, stored } = storedSource([storedEvent()]);
+    const result = await poll.getEvents({ config: { events: ['Validation Issue'] } });
+    expect(result.events).toEqual([]);
+    expect(stored).not.toHaveBeenCalled();
+    expect((result.checkpoint as SystemCheckpoint).stored?.occurredAt).toBe('2026-09-29T11:59:50.000Z');
+  });
+
+  it('delivers a stored Validation Issue under its own tag and advances the mark', async () => {
+    const event = storedEvent();
+    const { poll, stored } = storedSource([event]);
     const result = await poll.getEvents({
       config: { events: ['Validation Issue'] },
-      checkpoint: { runFailed: MARK },
+      checkpoint: { stored: STORED_MARK },
+      movementId: 'mov-crm',
     });
-    expect(result.events).toEqual([]);
-    expect(reader).not.toHaveBeenCalled();
+    expect(stored).toHaveBeenCalledWith(
+      expect.objectContaining({ kinds: [VALIDATION_ISSUE.typeId], after: STORED_MARK }),
+    );
+    // An automation IS told about its own validation issue.
+    expect(result.events).toEqual([
+      {
+        payload: event.payload,
+        externalId: 'evt-1',
+        idempotencyKey: `${VALIDATION_ISSUE.tag}:evt-1`,
+        tag: VALIDATION_ISSUE.tag,
+        occurredAt: '2026-09-29T11:55:00.000Z',
+      },
+    ]);
+    expect((result.checkpoint as SystemCheckpoint).stored).toEqual({
+      occurredAt: '2026-09-29T11:55:00.000Z',
+      id: 'evt-1',
+    });
+  });
+
+  it('reads both sources for a listen on Run Failed and a deploy kind, keeping each mark', async () => {
+    const { poll, failed, stored } = storedSource([
+      storedEvent({ id: 'evt-2', kind: RELEASE_APPLIED.typeId }),
+    ]);
+    const result = await poll.getEvents({
+      config: { events: ['Run Failed', 'Release Applied'] },
+      checkpoint: { runFailed: MARK, stored: STORED_MARK },
+    });
+    expect(failed).toHaveBeenCalled();
+    expect(stored).toHaveBeenCalledWith(expect.objectContaining({ kinds: [RELEASE_APPLIED.typeId] }));
+    expect(result.events.map((e) => e.tag)).toEqual([RELEASE_APPLIED.tag]);
+    expect((result.checkpoint as SystemCheckpoint).runFailed).toEqual(MARK);
   });
 });

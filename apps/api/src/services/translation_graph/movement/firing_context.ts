@@ -68,26 +68,48 @@ async function firingActor(firing: {
   teamId: TeamId;
   triggerId: string;
 }): Promise<string | undefined> {
-  const [trigger, members] = await Promise.all([
-    getAutomationsQb(['trigger'])
-      .selectFrom('trigger')
-      .select('created_by_user_id')
-      .where('id', '=', firing.triggerId as TriggerId)
-      .executeTakeFirst(),
-    getCoreQb(['team_membership'])
-      .selectFrom('team_membership')
-      .select(['user_id', 'access'])
-      .where('team_id', '=', firing.teamId)
-      .orderBy('created_at', 'asc')
-      .execute(),
-  ]);
+  const trigger = await getAutomationsQb(['trigger'])
+    .selectFrom('trigger')
+    .select('created_by_user_id')
+    .where('id', '=', firing.triggerId as TriggerId)
+    .executeTakeFirst();
+  return teamActor({
+    teamId: firing.teamId,
+    preferredUserId: (trigger?.created_by_user_id as unknown as string | null) ?? null,
+  });
+}
 
-  const author = (trigger?.created_by_user_id as unknown as string | null) ?? null;
-  if (author !== null && members.some((m) => (m.user_id as unknown as string) === author)) {
-    return author;
+/** `preferredUserId` while they are still on the team, else the team's
+ *  longest-standing member with write access. */
+async function teamActor(input: {
+  teamId: TeamId;
+  preferredUserId: string | null;
+}): Promise<string | undefined> {
+  const members = await getCoreQb(['team_membership'])
+    .selectFrom('team_membership')
+    .select(['user_id', 'access'])
+    .where('team_id', '=', input.teamId)
+    .orderBy('created_at', 'asc')
+    .execute();
+  const preferred = input.preferredUserId;
+  if (preferred !== null && members.some((m) => (m.user_id as unknown as string) === preferred)) {
+    return preferred;
   }
   const fallback = members.find((m) => m.access === 'write') ?? members[0];
   return fallback === undefined ? undefined : (fallback.user_id as unknown as string);
 }
 
-export { withFiringContext };
+/**
+ * Background work on a team's automations that is not a firing — the deploy
+ * check validating them — runs inside the team as the firing fallback's member,
+ * for the reason a firing does: team-scoped services read the ambient identity.
+ */
+async function withTeamContext<T>(teamId: TeamId, fn: () => Promise<T>): Promise<T> {
+  const userId = await teamActor({ teamId, preferredUserId: null });
+  if (userId === undefined) return runInSystemContext(fn);
+  const ctx = new Context();
+  ctx.bindPrincipal(userPrincipal({ userId, teamId: teamId as unknown as string }));
+  return ctx.runAsync(fn);
+}
+
+export { withFiringContext, withTeamContext };

@@ -30,29 +30,35 @@ export const RUN_FAILED: SystemEventKind = {
     'and a rehearsal (dry run) failing is not reported.',
 };
 
-/** Kinds declared for the deploy check the next release adds. Declared now so
- *  the surface an author reads is the whole one; nothing emits them yet. */
-const NEXT_RELEASE = 'Emitted by the deploy check from the next release; nothing emits it yet.';
+/** The deploy check's three kinds: emitted once per release, as it runs. */
+const ON_DEPLOY = 'Emitted by the check that runs as a new release is deployed.';
 
 export const VALIDATION_ISSUE: SystemEventKind = {
   typeId: 'validation_issue',
   displayName: 'Validation Issue',
   tag: 'system:validation_issue',
-  description: `A saved automation stopped validating under a new release. ${NEXT_RELEASE}`,
+  description:
+    `A saved automation does not validate cleanly under the release's current language ` +
+    `version, so it stays on the version it is written in. \`Reason\` lists what to repair. ${ON_DEPLOY}`,
 };
 
 export const DEPRECATED_VERSION: SystemEventKind = {
   typeId: 'deprecated_version',
   displayName: 'Deprecated Version',
   tag: 'system:deprecated_version',
-  description: `A saved automation is pinned to a language version the running release deprecates. ${NEXT_RELEASE}`,
+  description:
+    `A saved automation is written in a language version the running release deprecates; ` +
+    `it still runs, until a later release removes that version. ${ON_DEPLOY}`,
 };
 
 export const RELEASE_APPLIED: SystemEventKind = {
   typeId: 'release_applied',
   displayName: 'Release Applied',
   tag: 'system:release_applied',
-  description: `A new release was deployed and its checks ran over this automation. ${NEXT_RELEASE}`,
+  description:
+    `A new release was deployed and its check ran over this workspace's automations. ` +
+    `\`Reason\` names the release and how many automations moved to the current language ` +
+    `version, stayed with warnings, or failed. Not about one automation: \`Automation\` is empty. ${ON_DEPLOY}`,
 };
 
 export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [
@@ -75,7 +81,7 @@ export interface SystemEventPayload {
   automationId: string;
   /** Empty when the event concerns no run. */
   runId: string;
-  /** The language version's name; empty until versions exist. */
+  /** The language version's name; empty when the event concerns none. */
   version: string;
   reason: string;
   url: string;

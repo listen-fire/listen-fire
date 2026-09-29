@@ -7,8 +7,7 @@
 // enumerated — the platform's events are DELIVERED, one fires edge per kind,
 // each landing on a record with the same fields (types.ts). Event production
 // lives on the poll source (poll.ts), which reads what the platform already
-// records: it only emits what the engine and, from the next release, the
-// deploy check already know.
+// records: it only emits what the engine and the deploy check already know.
 
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { Adapter, AdapterManifest, EdgesFromResult, EventType } from '../../adapter';
@@ -41,18 +40,18 @@ export const SYSTEM_MANIFEST: AdapterManifest = {
     'in; nothing to connect.',
   authoringHints:
     'Every event carries `Automation`, `Automation Id`, `Run Id`, `Version`, ' +
-    '`Reason`, `Url` and `At`. `Run Failed` is the only kind delivered today; ' +
-    'the other three are declared for the deploy check the next release adds. ' +
-    'An automation is never told about its own failures.',
+    '`Reason`, `Url` and `At`. `Run Failed` is delivered as runs fail; ' +
+    '`Validation Issue`, `Deprecated Version` and `Release Applied` as a new ' +
+    'release is deployed. An automation is never told about its own failures.',
   handbookSection: SYSTEM_HANDBOOK_SECTION,
   triggerExpectation:
     'Fires on the platform’s own events, selected with `events`. `Run Failed` ' +
     '(the default) fires once per run of ANOTHER automation in this workspace ' +
     'that ends failed, within a couple of minutes — never for the listening ' +
-    'automation’s own runs, and never for a rehearsal. The first poll sets the ' +
-    'mark and emits nothing, so going live never replays past failures. ' +
-    '`Validation Issue`, `Deprecated Version` and `Release Applied` are declared ' +
-    'but emitted by the deploy check from the next release; today they never fire.',
+    'automation’s own runs, and never for a rehearsal. `Validation Issue` and ' +
+    '`Deprecated Version` fire once per affected automation, and `Release Applied` ' +
+    'once per workspace, each time a new release is deployed. The first poll sets ' +
+    'the mark and emits nothing, so going live never replays past events.',
   supportedTriggers: ['poll'],
   methods: ['listEntryPoints', 'describe', 'getFieldValue', 'listEventTypes'],
   subscribableEvents: [...SYSTEM_SUBSCRIBABLE_EVENTS],

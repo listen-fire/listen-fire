@@ -24,6 +24,8 @@ import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
 
 import { getAutomationsQb } from '../../../lib/kysely';
 import { parseRunMode, type TriggerRunMode } from '../triggers/run_mode';
+import type { AuthoringDiagnostic } from './authoring';
+import { repinCurrentVersion } from './version_store';
 
 /** Runtime validity of the CURRENT source against the adapters' CURRENT live
  *  shape. Null = never checked.
@@ -54,6 +56,11 @@ export interface MovementRow {
   /** The language version this movement is written against — stamped at first
    *  save, never moved by an edit. Validation and runs of it use this. */
   languageVersion: LanguageVersion;
+  /** What stands between this movement and `upgradeCheckedAgainst`: the error
+   *  and warning diagnostics validating it under that version found. Null =
+   *  nothing recorded (never checked, or already on that version). */
+  upgradeDiagnostics: AuthoringDiagnostic[] | null;
+  upgradeCheckedAgainst: LanguageVersion | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +80,8 @@ const movementColumns = [
   'validity_consented_at',
   'validity_checked_against',
   'language_version',
+  'upgrade_diagnostics',
+  'upgrade_checked_against',
   'created_at',
   'updated_at',
 ] as const;
@@ -92,6 +101,8 @@ function toMovementRow(row: {
   validity_consented_at: Date | null;
   validity_checked_against: number | null;
   language_version: number;
+  upgrade_diagnostics: unknown;
+  upgrade_checked_against: number | null;
   created_at: Date;
   updated_at: Date;
 }): MovementRow {
@@ -110,6 +121,10 @@ function toMovementRow(row: {
     validityConsentedAt: row.validity_consented_at,
     validityCheckedAgainst: row.validity_checked_against,
     languageVersion: row.language_version,
+    upgradeDiagnostics: Array.isArray(row.upgrade_diagnostics)
+      ? (row.upgrade_diagnostics as AuthoringDiagnostic[])
+      : null,
+    upgradeCheckedAgainst: row.upgrade_checked_against,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -139,6 +154,16 @@ export async function getMovementRowByName(input: {
     .select(movementColumns)
     .executeTakeFirst();
   return row ? toMovementRow(row) : null;
+}
+
+/** Every team's movements — the deploy check's sweep, oldest first. */
+export async function listAllMovementRows(): Promise<MovementRow[]> {
+  const rows = await getAutomationsQb(['movement'])
+    .selectFrom('movement')
+    .select(movementColumns)
+    .orderBy('created_at', 'asc')
+    .execute();
+  return rows.map(toMovementRow);
 }
 
 export async function listMovementRows(teamId: string): Promise<MovementRow[]> {
@@ -256,6 +281,52 @@ export async function recordValidityOutcome(input: {
     })
     .where('id', '=', input.id as MovementId)
     .execute();
+}
+
+/** Record what validating a movement under `checkedAgainst` (a version newer
+ *  than its pin) found — only its errors and warnings, the diagnostics that
+ *  keep the pin where it is. An empty list is stored as nothing. */
+export async function recordUpgradeCheck(input: {
+  id: string;
+  diagnostics: AuthoringDiagnostic[];
+  checkedAgainst: LanguageVersion;
+}): Promise<void> {
+  await getAutomationsQb(['movement'])
+    .updateTable('movement')
+    .set({
+      // A JS array would reach Postgres as an ARRAY literal, not JSON.
+      upgrade_diagnostics:
+        input.diagnostics.length > 0 ? JSON.stringify(input.diagnostics) : null,
+      upgrade_checked_against: input.checkedAgainst,
+      updated_at: new Date(),
+    })
+    .where('id', '=', input.id as MovementId)
+    .execute();
+}
+
+/**
+ * Move a movement's pin — the deploy check's auto-advance or an explicit
+ * upgrade, never an edit. Clears what stood in the way, and re-mints the
+ * movement's current snapshot under the new version so new runs pin it while
+ * parked ones keep the version they started with.
+ */
+export async function advanceMovementLanguageVersion(input: {
+  teamId: string;
+  id: string;
+  to: LanguageVersion;
+}): Promise<void> {
+  await getAutomationsQb(['movement'])
+    .updateTable('movement')
+    .set({
+      language_version: input.to,
+      upgrade_diagnostics: null,
+      upgrade_checked_against: input.to,
+      updated_at: new Date(),
+    })
+    .where('team_id', '=', input.teamId)
+    .where('id', '=', input.id as MovementId)
+    .execute();
+  await repinCurrentVersion({ teamId: input.teamId, movementId: input.id, languageVersion: input.to });
 }
 
 export async function deleteMovementRow(input: { teamId: string; id: string }): Promise<void> {

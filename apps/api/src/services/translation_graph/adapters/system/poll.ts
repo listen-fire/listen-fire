@@ -1,5 +1,6 @@
 // System PollSource — the platform's own events, read from what it already
-// records.
+// records: `Run Failed` from the run table, the deploy check's three kinds from
+// the stored events it writes (events.ts).
 //
 // WHY A POLL, NOT A PUSH. A run is marked failed by several independent writers
 // (the run recorder, Run now's settle, the interaction failure path, a cancel),
@@ -19,11 +20,22 @@ import type { MovementId } from '../../../../generated/kysely/automations/Moveme
 import type { TriggerId } from '../../../../generated/kysely/automations/Trigger';
 import type { TriggerRunId } from '../../../../generated/kysely/automations/TriggerRun';
 import { getAutomationsQb } from '../../../../lib/kysely';
-import { getEnvVar } from '../../../../lib/utils/environment';
 import type { DiscriminableEvent } from '../../adapter';
 import type { PollSource } from '../../poll_source';
 import { eventConfigList } from '../../triggers/listen_config';
-import { RUN_FAILED, type SystemEventPayload } from './types';
+import {
+  readStoredSystemEventsFromDb,
+  webBaseUrl,
+  type StoredEventMark,
+  type StoredSystemEvent,
+  type StoredSystemEventReader,
+} from './events';
+import {
+  RUN_FAILED,
+  SYSTEM_EVENT_KINDS,
+  type SystemEventKind,
+  type SystemEventPayload,
+} from './types';
 
 /** The platform's own table is cheap to read; a failure notice should not wait
  *  five minutes. Overridable per listen with `pollIntervalSeconds`. */
@@ -51,7 +63,14 @@ export interface RunFailedMark {
 
 export interface SystemCheckpoint {
   runFailed?: RunFailedMark;
+  /** One mark across the stored kinds — they share one table and one order. */
+  stored?: StoredEventMark;
 }
+
+/** The kinds read from the stored events rather than the run table. */
+const STORED_KINDS: readonly SystemEventKind[] = SYSTEM_EVENT_KINDS.filter(
+  (kind) => kind !== RUN_FAILED,
+);
 
 /** One failed run, joined to the automation it belongs to — null for a run
  *  no automation owns (a legacy or simulated run), which the mark still passes
@@ -80,15 +99,17 @@ function runFailedMark(checkpoint: unknown): RunFailedMark | undefined {
   return typeof mark?.failedAt === 'string' && typeof mark.runId === 'string' ? mark : undefined;
 }
 
-/** Whether a listen selected `Run Failed` — explicitly, or by selecting
- *  nothing (the manifest's default). */
-function wantsRunFailed(config: unknown): boolean {
-  const selected = eventConfigList((config as { events?: unknown } | null | undefined)?.events);
-  return selected.length === 0 || selected.includes(RUN_FAILED.displayName);
+function storedMark(checkpoint: unknown): StoredEventMark | undefined {
+  const mark = (checkpoint as SystemCheckpoint | null | undefined)?.stored;
+  return typeof mark?.occurredAt === 'string' && typeof mark.id === 'string' ? mark : undefined;
 }
 
-function webBaseUrl(): string {
-  return getEnvVar('WEB_BASE_URL', { devDefault: 'http://localhost:3003' }).replace(/\/$/, '');
+/** The kinds a listen selected — `Run Failed` alone when it selected nothing
+ *  (the manifest's default). */
+function selectedKinds(config: unknown): SystemEventKind[] {
+  const selected = eventConfigList((config as { events?: unknown } | null | undefined)?.events);
+  if (selected.length === 0) return [RUN_FAILED];
+  return SYSTEM_EVENT_KINDS.filter((kind) => selected.includes(kind.displayName));
 }
 
 /** The automation's run history, filtered to its failures — the page a person
@@ -103,8 +124,8 @@ export function runFailedEvent(run: OwnedFailedRun): DiscriminableEvent {
     automation: run.automation.name,
     automationId: run.automation.id,
     runId: run.runId,
-    // Language versions do not exist yet; the field is part of the record so a
-    // handler written today reads the same once they do.
+    // A failed run's version is not what went wrong; the field is part of the
+    // one record shape every kind shares.
     version: '',
     reason: run.reason,
     url: failedRunsUrl(run.automation.id),
@@ -121,6 +142,19 @@ export function runFailedEvent(run: OwnedFailedRun): DiscriminableEvent {
   };
 }
 
+export function storedSystemEvent(event: StoredSystemEvent): DiscriminableEvent | null {
+  const kind = STORED_KINDS.find((k) => k.typeId === event.kind);
+  if (kind === undefined) return null;
+  return {
+    payload: event.payload,
+    externalId: event.id,
+    // Per-trigger receipt dedupe, as for a failed run.
+    idempotencyKey: `${kind.tag}:${event.id}`,
+    tag: kind.tag,
+    occurredAt: event.occurredAt.toISOString(),
+  };
+}
+
 export class SystemPollSource implements PollSource {
   readonly pollIntervalSeconds = DEFAULT_POLL_INTERVAL_SECONDS;
 
@@ -129,6 +163,8 @@ export class SystemPollSource implements PollSource {
     /** Injectable for tests; production reads the run table. */
     private readonly readFailedRuns: FailedRunReader = readFailedRunsFromDb,
     private readonly now: () => Date = () => new Date(),
+    /** Injectable for tests; production reads the stored events. */
+    private readonly readStoredEvents: StoredSystemEventReader = readStoredSystemEventsFromDb,
   ) {}
 
   async getEvents(input: {
@@ -137,37 +173,86 @@ export class SystemPollSource implements PollSource {
     movementId?: string;
   }): Promise<{ events: DiscriminableEvent[]; checkpoint?: unknown }> {
     const previous = (input.checkpoint ?? {}) as SystemCheckpoint;
-    // The other three kinds are declared for the deploy check the next release
-    // adds; until then a listen on them has nothing to read.
-    if (!wantsRunFailed(input.config)) return { events: [], checkpoint: previous };
-
+    const kinds = selectedKinds(input.config);
     const until = new Date(this.now().getTime() - SETTLE_MS);
-    const mark = runFailedMark(input.checkpoint);
+
+    const runFailed = kinds.includes(RUN_FAILED)
+      ? await this.pollRunFailed({ mark: runFailedMark(input.checkpoint), until, movementId: input.movementId })
+      : { events: [], mark: previous.runFailed };
+    const storedKinds = kinds.filter((kind) => kind !== RUN_FAILED);
+    const stored =
+      storedKinds.length > 0
+        ? await this.pollStored({ kinds: storedKinds, mark: storedMark(input.checkpoint), until })
+        : { events: [], mark: previous.stored };
+
+    return {
+      events: [...runFailed.events, ...stored.events],
+      checkpoint: {
+        ...previous,
+        ...(runFailed.mark !== undefined ? { runFailed: runFailed.mark } : {}),
+        ...(stored.mark !== undefined ? { stored: stored.mark } : {}),
+      },
+    };
+  }
+
+  private async pollRunFailed(input: {
+    mark: RunFailedMark | undefined;
+    until: Date;
+    movementId: string | undefined;
+  }): Promise<{ events: DiscriminableEvent[]; mark: RunFailedMark }> {
     // First poll: set the mark and emit nothing. Going live never replays the
     // failures that happened before anyone was listening.
-    if (mark === undefined) {
-      return {
-        events: [],
-        checkpoint: { ...previous, runFailed: { failedAt: until.toISOString(), runId: NIL_RUN_ID } },
-      };
+    if (input.mark === undefined) {
+      return { events: [], mark: { failedAt: input.until.toISOString(), runId: NIL_RUN_ID } };
     }
 
     const runs = await this.readFailedRuns({
       teamId: this.teamId,
-      after: mark,
-      until,
+      after: input.mark,
+      until: input.until,
       limit: PAGE_SIZE,
     });
     const last = runs[runs.length - 1];
-    const next: RunFailedMark =
-      last === undefined ? mark : { failedAt: last.failedAt.toISOString(), runId: last.runId };
-
     return {
       events: runs
         .filter((run): run is OwnedFailedRun => run.automation !== null)
         .filter((run) => run.automation.id !== input.movementId)
         .map(runFailedEvent),
-      checkpoint: { ...previous, runFailed: next },
+      mark:
+        last === undefined
+          ? input.mark
+          : { failedAt: last.failedAt.toISOString(), runId: last.runId },
+    };
+  }
+
+  private async pollStored(input: {
+    kinds: readonly SystemEventKind[];
+    mark: StoredEventMark | undefined;
+    until: Date;
+  }): Promise<{ events: DiscriminableEvent[]; mark: StoredEventMark }> {
+    // First poll: set the mark and emit nothing, as for failed runs.
+    if (input.mark === undefined) {
+      return { events: [], mark: { occurredAt: input.until.toISOString(), id: NIL_RUN_ID } };
+    }
+    // An automation IS told about its own validation issue: unlike a failure,
+    // hearing about it cannot produce another one.
+    const events = await this.readStoredEvents({
+      teamId: this.teamId,
+      kinds: input.kinds.map((kind) => kind.typeId),
+      after: input.mark,
+      until: input.until,
+      limit: PAGE_SIZE,
+    });
+    const last = events[events.length - 1];
+    return {
+      events: events.flatMap((event) => {
+        const discriminable = storedSystemEvent(event);
+        return discriminable === null ? [] : [discriminable];
+      }),
+      mark:
+        last === undefined
+          ? input.mark
+          : { occurredAt: last.occurredAt.toISOString(), id: last.id },
     };
   }
 }
