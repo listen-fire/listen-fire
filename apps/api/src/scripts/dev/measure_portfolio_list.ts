@@ -30,10 +30,16 @@ import Pg from 'pg';
 // asked — one tick per statement, whoever built it.
 let statements = 0;
 let counting = false;
+const byStatement = new Map<string, number>();
 const clientQuery = Pg.Client.prototype.query;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 Pg.Client.prototype.query = function (this: any, ...args: any[]) {
-  if (counting) statements += 1;
+  if (counting) {
+    statements += 1;
+    const text: string = typeof args[0] === 'string' ? args[0] : (args[0]?.text ?? '?');
+    const signature = text.replace(/\s+/g, ' ').slice(0, 110);
+    byStatement.set(signature, (byStatement.get(signature) ?? 0) + 1);
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (clientQuery as any).apply(this, args);
 };
@@ -96,14 +102,27 @@ function comparableRows(items: Row[]) {
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
-async function measureResolver(rowsOut: string | undefined) {
+/** One call, in its own Context — which is the scope every per-request memo
+ *  and batch lives in, so two calls sharing one would flatter the second. */
+async function callList() {
   return runInContext(
     async () => {
       const caller = trpcRouter.createCaller({ authorise: async () => {} });
+      return caller.views.investments.getPortfolioInvestments(PAGE_INPUT as never);
+    },
+    { email: USER_EMAIL },
+    { teamId: TEAM_ID },
+  );
+}
 
-      // One warm pass first: the first call of the process pays for pools,
-      // prepared statements and JIT, and that cost is not the page's.
-      await caller.views.investments.getPortfolioInvestments(PAGE_INPUT as never);
+async function measureResolver(rowsOut: string | undefined) {
+  // One warm pass first: the first call of the process pays for pools,
+  // prepared statements and JIT, and that cost is not the page's.
+  await callList();
+
+  return runInContext(
+    async () => {
+      const caller = trpcRouter.createCaller({ authorise: async () => {} });
 
       statements = 0;
       counting = true;
@@ -123,6 +142,11 @@ async function measureResolver(rowsOut: string | undefined) {
         writeFileSync(rowsOut, `${JSON.stringify(comparableRows(items), null, 1)}\n`);
       }
 
+      const breakdown = Array.from(byStatement.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12)
+        .map(([signature, count]) => `${String(count).padStart(5)}  ${signature}`);
+
       return {
         rows: items.length,
         resolverMs: Math.round(ms),
@@ -131,6 +155,7 @@ async function measureResolver(rowsOut: string | undefined) {
         bytesWithoutTrace: withoutTrace,
         bytesGzipped: gzipped,
         rowsFile: rowsOut,
+        breakdown,
       };
     },
     { email: USER_EMAIL },

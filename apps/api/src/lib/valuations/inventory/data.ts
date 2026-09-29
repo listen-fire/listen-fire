@@ -6,8 +6,24 @@ import { InvestmentId } from '../../../generated/kysely/valuations/Investment';
 import { LegalEntityId } from '../../../generated/kysely/valuations/LegalEntity';
 import { TeamId } from '../../../generated/kysely/core/Team';
 import { jsonbAgg, getValuationsQb } from '../../kysely';
+import { requestBatchLoader } from '../requestCache';
 import { getAssetTrackedEntities } from '../trackedEntities';
 import { AssetTransfer, AssetId, InvestingEntityId } from './types';
+
+/** Which of our entities holds an investment. One investment's answer is its
+ *  own, so every row's ask joins the same query. */
+const loadInvestmentAssetHolder = requestBatchLoader<string, string>({
+  identity: (investmentId) => investmentId,
+  fetch: async (investmentIds) => {
+    const results = await getValuationsQb(['investment'])
+      .selectFrom('investment')
+      .select(['id', 'investor_profile_id'])
+      .where('investment.id', 'in', Array.from(new Set(investmentIds)) as InvestmentId[])
+      .execute();
+
+    return new Map(results.map((row) => [row.id as string, row.investor_profile_id]));
+  },
+});
 
 async function getAssetHolderIdsForInvestments({
   investmentIds,
@@ -15,15 +31,79 @@ async function getAssetHolderIdsForInvestments({
   investmentIds: string[];
 }): Promise<string[]> {
   if (investmentIds.length === 0) return [];
-  const results = await getValuationsQb(['investment'])
-    .selectFrom('investment')
-    .select('investor_profile_id')
-    .distinct()
-    .where('investment.id', 'in', investmentIds as InvestmentId[])
-    .execute();
+  const holders = await Promise.all(investmentIds.map(loadInvestmentAssetHolder));
 
-  return results.map((row) => row.investor_profile_id);
+  return Array.from(new Set(holders.filter((id): id is string => !!id)));
 }
+
+/** The assets and transactions one investment opens the walk with. Each
+ *  investment's rows are its own, so a hundred companies ask once between
+ *  them. */
+const loadInvestmentSeed = requestBatchLoader<
+  { investmentId: string; asOfDate: Date },
+  { assetIds: string[]; transactionIds: string[] }
+>({
+  identity: ({ investmentId, asOfDate }) => `${investmentId}|${asOfDate.toISOString()}`,
+  fetch: async (batch) => {
+    const teamId = currentPrincipal().teamId;
+    const byDate = new Map<string, { asOfDate: Date; investmentIds: Set<string> }>();
+    for (const { investmentId, asOfDate } of batch) {
+      const key = asOfDate.toISOString();
+      const group = byDate.get(key) ?? { asOfDate, investmentIds: new Set<string>() };
+      group.investmentIds.add(investmentId);
+      byDate.set(key, group);
+    }
+
+    const seeds = new Map<string, { assetIds: string[]; transactionIds: string[] }>();
+    await Promise.all(
+      Array.from(byDate.values()).map(async ({ asOfDate, investmentIds }) => {
+        const results = await getValuationsQb([
+          'asset_transfer',
+          'asset',
+          'transaction',
+          'legal_entity',
+        ])
+          .selectFrom('asset_transfer')
+          .innerJoin('transaction', 'transaction.id', 'asset_transfer.transaction_id')
+          .innerJoin('asset', 'asset.id', 'asset_transfer.asset_id')
+          .innerJoin('legal_entity as to', (join) =>
+            join.on(($) =>
+              $.and([
+                $('to.id', '=', $.ref('asset_transfer.to_legal_entity_id')),
+                $.or([$('to.is_portfolio', '=', true), $('to.is_own_investing_entity', '=', true)]),
+              ]),
+            ),
+          )
+          .innerJoin('legal_entity as from', 'from.id', 'asset_transfer.from_legal_entity_id')
+          .select([
+            'asset.id as asset_id',
+            'transaction.id as transaction_id',
+            'transaction.investment_id',
+          ])
+          .where('transaction.team_id', '=', teamId as TeamId)
+          .where('transaction.investment_id', 'in', Array.from(investmentIds) as InvestmentId[])
+          .where('transaction.close_date', '<=', asOfDate)
+          .where('asset.type', '<>', AssetType.CURRENCY)
+          .execute();
+
+        for (const investmentId of investmentIds) {
+          seeds.set(`${investmentId}|${asOfDate.toISOString()}`, {
+            assetIds: [],
+            transactionIds: [],
+          });
+        }
+        for (const row of results) {
+          const seed = seeds.get(`${row.investment_id}|${asOfDate.toISOString()}`);
+          if (!seed) continue;
+          seed.assetIds.push(row.asset_id);
+          seed.transactionIds.push(row.transaction_id);
+        }
+      }),
+    );
+
+    return seeds;
+  },
+});
 
 async function getAssetsAndTransactionsForInvestments({
   investmentIds,
@@ -39,32 +119,100 @@ async function getAssetsAndTransactionsForInvestments({
     };
   }
 
-  const teamId = currentPrincipal().teamId;
-  const results = await getValuationsQb(['asset_transfer', 'asset', 'transaction', 'legal_entity'])
-    .selectFrom('asset_transfer')
-    .innerJoin('transaction', 'transaction.id', 'asset_transfer.transaction_id')
-    .innerJoin('asset', 'asset.id', 'asset_transfer.asset_id')
-    .innerJoin('legal_entity as to', (join) =>
-      join.on(($) =>
-        $.and([
-          $('to.id', '=', $.ref('asset_transfer.to_legal_entity_id')),
-          $.or([$('to.is_portfolio', '=', true), $('to.is_own_investing_entity', '=', true)]),
-        ]),
-      ),
-    )
-    .innerJoin('legal_entity as from', 'from.id', 'asset_transfer.from_legal_entity_id')
-    .select(['asset.id as asset_id', 'transaction.id as transaction_id'])
-    .where('transaction.team_id', '=', teamId as TeamId)
-    .where('transaction.investment_id', 'in', investmentIds as InvestmentId[])
-    .where('transaction.close_date', '<=', asOfDate)
-    .where('asset.type', '<>', AssetType.CURRENCY)
-    .execute();
+  const seeds = await Promise.all(
+    investmentIds.map((investmentId) => loadInvestmentSeed({ investmentId, asOfDate })),
+  );
 
-  return {
-    assetIds: new Set(results.map((row) => row.asset_id)),
-    transactionIds: new Set(results.map((row) => row.transaction_id)),
-  };
+  const assetIds = new Set<string>();
+  const transactionIds = new Set<string>();
+  for (const seed of seeds) {
+    for (const assetId of seed?.assetIds ?? []) assetIds.add(assetId);
+    for (const transactionId of seed?.transactionIds ?? []) transactionIds.add(transactionId);
+  }
+
+  return { assetIds, transactionIds };
 }
+
+type SeededTransferRow = {
+  /** Which asset of the batch reached this transfer. The walk asks per asset,
+   *  so the answer is filed per asset and merged back for whoever asked. */
+  seedAssetId: string;
+  /** The `asset_transfer` row itself: unique, and everything but the investee
+   *  list is a function of it, so it is the key two seeds' rows merge on. */
+  transferId: string;
+  /** Where the row sat in the batch's own chronological result, so a merge of
+   *  several seeds' rows stays in the order the database put them in. */
+  position: number;
+  transaction: Omit<AssetTransfer, 'transfers'>;
+  transfer: AssetTransfer['transfers'][number];
+};
+
+/**
+ * Every transfer one asset takes part in — of the asset itself, or of cash from
+ * an entity whose value it tracks.
+ *
+ * Asked per asset and answered per batch. The walk runs once per company and
+ * steps level by level, so without this each level of each company is its own
+ * round trip; with it, every company's level is one query. An asset's rows are
+ * a function of the asset and the date alone — the one thing that isn't is the
+ * investee list, which names the issuers of the ASKING assets, so the merge
+ * below rebuilds it from whichever seeds the caller actually asked about.
+ */
+const loadAssetTransfers = requestBatchLoader<
+  { assetId: string; asOfDate: Date },
+  SeededTransferRow[]
+>({
+  identity: ({ assetId, asOfDate }) => `${assetId}|${asOfDate.toISOString()}`,
+  fetch: async (batch) => {
+    const byDate = new Map<string, { asOfDate: Date; assetIds: Set<string> }>();
+    for (const { assetId, asOfDate } of batch) {
+      const key = asOfDate.toISOString();
+      const group = byDate.get(key) ?? { asOfDate, assetIds: new Set<string>() };
+      group.assetIds.add(assetId);
+      byDate.set(key, group);
+    }
+
+    const rowsByAsset = new Map<string, SeededTransferRow[]>();
+    await Promise.all(
+      Array.from(byDate.values()).map(async ({ asOfDate, assetIds }) => {
+        const wanted = Array.from(assetIds);
+        for (const assetId of wanted) {
+          rowsByAsset.set(`${assetId}|${asOfDate.toISOString()}`, []);
+        }
+
+        const results = await fetchTransfersForAssets({ assetIds: wanted, asOfDate });
+        results.forEach((row, position) => {
+          rowsByAsset.get(`${row.seed_asset_id}|${asOfDate.toISOString()}`)?.push({
+            seedAssetId: row.seed_asset_id,
+            transferId: row.transfer_id,
+            position,
+            transaction: {
+              transaction_id: row.transaction_id,
+              event_id: row.event_id,
+              investment_id: row.investment_id,
+              due_to_rights_from_asset_id: row.due_to_rights_from_asset_id,
+              close_date: row.close_date,
+              convertedToId: row.converted_to_id,
+            },
+            transfer: {
+              assetId: row.asset_id as AssetId,
+              assetName: row.name,
+              assetType: row.type,
+              assetIssuerId: row.asset_issuer_id,
+              numAssets: row.num_assets ?? 0,
+              type: row.flowtype,
+              investingEntityId: row.investing_entity_id as string as InvestingEntityId,
+              investingEntityName: row.investing_entity_name,
+              investees: row.investees,
+            },
+          });
+        });
+      }),
+    );
+
+    return rowsByAsset;
+  },
+});
 
 async function getTransactionsForAssets({
   assetIds,
@@ -77,6 +225,48 @@ async function getTransactionsForAssets({
     return [];
   }
 
+  const perAsset = await Promise.all(
+    Array.from(new Set(assetIds)).map((assetId) => loadAssetTransfers({ assetId, asOfDate })),
+  );
+
+  // Back into one chronological stream. Two seeds that reached the same
+  // transfer contribute one entry between them, carrying both their issuers —
+  // which is what a single query over both assets would have aggregated.
+  const merged = perAsset.flatMap((rows) => rows ?? []).sort((a, b) => a.position - b.position);
+
+  const transactionMap = new Map<string, AssetTransfer>();
+  const transferById = new Map<string, AssetTransfer['transfers'][number]>();
+
+  for (const { transferId, transaction, transfer } of merged) {
+    const seen = transferById.get(transferId);
+    if (seen) {
+      for (const investee of transfer.investees) {
+        const known = seen.investees.some(
+          (i) => i.id === investee.id && !!i.isAlsoIssuerOfAsset === !!investee.isAlsoIssuerOfAsset,
+        );
+        if (!known) seen.investees.push(investee);
+      }
+      continue;
+    }
+
+    if (!transactionMap.has(transaction.transaction_id)) {
+      transactionMap.set(transaction.transaction_id, { ...transaction, transfers: [] });
+    }
+    const entry = { ...transfer, investees: [...transfer.investees] };
+    transferById.set(transferId, entry);
+    transactionMap.get(transaction.transaction_id)!.transfers.push(entry);
+  }
+
+  return Array.from(transactionMap.values());
+}
+
+async function fetchTransfersForAssets({
+  assetIds,
+  asOfDate,
+}: {
+  assetIds: string[];
+  asOfDate: Date;
+}) {
   // What we need is to get two types of transaction:
   // - exchanges of the assets
   // - cash from any entity whose value the asset tracks
@@ -145,6 +335,13 @@ async function getTransactionsForAssets({
       ),
     )
     .select(($) => [
+      // The asking asset and the transfer row: the merge in
+      // `getTransactionsForAssets` keys on the transfer, and files each row
+      // under the seed that reached it. Everything else below is a function of
+      // the transfer alone — except `investees`, which names this seed's issuer
+      // and so is unioned across the seeds a caller asked about.
+      'a.id as seed_asset_id',
+      'at2.id as transfer_id',
       't.id as transaction_id',
       't.event_id',
       't.investment_id',
@@ -200,47 +397,16 @@ async function getTransactionsForAssets({
         $('from.is_portfolio', '=', true),
       ]),
     )
-    .groupBy(['t.id', 'at2.id', 'a2.id', 'to.id', 'from.id', 'ca.id'])
+    .groupBy(['a.id', 't.id', 'at2.id', 'a2.id', 'to.id', 'from.id', 'ca.id'])
     // Same-day rows walk in one fixed order. A payout's split between cheques
     // depends on what is held when its row is walked, so leaving ties to the
     // query plan would let the same company value differently depending on
-    // what else the query was asked about.
+    // what else the batch was asked about.
     .orderBy('t.close_date', 'asc')
     .orderBy('t.id', 'asc')
     .orderBy('at2.id', 'asc');
 
-  const results = await query.execute();
-
-  const transactionMap = new Map<string, AssetTransfer>();
-
-  for (const row of results) {
-    if (!transactionMap.has(row.transaction_id)) {
-      transactionMap.set(row.transaction_id, {
-        transaction_id: row.transaction_id,
-        event_id: row.event_id,
-        investment_id: row.investment_id,
-        due_to_rights_from_asset_id: row.due_to_rights_from_asset_id,
-        close_date: row.close_date,
-        convertedToId: row.converted_to_id,
-        transfers: [],
-      });
-    }
-
-    const transaction = transactionMap.get(row.transaction_id)!;
-    transaction.transfers.push({
-      assetId: row.asset_id as AssetId,
-      assetName: row.name,
-      assetType: row.type,
-      assetIssuerId: row.asset_issuer_id,
-      numAssets: row.num_assets ?? 0,
-      type: row.flowtype,
-      investingEntityId: row.investing_entity_id as string as InvestingEntityId,
-      investingEntityName: row.investing_entity_name,
-      investees: row.investees,
-    });
-  }
-
-  return Array.from(transactionMap.values());
+  return query.execute();
 }
 
 /** The investee company under whose holdings an asset's flows are keyed. A
