@@ -444,10 +444,11 @@ slug = TEXT.SLUG("Acme Corp Ltd.")   # "acme-corp-ltd"
 
 ### URL.HOST
 
-\`URL.HOST(text)\` → \`text | absent\` — the host of a URL, lowercased and otherwise verbatim (\`www.\` kept, no port, no path); absent when the text isn't a URL with a host.
+\`URL.HOST(text)\` → \`text | absent\` — the host, lowercased and otherwise verbatim (\`www.\` kept, no port, no path). Takes a full URL (\`https://acme.com\`) or a scheme-less address (\`acme.com\`, \`acme.com:8080\`, \`www.Acme.com/path\`) — the bare form is read as if \`http://\` were in front of it. Absent for an email (\`joe@acme.com\` names an account, not a host) and for text that names no address at all.
 
 \`\`\`
-host = URL.HOST("https://WWW.Acme.com:8080/deals/1")   # "www.acme.com"
+host  = URL.HOST("https://WWW.Acme.com:8080/deals/1")   # "www.acme.com"
+host2 = URL.HOST("acme.com")                             # "acme.com" — no scheme needed
 \`\`\`
 
 ### NUMBER.FORMAT

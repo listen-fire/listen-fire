@@ -599,9 +599,23 @@ describe('URL.HOST', () => {
     expect(apply('url.host', '/deals/1')).toBeNull();
   });
 
+  it('accepts a scheme-less address, assumed http://', () => {
+    expect(apply('url.host', 'acme.com')).toBe('acme.com');
+    expect(apply('url.host', 'www.Acme.com/path?x=1')).toBe('www.acme.com');
+    expect(apply('url.host', 'acme.com:8080')).toBe('acme.com');
+  });
+
+  it('a URL with an explicit scheme is unchanged', () => {
+    expect(apply('url.host', 'https://acme.com')).toBe('acme.com');
+  });
+
+  it('an email is not a host', () => {
+    expect(apply('url.host', 'joe@acme.com')).toBeNull();
+  });
+
   it('text that is not a URL at all is absent', () => {
     expect(apply('url.host', 'not a url')).toBeNull();
-    expect(apply('url.host', 'acme.com')).toBeNull(); // no scheme — not a URL
+    expect(apply('url.host', '')).toBeNull();
   });
 
   it('null is absent', () => {

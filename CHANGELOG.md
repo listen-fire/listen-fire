@@ -9,6 +9,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 ### Added
 
 - `%` remainder in the formula grammar (`a % b`), same precedence as `*` and `/`, TypeScript semantics — the sign follows the dividend (`-7 % 20` is `-7`).
+- `URL.HOST` accepts a scheme-less address (`acme.com`, `acme.com:8080`, `www.Acme.com/path`), not just a full URL — an email is still not a host.
 
 ## [v0.8.5] - 2026-09-29
 
