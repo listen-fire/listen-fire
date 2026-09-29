@@ -1,4 +1,4 @@
-import { tokenizeDocument, type MvtToken } from "../movement-language";
+import { linesStartingInString, tokenizeDocument, type MvtToken } from "../movement-language";
 
 // The user's SyncToAttio script — the regression fixture for statement
 // keyword highlighting (listen/to/fire after a top-level `}`, `as`
@@ -169,6 +169,56 @@ describe("movement language tokenizer", () => {
 
     it("keeps UPPERCASE expression keywords distinct", () => {
       expect(styleOf(full, "CONTAINS", 25)).toBe("operatorKeyword");
+    });
+  });
+
+  // Henry's reply-card prompt: a continuation line that opens with `> ` and
+  // then an interpolation, a blank line, and a closing line that is mostly
+  // interpolation.
+  describe("multi-line string with interpolation (reply card)", () => {
+    const REPLY_CARD = `write head-[:Replies]-> {
+  Message: "Nemo's take:
+> \${o.take}
+
+\${card}"
+}`;
+    const card = tokenizeDocument(REPLY_CARD);
+    const DELIM = "interpolationDelimiter";
+
+    it("styles every string character on a continuation line as string, up to the delimiter", () => {
+      // `> ` used to ride along inside the `${` token and lose the string style.
+      expect(card[2][0]).toEqual({ text: "> ", style: "string" });
+      expect(card[2][1]).toEqual({ text: "${", style: DELIM });
+    });
+
+    it("makes `${` and `}` delimiter tokens, never merged with neighbouring text", () => {
+      for (const line of [card[2], card[4]]) {
+        expect(line.filter((t) => t.style === DELIM).map((t) => t.text)).toEqual(["${", "}"]);
+      }
+      expect(card[4][card[4].length - 1]).toEqual({ text: '"', style: "string" });
+    });
+
+    it("tokenizes the expression inside `${…}` as code, not string", () => {
+      expect(card[2].slice(2, 5)).toEqual([
+        { text: "o", style: "variableName" },
+        { text: ".", style: "punctuation" },
+        { text: "take", style: "variableName" },
+      ]);
+      expect(card[4][1]).toEqual({ text: "card", style: "variableName" });
+      const inner = [...card[2].slice(2, -1), card[4][1]];
+      expect(inner.some((t) => t.style === "string")).toBe(false);
+    });
+
+    it("resumes code after the string closes", () => {
+      expect(card[5]).toEqual([{ text: "}", style: "punctuation" }]);
+    });
+
+    it("marks every line that starts inside the string (blank and closing lines too) for the line wash", () => {
+      expect(linesStartingInString(REPLY_CARD)).toEqual([false, false, true, true, true, false]);
+    });
+
+    it("does not wash the line after a single-line string", () => {
+      expect(linesStartingInString('a = 1\nb = "x"\nc = 2')).toEqual([false, false, false]);
     });
   });
 
