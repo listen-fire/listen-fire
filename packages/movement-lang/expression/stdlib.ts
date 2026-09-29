@@ -665,6 +665,90 @@ export function coerceToNumber(value: unknown): number | null {
   return Number.isFinite(n) && String(value).trim() !== '' ? n : null;
 }
 
+// ── NUMBER / CURRENCY formatting — NUMBER.FORMAT and CURRENCY.FORMAT_FIGURE ──
+//
+// One magnitude renderer serves both: NUMBER.FORMAT("compact") writes a bare
+// number out (1200000 -> "1.2M"); CURRENCY.FORMAT_FIGURE is its money-aware
+// sibling and the inverse of CURRENCY.GET_NUMBER_FROM_FIGURE — the same
+// magnitude rendering with a currency mark stuck on the front: the symbol
+// where the GET_CODE_FROM_FIGURE table has one, the ISO code after a space
+// where it doesn't, nothing where the code is empty or unrecognised. Both
+// null-propagate like every other member: no number in, no text out — hence
+// `maybeAbsent`, exactly like DATE.PARSE and URL.HOST.
+
+const COMPACT_TIERS: ReadonlyArray<[threshold: number, suffix: string]> = [
+  [1e12, 'T'],
+  [1e9, 'B'],
+  [1e6, 'M'],
+  [1e3, 'K'],
+];
+
+/** `abs` is the magnitude alone — the sign belongs to the caller, so it can
+ *  land wherever it reads right (before a symbol, not inside the digits).
+ *  One decimal at most, no trailing ".0". */
+function compactMagnitude(abs: number): string {
+  const tier = COMPACT_TIERS.find(([threshold]) => abs >= threshold);
+  if (!tier) return String(abs);
+  const [threshold, suffix] = tier;
+  const scaled = Math.round((abs / threshold) * 10) / 10;
+  const digits = Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(1);
+  return `${digits}${suffix}`;
+}
+
+/** Thousands-grouped, decimal part kept as given (rounded to at most two
+ *  places — a number literal never carries more precision than that anyway). */
+function groupedMagnitude(abs: number): string {
+  const rounded = Math.round(abs * 100) / 100;
+  const [intPart, fracPart] = String(rounded).split('.');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return fracPart !== undefined ? `${grouped}.${fracPart}` : grouped;
+}
+
+const NUMBER_FORMAT_STYLES = ['compact', 'grouped'] as const;
+
+/** The save-time check on NUMBER.FORMAT's style — a literal, same shape as
+ *  DATE.FORMAT's pattern: written down, not computed, checked against the
+ *  whole (small) vocabulary. */
+function checkNumberFormatStyle(style: string): string | undefined {
+  if ((NUMBER_FORMAT_STYLES as readonly string[]).includes(style)) return undefined;
+  return `'${style}' isn't a number format style — write "compact" or "grouped".`;
+}
+
+function numberFormat(args: unknown[]): unknown {
+  const [value, style] = args;
+  const n = coerceToNumber(value);
+  if (n === null) return null;
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  switch (style) {
+    case 'compact':
+      return `${sign}${compactMagnitude(abs)}`;
+    case 'grouped':
+      return `${sign}${groupedMagnitude(abs)}`;
+    default:
+      return null;
+  }
+}
+
+/** Code -> symbol, the reverse of the table CURRENCY.GET_CODE_FROM_FIGURE
+ *  reads (symbol -> code) — the same table, so the two functions can never
+ *  disagree about which codes have a symbol. */
+const SYMBOL_BY_CODE = new Map(CURRENCY_SYMBOLS.map(([symbol, code]) => [code, symbol]));
+
+function formatFigure(args: unknown[]): unknown {
+  const [value, code] = args;
+  const n = coerceToNumber(value);
+  if (n === null) return null;
+  const sign = n < 0 ? '-' : '';
+  const amount = compactMagnitude(Math.abs(n));
+  const normalizedCode = code == null ? '' : String(code).trim().toUpperCase();
+  if (normalizedCode === '') return `${sign}${amount}`;
+  const symbol = SYMBOL_BY_CODE.get(normalizedCode);
+  if (symbol !== undefined) return `${sign}${symbol}${amount}`;
+  if (CURRENCY_CODES.has(normalizedCode)) return `${sign}${amount} ${normalizedCode}`;
+  return `${sign}${amount}`;
+}
+
 /** A documented bare coercer — the editor's single source of truth for both
  *  the autocomplete item and its hover. One value in, a value of `returns`
  *  out; `summary` is user-facing (clear, jargon-free, with an example). */
@@ -841,6 +925,15 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         returns: 'text',
         apply: figureCode,
       }),
+      spec('CURRENCY', 'FORMAT_FIGURE', {
+        args: 'number, code',
+        summary:
+          'a number as a money figure — the inverse of GET_NUMBER_FROM_FIGURE — CURRENCY.FORMAT_FIGURE(1200000, "EUR") is "€1.2M"; a code with no symbol prints after the amount ("1.2M CHF"); an empty or unknown code prints the bare number',
+        arity: { min: 2, max: 2 },
+        returns: 'text',
+        maybeAbsent: true,
+        apply: formatFigure,
+      }),
     ],
   },
   {
@@ -939,6 +1032,21 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         returns: 'text',
         maybeAbsent: true,
         apply: urlHost,
+      }),
+    ],
+  },
+  {
+    namespace: 'NUMBER',
+    functions: [
+      spec('NUMBER', 'FORMAT', {
+        args: 'number, style',
+        summary:
+          'a number written out — "compact" abbreviates with K/M/B/T (NUMBER.FORMAT(1200000, "compact") is "1.2M"); "grouped" adds thousands separators (NUMBER.FORMAT(1200000, "grouped") is "1,200,000")',
+        arity: { min: 2, max: 2 },
+        returns: 'text',
+        maybeAbsent: true,
+        literalArgs: [{ index: 1, what: 'the format style', check: checkNumberFormatStyle }],
+        apply: numberFormat,
       }),
     ],
   },

@@ -6,7 +6,9 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
-<!-- add merged PRs here -->
+### Added
+
+- `NUMBER.FORMAT(number, "compact" | "grouped")` writes a number out — `"compact"` abbreviates with K/M/B/T (`1200000` → `"1.2M"`), `"grouped"` adds thousands separators (`1200000` → `"1,200,000"`). `CURRENCY.FORMAT_FIGURE(number, code)`, the inverse of `CURRENCY.GET_NUMBER_FROM_FIGURE`, writes a money figure with its symbol (`"€1.2M"`) or, for a code with none, the ISO code after the amount (`"1.2M CHF"`).
 
 ### Fixed
 

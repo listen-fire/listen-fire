@@ -67,6 +67,31 @@ describe('DATE.FORMAT checks its pattern at save', () => {
   });
 });
 
+describe('NUMBER.FORMAT checks its style at save', () => {
+  // NUMBER.FORMAT is maybeAbsent (like DATE.PARSE / URL.HOST), so a write
+  // into the required `Body` field needs COALESCE — same as every other
+  // maybeAbsent helper's tests elsewhere in this file.
+  const write = (value: string) => `  write inbox-[:note]-> { Body: COALESCE(${value}, "") }`;
+
+  it('a written "compact" or "grouped" style is clean', () => {
+    expect(codes(write('NUMBER.FORMAT(3, "compact")'))).toEqual([]);
+    expect(codes(write('NUMBER.FORMAT(3, "grouped")'))).toEqual([]);
+  });
+
+  it('an unknown style is refused, naming the two', () => {
+    const body = write('NUMBER.FORMAT(3, "percent")');
+    expect(codes(body)).toContain('MOV_STDLIB_ARG_INVALID');
+    expect(messages(body)).toContain('compact');
+    expect(messages(body)).toContain('grouped');
+  });
+
+  it('a computed style is refused — nothing here could check it', () => {
+    const body = '  p = e.`Subject`\n' + write('NUMBER.FORMAT(3, p)');
+    expect(codes(body)).toContain('MOV_STDLIB_ARG_NOT_LITERAL');
+    expect(messages(body)).toContain('the format style');
+  });
+});
+
 describe('DATE.TODAY and DATETIME.AT check their zone and time at save', () => {
   const write = (value: string) => `  write inbox-[:note]-> { Body: ${value} }`;
 

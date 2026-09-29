@@ -77,6 +77,33 @@ describe('namespaced stdlib calls fold to dotted function nodes', () => {
     });
   });
 
+  it('NUMBER.FORMAT(n, "compact") folds to a plain function node — NUMBER is both a namespace and a bare coercer, like DATETIME', () => {
+    expect(parseMovementExpression('NUMBER.FORMAT(n, "compact")')).toEqual({
+      type: 'function',
+      fn: 'number.format',
+      args: [
+        { type: 'property', propertyTypeId: 'n' },
+        { type: 'static', value: 'compact' },
+      ],
+    });
+  });
+
+  it('CURRENCY.FORMAT_FIGURE(n, code) folds to a plain function node — code may be any expression, not only a literal', () => {
+    expect(parseMovementExpression('CURRENCY.FORMAT_FIGURE(n, msg.`code`)')).toEqual({
+      type: 'function',
+      fn: 'currency.format_figure',
+      args: [
+        { type: 'property', propertyTypeId: 'n' },
+        {
+          type: 'traverse',
+          aliasRoot: 'msg',
+          steps: [],
+          expression: { type: 'property', propertyTypeId: 'code' },
+        },
+      ],
+    });
+  });
+
   it('DATE.ADD_DAYS(d, -back_days) — a unary-minus argument parses (was the motivating case for the grammar amendment)', () => {
     expect(parseMovementExpression('DATE.ADD_DAYS(d, -back_days)')).toEqual({
       type: 'function',
@@ -426,6 +453,84 @@ describe('CURRENCY', () => {
     expect(apply('currency.get_code_from_figure', 'usd 12')).toBe('USD');
     expect(apply('currency.get_code_from_figure', '5m')).toBeNull();
     expect(apply('currency.get_code_from_figure', null)).toBeNull();
+  });
+
+  it('FORMAT_FIGURE is the inverse of GET_NUMBER_FROM_FIGURE — a symbol where the table has one', () => {
+    expect(apply('currency.format_figure', 1_200_000, 'EUR')).toBe('€1.2M');
+    expect(apply('currency.format_figure', 1_200_000, 'GBP')).toBe('£1.2M');
+    expect(apply('currency.format_figure', 350_000, 'USD')).toBe('$350K');
+  });
+
+  it('FORMAT_FIGURE prints a symbol-less but known code after the amount, with a space', () => {
+    expect(apply('currency.format_figure', 1_200_000, 'CHF')).toBe('1.2M CHF');
+  });
+
+  it('FORMAT_FIGURE prints the bare compact number for an empty or unknown code', () => {
+    expect(apply('currency.format_figure', 1_200_000, '')).toBe('1.2M');
+    expect(apply('currency.format_figure', 1_200_000, null)).toBe('1.2M');
+    expect(apply('currency.format_figure', 1_200_000, 'ZZZ')).toBe('1.2M');
+  });
+
+  it('FORMAT_FIGURE keeps the sign, and is null-safe', () => {
+    expect(apply('currency.format_figure', -1_200_000, 'EUR')).toBe('-€1.2M');
+    expect(apply('currency.format_figure', null, 'EUR')).toBeNull();
+  });
+
+  it('FORMAT_FIGURE takes its code case-insensitively, trimmed', () => {
+    expect(apply('currency.format_figure', 1_200_000, ' eur ')).toBe('€1.2M');
+  });
+
+  it('is declared maybeAbsent, like DATE.PARSE and URL.HOST, and does not check its code as a literal', () => {
+    const spec = stdlibFunctionById('currency.format_figure');
+    expect(spec?.maybeAbsent).toBe(true);
+    expect(spec?.literalArgs).toBeUndefined();
+  });
+});
+
+describe('NUMBER.FORMAT', () => {
+  it('the worked "compact" examples', () => {
+    expect(apply('number.format', 1_200_000, 'compact')).toBe('1.2M');
+    expect(apply('number.format', 350_000, 'compact')).toBe('350K');
+    expect(apply('number.format', 2_100_000_000, 'compact')).toBe('2.1B');
+    expect(apply('number.format', 999, 'compact')).toBe('999');
+    expect(apply('number.format', 1000, 'compact')).toBe('1K');
+    expect(apply('number.format', 1500, 'compact')).toBe('1.5K');
+  });
+
+  it('compact keeps the sign and never prints a trailing ".0"', () => {
+    expect(apply('number.format', -1_200_000, 'compact')).toBe('-1.2M');
+    expect(apply('number.format', 2_000_000, 'compact')).toBe('2M');
+    expect(apply('number.format', -2_000_000, 'compact')).toBe('-2M');
+  });
+
+  it('compact reaches T for trillions', () => {
+    expect(apply('number.format', 3_400_000_000_000, 'compact')).toBe('3.4T');
+  });
+
+  it('the worked "grouped" examples', () => {
+    expect(apply('number.format', 1_200_000, 'grouped')).toBe('1,200,000');
+    expect(apply('number.format', 1234.5, 'grouped')).toBe('1,234.5');
+  });
+
+  it('grouped keeps the sign and a whole number carries no decimal point', () => {
+    expect(apply('number.format', -1200, 'grouped')).toBe('-1,200');
+    expect(apply('number.format', 999, 'grouped')).toBe('999');
+  });
+
+  it('is null-safe and null on an uncoercible value', () => {
+    expect(apply('number.format', null, 'compact')).toBeNull();
+    expect(apply('number.format', 'not a number', 'grouped')).toBeNull();
+  });
+
+  it('is declared maybeAbsent with a checked literal style', () => {
+    const spec = stdlibFunctionById('number.format');
+    expect(spec?.maybeAbsent).toBe(true);
+    expect(spec?.literalArgs?.map((a) => [a.index, a.what])).toEqual([[1, 'the format style']]);
+    expect(spec?.literalArgs?.[0].check('compact')).toBeUndefined();
+    expect(spec?.literalArgs?.[0].check('grouped')).toBeUndefined();
+    expect(spec?.literalArgs?.[0].check('percent')).toContain(
+      'write "compact" or "grouped"',
+    );
   });
 });
 

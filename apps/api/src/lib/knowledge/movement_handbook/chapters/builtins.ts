@@ -361,6 +361,15 @@ amount = CURRENCY.GET_NUMBER_FROM_FIGURE("£1.2m")   # 1200000
 code = CURRENCY.GET_CODE_FROM_FIGURE("£1.2m")   # "GBP"
 \`\`\`
 
+### CURRENCY.FORMAT_FIGURE
+
+\`CURRENCY.FORMAT_FIGURE(number, code)\` → \`text | absent\` — a number as a money figure, the inverse of \`GET_NUMBER_FROM_FIGURE\`: a symbol where the code has one, the ISO code after a space where it doesn't, the bare number for an empty or unrecognised code. \`code\` may be any expression, not only a literal.
+
+\`\`\`
+line = CURRENCY.FORMAT_FIGURE(1200000, "EUR")   # "€1.2M"
+chf  = CURRENCY.FORMAT_FIGURE(1200000, "CHF")   # "1.2M CHF"
+\`\`\`
+
 ### DATE.PARSE
 
 \`DATE.PARSE(text)\` → \`date | absent\` — a written date read as an ISO date; unreadable text (including an ambiguous numeric form like \`"12/03/2026"\`) is absent rather than a guess.
@@ -431,6 +440,15 @@ slug = TEXT.SLUG("Acme Corp Ltd.")   # "acme-corp-ltd"
 
 \`\`\`
 host = URL.HOST("https://WWW.Acme.com:8080/deals/1")   # "www.acme.com"
+\`\`\`
+
+### NUMBER.FORMAT
+
+\`NUMBER.FORMAT(number, style)\` → \`text | absent\` — a number written out. \`style\` is a literal, checked when you save: \`"compact"\` abbreviates with K/M/B/T, one decimal at most and no trailing \`.0\`; \`"grouped"\` adds thousands separators, keeping a decimal part up to two places.
+
+\`\`\`
+short = NUMBER.FORMAT(1200000, "compact")   # "1.2M"
+long  = NUMBER.FORMAT(1200000, "grouped")   # "1,200,000"
 \`\`\`
 
 ### AI
@@ -635,7 +653,8 @@ listen to runs {} fire \`Cut A Document\`
 `,
     },
     {
-      construct: 'namespaced helper families: CURRENCY.*, DATE.*, DATETIME.AT, TEXT.*, URL.HOST',
+      construct:
+        'namespaced helper families: CURRENCY.*, DATE.*, DATETIME.AT, TEXT.*, URL.HOST, NUMBER.FORMAT',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -645,18 +664,19 @@ inbox = email()
 crm   = attio(credentials: acme)
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  today = DATE.TODAY("Europe/Berlin")
-  win   = DATETIME.AT(today, "07:00", "Europe/Berlin")
-  ref   = TEXT.REGEX_EXTRACT(m.\`Subject\`, "(DEAL-\\\\d+)")
+  today  = DATE.TODAY("Europe/Berlin")
+  win    = DATETIME.AT(today, "07:00", "Europe/Berlin")
+  ref    = TEXT.REGEX_EXTRACT(m.\`Subject\`, "(DEAL-\\\\d+)")
+  amount = CURRENCY.GET_NUMBER_FROM_FIGURE(m.\`Body\`)
   company = write crm-[:Companies]-> {
     unique by (\`Name\`)
     Name:        TEXT.SLUG(m.\`Subject\`)
     Description: CURRENCY.GET_CODE_FROM_FIGURE(m.\`Body\`)
-    \`Team Size\` ?: CURRENCY.GET_NUMBER_FROM_FIGURE(m.\`Body\`)
+    \`Team Size\` ?: amount
   }
   write company-[:Notes]-> {
     Title:   "Window"
-    Content: "\${COALESCE(DATE.PARSE(m.\`Subject\`), DATE.ADD_DAYS(today, 7))} / \${DATE.FORMAT(today, "MMMM D, YYYY")} / \${DATE.FORMAT_ISO(win)} / \${COALESCE(ref, "")} / \${COALESCE(URL.HOST(m.\`Body\`), "")}"
+    Content: "\${COALESCE(DATE.PARSE(m.\`Subject\`), DATE.ADD_DAYS(today, 7))} / \${DATE.FORMAT(today, "MMMM D, YYYY")} / \${DATE.FORMAT_ISO(win)} / \${COALESCE(ref, "")} / \${COALESCE(URL.HOST(m.\`Body\`), "")} / \${COALESCE(NUMBER.FORMAT(amount, "compact"), "")} / \${COALESCE(CURRENCY.FORMAT_FIGURE(amount, "EUR"), "")}"
   }
 }
 `,
