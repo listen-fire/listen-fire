@@ -183,7 +183,7 @@ async function measureResolver(rowsOut: string | undefined) {
 async function measureHttp() {
   const token = generateJWT(USER_EMAIL);
   const input = encodeURIComponent(JSON.stringify(PAGE_INPUT));
-  const url = `${API_URL}/trpc/views.investments.getPortfolioInvestments?input=${input}`;
+  const url = `${API_URL}/api/trpc/views.investments.getPortfolioInvestments?input=${input}`;
 
   const call = async (acceptEncoding: string) => {
     const startedAt = process.hrtime.bigint();
