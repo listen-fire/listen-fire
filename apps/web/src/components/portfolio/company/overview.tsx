@@ -18,6 +18,7 @@ import { PackageOpen } from "lucide-react";
 import { EmptyState } from "@/components/ui";
 
 import type { Company } from "./types";
+import { AcquisitionsSection } from "./acquisitions-section";
 import { InvestmentSummarySection } from "./investment-summary";
 import { InvestorsSection } from "./investors-section";
 
@@ -26,7 +27,10 @@ export function Overview({ company }: { company: Company }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  if (!company?.investments || company.investments.length === 0) {
+  const acquisitions = company?.acquisitions ?? [];
+  const hasInvestments = (company?.investments?.length ?? 0) > 0;
+
+  if (!hasInvestments && acquisitions.length === 0) {
     return (
       <EmptyState
         icon={<PackageOpen size={22} />}
@@ -34,6 +38,12 @@ export function Overview({ company }: { company: Company }) {
         caption="Once an investment is added for this company, its funding summary and co-investors will show up here."
       />
     );
+  }
+
+  // Held only through acquisitions: the shares are real, but none of them
+  // is an investment into this company, so there is no summary to show.
+  if (!hasInvestments) {
+    return <AcquisitionsSection acquisitions={acquisitions} />;
   }
 
   const goToFunding = () => {
@@ -49,6 +59,7 @@ export function Overview({ company }: { company: Company }) {
         disclosureTitle="Details"
         disclosureAction={goToFunding}
       />
+      {acquisitions.length > 0 && <AcquisitionsSection acquisitions={acquisitions} />}
       <InvestorsSection company={company} />
     </div>
   );

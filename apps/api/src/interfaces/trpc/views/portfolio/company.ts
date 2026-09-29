@@ -17,6 +17,7 @@ import { isReportableInvestment } from '../reportableInvestments';
 import { currentContext } from '../../../../services/context';
 import { getCurrencyAsset } from '../../../../lib/datasources/asset';
 import { topVcs } from './topVcs';
+import { getCompanyAcquisitions } from './acquisitions';
 import { notNull, notUndefined } from '../../../../lib/utils/nullability';
 import { getInvestmentsValuation } from '../../../../lib/valuations/valuation';
 import { deriveInvestmentStatus } from '../../../../lib/valuations/valuation/status';
@@ -224,6 +225,7 @@ const companyRouter = (procedure: typeof trpc.procedure) =>
             holdsRetainedAssets,
           },
           holdings,
+          acquisitions,
         ] = await Promise.all([
           ProfileService.getInvestingEntities(company.id),
           ProfileService.getLatestRoundWithValuation(company.id, {
@@ -238,6 +240,13 @@ const companyRouter = (procedure: typeof trpc.procedure) =>
           }),
           getInventoryForInvestments({
             investmentIds: company.investments.map((i) => i.id),
+          }),
+          getCompanyAcquisitions({
+            companyId: company.id,
+            teamId: ctx.user.teamId as TeamId,
+            currency: (config?.currency as CurrencyIsoCode) ?? CurrencyIsoCode.USD,
+            asOfDate: config?.valuationDate ? new Date(config.valuationDate) : new Date(),
+            fxDate: config?.valuationDate ? new Date(config.valuationDate) : new Date(),
           }),
         ]);
 
@@ -269,6 +278,9 @@ const companyRouter = (procedure: typeof trpc.procedure) =>
           firstInvested: firstInvested?.invested_at?.toISOString() ?? null,
           moic,
           holdings: transformHoldingsForDisplay(holdings),
+          // Positions taken here as payment for another company being
+          // acquired. Never part of the figures above.
+          acquisitions,
         };
       }),
     addDividends: procedure
