@@ -8,8 +8,11 @@ version: "3.6"
 # older Docker Compose does not interpolate `${VAR}` in that field, so it
 # would render literally instead of varying per checkout). Set
 # $LISTEN_FIRE_STACK yourself if you drive this file directly. Host ports
-# (9432, 6379) are still fixed, so a second checkout fails honestly on a port
-# conflict rather than silently reusing the first checkout's containers.
+# come from $POSTGRES_HOST_PORT / $REDIS_HOST_PORT (defaulting to 9432/6379,
+# the developer stack's fixed ports) so a profile that wants its own isolated
+# datastore — the `agent` profile, see dev/loop.sh — can claim different ones
+# instead of fighting the developer's stack, or an unrelated compose project
+# on the same host, for the default ports.
 services:
   postgres:
     container_name: ${LISTEN_FIRE_STACK}-postgres
@@ -23,14 +26,14 @@ services:
       POSTGRES_PASSWORD: localdevpassword
       POSTGRES_DB: listenfire
     ports:
-      - 9432:5432
+      - "${POSTGRES_HOST_PORT:-9432}:5432"
 
   redis:
     container_name: ${LISTEN_FIRE_STACK}-redis
     image: redis:7.2-alpine
     restart: always
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     command: redis-server --save 60 1 --loglevel warning
 volumes:
   listenfire-postgres:

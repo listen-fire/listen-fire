@@ -12,7 +12,13 @@
 #   agent2  — second agent stack. api 4000 … admin 4004, 6155, 6156.
 #   agent3  — third agent stack. api 4500 … admin 4504, 6255, 6256.
 #
-# Postgres + Redis are shared single docker containers across all profiles.
+# Postgres + Redis are shared single docker containers across the default,
+# agent2 and agent3 profiles. The `agent` profile is the exception: it gets
+# its OWN docker compose project and its OWN Postgres/Redis host ports, so it
+# never depends on the developer's stack (or an unrelated compose project on
+# the same host, e.g. a sibling repo's `dev` project bound to the same
+# default ports) being free or uncontended. See the STACK_NAME_DEFAULT /
+# POSTGRES_HOST_PORT_DEFAULT / REDIS_HOST_PORT_DEFAULT block below.
 # Profile state is recorded in .dev-loop/profiles/<profile>.json so that
 # out-of-band dev CLIs can pick the right stack, and `pnpm dev:loop:status`
 # can list / prune dead loops.
@@ -28,13 +34,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Names the docker compose project (and its container names) uniquely per
-# checkout, so a second clone or fork on the same machine never treats this
-# repo's Postgres/Redis as its own service to recreate. Without this,
-# compose derives the project name from the compose file's directory
-# basename ("dev"), which every checkout shares.
-export LISTEN_FIRE_STACK="${LISTEN_FIRE_STACK:-listenfire-$(basename "$REPO_ROOT")}"
-
 PROFILE="${DEV_LOOP_PROFILE:-default}"
 FORCE_KILL=0
 for arg in "$@"; do
@@ -44,10 +43,6 @@ for arg in "$@"; do
   esac
 done
 
-echo "[dev:loop] Repo: $REPO_ROOT"
-echo "[dev:loop] Profile: $PROFILE"
-echo "[dev:loop] Compose project: $LISTEN_FIRE_STACK"
-
 # Profile-specific port assignments. Each profile reserves an api/web
 # pair in the 3000-range and a fake-channels pair in the 5000-6000 range.
 # Exporting these makes them visible to the parallel app processes started
@@ -56,11 +51,26 @@ echo "[dev:loop] Compose project: $LISTEN_FIRE_STACK"
 #   - web (next):    $WEB_PORT in package.json dev script
 #   - fake-channels: process.env.FAKE_CHANNELS_PORT (index.ts)
 #   - fake CRM:      process.env.FAKE_REMOTE_ADAPTER_PORT (fake_crm_adapter.ts)
+#
+# STACK_NAME_DEFAULT / POSTGRES_HOST_PORT_DEFAULT / REDIS_HOST_PORT_DEFAULT
+# set the developer stack's defaults up front; `agent` below overrides them
+# to its own fixed compose project name and its own datastore ports, so it
+# never contends with the developer's stack (or an unrelated compose project
+# on this host bound to the default ports — a sibling repo's own `dev`
+# project has done exactly that). Every other profile is unchanged from
+# before: same shared Postgres/Redis as always.
+STACK_NAME_DEFAULT="listenfire-$(basename "$REPO_ROOT")"
+POSTGRES_HOST_PORT_DEFAULT=9432
+REDIS_HOST_PORT_DEFAULT=6379
 case "$PROFILE" in
   default)
     API_BASE=3000; HARNESS_BASE=5555 ;;
   agent)
-    API_BASE=3500; HARNESS_BASE=6055 ;;
+    API_BASE=3500; HARNESS_BASE=6055
+    STACK_NAME_DEFAULT="listen-fire-dev-agent"
+    POSTGRES_HOST_PORT_DEFAULT=9434
+    REDIS_HOST_PORT_DEFAULT=6381
+    ;;
   agent2)
     API_BASE=4000; HARNESS_BASE=6155 ;;
   agent3)
@@ -70,6 +80,24 @@ case "$PROFILE" in
     exit 1
     ;;
 esac
+
+# Names the docker compose project (and its container names). Defaulting to
+# the repo-basename form keeps a second clone/fork on the same machine from
+# treating this checkout's Postgres/Redis as its own service to recreate
+# (compose otherwise derives the project name from the compose file's
+# directory, "dev", which every checkout shares — and, per the 2026-09-15
+# incident, a shared project NAME is enough on its own to make one loop
+# clobber another's containers, regardless of ports). Set $LISTEN_FIRE_STACK,
+# $POSTGRES_HOST_PORT or $REDIS_HOST_PORT yourself to override any of these.
+export LISTEN_FIRE_STACK="${LISTEN_FIRE_STACK:-$STACK_NAME_DEFAULT}"
+export POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-$POSTGRES_HOST_PORT_DEFAULT}"
+export REDIS_HOST_PORT="${REDIS_HOST_PORT:-$REDIS_HOST_PORT_DEFAULT}"
+
+echo "[dev:loop] Repo: $REPO_ROOT"
+echo "[dev:loop] Profile: $PROFILE"
+echo "[dev:loop] Compose project: $LISTEN_FIRE_STACK"
+echo "[dev:loop] Postgres: localhost:$POSTGRES_HOST_PORT  Redis: localhost:$REDIS_HOST_PORT"
+
 export PORT="${PORT:-$API_BASE}"
 # Nothing listens on APP_PORT since the legacy SPA was removed; it survives
 # only to give APP_BASE_URL a value. The login + billing-notice links moved to
@@ -107,9 +135,9 @@ echo "[dev:loop] Bringing up postgres + redis (idempotent)..."
 docker compose -p "$LISTEN_FIRE_STACK" -f dev/docker-compose.yml up -d
 
 # 2. Wait for postgres
-echo -n "[dev:loop] Waiting for postgres on localhost:9432"
+echo -n "[dev:loop] Waiting for postgres on localhost:$POSTGRES_HOST_PORT"
 for i in $(seq 1 30); do
-  if pg_isready -h localhost -p 9432 -U listenfire >/dev/null 2>&1; then
+  if pg_isready -h localhost -p "$POSTGRES_HOST_PORT" -U listenfire >/dev/null 2>&1; then
     echo " ready."
     break
   fi
@@ -122,10 +150,38 @@ for i in $(seq 1 30); do
   fi
 done
 
+# 2b. The agent profile's Postgres/Redis are its OWN containers (see above),
+# so on a first boot they are an empty, unmigrated database and a fresh
+# cache — every other profile keeps sharing the developer's already-migrated
+# one, so none of this runs for them. DATABASE_URL/DATABASE_URL_READONLY
+# point at the `listenfire` role and database the compose file itself
+# provisions (POSTGRES_USER/POSTGRES_DB above, plus the readonly role from
+# dev/readonly-user.sh) rather than at whatever apps/api/.env has locally —
+# that .env may name a role that only the DEVELOPER's long-lived Postgres
+# volume actually has. `bash migrate.sh` is idempotent (each migration is
+# recorded and skipped on a re-run), so this is safe on every boot; NODE_ENV
+# is cleared for the call so it does not also run the (slow, unnecessary —
+# the generated Prisma/Kysely types are already checked in) codegen tail.
+if [ "$PROFILE" = "agent" ]; then
+  export DATABASE_URL="${DATABASE_URL:-postgresql://listenfire:localdevpassword@localhost:$POSTGRES_HOST_PORT/listenfire}"
+  export DATABASE_URL_READONLY="${DATABASE_URL_READONLY:-postgresql://readonly:readonly@localhost:$POSTGRES_HOST_PORT/listenfire}"
+  export MESSAGE_QUEUE_REDIS_HOSTNAME="${MESSAGE_QUEUE_REDIS_HOSTNAME:-localhost}"
+  export MESSAGE_QUEUE_REDIS_PORT="${MESSAGE_QUEUE_REDIS_PORT:-$REDIS_HOST_PORT}"
+
+  echo "[dev:loop] Applying schema to the agent stack's own database (idempotent)..."
+  NODE_ENV= bash apps/api/src/db/migrate.sh "$DATABASE_URL" \
+    || { echo "[dev:loop] schema migration against the agent database failed"; exit 1; }
+fi
+
 # 3. Pre-flight: hard-fail if any of THIS profile's ports are already bound.
 # Default behaviour aborts; --force-kill claims the ports by killing the
 # holders first. The previous behaviour was to warn-and-continue, which let
 # the loop boot into a half-broken state (e.g. fake-channels missing).
+# Never checks/kills postgres or redis: those are a `docker compose -p
+# "$LISTEN_FIRE_STACK"` project scoped to THIS profile's own containers (see
+# above), so --force-kill can only ever touch this profile's own app-port
+# holders, never another stack's or another project's (e.g. an unrelated
+# sibling repo's `dev` compose project) containers.
 PORTS_TO_CHECK=("$PORT" "$WEB_PORT" "$FAKE_CHANNELS_PORT" "$FAKE_REMOTE_ADAPTER_PORT" "$ADMIN_PORT")
 COLLISIONS=()
 for p in "${PORTS_TO_CHECK[@]}"; do
@@ -234,6 +290,21 @@ echo "[dev:loop] log: $LOG_FILE"
 # per-profile files under profiles/.
 rm -f "$LOG_DIR/profile.json"
 
+# The agent profile additionally hands out-of-band CLIs its own datastore
+# endpoints (see step 2b) — every other profile leaves this empty so the
+# CLIs keep resolving DATABASE_URL/etc. from apps/api/.env exactly as before.
+EXTRA_ENV_JSON=""
+if [ "$PROFILE" = "agent" ]; then
+  EXTRA_ENV_JSON=$(cat <<JSON
+,
+    "DATABASE_URL": "$DATABASE_URL",
+    "DATABASE_URL_READONLY": "$DATABASE_URL_READONLY",
+    "MESSAGE_QUEUE_REDIS_HOSTNAME": "$MESSAGE_QUEUE_REDIS_HOSTNAME",
+    "MESSAGE_QUEUE_REDIS_PORT": "$MESSAGE_QUEUE_REDIS_PORT"
+JSON
+)
+fi
+
 # Write a marker file so that out-of-band dev CLIs (e.g. `pnpm dev:chat`
 # invoked in a fresh shell) auto-discover the active stack's ports.
 # `_profile_loader.ts` reads this and merges into process.env without
@@ -261,7 +332,7 @@ cat > "$PROFILE_FILE" <<EOF
     "NEXT_PUBLIC_API_URL": "$NEXT_PUBLIC_API_URL",
     "GMAIL_CONNECT_METHOD": "$GMAIL_CONNECT_METHOD",
     "GMAIL_SEND_ENABLED": "$GMAIL_SEND_ENABLED",
-    "GMAIL_MAILBOX_ALLOWLIST": "$GMAIL_MAILBOX_ALLOWLIST"
+    "GMAIL_MAILBOX_ALLOWLIST": "$GMAIL_MAILBOX_ALLOWLIST"$EXTRA_ENV_JSON
   }
 }
 EOF

@@ -55,7 +55,7 @@ tail -F .dev-loop/loop.log            # API logs (loop.sh tees them here)
 
 | Surface | Mode | Notes |
 |---|---|---|
-| Postgres, Redis | **real** | docker compose, ports 9432 / 6379 |
+| Postgres, Redis | **real** | docker compose, ports 9432 / 6379 (agent profile: its own project, 9434 / 6381) |
 | S3 | **real** | uses your `AWS_*` env from apps/api/.env |
 | Anthropic, OpenAI (incl. whisper transcription), Google DocumentAI | **real** | hits live APIs; spends real tokens (a voice-note e2e costs well under 1p) |
 | Slack, Attio, Email (Mailgun), WhatsApp (Meta Cloud API — send + inbound media), Telegram (Bot API — send + getFile/media), Affinity, Airtable, Sheets, Granola (meeting-notes poll API), Evertrace (signal poll API), Dealroom (Premium search API), Gmail (users.messages / history / send, plus a Google sign-in to connect a mailbox against) | **fake** | persistent SQLite-backed via `apps/fake-channels` (port 5556 default; 6056 / 6156 / 6256 under agent / agent2 / agent3) |
@@ -79,10 +79,17 @@ pnpm dev:loop:status       # see what's currently running / prune dead
 
 What this does:
 
-1. `docker compose -f dev/docker-compose.yml up -d` — postgres + redis
-2. waits for postgres to be ready
+1. `docker compose -p <project> -f dev/docker-compose.yml up -d` — postgres +
+   redis, in the chosen profile's own compose project (see below)
+2. waits for postgres to be ready — and, agent profile only, points
+   `DATABASE_URL`/`DATABASE_URL_READONLY`/`MESSAGE_QUEUE_REDIS_HOSTNAME`/
+   `MESSAGE_QUEUE_REDIS_PORT` at its own Postgres/Redis instead of
+   `apps/api/.env`'s, and applies the schema (idempotent — a no-op once
+   already applied)
 3. **aborts** if any of the chosen profile's ports are already bound (pass
-   `--force-kill` to claim them by killing the holders first)
+   `--force-kill` to claim them by killing the holders first) — this only
+   ever checks/kills the chosen profile's own app ports, never postgres or
+   redis
 4. exports port + URL env vars for the chosen profile, plus
    `MOCK_OUTPUT_ADAPTERS=true`
 5. writes `.dev-loop/profiles/<profile>.json` so out-of-band dev CLIs
@@ -101,8 +108,8 @@ What this does:
 | test-harness  | 5555    | 6055  | 6155   | 6255   |
 | fake-channels | 5556    | 6056  | 6156   | 6256   |
 | fake CRM (`acme_crm`) | 5557 | 6057 | 6157  | 6257   |
-| postgres      | 9432 (shared across all profiles) | | | |
-| redis         | 6379 (shared across all profiles) | | | |
+| postgres      | 9432 (shared: default, agent2, agent3) | 9434 (own project) | 9432 | 9432 |
+| redis         | 6379 (shared: default, agent2, agent3) | 6381 (own project) | 6379 | 6379 |
 
 Reads `apps/api/.env` for `TEST_HARNESS_TEAM_ID`. That team id is what
 makes `lib/recording.ts` rewrite Attio/Slack/Affinity/etc. credentials to
@@ -111,9 +118,15 @@ point at fake-channels.
 ### Multiple stacks in parallel
 
 Each profile reserves its own port range so up to four stacks can run
-side by side (the default stack + three agents). Postgres and Redis are
-still single docker containers, **shared across whichever stacks are
-up** — so concurrent stacks see each other's database writes. Don't run
+side by side (the default stack + three agents). The `agent` profile gets
+its own docker compose project (`listen-fire-dev-agent`, or `$LISTEN_FIRE_STACK`
+if you override it) and its own Postgres/Redis host ports (9434 / 6381) —
+isolated both from the developer's own stack and from an unrelated compose
+project on the same host that happens to be bound to the default 9432/6379
+(this is what forced the change: a sibling repo's own `dev` compose project
+was doing exactly that). `default`, `agent2` and `agent3` are unchanged: they
+still share a single Postgres/Redis pair on the default ports, so concurrent
+stacks among *those three* see each other's database writes. Don't run
 agents whose work could collide on the same KG rows at the same time.
 
 The dev CLIs (`dev:chat`, `dev:inject`, `dev:graph`, `dev:ui`, `dev:link`,
@@ -144,11 +157,16 @@ namespaced by `$LISTEN_FIRE_STACK`, which `dev/loop.sh` exports before every
 this, compose derives the project name from the compose file's directory
 (`dev`), which every checkout shares — booting a second clone or fork then
 treats the first checkout's containers as its own, stopping and renaming them.
-Each checkout still binds the same host ports (9432 / 6379), so a second one
-fails honestly on a port conflict instead of silently reusing the first
-checkout's containers; set `LISTEN_FIRE_STACK` yourself if you need two
-checkouts' datastores up at once (and pick a compose file with different host
-ports, or run one at a time).
+Each checkout still binds the same host ports (9432 / 6379 for `default`,
+`agent2`, `agent3`), so a second one fails honestly on a port conflict
+instead of silently reusing the first checkout's containers; set
+`LISTEN_FIRE_STACK`, `POSTGRES_HOST_PORT` and `REDIS_HOST_PORT` yourself if
+you need two checkouts' datastores up at once (and pick host ports that
+don't collide, or run one at a time). The `agent` profile already does this
+by default — its own project (`listen-fire-dev-agent`) and its own ports
+(9434 / 6381) — specifically so it never depends on the developer's own
+stack, or an unrelated compose project on the same host, being free on the
+default ports.
 
 ### Lifecycle commands
 
