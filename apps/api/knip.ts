@@ -6,6 +6,7 @@ const config: KnipConfig = {
     'src/services/document_sources/tome.ts', // not enabling tome support yet
     'src/lib/portfolio/secondaries.ts', // hooking this up soon
     'build/**',
+    'src/__conformance__/**', // an older release's tests, verbatim — run by jest-conformance-v1.config.ts
   ],
   entry: [
     'src/server.ts', // entrypoint for server
@@ -15,6 +16,7 @@ const config: KnipConfig = {
     'src/test/globalSetup.ts', // used by Jest, referenced in jest-integration.config.ts
     'src/test/jest-integration.config.ts', // used by Jest, referenced in package.json
     'src/test/jest-unit.config.ts', // used by Jest, referenced in package.json
+    'src/test/jest-conformance-v1.config.ts', // used by Jest, referenced in package.json
     'src/interfaces/trpc/index.ts', // entrypoint for trpc types for UI
     'src/lib/utils/email_providers.ts', // standalone value?
     'src/lib/cache.ts', // standalone value?

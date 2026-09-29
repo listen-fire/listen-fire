@@ -24,5 +24,7 @@
     "types": ["jest", "node"],
     "jsx": "react"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.json"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.json"],
+  // An older release's tests, verbatim — typed against that release's tree.
+  "exclude": ["src/__conformance__"]
 }

@@ -44,6 +44,7 @@
 
 import { z } from 'zod';
 import {
+  before,
   BridgeError,
   borrowedTypeSegments,
   isEnumType,
@@ -66,6 +67,7 @@ import { neverAsAny } from '../../lib/utils/types';
 import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS, type ChatReply } from '../../lib/anthropic';
 import { currentLlmUsageContext, runFields } from '../../lib/llm_usage';
 import { RunCancelledSignal } from './cancel_gate';
+import { currentLanguageVersion } from './run_scope';
 import { parseJsonReply } from '../../lib/prompts/execute';
 import { matchOption } from '../../lib/utils/string';
 import type {
@@ -605,6 +607,8 @@ async function storedDocumentFiles(ids: string[], plugin: string): Promise<Map<s
  * same thing: a file the record was extracted from, walked off `_resources`.
  */
 function pluginFileResources(result: TransformInvocationResult): Resource[] {
+  // Version 1's `_resources` held the `from [ … ]` sources alone.
+  if (before(currentLanguageVersion(), 2)) return [];
   const resources: Resource[] = [];
   for (const record of result.records ?? []) {
     const file = record.file;
@@ -2259,6 +2263,8 @@ function addResources(
  * and still counted empty.
  */
 function presentTextFields(spec: ExtractNodeSpec): Set<string> {
+  // Version 1 hands an unfound text over absent, like every other field.
+  if (before(currentLanguageVersion(), 2)) return new Set();
   const typeOf = new Map<string, FieldType | undefined>();
   for (const stage of spec.stages) {
     for (const field of stage.fields) typeOf.set(field.name, field.type);

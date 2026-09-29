@@ -64,6 +64,7 @@ import {
   positionLabel,
   type ExpressionType,
   type Position,
+  type TransformOutputKind,
   type TransformSignature,
 } from '../types';
 import { connectMethodForType } from '../../credentials/connect_link';
@@ -254,6 +255,10 @@ function pluginSpecOf(signature: TransformSignature): PluginSpec {
   // runs, not what it runs on.
   const fedByExtraction =
     signature.dataDependency === 'extracted_context' && authorParams.length === 0;
+  const earlierOutputs = (signature.output?.previously ?? []).map((entry) => ({
+    before: entry.before,
+    output: pluginOutputOf(entry.output),
+  }));
   return {
     args: authorParams.map((p) => p.name),
     ...(requiredArgs.length ? { requiredArgs } : {}),
@@ -261,6 +266,7 @@ function pluginSpecOf(signature: TransformSignature): PluginSpec {
     ...(fedArgs.length ? { fedArgs } : {}),
     ...(fedByExtraction ? { fedByExtraction: true } : {}),
     ...(signature.output !== undefined ? { output: pluginOutputOf(signature.output) } : {}),
+    ...(earlierOutputs.length > 0 ? { earlierOutputs } : {}),
   };
 }
 
@@ -271,7 +277,7 @@ function pluginSpecOf(signature: TransformSignature): PluginSpec {
  * language already uses. ONE projection, so what the engine hands back and what
  * the checker typed cannot disagree.
  */
-function pluginOutputOf(output: NonNullable<TransformSignature['output']>): PluginOutput {
+function pluginOutputOf(output: TransformOutputKind): PluginOutput {
   switch (output.kind) {
     case 'value':
       return { kind: 'value', type: outputFieldType(output) };

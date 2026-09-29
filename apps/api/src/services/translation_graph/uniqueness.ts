@@ -16,6 +16,9 @@
 // uniqueness_constraints.ts) — that is a separate pipeline and is untouched.
 
 import { z } from 'zod';
+import { since } from 'movement-lang';
+
+import { currentLanguageVersion } from '../movement_engine/run_scope';
 
 /** One AND-tupled entry: a target field name, optionally fuzzy-matched. */
 export const uniquenessEntrySchema = z.object({
@@ -52,7 +55,11 @@ export function mergeUniqueness(
  * matched on.
  */
 export function isBlankIdentityValue(value: unknown): boolean {
-  return value == null || (typeof value === 'string' && value.trim() === '');
+  if (value == null) return true;
+  // Since language version 2. A version-1 run matches "" like any other value.
+  return (
+    since(currentLanguageVersion(), 2) && typeof value === 'string' && value.trim() === ''
+  );
 }
 
 /** Case-insensitive equality that treats a multi-value field as a match when
