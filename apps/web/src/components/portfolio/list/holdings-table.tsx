@@ -115,6 +115,7 @@ function HoldingRow({
                 {investment.slug ? (
                   <Link
                     href={`/portfolio/c/${investment.slug}`}
+                    prefetch={false}
                     className="truncate font-medium text-gray-900 hover:underline"
                   >
                     {investment.name}
@@ -208,7 +209,11 @@ function FundsCell({ investment }: { investment: Investment }) {
     return (
       <span>
         acquired by{" "}
-        <Link href={`/portfolio/c/${investment.acquirer.slug}`} className="text-primary hover:underline">
+        <Link
+          href={`/portfolio/c/${investment.acquirer.slug}`}
+          prefetch={false}
+          className="text-primary hover:underline"
+        >
           {investment.acquirer.name}
         </Link>
       </span>
@@ -227,7 +232,7 @@ function FundsCell({ investment }: { investment: Investment }) {
           <span key={a.id}>
             {i > 0 && ", "}
             {a.slug ? (
-              <Link href={`/portfolio/c/${a.slug}`} className="text-primary hover:underline">
+              <Link href={`/portfolio/c/${a.slug}`} prefetch={false} className="text-primary hover:underline">
                 {a.name}
               </Link>
             ) : (

@@ -387,6 +387,7 @@ function EventItem({ event, companyId }: { event: Event; companyId: string }) {
               Acquired by:{" "}
               <Link
                 href={`/portfolio/c/${event.acquirer.slug}`}
+                prefetch={false}
                 className="text-primary hover:underline"
               >
                 {event.acquirer.name}
@@ -695,6 +696,7 @@ function InvestorDisplay({
       />
       <Link
         href={`/portfolio/c/${investor.slug}`}
+        prefetch={false}
         className="inline-block w-full truncate text-[13px] font-medium leading-9 text-gray-600"
       >
         {investor.name}
