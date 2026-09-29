@@ -86,16 +86,7 @@ function compressResponses({ threshold = 1024 }: { threshold?: number } = {}): R
         return end(body, done);
       }
 
-      const compress = encoding === 'br' ? brotliCompress : gzip;
-      const options =
-        encoding === 'br'
-          ? // Quality 5 is where brotli stops being slower than gzip for what it
-            // saves; the default, 11, is for files compressed once and served
-            // many times, not for an answer computed per request.
-            { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }
-          : {};
-
-      compress(body, options, (error, compressed) => {
+      const finish = (error: Error | null, compressed: Buffer) => {
         if (error) {
           logger.warn('[compression] falling back to an uncompressed response', {
             cause: error.message,
@@ -108,7 +99,16 @@ function compressResponses({ threshold = 1024 }: { threshold?: number } = {}): R
         response.setHeader('Content-Encoding', encoding);
         response.setHeader('Content-Length', compressed.length);
         end(compressed, done);
-      });
+      };
+
+      if (encoding === 'br') {
+        // Quality 5 is where brotli stops being slower than gzip for what it
+        // saves; the default, 11, is for files compressed once and served many
+        // times, not for an answer computed per request.
+        brotliCompress(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }, finish);
+      } else {
+        gzip(body, finish);
+      }
 
       return response;
     }) as any;
