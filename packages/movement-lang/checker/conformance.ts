@@ -22,7 +22,7 @@ import {
   type InstanceSchema,
   type SchemaFieldType,
 } from './catalog';
-import { fieldAssignable } from './typing';
+import { fieldAssignable, maybeAbsent, stripAbsent } from './typing';
 
 /**
  * Derives the same schema shape adapters publish for an in-file node declaration.
@@ -48,8 +48,11 @@ export function shapeToSchema(
     for (const field of node.fields) {
       // Unknown surface type names degrade to text rather than dropping the
       // field (a dropped field would false-positive every write to it).
-      properties[field.name] =
-        parseFieldTypeName(field.type) ?? resolveDeclaredType?.(field.type) ?? 'text';
+      const named = parseFieldTypeName(field.type) ?? resolveDeclaredType?.(field.type) ?? 'text';
+      // `<T | null>` is `T | absent` wherever the declaration is used — a
+      // parameter, a collecting node's entries, `IS`, a spread — not only as
+      // an extraction's shape: the engine holds null there in every case.
+      properties[field.name] = field.nullable === true ? (maybeAbsent(named) ?? named) : named;
     }
     const edges: PositionSchema['edges'] = {};
     for (const child of node.children) {
@@ -211,7 +214,7 @@ export function surfaceMisfit(
     const have = supplied.properties[name];
     if (have === undefined) continue;
     if (!fieldAssignable(have, want)) {
-      return `its ${path}\`${name}\` is ${describeFieldType(have)}, not ${describeFieldType(want)}`;
+      return `its ${path}\`${name}\` is ${describeFieldType(have)}, not ${describeFieldType(want)}${textRepair(have, want)}`;
     }
   }
   for (const [name, edge] of Object.entries(schema.edges)) {
@@ -231,4 +234,22 @@ export function surfaceMisfit(
     if (misfit !== undefined) return misfit;
   }
   return undefined;
+}
+
+/**
+ * The repair when a number or a yes/no reaches a declared TEXT field. Text
+ * does not take either as-is — which text a `TRUE` should be is the author's
+ * call, not a rendering rule's — so say how to write the one they meant.
+ * Empty for every other mismatch.
+ */
+export function textRepair(have: FieldType, want: FieldType): string {
+  if (stripAbsent(want) !== 'text') return '';
+  switch (stripAbsent(have)) {
+    case 'number':
+      return ' — write the text it should be: `TOSTRING(…)`';
+    case 'boolean':
+      return ' — write the text it should be: `IF … THEN "Yes" ELSE "No" END`';
+    default:
+      return '';
+  }
 }

@@ -711,6 +711,32 @@ describe('`<text | null>` — a text nobody found arrives null', () => {
     ]);
   });
 
+  it("a collecting node's entry holds an unfound one absent, so `!= null` is a real test", async () => {
+    // The Project A shape: extracted records merged into a collecting node
+    // typed by the declaration, then read back off its entries.
+    const COLLECT = [
+      '  deduped = node { entries: <Entry> order by arrival }',
+      '  found-[e:entry]-> { write deduped-[:entries]-> { unique by (name), ?...e } }',
+      '  deduped-[x:entries]-> {',
+      '    if x.stage != null {',
+      '      write crm-[:companies]-> { name: x.name, stage: x.stage }',
+      '    } else {',
+      '      write crm-[:companies]-> { name: x.name, thesis: "no stage" }',
+      '    }',
+      '  }',
+    ];
+    const source = movement(NULLABLE_ENTRY, ['    node entry: <Entry>'], COLLECT);
+    const unfound = {
+      'x:extract_result#1': [{ entry: [{ name: wrap('Acme'), stage: null, thesis: wrap('Infra'), founder: [] }] }],
+    };
+    expect((await run(source, { reply: unfound })).writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', thesis: 'no stage' } }),
+    ]);
+    expect((await run(source)).writes).toEqual([
+      expect.objectContaining({ kind: 'create', fields: { name: 'Acme', stage: 'Seed' } }),
+    ]);
+  });
+
   it('the model is asked exactly what `<text>` asks', async () => {
     const plain = await run(movement(ENTRY, ['    node entry: <Entry>']));
     const nullable = await run(movement(NULLABLE_ENTRY, ['    node entry: <Entry>']));

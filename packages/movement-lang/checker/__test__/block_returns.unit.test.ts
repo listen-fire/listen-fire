@@ -166,16 +166,16 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
     + use;
 
   it('an untyped call over an extracted field is not a record', () => {
-    const body = overExtraction('COALESCE(md.`items`, "")');
+    const body = overExtraction('TRIM(md.`items`)');
     expect(codes(body)).toEqual([]);
     expect(bindingType(body, 'items')?.bindingPlane).toBeUndefined();
-    expect(codes(overExtraction('COALESCE(md.`items`, "")', '  t = JOIN(items, "\\n")'))).toEqual(
+    expect(codes(overExtraction('TRIM(md.`items`)', '  t = JOIN(items, "\\n")'))).toEqual(
       [],
     );
   });
 
   it('an untyped call that touches nothing extracted is not a record either', () => {
-    const body = overExtraction('COALESCE("x", "")', '  t = JOIN(items, "\\n")');
+    const body = overExtraction('TRIM("x")', '  t = JOIN(items, "\\n")');
     expect(codes(body)).toEqual([]);
   });
 
@@ -186,7 +186,7 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
 
   it('the same over a TRAVERSED position', () => {
     const body =
-      '  names = e-[a:Parts]-> { return COALESCE(a.`Name`, "") }\n'
+      '  names = e-[a:Parts]-> { return TRIM(a.`Name`) }\n'
       + '  t = JOIN(names, ", ")';
     expect(codes(body)).toEqual([]);
   });
@@ -194,7 +194,7 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
   it("the same over a local node's entries", () => {
     const body =
       '  bundle = node { files: lazy e-[a:Parts]-> }\n'
-      + '  names = bundle-[f:files]-> { return COALESCE(f.`Name`, "") }\n'
+      + '  names = bundle-[f:files]-> { return TRIM(f.`Name`) }\n'
       + '  t = JOIN(names, ", ")';
     expect(codes(body)).toEqual([]);
   });
