@@ -10,6 +10,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - The company page warns when two prices apply to the same equity on the same day, and says which one the valuation uses.
 
+### Fixed
+
+- A payout to a fund holding several cheques in one company is split between them by the shares each cheque held just before the event. Before, a wind-down recorded as a share return and a cash payment on the same day, or a later distribution with nothing left held, could land wholly on one cheque. Transactions on the same day are now walked in a fixed order, so a cheque's figures no longer depend on what else is on the page.
+
 ## [v0.8.4] - 2026-09-29
 
 ### Fixed

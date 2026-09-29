@@ -201,7 +201,13 @@ async function getTransactionsForAssets({
       ]),
     )
     .groupBy(['t.id', 'at2.id', 'a2.id', 'to.id', 'from.id', 'ca.id'])
-    .orderBy('t.close_date', 'asc');
+    // Same-day rows walk in one fixed order. A payout's split between cheques
+    // depends on what is held when its row is walked, so leaving ties to the
+    // query plan would let the same company value differently depending on
+    // what else the query was asked about.
+    .orderBy('t.close_date', 'asc')
+    .orderBy('t.id', 'asc')
+    .orderBy('at2.id', 'asc');
 
   const results = await query.execute();
 

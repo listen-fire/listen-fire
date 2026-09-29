@@ -19,7 +19,7 @@ import {
 import { logHoldings } from './messages';
 import { handleError } from '../../errors';
 import { neverAsAny } from '../../utils/types';
-import { AssetHolding, Holdings } from './holdings';
+import { AssetHolding, Holdings, InvesteeHoldings } from './holdings';
 import {
   TransactionFlow,
   TransactionFlowClassification,
@@ -63,6 +63,26 @@ function oneWayCashInvestee({
     .map((investee) => investeeByIssuer.get(investee.id))
     .find((bucket): bucket is Investee => !!bucket);
 }
+
+/** Below this many shares a net balance is rounding residue, not a holding. */
+const HELD_EPSILON = 1e-4;
+
+type EquitySplit = { fromInvestment: number; fromOther: number };
+
+/** Equity held in a bucket, split between the investments being valued and
+ *  everything else. */
+function equitySplit(assetHoldings: InvesteeHoldings): EquitySplit {
+  return assetHoldings.getManyByType('EQUITY').reduce(
+    (sum, [_, holding]) => ({
+      fromInvestment: sum.fromInvestment + holding.sum().fromInvestment,
+      fromOther: sum.fromOther + holding.sum().fromOtherTransactions,
+    }),
+    { fromInvestment: 0, fromOther: 0 },
+  );
+}
+
+const isHeld = ({ fromInvestment, fromOther }: EquitySplit) =>
+  Math.abs(fromInvestment + fromOther) > HELD_EPSILON;
 
 type ClassifiedTransactionFlow = TransactionFlow & {
   date: Date;
@@ -135,6 +155,13 @@ async function rollUpHoldings({
   const messageRows: string[][] = [];
 
   const classifiedTransactionFlows: ClassifiedTransactionFlow[] = [];
+
+  // Per (fund, company) bucket: the equity split the last time any was held. A
+  // payout often arrives when nothing is held any more — a wind-down recorded
+  // as a share return and a cash payment on the same day, or a distribution
+  // months after the shares went back — and then it belongs to whoever held
+  // the shares just before, not to whatever rounding residue is left.
+  const lastHeldEquitySplit = new Map<InvesteeHoldings, EquitySplit>();
 
   // Process transactions in chronological order
   for (const {
@@ -209,6 +236,8 @@ async function rollUpHoldings({
         transactionFlow,
       ] of entityTransactionFlowsByInvestee.entries()) {
         const assetHoldings = holdings.get(investingEntityKey, investeeEntityKey);
+        const heldBefore = equitySplit(assetHoldings);
+        if (isHeld(heldBefore)) lastHeldEquitySplit.set(assetHoldings, heldBefore);
 
         const classification = classifyTransactionFlow({
           transactionFlow,
@@ -413,13 +442,11 @@ async function rollUpHoldings({
             // e.g. if we hold 100 shares of A and 200 shares of B,
             // then a dividend would be split 1:2 between A and B
             // so sum the total holdings and split the inflow based on the ratio of each holding
-            const { fromInvestment, fromOther } = equityHoldings.reduce(
-              (sum, [_, holding]) => ({
-                fromInvestment: sum.fromInvestment + holding.sum().fromInvestment,
-                fromOther: sum.fromOther + holding.sum().fromOtherTransactions,
-              }),
-              { fromInvestment: 0, fromOther: 0 },
-            );
+            // With nothing held, today's balances are residue divided by
+            // residue; the holdings just before the shares went back decide.
+            const { fromInvestment, fromOther } = isHeld(heldBefore)
+              ? heldBefore
+              : (lastHeldEquitySplit.get(assetHoldings) ?? heldBefore);
             const totalEquityHoldings = fromInvestment + fromOther;
             const equityProportion =
               totalEquityHoldings > 0 ? fromInvestment / totalEquityHoldings : 0;
