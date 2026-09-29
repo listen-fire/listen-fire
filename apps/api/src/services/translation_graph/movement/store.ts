@@ -20,6 +20,8 @@ import { randomUUID } from 'node:crypto';
 import type { UserId } from '../../../generated/kysely/core/User';
 import type { MovementId } from '../../../generated/kysely/automations/Movement';
 import type { TriggerId } from '../../../generated/kysely/automations/Trigger';
+import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
+
 import { getAutomationsQb } from '../../../lib/kysely';
 import { parseRunMode, type TriggerRunMode } from '../triggers/run_mode';
 
@@ -46,6 +48,12 @@ export interface MovementRow {
   validitySourceHash: string | null;
   validityCheckedAt: Date | null;
   validityConsentedAt: Date | null;
+  /** The language version the last validity check ran under; null until the
+   *  first check since versioning. */
+  validityCheckedAgainst: LanguageVersion | null;
+  /** The language version this movement is written against — stamped at first
+   *  save, never moved by an edit. Validation and runs of it use this. */
+  languageVersion: LanguageVersion;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -63,6 +71,8 @@ const movementColumns = [
   'validity_source_hash',
   'validity_checked_at',
   'validity_consented_at',
+  'validity_checked_against',
+  'language_version',
   'created_at',
   'updated_at',
 ] as const;
@@ -80,6 +90,8 @@ function toMovementRow(row: {
   validity_source_hash: string | null;
   validity_checked_at: Date | null;
   validity_consented_at: Date | null;
+  validity_checked_against: number | null;
+  language_version: number;
   created_at: Date;
   updated_at: Date;
 }): MovementRow {
@@ -96,6 +108,8 @@ function toMovementRow(row: {
     validitySourceHash: row.validity_source_hash ?? null,
     validityCheckedAt: row.validity_checked_at,
     validityConsentedAt: row.validity_consented_at,
+    validityCheckedAgainst: row.validity_checked_against,
+    languageVersion: row.language_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -141,6 +155,9 @@ export async function listMovementRows(teamId: string): Promise<MovementRow[]> {
  * Upsert the canonical source row — BEFORE any compile runs, so the text
  * is never lost to a failed compile. Keyed by `id` when provided (the
  * editor's re-save path, which may rename), else by `(team_id, name)`.
+ *
+ * The FIRST save stamps the movement's language version with the current
+ * one; an update never touches it, so an edit keeps the movement's pin.
  */
 export async function upsertMovementRow(input: {
   teamId: string;
@@ -180,6 +197,7 @@ export async function upsertMovementRow(input: {
       name: input.name,
       source: input.source,
       description: input.description ?? '',
+      language_version: CURRENT_LANGUAGE_VERSION,
       created_by_user_id: (input.userId ?? null) as UserId | null,
     })
     .execute();
@@ -221,6 +239,8 @@ export async function recordValidityOutcome(input: {
   status: MovementValidityStatus;
   reason: unknown;
   sourceHash: string;
+  /** The language version the validation ran under. */
+  checkedAgainst: LanguageVersion;
   consentedAt?: Date | null;
 }): Promise<void> {
   await getAutomationsQb(['movement'])
@@ -230,6 +250,7 @@ export async function recordValidityOutcome(input: {
       validity_reason: (input.reason ?? null) as never,
       validity_source_hash: input.sourceHash,
       validity_checked_at: new Date(),
+      validity_checked_against: input.checkedAgainst,
       ...(input.consentedAt !== undefined ? { validity_consented_at: input.consentedAt } : {}),
       updated_at: new Date(),
     })

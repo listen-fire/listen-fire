@@ -265,6 +265,8 @@ model Movement {
   validitySourceHash                                       String?              @map("validity_source_hash")
   validityCheckedAt                                        DateTime?            @map("validity_checked_at") @db.Timestamptz(6)
   validityConsentedAt                                      DateTime?            @map("validity_consented_at") @db.Timestamptz(6)
+  validityCheckedAgainst                                   Int?                 @map("validity_checked_against")
+  languageVersion                                          Int                  @default(1) @map("language_version")
   createdAt                                                DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                                                DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
   movementVersionMovementCurrentVersionIdTomovementVersion MovementVersion?     @relation("movement_current_version_idTomovement_version", fields: [currentVersionId], references: [id])

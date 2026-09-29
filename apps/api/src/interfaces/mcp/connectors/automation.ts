@@ -219,10 +219,23 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       validateAutomation: {
         description:
-          'Typecheck an automation program against the live connected systems WITHOUT saving: parse, check, and compile. Returns diagnostics (code, message, severity, line/col, offending line). A clean validation predicts a live save — ALWAYS run this before saveAutomation.',
+          'Typecheck an automation program against the live connected systems WITHOUT saving: parse, check, and compile. Returns diagnostics (code, message, severity, line/col, offending line) and `validatedUnder` — the language version it was checked against. A clean validation predicts a live save — ALWAYS run this before saveAutomation. When changing a saved automation, pass its id as `automation` so the text is checked under the language version that automation is written in; new text is checked under the current version.',
         inputSchema: {
           source: z.string().describe('The automation program text (.mvt).'),
           team: z.string().optional().describe('Team id (see instructions).'),
+          automation: z
+            .string()
+            .optional()
+            .describe(
+              'The saved automation this text belongs to (id from listAutomations) — it is then checked under that automation\'s language version.',
+            ),
+          languageVersion: z
+            .number()
+            .int()
+            .optional()
+            .describe(
+              'Check under this language version (the integer from listAutomations\' `languageVersion`) instead — e.g. to see what an older automation would need to move to the current version.',
+            ),
         },
         title: 'Validate an automation',
         annotations: { readOnlyHint: true },
@@ -273,7 +286,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       listAutomations: {
         description:
-          "List the saved automations across every team this connection covers: each one's id, name, status, listeners, storyUrl, and the team it lives in (teamId, teamName). Use the id with getAutomation, saveAutomation, or runAutomation. storyUrl is a link to a picture of what an automation does, for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see one. Anyone holding a link can view it with no login, until that automation is deleted.",
+          "List the saved automations across every team this connection covers: each one's id, name, status, listeners, storyUrl, the team it lives in (teamId, teamName), its `languageVersion` (the version of the automation language it is written in, as { version, name }) and `checkedAgainst` (the version its last check ran under). Use the id with getAutomation, saveAutomation, or runAutomation. storyUrl is a link to a picture of what an automation does, for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see one. Anyone holding a link can view it with no login, until that automation is deleted.",
         annotations: { readOnlyHint: true },
         inputSchema: {},
         title: 'List automations',
@@ -281,7 +294,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       getAutomation: {
         description:
-          "Get one saved automation by its id or exact name (looked up across the teams this connection covers): the full program text, status, listeners, `revision` — a fingerprint of its current source — and storyUrl. When you only need the text (or part of it), readAutomation is cheaper; reach for this one when you also want the metadata alongside it. Re-read this or readAutomation (don't reuse an old copy) right before you edit and re-save an existing automation, and pass its `revision` back as saveAutomation's or editAutomation's expectedRevision — that way a concurrent edit by someone else is caught as a conflict instead of silently overwritten. storyUrl is a link to a picture of what it does (its triggers, steps, and the records it touches), for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see it. Anyone holding the link can view with no login, until the automation is deleted. In a chat that can show it, that same picture is drawn right below this answer, so there is no need to describe it.",
+          "Get one saved automation by its id or exact name (looked up across the teams this connection covers): the full program text, status, listeners, `revision` — a fingerprint of its current source — `languageVersion` and `checkedAgainst` (as in listAutomations), and storyUrl. When you only need the text (or part of it), readAutomation is cheaper; reach for this one when you also want the metadata alongside it. Re-read this or readAutomation (don't reuse an old copy) right before you edit and re-save an existing automation, and pass its `revision` back as saveAutomation's or editAutomation's expectedRevision — that way a concurrent edit by someone else is caught as a conflict instead of silently overwritten. storyUrl is a link to a picture of what it does (its triggers, steps, and the records it touches), for a person to look at — you can't open it yourself, so hand it out as a labelled link when they want to see it. Anyone holding the link can view with no login, until the automation is deleted. In a chat that can show it, that same picture is drawn right below this answer, so there is no need to describe it.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           idOrName: z

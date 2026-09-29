@@ -20,6 +20,7 @@ import {
 } from '@listen-fire/shared/expression/formula';
 import type { Loc, Span } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
+import type { LanguageVersion } from '../language_version';
 import { scanName } from '../parser/scan';
 import {
   checkProgram,
@@ -83,6 +84,10 @@ export const PARSE_DIAGNOSTIC_CODE = 'MOV_PARSE';
 export function getMovementDiagnostics(
   source: string,
   snapshot: CatalogSnapshot,
+  options?: {
+    /** The saved movement's pin. Absent ⇒ the current version. */
+    languageVersion?: LanguageVersion;
+  },
 ): MovementDiagnostic[] {
   const lineStarts = lineStartsOf(source);
   const toRange = (span: Span): { from: number; to: number } => {
@@ -102,9 +107,14 @@ export function getMovementDiagnostics(
   const resolveFile = resolveFileFromSnapshot(snapshot);
   let diagnostics: Diagnostic[];
   try {
-    const program = parseProgram(source);
+    const languageVersion = options?.languageVersion;
+    const program = parseProgram(
+      source,
+      languageVersion !== undefined ? { languageVersion } : undefined,
+    );
     diagnostics = checkProgram(program, catalog, {
       ...(resolveFile ? { resolveFile } : {}),
+      ...(languageVersion !== undefined ? { languageVersion } : {}),
     });
   } catch (e) {
     if (!(e instanceof MovementParseError)) throw e;

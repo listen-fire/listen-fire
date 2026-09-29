@@ -37,6 +37,7 @@ import {
   Statement,
 } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
+import type { LanguageVersion } from '../language_version';
 
 export interface FileResolution {
   source: string;
@@ -176,7 +177,15 @@ function armBodies(expr: CombinatorExpression | undefined): Statement[] {
  * `"<path>" line <n>:` message prefix), and the affected names are simply
  * absent from the imports maps.
  */
-export function linkImports(program: Program, resolveFile: ResolveFile): ProgramLink {
+export function linkImports(
+  program: Program,
+  resolveFile: ResolveFile,
+  options?: {
+    /** The importing movement's pin — a library is read under the version of
+     *  the program that imports it. Absent ⇒ the current version. */
+    languageVersion?: LanguageVersion;
+  },
+): ProgramLink {
   const files = new Map<string, LinkedFile | null>();
   const problems: LinkProblem[] = [];
   const loading: string[] = [];
@@ -226,7 +235,10 @@ export function linkImports(program: Program, resolveFile: ResolveFile): Program
 
     let libraryProgram: Program;
     try {
-      libraryProgram = parseProgram(resolution.source);
+      libraryProgram = parseProgram(
+        resolution.source,
+        options?.languageVersion !== undefined ? { languageVersion: options.languageVersion } : undefined,
+      );
     } catch (e) {
       if (!(e instanceof MovementParseError)) throw e;
       report(

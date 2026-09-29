@@ -169,6 +169,11 @@ import {
   type EffectRow,
 } from './effects';
 import { neverAsAny } from '../never';
+import {
+  CURRENT_LANGUAGE_VERSION,
+  languageVersionDiagnostic,
+  type LanguageVersion,
+} from '../language_version';
 import { terminates } from './flow';
 import { didYouMean } from './meta';
 import { genericLandingKey, literalStringValuesOf } from './generics';
@@ -908,6 +913,12 @@ export interface CheckOptions {
    * with the names treated as opaque.
    */
   resolveFile?: ResolveFile;
+  /**
+   * The language version the program is written against — the saved
+   * movement's pin. Absent ⇒ the current version. A version this release
+   * does not support is an error diagnostic; a deprecated one a warning.
+   */
+  languageVersion?: LanguageVersion;
 }
 
 export function checkProgram(
@@ -930,19 +941,28 @@ export function checkProgramWithLink(
   catalog: Catalog,
   options?: CheckOptions,
 ): { diagnostics: Diagnostic[]; link?: ProgramLink; recording?: CheckRecording } {
-  const link = options?.resolveFile ? linkImports(program, options.resolveFile) : undefined;
+  const languageVersion = options?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const link = options?.resolveFile
+    ? linkImports(program, options.resolveFile, { languageVersion })
+    : undefined;
   const recording: CheckRecording | undefined =
     options?.recordAnalysis === true ? { frames: [], writes: [], nodes: [] } : undefined;
   const checker = new Checker(catalog, {
+    languageVersion,
     ...(link ? { linkContext: { link, checked: new Map() } } : {}),
     ...(recording ? { recording } : {}),
   });
   checker.run(program);
+  const versionDiagnostic = languageVersionDiagnostic(languageVersion);
+  const versionDiagnostics = versionDiagnostic ? [versionDiagnostic] : [];
   if (!link) {
-    return { diagnostics: checker.diagnostics, ...(recording ? { recording } : {}) };
+    return {
+      diagnostics: [...versionDiagnostics, ...checker.diagnostics],
+      ...(recording ? { recording } : {}),
+    };
   }
   return {
-    diagnostics: [...link.problems, ...checker.diagnostics],
+    diagnostics: [...versionDiagnostics, ...link.problems, ...checker.diagnostics],
     link,
     ...(recording ? { recording } : {}),
   };
@@ -2102,6 +2122,9 @@ interface LinkContext {
 }
 
 interface CheckerOptions {
+  /** The compile context's language version — what every `since`/`before`
+   *  conditional in the checker reads (none do yet). */
+  languageVersion: LanguageVersion;
   linkContext?: LinkContext;
   /** The file being checked, when it is an imported library (its imports
    *  resolve through `file.imports` rather than `link.imports`). */
@@ -2140,8 +2163,12 @@ class Checker {
 
   constructor(
     private readonly catalog: Catalog,
-    private readonly options: CheckerOptions = {},
+    private readonly options: CheckerOptions,
   ) {}
+
+  private get languageVersion(): LanguageVersion {
+    return this.options.languageVersion;
+  }
 
   /** Notes a scope the editor may resolve a cursor inside. Every `new Scope`
    *  the checker opens has one of these beside it — the pairing IS the
@@ -3024,6 +3051,7 @@ class Checker {
     const cached = context.checked.get(file.path);
     if (cached) return cached;
     const checker = new Checker(this.catalog, {
+      languageVersion: this.languageVersion,
       linkContext: context,
       currentFile: file,
       library: true,

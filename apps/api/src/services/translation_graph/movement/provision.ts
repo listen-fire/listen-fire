@@ -73,6 +73,7 @@ import {
 import type {
   Diagnostic,
   ImportStatement,
+  LanguageVersion,
   ListenDeclaration,
   MovementDeclaration,
   NamedArg,
@@ -647,7 +648,7 @@ async function provisionListeners(input: {
 
   let program: Program;
   try {
-    program = parseProgram(input.source);
+    program = parseProgram(input.source, { languageVersion: input.movementRow.languageVersion });
   } catch (e) {
     if (!(e instanceof MovementParseError)) throw e;
     return {
@@ -660,7 +661,10 @@ async function provisionListeners(input: {
   }
 
   const checkDiagnostics = await within('listenCheck', async () =>
-    checkProgram(program, teamCatalog.catalog, { resolveFile: teamCatalog.resolveFile }),
+    checkProgram(program, teamCatalog.catalog, {
+      resolveFile: teamCatalog.resolveFile,
+      languageVersion: input.movementRow.languageVersion,
+    }),
   );
   const errors = checkDiagnostics.filter((d) => (d.severity ?? 'error') === 'error');
   const infos = checkDiagnostics.filter((d) => (d.severity ?? 'error') !== 'error');
@@ -1076,10 +1080,12 @@ async function runSave(
   // `needsConfirmation` (source already persisted, so the broken movement is
   // retained as an artifact), never a wall.
   const { validation, validity } = await timer.step('diagnose', async () => {
+    // Under the movement's pin — which a re-save never moves.
     const diagnosed = diagnoseMovementSource(input.source, {
       catalog: teamCatalog.catalog,
       resolveCredentialId: teamCatalog.resolveCredentialId,
       resolveFile: teamCatalog.resolveFile,
+      languageVersion: row.languageVersion,
     });
     return {
       validation: diagnosed,
@@ -1110,6 +1116,7 @@ async function runSave(
     status: validity.status,
     reason: validity.reason,
     sourceHash,
+    checkedAgainst: row.languageVersion,
     ...(consented ? { consentedAt: new Date() } : {}),
   });
 
@@ -1312,6 +1319,10 @@ export interface MovementListItem {
    *  file actually is. */
   validityStatus: MovementValidityStatus | null;
   validityCheckedAt: Date | null;
+  /** The language version the last validity check ran under. */
+  validityCheckedAgainst: LanguageVersion | null;
+  /** The language version the movement is written against (its pin). */
+  languageVersion: LanguageVersion;
   /** First listener's channel (null for libraries). */
   kind: string | null;
   /** Derived listeners — one per `listen` statement of the last shipped save. */
@@ -1330,7 +1341,10 @@ export interface MovementListItem {
  *  trigger row (uniform dispatch). */
 function isRunnable(row: MovementRow): boolean {
   try {
-    return manualListenerMovements(parseProgram(row.source)).length > 0;
+    return (
+      manualListenerMovements(parseProgram(row.source, { languageVersion: row.languageVersion }))
+        .length > 0
+    );
   } catch (e) {
     if (e instanceof MovementParseError) return false;
     throw e;
@@ -1347,6 +1361,8 @@ export async function listMovements(teamId: string): Promise<MovementListItem[]>
       name: row.name,
       validityStatus: row.validityStatus,
       validityCheckedAt: row.validityCheckedAt,
+      validityCheckedAgainst: row.validityCheckedAgainst,
+      languageVersion: row.languageVersion,
       kind: listeners[0]?.kind ?? null,
       listeners,
       runnable: isRunnable(row),

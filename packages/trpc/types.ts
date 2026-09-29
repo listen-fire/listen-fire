@@ -1,5 +1,5 @@
 import * as story_view_view from 'story-view/view';
-import { FieldType, CatalogSnapshot, InstanceSchema, Diagnostic } from 'movement-lang';
+import { FieldType, CatalogSnapshot, InstanceSchema, LanguageVersion, Diagnostic } from 'movement-lang';
 import * as _shared_expression_types from '@listen-fire/shared/expression/types';
 import * as _prisma_client_runtime_library from '@prisma/client/runtime/library';
 import * as _trpc_server_observable from '@trpc/server/observable';
@@ -1061,6 +1061,12 @@ export interface MovementRow {
     validitySourceHash: string | null;
     validityCheckedAt: Date | null;
     validityConsentedAt: Date | null;
+    /** The language version the last validity check ran under; null until the
+     *  first check since versioning. */
+    validityCheckedAgainst: LanguageVersion | null;
+    /** The language version this movement is written against — stamped at first
+     *  save, never moved by an edit. Validation and runs of it use this. */
+    languageVersion: LanguageVersion;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -1196,6 +1202,10 @@ export interface MovementListItem {
      *  file actually is. */
     validityStatus: MovementValidityStatus | null;
     validityCheckedAt: Date | null;
+    /** The language version the last validity check ran under. */
+    validityCheckedAgainst: LanguageVersion | null;
+    /** The language version the movement is written against (its pin). */
+    languageVersion: LanguageVersion;
     /** First listener's channel (null for libraries). */
     kind: string | null;
     /** Derived listeners — one per `listen` statement of the last shipped save. */

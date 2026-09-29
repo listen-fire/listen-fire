@@ -30,6 +30,8 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
+
 /** The systems that count against a ceiling. One entry per system that has its
  *  own env var below; a system not listed here is simply not capped. */
 export type AdapterCallSystem = 'affinity';
@@ -149,13 +151,36 @@ class RunReadMemo {
 interface RunScope {
   readonly ledger: RunCallLedger;
   readonly memo: RunReadMemo;
+  /** The movement's pinned language version — the run context's copy, so a
+   *  plugin or adapter the engine calls into can honour the pin without the
+   *  engine threading it through every seam. */
+  readonly languageVersion: LanguageVersion;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<RunScope>();
 
 /** Run one interpreter segment under its own fresh count and its own memo. */
-export function withRunCallLedger<T>(fn: () => Promise<T>): Promise<T> {
-  return asyncLocalStorage.run({ ledger: new RunCallLedger(), memo: new RunReadMemo() }, fn);
+export function withRunCallLedger<T>(
+  fn: () => Promise<T>,
+  options?: { languageVersion?: LanguageVersion },
+): Promise<T> {
+  return asyncLocalStorage.run(
+    {
+      ledger: new RunCallLedger(),
+      memo: new RunReadMemo(),
+      languageVersion: options?.languageVersion ?? CURRENT_LANGUAGE_VERSION,
+    },
+    fn,
+  );
+}
+
+/**
+ * The language version the current run is pinned to — what a plugin's or an
+ * adapter's `since`/`before` conditional reads. Outside a run (CLI scripts,
+ * catalog describe, tests) there is no pin and this is the current version.
+ */
+export function currentLanguageVersion(): LanguageVersion {
+  return asyncLocalStorage.getStore()?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
 }
 
 /**

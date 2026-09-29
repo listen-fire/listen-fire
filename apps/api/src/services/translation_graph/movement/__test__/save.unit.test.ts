@@ -1343,3 +1343,48 @@ describe('saveMovement — backtick credential args (provision-path)', () => {
     expect(directCredId).toBe('cred-attio-123');
   });
 });
+
+// The language-version pin: stamped at FIRST save, never moved by an edit, and
+// the version every save validates under (recorded as `checked_against`).
+describe('the language version pin', () => {
+  it('a first save stamps the current version and records the check under it', async () => {
+    const saved = await saveMovement({ teamId: TEAM, source: SOURCE_V1 });
+    expect(saved.ok).toBe(true);
+    const [row] = db.__tables.movement;
+    expect(row.language_version).toBe(2);
+    expect(row.validity_checked_against).toBe(2);
+
+    const [item] = await listMovements(TEAM);
+    expect(item).toMatchObject({ languageVersion: 2, validityCheckedAgainst: 2 });
+  });
+
+  it('a re-save keeps an older pin and validates under it', async () => {
+    const first = await saveMovement({ teamId: TEAM, source: SOURCE_V1 });
+    if (!first.ok) throw new Error('first save failed');
+    // A movement saved before the current version existed.
+    db.__tables.movement[0].language_version = 1;
+
+    const again = await saveMovement({ teamId: TEAM, id: first.movementId, source: SOURCE_V2 });
+    expect(again.ok).toBe(true);
+    const [row] = db.__tables.movement;
+    expect(row.source).toBe(SOURCE_V2);
+    expect(row.language_version).toBe(1);
+    expect(row.validity_checked_against).toBe(1);
+
+    const detail = await getMovement({ teamId: TEAM, id: first.movementId });
+    expect(detail).toMatchObject({ languageVersion: 1, validityCheckedAgainst: 1 });
+  });
+
+  it('a movement pinned to a version this release does not support is refused, not saved as current', async () => {
+    const first = await saveMovement({ teamId: TEAM, source: SOURCE_V1 });
+    if (!first.ok) throw new Error('first save failed');
+    db.__tables.movement[0].language_version = 99;
+
+    const again = await saveMovement({ teamId: TEAM, id: first.movementId, source: SOURCE_V2 });
+    expect(again.ok).toBe(false);
+    const [row] = db.__tables.movement;
+    expect(row.language_version).toBe(99);
+    expect(row.validity_status).toBe('invalid');
+    expect(JSON.stringify(row.validity_reason)).toContain('MOV_LANGUAGE_VERSION_UNSUPPORTED');
+  });
+});

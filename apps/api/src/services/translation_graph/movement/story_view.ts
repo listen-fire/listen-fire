@@ -28,6 +28,7 @@ import {
   storyOf,
   type Chip,
   type ChipPart,
+  type LanguageVersion,
   type StoryFilter,
   type StoryIR,
   type StoryNode,
@@ -636,6 +637,8 @@ export async function projectStoryView(row: {
   name: string;
   source: string;
   validityStatus: MovementValidityStatus | null;
+  /** The movement's pin; absent (an unsaved preview) ⇒ the current version. */
+  languageVersion?: LanguageVersion;
 }): Promise<StoryViewResult> {
   // Same fallback the authoring path takes: assembling a source-scoped catalog
   // needs the source to parse, and the whole point of the unreadable branch is
@@ -655,6 +658,7 @@ export async function projectStoryView(row: {
     name: row.name,
     resolveFile: teamCatalog.resolveFile,
     ...(row.validityStatus !== null ? { validityStatus: row.validityStatus } : {}),
+    ...(row.languageVersion !== undefined ? { languageVersion: row.languageVersion } : {}),
   });
 
   if (!result.ok) {
@@ -723,6 +727,7 @@ export async function servedStoryView(input: {
     movementSourceHash(row.source),
     row.name,
     row.validityStatus ?? '',
+    row.languageVersion,
   ].join(':');
   const hit = servedStories.get(key);
   if (hit) return hit;

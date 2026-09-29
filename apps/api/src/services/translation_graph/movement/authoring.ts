@@ -13,12 +13,21 @@
 
 import {
   BridgeError,
+  CURRENT_LANGUAGE_VERSION,
   MovementParseError,
   checkProgram,
   diagnosticSeverity,
+  languageVersionDiagnostic,
   parseProgram,
 } from 'movement-lang';
-import type { Catalog, Diagnostic, Program, ResolveFile, Span } from 'movement-lang';
+import type {
+  Catalog,
+  Diagnostic,
+  LanguageVersion,
+  Program,
+  ResolveFile,
+  Span,
+} from 'movement-lang';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { listUnsupportedConstructs } from '../../movement_engine/interpretable';
 import { movementCatalogForTeam } from './catalog';
@@ -99,13 +108,29 @@ export function diagnoseMovementSource(
     /** File-import resolution (movement libraries) — same resolver the
      *  save path threads through checkProgram and compileMovement. */
     resolveFile?: ResolveFile;
+    /** The language version to validate under — a saved movement's pin.
+     *  Absent ⇒ the current version. */
+    languageVersion?: LanguageVersion;
   },
 ): MovementValidation {
   const lines = source.split('\n');
+  const languageVersion = options.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+
+  // A pin this release cannot honour is the whole verdict: reading the text
+  // under some other version's grammar would report problems that aren't.
+  const versionDiagnostic = languageVersionDiagnostic(languageVersion);
+  if (versionDiagnostic !== undefined && diagnosticSeverity(versionDiagnostic) === 'error') {
+    return {
+      ok: false,
+      diagnostics: [toAuthoringDiagnostic(versionDiagnostic, lines)],
+      listenerCount: 0,
+      firedMovements: [],
+    };
+  }
 
   let program: Program;
   try {
-    program = parseProgram(source);
+    program = parseProgram(source, { languageVersion });
   } catch (e) {
     if (!(e instanceof MovementParseError)) throw e;
     const parseDiagnostic: Diagnostic = {
@@ -123,6 +148,7 @@ export function diagnoseMovementSource(
 
   const collected: Diagnostic[] = [
     ...checkProgram(program, options.catalog, {
+      languageVersion,
       ...(options.resolveFile !== undefined ? { resolveFile: options.resolveFile } : {}),
     }),
   ];
@@ -199,6 +225,9 @@ export function assessMovementValidity(input: {
 export async function validateMovementForTeam(input: {
   teamId: string;
   source: string;
+  /** The language version to validate under — a saved movement's pin, or an
+   *  explicit request. Absent ⇒ the current version. */
+  languageVersion?: LanguageVersion;
 }): Promise<TeamMovementValidation> {
   // Catalog assembly scopes itself to the source by scanning its constructions
   // and expression slots. A malformed expression can make one of those scans
@@ -215,7 +244,7 @@ export async function validateMovementForTeam(input: {
 }
 
 async function runValidate(
-  input: { teamId: string; source: string },
+  input: { teamId: string; source: string; languageVersion?: LanguageVersion },
   timer: StepTimer,
 ): Promise<TeamMovementValidation> {
   let teamCatalog;
@@ -243,6 +272,7 @@ async function runValidate(
       catalog: teamCatalog.catalog,
       resolveCredentialId: teamCatalog.resolveCredentialId,
       resolveFile: teamCatalog.resolveFile,
+      ...(input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : {}),
     }),
   );
   const notes = [...teamCatalog.notes];

@@ -28,6 +28,7 @@ import {
   fileExports,
   parseProgram,
   referencedFileImports,
+  type LanguageVersion,
   type Program,
   type ResolveFile,
 } from 'movement-lang';
@@ -335,12 +336,15 @@ export interface DependentCheckResult {
 export type ValidateMovementSource = (input: {
   teamId: string;
   source: string;
+  languageVersion?: LanguageVersion;
 }) => Promise<{ ok: boolean; diagnostics: Array<{ severity: 'error' | 'warning' | 'info' }> }>;
 
 /** Pure core: re-check every row that imports `name`. */
 export async function checkMovementDependentsOf(input: {
   teamId: string;
-  rows: Array<{ id: string; name: string; source: string }>;
+  /** `languageVersion` is each dependent's pin — it is re-checked under its
+   *  own version, not the importing file's. */
+  rows: Array<{ id: string; name: string; source: string; languageVersion?: LanguageVersion }>;
   name: string;
   validate: ValidateMovementSource;
 }): Promise<DependentCheckResult[]> {
@@ -349,7 +353,11 @@ export async function checkMovementDependentsOf(input: {
   );
   return Promise.all(
     dependents.map(async (row) => {
-      const validation = await input.validate({ teamId: input.teamId, source: row.source });
+      const validation = await input.validate({
+        teamId: input.teamId,
+        source: row.source,
+        ...(row.languageVersion !== undefined ? { languageVersion: row.languageVersion } : {}),
+      });
       return {
         id: row.id,
         name: row.name,

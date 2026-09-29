@@ -3523,6 +3523,12 @@ CREATE TABLE automations.movement (
     validity_source_hash text,                    -- content hash of the source the status was computed against (version-match rule)
     validity_checked_at timestamptz,
     validity_consented_at timestamptz,            -- set when a non-valid save was shipped on explicit consent
+    validity_checked_against integer,             -- the language version the last validation ran under (NULL = never checked)
+    -- The language version this movement is written against (packages/movement-lang
+    -- language_version.ts). Stamped explicitly at FIRST save with the release's
+    -- current version and never moved by an edit or re-save. The default is the
+    -- backfill: a row nobody stamped predates versioning, so it is version 1.
+    language_version integer DEFAULT 1 NOT NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT movement_validity_status_check CHECK (validity_status IN ('valid', 'invalid', 'unverified'))

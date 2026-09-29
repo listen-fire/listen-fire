@@ -36,6 +36,10 @@ export default interface MovementTable {
 
   validity_consented_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
+  validity_checked_against: ColumnType<number | null, number | null, number | null>;
+
+  language_version: ColumnType<number, number | undefined, number>;
+
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
 
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
