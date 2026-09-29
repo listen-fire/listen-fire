@@ -1398,6 +1398,8 @@ export async function evalMovementExpr(
           return { value: l * r, provenance };
         case '/':
           return { value: r === 0 ? null : l / r, provenance };
+        case '%':
+          return { value: r === 0 ? null : l % r, provenance };
       }
       return { value: null, provenance };
     }

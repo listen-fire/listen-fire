@@ -141,6 +141,43 @@ describe('parseMovementExpression', () => {
       expect(parseMovementExpression('a-b')).toEqual(subtraction);
     });
 
+    it('% is remainder, at the same precedence as * and /', () => {
+      expect(parseMovementExpression('a % b')).toEqual({
+        type: 'arithmetic',
+        op: '%',
+        left: { type: 'property', propertyTypeId: 'a' },
+        right: { type: 'property', propertyTypeId: 'b' },
+      });
+    });
+
+    it('% binds tighter than + — a + b % c is a + (b % c)', () => {
+      expect(parseMovementExpression('a + b % c')).toEqual({
+        type: 'arithmetic',
+        op: '+',
+        left: { type: 'property', propertyTypeId: 'a' },
+        right: {
+          type: 'arithmetic',
+          op: '%',
+          left: { type: 'property', propertyTypeId: 'b' },
+          right: { type: 'property', propertyTypeId: 'c' },
+        },
+      });
+    });
+
+    it('% is left-associative: a % b % c is (a % b) % c', () => {
+      expect(parseMovementExpression('a % b % c')).toEqual({
+        type: 'arithmetic',
+        op: '%',
+        left: {
+          type: 'arithmetic',
+          op: '%',
+          left: { type: 'property', propertyTypeId: 'a' },
+          right: { type: 'property', propertyTypeId: 'b' },
+        },
+        right: { type: 'property', propertyTypeId: 'c' },
+      });
+    });
+
     it('probe: CONCAT("a", b) parses to { type: concat, parts } — the shape interpolation mirrors', () => {
       expect(parseMovementExpression('CONCAT("a", b)')).toEqual({
         type: 'concat',
@@ -221,7 +258,6 @@ describe('parseMovementExpression', () => {
         ['a ? b : c', '?', 2, 'IF'],
         ['a \\ b', '\\', 2, 'quoted string'],
         ['a ; b', ';', 2, ';'],
-        ['a % b', '%', 2, '%'],
         ['a \u2013 b', '\u2013', 2, 'en dash'],
         ['a \u2014 b', '\u2014', 2, 'em dash'],
         ['a \u2212 b', '\u2212', 2, 'minus sign'],

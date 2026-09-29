@@ -341,6 +341,13 @@ export const TypedDiagnosticCodes = {
    *  message carries the vocabulary and a did-you-mean, the way a typo'd enum
    *  value does. */
   STDLIB_ARG_INVALID: 'MOV_STDLIB_ARG_INVALID',
+  /** A stdlib argument declared `recordArg` (`TEXT.PAIRS`'s first) that is
+   *  neither a dict nor a typed record — `<json>` from a system included: it
+   *  looks keyed at the write layer, but the checker cannot see its keys, so
+   *  folding over it would fold over nothing the author wrote down. A record
+   *  that may itself be ABSENT is not this error: absence propagates through
+   *  the call the way it does everywhere else. */
+  STDLIB_ARG_NOT_RECORD: 'MOV_STDLIB_ARG_NOT_RECORD',
   /** `READ(x)` where `x` is not a file. READ turns a FILE into its text, and
    *  nothing else has bytes to read — a text argument is either a value the
    *  author already has (so the call does nothing) or the wrong name. The
@@ -3230,6 +3237,7 @@ export class ExpressionTyping {
         const stdlibSpec = stdlibFunctionById(expr.fn);
         if (stdlibSpec === undefined) return undefined;
         this.checkStdlibLiteralArgs(stdlibSpec, expr.args);
+        this.checkStdlibRecordArg(stdlibSpec, args);
         // `DATE.TODAY(zone)` reads the run's clock, exactly as `@current_date`
         // does — same effect, so the row says so from the registry rather than
         // from a second list of names.
@@ -3931,6 +3939,31 @@ export class ExpressionTyping {
         this.report(TypedDiagnosticCodes.STDLIB_ARG_INVALID, problem);
       }
     }
+  }
+
+  /**
+   * `TEXT.PAIRS`'s first argument (or any future `recordArg`): must be
+   * KEYED — a dict, or a typed record — not an ordinary scalar and not
+   * `<json>`. `json` gets the same treatment `checkArithmeticOperands` gives
+   * it: it LOOKS keyed at the write layer, but the checker cannot see its
+   * keys, so folding over one would fold over nothing the author wrote.
+   * Unknown stays silent, as everywhere else in this file; an ABSENT record
+   * is not this error either — absence propagates through the call.
+   */
+  private checkStdlibRecordArg(
+    spec: StdlibFunctionSpec,
+    args: ReadonlyArray<FieldType | undefined>,
+  ): void {
+    const declared = spec.recordArg;
+    if (declared === undefined) return;
+    const type = args[declared.index];
+    if (type === undefined) return; // unknown stays silent
+    const stripped = stripAbsent(type);
+    if (isRecordType(stripped) || isDictType(stripped)) return;
+    this.report(
+      TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+      `${spec.signature} takes a record or a dict, and this is ${describeFieldType(stripped)}.`,
+    );
   }
 
   /**

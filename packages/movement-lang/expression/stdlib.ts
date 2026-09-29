@@ -103,6 +103,17 @@ interface StdlibFunctionCommon {
     /** A message when the literal is wrong, undefined when it is fine. */
     check: (value: string) => string | undefined;
   }>;
+  /**
+   * The one argument that has to be KEYED — a dict, or a typed extracted
+   * record — rather than an ordinary value (`TEXT.PAIRS`'s first). The
+   * registry otherwise has no way to say "this argument's shape is a
+   * record": arity is a count and `literalArgs` is about parsed strings,
+   * neither says anything about a value's structure, so this is the
+   * smallest addition that lets the checker refuse `<json>` (a system's
+   * opaque data looks keyed at the write layer, but the checker cannot see
+   * its keys) while accepting a dict literal or a positioned record.
+   */
+  recordArg?: { index: number };
 }
 
 /** The ordinary member: its arguments are everything it sees. */
@@ -820,6 +831,32 @@ function textSlug(args: unknown[]): unknown {
     .replace(/^-+|-+$/g, '');
 }
 
+/** A single field's value, rendered exactly as `${\u2026}` interpolation renders
+ *  one \u2014 absent is empty, everything else is `String(value)` (a boolean
+ *  prints `true`/`false`, a number is what `TOSTRING` gives it). */
+function textPairsScalar(value: unknown): string {
+  return value === null || value === undefined ? '' : String(value);
+}
+
+/** `record` is a plain keyed object at this layer whatever it came from \u2014 a
+ *  dict literal's own `Object.fromEntries`, or a materialised extracted
+ *  record \u2014 so own-key order IS the written order the checker promises
+ *  (`shape`'s key order for a dict literal, the declaration's field order
+ *  for a record). A value that is itself an object or an array is a nested
+ *  node/edge, not a scalar field, and is skipped rather than stringified \u2014
+ *  `[object Object]` helps nobody. */
+function textPairs(args: unknown[]): unknown {
+  const [record, separator] = args;
+  if (record == null || typeof record !== 'object' || Array.isArray(record)) return null;
+  const sep = typeof separator === 'string' ? separator : ' | ';
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+    if (value !== null && typeof value === 'object') continue; // nested node/edge \u2014 skip
+    parts.push(`${key}=${textPairsScalar(value)}`);
+  }
+  return parts.join(sep);
+}
+
 // ── URL ──────────────────────────────────────────────────────────────────────
 
 // This package declares no DOM/Node lib (`tsconfig.json`'s `lib: ["es2022"]`
@@ -828,19 +865,42 @@ function textSlug(args: unknown[]): unknown {
 // every browser, and every other JS host that runs this package — needs its
 // own narrow ambient type here rather than pulling in a whole environment's
 // globals for one function's sake.
-declare const URL: { new (input: string): { hostname: string } };
+declare const URL: { new (input: string): { hostname: string; username: string } };
+
+// A `scheme:` prefix not followed by `//` — `mailto:`, `tel:` — marks an
+// OPAQUE uri with no authority to read a host out of. Deliberately dot-free
+// (no real IANA scheme has one): `acme.com:8080` is not this — it is a bare
+// host:port whose "scheme" would be `acme.com` — so it falls through to the
+// scheme-less path below instead of being mistaken for an opaque uri.
+const OPAQUE_SCHEME_URI = /^[a-zA-Z][a-zA-Z0-9+-]*:(?!\/\/)/;
 
 function urlHost(args: unknown[]): unknown {
   const [text] = args;
   if (text == null) return null;
-  let url: { hostname: string };
+  const raw = String(text).trim();
+  if (raw === '') return null;
+
+  // A scheme-less address (`acme.com`, `acme.com:8080`, `www.Acme.com/x`)
+  // parses under an assumed `http://`. Not a relative path (`/deals/1` —
+  // itself parseable as an authority once prefixed, which would be wrong)
+  // and not an opaque uri (`mailto:a@b.com` has no host either way, so the
+  // prefix would only invent one from its own address).
+  const attempt =
+    raw.includes('://') ? raw
+    : raw.startsWith('/') || OPAQUE_SCHEME_URI.test(raw) ? null
+    : `http://${raw}`;
+  if (attempt === null) return null;
+
+  let url: { hostname: string; username: string };
   try {
-    url = new URL(String(text));
+    url = new URL(attempt);
   } catch {
     return null;
   }
-  // No host at all (`file:///x`, `mailto:a@b.com`) — nothing to answer.
-  if (!url.hostname) return null;
+  // No host at all (`file:///x`) — nothing to answer. Userinfo (`user@host`)
+  // means this named credentials, not a bare host — `joe@acme.com` is an
+  // email, not a host.
+  if (!url.hostname || url.username) return null;
   // `URL` already normalizes the hostname to lowercase, keeps `www.`, and
   // carries no port (that's `url.port`) or path — verbatim otherwise.
   return url.hostname;
@@ -858,6 +918,7 @@ function spec(
     returns: StdlibFunctionSpec['returns'];
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
+    recordArg?: StdlibFunctionCommon['recordArg'];
     apply: StdlibPureFunctionSpec['apply'];
   },
 ): StdlibPureFunctionSpec {
@@ -892,6 +953,7 @@ function common(
     returns: StdlibFunctionSpec['returns'];
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
+    recordArg?: StdlibFunctionCommon['recordArg'];
   },
 ): StdlibFunctionCommon {
   return {
@@ -904,6 +966,7 @@ function common(
     returns: options.returns,
     ...(options.maybeAbsent !== undefined ? { maybeAbsent: options.maybeAbsent } : {}),
     ...(options.literalArgs !== undefined ? { literalArgs: options.literalArgs } : {}),
+    ...(options.recordArg !== undefined ? { recordArg: options.recordArg } : {}),
   };
 }
 
@@ -1019,6 +1082,15 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         returns: 'text',
         apply: textSlug,
       }),
+      spec('TEXT', 'PAIRS', {
+        args: 'record, separator?',
+        summary:
+          'a record or dict rendered as key=value pairs, keys in written order, joined by `separator` (default " | ") — TEXT.PAIRS({ name: "Acme", url: "acme.com" }) is "name=Acme | url=acme.com"; a nested node/edge field is skipped, not stringified',
+        arity: { min: 1, max: 2 },
+        returns: 'text',
+        recordArg: { index: 0 },
+        apply: textPairs,
+      }),
     ],
   },
   {
@@ -1027,7 +1099,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       spec('URL', 'HOST', {
         args: 'text',
         summary:
-          'the host of a URL, lowercased and otherwise verbatim (`www.` kept, no port, no path) — URL.HOST("https://WWW.Acme.com:8080/x") is "www.acme.com"; text that isn\'t a URL with a host is absent',
+          'the host of a URL or a scheme-less address, lowercased and otherwise verbatim (`www.` kept, no port, no path) — URL.HOST("https://WWW.Acme.com:8080/x") is "www.acme.com", URL.HOST("acme.com:8080") is "acme.com"; an email (`joe@acme.com`) is not a host, and text that names no address at all is absent',
         arity: { min: 1, max: 1 },
         returns: 'text',
         maybeAbsent: true,

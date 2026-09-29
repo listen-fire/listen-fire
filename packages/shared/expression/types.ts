@@ -480,7 +480,7 @@ export type Expression =
   // adapter-specific canned predicates.
   | { type: 'exists'; steps: TraversalStep[]; where?: Expression }
   // Operations
-  | { type: 'arithmetic'; op: '+' | '-' | '*' | '/'; left: Expression; right: Expression }
+  | { type: 'arithmetic'; op: '+' | '-' | '*' | '/' | '%'; left: Expression; right: Expression }
   | { type: 'compare'; op: FilterOperator; left: Expression; right: Expression }
   | { type: 'logical'; op: 'and' | 'or'; operands: Expression[] }
   | { type: 'not'; expression: Expression }

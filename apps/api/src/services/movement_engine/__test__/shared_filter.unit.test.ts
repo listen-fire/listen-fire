@@ -222,6 +222,14 @@ describe('evaluatePredicate — value semantics mirror the engine', () => {
     expect(isPurePredicate(negate)).toBe(true);
   });
 
+  it('arithmetic: % is TypeScript remainder (sign of the dividend), and by zero → null', () => {
+    const mod = (n: number, d: number): Expression => ({ type: 'arithmetic', op: '%', left: { type: 'static', value: n }, right: { type: 'static', value: d } });
+    expect(evaluatePredicate(mod(7, 3), scopeOf({}))).toBe(1);
+    expect(evaluatePredicate(mod(-7, 20), scopeOf({}))).toBe(-7);
+    expect(evaluatePredicate(mod(7, 0), scopeOf({}))).toBeNull();
+    expect(isPurePredicate(mod(7, 3))).toBe(true);
+  });
+
   it('concat folds nulls to empty strings', () => {
     const expr: Expression = { type: 'concat', parts: [{ type: 'static', value: 'a' }, { type: 'property', propertyTypeId: 'x' }, { type: 'static', value: 'b' }] };
     expect(evaluatePredicate(expr, scopeOf({ x: null }))).toBe('ab');

@@ -297,6 +297,14 @@ line = IF EXISTS(domain) THEN "\${domain}" ELSE "" END
 delta = -(after - before)
 \`\`\`
 
+### remainder
+
+\`a % b\` → \`number\` — same precedence as \`*\` and \`/\`, left-associative. TypeScript semantics: the sign follows the dividend (\`-7 % 20\` is \`-7\`, not \`13\`). Both operands must already be numbers, the same rule every arithmetic operator has; division by zero answers \`null\`.
+
+\`\`\`
+leftover = amount % batch_size
+\`\`\`
+
 ### FILE
 
 \`FILE(content, "pdf" | "text")\` → a \`file\` value, always present — turns a composed string into a file for a file-typed field. \`type\` is a literal; the content renders as plain text, line breaks preserved.
@@ -434,12 +442,28 @@ ref = TEXT.REGEX_EXTRACT(m.\`Subject\`, "(DEAL-\\\\d+)")
 slug = TEXT.SLUG("Acme Corp Ltd.")   # "acme-corp-ltd"
 \`\`\`
 
-### URL.HOST
+### TEXT.PAIRS
 
-\`URL.HOST(text)\` → \`text | absent\` — the host of a URL, lowercased and otherwise verbatim (\`www.\` kept, no port, no path); absent when the text isn't a URL with a host.
+\`TEXT.PAIRS(record, separator?)\` → \`text\`, always present — a record or a dict rendered as \`key=value\` pairs, keys in the order they were written (a dict literal's own order; a declared or extracted record's field order), joined by \`separator\` (default \`" | "\`). Each value renders exactly as \`\${…}\` interpolation would: absent is empty, a boolean is \`true\`/\`false\`, a number is \`TOSTRING\`'s form. A nested node or edge field is SKIPPED, not stringified — only scalar fields make it into the line. Refused on \`<json>\`: it looks keyed but the checker cannot see its keys, so name the fields into a dict first.
+
+Project A's composer posts one Slack line per candidate row:
 
 \`\`\`
-host = URL.HOST("https://WWW.Acme.com:8080/deals/1")   # "www.acme.com"
+summary = TEXT.PAIRS({ name: c.\`Name\`, url: c.\`Website\`, stage: c.\`Stage\` })
+# "name=Acme | url=acme.com | stage=Series A"
+\`\`\`
+\`\`\`
+line = "candidate — \${TEXT.PAIRS({ name: c.\`Name\`, url: c.\`Website\` }, ", ")}"
+# "candidate — name=Acme, url=acme.com"
+\`\`\`
+
+### URL.HOST
+
+\`URL.HOST(text)\` → \`text | absent\` — the host, lowercased and otherwise verbatim (\`www.\` kept, no port, no path). Takes a full URL (\`https://acme.com\`) or a scheme-less address (\`acme.com\`, \`acme.com:8080\`, \`www.Acme.com/path\`) — the bare form is read as if \`http://\` were in front of it. Absent for an email (\`joe@acme.com\` names an account, not a host) and for text that names no address at all.
+
+\`\`\`
+host  = URL.HOST("https://WWW.Acme.com:8080/deals/1")   # "www.acme.com"
+host2 = URL.HOST("acme.com")                             # "acme.com" — no scheme needed
 \`\`\`
 
 ### NUMBER.FORMAT

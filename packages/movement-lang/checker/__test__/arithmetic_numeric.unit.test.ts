@@ -27,7 +27,7 @@ const stageEnum: SchemaFieldType = { kind: 'enum', options: ['Seed', 'Series A']
 // The operand vocabulary is easier to pin here than through a schema: absence
 // and list cardinality are the two shapes a movement can't cheaply produce.
 
-const arith = (op: '+' | '-' | '*' | '/', left: FieldType | undefined, right: FieldType | undefined) =>
+const arith = (op: '+' | '-' | '*' | '/' | '%', left: FieldType | undefined, right: FieldType | undefined) =>
   checkArithmeticOperands(
     { type: 'arithmetic', op, left: { type: 'static', value: 1 }, right: { type: 'static', value: 1 } },
     left,
@@ -333,5 +333,26 @@ describe('unary minus operand typing', () => {
 
   it('an operand this layer cannot see stays silent', () => {
     expectClean(onDeal('  write c-[:deals]-> { Amount: -NUMBER(d.`Name`) }'));
+  });
+});
+
+// ── % (remainder): same rule as + - * /, no new code. ──
+
+describe('% operand typing — same rule as + - * /', () => {
+  it('numeric operands are clean', () => {
+    expect(arith('%', 'number', 'number')).toBeNull();
+  });
+
+  it('a non-numeric operand is reported, naming the operator', () => {
+    expect(arith('%', 'text', 'number')?.code).toBe(CODE);
+    expect(arith('%', 'text', 'number')?.message).toContain("the left side of '%' is text");
+  });
+
+  it('clean through a real program', () => {
+    expectClean(onDeal('  write c-[:deals]-> { Amount: d.`Amount` % 3 }'));
+  });
+
+  it('loud through a real program', () => {
+    expect(codes(onDeal('  write c-[:deals]-> { Amount: d.`Name` % 3 }'))).toContain(CODE);
   });
 });

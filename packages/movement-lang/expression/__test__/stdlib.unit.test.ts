@@ -599,13 +599,61 @@ describe('URL.HOST', () => {
     expect(apply('url.host', '/deals/1')).toBeNull();
   });
 
+  it('accepts a scheme-less address, assumed http://', () => {
+    expect(apply('url.host', 'acme.com')).toBe('acme.com');
+    expect(apply('url.host', 'www.Acme.com/path?x=1')).toBe('www.acme.com');
+    expect(apply('url.host', 'acme.com:8080')).toBe('acme.com');
+  });
+
+  it('a URL with an explicit scheme is unchanged', () => {
+    expect(apply('url.host', 'https://acme.com')).toBe('acme.com');
+  });
+
+  it('an email is not a host', () => {
+    expect(apply('url.host', 'joe@acme.com')).toBeNull();
+  });
+
   it('text that is not a URL at all is absent', () => {
     expect(apply('url.host', 'not a url')).toBeNull();
-    expect(apply('url.host', 'acme.com')).toBeNull(); // no scheme — not a URL
+    expect(apply('url.host', '')).toBeNull();
   });
 
   it('null is absent', () => {
     expect(apply('url.host', null)).toBeNull();
+  });
+});
+
+describe('TEXT.PAIRS', () => {
+  it('the worked example — the Project A composer row', () => {
+    expect(apply('text.pairs', { name: 'Acme', url: 'acme.com' })).toBe('name=Acme | url=acme.com');
+  });
+
+  it('a custom separator', () => {
+    expect(apply('text.pairs', { a: 1, b: 2 }, ', ')).toBe('a=1, b=2');
+  });
+
+  it('keys in written order', () => {
+    expect(apply('text.pairs', { z: 1, a: 2, m: 3 })).toBe('z=1 | a=2 | m=3');
+  });
+
+  it('renders each value exactly as interpolation would', () => {
+    expect(apply('text.pairs', { present: 'x', gone: null, on: true, off: false, n: 3 })).toBe(
+      'present=x | gone= | on=true | off=false | n=3',
+    );
+  });
+
+  it('skips a nested node/edge field — only scalar fields render', () => {
+    expect(apply('text.pairs', { name: 'Acme', address: { city: 'NYC' } })).toBe('name=Acme');
+    expect(apply('text.pairs', { name: 'Acme', tags: ['a', 'b'] })).toBe('name=Acme');
+  });
+
+  it('an empty record is an empty string', () => {
+    expect(apply('text.pairs', {})).toBe('');
+  });
+
+  it('defaults the separator to " | "', () => {
+    const spec = stdlibFunctionById('text.pairs');
+    expect(spec?.signature).toBe('TEXT.PAIRS(record, separator?)');
   });
 });
 
