@@ -8,6 +8,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.8.2] - 2026-09-29
+
 ### Added
 
 - An extraction field, inline or in a node declaration, may be annotated `<text | null>`. A text the model did not find then arrives null instead of `""`, so `EXISTS(…)`, `!= null` and a guard clause test it and narrow it, and a plain write of it needs `?:` or a guard. The prompt is unchanged. `| null` on any other type (`<number | null>`, `<Thesis | null>`) means what the type already meant. It is accepted under every language version. `<null>` alone, a second `|`, and `| null` anywhere other than a field annotation are refused. The refusal of a null test on plain extracted text now names this annotation as the first fix.
@@ -255,7 +257,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.8.2...HEAD
+[v0.8.2]: https://github.com/listen-fire/listen-fire/compare/v0.8.1...v0.8.2
 [v0.8.1]: https://github.com/listen-fire/listen-fire/compare/v0.8.0...v0.8.1
 [v0.8.0]: https://github.com/listen-fire/listen-fire/compare/v0.7.0...v0.8.0
 [v0.7.0]: https://github.com/listen-fire/listen-fire/compare/v0.6.2...v0.7.0
