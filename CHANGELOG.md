@@ -6,7 +6,9 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
-<!-- add merged PRs here -->
+### Fixed
+
+- A connector client closing its event stream no longer logs an unhandled rejection on the API; the session is released quietly.
 
 ## [v0.9.1] - 2026-09-29
 
