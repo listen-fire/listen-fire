@@ -212,9 +212,23 @@ class Context extends EventEmitter implements ClsStorage {
     await this.cleanup();
   }
 
-  /** instigate destruction of the context due to an error */
+  /**
+   * Instigate destruction of the context due to an error.
+   *
+   * 'error' is documented above as a passive notification, but `EventEmitter`
+   * special-cases that event name: emitting it with no listener attached
+   * throws the value synchronously instead of doing nothing, which — inside
+   * this `async` method — becomes a rejected promise. Most callers (e.g.
+   * `contextInjector`'s `req.on('error', (err) => ctx.error(err))`) don't
+   * await or catch that promise, so a Context with nothing actively listening
+   * (any request outside an open DB transaction) turned every aborted
+   * request into an unhandled rejection. Only emit when someone is actually
+   * listening; cleanup always runs either way.
+   */
   async error(err: unknown) {
-    this.emit('error', err);
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', err);
+    }
     await this.cleanup();
   }
 

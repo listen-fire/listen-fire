@@ -7,6 +7,8 @@ import { z } from 'zod';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 
 import { getEnvVar } from '../../lib/utils/environment';
+import { isClientAbort } from '../../lib/middleware/context';
+import { logger } from '../../services/logger';
 import { describeRoutes, validateCallApiBody } from './registry';
 
 const PORT = process.env.PORT ?? 3000;
@@ -452,8 +454,16 @@ function createMcpRouter(options: McpRouterOptions): ReturnType<typeof Router> {
     try {
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      if (req.destroyed || res.destroyed) return;
-      if (err instanceof Error && err.message === 'aborted') return;
+      // The client closing its own connection — a GET's long-lived SSE
+      // stream ending, or a POST session torn down mid-request — is routine,
+      // not a bug in the request. Note it once and release the session
+      // rather than staying silent (the previous bare `return` gave no
+      // signal this was even happening) or rethrowing into an unhandled
+      // rejection.
+      if (req.destroyed || res.destroyed || isClientAbort(err)) {
+        logger.info('[mcp] client closed the stream', { domain: options.domain, sessionId: transport.sessionId });
+        return;
+      }
       throw err;
     }
   };
