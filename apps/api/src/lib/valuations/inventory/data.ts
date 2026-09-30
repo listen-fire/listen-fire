@@ -199,6 +199,7 @@ const loadAssetTransfers = requestBatchLoader<
               assetName: row.name,
               assetType: row.type,
               assetIssuerId: row.asset_issuer_id,
+              senderId: row.sender_id,
               numAssets: row.num_assets ?? 0,
               type: row.flowtype,
               investingEntityId: row.investing_entity_id as string as InvestingEntityId,
@@ -351,6 +352,7 @@ async function fetchTransfersForAssets({
       'a2.id as asset_id',
       'a2.type',
       'a2.issued_by_legal_entity_id as asset_issuer_id',
+      'at2.from_legal_entity_id as sender_id',
       $.fn.coalesce($.cast<string>('ca.iso_code', 'text'), 'a2.name').as('name'),
       'at2.num_assets',
       jsonbAgg($, {
