@@ -490,6 +490,18 @@ export const DiagnosticCodes = {
    *  along it. Fires before the generic target-not-writable gate so the
    *  message names the EDGE's read-only nature, not the target's. */
   WRITE_READ_ONLY_EDGE: 'MOV_WRITE_READ_ONLY_EDGE',
+  /** A `WHERE` on a hop of a `match`/`write` target other than the last. The
+   *  target's WHERE narrows the records its final hop lands on (the identity
+   *  candidates); an earlier hop is one the target only passes through. */
+  TARGET_WHERE_NOT_FINAL: 'MOV_TARGET_WHERE_NOT_FINAL',
+  /** A `WHERE` on a `match`/`write` target whose edge belongs to a node this
+   *  run built — its landings take no WHERE (the read side refuses one too);
+   *  `unique by` is how a landing is picked. */
+  TARGET_WHERE_LOCAL: 'MOV_TARGET_WHERE_LOCAL',
+  /** A `WHERE` on the target of a `bind` write — a bound write's identity IS
+   *  the binding, so there are no candidates to narrow (the `WRITE_BIND_UNIQUE`
+   *  twin). */
+  TARGET_WHERE_BIND: 'MOV_TARGET_WHERE_BIND',
   /** `link` / `unlink` along an edge the source system can only CREATE along
    *  (`EdgeSchema.linkable: false`). The write promise covers making the
    *  relationship as part of writing the target; it does not cover joining two
@@ -5621,6 +5633,7 @@ class Checker {
           span: write.target.span,
           purpose: 'write',
           isBound,
+          ...(write.bind !== undefined ? { bindName: write.bind.name } : {}),
         },
         scope,
       );
@@ -5639,6 +5652,7 @@ class Checker {
       const tuple = this.checkTupleWriteTarget(write.target, scope, parents, {
         purpose: 'write',
         isBound,
+        ...(write.bind !== undefined ? { bindName: write.bind.name } : {}),
       });
       root = tuple.root;
       handle = tuple.handle;
@@ -6378,6 +6392,10 @@ class Checker {
        *  the only form an ephemeral final edge rejects. Bare statements and
        *  matches never trip the gate. */
       isBound?: boolean;
+      /** The write's `bind` counterpart, when it has one — a bound write's
+       *  identity IS the binding, so a target WHERE would have nothing to
+       *  narrow. */
+      bindName?: string;
     },
     scope: Scope,
   ): {
@@ -6416,6 +6434,18 @@ class Checker {
       return {};
     }
 
+    // A WHERE on a target says which existing records the find may take, and
+    // those are the records the FINAL hop lands on. On any earlier hop it
+    // would narrow a parent the target never walks from at run time.
+    for (const step of head.steps.slice(0, -1)) {
+      if (step.type !== 'edge' || step.expressionFilter === undefined) continue;
+      this.report(
+        DiagnosticCodes.TARGET_WHERE_NOT_FINAL,
+        `the WHERE on '-[:${step.edgeTypeId}]->' narrows a hop the ${input.purpose} only passes through — a ${input.purpose} target's WHERE goes on its final hop, where it says which existing records may be matched ('${input.purpose} parent-[x:Edge WHERE …]-> { … }')`,
+        input.span,
+      );
+    }
+
     const typing = this.slotTyping(scope, input.span);
     const parent = typing.walkSteps(head.rootType, head.steps.slice(0, -1));
     if (parent === undefined) return {};
@@ -6431,6 +6461,13 @@ class Checker {
       // The root's NAME is the subject only when the parent IS the root — one
       // hop further along and the author's name is for a different node.
       const subject = head.steps.length === 1 ? rootName : undefined;
+      if (linkStep.expressionFilter !== undefined) {
+        this.report(
+          DiagnosticCodes.TARGET_WHERE_LOCAL,
+          `'${edgeName}' is an edge of a node this run built, and its landings take no WHERE — say which one you mean in 'unique by (…)' instead`,
+          input.span,
+        );
+      }
       return this.localWriteTarget(parent, edgeName, input.span, subject);
     }
 
@@ -6578,6 +6615,25 @@ class Checker {
         (parent.kind === 'handle' ? parent.genericLandings?.[edgeName] : undefined) ?? edge.target;
     }
 
+    // The final hop's WHERE narrows the identity candidates — each one read as
+    // the record it is, so it types like a read hop's WHERE at the type the
+    // target lands on. The formula grammar has no write and no ask, so a
+    // filter that type-checks here is read-only by construction.
+    if (linkStep.expressionFilter !== undefined) {
+      if (input.bindName !== undefined) {
+        this.report(
+          DiagnosticCodes.TARGET_WHERE_BIND,
+          `a WHERE on the target and 'bind ${input.bindName}' don't combine — a bound write's identity IS the binding, so there are no candidates for the WHERE to narrow. Drop the WHERE, or the 'bind' to find the record by 'unique by (…)'`,
+          input.span,
+        );
+      }
+      typing.typeTargetFilter({
+        filter: linkStep.expressionFilter,
+        landing: positionRefIn(instance, written),
+        alias: linkStep.alias,
+      });
+    }
+
     const root =
       instance.schema.writableRoots[written] ??
       instance.schema.createShapes?.[written] ??
@@ -6628,7 +6684,7 @@ class Checker {
     target: Extract<WriteExpression['target'], { kind: 'tuple' }>,
     scope: Scope,
     parents: Array<{ type?: string; edge: string }>,
-    options: { purpose: 'write' | 'match'; isBound?: boolean },
+    options: { purpose: 'write' | 'match'; isBound?: boolean; bindName?: string },
   ): { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string } {
     let agreed:
       | { root?: WritableRootSchema; handle?: PositionTypeRef; description?: string; instanceToken: object; written: string; pathIndex: number }

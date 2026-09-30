@@ -86,6 +86,8 @@ unique by (\`First Name\`, \`Last Name\`)
 - A component may be a **handle** rather than a field: \`unique by (parent, \`Stage\`)\` scopes identity to a parent, the way an order is unique *within* its customer.
 - \`FUZZY\` matches a component by *similarity*: \`unique by (FUZZY \`Name\`)\` treats "Acme, Inc." and "Acme Inc" as one company. Use it on names and labels, never on ids or emails; not every target offers it.
 - A \`FUZZY\` match is settled in two steps: the target surfaces the candidates by its own means, and a judge picks the best one, if any. A record the run built judges the same way.
+- A component may pin a value: \`unique by (parent, \`Stage\` == "Seed")\` matches only a record whose Stage is Seed.
+- A component that is not an equality narrows the candidates after the lookup: \`unique by (\`Name\`, \`Updated\` WITHIN 30d)\` matches by Name, and only a record updated in the last 30 days. This applies when the write has a single \`unique by\` clause.
 
 Identity at write time is the **union** of the target's own rules and your \`unique by\`, so author only the identity the target lacks: compound business keys, parent-scoped identity, fields it treats as ordinary.
 
@@ -107,6 +109,7 @@ company = match crm-[:Companies]-> {
 - The lines after it run only when the record exists. On a miss the enclosing scope ends quietly: that iteration skips, or the run stops after the work already done.
 - Written without a name (\`match crm-[:Companies]-> { … }\`), it is a gate: the rest of the block runs only if the record is there.
 - The handle reads like a write's, without \`created\` and \`committed\`. A polymorphic edge takes the type explicitly: \`match a-[:related]-><Companies> { … }\`.
+- A \`WHERE\` on the target's hop says which existing records may be matched: \`match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> { … }\` considers only companies with someone on their team. Each candidate is read the way a traversal's \`WHERE\` reads a record, before the identity is settled. On \`write\` the \`WHERE\` limits what may be updated, never whether to write: with no candidate left, the write creates.
 - Use \`write … unique by\` instead when the record should be created if it is missing.
 
 \`FUZZY\` works only on the fields a target lists for similarity, and the save check names them. A valuations Legal Entity lists \`Name\`, \`Legal Name\`, \`Also Known As\` and \`Other Names\`: its shortlist searches the words in all four, plus near spellings of \`Name\` and \`Legal Name\`. Every other field matches exactly, and \`Website\` ignores the scheme, \`www.\` and a trailing slash.
@@ -249,6 +252,25 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   employer = link person -[:Company]-> { unique by (FUZZY \`Name\`), Name: "Acme" }
   link person -[:Company]-> { Name: m.\`Subject\` }
   write employer-[:Notes]-> { Title: "Introduced", Content: m.\`Subject\` }
+}
+`,
+    },
+    {
+      construct: "a WHERE on a match target's hop, narrowing which existing records may be matched",
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  company = match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> {
+    unique by (FUZZY \`Name\`)
+    Name: m.\`Subject\`
+  }
+  write company-[:Notes]-> { Title: "Seen again", Content: m.\`Subject\` }
 }
 `,
     },

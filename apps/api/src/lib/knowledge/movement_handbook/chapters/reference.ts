@@ -110,12 +110,15 @@ company = write crm-[:Companies]-> {
 - \`unique by (parent, Stage)\` — a handle component scopes identity to that parent.
 - \`unique by (FUZZY Name)\` — similarity match (when the target supports it).
 - \`unique by (Domain, FUZZY Name)\` — mix exact and fuzzy.
+- \`unique by (parent, \`Stage\` == "Seed")\` — a component pinned to a value.
+- \`unique by (Name, \`Updated\` WITHIN 30d)\` — a non-equality component narrows the candidates after the lookup (one \`unique by\` clause only).
 
 Connecting records (write related records **along their edges**, never as flat rows):
 - \`write company-[:Notes]-> { … }\` — linked write off a parent handle.
 - \`write (a-[:agreements]->, b-[:agreements]->) { … }\` — one record under several parents; \`unique by (a, b)\`.
 - \`link champion -[:led]-> part\` — connect two records already bound.
 - \`p = match c-[:portfolio]-> { unique by (\`Name\`), Name: "Fund III" }\` — find by identity, never create or write; on a miss the scope ends quietly.
+- \`match crm-[c:Companies WHERE EXISTS(c-[:Team]->)]-> { … }\` — a \`WHERE\` on the target's final hop limits which existing records may be matched (\`write\` still creates when none is left).
 - \`p = link c -[:portfolio]-> { Name: "Fund III" }\` — \`match\` then \`link\`; a body with no \`unique by\` identifies by all its fields.
 - \`write record { Status: "Customer" }\` — in-place update of a held/traversed record (no \`unique by\`).
 - \`unlink a -[:related]-> b\` — sever an edge. \`delete stale\` — remove a record (only when removal is the automation's purpose).
