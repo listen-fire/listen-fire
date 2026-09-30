@@ -215,6 +215,7 @@ import {
   describeBinding,
   evalMovementExpr,
   evaluateMovementExpression,
+  hopFilterKeeps,
   hopMemberGate,
   hopOrderKeyReader,
   nodeEdgeLandings,
@@ -5965,31 +5966,29 @@ class Interpreter {
           if (!isMember(r.position)) continue;
           const edgeProperties =
             r.edgeProperties !== undefined ? { edgeProperties: r.edgeProperties } : {};
-          const positionScope = {
-            kind: 'position' as const,
+          const landing: Binding = {
+            kind: 'sourcePosition',
             position: r.position,
             ...edgeProperties,
             ...(bindingRead !== undefined ? { read: bindingRead } : {}),
           };
-          if (step.expressionFilter) {
-            // Position-scoped, per landed record — `property` reads hit
-            // the destination, `edge_property` reads the walked edge's
-            // inline properties (the bracket-WHERE grammar's currency).
-            const keep = await evaluateMovementExpression(step.expressionFilter, {
-              ...this.exprContext(input.env),
-              scope: positionScope,
-            });
-            if (!keep) continue;
+          // Position-scoped, per landed record — `property` reads hit the
+          // destination, `edge_property` reads the walked edge's inline
+          // properties (the bracket-WHERE grammar's currency), and the hop's
+          // alias names the landed record.
+          if (
+            step.expressionFilter &&
+            !(await hopFilterKeeps({
+              step,
+              filter: step.expressionFilter,
+              landed: landing,
+              ctx: this.exprContext(input.env),
+            }))
+          ) {
+            continue;
           }
           const aliases = new Map(path.aliases);
-          if (step.alias !== undefined) {
-            aliases.set(step.alias, {
-              kind: 'sourcePosition',
-              position: r.position,
-              ...edgeProperties,
-              ...(bindingRead !== undefined ? { read: bindingRead } : {}),
-            });
-          }
+          if (step.alias !== undefined) aliases.set(step.alias, landing);
           kept.push({ aliases, position: r.position, ...edgeProperties });
         }
         // Bracket ORDER BY / LIMIT — per origin position, post-stream. The key

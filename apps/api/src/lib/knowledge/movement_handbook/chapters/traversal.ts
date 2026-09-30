@@ -21,7 +21,7 @@ msg-[a:Attachments]-> {
 - The head is a traversal: \`-[:edge]->\` relative to the enclosing position, or rooted at any in-scope name (\`deals-[c:Companies]->\`, chaining hops as usual).
 - Head the block at an EXPRESSION that ends in a record, and skip the binding: \`AT(rows, 0)-[c:company]-> { … }\` walks exactly as naming the call first and hopping off the name does. The expression ends at the first \`-[\` outside its own brackets, so a hop written inside it belongs to it (\`ONLY(found-[c:company]->)-[f:founder]->\`).
 - The bracket-alias (\`a\`, \`c\`) names *this iteration's* position inside the block. Aliases are lexically scoped to their block.
-- A \`WHERE\` filter on the hop narrows which positions the block sees: \`msg-[f:attachments WHERE \`Content Type\` == "application/pdf"]-> { … }\`.
+- A \`WHERE\` filter on the hop narrows which positions the block sees: \`msg-[f:attachments WHERE \`Content Type\` == "application/pdf"]-> { … }\`. Inside it, a bare field and the hop's own alias both read the record the hop lands on: \`f.\`Content Type\`\` means the same.
 - Pick one member of an edge that holds several kinds by testing its label in the \`WHERE\`: \`o-[le:\`List Entries\` WHERE \`listName\` == "Deal Pipeline" AND \`Deal Created\` >= cutoff]-> { … }\`. The whole \`WHERE\` narrows the hop to that list, whatever order its tests are in, so the list's own fields read in the \`WHERE\` and off \`le\`. Without that test the hop carries only what every list shares, and reading one list's field is refused, naming the test to add.
 - Blocks nest: a block over companies can contain a block over each company's rounds. With nesting, write the inner record as a **linked write** from the enclosing handle so the structure lands connected (see the writes chapter).
 
@@ -166,7 +166,7 @@ function \`Top Ten\`(go: <runs-[:Invocation]->>) {
       Name: c.\`Name\`
     }
   }
-  if EXISTS(crm-[k:Companies ORDER BY \`Name\` LIMIT 1]->) {
+  if EXISTS(crm-[k:Companies WHERE k.\`Categories\` == "Customer" ORDER BY \`Name\` LIMIT 1]->) {
     crm-[top:Companies ORDER BY \`Name\` DESC LIMIT 1]-> {
       write top-[:Notes]-> { Title: "Last by name", Content: top.\`Name\` }
     }

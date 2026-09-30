@@ -3749,26 +3749,26 @@ export class ExpressionTyping {
         this.checkHopLimitOrder(step, ordering);
         const next =
           stepped !== undefined ? refineSelected(stepped, step.expressionFilter) : stepped;
+        // The hop's own alias names the element it lands on, and the bracket's
+        // WHERE and ORDER BY are expressions over that element — so the alias
+        // is bound before either is typed (`-[e:X WHERE e.`F` == 1]->`, `ORDER
+        // BY e-[:Signal]->.`Discovered At``), as the engine binds it per member.
+        if (step.alias) this.locals.set(step.alias, next);
         if (step.expressionFilter) this.inferAt(step.expressionFilter, next);
-        // The bracket `ORDER BY` key is an expression over the element the hop
-        // lands on, so it types exactly as the WHERE just did: at the
-        // destination, in check 4's vocabulary, silent on an untyped one. The
-        // hop's own alias names that element, so a path key (`ORDER BY
-        // e-[:Signal]->.`Discovered At``) is bound before the key is read.
+        // The bracket `ORDER BY` key types exactly as the WHERE just did: at
+        // the destination, in check 4's vocabulary, silent on an untyped one.
         const orderKey = step.cardinality?.orderBy;
         if (orderKey !== undefined) {
-          if (step.alias) this.locals.set(step.alias, next);
           const keyType = this.inferAt(orderKey, next);
           this.checkOrderingKey(orderKey, keyType, `ORDER BY on '${step.edgeTypeId}'`);
         }
         // Gate the hop's WHERE / ORDER BY / LIMIT against the source's declared
         // filter/order/limit capability (chunk 6). Silent when undeclared.
         if (current !== undefined) this.gateHopCapability(current, step, next);
-        if (step.alias) this.locals.set(step.alias, next);
         current = next;
       } else if (step.type === 'meta_edge') {
-        if (step.expressionFilter) this.inferAt(step.expressionFilter, undefined);
         if (step.alias) this.locals.set(step.alias, undefined);
+        if (step.expressionFilter) this.inferAt(step.expressionFilter, undefined);
         current = undefined;
         ordering = 'unknown';
         orderingEdge = undefined;
