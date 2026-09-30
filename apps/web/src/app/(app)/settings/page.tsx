@@ -201,6 +201,9 @@ function WhatsAppSection() {
 
   const verified = data?.verifiedAt ? data : null;
   const busy = isSending || isConfirming;
+  // Only labels the button; what happens after a press follows what the link
+  // call answers, so a label and a flow can never disagree about a code.
+  const linksWithoutCode = deployment?.whatsappLinkVerification === "trust";
 
   const startMessages: Record<string, string> = {
     number_taken: "That number is already linked to another account.",
@@ -212,6 +215,7 @@ function WhatsAppSection() {
     expired: "That code expired. Send a new one.",
     too_many_attempts: "Too many wrong attempts. Send a new code.",
     invalid_code: "That code is not right. Check it and try again.",
+    no_code_needed: "No code is needed. Link the number again.",
   };
 
   const handleSend = async () => {
@@ -227,6 +231,13 @@ function WhatsAppSection() {
       const res = await startVerification({ phoneNumber: phone.trim() });
       if (!res.ok) {
         setError(startMessages[res.reason] ?? "Could not send a code.");
+        return;
+      }
+      if (res.outcome === "linked") {
+        setStage("enter");
+        setEditing(false);
+        setSuccess("Number linked.");
+        await utils.views.userSettings.getPhoneNumber.invalidate();
         return;
       }
       setStage("code");
@@ -267,7 +278,7 @@ function WhatsAppSection() {
     <Card testId="settings-whatsapp-section">
       <h2 className="text-[13px] font-semibold text-gray-900">WhatsApp</h2>
       <p className="mt-1 text-[12px] text-gray-400">
-        Verify your WhatsApp number so messages you send to{" "}
+        {linksWithoutCode ? "Link" : "Verify"} your WhatsApp number so messages you send to{" "}
         {deployment.whatsappNumber} run your automations.
       </p>
 
@@ -322,7 +333,7 @@ function WhatsAppSection() {
                 className={btnPrimary}
                 data-testid="settings-send-code"
               >
-                Send code
+                {linksWithoutCode ? "Link number" : "Send code"}
               </button>
             ) : (
               <>

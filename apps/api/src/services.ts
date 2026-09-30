@@ -13,6 +13,7 @@ import { logger } from './services/logger';
 import { OutboundTwilioMessager } from './adapters/whatsapp/twilio.adapter';
 import { FakeOutboundWhatsAppAdapter } from './adapters/whatsapp/fake.adapter';
 import { UnconfiguredOutboundWhatsAppAdapter } from './adapters/whatsapp/unconfigured.adapter';
+import { whatsappLinkVerification } from './services/whatsapp/phone_verification/link_verification';
 import { S3Adapter } from './adapters/document/s3';
 import { UnconfiguredDocumentProvider } from './adapters/document/unconfigured';
 import { GoogleDocumentAIAdapter } from './adapters/ocr/google';
@@ -192,6 +193,10 @@ if (isProductionOrStaging && TWILIO_NUMBER && TWILIO_ACCOUNT_SID && TWILIO_AUTH_
 } else {
   services.whatsapp = new FakeOutboundWhatsAppAdapter();
 }
+
+// Read here only so a mistyped value stops the boot, naming the variable and
+// its values; the link flow reads it again per call.
+whatsappLinkVerification();
 
 // Object storage is OPTIONAL: a deployment that never touches a file (no
 // exposed_file bytes, no valuations attachments) boots without it and only the

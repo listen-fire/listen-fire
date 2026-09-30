@@ -250,6 +250,9 @@ services:
         generateValue: true
       - key: PHONE_VERIFICATION_SECRET
         generateValue: true
+      # otp (default) or trust: trust links a user's WhatsApp number without a code.
+      - key: WHATSAPP_LINK_VERIFICATION
+        sync: false
 
       # ---- core's first-boot provisioning (apps/api/src/startup/core.ts):
       # all three of these are required together or nothing is provisioned.

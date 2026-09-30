@@ -8,8 +8,27 @@ import { z } from 'zod';
 import { createMcpRouter } from '../server';
 import { storyApp } from '../story_app';
 import { AUTOMATION_MCP_PATH } from '../paths';
+import {
+  whatsappLinkVerification,
+  type WhatsappLinkVerification,
+} from '../../../services/whatsapp/phone_verification/link_verification';
+
+// The two WhatsApp linking tools describe the flow THIS deployment runs, so an
+// agent on a trusting deployment is never told to ask the user for a code.
+const WHATSAPP_LINK_DESCRIPTION: Record<WhatsappLinkVerification, string> = {
+  otp: "Link the user's WhatsApp number so messages they send to the Listen-Fire WhatsApp number run their automations. Sends a one-time verification code to the number over WhatsApp. Pass the number in full international format (e.g. +447700900000). Returns instructions: ask the user for the code they received on WhatsApp, then call confirmWhatsappCode with the same number and that code. A number must be linked this way before a WhatsApp listener will fire for that person — an unverified number is ignored. If the number is already linked to a different account, or a code was just sent, the call returns a clear reason.",
+  trust:
+    "Link the user's WhatsApp number so messages they send to the Listen-Fire WhatsApp number run their automations. On this deployment the number is linked straight away: no code is sent and none is needed, so do not call confirmWhatsappCode. Pass the number in full international format (e.g. +447700900000). On success the result says the number is linked and includes a wa.me chat link — give it to the user so they can open WhatsApp and start messaging Listen-Fire in one tap. A number must be linked before a WhatsApp listener will fire for that person. If the number is already linked to a different account, the call returns a clear reason.",
+};
+
+const WHATSAPP_CONFIRM_DESCRIPTION: Record<WhatsappLinkVerification, string> = {
+  otp: "Finish linking a WhatsApp number by confirming the code the user received. Pass the same number given to linkWhatsappNumber and the code. On success the number is verified and the user's messages to the Listen-Fire WhatsApp number will run their automations, and the result includes a wa.me chat link — give it to the user so they can open WhatsApp and start messaging Listen-Fire in one tap. A wrong, expired, or already-used code returns a clear reason so you can ask the user to try again or request a fresh code.",
+  trust:
+    'Not needed on this deployment: linkWhatsappNumber links a number straight away without a code. Calling this returns a reason saying no code is needed.',
+};
 
 function createAutomationMcpRouter(): ReturnType<typeof Router> {
+  const linkVerification = whatsappLinkVerification();
   return createMcpRouter({
     name: 'listen-fire-automation',
     domain: 'automation',
@@ -191,8 +210,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         endpoint: { method: 'POST', path: '/v1/automation/connections/grant-access' },
       },
       linkWhatsappNumber: {
-        description:
-          "Link the user's WhatsApp number so messages they send to the Listen-Fire WhatsApp number run their automations. Sends a one-time verification code to the number over WhatsApp. Pass the number in full international format (e.g. +447700900000). Returns instructions: ask the user for the code they received on WhatsApp, then call confirmWhatsappCode with the same number and that code. A number must be linked this way before a WhatsApp listener will fire for that person — an unverified number is ignored. If the number is already linked to a different account, or a code was just sent, the call returns a clear reason.",
+        description: WHATSAPP_LINK_DESCRIPTION[linkVerification],
         inputSchema: {
           phoneNumber: z
             .string()
@@ -205,8 +223,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         endpoint: { method: 'POST', path: '/v1/automation/whatsapp/verify/start' },
       },
       confirmWhatsappCode: {
-        description:
-          "Finish linking a WhatsApp number by confirming the code the user received. Pass the same number given to linkWhatsappNumber and the code. On success the number is verified and the user's messages to the Listen-Fire WhatsApp number will run their automations, and the result includes a wa.me chat link — give it to the user so they can open WhatsApp and start messaging Listen-Fire in one tap. A wrong, expired, or already-used code returns a clear reason so you can ask the user to try again or request a fresh code.",
+        description: WHATSAPP_CONFIRM_DESCRIPTION[linkVerification],
         inputSchema: {
           phoneNumber: z
             .string()

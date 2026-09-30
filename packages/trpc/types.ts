@@ -41,9 +41,16 @@ export type WebhookSubscriptionId = string & {
     __brand: 'automations.webhook_subscription';
 };
 
+/** `code_sent`: a code is on its way and the link is verified only once it
+ *  comes back. `linked`: the link is verified already (the deployment trusts a
+ *  signed-in user's claim) and there is no code to ask for. */
 export type StartOutcome = {
     ok: true;
+    outcome: 'code_sent';
     expiresAt: Date;
+} | {
+    ok: true;
+    outcome: 'linked';
 } | {
     ok: false;
     reason: 'cooldown' | 'too_many_sends' | 'number_taken';
@@ -52,7 +59,7 @@ export type ConfirmOutcome = {
     ok: true;
 } | {
     ok: false;
-    reason: 'no_active_code' | 'expired' | 'too_many_attempts' | 'invalid_code';
+    reason: 'no_active_code' | 'expired' | 'too_many_attempts' | 'invalid_code' | 'no_code_needed';
 };
 
 /** Represents the enum valuations.CurrencyIsoCode */
@@ -14424,6 +14431,7 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
             }, {
                 version: string;
                 whatsappNumber: string | null;
+                whatsappLinkVerification: "otp" | "trust";
             }>;
             getPhoneNumber: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{
