@@ -3689,6 +3689,23 @@ export class ExpressionTyping {
     );
   }
 
+  /**
+   * The WHERE on a `match` or `write` target's final hop, typed where it
+   * applies: at the record the hop lands on, with the hop's own alias naming
+   * that record. The engine evaluates it once per identity candidate, reading
+   * the candidate exactly as a traversal WHERE reads a landed record — so the
+   * typing is a read hop's, with the alias bound before the filter rather than
+   * after it.
+   */
+  typeTargetFilter(input: {
+    filter: Expression;
+    landing: PositionTypeRef | undefined;
+    alias: string | undefined;
+  }): FieldType | undefined {
+    if (input.alias !== undefined) this.locals.set(input.alias, input.landing);
+    return this.inferAt(input.filter, input.landing);
+  }
+
   private checkExistsSteps(
     steps: TraversalStep[],
     where: Expression | undefined,

@@ -149,7 +149,7 @@ import type {
   FieldWriteMode,
   SuppliedSurface,
 } from 'movement-lang';
-import type { Expression } from '#shared/expression/types';
+import type { Expression, TraversalStep } from '#shared/expression/types';
 import {
   evaluatePredicate,
   isPurePredicate,
@@ -1281,6 +1281,18 @@ interface ResumeAncestorFrame {
   branchIndex: number;
 }
 
+/**
+ * The `WHERE` on a `match`/`write` target's final hop — which existing records
+ * the find may take (`match crm-[c:companies WHERE EXISTS(c-[:deals]->)]-> …`).
+ * It narrows the identity candidates before arbitration; it never decides
+ * whether a write creates.
+ */
+interface TargetWhere {
+  /** The hop's alias — names the candidate inside the filter. */
+  alias?: string;
+  filter: Expression;
+}
+
 /** A write's resolved destination (see `resolveWriteTarget`). */
 interface ResolvedWriteTarget {
   adapter: Adapter;
@@ -1323,6 +1335,39 @@ interface ResolvedWriteTarget {
     /** The parent's payload — see `ParentLink.data`. */
     data?: Record<string, unknown>;
   }>;
+  /** Every path's final-hop `WHERE` (one per tuple path that carries one); a
+   *  candidate must pass them all. Empty when the target has none. */
+  where: TargetWhere[];
+}
+
+/** A target's `WHERE`, ready to run against identity candidates: the filters,
+ *  the graph each candidate is read in, the scope the filters close over, and
+ *  the type a matched handle would stand on. */
+interface CandidateWhere {
+  filters: TargetWhere[];
+  graph: HandleGraph;
+  env: Environment;
+  handleType?: string;
+}
+
+/** A target hop's `WHERE`, when it has one. */
+function targetWhereOf(step: TraversalStep): TargetWhere | undefined {
+  if (step.type !== 'edge' || step.expressionFilter === undefined) return undefined;
+  return {
+    ...(step.alias !== undefined ? { alias: step.alias } : {}),
+    filter: step.expressionFilter,
+  };
+}
+
+/** A node this run built has no existing records to narrow — its landings take
+ *  no WHERE on the read side either. The checker says so first
+ *  (`MOV_TARGET_WHERE_LOCAL`); this is the run's half of the same rule. */
+function refuseLocalTargetWhere(where: TargetWhere | undefined, at: string): void {
+  if (where === undefined) return;
+  throw unsupported(
+    `WHERE on the target of '${at}' — an edge of a node this run built`,
+    "say which landing you mean in 'unique by (…)' instead",
+  );
 }
 
 /**
@@ -6107,6 +6152,15 @@ class Interpreter {
     // and the engine maintains the link itself through the adapter's normal
     // create / update-by-id (3b). A plain write takes the identity-resolve
     // path (`unique by` ∪ native constraints).
+    if (write.bind !== undefined && target.where.length > 0) {
+      // The checker's MOV_TARGET_WHERE_BIND, held at run time too: the binding
+      // is the identity, so the WHERE would narrow nothing — and saying nothing
+      // is how it was ignored before.
+      throw unsupported(
+        `a WHERE on the target of a 'bind ${write.bind.name}' write`,
+        "a bound write's identity is the binding — drop the WHERE, or the bind",
+      );
+    }
     const handle =
       write.bind !== undefined
         ? await this.executeBindWrite({
@@ -6129,6 +6183,7 @@ class Interpreter {
             resolveRecord,
             constraints,
             ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+            ...this.candidateWhere(target, env),
             fields,
             fieldSemantics,
             fieldEvidence,
@@ -6197,6 +6252,8 @@ class Interpreter {
     resolveRecord: Record<string, unknown>;
     constraints: UniquenessConstraints;
     identityPostFilter?: Expression;
+    /** The target's final-hop `WHERE` — see `CandidateWhere`. */
+    candidateWhere?: CandidateWhere;
     /** What the body asserted — what exactness is judged against and what
      *  the judge reads. */
     asserted: Record<string, unknown>;
@@ -6207,10 +6264,22 @@ class Interpreter {
       candidates: [],
       constraints: input.constraints,
     });
-    const candidates =
+    const predicateNarrowed =
       input.identityPostFilter !== undefined
         ? this.narrowCandidatesByPredicate(resolved.candidates, input.identityPostFilter)
         : resolved.candidates;
+    // The target's WHERE runs LAST, on the smallest list: it reads each
+    // candidate as the record it is (and may walk its edges), so it pays per
+    // candidate what the coarse search and the pure conjuncts paid once.
+    const candidates =
+      input.candidateWhere !== undefined
+        ? await this.narrowCandidatesByTargetWhere({
+            candidates: predicateNarrowed,
+            adapter: input.adapter,
+            recordType: input.recordType,
+            where: input.candidateWhere,
+          })
+        : predicateNarrowed;
     let judgeUnavailable: string | undefined;
     const chosen = await arbitrateEntityCandidates({
       asserted: input.asserted,
@@ -6250,6 +6319,10 @@ class Interpreter {
     /** Non-equality `unique by` conjuncts (e.g. `WITHIN`) the adapter's coarse
      *  search can't express — the engine narrows the shortlist by them. */
     identityPostFilter?: Expression;
+    /** The target's final-hop `WHERE`. A shortlist it empties is a MISS, and
+     *  a miss creates: the WHERE says which existing record may be matched,
+     *  not whether to write. */
+    candidateWhere?: CandidateWhere;
     fields: Record<string, unknown>;
     fieldSemantics: Record<string, FieldWriteMode>;
     fieldEvidence: Record<string, FieldEvidence>;
@@ -6266,6 +6339,7 @@ class Interpreter {
       resolveRecord: input.resolveRecord,
       constraints: input.constraints,
       ...(input.identityPostFilter ? { identityPostFilter: input.identityPostFilter } : {}),
+      ...(input.candidateWhere ? { candidateWhere: input.candidateWhere } : {}),
       asserted: input.fields,
     });
     const matchedExternalId = matched?.externalId;
@@ -6740,6 +6814,7 @@ class Interpreter {
           recordType,
           graph: { kind: 'instance', instance },
           parents: [],
+          where: [],
         },
         externalId: identity.recordId,
       };
@@ -6759,6 +6834,7 @@ class Interpreter {
           recordType: binding.targetType,
           graph,
           parents: [],
+          where: [],
         },
         externalId: binding.handle.externalId,
       };
@@ -6828,8 +6904,9 @@ class Interpreter {
     env: Environment,
     body: BodyContext,
   ): Promise<Binding> {
-    const edgeName = this.singleWriteEdge(target.path);
+    const { edgeName, where } = this.singleWriteEdge(target.path);
     const at = `write ${pathRootName(target.path) ?? ''}-[:${edgeName}]->`;
+    refuseLocalTargetWhere(where, at);
     if (write.bind !== undefined) {
       throw unsupported(
         `'bind' on a write into a node this run built (${at})`,
@@ -6941,7 +7018,13 @@ class Interpreter {
     if (write.target.kind !== 'linked') {
       throw new MovementEngineError('MOVENG_RUNTIME', 'a shape write names its node directly');
     }
-    const node = this.singleWriteEdge(write.target.path);
+    const { edgeName: node, where } = this.singleWriteEdge(write.target.path);
+    if (where !== undefined) {
+      throw unsupported(
+        'WHERE on a shape write',
+        'a shape position is in-memory — there are no existing records to narrow',
+      );
+    }
     if (write.uniqueBy.length > 0) {
       throw unsupported(
         'unique by on a shape write',
@@ -7407,6 +7490,10 @@ class Interpreter {
       resolveRecord: this.identityRecord({ fields, identity, constraints, target: resolved }),
       constraints,
       ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      ...this.candidateWhere(
+        handleType !== undefined ? { ...resolved, handleType } : resolved,
+        env,
+      ),
       asserted: fields,
     });
     if (matched === undefined) {
@@ -7463,7 +7550,8 @@ class Interpreter {
     at: string;
   }): Promise<Binding> {
     const { match, from, env, at } = input;
-    const edgeName = this.singleWriteEdge(input.target.path);
+    const { edgeName, where } = this.singleWriteEdge(input.target.path);
+    refuseLocalTargetWhere(where, at);
     const edge = from.edges[edgeName];
     if (edge === undefined || edge.kind !== 'landed') {
       throw new MovementEngineError(
@@ -7837,6 +7925,7 @@ class Interpreter {
       recordType: parent.surfaceType,
       graph,
       parents: [parent.parent],
+      where: parent.where !== undefined ? [parent.where] : [],
     };
   }
 
@@ -7850,7 +7939,7 @@ class Interpreter {
     target: Extract<WriteExpression['target'], { kind: 'linked' }>,
     binding: Extract<Binding, { kind: 'instance' }>,
   ): Promise<ResolvedWriteTarget> {
-    const edgeName = this.singleWriteEdge(target.path);
+    const { edgeName, where } = this.singleWriteEdge(target.path);
     const schema = binding.schema;
     // The collection resolves to the record's natural type (`companies` →
     // `company`); where the schema doesn't map it (a graph's collection IS the
@@ -7863,12 +7952,14 @@ class Interpreter {
       recordType,
       graph: { kind: 'instance', instance: binding },
       parents: [],
+      where: where !== undefined ? [where] : [],
     };
   }
 
   /** The single declared edge a linked write walks — shared by meta writes and
-   *  in-memory shape writes (both name their target with exactly one hop). */
-  private singleWriteEdge(path: PathHead): string {
+   *  in-memory shape writes (both name their target with exactly one hop) —
+   *  and the `WHERE` on it, when the author narrowed it. */
+  private singleWriteEdge(path: PathHead): { edgeName: string; where?: TargetWhere } {
     const probe = this.probeHead(path);
     const steps = probe?.type === 'traverse' ? probe.steps : undefined;
     if (!steps || steps.length !== 1 || steps[0].type !== 'edge') {
@@ -7877,7 +7968,8 @@ class Interpreter {
         'a linked write walks exactly one declared edge from its root',
       );
     }
-    return steps[0].edgeTypeId;
+    const where = targetWhereOf(steps[0]);
+    return { edgeName: steps[0].edgeTypeId, ...(where !== undefined ? { where } : {}) };
   }
 
   /** The handle graph a linked/tuple path's root lives in — peeked before
@@ -7959,6 +8051,9 @@ class Interpreter {
       recordType: first.surfaceType,
       graph,
       parents: resolved.map((r) => r.parent),
+      // One record at the convergence of every path, so each path's WHERE is
+      // a condition on that same record: a candidate passes them all.
+      where: resolved.flatMap((r) => (r.where !== undefined ? [r.where] : [])),
     };
   }
 
@@ -7981,6 +8076,7 @@ class Interpreter {
     surfaceEdgeName: string;
     rootName: string;
     parent: ResolvedWriteTarget['parents'][number];
+    where?: TargetWhere;
   } {
     const rootName = pathRootName(input.path);
     const binding = rootName !== undefined ? input.env.resolve(rootName) : undefined;
@@ -8030,6 +8126,7 @@ class Interpreter {
       );
     }
     const edgeName = steps[0].edgeTypeId;
+    const where = targetWhereOf(steps[0]);
     const graph = this.linkedPathGraph(input.path, input.env);
     const parentSurfaceType =
       binding.kind === 'handle'
@@ -8071,6 +8168,7 @@ class Interpreter {
           ? { data: parentData as Record<string, unknown> }
           : {}),
       },
+      ...(where !== undefined ? { where } : {}),
     };
   }
 
@@ -8244,6 +8342,89 @@ class Interpreter {
       if (fields.some((f) => !(f in data))) return true; // sparse ⇒ keep (lenient)
       return Boolean(evaluatePredicate(predicate, { read: (name) => data[name] }));
     });
+  }
+
+  /** What `resolveIdentity` needs to run a target's `WHERE`: the filters, and
+   *  the graph and scope to read each candidate in. Absent when the target
+   *  carries no WHERE. */
+  private candidateWhere(
+    target: Pick<ResolvedWriteTarget, 'where' | 'graph' | 'handleType'>,
+    env: Environment,
+  ): { candidateWhere?: CandidateWhere } {
+    if (target.where.length === 0) return {};
+    return {
+      candidateWhere: {
+        filters: target.where,
+        graph: target.graph,
+        env,
+        ...(target.handleType !== undefined ? { handleType: target.handleType } : {}),
+      },
+    };
+  }
+
+  /**
+   * Narrow the identity shortlist to the candidates the target's `WHERE`
+   * admits. Each candidate is read as the record it is — the adapter's
+   * `readRecord` over its snapshot, the same data a match binds — and stands
+   * where a traversal's landed record stands: the hop alias names it, a bare
+   * field reads it, and a hop inside the filter (`EXISTS(c-[:deals]->)`)
+   * walks from it through the target graph's read seam. So the WHERE means
+   * here exactly what it means on a read hop. Strict, unlike the pure
+   * post-filter: the author asked for records that satisfy it, and a
+   * candidate that does not is not one — the shortlist's order is kept.
+   */
+  private async narrowCandidatesByTargetWhere(input: {
+    candidates: ExternalRecordRef[];
+    adapter: Adapter;
+    recordType: string;
+    where: CandidateWhere;
+  }): Promise<ExternalRecordRef[]> {
+    if (input.candidates.length === 0) return input.candidates;
+    const read = await this.instanceSourceRead(input.where.graph.instance);
+    const kept: ExternalRecordRef[] = [];
+    for (const candidate of input.candidates) {
+      const current =
+        typeof input.adapter.readRecord === 'function'
+          ? await input.adapter.readRecord({
+              recordType: input.recordType,
+              externalId: candidate.externalId,
+            })
+          : null;
+      // The position a matched handle reads through (`graphReadFor`): the
+      // handle's type, its id, and its result data.
+      const position = makeStablePosition({
+        adapterType: input.adapter.adapterType,
+        recordType: input.where.handleType ?? input.recordType,
+        recordId: candidate.externalId,
+        data: {
+          ...(candidate.url !== undefined ? { url: candidate.url } : {}),
+          ...candidate.data,
+          ...(current ?? {}),
+        },
+      });
+      if (await this.candidatePassesTargetWhere({ position, read, where: input.where })) {
+        kept.push(candidate);
+      }
+    }
+    return kept;
+  }
+
+  private async candidatePassesTargetWhere(input: {
+    position: SourcePosition;
+    read: SourceRead;
+    where: CandidateWhere;
+  }): Promise<boolean> {
+    const { position, read } = input;
+    for (const { alias, filter } of input.where.filters) {
+      const env = input.where.env.child();
+      if (alias !== undefined) env.declare(alias, { kind: 'sourcePosition', position, read });
+      const keep = await evaluateMovementExpression(filter, {
+        ...this.exprContext(env),
+        scope: { kind: 'position', position, read },
+      });
+      if (!keep) return false;
+    }
+    return true;
   }
 
   /** The firing-log linkage projection of a write's parent set. */
