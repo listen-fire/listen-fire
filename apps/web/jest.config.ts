@@ -20,6 +20,7 @@ export default {
         moduleResolution: 'node',
         esModuleInterop: true,
         strict: true,
+        jsx: 'react-jsx',
       },
     }],
   },

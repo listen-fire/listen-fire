@@ -15,6 +15,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 ### Fixed
 
 - The WhatsApp webhook now logs a `warn` naming the cause when an inbound delivery's signature is missing or does not verify against `WHATSAPP_WEBHOOK_SECRET` (a second Meta app subscribed to the same WhatsApp Business Account, or a rotated secret), instead of a bare 401 with no explanation.
+- The Save button on a portfolio company's Edit company dialog saves again. Before, clicking it did nothing: the dialog stayed open and no change reached the company.
 
 ## [v0.9.1] - 2026-09-29
 

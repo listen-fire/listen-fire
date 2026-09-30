@@ -9,10 +9,13 @@
  */
 
 import { useEffect } from "react";
-import { Formik, useFormikContext } from "formik";
+import { Formik, Form as FormikForm, useFormikContext } from "formik";
 import { MapPin } from "lucide-react";
 
-import { getCountryByCode, COUNTRIES } from "@listen-fire/shared/constants/countries";
+import {
+  getCountryByCode,
+  COUNTRIES,
+} from "@listen-fire/shared/constants/countries";
 import { CompanyLegalStatus } from "#trpc";
 import {
   Field,
@@ -117,7 +120,6 @@ function EditHeaderModal({
     touched,
     setFieldValue,
     setFieldTouched,
-    submitForm,
     isSubmitting,
     resetForm,
   } = useFormikContext<FormValues>();
@@ -129,117 +131,120 @@ function EditHeaderModal({
     if (!isOpen) resetForm();
   }, [isOpen, resetForm]);
 
+  // The form encloses the whole modal, not just its body: Save lives in the
+  // footer, and a submit button only submits a form it is inside.
   return (
-    <FormModal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Edit company"
-      size="lg"
-      footer={
-        <FormFooter
-          onCancel={onClose}
-          submitLabel="Save"
-          isSubmitting={isSubmitting}
-          isDisabled={Object.keys(touched).length === 0 || !values.companyId}
-        />
-      }
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          submitForm();
-        }}
-        className="flex flex-col gap-6"
+    <FormikForm>
+      <FormModal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Edit company"
+        size="lg"
+        footer={
+          <FormFooter
+            onCancel={onClose}
+            submitLabel="Save"
+            isSubmitting={isSubmitting}
+            isDisabled={Object.keys(touched).length === 0 || !values.companyId}
+          />
+        }
       >
-        <div className="grid grid-cols-3 gap-4">
-          <Field icon={null} label="Name" required>
-            <TextInput
-              value={values.name ?? ""}
-              placeholder="Company name"
-              onChange={(e) => {
-                setFieldTouched("name", true);
-                setFieldValue("name", e.target.value);
-              }}
-            />
-          </Field>
-          <Field icon={null} label="Legal name">
-            <TextInput
-              value={values.legalName ?? ""}
-              placeholder="Legal name"
-              onChange={(e) => {
-                setFieldTouched("legalName", true);
-                setFieldValue("legalName", e.target.value);
-              }}
-            />
-          </Field>
-          <Field icon={null} label="Other names">
-            <TextInput
-              value={values.otherNames ?? ""}
-              placeholder="Other names separated by commas"
-              onChange={(e) => {
-                setFieldTouched("otherNames", true);
-                setFieldValue("otherNames", e.target.value);
-              }}
-            />
-          </Field>
-        </div>
+        <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-3 gap-4">
+            <Field icon={null} label="Name" required>
+              <TextInput
+                value={values.name ?? ""}
+                placeholder="Company name"
+                onChange={(e) => {
+                  setFieldTouched("name", true);
+                  setFieldValue("name", e.target.value);
+                }}
+              />
+            </Field>
+            <Field icon={null} label="Legal name">
+              <TextInput
+                value={values.legalName ?? ""}
+                placeholder="Legal name"
+                onChange={(e) => {
+                  setFieldTouched("legalName", true);
+                  setFieldValue("legalName", e.target.value);
+                }}
+              />
+            </Field>
+            <Field icon={null} label="Other names">
+              <TextInput
+                value={values.otherNames ?? ""}
+                placeholder="Other names separated by commas"
+                onChange={(e) => {
+                  setFieldTouched("otherNames", true);
+                  setFieldValue("otherNames", e.target.value);
+                }}
+              />
+            </Field>
+          </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Field icon={null} label="Website">
-            <TextInput
-              value={values.website ?? ""}
-              placeholder="Company website"
-              onChange={(e) => {
-                setFieldTouched("website", true);
-                setFieldValue("website", e.target.value);
-              }}
-            />
-          </Field>
-          <Field label="Country" icon={<MapPin size={14} className="text-gray-400" />}>
-            <FormSelect<string>
+          <div className="grid grid-cols-2 gap-4">
+            <Field icon={null} label="Website">
+              <TextInput
+                value={values.website ?? ""}
+                placeholder="Company website"
+                onChange={(e) => {
+                  setFieldTouched("website", true);
+                  setFieldValue("website", e.target.value);
+                }}
+              />
+            </Field>
+            <Field
+              label="Country"
+              icon={<MapPin size={14} className="text-gray-400" />}
+            >
+              <FormSelect<string>
+                value={
+                  values.country
+                    ? {
+                        label: getCountryByCode(values.country)?.title ?? "",
+                        value: getCountryByCode(values.country)?.code ?? "",
+                      }
+                    : undefined
+                }
+                setValue={(next) => {
+                  setFieldTouched("country", true);
+                  setFieldValue("country", next?.value ?? "");
+                }}
+                options={COUNTRY_OPTIONS}
+              />
+            </Field>
+          </div>
+
+          <Field icon={null} label="Status">
+            <FormSelect<CompanyLegalStatus>
               value={
-                values.country
-                  ? {
-                      label: getCountryByCode(values.country)?.title ?? "",
-                      value: getCountryByCode(values.country)?.code ?? "",
-                    }
+                values.status
+                  ? { label: values.status, value: values.status }
                   : undefined
               }
               setValue={(next) => {
-                setFieldTouched("country", true);
-                setFieldValue("country", next?.value ?? "");
+                setFieldValue("status", next?.value);
+                setFieldTouched("status", true);
               }}
-              options={COUNTRY_OPTIONS}
+              options={STATUS_OPTIONS}
+              placeholder="Select..."
+            />
+          </Field>
+
+          <Field icon={null} label="Description">
+            <TextArea
+              value={values.description ?? ""}
+              onChange={(e) => {
+                setFieldTouched("description", true);
+                setFieldValue("description", e.target.value);
+              }}
+              rows={3}
+              placeholder="Company description"
             />
           </Field>
         </div>
-
-        <Field icon={null} label="Status">
-          <FormSelect<CompanyLegalStatus>
-            value={
-              values.status ? { label: values.status, value: values.status } : undefined
-            }
-            setValue={(next) => {
-              setFieldValue("status", next?.value);
-              setFieldTouched("status", true);
-            }}
-            options={STATUS_OPTIONS}
-            placeholder="Select..."
-          />
-        </Field>
-
-        <Field icon={null} label="Description">
-          <TextArea
-            value={values.description ?? ""}
-            onChange={(e) => {
-              setFieldTouched("description", true);
-              setFieldValue("description", e.target.value);
-            }}
-            rows={3}
-            placeholder="Company description"
-          />
-        </Field>
-      </form>
-    </FormModal>
+      </FormModal>
+    </FormikForm>
   );
 }
