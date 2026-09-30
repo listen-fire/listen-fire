@@ -57,6 +57,8 @@ interface AssetTransfer {
     /** The entity that issued the asset moved — the payer of a dividend paid on
      *  rights we hold, which cash itself can never name. */
     assetIssuerId: string | null;
+    /** The entity the asset moved from — for cash coming in, the payer. */
+    senderId?: string | null;
     numAssets: number;
     type: 'inflow' | 'outflow';
     investingEntityId?: InvestingEntityId | null;

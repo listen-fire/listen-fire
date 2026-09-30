@@ -8,6 +8,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ### Fixed
 
+- A payout to a fund that holds a company both directly and through an SPV now reaches the cheque it was paid on: a payment is attributed to the holdings whose asset the paying entity issued, so the SPV's payout goes to the SPV cheque. Before, the SPV cheque valued on its own received nothing, and the fund's cheques valued one at a time added up to less than the fund's position valued whole.
 - A connector client closing its event stream no longer logs an unhandled rejection on the API; the session is released quietly.
 
 ### Added

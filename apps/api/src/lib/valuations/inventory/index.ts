@@ -141,6 +141,15 @@ async function rollUpHoldings({
     }
   }
 
+  // Who issued each asset, so a payment can be matched to the rights its payer
+  // granted.
+  const issuerByAsset = new Map<string, string | null>();
+  for (const { transfers } of orderedTransactions) {
+    for (const { assetId, assetIssuerId } of transfers) {
+      if (!issuerByAsset.has(assetId)) issuerByAsset.set(assetId, assetIssuerId);
+    }
+  }
+
   const holdings = new Holdings();
 
   messageCollector?.header('Transaction Classification');
@@ -416,6 +425,31 @@ async function rollUpHoldings({
             );
           }
 
+          // A payment is on the rights the payer granted: when the record names
+          // no holding, the holdings it was paid on are those whose asset the
+          // paying entity issued — an SPV's payout is on the SPV interest, never
+          // on shares held directly beside it. A payer that issued none of this
+          // bucket's assets says nothing, and the rules below decide as before.
+          const payers = new Set(
+            transfers
+              .filter(
+                (t) =>
+                  t.type === 'inflow' &&
+                  !!t.senderId &&
+                  !!t.investingEntityId &&
+                  investingEntityKey.startsWith(`${t.investingEntityId}:`),
+              )
+              .map((t) => t.senderId),
+          );
+          const paidOn = dueToRightsFromAssetId
+            ? []
+            : nonCurrencyHoldings.filter(([assetKey]) =>
+                payers.has(issuerByAsset.get(assetKey.split(':')[0])),
+              );
+          const paidOnSharesToo =
+            paidOn.length === 0 || paidOn.some(([assetKey]) => assetKey.split(':')[2] === 'EQUITY');
+          const interests = paidOn.length ? paidOn : nonCurrencyHoldings;
+
           // The rights this payment came in on. `due_to_rights_from_asset_id`
           // names the holding outright where the source recorded it; otherwise
           // the branch's own candidate set stands in. This chooses only which
@@ -437,7 +471,7 @@ async function rollUpHoldings({
             });
 
             addLogRow(1);
-          } else if (equityHoldings.length > 0) {
+          } else if (equityHoldings.length > 0 && paidOnSharesToo) {
             // if we hold equity, non-exchanges are proportional to the existing holdings
             // e.g. if we hold 100 shares of A and 200 shares of B,
             // then a dividend would be split 1:2 between A and B
@@ -459,9 +493,9 @@ async function rollUpHoldings({
             });
 
             addLogRow(equityProportion);
-          } else if (nonCurrencyHoldings.length === 1) {
+          } else if (interests.length === 1) {
             // if not and there is a single non-currency asset, split the inflow based on the ratio of that asset
-            const holding = nonCurrencyHoldings[0][1];
+            const holding = interests[0][1];
             const { fromInvestment, fromOtherTransactions } = holding.sum();
             const totalHoldings = fromInvestment + fromOtherTransactions;
             const proportion =
@@ -471,7 +505,7 @@ async function rollUpHoldings({
               transactionFlow,
               investmentProportion: proportion,
               date,
-              inflowProvenance: oneWayProvenance(nonCurrencyHoldings),
+              inflowProvenance: oneWayProvenance(interests),
             });
 
             addLogRow(proportion);
