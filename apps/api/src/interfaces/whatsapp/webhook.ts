@@ -209,10 +209,10 @@ const receiveWebhook = (config: WhatsappDoorConfig) => async (req: Request, res:
     const appSecret = config.appSecret;
     if (appSecret) {
       const signature = req.get('X-Hub-Signature-256');
-      // Meta signs the RAW request bytes. Prefer a captured rawBody (set by a
-      // body-parser verify hook); fall back to re-serialising the parsed body.
-      // FLAG: re-serialisation may not byte-match Meta's payload — wire a rawBody
-      // verify hook on the WhatsApp route for robust verification.
+      // Meta signs the RAW request bytes, captured as rawBody by the JSON
+      // parser's verify hook (lib/middleware/body_parser). The re-serialising
+      // fallback only byte-matches plain-ASCII payloads with no `/` in them, so
+      // it is for callers that hand the handler a body directly (tests).
       const rawBody: Buffer =
         (req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body));
       if (!signature || !whatsappProvider.verifySignature(rawBody, signature, appSecret)) {
