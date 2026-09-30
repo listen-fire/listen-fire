@@ -111,7 +111,7 @@ company = write crm-[:Companies]-> {
 - \`unique by (FUZZY Name)\` — similarity match (when the target supports it).
 - \`unique by (Domain, FUZZY Name)\` — mix exact and fuzzy.
 - \`unique by (parent, \`Stage\` == "Seed")\` — a component pinned to a value.
-- \`unique by (Name, \`Updated\` WITHIN 30d)\` — a non-equality component narrows the candidates after the lookup (one \`unique by\` clause only).
+- \`unique by (Name, \`Updated\` WITHIN 30d)\` — a non-equality component narrows the candidates its own line's key found; it reads only the candidate's fields (a missing field fails it, except \`!=\`). Test anything else on the target's \`WHERE\`.
 
 Connecting records (write related records **along their edges**, never as flat rows):
 - \`write company-[:Notes]-> { … }\` — linked write off a parent handle.

@@ -2781,9 +2781,11 @@ async function evaluateExists(
       const kept: Binding[] = [];
       for (const landed of await stepExistsCursor(cursor, step, ctx)) {
         if (isMember && landed.kind === 'sourcePosition' && !isMember(landed.position)) continue;
-        if (step.expressionFilter) {
-          const keep = await evalScopedFilter(step.expressionFilter, scopeOf(landed), ctx);
-          if (!keep) continue;
+        if (
+          step.expressionFilter &&
+          !(await hopFilterKeeps({ step, filter: step.expressionFilter, landed, ctx }))
+        ) {
+          continue;
         }
         kept.push(landed);
       }
@@ -3093,6 +3095,28 @@ export function hopMemberGate(input: {
  * (Inside an OR or a NOT, every leaf of the surviving conjunct is still
  * resolved before it is evaluated.)
  */
+/**
+ * Whether a record a hop landed on passes the hop's WHERE. The hop's own alias
+ * names that record inside the filter, as it does in the bracket's ORDER BY —
+ * `-[e:X WHERE e.\`F\` == 1]->` reads `F` off the landed record exactly as the
+ * bare `WHERE \`F\` == 1` does. Every walker that evaluates a hop WHERE goes
+ * through here, so the alias means the same thing wherever the hop is written.
+ */
+export async function hopFilterKeeps(input: {
+  step: Pick<EdgeStep, 'alias'>;
+  filter: Expression;
+  landed: Binding;
+  ctx: MovementExprContext;
+}): Promise<boolean> {
+  const { step, filter, landed, ctx } = input;
+  let env = ctx.env;
+  if (step.alias !== undefined) {
+    env = ctx.env.child();
+    env.declare(step.alias, landed);
+  }
+  return Boolean(await evalScopedFilter(filter, scopeOf(landed), { ...ctx, env }));
+}
+
 async function evalScopedFilter(
   filter: Expression,
   scope: PositionScope,
@@ -3312,9 +3336,11 @@ async function walkAdapterPositions(input: {
           ...(r.edgeProperties !== undefined ? { edgeProperties: r.edgeProperties } : {}),
           read,
         };
-        if (step.expressionFilter) {
-          const keep = await evalScopedFilter(step.expressionFilter, scopeOf(candidate), ctx);
-          if (!keep) continue;
+        if (
+          step.expressionFilter &&
+          !(await hopFilterKeeps({ step, filter: step.expressionFilter, landed: candidate, ctx }))
+        ) {
+          continue;
         }
         kept.push(candidate);
       }
