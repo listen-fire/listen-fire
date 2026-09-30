@@ -496,7 +496,7 @@ A Meta app, a WhatsApp Business Account and a phone number on it. **Weeks** — 
 
 `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_MOVEMENTS_PHONE_NUMBER_ID`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `WHATSAPP_WEBHOOK_SECRET`. Set `WHATSAPP_MOVEMENTS_NUMBER` too — the number in full international format (`+447700900000`), which is what the authoring agent quotes and what the settings page offers to verify against; leave it unset and neither names a number. Also `PHONE_VERIFICATION_SECRET`, which peppers the stored hash of the six-digit verification code — without one only you know, a leaked row yields the code by exhaustive search, and in production verification fails naming it.
 
-In the Meta app's webhook configuration, set the callback URL to `<API_BASE_URL>/api/public/whatsapp/webhook` and the verify token to the same string as `WHATSAPP_WEBHOOK_VERIFY_TOKEN`; Meta calls it with a GET to confirm before delivering anything.
+In the Meta app's webhook configuration, set the callback URL to `<API_BASE_URL>/api/public/whatsapp/webhook` and the verify token to the same string as `WHATSAPP_WEBHOOK_VERIFY_TOKEN`; Meta calls it with a GET to confirm before delivering anything. Exactly one Meta app should be subscribed to the WhatsApp Business Account — a second one signs with a different app secret, and every delivery from it is refused with a 401 that the log explains.
 
 The authentication template is registered with Meta per deployment, and Meta substitutes an app name into the code it sends. `WHATSAPP_APP_DISPLAY_NAME` is that name, defaulting to `Listen-Fire`; set it to match the template you registered, so the message a recipient reads names your app rather than someone else's.
 

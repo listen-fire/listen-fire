@@ -203,3 +203,80 @@ describe('a non-callback button flows on untouched', () => {
     expect(dispatchWhatsappMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+// A rejected signature used to log NOTHING beyond the 401 — an operator whose
+// deliveries all bounce (a second Meta app subscribed to the same WhatsApp
+// Business Account, signing with a different app secret; or a rotated
+// secret) saw only 401s in the access log with no reason. These pin that the
+// mismatch and missing-header branches now explain themselves.
+describe('a signature that does not verify', () => {
+  function deliverWithSignature(body: unknown, signatureHeader: string | undefined) {
+    const req = { get: () => signatureHeader, body } as any;
+    const res = fakeRes();
+    const handler = receiveWebhook({ verifyToken: undefined, appSecret: 'test-app-secret' });
+    return { req, res, promise: handler(req, res as any) };
+  }
+
+  const { whatsappProvider } = jest.requireMock('../../../services/webhook_sync/providers/whatsapp') as {
+    whatsappProvider: { verifySignature: jest.Mock };
+  };
+  const { logger } = jest.requireMock('../../../services/logger') as {
+    logger: { warn: jest.Mock };
+  };
+
+  it('logs a warn naming the second-app/rotated-secret cause and 401s on a mismatch', async () => {
+    whatsappProvider.verifySignature.mockReturnValueOnce(false);
+    const body = {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'waba-123',
+          changes: [{ field: 'messages', value: { metadata: { phone_number_id: 'PNID_1' } } }],
+        },
+      ],
+    };
+
+    const { res, promise } = deliverWithSignature(body, 'sha256=wrong');
+    await promise;
+
+    expect(res.sendStatus).toHaveBeenCalledWith(401);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[whatsapp/webhook] REJECTING inbound: signature did not verify against WHATSAPP_WEBHOOK_SECRET — the sending Meta app's secret differs (a second app subscribed to this WhatsApp Business Account, or the secret was reset in Meta)",
+      { hasSignature: true, businessAccountId: 'waba-123', phoneNumberId: 'PNID_1' },
+    );
+  });
+
+  it('logs a warn naming the absent header and 401s when no signature header arrives', async () => {
+    const body = { object: 'whatsapp_business_account', entry: [{ id: 'waba-456', changes: [] }] };
+
+    const { res, promise } = deliverWithSignature(body, undefined);
+    await promise;
+
+    expect(res.sendStatus).toHaveBeenCalledWith(401);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[whatsapp/webhook] REJECTING inbound: X-Hub-Signature-256 header was absent — the sending Meta app's secret differs (a second app subscribed to this WhatsApp Business Account, or the secret was reset in Meta)",
+      { hasSignature: false, businessAccountId: 'waba-456', phoneNumberId: null },
+    );
+    // verifySignature is never reached without a header — nothing to verify.
+    expect(whatsappProvider.verifySignature).not.toHaveBeenCalled();
+  });
+
+  it('never warns on a valid signature — 200 and dispatch proceeds', async () => {
+    const message = {
+      from: '15551234567',
+      id: 'wamid.OK',
+      timestamp: '1700000005',
+      type: 'text',
+      text: { body: 'hi' },
+    };
+    const { res, promise } = deliverWithSignature(metaBody(message), 'sha256=valid');
+    await promise;
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(dispatchWhatsappMessage).toHaveBeenCalledTimes(1);
+  });
+});
