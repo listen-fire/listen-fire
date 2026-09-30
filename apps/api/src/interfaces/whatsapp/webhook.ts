@@ -174,6 +174,27 @@ const verifyWebhook = (config: WhatsappDoorConfig) => (req: Request, res: Respon
   res.sendStatus(400);
 };
 
+/** Safe, no-throw extraction for the signature-rejection log below — the body
+ *  may not have parsed into the shape we expect, and this must never throw
+ *  while handling a rejection. Never log the body itself, only these three
+ *  identifying fields. */
+function describeWhatsappWebhookRejection(
+  body: unknown,
+  hasSignature: boolean,
+): { hasSignature: boolean; businessAccountId: string | null; phoneNumberId: string | null } {
+  const entry = (
+    body as
+      | { entry?: Array<{ id?: string; changes?: Array<{ value?: { metadata?: { phone_number_id?: string } } }> }> }
+      | null
+      | undefined
+  )?.entry?.[0];
+  return {
+    hasSignature,
+    businessAccountId: typeof entry?.id === 'string' ? entry.id : null,
+    phoneNumberId: entry?.changes?.[0]?.value?.metadata?.phone_number_id ?? null,
+  };
+}
+
 /**
  * Receive webhook endpoint for WhatsApp Business API
  * This endpoint receives webhook events from WhatsApp
@@ -195,6 +216,16 @@ const receiveWebhook = (config: WhatsappDoorConfig) => async (req: Request, res:
       const rawBody: Buffer =
         (req as unknown as { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body));
       if (!signature || !whatsappProvider.verifySignature(rawBody, signature, appSecret)) {
+        // A mismatch is silent otherwise: an operator whose deliveries all
+        // bounce sees only 401s in the access log, with no way to tell a
+        // second Meta app (subscribed to the same WhatsApp Business Account,
+        // signing with its own app secret) from a rotated secret.
+        logger.warn(
+          signature
+            ? "[whatsapp/webhook] REJECTING inbound: signature did not verify against WHATSAPP_WEBHOOK_SECRET — the sending Meta app's secret differs (a second app subscribed to this WhatsApp Business Account, or the secret was reset in Meta)"
+            : "[whatsapp/webhook] REJECTING inbound: X-Hub-Signature-256 header was absent — the sending Meta app's secret differs (a second app subscribed to this WhatsApp Business Account, or the secret was reset in Meta)",
+          describeWhatsappWebhookRejection(req.body, Boolean(signature)),
+        );
         res.sendStatus(401);
         return;
       }
