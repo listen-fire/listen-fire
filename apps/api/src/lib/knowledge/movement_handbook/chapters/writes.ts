@@ -87,7 +87,8 @@ unique by (\`First Name\`, \`Last Name\`)
 - \`FUZZY\` matches a component by *similarity*: \`unique by (FUZZY \`Name\`)\` treats "Acme, Inc." and "Acme Inc" as one company. Use it on names and labels, never on ids or emails; not every target offers it.
 - A \`FUZZY\` match is settled in two steps: the target surfaces the candidates by its own means, and a judge picks the best one, if any. A record the run built judges the same way.
 - A component may pin a value: \`unique by (parent, \`Stage\` == "Seed")\` matches only a record whose Stage is Seed.
-- A component that is not an equality narrows the candidates after the lookup: \`unique by (\`Name\`, \`Updated\` WITHIN 30d)\` matches by Name, and only a record updated in the last 30 days. This applies when the write has a single \`unique by\` clause.
+- A component that is not an equality narrows the candidates after the lookup: \`unique by (\`Name\`, \`Updated\` WITHIN 30d)\` matches by Name, and only a record updated in the last 30 days. With several \`unique by\` lines, each line's test narrows only the records its own key found.
+- Such a test reads only the candidate's own fields, and a candidate without the field fails it unless the test is \`!=\`. To test anything else (a hop such as \`EXISTS(…)\`, a value from earlier in the run), use a \`WHERE\` on the target instead.
 
 Identity at write time is the **union** of the target's own rules and your \`unique by\`, so author only the identity the target lacks: compound business keys, parent-scoped identity, fields it treats as ordinary.
 

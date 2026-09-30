@@ -93,6 +93,7 @@ import {
   resolveBorrowedField,
   borrowedTypeSegments,
   splitUniquenessConjuncts,
+  identityKeyOf,
   durationToMs,
   unwrapCredentialArg,
   CALLBACK_CALLED_EDGE,
@@ -1339,6 +1340,17 @@ interface ResolvedWriteTarget {
   /** Every path's final-hop `WHERE` (one per tuple path that carries one); a
    *  candidate must pass them all. Empty when the target has none. */
   where: TargetWhere[];
+}
+
+/**
+ * A `unique by` clause's non-key conjuncts (`WITHIN`, `!=`, ranges), and the
+ * key whose candidates they narrow. Each clause narrows only what its own key
+ * found: `unique by` clauses are OR-ed, and one clause's test says nothing
+ * about a record another clause identified.
+ */
+interface IdentityNarrowing {
+  key: UniquenessConstraints['any'][number];
+  filter: Expression;
 }
 
 /** A target's `WHERE`, ready to run against identity candidates: the filters,
@@ -6181,7 +6193,7 @@ class Interpreter {
             descriptor,
             resolveRecord,
             constraints,
-            ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+            identityNarrowings: identity.narrowings,
             ...this.candidateWhere(target, env),
             fields,
             fieldSemantics,
@@ -6250,23 +6262,14 @@ class Interpreter {
     recordType: string;
     resolveRecord: Record<string, unknown>;
     constraints: UniquenessConstraints;
-    identityPostFilter?: Expression;
+    identityNarrowings: IdentityNarrowing[];
     /** The target's final-hop `WHERE` — see `CandidateWhere`. */
     candidateWhere?: CandidateWhere;
     /** What the body asserted — what exactness is judged against and what
      *  the judge reads. */
     asserted: Record<string, unknown>;
   }): Promise<{ matched: ExternalRecordRef | undefined; judgeUnavailable?: string }> {
-    const resolved = await input.adapter.resolveEntity({
-      record: input.resolveRecord,
-      recordType: input.recordType,
-      candidates: [],
-      constraints: input.constraints,
-    });
-    const predicateNarrowed =
-      input.identityPostFilter !== undefined
-        ? this.narrowCandidatesByPredicate(resolved.candidates, input.identityPostFilter)
-        : resolved.candidates;
+    const predicateNarrowed = await this.identityShortlist(input);
     // The target's WHERE runs LAST, on the smallest list: it reads each
     // candidate as the record it is (and may walk its edges), so it pays per
     // candidate what the coarse search and the pure conjuncts paid once.
@@ -6297,6 +6300,56 @@ class Interpreter {
   }
 
   /**
+   * The candidates the identity lookup finds, each already narrowed by the
+   * non-key conjuncts of the `unique by` clause that found it. With no such
+   * conjuncts the keys are searched together, in one lookup. With any, each key
+   * is searched on its own, so a clause's narrowing applies to exactly the
+   * candidates its key found (a candidate another key found stands on that
+   * key); the lists are merged in key order, first sighting kept.
+   */
+  private async identityShortlist(input: {
+    adapter: Adapter;
+    recordType: string;
+    resolveRecord: Record<string, unknown>;
+    constraints: UniquenessConstraints;
+    identityNarrowings: IdentityNarrowing[];
+  }): Promise<ExternalRecordRef[]> {
+    const search = async (constraints: UniquenessConstraints) =>
+      (
+        await input.adapter.resolveEntity({
+          record: input.resolveRecord,
+          recordType: input.recordType,
+          candidates: [],
+          constraints,
+        })
+      ).candidates;
+    if (input.identityNarrowings.length === 0) return search(input.constraints);
+    const shortlist: ExternalRecordRef[] = [];
+    const seen = new Set<string>();
+    for (const key of input.constraints.any) {
+      // By reference: `mergeUniqueness` carries the authored keys over as they
+      // are, next to the target's own (which no clause narrows).
+      const narrowing = input.identityNarrowings.find((n) => n.key === key);
+      const found = await search({ any: [key] });
+      const kept =
+        narrowing !== undefined
+          ? await this.narrowCandidatesByPredicate({
+              candidates: found,
+              predicate: narrowing.filter,
+              adapter: input.adapter,
+              recordType: input.recordType,
+            })
+          : found;
+      for (const candidate of kept) {
+        if (seen.has(candidate.externalId)) continue;
+        seen.add(candidate.externalId);
+        shortlist.push(candidate);
+      }
+    }
+    return shortlist;
+  }
+
+  /**
    * The identity-resolve write path (no `bind`): the adapter searches by the
    * effective `unique by` ∪ native constraints, the shared module arbitrates,
    * and a match updates / a miss creates. Correspondence is NOT established
@@ -6315,9 +6368,9 @@ class Interpreter {
     descriptor: Awaited<ReturnType<Adapter['describe']>>;
     resolveRecord: Record<string, unknown>;
     constraints: UniquenessConstraints;
-    /** Non-equality `unique by` conjuncts (e.g. `WITHIN`) the adapter's coarse
-     *  search can't express — the engine narrows the shortlist by them. */
-    identityPostFilter?: Expression;
+    /** Each `unique by` clause's non-key conjuncts (e.g. `WITHIN`), with the
+     *  key whose candidates they narrow — see `IdentityNarrowing`. */
+    identityNarrowings: IdentityNarrowing[];
     /** The target's final-hop `WHERE`. A shortlist it empties is a MISS, and
      *  a miss creates: the WHERE says which existing record may be matched,
      *  not whether to write. */
@@ -6337,7 +6390,7 @@ class Interpreter {
       recordType: target.recordType,
       resolveRecord: input.resolveRecord,
       constraints: input.constraints,
-      ...(input.identityPostFilter ? { identityPostFilter: input.identityPostFilter } : {}),
+      identityNarrowings: input.identityNarrowings,
       ...(input.candidateWhere ? { candidateWhere: input.candidateWhere } : {}),
       asserted: input.fields,
     });
@@ -6937,7 +6990,7 @@ class Interpreter {
       descriptor,
       resolveRecord: { ...fields, ...identity.valueOverlay },
       constraints: identity.constraints,
-      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      identityNarrowings: identity.narrowings,
       fields,
       fieldSemantics,
       fieldEvidence,
@@ -7337,6 +7390,7 @@ class Interpreter {
       recordType,
       resolveRecord: criteria,
       constraints,
+      identityNarrowings: [],
       asserted: criteria,
     });
     if (matched === undefined) {
@@ -7488,7 +7542,7 @@ class Interpreter {
       recordType: resolved.recordType,
       resolveRecord: this.identityRecord({ fields, identity, constraints, target: resolved }),
       constraints,
-      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      identityNarrowings: identity.narrowings,
       ...this.candidateWhere(
         handleType !== undefined ? { ...resolved, handleType } : resolved,
         env,
@@ -7567,7 +7621,7 @@ class Interpreter {
       recordType: edgeName,
       resolveRecord: { ...fields, ...identity.valueOverlay },
       constraints: identity.constraints,
-      ...(identity.postFilter ? { identityPostFilter: identity.postFilter } : {}),
+      identityNarrowings: identity.narrowings,
       asserted: fields,
     });
     const landing = matched !== undefined ? store.landingOf(matched.externalId) : undefined;
@@ -8256,9 +8310,9 @@ class Interpreter {
    * `UniquenessConstraints` (the adapter's currency); literal RHS values ride a
    * `valueOverlay` folded into the resolve record so the adapter's
    * `record[field]` search finds them. NON-equality conjuncts (`WITHIN`,
-   * ranges) can't be a coarse field match, so they become a `postFilter`
-   * expression the engine evaluates over the returned candidates via the shared
-   * filter unit — precise, over a bounded shortlist (principle 4).
+   * ranges, `!=`) can't be a coarse field match, so each clause's become a
+   * narrowing of the candidates ITS key finds, evaluated by the engine via the
+   * shared filter unit — precise, over a bounded shortlist (principle 4).
    */
   private uniqueByIdentity(
     write: IdentityBody,
@@ -8266,81 +8320,94 @@ class Interpreter {
   ): {
     constraints: UniquenessConstraints;
     valueOverlay: Record<string, unknown>;
-    postFilter?: Expression;
+    narrowings: IdentityNarrowing[];
   } {
     const any: UniquenessConstraints['any'] = [];
     const valueOverlay: Record<string, unknown> = {};
-    const postClauses: Expression[] = [];
+    const narrowings: IdentityNarrowing[] = [];
     for (const clause of write.uniqueBy) {
       const all: { field: string; fuzzy?: boolean }[] = [];
-      const nonEquality: Expression[] = [];
+      const nonKey: Expression[] = [];
       // FUZZY rides on a textual conjunct, so split first (lifting the modifier)
       // then flatten each parsed part — equivalent to a single-parse flatten for
       // plain predicates, but it carries the per-component fuzzy flag through.
       for (const part of splitUniquenessConjuncts(clause.predicate.raw)) {
         const fuzzyMark = part.fuzzy ? { fuzzy: true as const } : {};
         for (const conjunct of flattenAndConjuncts(parseMovementExpression(part.raw))) {
-          if (
-            conjunct.type === 'property' ||
-            conjunct.type === 'edge_property' ||
-            conjunct.type === 'alias_ref'
-          ) {
+          const key = identityKeyOf(conjunct);
+          if (key === undefined) {
+            nonKey.push(conjunct);
+          } else if (key.comparedWith !== undefined) {
+            all.push({ field: key.name, ...fuzzyMark });
+            if (key.comparedWith.type === 'static') valueOverlay[key.name] = key.comparedWith.value;
+          } else {
             // A bare name: a field of the written record (identify by its written
             // value), OR a bound parent handle (→ the parent's edge name,
-            // edge-scoped identity). The bridge renders a bare name as either
-            // `property` or `alias_ref`, so resolve the parent handle for both.
-            const name = conjunct.type === 'alias_ref' ? conjunct.name : conjunct.propertyTypeId;
-            const parent = target.parents.find((p) => p.handleName === name);
-            all.push({ field: parent ? parent.edgeName : name, ...fuzzyMark });
-          } else if (
-            conjunct.type === 'compare' &&
-            conjunct.op === 'eq' &&
-            (conjunct.left.type === 'property' || conjunct.left.type === 'edge_property')
-          ) {
-            const field = conjunct.left.propertyTypeId;
-            all.push({ field, ...fuzzyMark });
-            if (conjunct.right.type === 'static') valueOverlay[field] = conjunct.right.value;
-          } else {
-            nonEquality.push(conjunct);
+            // edge-scoped identity).
+            const parent = target.parents.find((p) => p.handleName === key.name);
+            all.push({ field: parent ? parent.edgeName : key.name, ...fuzzyMark });
           }
         }
       }
-      if (all.length > 0) any.push({ all });
-      if (nonEquality.length > 0) {
-        postClauses.push(
-          nonEquality.length === 1
-            ? nonEquality[0]
-            : { type: 'logical', op: 'and', operands: nonEquality },
+      if (all.length === 0) {
+        // The checker's MOV_UNIQUE_CONJUNCT_NEEDS_WHERE, held at run time: a
+        // clause with nothing to search by finds nothing for its tests to narrow.
+        throw unsupported(
+          `a 'unique by' clause with no key ('${clause.predicate.raw}')`,
+          'add the field or parent that finds the record, or move the test onto a WHERE on the target',
         );
       }
+      const searchKey = { all };
+      any.push(searchKey);
+      if (nonKey.length > 0) {
+        narrowings.push({
+          key: searchKey,
+          filter: nonKey.length === 1 ? nonKey[0] : { type: 'logical', op: 'and', operands: nonKey },
+        });
+      }
     }
-    // A single clause's non-equality conjuncts post-filter precisely. Multiple
-    // OR-ed clauses with non-equality parts would muddy the OR semantics, so we
-    // only post-filter the unambiguous single-clause case (the common one).
-    const postFilter =
-      postClauses.length === 1 && write.uniqueBy.length === 1 ? postClauses[0] : undefined;
-    return { constraints: { any }, valueOverlay, ...(postFilter ? { postFilter } : {}) };
+    return { constraints: { any }, valueOverlay, narrowings };
   }
 
   /**
-   * Narrow resolved candidates to those that also satisfy the `unique by`
-   * predicate's non-equality conjuncts (chunk 8), via the shared filter unit
-   * over each candidate's own fields. Lenient: a candidate whose data doesn't
-   * carry a referenced field is KEPT (never drop a real match on sparse data —
-   * a false drop would mint a duplicate). Only pure predicates are evaluated;
-   * anything else leaves the shortlist untouched.
+   * Narrow a key's candidates to those that satisfy its clause's non-key
+   * conjuncts, via the shared filter unit over each candidate's own fields.
+   *
+   * A field the conjunct reads that the candidate lacks: the lookup's snapshot
+   * may simply not carry it, so the record is read first (`readRecord`, as the
+   * target's WHERE reads it); a field the record still lacks is absent, and
+   * the conjunct is decided as written — an absent field fails an equality, a
+   * range or `WITHIN`, and satisfies `!=`.
    */
-  private narrowCandidatesByPredicate<T extends { data?: Record<string, unknown> }>(
-    candidates: T[],
-    predicate: Expression,
-  ): T[] {
-    if (!isPurePredicate(predicate)) return candidates;
+  private async narrowCandidatesByPredicate(input: {
+    candidates: ExternalRecordRef[];
+    predicate: Expression;
+    adapter: Adapter;
+    recordType: string;
+  }): Promise<ExternalRecordRef[]> {
+    const { predicate, adapter } = input;
+    if (!isPurePredicate(predicate)) {
+      // The checker's MOV_UNIQUE_CONJUNCT_NEEDS_WHERE, held at run time.
+      throw unsupported(
+        "a 'unique by' test that reads beyond the candidate",
+        'move it onto a WHERE on the target',
+      );
+    }
     const fields = pureLeafReads(predicate).map(leafReadKey);
-    return candidates.filter((candidate) => {
-      const data = candidate.data ?? {};
-      if (fields.some((f) => !(f in data))) return true; // sparse ⇒ keep (lenient)
-      return Boolean(evaluatePredicate(predicate, { read: (name) => data[name] }));
-    });
+    const kept: ExternalRecordRef[] = [];
+    for (const candidate of input.candidates) {
+      let data = candidate.data;
+      if (fields.some((f) => !(f in data)) && typeof adapter.readRecord === 'function') {
+        const current = await adapter.readRecord({
+          recordType: input.recordType,
+          externalId: candidate.externalId,
+        });
+        data = { ...data, ...(current ?? {}) };
+      }
+      const read = data;
+      if (evaluatePredicate(predicate, { read: (name) => read[name] })) kept.push(candidate);
+    }
+    return kept;
   }
 
   /** What `resolveIdentity` needs to run a target's `WHERE`: the filters, and

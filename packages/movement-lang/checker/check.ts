@@ -37,6 +37,12 @@
 import type { Expression, TraversalStep } from '@listen-fire/shared/expression/types';
 import { quoteName } from '@listen-fire/shared/expression/formula';
 import {
+  flattenAndConjuncts,
+  isPurePredicate,
+  leafReadKey,
+  pureLeafReads,
+} from '@listen-fire/shared/expression/filter';
+import {
   constructionAsCall,
   EXPRESSION_ROOT_PROBE,
   expandWriteSpreads,
@@ -109,6 +115,7 @@ import { cronScheduleError, cronTimezoneError } from '@listen-fire/shared/cron';
 import {
   BridgeError,
   splitUniquenessConjuncts,
+  identityKeyOf,
   MovementCondition,
   parseMovementCondition,
   parseMovementExpression,
@@ -442,6 +449,12 @@ export const DiagnosticCodes = {
    *  `uniquenessAuthorable: false` — e.g. Affinity, whose org/person matching
    *  is native and not a thing a movement configures). */
   UNIQUE_NOT_AUTHORABLE: 'MOV_UNIQUE_NOT_AUTHORABLE',
+  /** A `unique by` conjunct that is not part of the key and reads something
+   *  other than the candidate's own fields — a hop, a call, a value bound
+   *  elsewhere in the run. Such a conjunct narrows the candidates by testing
+   *  each one's fields and nothing else, so this one could not be honoured;
+   *  the target's WHERE reads the candidate with the whole run in scope. */
+  UNIQUE_CONJUNCT_NEEDS_WHERE: 'MOV_UNIQUE_CONJUNCT_NEEDS_WHERE',
   /** A write/link target rooted at a name that is not a graph this file
    *  declares (a constructed adapter instance, kg, or a shape). The
    *  canonical case is an instance-typed PARAMETER used as a write
@@ -5908,6 +5921,9 @@ class Checker {
     // `\`stage\` == "Open"`) or a bound handle in scope (edge-scoped
     // identity). A literal RHS / operators need no resolution.
     for (const clause of uniqueBy) {
+      // Whether the clause has anything to search by — undefined once a part
+      // fails to parse (that is EXPR_PARSE's to report).
+      let hasKey: boolean | undefined = false;
       // A FUZZY modifier rides on a textual component, so split first and
       // strip it before parsing each part as an ordinary expression.
       for (const part of splitUniquenessConjuncts(clause.predicate.raw)) {
@@ -5921,8 +5937,19 @@ class Checker {
             e.message,
             spanWithin(clause.predicate, part.offset + (e.pos ?? 0)),
           );
+          hasKey = undefined;
           continue;
         }
+        if (hasKey === false && flattenAndConjuncts(parsed).some(c => identityKeyOf(c) !== undefined)) {
+          hasKey = true;
+        }
+        this.checkIdentityNarrowing({
+          parsed,
+          root,
+          scope,
+          text: part.raw,
+          span: spanWithin(clause.predicate, part.offset),
+        });
         if (root === undefined) continue; // schema unknown ⇒ stay silent
         const names = collectExpressionNames(parsed);
         const refs = [...new Set(names.refs)].filter((ref) => !names.aliases.has(ref));
@@ -5949,8 +5976,57 @@ class Checker {
           );
         }
       }
+      if (hasKey === false) {
+        this.report(
+          DiagnosticCodes.UNIQUE_CONJUNCT_NEEDS_WHERE,
+          `'unique by (${clause.predicate.raw})' has nothing to find the record by — its tests only narrow the candidates a key finds. Add the field or parent that identifies the record ('unique by (\`Name\`, …)'), or use a WHERE on the target instead`,
+          clause.span,
+        );
+      }
     }
     this.checkNativeUniqueness(uniqueBy, root, rootDescription);
+  }
+
+  /**
+   * A conjunct of a `unique by` component that is not part of the key narrows
+   * the candidates the lookup found, and it does so by testing each candidate's
+   * own fields — nothing else is in reach there. A conjunct that walks a hop,
+   * calls something, or reads a value bound elsewhere in the run could not be
+   * honoured, so it is refused, pointing at the target's WHERE, which reads the
+   * candidate with the whole run in scope. A name that is neither a field nor
+   * bound is `UNIQUE_UNKNOWN_FIELD`'s to report.
+   */
+  private checkIdentityNarrowing(input: {
+    parsed: Expression;
+    root: WritableRootSchema | undefined;
+    scope: Scope;
+    text: string;
+    span: Span;
+  }): void {
+    const { root, scope } = input;
+    for (const conjunct of flattenAndConjuncts(input.parsed)) {
+      if (identityKeyOf(conjunct) !== undefined) continue;
+      let reason: string | undefined;
+      if (!isPurePredicate(conjunct)) {
+        reason = 'it reads beyond the record — a hop, a call, or a value computed per candidate';
+      } else if (root !== undefined) {
+        const outer = pureLeafReads(conjunct).find(leaf => {
+          if (leaf.type === 'property' || leaf.type === 'edge_property') {
+            return !(leaf.propertyTypeId in root.fields) && scope.resolve(leaf.propertyTypeId).kind === 'found';
+          }
+          return true;
+        });
+        if (outer !== undefined) {
+          reason = `'${leafReadKey(outer)}' is not a field of the record — it names a value from elsewhere in the run`;
+        }
+      }
+      if (reason === undefined) continue;
+      this.report(
+        DiagnosticCodes.UNIQUE_CONJUNCT_NEEDS_WHERE,
+        `'${input.text}' in 'unique by' can't narrow the candidates: ${reason}. A 'unique by' component that isn't a key can only test the candidate's own fields — use a WHERE on the target instead ('write crm-[c:Companies WHERE …]-> { … }'), where the candidate is named by the hop's alias and the rest of the run is in scope`,
+        input.span,
+      );
+    }
   }
 
   /**

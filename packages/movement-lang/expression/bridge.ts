@@ -1336,3 +1336,30 @@ export function splitUniquenessConjuncts(raw: string): UniquenessConjunct[] {
     return { raw: text.trim(), offset: span.start + lead, fuzzy: false };
   });
 }
+
+/**
+ * What one conjunct of a `unique by` component contributes to the KEY the
+ * target's lookup searches by: a bare name (a field of the record, identified
+ * by the value written, or a bound parent handle), or `field == value` (the
+ * field, compared with `value`). Undefined for every other conjunct (`WITHIN`,
+ * `!=`, a range), which narrows the candidates that lookup returns instead.
+ * The checker and the engine both split a clause by this, so they cannot
+ * disagree about which conjuncts are which.
+ */
+export function identityKeyOf(
+  conjunct: Expression,
+): { name: string; comparedWith?: Expression } | undefined {
+  switch (conjunct.type) {
+    case 'property':
+    case 'edge_property':
+      return { name: conjunct.propertyTypeId };
+    case 'alias_ref':
+      return { name: conjunct.name };
+    case 'compare':
+      if (conjunct.op !== 'eq') return undefined;
+      if (conjunct.left.type !== 'property' && conjunct.left.type !== 'edge_property') return undefined;
+      return { name: conjunct.left.propertyTypeId, comparedWith: conjunct.right };
+    default:
+      return undefined;
+  }
+}
