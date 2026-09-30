@@ -232,6 +232,7 @@ describe('a tool that acts on one person’s account', () => {
     acting = HUMAN;
     startPhoneVerification.mockResolvedValue({
       ok: true,
+      outcome: 'code_sent',
       expiresAt: new Date('2030-01-01T00:00:00Z'),
     });
 

@@ -5,6 +5,7 @@ import {
   startPhoneVerification,
   confirmPhoneVerification,
 } from '../../../services/whatsapp/phone_verification';
+import { whatsappLinkVerification } from '../../../services/whatsapp/phone_verification/link_verification';
 import { trpc } from '../trpc';
 import { userProcedure as sharedUserProcedure } from '../procedures';
 import { UserService } from '../../../services/user';
@@ -24,9 +25,13 @@ const userSettingsRouter = (procedure: typeof trpc.procedure) => {
     //
     // `whatsappNumber` is null on an install with no WhatsApp sender
     // registered, and the WhatsApp section has nothing to offer then.
+    // `whatsappLinkVerification` says whether linking a number sends a code
+    // (`otp`) or links it on the spot (`trust`), so the page can label its
+    // button before anyone presses it.
     getDeployment: userProcedure.query(() => ({
       version: LISTEN_FIRE_VERSION,
       whatsappNumber: WHATSAPP_MOVEMENTS_NUMBER,
+      whatsappLinkVerification: whatsappLinkVerification(),
     })),
 
     getPhoneNumber: userProcedure.query(async () => {
@@ -43,7 +48,8 @@ const userSettingsRouter = (procedure: typeof trpc.procedure) => {
       return res;
     }),
 
-    // Send a WhatsApp verification code to the number the user is claiming.
+    // Send a WhatsApp verification code to the number the user is claiming —
+    // or, on a deployment that trusts the claim, link it straight away.
     startPhoneVerification: userProcedure
       .input(z.object({ phoneNumber: z.string().min(6) }))
       .mutation(async ({ input }) => {

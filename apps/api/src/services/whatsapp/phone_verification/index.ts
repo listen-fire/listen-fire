@@ -1,12 +1,15 @@
 // Orchestration for the WhatsApp phone-verification loop: fetch the active code,
 // let the pure logic (logic.ts) decide, apply the outcome, send the code. The
 // only way a phone earns `phone_number.verified_at` — which is what inbound
-// routing now requires.
+// routing now requires. Under `WHATSAPP_LINK_VERIFICATION=trust` the code step
+// is skipped and the claim itself earns it (see link_verification.ts).
 
 import { getAutomationsQb } from '../../../lib/kysely';
 import type { UserId } from '../../../generated/kysely/core/User';
 import type { PhoneVerificationId } from '../../../generated/kysely/automations/PhoneVerification';
+import { logger } from '../../logger';
 import { sendVerificationCode } from '../metaApi';
+import { maskPhoneNumber, whatsappLinkVerification } from './link_verification';
 import {
   PHONE_VERIFICATION,
   evaluateStart,
@@ -16,13 +19,20 @@ import {
   type ActiveCode,
 } from './logic';
 
+/** `code_sent`: a code is on its way and the link is verified only once it
+ *  comes back. `linked`: the link is verified already (the deployment trusts a
+ *  signed-in user's claim) and there is no code to ask for. */
 export type StartOutcome =
-  | { ok: true; expiresAt: Date }
+  | { ok: true; outcome: 'code_sent'; expiresAt: Date }
+  | { ok: true; outcome: 'linked' }
   | { ok: false; reason: 'cooldown' | 'too_many_sends' | 'number_taken' };
 
 export type ConfirmOutcome =
   | { ok: true }
-  | { ok: false; reason: 'no_active_code' | 'expired' | 'too_many_attempts' | 'invalid_code' };
+  | {
+      ok: false;
+      reason: 'no_active_code' | 'expired' | 'too_many_attempts' | 'invalid_code' | 'no_code_needed';
+    };
 
 /** Canonical stored form: `+` then digits only — the exact form the inbound
  *  router (resolveSenderTeam / findUserByPhoneNumber) resolves against, so a
@@ -79,8 +89,17 @@ export async function startPhoneVerification(input: {
     .executeTakeFirst();
   if (owner?.user_id && owner.user_id !== userId) return { ok: false, reason: 'number_taken' };
 
-  const existing = await fetchActiveCode(userId, phone);
   const now = new Date();
+  if (whatsappLinkVerification() === 'trust') {
+    await linkVerifiedPhone({ userId, phone, at: now });
+    logger.info('[whatsapp/link] number linked without a code (WHATSAPP_LINK_VERIFICATION=trust)', {
+      userId,
+      phoneNumber: maskPhoneNumber(phone),
+    });
+    return { ok: true, outcome: 'linked' };
+  }
+
+  const existing = await fetchActiveCode(userId, phone);
   const decision = evaluateStart({ existing, now });
   if (decision.kind === 'reject') return { ok: false, reason: decision.reason };
 
@@ -117,7 +136,7 @@ export async function startPhoneVerification(input: {
   }
 
   await sendVerificationCode({ to: phone, code });
-  return { ok: true, expiresAt };
+  return { ok: true, outcome: 'code_sent', expiresAt };
 }
 
 export async function confirmPhoneVerification(input: {
@@ -125,6 +144,11 @@ export async function confirmPhoneVerification(input: {
   phoneNumber: string;
   code: string;
 }): Promise<ConfirmOutcome> {
+  // Under trust no code is ever issued, so there is nothing to check a code
+  // against — say so rather than answer `no_active_code`, which reads as
+  // "request one first".
+  if (whatsappLinkVerification() === 'trust') return { ok: false, reason: 'no_code_needed' };
+
   const { userId } = input;
   const phone = canonicalizePhone(input.phoneNumber);
   const existing = await fetchActiveCode(userId, phone);

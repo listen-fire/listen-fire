@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Added
+
+- `WHATSAPP_LINK_VERIFICATION=trust` links a signed-in user's WhatsApp number as soon as they enter it, with no code sent and no authentication template needed; anyone with an account can then claim any number, so it suits a self-host serving one organisation. The default, `otp`, is unchanged, and any other value fails boot naming the variable.
+
 ## [v0.9.1] - 2026-09-29
 
 ### Fixed

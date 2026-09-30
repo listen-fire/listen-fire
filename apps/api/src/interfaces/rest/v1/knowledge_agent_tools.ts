@@ -561,7 +561,9 @@ const grantAccessHandler: RequestHandler = jsonHandler(grantAccessSchema, 'body'
 // ---------------------------------------------------------------------------
 // WhatsApp number linking — prove a number is the user's so messages they send
 // to the Listen-Fire WhatsApp number run their automations. Two steps: send a code,
-// then confirm it. The MCP key is user-bound, so the link targets that user.
+// then confirm it — or one, on a deployment that trusts a signed-in user's claim
+// (WHATSAPP_LINK_VERIFICATION=trust). The MCP key is user-bound, so the link
+// targets that user.
 // ---------------------------------------------------------------------------
 
 const startWhatsappVerificationSchema = z.object({ phoneNumber: z.string().min(6) });
@@ -586,13 +588,25 @@ const startWhatsappVerificationHandler: RequestHandler = jsonHandler(
             : 'Too many codes have been requested for that number recently. Try again shortly.';
       return { ok: false, reason: res.reason, message };
     }
-    return {
-      ok: true,
-      expiresAt: res.expiresAt.toISOString(),
-      instructions:
-        'A verification code was sent to that number on WhatsApp (it expires in a few minutes). ' +
-        'Ask the user for the code they received, then call confirmWhatsappCode with the same number and the code.',
-    };
+    switch (res.outcome) {
+      case 'linked':
+        return {
+          ok: true,
+          outcome: res.outcome,
+          ...whatsappLinkedResult('That number is now linked — no code is needed on this deployment.'),
+        };
+      case 'code_sent':
+        return {
+          ok: true,
+          outcome: res.outcome,
+          expiresAt: res.expiresAt.toISOString(),
+          instructions:
+            'A verification code was sent to that number on WhatsApp (it expires in a few minutes). ' +
+            'Ask the user for the code they received, then call confirmWhatsappCode with the same number and the code.',
+        };
+      default:
+        return neverAsAny(res);
+    }
   },
 );
 
@@ -614,26 +628,33 @@ const confirmWhatsappVerificationHandler: RequestHandler = jsonHandler(
     });
     if (!res.ok) {
       const message =
-        res.reason === 'no_active_code'
-          ? 'No code is waiting for that number — request one first with linkWhatsappNumber.'
-          : res.reason === 'expired'
-            ? 'That code has expired — request a new one with linkWhatsappNumber.'
-            : res.reason === 'too_many_attempts'
-              ? 'Too many wrong attempts — request a new code with linkWhatsappNumber.'
-              : 'That code is not right — double-check it with the user and try again.';
+        res.reason === 'no_code_needed'
+          ? 'No code is needed on this deployment — linkWhatsappNumber links the number straight away.'
+          : res.reason === 'no_active_code'
+            ? 'No code is waiting for that number — request one first with linkWhatsappNumber.'
+            : res.reason === 'expired'
+              ? 'That code has expired — request a new one with linkWhatsappNumber.'
+              : res.reason === 'too_many_attempts'
+                ? 'Too many wrong attempts — request a new code with linkWhatsappNumber.'
+                : 'That code is not right — double-check it with the user and try again.';
       return { ok: false, reason: res.reason, message };
     }
-    return {
-      ok: true,
-      chatLink: WHATSAPP_MOVEMENTS_WA_ME_LINK,
-      message:
-        'That number is now verified and linked. Messages the user sends to the Listen-Fire WhatsApp number will run their automations.' +
-        (WHATSAPP_MOVEMENTS_WA_ME_LINK
-          ? ` Give the user this link to open the chat and start straight away: ${WHATSAPP_MOVEMENTS_WA_ME_LINK}`
-          : ''),
-    };
+    return { ok: true, ...whatsappLinkedResult('That number is now verified and linked.') };
   },
 );
+
+/** What both ways of finishing a link tell the agent: where the user's
+ *  messages go now, and the one-tap chat link when the deployment has one. */
+function whatsappLinkedResult(lead: string): { chatLink: string | null; message: string } {
+  return {
+    chatLink: WHATSAPP_MOVEMENTS_WA_ME_LINK,
+    message:
+      `${lead} Messages the user sends to the Listen-Fire WhatsApp number will run their automations.` +
+      (WHATSAPP_MOVEMENTS_WA_ME_LINK
+        ? ` Give the user this link to open the chat and start straight away: ${WHATSAPP_MOVEMENTS_WA_ME_LINK}`
+        : ''),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // teams — the connection's accessible teams

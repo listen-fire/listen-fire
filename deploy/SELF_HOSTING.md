@@ -500,6 +500,8 @@ In the Meta app's webhook configuration, set the callback URL to `<API_BASE_URL>
 
 The authentication template is registered with Meta per deployment, and Meta substitutes an app name into the code it sends. `WHATSAPP_APP_DISPLAY_NAME` is that name, defaulting to `Listen-Fire`; set it to match the template you registered, so the message a recipient reads names your app rather than someone else's.
 
+`WHATSAPP_LINK_VERIFICATION` decides how a user proves a number is theirs. The default, `otp`, sends a code through that template and links the number once the code comes back. `trust` links a signed-in user's number the moment they enter it: no authentication template, no code sent, and so no `PHONE_VERIFICATION_SECRET` in use. Everything else still applies: `WHATSAPP_WEBHOOK_SECRET` and the verify token so inbound messages are accepted, the phone-number ids so they are routed, and `WHATSAPP_ACCESS_TOKEN` for replies and for fetching a message's attachments. A number already linked to another account is refused under either setting. The trade-off: anyone with an account on the deployment can claim any number, and that number's messages then run that account's automations, which suits a self-host serving one organisation and not a shared one.
+
 One outbound path runs through a separate messaging provider (`TWILIO_NUMBER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`). With any of them unset, production sends nothing and says so in the log rather than pretending to deliver.
 
 A new number means every conversation starts fresh; counterparty threads do not carry over.
@@ -624,6 +626,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `LISTEN_FIRE_ADMIN_EMAIL` | recommended with `core` | `admin@listen-fire.local` — the address the first account is provisioned with, and the one that receives login links |
 | `SLACK_APP_DISPLAY_NAME` | no | `Listen-Fire` — the name your Slack app shows in a workspace, which is yours to pick because the app is yours |
 | `WHATSAPP_APP_DISPLAY_NAME` | no | `Listen-Fire` — the app name Meta substitutes into the WhatsApp authentication template you registered |
+| `WHATSAPP_LINK_VERIFICATION` | no | `otp` — linking a WhatsApp number sends it a code, and the link counts once the code comes back. `trust` links a signed-in user's number at once with no code (see "WhatsApp"); anything else fails boot naming the variable and the two values |
 | `SUPPORT_EMAIL` | no | no address is published: anything that would point someone at support says nothing rather than inventing an inbox |
 | `API_BASE_URL` | yes in production | `http://localhost:8081`. Must be stable forever; also decides cookie security with the one below |
 | `WEB_BASE_URL` | yes in production | `http://localhost:8080`. Where login links point |
