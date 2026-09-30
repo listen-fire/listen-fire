@@ -10,6 +10,7 @@ import {
   recursiveGetTransactionsForAssets,
 } from '../data';
 import { AssetId, AssetTransfer, getInvesteeEntityKey, getInvestingEntityKey } from '../types';
+import { logger } from '../../../../services/logger';
 
 jest.mock('../data', () => ({
   getAssetHolderIdsForInvestments: jest.fn(),
@@ -20,12 +21,20 @@ jest.mock('../data', () => ({
 const FUND_ID = 'fund-1';
 const COMPANY = { id: 'company-1', name: 'Company A' };
 const SPV_ID = 'spv-1';
+const VEHICLE_ID = 'vehicle-1';
+const BUYER_ID = 'buyer-1';
 
 type Transfer = AssetTransfer['transfers'][number];
 
 const ASSETS: Record<string, { name: string; type: string; issuer: string }> = {
   shares: { name: 'A Shares', type: 'EQUITY', issuer: COMPANY.id },
   spvPoints: { name: 'SPV Interest (A)', type: 'SPV_INTEREST_POINT', issuer: SPV_ID },
+  lpFirst: { name: 'LP Interest Point 1', type: 'LP_INTEREST_POINT', issuer: VEHICLE_ID },
+  lpSecond: { name: 'LP Interest Point 2', type: 'LP_INTEREST_POINT', issuer: VEHICLE_ID },
+  commitFirst: { name: 'Commitment 1', type: 'FUND_OUTSTANDING_COMMITMENT', issuer: VEHICLE_ID },
+  commitSecond: { name: 'Commitment 2', type: 'FUND_OUTSTANDING_COMMITMENT', issuer: VEHICLE_ID },
+  unitsFirst: { name: 'Units 1', type: 'EQUITY_UNKNOWN_SHARES', issuer: COMPANY.id },
+  unitsSecond: { name: 'Units 2', type: 'EQUITY_UNKNOWN_SHARES', issuer: COMPANY.id },
   usd: { name: 'USD', type: 'CURRENCY', issuer: '' },
 };
 
@@ -108,6 +117,12 @@ async function received(
   return Math.round(onDate * 100) / 100;
 }
 
+let warn: jest.SpyInstance;
+beforeEach(() => {
+  warn = jest.spyOn(logger, 'warn').mockImplementation(() => logger);
+});
+afterEach(() => warn.mockRestore());
+
 describe('payout on an SPV interest held beside direct shares', () => {
   const DIRECT = 'investment-direct';
   const SPV = 'investment-spv';
@@ -156,5 +171,92 @@ describe('payout on an SPV interest held beside direct shares', () => {
 
     expect(await received([DIRECT], companyWalk, PAYOUT_DATE)).toBe(PAYOUT);
     expect(await received([SPV], companyWalk, PAYOUT_DATE)).toBe(0);
+  });
+});
+
+describe('payout on fund-of-funds commitments', () => {
+  const FIRST = 'investment-first-commitment';
+  const SECOND = 'investment-second-commitment';
+  const PAYOUT = 8;
+  const PAYOUT_DATE = '2025-03-20';
+
+  it('(B1) splits the payout by the amount each cheque committed', async () => {
+    const walk = [
+      transaction(
+        'txn-first',
+        '2022-04-11',
+        [
+          transfer('usd', 100_000, 'outflow'),
+          transfer('commitFirst', 1, 'outflow'),
+          transfer('lpFirst', 1, 'inflow'),
+        ],
+        FIRST,
+      ),
+      transaction(
+        'txn-second',
+        '2023-09-05',
+        [
+          transfer('usd', 300_000, 'outflow'),
+          transfer('commitSecond', 1, 'outflow'),
+          transfer('lpSecond', 1, 'inflow'),
+        ],
+        SECOND,
+      ),
+      transaction('txn-distribution', PAYOUT_DATE, [transfer('usd', PAYOUT, 'inflow', VEHICLE_ID)]),
+    ];
+
+    const first = await received([FIRST], walk, PAYOUT_DATE);
+    const second = await received([SECOND], walk, PAYOUT_DATE);
+
+    expect(first).toBe(2);
+    expect(second).toBe(6);
+    expect(first + second).toBe(await received([FIRST, SECOND], walk, PAYOUT_DATE));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('(B2) attributes a payout nothing held can explain by invested cost, with one warning', async () => {
+    const LATE = 40;
+    const LATE_DATE = '2026-06-01';
+    // Both positions are sold for cash; a distribution arrives afterwards with
+    // no interest left to weigh it by.
+    const walk = [
+      transaction(
+        'txn-first',
+        '2022-01-01',
+        [transfer('usd', 100_000, 'outflow'), transfer('unitsFirst', 1, 'inflow')],
+        FIRST,
+      ),
+      transaction(
+        'txn-second',
+        '2022-06-01',
+        [transfer('usd', 300_000, 'outflow'), transfer('unitsSecond', 1, 'inflow')],
+        SECOND,
+      ),
+      transaction('txn-first-sale', '2025-01-01', [
+        transfer('unitsFirst', 1, 'outflow'),
+        transfer('usd', 125_000, 'inflow', BUYER_ID),
+      ]),
+      transaction('txn-second-sale', '2025-01-02', [
+        transfer('unitsSecond', 1, 'outflow'),
+        transfer('usd', 375_000, 'inflow', BUYER_ID),
+      ]),
+      transaction('txn-late', LATE_DATE, [transfer('usd', LATE, 'inflow', COMPANY.id)]),
+    ];
+
+    const first = await received([FIRST], walk, LATE_DATE);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      investingEntityId: FUND_ID,
+      investeeEntityId: COMPANY.id,
+    });
+    expect(JSON.stringify(warn.mock.calls[0])).not.toContain(COMPANY.name);
+
+    warn.mockClear();
+    const second = await received([SECOND], walk, LATE_DATE);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    expect(first).toBe(10);
+    expect(second).toBe(30);
+    expect(first + second).toBe(LATE);
   });
 });

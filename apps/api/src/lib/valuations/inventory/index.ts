@@ -1,6 +1,7 @@
 import { formatDate } from 'date-fns';
 
 import {
+  AssetFlow,
   AssetKey,
   AssetTransfer,
   getInvestingEntityKey,
@@ -18,6 +19,7 @@ import {
 } from './data';
 import { logHoldings } from './messages';
 import { handleError } from '../../errors';
+import { logger } from '../../../services/logger';
 import { neverAsAny } from '../../utils/types';
 import { AssetHolding, Holdings, InvesteeHoldings } from './holdings';
 import {
@@ -83,6 +85,70 @@ function equitySplit(assetHoldings: InvesteeHoldings): EquitySplit {
 
 const isHeld = ({ fromInvestment, fromOther }: EquitySplit) =>
   Math.abs(fromInvestment + fromOther) > HELD_EPSILON;
+
+type CostBasis = Map<AssetKey, number>;
+
+/** Cash paid for non-cash assets received, spread evenly over them. Amounts in
+ *  different currencies are summed as they stand: the walk carries no FX, and
+ *  this only weighs one interest against another in the same company. */
+function recordCostBasis(costBasis: CostBasis, { inflows, outflows }: TransactionFlow) {
+  const paid = outflows
+    .filter((flow) => flow.assetType === 'CURRENCY')
+    .reduce((sum, flow) => sum + flow.numAssets, 0);
+  const received = inflows.filter((flow) => flow.assetType !== 'CURRENCY');
+  if (paid <= 0 || received.length === 0) return;
+
+  for (const flow of received) {
+    const assetKey = getAssetKey(flow);
+    costBasis.set(assetKey, (costBasis.get(assetKey) ?? 0) + paid / received.length);
+  }
+}
+
+/**
+ * The investments' share of a payment on these interests, or null when nothing
+ * held can explain it. One interest splits by its own units. Several interests
+ * share no common unit — an SPV point, a fund-of-funds interest and a capital
+ * call's units don't compare — so each is weighed by the cash invested in it,
+ * and split inside by its own units: invested cost is the one measure every
+ * cheque has, whatever it bought.
+ */
+function interestProportion(
+  interests: (readonly [AssetKey, AssetHolding])[],
+  costBasis: CostBasis | undefined,
+): number | null {
+  const held = interests
+    .map(([assetKey, holding]) => {
+      const { fromInvestment, fromOtherTransactions } = holding.sum();
+      return {
+        share: Math.abs(fromInvestment / (fromInvestment + fromOtherTransactions)),
+        units: fromInvestment + fromOtherTransactions,
+        cost: costBasis?.get(assetKey) ?? 0,
+      };
+    })
+    .filter(({ units }) => Math.abs(units) > HELD_EPSILON);
+
+  if (held.length === 0) return null;
+  if (held.length === 1) return held[0].share;
+
+  const totalCost = held.reduce((sum, { cost }) => sum + cost, 0);
+  if (totalCost <= 0) return null;
+  return held.reduce((sum, { share, cost }) => sum + share * cost, 0) / totalCost;
+}
+
+/** The investments' share of all cash ever put into this bucket. */
+function investedCostProportion(assetHoldings: InvesteeHoldings): number {
+  const spent = (flows: AssetFlow[]) =>
+    flows.filter((flow) => flow.numAssets < 0).reduce((sum, flow) => sum - flow.numAssets, 0);
+  const { fromInvestment, fromOther } = assetHoldings.getManyByType('CURRENCY').reduce(
+    (sum, [_, holding]) => ({
+      fromInvestment: sum.fromInvestment + spent(holding.data.fromInvestment),
+      fromOther: sum.fromOther + spent(holding.data.fromOtherTransactions),
+    }),
+    { fromInvestment: 0, fromOther: 0 },
+  );
+  const total = fromInvestment + fromOther;
+  return total > 0 ? fromInvestment / total : 0;
+}
 
 type ClassifiedTransactionFlow = TransactionFlow & {
   date: Date;
@@ -172,6 +238,10 @@ async function rollUpHoldings({
   // the shares just before, not to whatever rounding residue is left.
   const lastHeldEquitySplit = new Map<InvesteeHoldings, EquitySplit>();
 
+  // Per bucket: the cash paid for each asset held in it, for weighing interests
+  // that share no unit.
+  const costBasis = new Map<InvesteeHoldings, CostBasis>();
+
   // Process transactions in chronological order
   for (const {
     transaction_id: transactionId,
@@ -247,6 +317,8 @@ async function rollUpHoldings({
         const assetHoldings = holdings.get(investingEntityKey, investeeEntityKey);
         const heldBefore = equitySplit(assetHoldings);
         if (isHeld(heldBefore)) lastHeldEquitySplit.set(assetHoldings, heldBefore);
+        if (!costBasis.has(assetHoldings)) costBasis.set(assetHoldings, new Map());
+        recordCostBasis(costBasis.get(assetHoldings)!, transactionFlow);
 
         const classification = classifyTransactionFlow({
           transactionFlow,
@@ -448,7 +520,6 @@ async function rollUpHoldings({
               );
           const paidOnSharesToo =
             paidOn.length === 0 || paidOn.some(([assetKey]) => assetKey.split(':')[2] === 'EQUITY');
-          const interests = paidOn.length ? paidOn : nonCurrencyHoldings;
 
           // The rights this payment came in on. `due_to_rights_from_asset_id`
           // names the holding outright where the source recorded it; otherwise
@@ -461,16 +532,47 @@ async function rollUpHoldings({
             return provenanceFromHoldings(named.length ? named : candidates);
           };
 
-          if (holdingsSplit === 'INVESTMENT_ONLY') {
-            // if there are no holdings in Other and some in Investment, then assign it all to Investment
+          const attribute = (
+            investmentProportion: number,
+            candidates: (readonly [AssetKey, AssetHolding])[],
+          ) => {
             assetHoldings.proportionallyAdd({
               transactionFlow,
-              investmentProportion: 1,
+              investmentProportion,
               date,
-              inflowProvenance: oneWayProvenance(nonCurrencyHoldings),
+              inflowProvenance: oneWayProvenance(candidates),
             });
+            addLogRow(investmentProportion);
+          };
 
-            addLogRow(1);
+          // Nothing held explains the payment. Rather than let it vanish into
+          // "other", it goes to whoever put money into this company, in
+          // proportion to what each put in — and says so, since it is a guess.
+          const attributeByInvestedCost = () => {
+            const proportion = investedCostProportion(assetHoldings);
+            logger.warn(
+              '[valuations] one-way flow matched no held interest; attributed by invested cost',
+              {
+                investingEntityId: investingEntityKey.split(':')[0],
+                investeeEntityId: investeeEntityKey.split(':')[0],
+                transactionId,
+                amounts: [...transactionFlow.inflows, ...transactionFlow.outflows].map((f) => ({
+                  assetId: f.assetId,
+                  numAssets: f.numAssets,
+                })),
+                investmentProportion: proportion,
+              },
+            );
+            attribute(proportion, nonCurrencyHoldings);
+          };
+
+          if (holdingsSplit === 'INVESTMENT_ONLY') {
+            // if there are no holdings in Other and some in Investment, then assign it all to Investment
+            attribute(1, nonCurrencyHoldings);
+          } else if (holdingsSplit === 'OTHER_ONLY') {
+            // Nothing here came from the investments being valued, so none of
+            // the payment can be theirs — a certainty, not a guess to warn on.
+            attribute(0, nonCurrencyHoldings);
           } else if (equityHoldings.length > 0 && paidOnSharesToo) {
             // if we hold equity, non-exchanges are proportional to the existing holdings
             // e.g. if we hold 100 shares of A and 200 shares of B,
@@ -482,43 +584,25 @@ async function rollUpHoldings({
               ? heldBefore
               : (lastHeldEquitySplit.get(assetHoldings) ?? heldBefore);
             const totalEquityHoldings = fromInvestment + fromOther;
-            const equityProportion =
-              totalEquityHoldings > 0 ? fromInvestment / totalEquityHoldings : 0;
 
-            assetHoldings.proportionallyAdd({
-              transactionFlow,
-              investmentProportion: equityProportion,
-              date,
-              inflowProvenance: oneWayProvenance(equityHoldings),
-            });
-
-            addLogRow(equityProportion);
-          } else if (interests.length === 1) {
-            // if not and there is a single non-currency asset, split the inflow based on the ratio of that asset
-            const holding = interests[0][1];
-            const { fromInvestment, fromOtherTransactions } = holding.sum();
-            const totalHoldings = fromInvestment + fromOtherTransactions;
-            const proportion =
-              Math.abs(totalHoldings) > 0 ? Math.abs(fromInvestment / totalHoldings) : 0;
-
-            assetHoldings.proportionallyAdd({
-              transactionFlow,
-              investmentProportion: proportion,
-              date,
-              inflowProvenance: oneWayProvenance(interests),
-            });
-
-            addLogRow(proportion);
+            if (totalEquityHoldings > 0) {
+              attribute(fromInvestment / totalEquityHoldings, equityHoldings);
+            } else {
+              attributeByInvestedCost();
+            }
           } else {
-            // otherwise, assign it all to Other - we can't determine the ratio
-            assetHoldings.proportionallyAdd({
-              transactionFlow,
-              investmentProportion: 0,
-              date,
-              inflowProvenance: oneWayProvenance(nonCurrencyHoldings),
-            });
+            // A commitment is an obligation, not an interest: it carries no
+            // rights to a payout.
+            const interests = (paidOn.length ? paidOn : nonCurrencyHoldings).filter(
+              ([assetKey]) => assetKey.split(':')[2] !== 'FUND_OUTSTANDING_COMMITMENT',
+            );
+            const proportion = interestProportion(interests, costBasis.get(assetHoldings));
 
-            addLogRow(0);
+            if (proportion !== null) {
+              attribute(proportion, interests);
+            } else {
+              attributeByInvestedCost();
+            }
           }
         } else {
           throw new Error(`Unknown transaction type: ${neverAsAny(classification)}`);
