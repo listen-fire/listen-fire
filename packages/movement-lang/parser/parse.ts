@@ -41,6 +41,8 @@ import {
   MovementDeclaration,
   MovementParam,
   NamedArg,
+  GraphForm,
+  MapSpread,
   NodeEntry,
   NodeLiteral,
   PathHead,
@@ -1176,6 +1178,9 @@ class Parser {
       this.pos += 'node'.length;
       return { kind: 'node', node: this.parseNodeLiteral(start) };
     }
+    if (this.atGraphLiteral()) {
+      return { kind: 'node', node: this.parseGraphLiteral(start) };
+    }
     if (this.atLazy()) {
       this.pos += 'lazy'.length;
       return { kind: 'lazy', lazy: this.parseLazy(start) };
@@ -2137,6 +2142,217 @@ class Parser {
     return this.parseNodeLiteral(nodeStart);
   }
 
+  // ── Graph literals ──
+
+  /**
+   * Is `graph { … }` or `graph<Shape> { … }` next? CONTEXTUAL, as `node` is:
+   * `graph` is a common instance name (`graph = kg()`, `listen to graph { … }`),
+   * so the word alone stays an ordinary name and only the literal's full
+   * opening — the brace, or a bracketed name and then the brace — is the
+   * literal. Neither opening was a valid value before, so no existing program
+   * changes meaning. Consumes nothing.
+   */
+  private atGraphLiteral(): boolean {
+    if (this.peekIdent() !== 'graph') return false;
+    const save = this.pos;
+    this.pos += 'graph'.length;
+    this.skipInlineWs();
+    let opens = false;
+    if (this.peekCh() === '{') opens = true;
+    else if (this.peekCh() === '<') {
+      this.pos++;
+      this.skipInlineWs();
+      const scanned = scanName(this.src, this.pos);
+      if (scanned) {
+        this.pos = scanned.end;
+        this.skipInlineWs();
+        if (this.peekCh() === '>') {
+          this.pos++;
+          this.skipInlineWs();
+          opens = this.peekCh() === '{';
+        }
+      }
+    }
+    this.pos = save;
+    return opens;
+  }
+
+  /** `graph<Shape> { … }` with `graph` at the cursor; `start` is its offset. */
+  private parseGraphLiteral(start: number): NodeLiteral {
+    this.pos += 'graph'.length;
+    this.skipInlineWs();
+    let shape: GraphForm['shape'];
+    if (this.peekCh() === '<') {
+      const markerStart = this.pos;
+      this.pos++;
+      this.skipInlineWs();
+      const name = this.readName("the node declaration inside 'graph<…>'");
+      this.skipInlineWs();
+      this.expect('>', `to close 'graph<${name}'`);
+      shape = { name, span: this.spanFrom(markerStart) };
+    }
+    return this.parseGraphBody(start, shape !== undefined ? { shape } : {});
+  }
+
+  /**
+   * A graph literal's body: a WRITE body's field syntax (`name: value`, commas
+   * or newlines, `...spread`), read with the node literal's entry rules — the
+   * value's kind decides what it builds. The write body's own words (`unique
+   * by`, the `?:` / `+:` modes, `?...`) look a record up or merge into one, and
+   * a graph literal starts empty, so each is refused by name.
+   */
+  private parseGraphBody(start: number, form: GraphForm): NodeLiteral {
+    this.skipInlineWs();
+    const braceOffset = this.pos;
+    this.expect('{', 'to open the graph literal');
+    const entries: NodeEntry[] = [];
+    const spreads: MapSpread[] = [];
+    for (;;) {
+      this.skipAllWs();
+      if (this.eof()) this.error("Expected '}' to close the graph literal", braceOffset);
+      if (this.peekCh() === '}') {
+        this.pos++;
+        return {
+          entries,
+          graph: form,
+          ...(spreads.length > 0 ? { spreads } : {}),
+          span: this.spanFrom(start),
+        };
+      }
+      if (this.peekCh() === ',') {
+        this.pos++;
+        continue;
+      }
+      const spreadStart = this.pos;
+      const spread = this.tryParseWriteSpread();
+      if (spread !== undefined) {
+        if (spread.semantics === 'fill') {
+          this.error(
+            `'?...${spread.source}' fills only the fields that are still empty, and a graph literal starts empty — write '...${spread.source}'`,
+            spreadStart,
+          );
+        }
+        spreads.push({ source: spread.source, span: spread.span });
+        this.finishNodeEntry(spread.source);
+        continue;
+      }
+      if (this.peekIdent() === 'unique') {
+        this.error(
+          "'unique by' says how a write finds the record it changes, and a graph literal finds nothing — it builds a new local graph",
+        );
+      }
+      entries.push(this.parseGraphEntry());
+    }
+  }
+
+  /**
+   * `name: <value>` in a graph body. A brace (or a list of braces) is a child
+   * node; a walk is a snapshot of the records it lands on — followed by a
+   * field body, one child per record built from that body; bare, a copy of
+   * each record. Anything else is a field value.
+   */
+  private parseGraphEntry(): NodeEntry {
+    const entryStart = this.pos;
+    const name = this.readName('a field name in the graph literal');
+    this.skipInlineWs();
+    for (const op of ['+?:', '+:', '?:']) {
+      if (this.startsWith(op)) {
+        this.error(
+          `'${name} ${op}' merges into a value already there, and a graph literal starts empty — write '${name}: …'`,
+        );
+      }
+    }
+    this.expect(':', `after the field name '${name}'`);
+    this.skipInlineWs();
+
+    if (this.peekCh() === '{') {
+      const node = this.parseGraphBody(this.pos, {});
+      this.finishNodeEntry(name);
+      return { kind: 'nodes', name, nodes: [node], span: this.spanFrom(entryStart) };
+    }
+    if (this.peekCh() === '[') {
+      const save = this.pos;
+      const nodes = this.tryParseGraphBodyList();
+      if (nodes) {
+        this.finishNodeEntry(name);
+        return { kind: 'nodes', name, nodes, span: this.spanFrom(entryStart) };
+      }
+      this.pos = save;
+    }
+    this.refuseInGraphBody(name);
+    const save = this.pos;
+    const head = this.tryParsePathHead();
+    if (head) {
+      this.skipInlineWs();
+      const mapping = this.peekCh() === '{' ? this.parseGraphBody(this.pos, {}) : undefined;
+      this.finishNodeEntry(name);
+      return {
+        kind: 'traversal',
+        name,
+        head,
+        lazy: false,
+        ...(mapping ? { mapping } : {}),
+        span: this.spanFrom(entryStart),
+      };
+    }
+    this.pos = save;
+    this.refuseNonEntryValue(name, false);
+    const { slot, stop } = this.readExprSlot({
+      stops: ',\n}',
+      allowEof: false,
+      context: `for the field '${name}'`,
+    });
+    if (stop === ',') this.pos++;
+    return {
+      kind: 'value',
+      name,
+      value: slot,
+      span: { start: this.locAt(entryStart), end: slot.span.end },
+    };
+  }
+
+  /** `[{ … }, { … }]` — the plural child. Consumes through `]`, or returns
+   *  `undefined` (the caller restores the position) when the bracket opens an
+   *  ordinary list value instead. */
+  private tryParseGraphBodyList(): NodeLiteral[] | undefined {
+    this.pos++; // '['
+    const nodes: NodeLiteral[] = [];
+    for (;;) {
+      this.skipAllWs();
+      if (this.eof()) return undefined;
+      if (this.peekCh() === ']') {
+        this.pos++;
+        return nodes.length > 0 ? nodes : undefined;
+      }
+      if (this.peekCh() === ',') {
+        this.pos++;
+        continue;
+      }
+      if (this.peekCh() !== '{') return undefined;
+      nodes.push(this.parseGraphBody(this.pos, {}));
+    }
+  }
+
+  /** The node literal's entry spellings, refused inside a graph body with the
+   *  graph literal's own spelling of the same thing. */
+  private refuseInGraphBody(name: string): void {
+    if (this.atNodeLiteral() || this.atGraphLiteral()) {
+      this.error(
+        `inside a graph literal a child node is written as its body alone — '${name}: { … }'`,
+      );
+    }
+    if (this.peekCh() === '<') {
+      this.error(
+        `'${name}: <…>' declares an empty edge, which is the node literal's spelling — in a graph literal, give the graph a shape ('graph<Shape> { … }') and every child node it declares starts empty`,
+      );
+    }
+    if (this.atLazy()) {
+      this.error(
+        `a graph literal is a snapshot, and 'lazy' would re-walk the source at every read — drop 'lazy' to copy the records now, or use a node literal ('node { ${name}: lazy … }') to keep the walk`,
+      );
+    }
+  }
+
   // ── Calls ──
 
   private parseCallStatement(callee: string, start: number): CallStatement {
@@ -2144,6 +2360,17 @@ class Parser {
     const args = this.parseCallArgs(callee, start);
     this.expectStatementEnd();
     return { kind: 'call', callee, args, span: this.spanFrom(start) };
+  }
+
+  /** `node { … }` or `graph<Shape> { … }` where an argument is written —
+   *  consumes nothing when neither is next. */
+  private tryParsePositionLiteral(): NodeLiteral | undefined {
+    const start = this.pos;
+    if (this.atNodeLiteral()) {
+      this.pos += 'node'.length;
+      return this.parseNodeLiteral(start);
+    }
+    return this.atGraphLiteral() ? this.parseGraphLiteral(start) : undefined;
   }
 
   /** A call's NAMED argument list, with the opening `(` already consumed;
@@ -2160,11 +2387,9 @@ class Parser {
       }
       const name = this.readCallArgName(callee);
       this.refuseNamedNodeAsValue();
-      if (this.atNodeLiteral()) {
-        const nodeStart = this.pos;
-        this.pos += 'node'.length;
-        const node = this.parseNodeLiteral(nodeStart);
-        args.push({ kind: 'node', name, node });
+      const literal = this.tryParsePositionLiteral();
+      if (literal !== undefined) {
+        args.push({ kind: 'node', name, node: literal });
         this.skipAllWs();
         if (this.peekCh() === ',') this.pos++;
         else if (this.peekCh() !== ')') {

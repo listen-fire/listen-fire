@@ -181,6 +181,18 @@ export function schemaSurface(
   };
 }
 
+/** How `surfaceMisfit` reads the comparison. */
+export interface SurfaceMisfitOptions {
+  /** The edge path walked so far, for the message. */
+  path?: string;
+  /** Required positions already on the path — a cycle stops at the repeat. */
+  seen?: ReadonlySet<string>;
+  /** A `T | absent` member may be missing outright. A graph literal's COPY
+   *  asks this: a record without the field is copied with it absent, which is
+   *  what the declaration allows. A parameter does not: it reads the member. */
+  absentMayBeMissing?: boolean;
+}
+
 /** Where a required structure lives — a schema and the position within it. */
 export interface RequiredPosition {
   schema: InstanceSchema;
@@ -201,14 +213,15 @@ export interface RequiredPosition {
 export function surfaceMisfit(
   supplied: SuppliedSurface | undefined,
   required: RequiredPosition,
-  path = '',
-  seen: ReadonlySet<string> = new Set(),
+  options: SurfaceMisfitOptions = {},
 ): string | undefined {
+  const { path = '', seen = new Set<string>() } = options;
   const schema = required.schema.positions[required.position];
   if (!schema || surfaceNotEnumerated(schema)) return undefined;
   if (supplied === undefined) return undefined;
   for (const [name, want] of Object.entries(schema.properties)) {
     if (!Object.hasOwn(supplied.properties, name)) {
+      if (options.absentMayBeMissing === true && typeof want === 'object' && want.kind === 'maybeAbsent') continue;
       return `it has no ${path}\`${name}\``;
     }
     const have = supplied.properties[name];
@@ -228,8 +241,7 @@ export function surfaceMisfit(
     const misfit = surfaceMisfit(
       landing?.(),
       { schema: required.schema, position: edge.target },
-      `${name} → `,
-      new Set([...seen, edge.target]),
+      { ...options, path: `${name} → `, seen: new Set([...seen, edge.target]) },
     );
     if (misfit !== undefined) return misfit;
   }
