@@ -42,7 +42,15 @@ import {
   type LinkExpression,
   type WriteExpression,
 } from '../parser/ast';
-import { constructionAsCall, pathRootName, spellName, spellPathHead } from '../parser/ast';
+import {
+  constructionAsCall,
+  isValueTypeRef,
+  pathRootName,
+  spellName,
+  spellPathHead,
+  spellValueType,
+  typeNameOf,
+} from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { parseMovementExpression } from '../expression/bridge';
 import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
@@ -428,6 +436,9 @@ export interface StoryNode {
  * movement's value), and rendering only the value-shaped ones is what made an
  * inline `node { … }` argument disappear from the picture entirely.
  */
+/** `name` is the parameter the argument binds — written by the author for a
+ *  named argument, and the declaration's for a positional one (its place in
+ *  the call, from 1, where the callee's signature is unknown). */
 export type StoryArg = { name: string } & (
   | { kind: 'value'; chip: Chip }
   | { kind: 'node'; node: StoryNode }
@@ -442,6 +453,9 @@ export interface StoryParam {
    *  the author wrote none — a collection op's function takes its parameter's
    *  type from the collection, so there is nothing authored to render. */
   type?: { graph: string; position?: string; hops?: string };
+  /** A VALUE type the author spelled in full (`text[]`, `{ mode: text }`) —
+   *  it names no graph, so it rides here instead of `type`. */
+  valueType?: string;
   /**
    * WHAT the annotation resolved to, as the checker typed it — the same address
    * a reference's origin carries, so a parameter's shape is read out of the
@@ -1351,7 +1365,10 @@ class Projection {
     const resolution = inside.resolve(param.name);
     const posType = resolution.kind === 'found' ? resolution.symbol.posType : undefined;
     const address = posType !== undefined ? positionAddress(posType) : undefined;
-    const authored = typeRefOf(param.type);
+    const authored = typeRefOf(typeNameOf(param.type));
+    if (param.type !== undefined && isValueTypeRef(param.type)) {
+      return { name: param.name, valueType: spellValueType(param.type) };
+    }
     if (address === undefined) {
       return { name: param.name, ...(authored !== undefined ? { type: authored } : {}) };
     }
@@ -1823,7 +1840,8 @@ class Projection {
     const recorded = this.nodes.get(`call:${spanKey(call.span)}`);
     const node = recorded?.kind === 'call' ? (recorded as RecordedCall) : undefined;
     const scope = node?.scope ?? this.scopeOfNearest(call.span);
-    const args = call.args.map((arg) => this.arg(arg, scope));
+    const args = call.args.map((arg, index) =>
+      this.arg(arg, arg.name ?? node?.argParams?.[index] ?? `${index + 1}`, scope));
     if (binding !== undefined) this.callBindings.set(binding, call.callee);
     return {
       kind: 'call',
@@ -1838,17 +1856,17 @@ class Projection {
   /** One argument. A POSITION argument is not a value, and it used to be
    *  dropped — which is how `notify(n: node { … })` rendered as a call with no
    *  arguments at all. Each form now carries what it actually is. */
-  private arg(arg: CallArg, scope: Scope): StoryArg {
+  private arg(arg: CallArg, name: string, scope: Scope): StoryArg {
     switch (arg.kind) {
       case 'expr':
-        return { name: arg.name, kind: 'value', chip: this.chip(arg.expr, scope) };
+        return { name, kind: 'value', chip: this.chip(arg.expr, scope) };
       case 'call':
-        return { name: arg.name, kind: 'call', movement: arg.call.callee };
+        return { name, kind: 'call', movement: arg.call.callee };
       case 'node':
-        return { name: arg.name, kind: 'node', node: this.nodeLiteral(arg.node, scope) };
+        return { name, kind: 'node', node: this.nodeLiteral(arg.node, scope) };
       case 'write':
         return {
-          name: arg.name,
+          name,
           kind: 'record',
           record: this.addRecord(arg.write, this.writes.get(spanKey(arg.write.span))),
         };

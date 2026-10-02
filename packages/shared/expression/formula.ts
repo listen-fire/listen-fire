@@ -1397,6 +1397,24 @@ function unrecognisedCharacter(token: Token): ParseError {
   );
 }
 
+/** The aggregate function names, and the AST kind each reads as. */
+const AGG_FNS: Record<string, string> = {
+  FIRST: 'first', LAST: 'last', ONLY: 'only', COUNT: 'count', SUM: 'sum', AVG: 'avg',
+  MIN: 'min', MAX: 'max', JOIN: 'join', COLLECT: 'collect', LLM_AGG: 'llm',
+};
+
+/**
+ * Every function name this grammar reads as something OTHER than a generic
+ * call — the aggregates and the special forms `parseFunctionCall` (and
+ * `SORT`'s own reader) recognise. Upper-case, as the grammar compares them.
+ * Exported so a caller that has to tell a built-in call from some other
+ * invocation of the same shape compares against the grammar's own list.
+ */
+export const FORMULA_SPECIAL_FUNCTIONS: ReadonlySet<string> = new Set([
+  ...Object.keys(AGG_FNS),
+  'AI', 'CONCAT', 'KG_EXISTS', 'KG_VALUE', 'EXTRACT_VALUE', 'AT', 'SORT',
+]);
+
 class Parser {
   private tokens: Token[];
   private pos = 0;
@@ -1960,11 +1978,6 @@ class Parser {
     // family and reports an unknown one there.
     if (options.scoped === true) return { type: 'function', fn: name.toLowerCase(), args };
 
-    // Map known function names to AST types
-    const AGG_FNS: Record<string, string> = {
-      FIRST: 'first', LAST: 'last', ONLY: 'only', COUNT: 'count', SUM: 'sum', AVG: 'avg',
-      MIN: 'min', MAX: 'max', JOIN: 'join', COLLECT: 'collect', LLM_AGG: 'llm',
-    };
     if (name in AGG_FNS) {
       return {
         type: 'aggregate',

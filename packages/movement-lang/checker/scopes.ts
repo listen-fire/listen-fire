@@ -28,7 +28,7 @@
 import { Loc, MovementDeclaration, ShapeDeclaration, Span } from '../parser/ast';
 import { FieldType, InstanceSchema } from './catalog';
 import type { EffectRow } from './effects';
-import { PositionTypeRef, ReturnShape } from './typing';
+import { PlaneType, PositionTypeRef, ReturnShape } from './typing';
 
 export type SymbolKind =
   /** `import { attio } from adapters` */
@@ -128,7 +128,7 @@ export interface ScopeSymbol {
     decl: MovementDeclaration;
     declScope: Scope;
     /** Cache — computed on first use. */
-    paramTypes?: Array<PositionTypeRef | undefined>;
+    paramTypes?: PlaneType[];
     /**
      * The type of a CALL of this movement: what its body RETURNS
      * (`checker/check.ts` `movementReturnType`). Cached like `paramTypes` and

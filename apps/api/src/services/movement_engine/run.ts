@@ -104,6 +104,12 @@ import {
   CALLBACK_CALLED_EDGE,
   CALLBACK_CALL_AT,
   constructionAsCall,
+  argumentBindings,
+  isPositionalCall,
+  isValueTypeRef,
+  parseFieldTypeName,
+  spellParamType,
+  typeNameOf,
   schemaSurface,
   declaredTypesIn,
   expandWriteSpreads,
@@ -141,6 +147,7 @@ import type {
   EventAddress,
   MovementCondition,
   MovementDeclaration,
+  MovementParam,
   NodeLiteral,
   CopyPlan,
   MapSpread,
@@ -2845,7 +2852,13 @@ class Interpreter {
         `'${movement.name}' has an untyped parameter — the checker should have caught this`,
       );
     }
-    const paramType = param.type;
+    const paramType = typeNameOf(param.type);
+    if (paramType === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${movement.name}' takes a value ('${param.name}: <${spellParamType(param.type)}>'), and a dispatched movement takes the triggering event — the checker should have caught this`,
+      );
+    }
     const sourceBinding = fileEnv.resolve(paramType.graph);
     if (sourceBinding?.kind === 'instance') {
       const sourceAdapter = await this.resolveAdapterFn({
@@ -4187,12 +4200,26 @@ class Interpreter {
     // An imported callee forks from ITS library's file scope; a same-file
     // callee forks from the running file's — lexical scoping either way.
     const calleeEnv = (callee.fileEnv ?? this.fileEnv).child();
-    // Arguments are NAMED (order carries no meaning) but still evaluate
-    // in the caller's source order — an inline write argument is an
-    // effect, and effects run in the order the text states them.
+    // Arguments bind by name or by declared order (`argumentBindings`, the
+    // checker's own projection) and evaluate in the caller's source order —
+    // an inline write argument is an effect, and effects run in the order the
+    // text states them.
+    const params = new Map(declaration.params.map((param) => [param.name, param]));
+    // A parameter typed by a refinement names one declared in the CALLEE's file.
+    const calleeTypes = this.typesIn(callee.fileEnv ?? this.fileEnv);
     const evaluated = new Map<string, Binding>();
-    for (const arg of statement.args) {
-      evaluated.set(arg.name, await this.evaluateCallArg(arg, env, body));
+    for (const { arg, param } of argumentBindings(statement.args, [...params.keys()])) {
+      const declared = param !== undefined ? params.get(param) : undefined;
+      if (param === undefined || declared === undefined) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `'${declaration.name}' has no parameter ${arg.name !== undefined ? `'${arg.name}'` : 'for this argument'} — the checker should have caught this`,
+        );
+      }
+      evaluated.set(
+        param,
+        await this.evaluateCallArg(arg, env, body, { takesValue: isValueParam(declared, calleeTypes) }),
+      );
     }
     for (const param of declaration.params) {
       const binding = evaluated.get(param.name);
@@ -4264,9 +4291,16 @@ class Interpreter {
         `'${statement.callee}' declares no output, so there is nothing a call to it can hand back — the checker should have caught this`,
       );
     }
+    if (isPositionalCall(statement.args)) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${statement.callee}' is a plugin, and a plugin's arguments are named — the checker should have caught this`,
+      );
+    }
     const config: Record<string, unknown> = {};
     const trails: Provenance[] = [];
     for (const arg of statement.args) {
+      if (arg.name === undefined) continue; // refused above: never positional
       if (arg.kind !== 'expr') {
         // A plugin's parameters are values. A record passed into one has no
         // meaning the plugin could act on, so it is refused here rather than
@@ -4309,7 +4343,15 @@ class Interpreter {
     arg: CallArg,
     env: Environment,
     body: BodyContext,
+    options: { takesValue: boolean },
   ): Promise<Binding> {
+    // A VALUE parameter (`<text>`, `<Thesis>`, `<text[]>`, `<{ … }>`) takes
+    // what the argument evaluates to — any expression, as a closure's
+    // parameter does. Only a POSITION parameter is held to positions below.
+    if (arg.kind === 'expr' && options.takesValue) {
+      const { value, provenance } = await this.evaluateSlot(arg.expr, { env });
+      return { kind: 'value', value, provenance };
+    }
     if (arg.kind === 'write') {
       return this.executeWrite(arg.write, undefined, env, body);
     }
@@ -4511,7 +4553,9 @@ class Interpreter {
                 `callback(${subject.movement}): '${subject.movement}' is not a movement in scope — the checker should have caught this`,
               );
             }
-            const supplied = new Set(subject.args.map((a) => a.name));
+            const supplied = new Set(
+              argumentBindings(subject.args, binding.declaration.params.map((p) => p.name)).map((b) => b.param),
+            );
             const deferred = binding.declaration.params.filter((p) => !supplied.has(p.name));
             if (deferred.length > 0) {
               // The named form's fire-time binding is not built (a movement
@@ -4530,17 +4574,14 @@ class Interpreter {
       // The checker refuses a record position here (no platform can hand us
       // one), so anything unrecognised is a checker escape — say so loudly
       // rather than defaulting the type and mis-coercing at fire time.
-      if (
-        param.type === undefined
-        || !isCallbackParamType(param.type.graph)
-        || param.type.hopsRaw !== undefined
-      ) {
+      const type = typeNameOf(param.type);
+      if (type === undefined || !isCallbackParamType(type.graph) || type.hopsRaw !== undefined) {
         throw new MovementEngineError(
           'MOVENG_RUNTIME',
-          `a callback's parameter '${param.name}' must be a scalar type, got '<${param.type?.graph ?? '?'}>' — the checker should have caught this`,
+          `a callback's parameter '${param.name}' must be a scalar type, got '<${param.type !== undefined ? spellParamType(param.type) : '?'}>' — the checker should have caught this`,
         );
       }
-      return { name: param.name, type: param.type.graph };
+      return { name: param.name, type: type.graph };
     });
   }
 
@@ -10145,4 +10186,18 @@ function recordCallBinding(
     binding: { kind: 'nodePosition', fields, fieldOrder: Object.keys(fields), fieldProvenance, edges: {} },
     handedBack: Object.keys(fields).length > 0,
   };
+}
+
+/**
+ * Does this parameter take a VALUE — a scalar, a refinement declared in the
+ * callee's file, or a list or record of them spelled out — rather than a record
+ * position? The checker's reading of the same written type
+ * (`paramValueType`), on the names the engine has.
+ */
+function isValueParam(param: MovementParam, declaredTypes: ReadonlyMap<string, SchemaFieldType>): boolean {
+  const type = param.type;
+  if (type === undefined) return false;
+  if (isValueTypeRef(type)) return true;
+  if (type.hopsRaw !== undefined) return false;
+  return parseFieldTypeName(type.graph) !== undefined || declaredTypes.has(type.graph);
 }

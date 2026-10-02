@@ -105,7 +105,10 @@ import {
   TypeRef,
   WriteExpression,
   WriteSpread,
+  type ParamTypeRef,
+  type ValueTypeMember,
 } from '../parser/ast';
+import { argumentBindings, isPositionalCall, isValueTypeRef, spellParamType, spellValueType, typeNameOf } from '../parser/ast';
 import { isValidDuration, durationToMs } from '../parser/duration';
 
 export type { ReturnShape } from './typing';
@@ -186,6 +189,7 @@ import {
 import { neverAsAny } from '../never';
 import {
   before,
+  since,
   changedBetween,
   CURRENT_LANGUAGE_VERSION,
   describeLanguageVersion,
@@ -238,6 +242,7 @@ import {
   PresenceProof,
   presenceProofs,
   holdsRecords,
+  isDictType,
   isEnumType,
   isListType,
   isRecordType,
@@ -251,6 +256,7 @@ import {
   TypedDiagnosticCodes,
   mixedTupleMessage,
   widenTuples,
+  unifyValueTypes,
   WriteTargetRef,
 } from './typing';
 
@@ -392,6 +398,9 @@ export const DiagnosticCodes = {
    *  — without one the honest place for it is a `through [ … ]` stage, whose
    *  pipeline bounds what it reaches. */
   PLUGIN_ROW_UNDECLARED: 'MOV_PLUGIN_ROW_UNDECLARED',
+  /** A plugin called with POSITIONAL arguments. A plugin's parameters are a
+   *  registry's flat config with no designed order, so they are named only. */
+  PLUGIN_ARGS_NAMED: 'MOV_PLUGIN_ARGS_NAMED',
   /** A plugin called as an ordinary function when the EXTRACTION is what feeds
    *  it — either the extraction is its only way in (nothing a bare call could
    *  pass it), or the one argument a stage gets fed for free was left out of a
@@ -919,6 +928,13 @@ export interface RecordedCall {
   callee: string;
   /** Whether `callee` resolved to a movement declaration. */
   isMovement: boolean;
+  /**
+   * The parameter each argument binds, in argument order — what a POSITIONAL
+   * argument is called, since the author did not write its name. Absent where
+   * the callee's signature is unknown; an entry is undefined for an argument
+   * past the last parameter.
+   */
+  argParams?: Array<string | undefined>;
 }
 
 /**
@@ -1078,8 +1094,62 @@ export function checkProgramWithLink(
 
 const BARE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** A movement's parameters by name, for named-argument matching. */
-type NamedParams = Array<{ name: string; type: PositionTypeRef | undefined }>;
+/** A movement's parameters in declaration order, each typed on its plane —
+ *  what a call's arguments bind against, by name or by position. */
+type DeclaredParams = Array<{ name: string; type: PlaneType }>;
+
+type BoundParam = DeclaredParams[number];
+
+/** One argument against the parameter it binds, for the fit diagnostics. */
+interface ArgFit {
+  callee: string;
+  param: BoundParam | undefined;
+  /** The argument's place in the call, from 0. */
+  index: number;
+  /** Written without its parameter's name — so the diagnostic says it. */
+  positional: boolean;
+}
+
+/** Where a positional argument binds, for a diagnostic: the author did not
+ *  write the parameter's name, so the message does. A named argument wrote it
+ *  already, and its message is unchanged. */
+function describeArgPlace(fit: ArgFit): string {
+  if (!fit.positional) return '';
+  return fit.param !== undefined
+    ? ` for '${fit.param.name}' (argument ${fit.index + 1})`
+    : ` (argument ${fit.index + 1})`;
+}
+
+/** What a value argument's fit is judged with: where it is written, whether it
+ *  is a fresh record literal (the excess-property check), and its parse, for a
+ *  string literal's own type. */
+interface ArgValueOptions {
+  span: Span;
+  literal?: boolean;
+  parsed?: Expression;
+}
+
+/** The text of a string LITERAL expression. */
+function stringLiteralOf(expr: Expression | undefined): string | undefined {
+  return expr?.type === 'static' && typeof expr.value === 'string' ? expr.value : undefined;
+}
+
+/** Is this argument slot a record LITERAL (`{ mode: "x" }`) — the fresh value
+ *  TypeScript's excess-property check applies to? */
+function isRecordLiteralSlot(slot: ExprSlot): boolean {
+  return slot.raw.trim().startsWith('{');
+}
+
+/** A parameter typed as a VALUE, as the symbol its body reads. */
+function valueParamSymbol(param: MovementParam, type: FieldType | undefined): ScopeSymbol {
+  return {
+    name: param.name,
+    kind: 'param',
+    span: param.span,
+    bindingPlane: 'scalar',
+    ...(type !== undefined ? { fieldType: type } : {}),
+  };
+}
 /** Expression-grammar literals a bare slot may legitimately be. */
 const EXPR_LITERALS = new Set(['TRUE', 'FALSE', 'NULL']);
 
@@ -2957,22 +3027,106 @@ class Checker {
     );
   }
 
-  /** Lazily types a movement's parameters in its declaring scope (cached on the symbol). */
-  private movementParamTypes(symbol: ScopeSymbol): Array<PositionTypeRef | undefined> | undefined {
+  /** Lazily types a movement's parameters in its declaring scope (cached on the
+   *  symbol), each on its plane: a value type, or a position. */
+  private movementParamTypes(symbol: ScopeSymbol): PlaneType[] | undefined {
     const info = symbol.movement;
     if (!info) return undefined;
     if (!info.paramTypes) {
       info.paramTypes = info.decl.params.map(param => {
         // An unannotated parameter is refused where it is DECLARED; here it
         // simply has no type to offer.
-        if (param.type === undefined) return undefined;
-        const paramType = param.type;
+        if (param.type === undefined) return {};
+        const value = this.movementParamValueType(param.type, info.declScope, false);
+        if (value !== undefined) return value.type !== undefined ? { fieldType: value.type } : {};
+        const paramType = typeNameOf(param.type);
+        if (paramType === undefined) return {};
         const resolution = info.declScope.resolve(paramType.graph);
-        if (resolution.kind !== 'found') return undefined;
-        return this.positionFromTypeRef(resolution.symbol, paramType);
+        if (resolution.kind !== 'found') return {};
+        const posType = this.positionFromTypeRef(resolution.symbol, paramType);
+        return posType !== undefined ? { posType } : {};
       });
     }
     return info.paramTypes;
+  }
+
+  /**
+   * The VALUE type a parameter's written type names — a scalar (`<text>`), a
+   * declared refinement (`<Thesis>`), or a list or record of them spelled out
+   * (`<text[]>`, `<{ mode: text, owner?: text }>`) — or undefined when it names
+   * a POSITION instead. `{ type: undefined }` is a value type nobody could type
+   * (a member that names nothing, reported when `report` is set).
+   *
+   * A record type is a dict whose keys were written down — the type a dict
+   * literal already has — and an optional key's type is `T | absent`, so a read
+   * of it inside the callee is possibly absent, as TypeScript's `owner?: string`
+   * reads `string | undefined`.
+   */
+  private paramValueType(
+    type: ParamTypeRef,
+    scope: Scope,
+    report: boolean,
+  ): { type: FieldType | undefined } | undefined {
+    if (isValueTypeRef(type)) return { type: this.valueMemberType(type, scope, report) };
+    if (type.hopsRaw !== undefined) return undefined;
+    const scalar = parseFieldTypeName(type.graph);
+    if (scalar !== undefined) return { type: scalar };
+    // A refinement-typed parameter is a value from version 3; before it the
+    // name resolved as a position source, as every non-scalar name did.
+    if (!since(this.languageVersion, 3)) return undefined;
+    const declared = this.declaredTypeIn(type.graph, scope);
+    return declared !== undefined ? { type: declared } : undefined;
+  }
+
+  /**
+   * `paramValueType` for a MOVEMENT's parameter. A movement's parameters became
+   * able to take values with language version 3; before it every one named a
+   * position (a scalar there resolved as a name, and failed as one), and a
+   * version's meaning is its own.
+   */
+  private movementParamValueType(
+    type: ParamTypeRef,
+    scope: Scope,
+    report: boolean,
+  ): { type: FieldType | undefined } | undefined {
+    return since(this.languageVersion, 3) ? this.paramValueType(type, scope, report) : undefined;
+  }
+
+  private valueMemberType(member: ValueTypeMember, scope: Scope, report: boolean): FieldType | undefined {
+    switch (member.kind) {
+      case 'name': {
+        const named = parseFieldTypeName(member.name) ?? this.declaredTypeIn(member.name, scope);
+        if (named === undefined && report) {
+          this.report(
+            DiagnosticCodes.UNKNOWN_TYPE_NAME,
+            `'${member.name}' is not a value type — a list or record type holds values: a primitive (${PRIMITIVE_TYPE_NAMES.join(', ')}), a type you declare (\`type ${member.name} = <"A" | "B">\`), or a list or record of them${didYouMean(member.name, typeNamesInScope(scope))}`,
+            member.span,
+          );
+        }
+        return named;
+      }
+      case 'list': {
+        const of = this.valueMemberType(member.of, scope, report);
+        return of !== undefined ? { kind: 'list', of } : undefined;
+      }
+      case 'record': {
+        const shape: Record<string, FieldType> = {};
+        let typed = true;
+        for (const key of member.keys) {
+          const keyType = this.valueMemberType(key.type, scope, report);
+          if (keyType === undefined) {
+            typed = false;
+            continue;
+          }
+          shape[key.name] = key.optional === true ? (maybeAbsent(keyType) ?? keyType) : keyType;
+        }
+        if (!typed) return undefined;
+        const of = unifyValueTypes(Object.values(shape).map(t => stripAbsent(t))) ?? 'json';
+        return { kind: 'dict', of, shape };
+      }
+      default:
+        return neverAsAny(member);
+    }
   }
 
   /**
@@ -3160,7 +3314,17 @@ class Checker {
     info.returnType = { done: false, shape: UNKNOWN_RETURN };
     const bodyScope = new Scope('movement', info.declScope);
     for (const param of info.decl.params) {
-      const paramType = param.type;
+      const value = param.type !== undefined
+        ? this.movementParamValueType(param.type, info.declScope, false)
+        : undefined;
+      // A type-only re-walk of a declaration the real walk also visits, so it
+      // declares without reporting — the shadowing (and duplicate) errors are
+      // this movement's own, raised where the author wrote it.
+      if (value !== undefined) {
+        bodyScope.declare(valueParamSymbol(param, value.type));
+        continue;
+      }
+      const paramType = typeNameOf(param.type);
       const graphSymbol = paramType !== undefined
         ? info.declScope.resolve(paramType.graph)
         : undefined;
@@ -3170,9 +3334,6 @@ class Checker {
         && graphSymbol.symbol.kind !== 'adapter'
           ? this.positionFromTypeRef(graphSymbol.symbol, paramType)
           : undefined;
-      // A type-only re-walk of a declaration the real walk also visits, so it
-      // declares without reporting — the shadowing (and duplicate) errors are
-      // this movement's own, raised where the author wrote it.
       bodyScope.declare({
         name: param.name,
         kind: 'param',
@@ -3206,13 +3367,13 @@ class Checker {
     return labelled;
   }
 
-  /** The movement's parameters by NAME with their types — what named-argument
-   *  matching resolves against. */
-  private movementParams(symbol: ScopeSymbol): NamedParams | undefined {
+  /** The movement's parameters, in declaration order, with their types — what
+   *  argument binding resolves against, by name or by position. */
+  private movementParams(symbol: ScopeSymbol): DeclaredParams | undefined {
     const info = symbol.movement;
     if (!info) return undefined;
     const types = this.movementParamTypes(symbol) ?? [];
-    return info.decl.params.map((param, i) => ({ name: param.name, type: types[i] }));
+    return info.decl.params.map((param, i) => ({ name: param.name, type: types[i] ?? {} }));
   }
 
   // ── Statement lists: hoisting, pending prescan, source-order walk ──
@@ -4186,8 +4347,9 @@ class Checker {
     // something SUPPLIES the type (a collection op does) or the parameter is
     // simply missing one.
     if (written === undefined) return {};
-    const scalar = written.hopsRaw === undefined ? parseFieldTypeName(written.graph) : undefined;
-    if (scalar !== undefined) return { fieldType: scalar };
+    const value = this.paramValueType(written, scope, true);
+    if (value !== undefined) return value.type !== undefined ? { fieldType: value.type } : {};
+    if (isValueTypeRef(written)) return {};
     const graphSymbol = this.resolveName(written.graph, written.span, scope);
     if (graphSymbol === undefined || graphSymbol.kind === 'adapter') return {};
     const posType = this.positionFromTypeRefStrict(graphSymbol, written, written.span);
@@ -5162,19 +5324,20 @@ class Checker {
     if (callee?.kind === 'movement') this.effects?.absorb(this.movementEffects(callee));
     else if (callee?.kind === 'fileImport') this.effects?.markPartial();
     const declared = callee?.kind === 'movement' ? this.movementParams(callee) : undefined;
-    const paramTypeOf = this.checkNamedArgs({
+    const bound = this.checkArgumentBindings({
       callee: subject.movement,
-      args: subject.args.map(arg => ({ name: arg.name, span: callArgSpan(arg) })),
+      args: subject.args,
       params: declared,
       span: subject.span,
-      // Unsupplied parameters are the fire-time signature, not omissions.
+      // Unsupplied parameters are the fire-time signature, not omissions —
+      // by name, any of them; by position, the ones after the last argument.
       partial: true,
     });
-    for (const arg of subject.args) {
-      this.checkCallArg(subject.movement, arg, paramTypeOf.get(arg.name), scope);
+    for (const { arg, param, index } of bound) {
+      this.checkCallArg(subject.movement, arg, param, index, scope);
     }
     if (declared === undefined || callee?.movement === undefined) return [];
-    const supplied = new Set(subject.args.map(arg => arg.name));
+    const supplied = new Set(bound.flatMap(b => (b.param !== undefined ? [b.param.name] : [])));
     const params: Array<{ name: string; type: FieldType | undefined }> = [];
     for (const param of callee.movement.decl.params) {
       if (supplied.has(param.name)) continue;
@@ -5196,7 +5359,7 @@ class Checker {
    * letting the `Called` landing quietly lose the field.
    */
   private checkCallbackParamType(
-    type: TypeRef | undefined,
+    type: ParamTypeRef | undefined,
     name: string,
     /** The DECLARING scope, when this callback declares the parameter itself
      *  (the inline form) — a named movement already checked its own. */
@@ -5207,6 +5370,16 @@ class Checker {
     // by `checkClosure`, a movement's by its declaration), so this only has to
     // say it has no type to offer.
     if (type === undefined) return undefined;
+    // A platform sends one scalar per control — a picked date, entered text —
+    // and nothing that could fill a list or a record.
+    if (isValueTypeRef(type)) {
+      this.report(
+        DiagnosticCodes.CALLBACK_PARAM_NOT_VALUE,
+        `a callback's parameter '${name}' is a value the platform sends when the callback fires, one per control, so it has to be a single scalar type (<text>, <number>, <boolean>, <date>, <datetime>, <json>, <file>) — '<${spellValueType(type)}>' is more than one. Supply it as a fixed argument instead.`,
+        at ?? type.span,
+      );
+      return undefined;
+    }
     const scalar = type.hopsRaw === undefined ? parseFieldTypeName(type.graph) : undefined;
     if (scalar !== undefined) return scalar;
     // Keep the graph name honest (an unresolvable one is still reported), then
@@ -7483,7 +7656,7 @@ class Checker {
     binding?: string,
   ): ReturnShape {
     const resolution = scope.resolve(statement.callee);
-    this.recordNode({
+    const recorded = this.recordNode<RecordedCall>({
       kind: 'call',
       span: statement.span,
       scope,
@@ -7491,7 +7664,7 @@ class Checker {
       callee: statement.callee,
       isMovement: resolution.kind === 'found' && resolution.symbol.kind === 'movement',
     });
-    let params: NamedParams | undefined;
+    let params: DeclaredParams | undefined;
     let value: ReturnShape = UNKNOWN_RETURN;
     if (resolution.kind !== 'found') {
       this.reportResolutionFailure(statement.callee, statement.span, resolution);
@@ -7528,42 +7701,65 @@ class Checker {
         }
       }
     }
-    const paramTypeOf = this.checkNamedArgs({
+    const bound = this.checkArgumentBindings({
       callee: statement.callee,
-      args: statement.args.map(arg => ({ name: arg.name, span: callArgSpan(arg) })),
+      args: statement.args,
       params,
       span: statement.span,
     });
-    for (const arg of statement.args) {
-      this.checkCallArg(statement.callee, arg, paramTypeOf.get(arg.name), scope);
+    if (recorded !== undefined && params !== undefined) {
+      recorded.argParams = bound.map(b => b.param?.name);
+    }
+    for (const { arg, param, index } of bound) {
+      this.checkCallArg(statement.callee, arg, param, index, scope);
     }
     return value;
   }
 
   /** One argument: check it in its own right, then check that it FITS the
-   *  parameter. The three forms differ only in how the argument's position type
-   *  is arrived at. */
+   *  parameter it binds. The forms differ only in how the argument's type is
+   *  arrived at. `index` is the argument's place, for a positional one's
+   *  diagnostics — an argument the author did not name is named for them. */
   private checkCallArg(
     callee: string,
     arg: CallArg,
-    paramType: PositionTypeRef | undefined,
+    param: BoundParam | undefined,
+    index: number,
     scope: Scope,
   ): void {
+    const fit: ArgFit = { callee, param, index, positional: arg.name === undefined };
     switch (arg.kind) {
       case 'expr': {
-        this.checkExprSlot(arg.expr, scope);
+        const { valueType, parsed } = this.checkExprSlot(arg.expr, scope);
         const argType = this.bareSlotPositionType(arg.expr, scope);
-        this.checkCallArgFit(callee, argType, paramType, arg.expr.span);
+        if (param?.type.fieldType !== undefined) {
+          this.checkValueArgFit(fit, param.type.fieldType, argType !== undefined ? recordOf(argType) : valueType, {
+            span: arg.expr.span,
+            literal: isRecordLiteralSlot(arg.expr),
+            ...(parsed !== undefined ? { parsed } : {}),
+          });
+          return;
+        }
+        this.refuseValueForPosition(fit, argType === undefined ? valueType : undefined, arg.expr.span);
+        this.checkCallArgFit(fit, argType, param?.type.posType, arg.expr.span);
         return;
       }
       case 'write': {
         const handle = this.checkWrite(arg.write, scope, { isBound: true });
-        this.checkCallArgFit(callee, handle, paramType, arg.write.span);
+        if (param?.type.fieldType !== undefined) {
+          this.checkValueArgFit(fit, param.type.fieldType, recordOf(handle), { span: arg.write.span });
+          return;
+        }
+        this.checkCallArgFit(fit, handle, param?.type.posType, arg.write.span);
         return;
       }
       case 'node': {
         const synthesised = this.checkNodeLiteral(arg.node, scope);
-        this.checkCallArgFit(callee, synthesised, paramType, arg.node.span);
+        if (param?.type.fieldType !== undefined) {
+          this.checkValueArgFit(fit, param.type.fieldType, recordOf(synthesised), { span: arg.node.span });
+          return;
+        }
+        this.checkCallArgFit(fit, synthesised, param?.type.posType, arg.node.span);
         return;
       }
       case 'call': {
@@ -7572,64 +7768,216 @@ class Checker {
         // by the same STRUCTURAL road — a node belongs to no graph, and there
         // is no third rule for one that came out of a call.
         const value = this.checkCall(arg.call, scope);
-        this.checkCallArgFit(callee, value.posType, paramType, arg.call.span);
+        if (param?.type.fieldType !== undefined) {
+          this.checkValueArgFit(fit, param.type.fieldType, valueOfReturn(value), { span: arg.call.span });
+          return;
+        }
+        this.refuseValueForPosition(fit, value.posType === undefined ? value.fieldType : undefined, arg.call.span);
+        this.checkCallArgFit(fit, value.posType, param?.type.posType, arg.call.span);
         return;
       }
     }
   }
 
   /**
-   * Named-argument matching (check 7, by NAME): every argument names a
-   * parameter, every parameter is supplied, no name repeats. Returns the
-   * parameter type per matched argument name for the per-argument fit
-   * checks. Unknown signatures (unresolved callees, file imports the
-   * linker didn't resolve) skip name checks entirely.
+   * A VALUE handed to a parameter that takes a record POSITION. The engine has
+   * always refused it at run time ("arguments are positions"); said here, where
+   * it is written, once the value's type is known and holds no records.
    */
-  private checkNamedArgs(input: {
+  private refuseValueForPosition(fit: ArgFit, valueType: FieldType | undefined, span: Span): void {
+    const posType = fit.param?.type.posType;
+    if (posType === undefined || valueType === undefined || holdsRecords(valueType)) return;
+    // Said at save from version 3, where a parameter may take a value instead;
+    // an older pin keeps the run-time refusal it always had.
+    if (!since(this.languageVersion, 3)) return;
+    this.report(
+      DiagnosticCodes.CALL_ARG_TYPE,
+      `'${fit.callee}' expects ${describePosition(posType)}${describeArgPlace(fit)}, but this argument is ${describeFieldType(valueType)} — a record parameter takes a record (a bound record, a node, or a write); declare the parameter as a value type ('<text>', '<{ … }>') to pass a value`,
+      span,
+    );
+  }
+
+  /**
+   * A value argument against a VALUE parameter — TypeScript's assignability,
+   * with its excess-property check: a record LITERAL passed to a record
+   * parameter may not carry a key the parameter does not declare, and every
+   * argument must carry the keys the parameter requires. A value that may be
+   * absent does not fill a parameter that requires one (`string | undefined`
+   * is not `string`); an optional key takes one.
+   */
+  private checkValueArgFit(
+    fit: ArgFit,
+    paramType: FieldType,
+    argType: FieldType | undefined,
+    options: ArgValueOptions,
+  ): void {
+    if (argType === undefined) return;
+    const { span } = options;
+    const expected = `'${fit.callee}' expects ${describeFieldType(paramType)}${describeArgPlace(fit)}`;
+    // A string LITERAL is its own type — `"warm"` is `"warm"`, which TypeScript
+    // assigns to `"brisk" | "warm"` — so against a closed set it is a
+    // membership check, with the enum's own did-you-mean.
+    const literal = stringLiteralOf(options.parsed);
+    if (literal !== undefined && this.reportEnumLiteral(literal, stripAbsent(paramType), span)) return;
+    if (isMaybeAbsent(argType) && !isMaybeAbsent(paramType)) {
+      this.report(
+        DiagnosticCodes.CALL_ARG_TYPE,
+        `${expected}, but this argument may be absent — fill it first ('COALESCE(x, …)') or declare the parameter as a record key that may be left out ('{ key?: … }')`,
+        span,
+      );
+      return;
+    }
+    const param = stripAbsent(paramType);
+    const arg = stripAbsent(argType);
+    if (isDictType(param) && param.shape !== undefined) {
+      this.checkRecordArgFit(expected, param.shape, arg, options);
+      return;
+    }
+    if (!fieldAssignable(arg, param)) {
+      this.report(DiagnosticCodes.CALL_ARG_TYPE, `${expected}, but this argument is ${describeFieldType(arg)}`, span);
+    }
+  }
+
+  /** A value against a record parameter's declared keys. */
+  private checkRecordArgFit(
+    expected: string,
+    keys: Record<string, FieldType | null>,
+    arg: FieldType,
+    options: ArgValueOptions,
+  ): void {
+    const { span } = options;
+    if (!isDictType(arg)) {
+      this.report(DiagnosticCodes.CALL_ARG_TYPE, `${expected}, but this argument is ${describeFieldType(arg)}`, span);
+      return;
+    }
+    const required = Object.entries(keys)
+      .filter(([, type]) => type !== null && !isMaybeAbsent(type))
+      .map(([key]) => key);
+    const supplied = arg.shape;
+    // Keys that are data, not program text: nothing says which are there.
+    if (supplied === undefined) {
+      if (required.length > 0) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `${expected}, but this argument is ${describeFieldType(arg)}, whose keys are data — nothing says it has ${required.map(k => `'${k}'`).join(', ')}`,
+          span,
+        );
+      }
+      return;
+    }
+    const missing = required.filter(key => !Object.hasOwn(supplied, key));
+    if (missing.length > 0) {
+      this.report(
+        DiagnosticCodes.CALL_ARG_TYPE,
+        `${expected}, but this argument is missing ${missing.length === 1 ? 'the key' : 'the keys'} ${missing.map(k => `'${k}'`).join(', ')}`,
+        span,
+      );
+    }
+    if (options.literal === true) {
+      const excess = Object.keys(supplied).filter(key => !Object.hasOwn(keys, key));
+      if (excess.length > 0) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `${expected}, which has no ${excess.length === 1 ? 'key' : 'keys'} ${excess.map(k => `'${k}'`).join(', ')}${didYouMean(excess[0], Object.keys(keys))}`,
+          span,
+        );
+      }
+    }
+    const written = options.parsed?.type === 'object' ? options.parsed.entries : [];
+    for (const [key, keyType] of Object.entries(keys)) {
+      const given = supplied[key];
+      if (keyType === null || given === undefined || given === null) continue;
+      const literal = stringLiteralOf(written.find(entry => entry.key === key)?.value);
+      if (literal !== undefined && this.reportEnumLiteral(literal, stripAbsent(keyType), span)) continue;
+      if (isMaybeAbsent(given) && !isMaybeAbsent(keyType)) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `${expected}, and its key '${key}' is required, but the value given for it may be absent`,
+          span,
+        );
+        continue;
+      }
+      if (!fieldAssignable(given, keyType)) {
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `${expected}, and its key '${key}' takes ${describeFieldType(stripAbsent(keyType))}, but the value given for it is ${describeFieldType(stripAbsent(given))}`,
+          span,
+        );
+      }
+    }
+  }
+
+  /**
+   * A string literal against a CLOSED option set — the enum check every
+   * literal-against-enum site shares. True when the target is such a set (the
+   * literal has then been judged); false leaves the ordinary fit to the caller.
+   */
+  private reportEnumLiteral(literal: string, target: FieldType, span: Span): boolean {
+    if (!isEnumType(target)) return false;
+    const diagnostic = checkEnumLiteral(literal, target);
+    if (diagnostic?.severity === 'warning') this.reportWarning(diagnostic.code, diagnostic.message, span);
+    else if (diagnostic) this.report(diagnostic.code, diagnostic.message, span);
+    return true;
+  }
+
+  /**
+   * Binds a call's arguments to its callee's parameters — by name, or by
+   * declared order — and checks the binding: every named argument names a
+   * parameter, every parameter is supplied, no parameter is supplied twice.
+   * Unknown signatures (unresolved callees, file imports the linker didn't
+   * resolve) skip the name checks entirely.
+   */
+  private checkArgumentBindings(input: {
     callee: string;
-    args: Array<{ name: string; span: Span }>;
-    params: NamedParams | undefined;
+    args: CallArg[];
+    params: DeclaredParams | undefined;
     span: Span;
     /** PARTIAL application (a callback's fixed arguments): an unsupplied
      *  parameter is not missing — it is what the caller supplies later. */
     partial?: boolean;
-  }): Map<string, PositionTypeRef | undefined> {
+  }): Array<{ arg: CallArg; param: BoundParam | undefined; index: number }> {
     const { callee, args, params, span } = input;
     const seen = new Set<string>();
     for (const arg of args) {
+      if (arg.name === undefined) continue;
       if (seen.has(arg.name)) {
         this.report(
           DiagnosticCodes.CALL_ARG_DUPLICATE,
           `Duplicate argument '${arg.name}' — each of '${callee}'s parameters is supplied once`,
-          arg.span,
+          callArgSpan(arg),
         );
       }
       seen.add(arg.name);
     }
-    const types = new Map<string, PositionTypeRef | undefined>();
-    if (!params) return types;
+    if (!params) return args.map((arg, index) => ({ arg, param: undefined, index }));
     const paramNames = params.map(p => p.name);
-    for (const param of params) {
-      types.set(param.name, param.type);
-    }
+    const byName = new Map(params.map(p => [p.name, p]));
+    const bound = argumentBindings(args, paramNames).map(({ arg, param }, index) => ({
+      arg,
+      param: param !== undefined ? byName.get(param) : undefined,
+      index,
+    }));
     for (const arg of args) {
-      if (!types.has(arg.name)) {
+      if (arg.name !== undefined && !byName.has(arg.name)) {
         this.report(
           DiagnosticCodes.CALL_ARG_UNKNOWN,
           `'${arg.name}' is not a parameter of '${callee}' — its parameters are: ${paramNames.join(', ') || '(none)'}`,
-          arg.span,
+          callArgSpan(arg),
         );
       }
     }
-    const missing = input.partial === true ? [] : paramNames.filter(name => !seen.has(name));
+    // A positional argument past the last parameter is the arity error the
+    // call site already reported; a parameter past the last argument is missing.
+    const supplied = new Set(bound.flatMap(b => (b.param !== undefined ? [b.param.name] : [])));
+    const missing = input.partial === true ? [] : paramNames.filter(name => !supplied.has(name));
     if (missing.length > 0) {
       this.report(
         DiagnosticCodes.CALL_ARG_MISSING,
-        `'${callee}' is missing ${missing.length === 1 ? 'the argument' : 'arguments'} ${missing.map(n => `'${n}'`).join(', ')} — supply every parameter by name`,
+        `'${callee}' is missing ${missing.length === 1 ? 'the argument' : 'arguments'} ${missing.map(n => `'${n}'`).join(', ')} — ${isPositionalCall(args) ? `pass one argument per parameter, in order: ${callee}(${paramNames.join(', ')})` : 'supply every parameter by name'}`,
         span,
       );
     }
-    return types;
+    return bound;
   }
 
   /**
@@ -8249,18 +8597,20 @@ class Checker {
    * exactly as before: a real instance's position still matches nominally.
    */
   private checkCallArgFit(
-    callee: string,
+    fit: ArgFit,
     argType: PositionTypeRef | undefined,
     paramType: PositionTypeRef | undefined,
     span: Span,
   ): void {
     if (argType === undefined || paramType === undefined) return;
+    const { callee } = fit;
+    const place = describeArgPlace(fit);
     if (argType.kind === 'local') {
       const misfit = structuralMisfit(argType, paramType);
       if (misfit !== undefined) {
         this.report(
           DiagnosticCodes.NODE_ARG_SHAPE,
-          `'${callee}' expects ${describePosition(paramType)}, and ${misfit}`,
+          `'${callee}' expects ${describePosition(paramType)}${place}, and ${misfit}`,
           span,
         );
       }
@@ -8274,7 +8624,7 @@ class Checker {
       if (misfit !== undefined) {
         this.report(
           DiagnosticCodes.CALL_ARG_TYPE,
-          `'${callee}' expects a <${paramType.position}> record, and ${misfit}`,
+          `'${callee}' expects a <${paramType.position}> record${place}, and ${misfit}`,
           span,
         );
       }
@@ -8283,7 +8633,7 @@ class Checker {
     if (positionsMatch(argType, paramType) === false) {
       this.report(
         DiagnosticCodes.CALL_ARG_TYPE,
-        `'${callee}' expects ${describePosition(paramType)}, but this argument is ${describePosition(argType)}`,
+        `'${callee}' expects ${describePosition(paramType)}${place}, but this argument is ${describePosition(argType)}`,
         span,
       );
     }
@@ -8478,18 +8828,29 @@ class Checker {
         this.reportParamNeedsType(param.name, param.span, `'${statement.name}'`);
         continue;
       }
-      const paramTypeRef = param.type;
+      // A VALUE parameter — a scalar, a refinement, a list or record of them —
+      // is read on the dot plane, and nothing below (a graph, an event
+      // position, a listen) has anything to say about it.
+      const value = this.movementParamValueType(param.type, scope, true);
+      if (value !== undefined) {
+        if (this.declareAuthored(movementScope, valueParamSymbol(param, value.type), param.span)) {
+          this.report(DiagnosticCodes.DUPLICATE_DECL, `Duplicate parameter '${param.name}'`, param.span);
+        }
+        continue;
+      }
+      const paramTypeRef = typeNameOf(param.type);
+      if (paramTypeRef === undefined) continue;
       const graphSymbol = this.resolveName(paramTypeRef.graph, paramTypeRef.span, scope);
       // A bare adapter import used as a position source (`<manual-[:invocation]->>`)
       // — instantiation is explicit now, so the parameter's graph must be a
       // CONSTRUCTED instance. Guide the author to construct + name it first.
       if (graphSymbol?.kind === 'adapter') {
-        const adapterName = graphSymbol.importedName ?? param.type.graph;
-        const positionExample = param.type.position ?? (adapterName === 'cron' ? 'tick' : 'invocation');
+        const adapterName = graphSymbol.importedName ?? paramTypeRef.graph;
+        const positionExample = paramTypeRef.position ?? (adapterName === 'cron' ? 'tick' : 'invocation');
         this.report(
           DiagnosticCodes.ADAPTER_NOT_CONSTRUCTED,
-          `'${param.type.graph}' is an adapter, not an instance — construct an instance and name it first: 'go = ${this.constructionCall(adapterName)}', then type the parameter against the name ('<go-[:${positionExample}]->>') and listen to it ('listen to go {}')`,
-          param.type.span,
+          `'${paramTypeRef.graph}' is an adapter, not an instance — construct an instance and name it first: 'go = ${this.constructionCall(adapterName)}', then type the parameter against the name ('<go-[:${positionExample}]->>') and listen to it ('listen to go {}')`,
+          paramTypeRef.span,
         );
       }
       if (scope.kind === 'file' && statement.params.length === 1 && graphSymbol?.kind === 'instance') {
@@ -8497,9 +8858,9 @@ class Checker {
         // LISTEN_MISSING squiggle lands on the declaration word, not the body.
         this.dispatchables.push({
           movement: statement.name,
-          instanceName: param.type.graph,
+          instanceName: paramTypeRef.graph,
           ...(graphSymbol.adapter !== undefined ? { adapter: graphSymbol.adapter } : {}),
-          ...(param.type.position !== undefined ? { position: param.type.position } : {}),
+          ...(paramTypeRef.position !== undefined ? { position: paramTypeRef.position } : {}),
           ...(graphSymbol.schema?.eventNarrowingKeys !== undefined
             ? { narrowingKeys: [...graphSymbol.schema.eventNarrowingKeys] }
             : {}),
@@ -8508,7 +8869,7 @@ class Checker {
       }
       const posType =
         graphSymbol && graphSymbol.kind !== 'adapter'
-          ? this.positionFromTypeRefStrict(graphSymbol, param.type, param.type.span)
+          ? this.positionFromTypeRefStrict(graphSymbol, paramTypeRef, paramTypeRef.span)
           : undefined;
       const existing = this.declareAuthored(
         movementScope,
@@ -8977,8 +9338,19 @@ class Checker {
     }
 
     const param = info.decl.params[0];
-    const declared = param.type;
-    if (declared === undefined) return; // already reported at the declaration
+    if (param.type === undefined) return; // already reported at the declaration
+    // A listener hands its movement an event — a record position — so a
+    // movement whose parameter takes a VALUE is one no listen can fire.
+    if (this.movementParamValueType(param.type, info.declScope, false) !== undefined) {
+      this.report(
+        DiagnosticCodes.LISTEN_PARAM_MISMATCH,
+        `'${statement.movement}' takes '${param.name}: <${spellParamType(param.type)}>', a value, but a listener fires its movement with an event position of '${statement.instance}' — type the parameter as one ('<${statement.instance}-[:…]->>')`,
+        statement.span,
+      );
+      return;
+    }
+    const declared = typeNameOf(param.type);
+    if (declared === undefined) return;
     const paramGraph = info.declScope.resolve(declared.graph);
     if (paramGraph.kind !== 'found') return; // already reported at the declaration
 
@@ -9291,7 +9663,7 @@ class Checker {
     if (!instancePos) {
       this.reportInfo(
         DiagnosticCodes.LISTEN_SHAPE_MISMATCH,
-        `'${statement.instance}' isn't connected (or its event schema is unknown) — conformance to the declaration '${param.type?.graph ?? param.name}' is unchecked for this lane`,
+        `'${statement.instance}' isn't connected (or its event schema is unknown) — conformance to the declaration '${typeNameOf(param.type)?.graph ?? param.name}' is unchecked for this lane`,
         statement.span,
       );
       return;
@@ -9300,7 +9672,7 @@ class Checker {
     if (surfaceNotEnumerated(instancePos)) {
       this.reportInfo(
         DiagnosticCodes.LISTEN_SHAPE_MISMATCH,
-        `'${statement.instance}'s event schema can't be introspected — conformance to the declaration '${param.type?.graph ?? param.name}' is unchecked for this lane`,
+        `'${statement.instance}'s event schema can't be introspected — conformance to the declaration '${typeNameOf(param.type)?.graph ?? param.name}' is unchecked for this lane`,
         statement.span,
       );
       return;
@@ -9741,7 +10113,17 @@ class Checker {
   private checkPluginApplication(statement: CallStatement, symbol: ScopeSymbol): ReturnShape {
     const spec = this.catalog.plugin(symbol.importedName ?? statement.callee);
     this.absorbPluginRow(spec);
-    const supplied = new Set(statement.args.map(arg => arg.name));
+    // A plugin's parameters are a registry's flat config, in no order anyone
+    // designed — so there is no position for an argument to take. Named only.
+    if (isPositionalCall(statement.args)) {
+      this.report(
+        DiagnosticCodes.PLUGIN_ARGS_NAMED,
+        `'${statement.callee}' is a plugin, and a plugin's arguments are named — write each as '<parameter>: <value>'${spec !== undefined && spec.args.length > 0 ? ` (it takes: ${spec.args.join(', ')})` : ''}`,
+        statement.span,
+      );
+      return UNKNOWN_RETURN;
+    }
+    const supplied = new Set(statement.args.flatMap(arg => (arg.name !== undefined ? [arg.name] : [])));
     // Three ways a plugin is a stage and nothing else, in the order they
     // answer "why can't I call this": nobody said what it DOES, nobody said
     // what it HANDS BACK, or the extraction is its only way in. One refusal
@@ -9749,6 +10131,7 @@ class Checker {
     const stageOnly = this.refusePlainPluginCall(statement, spec, supplied);
     this.reportPluginMissingArgs(statement.callee, spec, supplied, statement.span);
     for (const arg of statement.args) {
+      if (arg.name === undefined) continue; // refused above: a plugin's arguments are named
       this.reportPluginBadArg(statement.callee, spec, arg.name, callArgSpan(arg), {
         plain: true,
       });

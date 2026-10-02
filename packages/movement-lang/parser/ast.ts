@@ -1033,34 +1033,60 @@ export interface ErrorStatement {
 // ── Calls ──
 
 /**
- * Call arguments are NAMED, matching the callee's parameter names
- * (3_syntax_sketch.md, 2026-06-11: parens = callable arguments, always
- * named). Positional arguments are a parse error. The checker matches
- * arguments to parameters by `name`.
+ * A call's arguments are POSITIONAL — bound to the callee's parameters in
+ * declared order, as TypeScript binds `f(a, b)` — or NAMED after them
+ * (`f(x: a)`), and one call is all of one or all of the other (a mixed list is
+ * a parse error). `name` is the parameter a named argument names; ABSENT on a
+ * positional one, whose parameter is the declaration's business, not the
+ * call's. `argumentBindings` is the one place either is resolved to a
+ * parameter, so the checker and the engine cannot bind differently.
  */
 export type CallArg =
-  /** `log_lead(l: m)` — a named expression argument. */
-  | { kind: 'expr'; name: string; expr: ExprSlot }
+  /** `log_lead(l: m)` / `log_lead(m)` — an expression argument. */
+  | { kind: 'expr'; name?: string; expr: ExprSlot }
   /** RETIRED (wave 4): inline shape-write adaptation,
    *  `files_to_dropbox(file: write Files-[:file]-> { … })`. Still PARSED — the
    *  checker refuses it by name and points at the `node` form below, which it
    *  can only do if the grammar still reaches it — and still RUN, for programs
    *  saved before the refusal. */
-  | { kind: 'write'; name: string; write: WriteExpression }
+  | { kind: 'write'; name?: string; write: WriteExpression }
   /** inline node synthesis: `process_deal(d: node { title: m.`Subject` })` */
-  | { kind: 'node'; name: string; node: NodeLiteral }
+  | { kind: 'node'; name?: string; node: NodeLiteral }
   /**
    * A CALL, passed on: `log_doc(d: email_to_doc(m: msg))`. The utility idiom —
    * one movement's value is another's argument — so it is a position argument
    * like the two above, not an expression: the value is a node, and nothing in
    * the expression plane can hold one.
    *
-   * Recognised by the NAMED-argument form (`f(x: …)`), which is the whole
-   * grammar of a call and no part of any expression: every stdlib function is
-   * positional.
+   * Recognised by the NAMED-argument form (`f(x: …)`), or by a POSITIONAL
+   * invocation of a name that is not a built-in function (`f(x)`, where `f`
+   * is not `UPPER`): the built-ins are a closed vocabulary, so the name is
+   * compared, never guessed at.
    *
    */
-  | { kind: 'call'; name: string; call: CallStatement };
+  | { kind: 'call'; name?: string; call: CallStatement };
+
+/** One argument and the parameter it binds — `param` is undefined for a
+ *  positional argument past the callee's last parameter. */
+export interface ArgumentBinding {
+  arg: CallArg;
+  param: string | undefined;
+}
+
+/**
+ * Which parameter each argument binds: a named argument the parameter it
+ * names, a positional one the parameter DECLARED at its index — TypeScript's
+ * call. `params` is the callee's parameter names in declaration order.
+ */
+export function argumentBindings(args: readonly CallArg[], params: readonly string[]): ArgumentBinding[] {
+  return args.map((arg, index) => ({ arg, param: arg.name ?? params[index] }));
+}
+
+/** Whether a call's arguments are positional. A call is all one or all the
+ *  other (the parser refuses a mix), so the first argument answers for all. */
+export function isPositionalCall(args: readonly CallArg[]): boolean {
+  return args.length > 0 && args[0].name === undefined;
+}
 
 /**
  * `log_doc(d: msg)` — a movement invoked. A call is a STATEMENT and an
@@ -1171,15 +1197,71 @@ export interface TypeDeclaration {
 export interface MovementParam {
   name: string;
   /**
-   * The written type. ABSENT where the caller supplies it — a collection op
+   * The written type: a NAME (`<inbox-[:message]->>`, `<doc>`, `<text>`,
+   * `<Thesis>`) or a value type spelled out in full (`<text[]>`,
+   * `<{ mode: text, owner?: text }>`). ABSENT where the caller supplies it — a collection op
    * hands its function one element, and the element's type is the
    * collection's, so `MAP(xs, (x) => …)` needs no annotation to know what `x`
    * is (TypeScript types a callback's parameter the same way, from the
    * signature it is passed to). Everywhere else a parameter's type is what the
    * declaration promises its callers, so leaving it out is refused.
    */
-  type?: TypeRef;
+  type?: ParamTypeRef;
   span: Span;
+}
+
+/**
+ * `<text[]>` / `<{ mode: text, owner?: text }>` — a VALUE type written out in
+ * full: TypeScript's array type and object type literal. A parameter typed
+ * this way takes a value (the dot plane), never a record position. A key
+ * marked `?` may be left out, and reads as possibly absent inside the callee.
+ */
+export type ValueTypeRef =
+  | { kind: 'list'; of: ValueTypeMember; span: Span }
+  | { kind: 'record'; keys: ValueTypeKey[]; span: Span };
+
+/** What a written value type is built from: a type NAME (a scalar, or a
+ *  declared refinement) or another written value type. */
+export type ValueTypeMember = { kind: 'name'; name: string; span: Span } | ValueTypeRef;
+
+export interface ValueTypeKey {
+  name: string;
+  type: ValueTypeMember;
+  /** `owner?: text` — the key may be left out. */
+  optional?: true;
+  span: Span;
+}
+
+/** A parameter's written type: a name, or a value type spelled in full. */
+export type ParamTypeRef = TypeRef | ValueTypeRef;
+
+/** Is this parameter type a value type spelled in full (rather than a name)? */
+export function isValueTypeRef(type: ParamTypeRef): type is ValueTypeRef {
+  return 'kind' in type;
+}
+
+/** The parameter type as a NAME (a position, a node declaration, a scalar, a
+ *  refinement) — undefined when none was written or it is a value type spelled
+ *  in full, which names no graph. */
+export function typeNameOf(type: ParamTypeRef | undefined): TypeRef | undefined {
+  return type === undefined || isValueTypeRef(type) ? undefined : type;
+}
+
+/** A parameter's written type in its surface spelling, without the brackets. */
+export function spellParamType(type: ParamTypeRef): string {
+  return isValueTypeRef(type) ? spellValueType(type) : `${type.graph}${type.hopsRaw ?? ''}`;
+}
+
+/** A written value type in its surface spelling, for diagnostics. */
+export function spellValueType(type: ValueTypeMember): string {
+  switch (type.kind) {
+    case 'name':
+      return type.name;
+    case 'list':
+      return `${spellValueType(type.of)}[]`;
+    case 'record':
+      return `{ ${type.keys.map(key => `${key.name}${key.optional ? '?' : ''}: ${spellValueType(key.type)}`).join(', ')} }`;
+  }
 }
 
 /**

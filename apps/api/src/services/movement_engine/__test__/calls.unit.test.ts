@@ -645,6 +645,8 @@ describe('guards', () => {
     );
   });
 
+  // Refused where it is written now (the checker knows the value's type), so
+  // the engine's own guard is the second line, behind MOVENG_CHECK.
   it('a value binding is not a position argument', async () => {
     await expectError(
       [
@@ -662,8 +664,113 @@ describe('guards', () => {
         '  persist(c: v)',
         '}',
       ].join('\n'),
-      /MOVENG_UNSUPPORTED: passing a value binding \('v'\) as a movement argument/,
+      /MOVENG_CHECK.*MOV_CALL_ARG_TYPE.*'persist' expects .*, but this argument is text/s,
     );
+  });
+});
+
+// ── Positional calls and value parameters ────────────────────────────────────
+//
+// What TypeScript does: `f(a, b)` binds in declared order, and a parameter may
+// take a value — a scalar, or a config record spelled as an object type — bound
+// to what the argument evaluates to.
+describe('positional calls and value parameters', () => {
+  const PRELUDE = [
+    'import { email, attio } from adapters',
+    'import { acme_main } from credentials',
+    '',
+    'inbox = email()',
+    '',
+    'node Lead {',
+    '  name: <text>',
+    '}',
+    '',
+    'node Note {',
+    '  text: <text>',
+    '}',
+  ].join('\n');
+
+  async function run(source: string) {
+    const attio = makeFakeAdapter('attio');
+    await runMovement({
+      source,
+      movementName: 'intake',
+      event: webhookEvent('email', { subject: 'Acme Corp', text: 'warm intro' }),
+      teamId: TEAM_ID,
+      catalog,
+      resolveCredentialId: (name) => CREDENTIAL_IDS[name],
+      resolveAdapter: makeResolver({ email: makeFakeAdapter('email').adapter, attio: attio.adapter }),
+    });
+    return attio.creates;
+  }
+
+  it('positional arguments bind to the parameters in declared order', async () => {
+    const creates = await run(
+      [
+        PRELUDE,
+        'movement persist_pair(c: <Lead>, n: <Note>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  write crm-[:companies]-> {',
+        '    unique by (`name`)',
+        '    name:    c.`name`',
+        '    summary: n.`text`',
+        '  }',
+        '}',
+        '',
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  persist_pair(node { name: msg.`subject` }, node { text: msg.`text` })',
+        '}',
+      ].join('\n'),
+    );
+    expect(creates).toEqual([
+      { recordType: 'company', fields: { name: 'Acme Corp', summary: 'warm intro' } },
+    ]);
+  });
+
+  it('a scalar and a config-record parameter take values, optional key left out', async () => {
+    const creates = await run(
+      [
+        PRELUDE,
+        'movement persist(name: <text>, cfg: <{ summary: text, tag?: text }>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  write crm-[:companies]-> {',
+        '    unique by (`name`)',
+        '    name:    name',
+        '    summary: AT(cfg, "summary")',
+        '  }',
+        '}',
+        '',
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  persist(msg.`subject`, { summary: "from ${msg.`text`}" })',
+        '}',
+      ].join('\n'),
+    );
+    expect(creates).toEqual([
+      { recordType: 'company', fields: { name: 'Acme Corp', summary: 'from warm intro' } },
+    ]);
+  });
+
+  it('a value call binds the same by name', async () => {
+    const creates = await run(
+      [
+        PRELUDE,
+        'movement persist(name: <text>, cfg: <{ summary: text }>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  write crm-[:companies]-> {',
+        '    unique by (`name`)',
+        '    name:    name',
+        '    summary: AT(cfg, "summary")',
+        '  }',
+        '}',
+        '',
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  persist(cfg: { summary: "named" }, name: msg.`subject`)',
+        '}',
+      ].join('\n'),
+    );
+    expect(creates).toEqual([
+      { recordType: 'company', fields: { name: 'Acme Corp', summary: 'named' } },
+    ]);
   });
 });
 

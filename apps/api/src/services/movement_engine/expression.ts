@@ -83,6 +83,7 @@ import {
   CHUNKS_FUNCTION_ID,
   estimateEntities,
   FILE_FUNCTION_ID,
+  INTERPRETED_FUNCTION_IDS,
   POSITION_SENTINEL,
   READ_FUNCTION_ID,
   readChunkSpec,
@@ -3974,14 +3975,7 @@ function readHandleField(handle: WriteRecord, field: string): unknown {
  * the static interpretability scan (interpretable.ts), which must agree
  * with this evaluator construct-for-construct.
  */
-export const INTERPRETED_FUNCTIONS: ReadonlySet<string> = new Set([
-  'isnull', 'coalesce', 'trim', 'lower', 'upper', 'length',
-  'abs', 'round', 'floor', 'ceil', 'tostring', 'tonumber', 'multi', 'split',
-  // Bare coercers — DATE/DATETIME normalise any readable date/timestamp,
-  // NUMBER parses a number; null-safe. Implementations imported from
-  // movement-lang so there is one source of truth (see applyMovementFunction).
-  'date', 'datetime', 'number',
-]);
+export const INTERPRETED_FUNCTIONS: ReadonlySet<string> = new Set(INTERPRETED_FUNCTION_IDS);
 
 /**
  * Every function name this evaluator runs REGARDLESS of context: the

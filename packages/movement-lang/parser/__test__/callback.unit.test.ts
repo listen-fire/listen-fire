@@ -6,7 +6,7 @@
 // a brace object is arguments or settings.
 
 import { MovementParseError, parseProgram } from '../parse';
-import { CallbackExpression, MovementDeclaration, RValue, Statement } from '../ast';
+import { CallbackExpression, MovementDeclaration, RValue, Statement, typeNameOf } from '../ast';
 
 function as<K extends Statement['kind']>(
   s: Statement | undefined,
@@ -53,7 +53,7 @@ describe('callback — the inline (anonymous movement) subject', () => {
   it('the arrow form carries the movement parameter grammar verbatim', () => {
     const cb = callbackIn('  cb = callback((when: <date>, note: <text>) => { write d-[:reply]-> { text: note } })');
     if (cb.subject.kind !== 'inline') throw new Error('expected inline');
-    expect(cb.subject.closure.params.map((p) => [p.name, p.type?.graph])).toEqual([
+    expect(cb.subject.closure.params.map((p) => [p.name, typeNameOf(p.type)?.graph])).toEqual([
       ['when', 'date'],
       ['note', 'text'],
     ]);

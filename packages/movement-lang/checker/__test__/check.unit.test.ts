@@ -822,10 +822,19 @@ describe('movements, shapes, calls', () => {
     expect(duplicate.map(d => d.code)).toEqual([C.CALL_ARG_DUPLICATE, C.CALL_ARG_MISSING]);
   });
 
-  it('positional call arguments are a parse error with the naming fix-it', () => {
-    expect(() => parseProgram('movement m(rec: <crm-[:record]->>) {\n  callee(rec)\n}')).toThrow(
-      /named — write each as '<parameter>: <value>'/,
-    );
+  it('positional call arguments bind in declared order', () => {
+    const withCall = (call: string) =>
+      [
+        PRELUDE,
+        'movement callee(a: <crm-[:record]->>, b: <crm-[:record]->>) {',
+        '  …',
+        '}',
+        'movement caller(rec: <crm-[:record]->>) {',
+        `  ${call}`,
+        '}',
+      ].join('\n');
+    expect(codes(withCall('callee(rec, rec)'))).toEqual([]);
+    expect(codes(withCall('callee(rec)'))).toEqual([C.CALL_ARITY, C.CALL_ARG_MISSING]);
   });
 });
 

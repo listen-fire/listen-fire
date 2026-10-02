@@ -8,7 +8,7 @@
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
 // for the expression bridge (existing formula grammar).
 
-import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
+import { CURRENT_LANGUAGE_VERSION, since, type LanguageVersion } from '../language_version';
 import {
   BindClause,
   BlockStatement,
@@ -40,6 +40,10 @@ import {
   LazyTraversal,
   MovementDeclaration,
   MovementParam,
+  ParamTypeRef,
+  ValueTypeKey,
+  ValueTypeMember,
+  ValueTypeRef,
   NamedArg,
   GraphForm,
   MapSpread,
@@ -79,6 +83,7 @@ import {
 import { spellName } from './ast';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import { scanBacktickName, scanIdent, scanName } from './scan';
+import { isBuiltinFunctionName } from '../expression/stdlib';
 
 /** The two spellings of a movement declaration — `function` is a pure parser
  *  alias, so this is a surface fact only; the AST keeps one node kind. */
@@ -1226,9 +1231,16 @@ class Parser {
    * The callee is a NAME (bare or backtick-quoted), so an adapter whose slug
    * isn't identifier-safe — `` `native-valuations` `` — is constructable
    * directly, not only via an `as` alias.
+   *
+   * A POSITIONAL invocation — `doc = email_to_doc(msg)` — is a call and nothing
+   * else: a construction's config is named, always. It is told from a built-in
+   * function call (`n = UPPER(msg)`) by the callee's name alone, which is
+   * compared against the closed list of built-ins (`isBuiltinFunctionName`).
    */
   private tryParseInvocation(): RValue | undefined {
     if (!this.atNamedInvocation()) {
+      const positional = this.tryParseInvocationCall('\n};');
+      if (positional !== undefined) return { kind: 'call', call: positional };
       const construct = this.tryParseConstruction();
       return construct ? { kind: 'construct', construct } : undefined;
     }
@@ -1241,7 +1253,11 @@ class Parser {
     const plain: NamedArg[] = [];
     for (const arg of args) {
       // One argument a construction cannot hold settles the whole invocation.
-      if (arg.kind !== 'expr') return { kind: 'call', call: { kind: 'call', callee, args, span } };
+      // (Every argument here is named — the invocation opened with one, and a
+      // call is never a mix.)
+      if (arg.kind !== 'expr' || arg.name === undefined) {
+        return { kind: 'call', call: { kind: 'call', callee, args, span } };
+      }
       plain.push({ name: arg.name, value: arg.expr });
     }
     return { kind: 'construct', construct: { callee, args: plain, span } };
@@ -2373,9 +2389,9 @@ class Parser {
     return this.atGraphLiteral() ? this.parseGraphLiteral(start) : undefined;
   }
 
-  /** A call's NAMED argument list, with the opening `(` already consumed;
-   *  consumes through the closing `)`. Shared by the call statement and the
-   *  named form of `callback(<movement>(…))`. */
+  /** A call's argument list — all positional or all named — with the opening
+   *  `(` already consumed; consumes through the closing `)`. Shared by the call
+   *  statement, a bound call, and the named form of `callback(<movement>(…))`. */
   private parseCallArgs(callee: string, start: number): CallArg[] {
     const args: CallArg[] = [];
     for (;;) {
@@ -2385,11 +2401,22 @@ class Parser {
         this.pos++;
         break;
       }
-      const name = this.readCallArgName(callee);
+      const argStart = this.pos;
+      const name = this.readCallArgName();
+      // Positional arguments arrived with language version 3; before it a call
+      // was named and nothing else, and a version's syntax is its own.
+      if (name === undefined && !since(this.languageVersion, 3)) {
+        this.error(
+          `Arguments to '${callee}' are named — write each as '<parameter>: <value>', naming '${callee}'s parameters in order (e.g. ${callee}(param: value))`,
+          argStart,
+        );
+      }
+      this.refuseMixedArgs(callee, args, name, argStart);
+      const named = name !== undefined ? { name } : {};
       this.refuseNamedNodeAsValue();
       const literal = this.tryParsePositionLiteral();
       if (literal !== undefined) {
-        args.push({ kind: 'node', name, node: literal });
+        args.push({ kind: 'node', ...named, node: literal });
         this.skipAllWs();
         if (this.peekCh() === ',') this.pos++;
         else if (this.peekCh() !== ')') {
@@ -2402,14 +2429,14 @@ class Parser {
       // here is refused by name rather than left to fail as an expression.
       if (this.atLazy()) {
         this.error(
-          `'lazy' defers a traversal, and an argument takes a value or a position — bind the deferred traversal above ('files = lazy …') and pass '${name}: files', or hand it through a 'node { ${name}: lazy … }'`,
+          `'lazy' defers a traversal, and an argument takes a value or a position — bind the deferred traversal above ('files = lazy …') and pass ${name !== undefined ? `'${name}: files'` : `'files'`}, or hand it through a 'node { ${name ?? 'files'}: lazy … }'`,
         );
       }
       if (this.peekIdent() === 'write') {
         const writeStart = this.pos;
         this.pos += 'write'.length;
         const write = this.parseWriteExpression(writeStart);
-        args.push({ kind: 'write', name, write });
+        args.push({ kind: 'write', ...named, write });
         this.skipAllWs();
         if (this.peekCh() === ',') this.pos++;
         else if (this.peekCh() !== ')') {
@@ -2419,59 +2446,120 @@ class Parser {
         }
         continue;
       }
-      // A CALL passed on — the utility idiom, `log_doc(d: email_to_doc(m: msg))`.
+      // A CALL passed on — the utility idiom, `log_doc(email_to_doc(msg))`.
       // Parsed structurally rather than left in the expression slot: a call's
       // value is a node, and an expression cannot hold one.
-      if (this.atNamedInvocation()) {
-        const callStart = this.pos;
-        const nested = this.readName('the movement to call');
-        this.skipInlineWs();
-        this.pos++; // '('
-        const nestedArgs = this.parseCallArgs(nested, callStart);
-        args.push({
-          kind: 'call',
-          name,
-          call: { kind: 'call', callee: nested, args: nestedArgs, span: this.spanFrom(callStart) },
-        });
+      const nested = this.tryParseInvocationCall(',)');
+      if (nested !== undefined) {
+        args.push({ kind: 'call', ...named, call: nested });
         this.skipAllWs();
         if (this.peekCh() === ',') this.pos++;
-        else if (this.peekCh() !== ')') {
-          this.error(`Expected ',' or ')' after the call argument, found ${this.describeHere()}`);
-        }
         continue;
       }
       const { slot, stop } = this.readExprSlot({
         stops: ',)',
-        context: `for the argument '${name}' of '${callee}'`,
+        context: `for the argument ${name !== undefined ? `'${name}'` : args.length + 1} of '${callee}'`,
       });
-      args.push({ kind: 'expr', name, expr: slot });
+      args.push({ kind: 'expr', ...named, expr: slot });
       if (stop === ',') this.pos++;
     }
     return args;
   }
 
   /**
-   * Call arguments are named after the callee's parameters — parens are
-   * callable arguments, always named. A positional argument is a parse
-   * error with the naming fix-it.
+   * A named argument's `<parameter>:` prefix, consumed — or undefined, consuming
+   * nothing, for a POSITIONAL argument (bound to the parameter declared at its
+   * index, as TypeScript binds one).
    */
-  private readCallArgName(callee: string): string {
-    const argStart = this.pos;
+  private readCallArgName(): string | undefined {
     const scanned = scanName(this.src, this.pos);
-    if (scanned) {
-      const save = this.pos;
-      this.pos = scanned.end;
+    if (!scanned) return undefined;
+    const save = this.pos;
+    this.pos = scanned.end;
+    this.skipInlineWs();
+    if (this.tryConsume(':')) {
       this.skipInlineWs();
-      if (this.tryConsume(':')) {
-        this.skipInlineWs();
-        return scanned.name;
-      }
-      this.pos = save;
+      return scanned.name;
     }
+    this.pos = save;
+    return undefined;
+  }
+
+  /** One call is all positional or all named — never a mix. */
+  private refuseMixedArgs(
+    callee: string,
+    earlier: CallArg[],
+    name: string | undefined,
+    at: number,
+  ): void {
+    const first = earlier[0];
+    if (first === undefined || (first.name === undefined) === (name === undefined)) return;
     this.error(
-      `Arguments to '${callee}' are named — write each as '<parameter>: <value>', naming '${callee}'s parameters in order (e.g. ${callee}(param: value))`,
-      argStart,
+      name === undefined
+        ? `The arguments to '${callee}' are named, and this one isn't — a call passes every argument by position ('${callee}(a, b)') or every one by name ('${callee}(x: a, y: b)'), never a mix`
+        : `The arguments to '${callee}' are positional, and '${name}:' names this one — a call passes every argument by position ('${callee}(a, b)') or every one by name ('${callee}(x: a, y: b)'), never a mix`,
+      at,
     );
+  }
+
+  /**
+   * A whole call written where a value goes — `f(x: …)`, or a POSITIONAL
+   * `f(…)` whose name is not a built-in function (`UPPER(x)` is an expression;
+   * `email_to_doc(msg)` is a call) — ending where the value does: at one of
+   * `stops`, or at the end of input. Consumes nothing and answers undefined
+   * when the text is not one: an invocation followed by more expression
+   * (`f(x) + 1`) is left to the expression slot, as it always was.
+   *
+   * A zero-argument `f()` is deliberately NOT one: a callee that reads nothing
+   * from its caller has nothing to compose, and `f()` is also how a
+   * construction with no config is spelled.
+   */
+  private tryParseInvocationCall(stops: string): CallStatement | undefined {
+    if (!this.atNamedInvocation() && !this.atPositionalInvocation()) return undefined;
+    const save = this.pos;
+    const callee = this.readName('the name being called');
+    this.skipInlineWs();
+    this.pos++; // '('
+    const args = this.parseCallArgs(callee, save);
+    const call: CallStatement = { kind: 'call', callee, args, span: this.spanFrom(save) };
+    const end = this.pos;
+    this.skipInlineWs();
+    const next = this.peekCh();
+    if (next === undefined || this.eof() || stops.includes(next)) {
+      this.pos = end;
+      return call;
+    }
+    this.pos = save;
+    return undefined;
+  }
+
+  /**
+   * Is a POSITIONAL invocation of a name that is not a built-in function next —
+   * `f(a, …)`? A named one (`f(x: …)`) is `atNamedInvocation`'s. Consumes
+   * nothing.
+   */
+  private atPositionalInvocation(): boolean {
+    if (!since(this.languageVersion, 3)) return false;
+    const save = this.pos;
+    const scanned = scanName(this.src, this.pos);
+    if (!scanned) return false;
+    if (
+      isBuiltinFunctionName(scanned.name)
+      || Parser.COLLECTION_OPS.has(scanned.name.toUpperCase())
+      || scanned.name.toUpperCase() === 'MEMBERS'
+    ) {
+      return false;
+    }
+    this.pos = scanned.end;
+    this.skipInlineWs();
+    let positional = false;
+    if (this.peekCh() === '(') {
+      this.pos++;
+      this.skipAllWs();
+      positional = !this.eof() && this.peekCh() !== ')' && this.readCallArgName() === undefined;
+    }
+    this.pos = save;
+    return positional;
   }
 
   // ── link / edge arrows ──
@@ -3597,12 +3685,15 @@ class Parser {
       this.skipAllWs();
       // A parameter's type names what the callable accepts — a bare graph
       // (`<inbox>`), a scalar, or an ADDRESS (`<at-[:\`Record Change\`
-      // WHERE …]->>`): the surface a listen is checked against.
-      const marker = this.readTypeMarker(
-        `for the parameter '${paramName}' (e.g. <inbox-[:message]->>)`,
-        { allowHops: true },
+      // WHERE …]->>`): the surface a listen is checked against — or spells a
+      // value type out in full (`<text[]>`, `<{ mode: text, owner?: text }>`).
+      const valueType = this.tryReadValueTypeMarker(paramName);
+      const type: ParamTypeRef = valueType ?? this.typeRefFromMarker(
+        this.readTypeMarker(`for the parameter '${paramName}' (e.g. <inbox-[:message]->>)`, {
+          allowHops: true,
+        }),
       );
-      params.push({ name: paramName, type: this.typeRefFromMarker(marker), span: this.spanFrom(paramStart) });
+      params.push({ name: paramName, type, span: this.spanFrom(paramStart) });
       this.skipAllWs();
       if (this.peekCh() === ',') {
         this.pos++;
@@ -3613,6 +3704,103 @@ class Parser {
       }
     }
     return params;
+  }
+
+  /**
+   * `<text[]>` / `<{ mode: text, owner?: text }>` — a parameter's VALUE type
+   * written out in full, TypeScript's array type and object type literal. Inside
+   * the angle brackets the members are bare type names (the brackets already
+   * say "a type"). Consumes nothing and answers undefined when the marker is a
+   * plain name or an address — `readTypeMarker`'s, as before.
+   */
+  private tryReadValueTypeMarker(paramName: string): ValueTypeRef | undefined {
+    const start = this.pos;
+    if (this.peekCh() !== '<' || !since(this.languageVersion, 3)) return undefined;
+    this.pos++;
+    this.skipInlineWs();
+    if (this.peekCh() !== '{') {
+      const scanned = scanName(this.src, this.pos);
+      if (!scanned) {
+        this.pos = start;
+        return undefined;
+      }
+      this.pos = scanned.end;
+      this.skipInlineWs();
+      const isList = this.startsWith('[') && this.src.slice(this.pos + 1).trimStart().startsWith(']');
+      this.pos = start + 1;
+      this.skipInlineWs();
+      if (!isList) {
+        this.pos = start;
+        return undefined;
+      }
+    }
+    const member = this.readValueTypeMember(paramName);
+    this.skipInlineWs();
+    this.expect('>', `to close the type of the parameter '${paramName}'`);
+    if (member.kind === 'name') {
+      // Unreachable by the checks above (a bare name with no `[]` was handed
+      // back to `readTypeMarker`), kept so the type stays honest.
+      this.error(`Expected a list or record type for the parameter '${paramName}'`, start);
+    }
+    return { ...member, span: this.spanFrom(start) };
+  }
+
+  /** One member of a written value type: `text`, `text[]`, `{ k: text }`, … */
+  private readValueTypeMember(paramName: string): ValueTypeMember {
+    const start = this.pos;
+    let member: ValueTypeMember;
+    if (this.peekCh() === '{') {
+      member = this.readValueRecordType(paramName);
+    } else if (this.peekCh() === '<') {
+      this.error(
+        `Inside a type's angle brackets the members are bare type names — write '${paramName}: <{ key: text }>', not '<{ key: <text> }>'`,
+      );
+    } else {
+      const name = this.readName(`a type name for the parameter '${paramName}'`);
+      member = { kind: 'name', name, span: this.spanFrom(start) };
+    }
+    for (;;) {
+      const save = this.pos;
+      this.skipInlineWs();
+      if (!this.tryConsume('[')) {
+        this.pos = save;
+        break;
+      }
+      this.skipInlineWs();
+      this.expect(']', `to close '[]' — a list type is written 'text[]'`);
+      member = { kind: 'list', of: member, span: this.spanFrom(start) };
+    }
+    return member;
+  }
+
+  /** `{ mode: text, owner?: text }` — keys separated by ',', ';' or newlines. */
+  private readValueRecordType(paramName: string): ValueTypeMember {
+    const start = this.pos;
+    this.pos++; // '{'
+    const keys: ValueTypeKey[] = [];
+    const seen = new Set<string>();
+    for (;;) {
+      this.skipAllWs();
+      if (this.tryConsume('}')) break;
+      if (this.eof()) this.error(`Expected '}' to close the record type of '${paramName}'`, start);
+      const keyStart = this.pos;
+      const name = this.readName(`a key in the record type of '${paramName}'`);
+      if (seen.has(name)) this.error(`The key '${name}' is written twice in the record type of '${paramName}'`, keyStart);
+      seen.add(name);
+      this.skipInlineWs();
+      const optional = this.tryConsume('?');
+      this.skipInlineWs();
+      this.expect(':', `after the key '${name}' (e.g. '${name}: text', or '${name}?: text' for a key that may be left out)`);
+      this.skipInlineWs();
+      const type = this.readValueTypeMember(paramName);
+      keys.push({ name, type, ...(optional ? { optional: true as const } : {}), span: this.spanFrom(keyStart) });
+      this.skipInlineWs();
+      if (this.peekCh() === ',' || this.peekCh() === ';') this.pos++;
+      else if (this.peekCh() !== '\n' && this.peekCh() !== '}') {
+        this.error(`Expected ',' or '}' in the record type of '${paramName}', found ${this.describeHere()}`);
+      }
+    }
+    return { kind: 'record', keys, span: this.spanFrom(start) };
   }
 
   // ── listen ──
