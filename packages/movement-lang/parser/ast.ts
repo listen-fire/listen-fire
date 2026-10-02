@@ -819,6 +819,8 @@ export type ArmExpression =
 /**
  * `MAP(xs, f)` / `FILTER(xs, f)` / `REDUCE(xs, init, f)` / `GROUPBY(xs, key)` /
  * `KEYBY(xs, key)` — iteration over a VALUE collection, with a function.
+ * `MAP(xs, { … }, f)` / `FILTER(xs, { … }, f)` take a settings record between
+ * the two.
  *
  * They live where `race` and `parallel` live rather than among the expression
  * functions, and for the same reason: the argument is a FUNCTION, and a
@@ -831,6 +833,11 @@ export interface CollectionOpExpression {
   source: ExprSlot;
   /** `REDUCE`'s starting value — the fold's zero, and the only op with one. */
   init?: ExprSlot;
+  /** `MAP(xs, { … }, f)` / `FILTER(xs, { … }, f)` — the settings record, as
+   *  written: what a failing member does, and how many run at once
+   *  (`readCollectionConfig`). Only `MAP` and `FILTER` take one; without it
+   *  the op runs one member at a time and the first failure fails the run. */
+  config?: ExprSlot;
   /** The function, written in place or named — an arm, in every sense the
    *  combinators mean it. */
   fn: ArmExpression;

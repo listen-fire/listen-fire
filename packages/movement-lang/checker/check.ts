@@ -192,6 +192,7 @@ import {
 } from '../language_version';
 import { terminates } from './flow';
 import { didYouMean } from './meta';
+import { readCollectionConfig } from './collection_config';
 import { genericLandingKey, literalStringValuesOf } from './generics';
 import { parseTraversalPath } from '../service/selectors';
 import { Resolution, Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
@@ -621,6 +622,12 @@ export const DiagnosticCodes = {
    *  belongs to the forms built for it — a traversal-headed block, or
    *  `race`/`parallel`. */
   COLLECTION_OP_SUSPENDS: 'MOV_COLLECTION_OP_SUSPENDS',
+  /** `MAP(xs, { … }, f)` / `FILTER(xs, { … }, f)` with a settings record the
+   *  op cannot run with: a key it has no setting for (TypeScript's
+   *  excess-property check), an `onError` that is not one of its three
+   *  answers, a concurrency that is not a whole number of at least 1, or a
+   *  value worked out rather than written down. */
+  COLLECTION_OP_CONFIG: 'MOV_COLLECTION_OP_CONFIG',
   /** `MEMBERS(<T>)` names a type whose membership is not CLOSED — an open
    *  known-values field, whose listed options are what could be enumerated and
    *  not all there are. There is no complete list to iterate. */
@@ -4522,6 +4529,7 @@ class Checker {
     const spelling = COLLECTION_OP_SPELLING[expr.op];
     const source = this.checkExprSlot(expr.source, scope);
     const init = expr.init !== undefined ? this.checkExprSlot(expr.init, scope) : undefined;
+    if (expr.config !== undefined) this.checkCollectionConfig(expr.config, spelling);
     // A name bound on the NODE plane is a position (or several) — the one
     // mistake worth naming, since the reflex is to reach for MAP over a
     // traversal and the language's answer is a block.
@@ -4570,6 +4578,24 @@ class Checker {
       case 'keyby':
         this.requireDictKeyIn(scope, expr.fn, returned, `filed under by '${spelling}'`);
         return element !== undefined ? { kind: 'dict', of: element } : undefined;
+    }
+  }
+
+  /** A settings record is read, not typed: every value in it is written down,
+   *  so the engine's own reader settles it here, once, the same way. */
+  private checkCollectionConfig(config: ExprSlot, spelling: string): void {
+    let parsed: Expression;
+    try {
+      parsed = parseMovementExpression(config.raw);
+    } catch (e) {
+      if (!(e instanceof BridgeError)) throw e;
+      this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(config, e.pos));
+      return;
+    }
+    const reading = readCollectionConfig(parsed, spelling);
+    if (reading.ok) return;
+    for (const problem of reading.problems) {
+      this.report(DiagnosticCodes.COLLECTION_OP_CONFIG, problem, config.span);
     }
   }
 

@@ -225,6 +225,64 @@ describe('MAP / FILTER over a value collection', () => {
   });
 });
 
+describe('MAP / FILTER settings: what a failure does, and how many run at once', () => {
+  const NAMES = '  names = COLLECT(c-[m:Messages]->.`Text`)\n';
+
+  it('a record of known settings, written down, is clean — and types the answer as the two-argument form does', () => {
+    expect(
+      codes([
+        NAMES,
+        '  loud = MAP(names, { onError: "warn", concurrency: 4, initialConcurrency: 1 }, (t) => { return UPPER(t) })',
+        '  kept = FILTER(loud, { onError: "ignore" }, (t) => { return t != "" })',
+        '  joined = JOIN(kept, "\\n")',
+      ].join('\n')),
+    ).toEqual([]);
+  });
+
+  it('a key the op has no setting for is refused, with a did-you-mean', () => {
+    const body = `${NAMES}  x = MAP(names, { concurency: 4 }, (t) => { return t })`;
+    expect(codes(body)).toEqual(['MOV_COLLECTION_OP_CONFIG']);
+    expect(messages(body)).toContain("no setting 'concurency' — did you mean 'concurrency'?");
+  });
+
+  it('an onError that is not one of its three answers is refused, naming them', () => {
+    const body = `${NAMES}  x = FILTER(names, { onError: "retry" }, (t) => { return t != "" })`;
+    expect(codes(body)).toEqual(['MOV_COLLECTION_OP_CONFIG']);
+    expect(messages(body)).toContain('"ignore", "warn", "error"');
+  });
+
+  it('a concurrency of nothing, or of a part, is refused', () => {
+    expect(codes(`${NAMES}  x = MAP(names, { concurrency: 0 }, (t) => { return t })`)).toEqual([
+      'MOV_COLLECTION_OP_CONFIG',
+    ]);
+    expect(codes(`${NAMES}  x = MAP(names, { concurrency: 1.5 }, (t) => { return t })`)).toEqual([
+      'MOV_COLLECTION_OP_CONFIG',
+    ]);
+    expect(
+      codes(`${NAMES}  x = MAP(names, { concurrency: 2, initialConcurrency: 0 }, (t) => { return t })`),
+    ).toEqual(['MOV_COLLECTION_OP_CONFIG']);
+  });
+
+  it('a value worked out rather than written down is refused', () => {
+    const body = `${NAMES}  n = 4\n  x = MAP(names, { concurrency: n }, (t) => { return t })`;
+    expect(codes(body)).toEqual(['MOV_COLLECTION_OP_CONFIG']);
+    expect(messages(body)).toContain('written down, not worked out');
+  });
+
+  it('a first batch wider than the rest is refused — the warm-up is never the wider one', () => {
+    const body = `${NAMES}  x = MAP(names, { concurrency: 2, initialConcurrency: 4 }, (t) => { return t })`;
+    expect(codes(body)).toEqual(['MOV_COLLECTION_OP_CONFIG']);
+  });
+
+  it("REDUCE is untouched: a record in the middle is its starting value, and its type is the fold's", () => {
+    const body = [
+      '  lines = COLLECT(c-[m:Messages]->.`Text`)',
+      '  x = REDUCE(lines, { concurrency: 0 }, (carried, t) => { return carried })',
+    ].join('\n');
+    expect(codes(body)).not.toContain('MOV_COLLECTION_OP_CONFIG');
+  });
+});
+
 describe('a bare collection-op statement (no binding)', () => {
   const NAMES = '  names = COLLECT(c-[m:Messages]->.`Text`)\n';
 

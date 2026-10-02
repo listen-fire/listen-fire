@@ -67,10 +67,15 @@
 // declarations. Everything still outside the slice (kg-seeded movements)
 // raises a clean MOVENG_UNSUPPORTED naming the construct.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import {
   BridgeError,
   DiagnosticCodes,
   MovementParseError,
+  readCollectionConfig,
+  SEQUENTIAL_COLLECTION_SETTINGS,
+  type CollectionRunSettings,
   checkProgramWithLink,
   before,
   CURRENT_LANGUAGE_VERSION,
@@ -287,7 +292,7 @@ import {
 import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
-import { withRunCallLedger } from './run_scope';
+import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -1237,6 +1242,48 @@ interface BodyContext {
   address: Address;
 }
 
+/**
+ * What one collection-op member's run owns while it runs — the dynamic state
+ * that would otherwise be shared by members running at once.
+ */
+interface MemberFrame {
+  /** The movements this member is inside: the op's own call stack, copied, so
+   *  a call one member makes is not on another's. */
+  callStack: MovementDeclaration[];
+  /** This member's trace entries, spliced into the enclosing trace in MEMBER
+   *  order once every member before it has finished — so the trace reads as it
+   *  would had the members run one after another, and an extraction's entries
+   *  stay next to each other (`recordExtractedEntities` finds its own by
+   *  position). */
+  trace: MovementTraceEntry[];
+  /** True while this flow holds the effect queue (`oneEffectAtATime`), so a
+   *  write that matches on the way does not queue behind itself. */
+  holdsEffectQueue: boolean;
+}
+
+/** One member's answer from a collection op's function — or that it has none,
+ *  because the function failed and `onError` forgave it. */
+type MemberAnswer = { kept: true; value: unknown } | { kept: false };
+
+/** The trace warning `onError: "warn"` leaves for a member it left out. */
+const COLLECTION_MEMBER_FAILED = 'MOVENG_COLLECTION_MEMBER_FAILED';
+
+/**
+ * Did a member's function FAIL, as opposed to the run's control flow passing
+ * through it? Only a failure is the member's, and only a failure can be
+ * forgiven by `onError`: a cancel, the call ceiling, a park and a quiet scope
+ * end all mean something about the run, and swallowing one would leave the run
+ * believing it had done something it had not.
+ */
+function isMemberFailure(error: unknown): boolean {
+  return !(
+    error instanceof RunParked
+    || error instanceof ScopeEndedQuietly
+    || error instanceof RunCancelledSignal
+    || isAdapterCallCeilingExceeded(error)
+  );
+}
+
 /** One traversal-block iteration: the hop aliases' bindings, plus the
  *  yielded record itself when the head walked ADAPTER edges (the
  *  iteration's write-bridge currency — extract/resource iterations have
@@ -1616,8 +1663,9 @@ class Interpreter {
    *  so a run with no writes still explains itself. Adopted from the caller
    *  when it supplied one, so the entries are readable AS THEY LAND rather
    *  than only at settle (a slow run showing an empty trace is exactly how it
-   *  comes to read as a hung one). */
-  private readonly trace: MovementTraceEntry[];
+   *  comes to read as a hung one). Read it through `trace`, which hands a
+   *  collection op's member its own buffer instead. */
+  private readonly runTrace: MovementTraceEntry[];
   /** Interns extraction sites + projects trails to refs for the
    *  firing record (E4 — refs not blobs). */
   private readonly summariser = new ProvenanceSummariser();
@@ -1647,8 +1695,17 @@ class Interpreter {
   private fileEnv?: Environment;
   /** Movement declarations currently executing (object identity — names
    *  may repeat across library files) — a call cycle would otherwise
-   *  loop forever. */
-  private readonly callStack: MovementDeclaration[] = [];
+   *  loop forever. Read it through `callStack`, which hands a collection op's
+   *  member its own copy instead. */
+  private readonly runCallStack: MovementDeclaration[] = [];
+  /** The collection-op member this async flow is running, when it is one.
+   *  Members may run at once, and the interpreter's dynamic state — the call
+   *  stack, the trace being appended to — is per FLOW, not per run: two members
+   *  calling the same movement are not a recursion, and one member's trace
+   *  entries are not another's. */
+  private readonly memberFrames = new AsyncLocalStorage<MemberFrame>();
+  /** The tail of the queue members' effects wait in (`oneEffectAtATime`). */
+  private effectQueue: Promise<void> = Promise.resolve();
   /** The running movement's body — the extraction module's backward
    *  type adoption scans it for writes the extracted fields flow into. */
   private movementBody: Statement[] = [];
@@ -1683,11 +1740,25 @@ class Interpreter {
     return this.input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
   }
 
+  /** Where a trace entry lands: the running member's own buffer inside a
+   *  collection op (spliced into the run's in member order), the run's trace
+   *  everywhere else. */
+  private get trace(): MovementTraceEntry[] {
+    return this.memberFrames.getStore()?.trace ?? this.runTrace;
+  }
+
+  /** The movements this flow is inside — a member's own copy inside a
+   *  collection op, so members calling the same movement at once are not
+   *  mistaken for a recursion. */
+  private get callStack(): MovementDeclaration[] {
+    return this.memberFrames.getStore()?.callStack ?? this.runCallStack;
+  }
+
   constructor(
     private readonly input: RunMovementInput,
     private readonly link?: ProgramLink,
   ) {
-    this.trace = input.trace ?? [];
+    this.runTrace = input.trace ?? [];
     // A deprecated pin runs, and says so on the run's own record. (An
     // unsupported one never gets this far — parseAndCheck refused it.)
     const versionWarning = languageVersionDiagnostic(this.languageVersion);
@@ -2531,7 +2602,7 @@ class Interpreter {
       movementName,
       writes: this.writes,
       extractionSites: this.summariser.sites,
-      trace: this.trace,
+      trace: this.runTrace,
       ...(this.parked ? { parked: true } : {}),
       ...(this.parkedAddress !== undefined ? { parkedAddress: this.parkedAddress } : {}),
       ...(this.cancelled ? { cancelled: true } : {}),
@@ -3275,7 +3346,7 @@ class Interpreter {
         case 'collection':
           // Bare — the function's effects are the point; the answer (if any)
           // is unbound, exactly as an unbound 'call' statement's return is.
-          await this.interpretCollectionOp(statement.collection, undefined, env, body);
+          await this.interpretCollectionOp(statement.collection, undefined, env, body, stmtAddress);
           break;
         case 'shape':
         case 'movement':
@@ -3361,7 +3432,7 @@ class Interpreter {
         await this.interpretCombinator(value.combinator, name, env, stmtAddress, body);
         break;
       case 'collection':
-        await this.interpretCollectionOp(value.collection, name, env, body);
+        await this.interpretCollectionOp(value.collection, name, env, body, stmtAddress);
         break;
       case 'members':
         this.interpretMembers(value.members, name, env);
@@ -3445,18 +3516,23 @@ class Interpreter {
    */
   /**
    * `MAP(xs, f)` / `FILTER(xs, f)` / `REDUCE(xs, init, f)` / `GROUPBY(xs, key)`
-   * / `KEYBY(xs, key)` — the function, once per member, in order.
+   * / `KEYBY(xs, key)` — the function, once per member.
    *
-   * Sequential and in-app, which is what the source text says: nothing here is
-   * pushed anywhere and nothing runs concurrently (that is `parallel`, written
-   * as `parallel`). The checker refuses a function that can park, so an
-   * iteration always finishes, and the whole op is one statement.
+   * In-app: nothing here is pushed anywhere. The checker refuses a function
+   * that can park, so every member's run finishes, and the whole op is one
+   * statement.
+   *
+   * Each member runs as `iter i` of this statement, so a member has an address
+   * of its own rather than borrowing the enclosing sequence's. Members run one
+   * at a time unless `MAP` / `FILTER` were given a settings record saying
+   * otherwise (`runMembers`); the answer is in MEMBER order either way.
    */
   private async interpretCollectionOp(
     expr: CollectionOpExpression,
     bindingName: string | undefined,
     env: Environment,
     body: BodyContext,
+    stmtAddress: Address,
   ): Promise<void> {
     const spelling = expr.op.toUpperCase();
     const source = await this.evaluateSlot(expr.source, { env });
@@ -3467,15 +3543,19 @@ class Interpreter {
         `'${spelling}' reads a collection of values and got ${members === null || members === undefined ? 'nothing' : typeof members} — the checker should have caught this`,
       );
     }
+    const settings = this.collectionSettings(expr, spelling);
     const fn = this.collectionFunction(expr.fn, spelling, env);
     const params = fn.closure.params.map((p) => p.name);
 
-    const call = async (values: unknown[]): Promise<unknown> => {
+    const call = async (values: unknown[], index: number): Promise<unknown> => {
       const args: Record<string, unknown> = {};
-      params.forEach((name, index) => {
-        args[name] = values[index] ?? null;
+      params.forEach((name, position) => {
+        args[name] = values[position] ?? null;
       });
-      const outcome = await this.invokeClosure(fn, args, body);
+      const outcome = await this.invokeClosure(fn, args, {
+        ...body,
+        address: childIter(stmtAddress, index),
+      });
       if (!outcome.returned) {
         // MAP alone allows this (checker: MAP_SLOT_ABSENT) — the closure ran
         // for its statements' effects (its writes already landed, above) and
@@ -3496,26 +3576,45 @@ class Interpreter {
       const start = expr.init !== undefined
         ? (await this.evaluateSlot(expr.init, { env })).value
         : null;
+      // One at a time by construction: each member's call reads the last one's
+      // answer.
       let carried = start;
-      for (const member of members) carried = await call([carried, member]);
+      await this.runMembers(members.length, settings, spelling, async (index) => {
+        carried = await call([carried, members[index]], index);
+        return carried;
+      });
       bound = { kind: 'value', value: carried, provenance: transformed(source.provenance) };
     } else if (expr.op === 'map') {
-      const out: unknown[] = [];
-      for (const member of members) out.push(await call([member]));
+      const answers = await this.runMembers(members.length, settings, spelling, (index) =>
+        call([members[index]], index),
+      );
+      const out = answers.flatMap((answer) => (answer.kept ? [answer.value] : []));
       bound = { kind: 'value', value: out, provenance: transformed(source.provenance) };
     } else if (expr.op === 'filter') {
-      const out: unknown[] = [];
+      const answers = await this.runMembers(members.length, settings, spelling, (index) =>
+        call([members[index]], index),
+      );
       // Truthiness is the language's own: the function returns a boolean, and
       // anything else is the checker's business, not a second definition here.
-      for (const member of members) if ((await call([member])) === true) out.push(member);
+      // A member whose predicate failed (under a forgiving `onError`) answered
+      // nothing, so it is not kept.
+      const out = members.filter((_, index) => {
+        const answer = answers[index];
+        return answer?.kept === true && answer.value === true;
+      });
       bound = { kind: 'value', value: out, provenance: source.provenance };
     } else {
       // GROUPBY / KEYBY — the key function's answer names the slot. A key that
       // is not text at run time is a checker escape; say so rather than
       // stringify it, which is the silence the save-time rule exists to avoid.
+      const keys = await this.runMembers(members.length, settings, spelling, (index) =>
+        call([members[index]], index),
+      );
       const filed: Record<string, unknown> = {};
-      for (const member of members) {
-        const key = await call([member]);
+      members.forEach((member, index) => {
+        const answer = keys[index];
+        if (answer?.kept !== true) return;
+        const key = answer.value;
         if (typeof key !== 'string') {
           throw new MovementEngineError(
             'MOVENG_RUNTIME',
@@ -3533,15 +3632,179 @@ class Interpreter {
             );
           }
           filed[key] = member;
-          continue;
+          return;
         }
         const group = filed[key];
         if (Array.isArray(group)) group.push(member);
         else filed[key] = [member];
-      }
+      });
       bound = { kind: 'value', value: filed, provenance: transformed(source.provenance) };
     }
     if (bindingName !== undefined) env.declare(bindingName, bound);
+  }
+
+  /** The op's settings record, read the way the checker read it — or, with
+   *  none written, one member at a time with the first failure failing the
+   *  run. */
+  private collectionSettings(expr: CollectionOpExpression, spelling: string): CollectionRunSettings {
+    if (expr.config === undefined) return SEQUENTIAL_COLLECTION_SETTINGS;
+    let reading: ReturnType<typeof readCollectionConfig>;
+    try {
+      reading = readCollectionConfig(parseMovementExpression(expr.config.raw), spelling);
+    } catch (e) {
+      if (!(e instanceof BridgeError)) throw e;
+      reading = { ok: false, problems: [e.message] };
+    }
+    if (!reading.ok) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${spelling}' was given settings it cannot run with — the checker should have caught this: ${reading.problems.join('; ')}`,
+      );
+    }
+    return reading.settings;
+  }
+
+  /**
+   * Run `member(i)` for every member of a collection op, `settings.concurrency`
+   * at a time, and hand back each one's answer in MEMBER order — whatever order
+   * they finished in.
+   *
+   * Scheduling. The first `initialConcurrency` members are a batch of their
+   * own: it runs to the end before any other member starts, so whatever the
+   * first members make shared (a cached prompt) is in place for the rest. The
+   * rest then run `concurrency` at a time, each slot taking the next member as
+   * soon as its last one finishes. With neither set, that is one member at a
+   * time, in order — what every op did before it could be told otherwise.
+   *
+   * Each member runs in a frame of its own (`MemberFrame`): its own copy of the
+   * call stack, and its own trace, spliced into the enclosing trace in member
+   * order as the members before it finish. What members do to the WORLD is put
+   * in a queue instead (`oneEffectAtATime`), because a write's identity is a
+   * find-then-create, and two members creating the same record at once would
+   * each find nothing and each create it.
+   *
+   * Failure. A member's function failing is a fact about that member, and
+   * `onError` says what it does: `error` fails the run (as it always has),
+   * `warn` and `ignore` leave the member out of the answer — `warn` putting a
+   * warning in the trace where the member's entries are. Only a member's own
+   * failure is forgiven. A run being cancelled, the run's call ceiling, a
+   * member parking (which the checker refuses), and a `match` that found
+   * nothing ending the scope quietly are the RUN's control flow, not a member
+   * failing, and pass through whatever `onError` says.
+   *
+   * When the op does fail, no further member starts, the members already
+   * running finish (their effects have happened, and the run's ledger has to
+   * hold them), and the failure re-thrown is the earliest MEMBER's — the one a
+   * one-at-a-time run would have stopped at.
+   */
+  private async runMembers(
+    count: number,
+    settings: CollectionRunSettings,
+    spelling: string,
+    member: (index: number) => Promise<unknown>,
+  ): Promise<MemberAnswer[]> {
+    const answers: MemberAnswer[] = [];
+    const frames: MemberFrame[] = [];
+    const enclosing = this.memberFrames.getStore();
+    let failure: { index: number; error: unknown } | undefined;
+    let next = 0;
+    // Each member's trace joins the enclosing trace as soon as every member
+    // before it has finished too — so a long op's trace still reads as it
+    // lands, and never out of member order.
+    const into = this.trace;
+    const finished: boolean[] = [];
+    let spliced = 0;
+    const splice = (): void => {
+      while (spliced < count && finished[spliced] === true) {
+        into.push(...(frames[spliced]?.trace ?? []));
+        spliced += 1;
+      }
+    };
+
+    const runOne = async (index: number): Promise<void> => {
+      const frame: MemberFrame = {
+        callStack: [...this.callStack],
+        trace: [],
+        // A collection op run while the effect queue is held (nothing in the
+        // grammar does this today) must not queue behind its own holder.
+        holdsEffectQueue: enclosing?.holdsEffectQueue ?? false,
+      };
+      frames[index] = frame;
+      try {
+        answers[index] = { kept: true, value: await this.memberFrames.run(frame, () => member(index)) };
+      } catch (error) {
+        if (settings.onError === 'error' || !isMemberFailure(error)) {
+          if (failure === undefined || index < failure.index) failure = { index, error };
+          return;
+        }
+        answers[index] = { kept: false };
+        if (settings.onError === 'warn') {
+          frame.trace.push({
+            kind: 'warning',
+            code: COLLECTION_MEMBER_FAILED,
+            message: `'${spelling}' left out the member at index ${index} of ${count}, because its function failed: ${getErrorMessage(error)}`,
+          });
+        }
+      } finally {
+        finished[index] = true;
+        splice();
+      }
+    };
+    // `width` slots, each taking the next member until `end` is reached or a
+    // member has failed the op.
+    const runBatch = async (end: number, width: number): Promise<void> => {
+      const slot = async (): Promise<void> => {
+        while (failure === undefined && next < end) {
+          const index = next;
+          next += 1;
+          await runOne(index);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.max(0, Math.min(width, end - next)) }, slot));
+    };
+
+    try {
+      if (settings.initialConcurrency < settings.concurrency) {
+        await runBatch(Math.min(settings.initialConcurrency, count), settings.initialConcurrency);
+      }
+      await runBatch(count, settings.concurrency);
+    } finally {
+      // A failed op stopped starting members, so the ones after a gap never
+      // ran; what the rest did still belongs on the trace, in member order.
+      for (let index = spliced; index < frames.length; index++) {
+        into.push(...(frames[index]?.trace ?? []));
+      }
+    }
+    if (failure !== undefined) throw failure.error;
+    return answers;
+  }
+
+  /**
+   * Run one effect on the world — a write, a match, a link, an unlink, a delete
+   * — after every effect a collection op's other members queued before it.
+   *
+   * Identity is a find-then-create: two members writing `unique by` the same
+   * key at once would each find nothing and each create the record. So a
+   * member's effects wait their turn, while everything else it does (reading,
+   * extracting, calling plugins) runs alongside the other members. Outside a
+   * collection op's member nothing else is running, so the effect runs
+   * straight away, exactly as it always has; and a flow already holding the
+   * queue (a link's match, a write's own nested write) never waits on itself.
+   */
+  private async oneEffectAtATime<T>(effect: () => Promise<T>): Promise<T> {
+    const frame = this.memberFrames.getStore();
+    if (frame === undefined || frame.holdsEffectQueue) return effect();
+    const ahead = this.effectQueue;
+    let done!: () => void;
+    this.effectQueue = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    await ahead;
+    try {
+      return await this.memberFrames.run({ ...frame, holdsEffectQueue: true }, effect);
+    } finally {
+      done();
+    }
   }
 
   /** The function a collection op runs: written in place, or a name bound to
@@ -6084,7 +6347,16 @@ class Interpreter {
   /** Returns the binding the write produced (a handle, or an in-memory
    *  shape position) — declared under `bindingName` when one is given,
    *  and the argument-adaptation currency for inline call args. */
-  private async executeWrite(
+  private executeWrite(
+    authored: WriteExpression,
+    bindingName: string | undefined,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<Binding> {
+    return this.oneEffectAtATime(() => this.performWrite(authored, bindingName, env, body));
+  }
+
+  private async performWrite(
     authored: WriteExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -7287,7 +7559,15 @@ class Interpreter {
    * here: graph mutation events reach listeners only via the knowledge
    * outbox drainer (M-38), external ones only via their webhooks.
    */
-  private async executeLink(
+  private executeLink(
+    link: LinkExpression,
+    bindingName: string | undefined,
+    env: Environment,
+  ): Promise<void> {
+    return this.oneEffectAtATime(() => this.performLink(link, bindingName, env));
+  }
+
+  private async performLink(
     link: LinkExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -7518,7 +7798,15 @@ class Interpreter {
    * The run log gets a `kind: 'match'` row so an inspector sees what the run
    * resolved to. It is not a write: nothing counted as written counts it.
    */
-  private async executeMatch(
+  private executeMatch(
+    match: MatchExpression,
+    bindingName: string | undefined,
+    env: Environment,
+  ): Promise<Binding> {
+    return this.oneEffectAtATime(() => this.performMatch(match, bindingName, env));
+  }
+
+  private async performMatch(
     match: MatchExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -7657,7 +7945,14 @@ class Interpreter {
    * the entry either way (kind 'unlink', `created` = whether a link was
    * actually severed) with both endpoints' write origins as provenance.
    */
-  private async executeUnlinkStatement(
+  private executeUnlinkStatement(
+    statement: Extract<Statement, { kind: 'unlink' }>,
+    env: Environment,
+  ): Promise<void> {
+    return this.oneEffectAtATime(() => this.performUnlink(statement, env));
+  }
+
+  private async performUnlink(
     statement: Extract<Statement, { kind: 'unlink' }>,
     env: Environment,
   ): Promise<void> {
@@ -7699,7 +7994,14 @@ class Interpreter {
    * provenance chains to the handle's own write, for a traversed record
    * the entry's ids are the provenance.
    */
-  private async executeDeleteStatement(
+  private executeDeleteStatement(
+    statement: Extract<Statement, { kind: 'delete' }>,
+    env: Environment,
+  ): Promise<void> {
+    return this.oneEffectAtATime(() => this.performDelete(statement, env));
+  }
+
+  private async performDelete(
     statement: Extract<Statement, { kind: 'delete' }>,
     env: Environment,
   ): Promise<void> {
