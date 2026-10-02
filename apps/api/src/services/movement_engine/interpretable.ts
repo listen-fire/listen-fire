@@ -211,6 +211,7 @@ class InterpretabilityScan {
       case 'assign':
         switch (statement.value.kind) {
           case 'extract':
+          case 'extractCall':
             this.flag('file-level extract expressions');
             return;
           case 'block':
@@ -317,6 +318,11 @@ class InterpretabilityScan {
               break;
             case 'extract':
               this.scanExtract(statement.value.extract);
+              break;
+            case 'extractCall':
+              // The content is an ordinary expression; the shape and the
+              // settings are the extraction module's, which runs them.
+              this.scanSlot(statement.value.extractCall.content);
               break;
             case 'block':
               this.scanHead(statement.value.block.head);
@@ -439,7 +445,8 @@ class InterpretabilityScan {
           this.scanBody(statement.block.body);
           break;
         case 'shape':
-          this.flag('nested node declarations inside a movement body');
+          // A node declaration in a body runs since the extraction call: it
+          // names a shape for that body (`extract(content, Local)`).
           break;
         case 'movement':
           this.flag('nested movement declarations inside a movement body');

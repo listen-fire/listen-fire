@@ -567,6 +567,15 @@ export const UNIVERSAL_EXPRESSION_KINDS: ReadonlySet<Expression['type']> = new S
 export const AI_TIERS = ['quick', 'careful', 'thorough'] as const;
 export type AiTier = (typeof AI_TIERS)[number];
 
+/**
+ * How hard a model is asked to think, in ascending depth — an extraction
+ * call's `effort` override (`extract(content, Shape, { effort: 'high' })`).
+ * One list: the checker refuses a word outside it and the platform's tier
+ * table (`ai_tiers.ts`) is typed by it.
+ */
+export const AI_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+export type AiEffort = (typeof AI_EFFORTS)[number];
+
 /** Spellings that predate the tiers — still accepted, taught nowhere, and
  *  nudged toward the tier that means the same thing. `"smart"` asked for the
  *  mid model, which is what `careful` asks for. */

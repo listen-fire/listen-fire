@@ -190,6 +190,9 @@ export type RValue =
    *  record its match found. */
   | { kind: 'link'; link: FindingLink }
   | { kind: 'extract'; extract: ExtractExpression }
+  /** `companies = extract(content, Company, { tier: 'careful' })` — the
+   *  extraction CALL (language version 3 on). */
+  | { kind: 'extractCall'; extractCall: ExtractCallExpression }
   | { kind: 'block'; block: TraversalBlock }
   | { kind: 'await'; await: AwaitExpression }
   /** `race([f, g])` / `parallel([f, g])` written WITHOUT `await` — a
@@ -1435,6 +1438,43 @@ export interface DeclaredExtractNode {
   stages: ExtractStage[];
   span: Span;
 }
+
+/**
+ * `extract(content, Shape, { tier, model, effort })` — extraction as a
+ * FUNCTION: content in, a list of `Shape` records out (a local graph, one
+ * record per thing found). Data first, then the shape, then the settings.
+ *
+ * It is a second form beside the `extract … from …` keyword, not a spelling
+ * of it: the keyword keeps its own tree, stages and engine path. What this
+ * form adds is that the shape is an ordinary node declaration and the prompt
+ * is laid out for the prompt cache (shared content first, shape last).
+ *
+ * Like `MAP` and `MEMBERS` it is read where a right-hand side is, because one
+ * of its arguments — the shape — is a TYPE, which an expression cannot hold.
+ */
+export interface ExtractCallExpression {
+  /** The content list, as written — text, files, and records rendered as
+   *  text (`TEXT.SERIALISE(r, 'JSON')`). Usually a list literal. */
+  content: ExprSlot;
+  shape: ExtractCallShape;
+  /** `{ tier: 'careful', model: '…', effort: '…' }`, as written; read by
+   *  `readExtractCallConfig`, the one reader the checker and the engine share. */
+  config?: ExprSlot;
+  span: Span;
+}
+
+/**
+ * The shape argument. A NAME is a node declaration in scope (file level, a
+ * library's, or one declared in the body around the call); an INLINE one is
+ * the declaration itself written in the argument (`node Company: "…" { … }`),
+ * read by the declaration grammar and checked by the declaration's own path.
+ * Anything else is COMPUTED — kept as written so the checker can refuse it,
+ * because the result's type is the shape's and a computed one has none.
+ */
+export type ExtractCallShape =
+  | { kind: 'named'; name: string; span: Span }
+  | { kind: 'inline'; declaration: ShapeDeclaration; span: Span }
+  | { kind: 'computed'; expr: ExprSlot; span: Span };
 
 /** `vc_url_retrieval(urls: urls)` or bare `scrub_sensitive` inside a `through [...]`. */
 export interface PluginCall {

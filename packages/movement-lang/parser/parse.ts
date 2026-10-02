@@ -19,6 +19,8 @@ import {
   DurationLiteral,
   ErrorStatement,
   ExprSlot,
+  ExtractCallExpression,
+  ExtractCallShape,
   ExtractExpression,
   ExtractField,
   ExtractNode,
@@ -906,6 +908,12 @@ class Parser {
       case 'ERROR':
         return this.parseErrorStatement();
       case 'extract':
+        if (this.atExtractCall()) {
+          this.error(
+            "An extraction hands back what it found, so it is bound to a name (or returned) — write `found = extract(content, Shape)`",
+            start,
+          );
+        }
         this.error(
           "An 'extract' must be bound to a name — write `name = extract from […] { … }`",
           start,
@@ -1139,6 +1147,9 @@ class Parser {
         );
       }
       return { kind: 'link', link: { ...link, to: link.to } };
+    }
+    if (word === 'extract' && this.atExtractCall()) {
+      return { kind: 'extractCall', extractCall: this.parseExtractCall(start) };
     }
     if (word === 'extract') {
       this.pos += word.length;
@@ -3916,6 +3927,101 @@ class Parser {
       movement,
       span: this.spanFrom(start),
     };
+  }
+
+  // ── extract(content, Shape, config) ──
+
+  /**
+   * Is `extract(` next — the extraction CALL rather than the keyword? From
+   * language version 3. Before it the call was never valid (the keyword wants
+   * `from` or a tier after the word), so no saved program changes meaning:
+   * under an earlier version `extract(` stays the parse error it always was.
+   */
+  private atExtractCall(): boolean {
+    return (
+      since(this.languageVersion, 3)
+      && this.peekIdent() === 'extract'
+      && this.followedByCall('extract')
+    );
+  }
+
+  /** `extract(content, Shape[, { … }])` with `extract` at the cursor. */
+  private parseExtractCall(start: number): ExtractCallExpression {
+    this.pos += 'extract'.length;
+    this.skipInlineWs();
+    this.expect('(', "to open 'extract(…)'");
+    const usage = "extract(<content>, <Shape>) or extract(<content>, <Shape>, { tier: 'careful' })";
+    const { slot: content, stop } = this.readExprSlot({
+      stops: ',)',
+      context: "for the content 'extract' reads",
+    });
+    if (stop !== ',') this.error(`'extract' takes ${usage} — the shape is missing`);
+    this.pos++; // ','
+    this.skipAllWs();
+    const shape = this.parseExtractCallShape();
+    this.skipAllWs();
+    let config: ExprSlot | undefined;
+    if (this.peekCh() === ',') {
+      this.pos++;
+      config = this.readExprSlot({
+        stops: ',)',
+        context: "for the settings 'extract' runs with",
+      }).slot;
+      this.skipAllWs();
+      if (this.peekCh() === ',') {
+        this.error(`'extract' takes ${usage} — nothing follows the settings`);
+      }
+    }
+    this.skipAllWs();
+    this.expect(')', "to close 'extract(…)'");
+    return {
+      content,
+      shape,
+      ...(config !== undefined ? { config } : {}),
+      span: this.spanFrom(start),
+    };
+  }
+
+  /**
+   * The shape argument: a declaration's NAME, or the declaration itself
+   * written in place — read by the one declaration grammar, header and all
+   * (`node Company: "each company…" { … }`). The anonymous node literal is
+   * refused here: its strings are VALUES, so the same text would mean a record
+   * in one place and a shape in another.
+   */
+  private parseExtractCallShape(): ExtractCallShape {
+    const start = this.pos;
+    if (this.atNodeLiteral()) {
+      this.error(
+        "'node { … }' builds a record — its strings are values, not descriptions — so it is not a shape. Write the declaration with its header (`extract(content, node Company: \"each company named\" { name: \"…\" })`), or declare it and pass its name",
+      );
+    }
+    if (this.atGraphLiteral()) {
+      this.error(
+        "'graph { … }' builds a local graph value, and 'extract' takes a SHAPE — pass a node declaration's name (`extract(content, Company)`), or write the declaration in place (`node Company: \"…\" { … }`)",
+      );
+    }
+    if (this.atNodeDeclaration()) {
+      const declaration = this.parseNodeDeclaration();
+      return { kind: 'inline', declaration, span: declaration.span };
+    }
+    if (this.peekCh() === '<') {
+      this.error(
+        'the shape is a node declaration passed by its name, without the type brackets — `extract(content, Company)`',
+      );
+    }
+    const scanned = scanName(this.src, this.pos);
+    if (scanned) {
+      const save = this.pos;
+      this.pos = scanned.end;
+      this.skipAllWs();
+      if (this.peekCh() === ',' || this.peekCh() === ')') {
+        return { kind: 'named', name: scanned.name, span: this.spanFrom(start, scanned.end) };
+      }
+      this.pos = save;
+    }
+    const { slot } = this.readExprSlot({ stops: ',)', context: "for the shape 'extract' fills" });
+    return { kind: 'computed', expr: slot, span: slot.span };
   }
 
   // ── extract ──

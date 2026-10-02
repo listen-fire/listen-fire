@@ -665,9 +665,22 @@ const MAX_CHAT_CONTINUATIONS = 5;
  *  logs, which is exactly how a 7½-minute extraction read as a dead process. */
 const SLOW_CALL_WARN_MS = 60 * SECOND;
 
+/**
+ * One block of a user turn sent as separate blocks. `cacheControl` makes the
+ * END of this block a cache breakpoint — the caller says where its stable
+ * prefix ends, and nothing else in the request adds one to the turn. Providers
+ * without explicit breakpoints drop the marker and keep the order.
+ */
+export interface AnthropicUserBlock {
+  text: string;
+  cacheControl?: 'ephemeral';
+}
+
 interface AnthropicChatOptions {
   system: string;
-  userMessage: string;
+  /** The user turn: one string, or separate blocks for a caller that places
+   *  its own cache breakpoints (the system block always carries one). */
+  userMessage: string | AnthropicUserBlock[];
   model?: ChatModelName;
   maxTokens?: number;
   label?: string;
@@ -759,6 +772,15 @@ interface ChatReply {
   steppedDown?: { from: ChatEffort; to: ChatEffort };
   /** The output ceiling every turn ran under. */
   maxTokens: number;
+  /** Tokens across every turn — what a caller measuring its cache reads. */
+  usage: ChatUsage;
+}
+
+interface ChatUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
 }
 
 type ChatEffort = 'low' | 'medium' | 'high' | 'xhigh';
@@ -816,7 +838,21 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
   const systemParam = system
     ? { system: [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }] }
     : {};
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: userMessage }];
+  const messages: Anthropic.MessageParam[] = [
+    {
+      role: 'user',
+      content:
+        typeof userMessage === 'string'
+          ? userMessage
+          : userMessage.map((block) => ({
+              type: 'text' as const,
+              text: block.text,
+              ...(block.cacheControl === 'ephemeral'
+                ? { cache_control: { type: 'ephemeral' as const } }
+                : {}),
+            })),
+    },
+  ];
 
   let accumulated = '';
   let totalInputTokens = 0;
@@ -970,6 +1006,12 @@ async function anthropicChatDetailed(options: AnthropicChatOptions): Promise<Cha
     ...(currentEffort ? { effort: currentEffort } : {}),
     ...(steppedDown ? { steppedDown } : {}),
     maxTokens,
+    usage: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      cacheCreationTokens: totalCacheCreationTokens,
+    },
   };
 }
 

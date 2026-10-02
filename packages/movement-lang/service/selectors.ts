@@ -531,6 +531,8 @@ export function scanInstanceChains(source: string): InstanceChain[] {
             visitSlot(statement.value.expr, aliasScope);
           } else if (statement.value.kind === 'extract') {
             for (const slot of statement.value.extract.from) visitSlot(slot, aliasScope);
+          } else if (statement.value.kind === 'extractCall') {
+            visitSlot(statement.value.extractCall.content, aliasScope);
           } else if (statement.value.kind === 'await') {
             const landing = visitAwait(statement.value.await, aliasScope);
             if (landing) aliasScope.set(statement.name, landing);
@@ -580,6 +582,8 @@ export function scanInstanceChains(source: string): InstanceChain[] {
             walk(value.block.body, blockScope(value.block.head, aliasScope));
           } else if (value.kind === 'extract') {
             for (const slot of value.extract.from) visitSlot(slot, aliasScope);
+          } else if (value.kind === 'extractCall') {
+            visitSlot(value.extractCall.content, aliasScope);
           } else if (value.kind === 'await') visitAwait(value.await, aliasScope);
           else if (value.kind === 'combinator') visitCombinator(value.combinator, aliasScope);
           else if (value.kind === 'call') {

@@ -135,6 +135,7 @@ describe('anthropicChatDetailed', () => {
       continuations: 0,
       thinkingOnly: false,
       maxTokens: 16384,
+      usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
     });
   });
 });

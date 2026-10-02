@@ -95,6 +95,7 @@ import {
   parseMovementCondition,
   parseMovementExpression,
   parseProgram,
+  readExtractCallConfig,
   resolveBorrowedField,
   borrowedTypeSegments,
   splitUniquenessConjuncts,
@@ -136,6 +137,7 @@ import type {
   ExprSlot,
   CallbackExpression,
   CallbackSubject,
+  ExtractCallExpression,
   ExtractExpression,
   SchemaFieldType,
   InstanceSchema,
@@ -263,12 +265,24 @@ import {
 import { surfaceReadAdapter } from './kg';
 import { localEdgeAdapter } from './local_edge_adapter';
 import {
+  countShapeNodes,
+  ExtractCallRunState,
+  makeAnthropicExtractCallClient,
+  runExtractCall,
+  type ExtractCallLlmClient,
+} from './extraction_call';
+import { extractionCallSettings, type ExtractionCallSettings } from './ai_tiers';
+import { parseChatModelName } from '../../lib/models/registry';
+import { selectModel } from '../translation_graph/engine/batched_extraction/schema_synthesis';
+import {
+  buildDeclarationSpec,
   buildExtractSpec,
   makeAnthropicLlmClient,
   materializeExtract,
   registryTransformInvoker,
   tracedUrl,
   type DeclaredNodeShape,
+  type ExtractNodeSpec,
   type ExtractEmission,
   type FileTextResolution,
   type MovementTransformInvoker,
@@ -369,6 +383,10 @@ export interface RunMovementInput {
    * stub.
    */
   llm?: LlmClient;
+  /** The extraction CALL's model client (`extract(content, Shape)`), which
+   *  sends its prompt as blocks with cache breakpoints. Defaults to the
+   *  Anthropic-backed client; tests inject a stub. */
+  extractCallLlm?: ExtractCallLlmClient;
   /** `through` plugin dispatch. Defaults to the TG transform registry;
    *  tests inject a deterministic stub. */
   transformInvoker?: MovementTransformInvoker;
@@ -1808,6 +1826,11 @@ class Interpreter {
    *  library environment built, only its program. */
   private readonly libraryTypes = new Map<string, Map<string, SchemaFieldType>>();
   private defaultLlm?: LlmClient;
+  private defaultExtractCallLlm?: ExtractCallLlmClient;
+  /** What the run's extraction calls share: the content prefixes already sent
+   *  (where the cache breakpoints go) and the files already read. */
+  private readonly extractCalls = new ExtractCallRunState();
+  private extractCallCount = 0;
   private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in
    *  place by the evaluator's meta resolvers — one chain per run). */
@@ -3028,6 +3051,7 @@ class Interpreter {
             return;
           }
           case 'extract':
+          case 'extractCall':
             throw unsupported(
               'file-level extract expressions',
               'extraction runs inside a movement body, where the event is in scope',
@@ -3364,6 +3388,14 @@ class Interpreter {
      *  root sets it, for a single-ask linear resume (chunk 5). */
     startIndex = 0,
   ): Promise<BodyOutcome> {
+    // A node declaration in a body names a shape for the whole body, as the
+    // checker hoists it — and a resume, which re-enters past the statements
+    // that already ran, finds it again here.
+    for (const statement of statements) {
+      if (statement.kind === 'shape' && env.resolveOwn(statement.name) === undefined) {
+        env.declare(statement.name, { kind: 'shape', declaration: statement, fileEnv: env, local: true });
+      }
+    }
     for (let stmtIndex = startIndex; stmtIndex < statements.length; stmtIndex++) {
       const statement = statements[stmtIndex];
       // This statement's lexical address (§4.3) — the address an `ask` here
@@ -3445,6 +3477,8 @@ class Interpreter {
           await this.interpretCollectionOp(statement.collection, undefined, env, body, stmtAddress);
           break;
         case 'shape':
+          // Hoisted above.
+          break;
         case 'movement':
           throw unsupported(`nested ${statement.kind} declarations inside a movement body`);
       }
@@ -3512,6 +3546,9 @@ class Interpreter {
         env.declare(name, { kind: 'extractRoot', emission });
         break;
       }
+      case 'extractCall':
+        env.declare(name, await this.runExtractCall(value.extractCall, env));
+        break;
       case 'block':
         await this.interpretBlock(value.block, name, env, stmtAddress);
         break;
@@ -5719,6 +5756,90 @@ class Interpreter {
     });
     recordExtractedEntities(this.trace, traceMark, emission);
     return emission;
+  }
+
+  /**
+   * `found = extract(content, Shape, { … })` — the extraction CALL. The shape
+   * is a node declaration in scope, or the one written in the argument (bound
+   * for this call only, as the checker scoped it); its spec is the one the
+   * keyword builds for `node x: <Shape>`, and the call itself is
+   * `extraction_call.ts`'s — a separate path, so nothing here reaches the
+   * keyword's.
+   */
+  private async runExtractCall(call: ExtractCallExpression, env: Environment): Promise<Binding> {
+    const shapeEnv = call.shape.kind === 'inline' ? env.child() : env;
+    if (call.shape.kind === 'inline') {
+      const { declaration } = call.shape;
+      shapeEnv.declare(declaration.name, { kind: 'shape', declaration, fileEnv: env, local: true });
+    }
+    if (call.shape.kind === 'computed') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'extract' takes a node declaration as its shape, and '${call.shape.expr.raw}' is worked out (the checker should have caught this)`,
+      );
+    }
+    const shapeName = call.shape.kind === 'named' ? call.shape.name : call.shape.declaration.name;
+    const shape = shapeEnv.resolve(shapeName);
+    if (shape?.kind !== 'shape') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${shapeName}' is not a node declaration in scope, so 'extract' has no shape to fill (the checker should have caught this)`,
+      );
+    }
+    const spec = await buildDeclarationSpec(shapeName, this.declaredNodeShape(shape, shapeEnv), {
+      resolveBorrowed: ([instanceName, rootName, fieldName]) => {
+        const schema = this.graphSchemaOf(instanceName, env);
+        return schema ? resolveBorrowedField(schema, rootName, fieldName) : undefined;
+      },
+    });
+    const settings = this.extractCallSettings(call, spec);
+    const { value, provenance } = await this.evaluateSlot(call.content, { env });
+    return runExtractCall({
+      content: value,
+      contentProvenance: provenance,
+      spec,
+      settings,
+      siteId: `xc:${shapeName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}#${++this.extractCallCount}`,
+      runtime: {
+        llm: this.extractCallClient(),
+        resolveFileText: this.fileTextResolver(),
+        trace: this.trace,
+        state: this.extractCalls,
+      },
+    });
+  }
+
+  /** The call's settings: its tier's assignment on this deployment, then the
+   *  author's model and effort, read by the reader the checker used. */
+  private extractCallSettings(call: ExtractCallExpression, spec: ExtractNodeSpec): ExtractionCallSettings {
+    let written: ReturnType<typeof readExtractCallConfig> = { ok: true, settings: {} };
+    if (call.config !== undefined) {
+      try {
+        written = readExtractCallConfig(parseMovementExpression(call.config.raw));
+      } catch (e) {
+        if (!(e instanceof BridgeError)) throw e;
+        throw new MovementEngineError('MOVENG_RUNTIME', `invalid 'extract' settings (the checker should have caught this): ${e.message}`);
+      }
+    }
+    if (!written.ok) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `invalid 'extract' settings (the checker should have caught this): ${written.problems.join('; ')}`,
+      );
+    }
+    const { tier, model, effort } = written.settings;
+    return extractionCallSettings({
+      tier,
+      densityModel: selectModel(countShapeNodes(spec)),
+      ...(model !== undefined ? { model: parseChatModelName(model, "'extract''s model") } : {}),
+      ...(effort !== undefined ? { effort } : {}),
+    });
+  }
+
+  private extractCallClient(): ExtractCallLlmClient {
+    if (this.input.extractCallLlm) return this.input.extractCallLlm;
+    this.defaultExtractCallLlm ??= makeAnthropicExtractCallClient();
+    return this.defaultExtractCallLlm;
   }
 
   private async describeIn(slot: ExprSlot, env: Environment): Promise<string> {

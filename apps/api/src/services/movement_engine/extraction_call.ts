@@ -1,0 +1,679 @@
+// Movement engine — the extraction CALL, `extract(content, Shape, config)`.
+//
+// Content in, a list of `Shape` records out: run-local records (the graph
+// literal's `nodePosition`), one per thing the content names, each nested node
+// an edge of records of its own. One model call per extraction, however deep
+// the shape.
+//
+// This is a SECOND engine path beside the keyword's (`extraction.ts`), and the
+// keyword's is untouched by it. What the two share is single-call machinery
+// only — the declaration's spec builder, the field validators, the file-text
+// seam and its bound, the output budget and the truncation rule. The PROMPT is
+// this file's own, laid out for the prompt cache:
+//
+//   1. one system prompt, identical for every call — no shape in it;
+//   2. each content item as its own user block, in the author's order;
+//   3. the shape and the instructions LAST.
+//
+// So a later call over the same leading content — the per-entity calls of a
+// `MAP` that put the shared content first — reads that content from the cache
+// the first call wrote, whatever shape it asks for. The engine remembers the
+// content prefixes this run has sent (`ExtractCallPrefixes`) and puts a cache
+// breakpoint at the end of the longest one this call shares, and one at the end
+// of all the content.
+
+import { createHash } from 'node:crypto';
+
+import { z } from 'zod';
+
+import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS } from '../../lib/anthropic';
+import { parseJsonReply } from '../../lib/prompts/execute';
+import type { LlmCallResult } from '../translation_graph/engine/batched_extraction';
+import type { FileRef } from '../translation_graph/adapter';
+import { isFileRef } from '../translation_graph/engine/files/retrieve';
+import { claudeModelId, type Effort, type ExtractionCallSettings, type TierModel } from './ai_tiers';
+import {
+  absentIfBlank,
+  boundFileText,
+  CoercionTracker,
+  describeGuideType,
+  described,
+  describeTruncation,
+  EXTRACTION_MAX_CONTINUATIONS,
+  EXTRACTION_MAX_TOKENS,
+  extractionMaxTokens,
+  extractionOutputBudgetEnabled,
+  logTruncatedExtraction,
+  throwIfCancelled,
+  zodForFieldType,
+  type ExtractFieldSpec,
+  type ExtractNodeSpec,
+} from './extraction';
+import {
+  bindingOf,
+  isFileUnreadable,
+  MovementEngineError,
+  type Binding,
+  type ExtractionTraceFile,
+  type FileTextResolution,
+  type LocalLandingShape,
+  type MovementTraceEntry,
+} from './expression';
+import { fromOrigin, type ExtractSiteRef, type Provenance, type ProvenanceOrigin } from './provenance';
+
+// ── The model seam ──────────────────────────────────────────────────────────
+
+/** One block of the user turn. `cacheBreakpoint` ends the cacheable prefix
+ *  here; a provider without explicit breakpoints keeps the order and drops
+ *  the marker. */
+export interface ExtractCallBlock {
+  text: string;
+  cacheBreakpoint?: true;
+}
+
+export interface ExtractCallLlmInput {
+  system: string;
+  blocks: ExtractCallBlock[];
+  label: string;
+  model: TierModel;
+  effort?: Effort;
+  maxTokens?: number;
+}
+
+/** Tokens one call spent, as the provider counts them. */
+export interface ExtractCallUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+export interface ExtractCallLlmResult extends LlmCallResult {
+  usage?: ExtractCallUsage;
+}
+
+/** The extraction call's model client — the keyword's `LlmClient` takes one
+ *  undivided user message, and this layout is blocks. Tests inject a stub. */
+export interface ExtractCallLlmClient {
+  call(input: ExtractCallLlmInput): Promise<ExtractCallLlmResult>;
+}
+
+/** The production client: the same Anthropic seam, budget and truncation rule
+ *  as the keyword's client, with the user turn sent as blocks. The system
+ *  block carries the one breakpoint the seam always gives it; the content
+ *  carries at most two (`ExtractCallPrefixes`), so a request never asks for
+ *  more than the four the API allows. */
+export function makeAnthropicExtractCallClient(): ExtractCallLlmClient {
+  return {
+    async call(input) {
+      await throwIfCancelled();
+      const joined = input.blocks.map((block) => block.text).join('\n\n');
+      const budgetOn = extractionOutputBudgetEnabled();
+      const maxTokens =
+        input.maxTokens ?? (budgetOn ? extractionMaxTokens({ system: input.system, userMessage: joined }) : EXTRACTION_MAX_TOKENS);
+      const reply = await anthropicChatDetailed({
+        system: input.system,
+        userMessage: input.blocks.map((block) => ({
+          text: block.text,
+          ...(block.cacheBreakpoint ? { cacheControl: 'ephemeral' as const } : {}),
+        })),
+        model: claudeModelId(input.model),
+        maxTokens,
+        maxContinuations: budgetOn ? EXTRACTION_MAX_CONTINUATIONS : MAX_CHAT_CONTINUATIONS,
+        ...(input.effort ? { effort: input.effort } : {}),
+        label: input.label,
+      });
+      if (reply.truncated) {
+        logTruncatedExtraction({ label: input.label, userMessage: joined }, reply);
+        throw new Error(
+          `Extraction '${input.label}' produced no complete answer: ${describeTruncation(reply, maxTokens)} (EXTRACTION_OUTPUT_BUDGET ${budgetOn ? 'on' : 'off'}).`,
+        );
+      }
+      return {
+        parsedJson: parseJsonReply(reply.text, { label: input.label, prompt: joined }),
+        rawText: reply.text,
+        ...(reply.steppedDown ? { effortSteppedDown: reply.steppedDown } : {}),
+        ...(reply.continuations > 0 ? { continuations: reply.continuations } : {}),
+        usage: reply.usage,
+      };
+    },
+  };
+}
+
+// ── The run's memory: prefixes sent, files read ─────────────────────────────
+
+/**
+ * The content prefixes this run has already sent, per model and effort (a
+ * cached prefix is only ever read back by a request to the same model with
+ * the same thinking settings).
+ *
+ * A prefix is identified by a CHAIN of hashes — each item's hash folded into
+ * the one before — so "the first k items of this call were the first k items
+ * of an earlier one" is one set lookup per k, and nothing compares texts.
+ */
+export class ExtractCallPrefixes {
+  private readonly sent = new Map<string, Set<string>>();
+
+  /**
+   * Where this call's breakpoints go — the content items whose blocks end in
+   * one — and how many leading items an earlier call already sent. Then
+   * remembers this call's own prefixes, so the next call can find them.
+   *
+   * At most two: the end of the longest prefix already sent (the cache an
+   * earlier call wrote, read here — and written at that boundary if the
+   * earlier call's breakpoint sat further on), and the end of all the content
+   * (what the next call over the same content reads).
+   */
+  plan(cacheKey: string, items: readonly string[]): { breakpoints: number[]; sharedItems: number } {
+    const sent = this.sent.get(cacheKey) ?? new Set<string>();
+    this.sent.set(cacheKey, sent);
+    const chain: string[] = [];
+    let previous = '';
+    for (const item of items) {
+      previous = sha256(`${previous}\u0000${sha256(item)}`);
+      chain.push(previous);
+    }
+    let sharedItems = 0;
+    for (let k = chain.length; k > 0; k--) {
+      if (sent.has(chain[k - 1])) {
+        sharedItems = k;
+        break;
+      }
+    }
+    const breakpoints: number[] = [];
+    if (sharedItems > 0 && sharedItems < items.length) breakpoints.push(sharedItems - 1);
+    if (items.length > 0) breakpoints.push(items.length - 1);
+    for (const link of chain) sent.add(link);
+    return { breakpoints, sharedItems };
+  }
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/** One content file as the prompt reads it: its bounded text, or why there is
+ *  none — the same seam and the same bound as the keyword's file sources. */
+interface ContentFile {
+  text?: string;
+  origin?: ProvenanceOrigin;
+  traced: ExtractionTraceFile;
+}
+
+/** Everything the extraction calls of one run share. */
+export class ExtractCallRunState {
+  readonly prefixes = new ExtractCallPrefixes();
+  /** File text by the file's handle: a file in the content of every member of
+   *  a `MAP` is read once, and renders identically each time — a block that
+   *  rendered differently would miss the cache. */
+  readonly files = new Map<string, Promise<ContentFile>>();
+}
+
+export interface ExtractCallRuntime {
+  llm: ExtractCallLlmClient;
+  resolveFileText?: (ref: FileRef) => Promise<FileTextResolution>;
+  trace?: MovementTraceEntry[];
+  state: ExtractCallRunState;
+}
+
+// ── The prompt ──────────────────────────────────────────────────────────────
+
+/** Identical for every extraction call there is — the shape comes last, so
+ *  nothing here varies. */
+export const EXTRACT_CALL_SYSTEM_PROMPT = [
+  'You are an information-extraction system.',
+  '',
+  'You are given content as numbered items, one block per item, in the order its author listed them. The last block says what to extract from that content and how to answer.',
+  '',
+  'Read every content item. Extract only what the content supports, and cite the item each value came from.',
+].join('\n');
+
+/** The answer key — fixed, because the shape block is the only thing that
+ *  should differ between two calls over the same content. */
+const ANSWER_KEY = 'records';
+
+function guideLines(spec: ExtractNodeSpec, parent: string | undefined, depth: number): string[] {
+  const indent = '  '.repeat(depth);
+  const head = parent === undefined
+    ? `${indent}**${spec.name}**${described(spec.description)} — emit each one as an element of the \`${ANSWER_KEY}\` array (zero, one, or many, as the description says)`
+    : `${indent}**${spec.name}** (an array under the key \`${spec.name}\` inside each **${parent}**)${described(spec.description)}`;
+  const stage = spec.stages[0];
+  const fields = (stage?.fields ?? []).map(
+    (f) => `${indent}    - \`${f.name}\` (${describeGuideType(f.type)})${described(f.description)}`,
+  );
+  return [
+    head,
+    ...(fields.length > 0 ? fields : [`${indent}    (no fields — structural only)`]),
+    ...(stage?.children ?? []).flatMap((child) => guideLines(child, spec.name, depth + 1)),
+  ];
+}
+
+/** The last block: the shape, then the instructions. */
+function shapeBlock(spec: ExtractNodeSpec, items: readonly number[]): string {
+  return [
+    '## What to extract',
+    '',
+    guideLines(spec, undefined, 0).join('\n'),
+    '',
+    '## How to answer',
+    '',
+    `Return a JSON object with one key, \`${ANSWER_KEY}\`, whose value is a bare JSON array of records. A nested node is a bare array of its own records under its key inside its parent record.`,
+    '',
+    'Every field is answered as `{ "value": …, "evidence": { "item": <n>, "quote": "…" } }` — the typed value, the number of the content item it came from, and a quote of the passage that supports it. Use null for a value the content does not give.',
+    '',
+    '## Rules',
+    `- \`item\` is the number in the heading of the content block the value came from (${items.map((i) => String(i)).join(', ')}). When a value is composed from several items, cite the one that carries most of it.`,
+    '- The `{ value, evidence }` wrapping belongs to a FIELD and to nothing else. A list of records is a bare array and a record is a bare object.',
+    '- Every key inside a record is a field or nested node the guide declares for it. Do not rename a field or answer under a key of your own.',
+    "- A field's description is authoritative. When it asks you to compose, normalise or reformat a value, produce that value and quote the passage(s) it was built from.",
+    '- Use null only when the content genuinely lacks the information. Never stand a missing value in with an empty string or a placeholder like "none", "N/A" or "unknown".',
+    '- Records of the same kind must be distinct. Omit a record entirely rather than emitting one with every field null.',
+  ].join('\n');
+}
+
+// ── The answer ──────────────────────────────────────────────────────────────
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** A field's evidence, as the model may actually write it: the citation
+ *  object asked for, a bare quote, or nothing. The VALUE half stays strict —
+ *  a wrong value earns the retry; a loose citation is provenance, not the
+ *  answer. */
+function normaliseCallField(raw: unknown): unknown {
+  if (!isPlainRecord(raw) || !('value' in raw)) return raw;
+  const { evidence } = raw;
+  if (evidence === undefined || evidence === null) return { ...raw, evidence: null };
+  if (typeof evidence === 'string') return { ...raw, evidence: { quote: evidence } };
+  if (!isPlainRecord(evidence)) return { ...raw, evidence: null };
+  const item = typeof evidence.item === 'string' && /^\d+$/.test(evidence.item.trim())
+    ? Number(evidence.item.trim())
+    : evidence.item;
+  const quote = [evidence.quote, evidence.text].find((q) => typeof q === 'string');
+  return {
+    ...raw,
+    evidence: {
+      ...(typeof item === 'number' && Number.isInteger(item) ? { item } : {}),
+      ...(quote !== undefined ? { quote } : {}),
+    },
+  };
+}
+
+const citation = z
+  .object({ item: z.number().int().optional(), quote: z.string().optional() })
+  .nullable();
+
+function fieldSchema(field: ExtractFieldSpec, key: string, sink: CoercionTracker): z.ZodTypeAny {
+  return z.preprocess(
+    normaliseCallField,
+    z
+      .object({ value: zodForFieldType(field.type, { key, sink }), evidence: citation })
+      .nullable()
+      .optional(),
+  );
+}
+
+/** A node's records as the model may have packaged them: a bare array, or one
+ *  record where an array was asked for. */
+function recordList(value: unknown): unknown {
+  return Array.isArray(value) || value == null ? value : [value];
+}
+
+function recordSchema(spec: ExtractNodeSpec, sink: CoercionTracker): z.ZodTypeAny {
+  const stage = spec.stages[0];
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const field of stage?.fields ?? []) {
+    shape[field.name] = fieldSchema(field, `${spec.name}.${field.name}`, sink);
+  }
+  for (const child of stage?.children ?? []) {
+    shape[child.name] = z.preprocess(recordList, z.array(recordSchema(child, sink))).optional().nullable();
+  }
+  const declared = Object.keys(shape);
+  const object = z.object(shape).passthrough();
+  if (declared.length === 0) return object;
+  // A record made only of keys nothing declared has answered some other
+  // question: every declared field would read null and the record would drop
+  // in silence. It is a shape failure, and takes the retry.
+  return object.superRefine((record, ctx) => {
+    const keys = Object.keys(record);
+    if (keys.length === 0 || keys.some((k) => declared.includes(k))) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `this record was answered under ${keys.map((k) => `\`${k}\``).join(', ')} — its fields are ${declared.map((k) => `\`${k}\``).join(', ')}`,
+    });
+  });
+}
+
+function responseSchema(spec: ExtractNodeSpec, sink: CoercionTracker): z.ZodTypeAny {
+  return z
+    .object({ [ANSWER_KEY]: z.preprocess(recordList, z.array(recordSchema(spec, sink))) })
+    .passthrough();
+}
+
+// ── The records ─────────────────────────────────────────────────────────────
+
+/** What each nested edge of a record carries, so a write into it mints the
+ *  shape's nested nodes as a write into a declared edge does. */
+function landingShapeOf(spec: ExtractNodeSpec): LocalLandingShape {
+  const stage = spec.stages[0];
+  return {
+    fields: (stage?.fields ?? []).map((f) => f.name),
+    edges: Object.fromEntries((stage?.children ?? []).map((c) => [c.name, landingShapeOf(c)])),
+  };
+}
+
+/** The fields a program reads as PRESENT text — plain text not marked
+ *  `| null` — handed over as `""` when nothing was found. The checker's half is
+ *  `readsAsPresentText`, as it is for the keyword's records. */
+function readsAsPresentText(field: ExtractFieldSpec): boolean {
+  return field.nullable !== true && (field.type === undefined || field.type === 'text');
+}
+
+type NodePosition = Extract<Binding, { kind: 'nodePosition' }>;
+
+function isEmptyRecord(record: NodePosition, spec: ExtractNodeSpec): boolean {
+  const stage = spec.stages[0];
+  const fieldsBlank = (stage?.fields ?? []).every((f) => {
+    const value = record.fields[f.name];
+    return value === null || value === undefined || value === '';
+  });
+  const edgesEmpty = Object.values(record.edges).every(
+    (edge) => edge.kind !== 'landed' || edge.landings.length === 0,
+  );
+  return fieldsBlank && edgesEmpty;
+}
+
+function buildRecords(
+  raw: unknown,
+  spec: ExtractNodeSpec,
+  site: ExtractSiteRef,
+  items: ReadonlySet<number>,
+  dropped: Record<string, number>,
+): NodePosition[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const stage = spec.stages[0];
+  const records: NodePosition[] = [];
+  for (const entry of list) {
+    if (!isPlainRecord(entry)) continue;
+    const fields: Record<string, unknown> = {};
+    const fieldProvenance: Record<string, Provenance> = {};
+    for (const field of stage?.fields ?? []) {
+      const answer = entry[field.name] as
+        | { value?: unknown; evidence?: { item?: number; quote?: string } | null }
+        | null
+        | undefined;
+      const value = field.type === 'json' ? (answer?.value ?? null) : absentIfBlank(answer?.value);
+      fields[field.name] = value === null && readsAsPresentText(field) ? '' : value;
+      const item = answer?.evidence?.item;
+      const quote = answer?.evidence?.quote;
+      fieldProvenance[field.name] = fromOrigin({
+        kind: 'extraction',
+        site,
+        field: field.name,
+        description: field.description,
+        ...(quote !== undefined && quote !== '' ? { quote } : {}),
+        // A citation of an item that was never shown is no citation.
+        ...(item !== undefined && items.has(item) ? { item } : {}),
+      });
+    }
+    const edges: NodePosition['edges'] = {};
+    for (const child of stage?.children ?? []) {
+      edges[child.name] = {
+        kind: 'landed',
+        landings: buildRecords(entry[child.name], child, site, items, dropped),
+        landingShape: landingShapeOf(child),
+      };
+    }
+    const record: NodePosition = {
+      kind: 'nodePosition',
+      fields,
+      fieldOrder: (stage?.fields ?? []).map((f) => f.name),
+      fieldProvenance,
+      edges,
+    };
+    if (isEmptyRecord(record, spec)) {
+      dropped[spec.name] = (dropped[spec.name] ?? 0) + 1;
+      continue;
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+// ── The content ─────────────────────────────────────────────────────────────
+
+/** One content item, ready to be a block. */
+interface ContentItem {
+  index: number;
+  /** What the trace calls it. */
+  classification: string;
+  block: string;
+  origin?: ProvenanceOrigin;
+  file?: ExtractionTraceFile;
+}
+
+async function contentFile(ref: FileRef, runtime: ExtractCallRuntime): Promise<ContentFile> {
+  const named = {
+    ...(ref.name !== undefined ? { name: ref.name } : {}),
+    ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+  };
+  if (runtime.resolveFileText === undefined) return { traced: { ...named, unreadable: 'bytes_unavailable' } };
+  const key = ref.source?.handle ?? ref.name;
+  const read = async (): Promise<ContentFile> => {
+    const result = await runtime.resolveFileText!(ref);
+    if (isFileUnreadable(result)) {
+      return {
+        traced: {
+          ...named,
+          unreadable: result.unreadable,
+          ...(result.detail !== undefined ? { detail: result.detail } : {}),
+        },
+      };
+    }
+    if (result.text.trim() === '') return { traced: { ...named, unreadable: 'no_text' } };
+    const bounded = boundFileText(result.text, ref);
+    return {
+      text: bounded.content,
+      origin: {
+        kind: 'file',
+        ...(result.rawTextId !== undefined ? { rawTextId: result.rawTextId } : {}),
+        ...(ref.source?.handle !== undefined ? { handle: ref.source.handle } : {}),
+        ...named,
+      },
+      traced: {
+        ...named,
+        chars: bounded.chars,
+        ...(bounded.truncatedFrom !== undefined ? { truncatedFrom: bounded.truncatedFrom } : {}),
+      },
+    };
+  };
+  if (key === undefined) return read();
+  const memo = runtime.state.files.get(key) ?? read();
+  runtime.state.files.set(key, memo);
+  return memo;
+}
+
+/**
+ * The content list, one block per item, in order. An item's NUMBER is its
+ * position in the list, so a citation means the same thing whatever was
+ * skipped: an absent item has no block, and a file nothing could read says so
+ * in its block rather than vanishing.
+ */
+async function contentItems(content: unknown, runtime: ExtractCallRuntime): Promise<ContentItem[]> {
+  const list = Array.isArray(content) ? content : [content];
+  const items: ContentItem[] = [];
+  for (const [index, value] of list.entries()) {
+    if (value === null || value === undefined) continue;
+    if (isFileRef(value)) {
+      const file = await contentFile(value, runtime);
+      const label = `file${value.name !== undefined ? ` "${value.name}"` : ''}`;
+      items.push({
+        index,
+        classification: `item ${index} (file)`,
+        block: `## Content item ${index} (${label})\n${file.text ?? `[this file could not be read: ${'unreadable' in file.traced ? file.traced.unreadable : 'no_text'}]`}`,
+        ...(file.origin !== undefined ? { origin: file.origin } : {}),
+        file: file.traced,
+      });
+      continue;
+    }
+    if (bindingOf(value) !== undefined || isPlainRecord(value) || Array.isArray(value)) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `content item ${index} of 'extract' is a ${Array.isArray(value) ? 'list' : 'record'}, and 'extract' reads text and files — render it as text with TEXT.SERIALISE(value, 'JSON') (the checker should have caught this)`,
+      );
+    }
+    const text = typeof value === 'string' ? value : String(value);
+    if (text.trim() === '') continue;
+    items.push({ index, classification: `item ${index} (text)`, block: `## Content item ${index} (text)\n${text}` });
+  }
+  return items;
+}
+
+// ── The call ────────────────────────────────────────────────────────────────
+
+const TRACE_INPUT_PARTS = 12;
+const TRACE_ISSUE_LINES = 8;
+
+export interface ExtractCallInput {
+  /** The content as evaluated: a list of text and files. */
+  content: unknown;
+  /** The content's own trail — the data sources every field cites. */
+  contentProvenance: Provenance;
+  /** The shape, as the spec its declaration builds. */
+  spec: ExtractNodeSpec;
+  settings: ExtractionCallSettings;
+  /** Unique within the run — the provenance site's id. */
+  siteId: string;
+  runtime: ExtractCallRuntime;
+}
+
+/** Run one extraction call: the records found, as a list of records. A reply
+ *  that answers some other question is asked once more, then raised — what a
+ *  caller does with a failure is the caller's (`MAP`'s `onError`). */
+export async function runExtractCall(input: ExtractCallInput): Promise<Binding> {
+  const { spec, settings, runtime } = input;
+  const items = await contentItems(input.content, runtime);
+  const files = items.flatMap((item) => (item.file !== undefined ? [item.file] : []));
+  const parts = items.map((item) => ({ classification: item.classification, chars: item.block.length }));
+  const shape = {
+    form: 'call' as const,
+    node: spec.name,
+    inputChars: parts.reduce((total, part) => total + part.chars, 0),
+    ...(parts.length > 0 ? { inputs: parts.slice(0, TRACE_INPUT_PARTS) } : {}),
+    ...(parts.length > TRACE_INPUT_PARTS ? { inputsTruncated: parts.length - TRACE_INPUT_PARTS } : {}),
+    ...(files.length > 0 ? { files: files.slice(0, TRACE_INPUT_PARTS) } : {}),
+    ...(files.length > TRACE_INPUT_PARTS ? { filesTruncated: files.length - TRACE_INPUT_PARTS } : {}),
+  };
+  if (items.length === 0) {
+    // Nothing to read is nothing found — said on the run, not left to look
+    // like a model that found nothing.
+    runtime.trace?.push({ kind: 'extraction', ...shape, skipped: 'empty_source', emissions: { [spec.name]: 0 } });
+    return { kind: 'positions', landings: [] };
+  }
+
+  const cacheKey = `${settings.model}|${settings.effort}`;
+  const plan = runtime.state.prefixes.plan(cacheKey, items.map((item) => item.block));
+  const breakpointAt = new Set(plan.breakpoints);
+  const contentBlocks: ExtractCallBlock[] = items.map((item, position) => ({
+    text: item.block,
+    ...(breakpointAt.has(position) ? { cacheBreakpoint: true as const } : {}),
+  }));
+  const shown = new Set(items.map((item) => item.index));
+  const guide = shapeBlock(spec, items.map((item) => item.index));
+  const site: ExtractSiteRef = {
+    siteId: input.siteId,
+    node: spec.name,
+    description: spec.description,
+    stage: 0,
+    dataSources: [
+      ...input.contentProvenance.origins,
+      ...items.flatMap((item) => (item.origin !== undefined ? [item.origin] : [])),
+    ],
+  };
+
+  const sink = new CoercionTracker();
+  const schema = responseSchema(spec, sink);
+  const usage: ExtractCallUsage[] = [];
+  const started = Date.now();
+  const ask = async (last: string, label: string): Promise<ExtractCallLlmResult> => {
+    await throwIfCancelled();
+    const reply = await runtime.llm.call({
+      system: EXTRACT_CALL_SYSTEM_PROMPT,
+      blocks: [...contentBlocks, { text: last }],
+      label,
+      model: settings.model,
+      effort: settings.effort,
+      ...(settings.maxTokens !== undefined ? { maxTokens: settings.maxTokens } : {}),
+    });
+    if (reply.usage !== undefined) usage.push(reply.usage);
+    return reply;
+  };
+  const telemetry = (): Pick<Extract<MovementTraceEntry, { kind: 'extraction' }>, 'model' | 'durationMs' | 'cache'> => ({
+    model: settings.model,
+    durationMs: Date.now() - started,
+    cache: {
+      breakpoints: plan.breakpoints.map((position) => items[position].index),
+      sharedItems: plan.sharedItems,
+      ...(usage.length > 0
+        ? {
+            inputTokens: usage.reduce((t, u) => t + u.inputTokens, 0),
+            readTokens: usage.reduce((t, u) => t + u.cacheReadTokens, 0),
+            writeTokens: usage.reduce((t, u) => t + u.cacheCreationTokens, 0),
+          }
+        : {}),
+    },
+  });
+
+  const first = await ask(guide, 'movement_extract_call');
+  sink.reset();
+  let parsed = schema.safeParse(first.parsedJson);
+  let retried: string[] | undefined;
+  if (!parsed.success) {
+    const lines = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`);
+    retried = lines.slice(0, TRACE_ISSUE_LINES);
+    // The content blocks are the same blocks, so the retry reads them from the
+    // cache the first attempt wrote; only the last block says what was wrong.
+    const retry = await ask(
+      `${guide}\n\n---\n\nYour previous response had validation errors:\n${lines.join('\n')}\n\nReturn the complete corrected JSON, with every record under \`${ANSWER_KEY}\`.`,
+      'movement_extract_call_retry',
+    );
+    sink.reset();
+    parsed = schema.safeParse(retry.parsedJson);
+    if (!parsed.success) {
+      runtime.trace?.push({
+        kind: 'extraction',
+        ...shape,
+        emissions: { [spec.name]: 0 },
+        failed: 'invalid_reply',
+        retried,
+        ...telemetry(),
+      });
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `The extraction of \`${spec.name}\` was answered with something its shape does not describe, twice: ${parsed.error.issues[0]?.path.join('.') || 'the reply'} — ${parsed.error.issues[0]?.message ?? 'unreadable'}.`,
+        parsed.error,
+      );
+    }
+  }
+  const dropped: Record<string, number> = {};
+  const answer = parsed.data as Record<string, unknown>;
+  const landings = buildRecords(answer[ANSWER_KEY], spec, site, shown, dropped);
+  const coerced = sink.snapshot();
+  runtime.trace?.push({
+    kind: 'extraction',
+    ...shape,
+    emissions: { [spec.name]: landings.length },
+    ...(retried !== undefined ? { retried } : {}),
+    ...(Object.keys(dropped).length > 0 ? { dropped } : {}),
+    ...(coerced ? { coerced } : {}),
+    ...telemetry(),
+  });
+  return { kind: 'positions', landings };
+}
+
+/** How many nodes a shape has — the density heuristic's input when no tier is
+ *  named, as the keyword counts the sites of one call. */
+export function countShapeNodes(spec: ExtractNodeSpec): number {
+  return 1 + (spec.stages[0]?.children ?? []).reduce((total, child) => total + countShapeNodes(child), 0);
+}

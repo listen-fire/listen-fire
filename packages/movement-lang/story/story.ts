@@ -1752,6 +1752,10 @@ class Projection {
         return this.linkSteps(value.link);
       case 'extract':
         return this.extractStep(value.extract.span, value.extract.from, binding, at);
+      // The call is the same step to a reader: what it read, and the tree of
+      // what it found (the shape, recorded by the checker at the call).
+      case 'extractCall':
+        return this.extractStep(value.extractCall.span, [value.extractCall.content], binding, at);
       case 'await': {
         const src = value.await.source;
         if (src.kind === 'combinator') {

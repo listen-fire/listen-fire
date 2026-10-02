@@ -86,6 +86,10 @@ export type ProvenanceOrigin =
       field?: string;
       description?: string;
       quote?: string;
+      /** The extraction CALL's content item the value came from — its
+       *  position in the content list. Absent under the keyword, whose
+       *  content is one undivided message. */
+      item?: number;
     }
   /** A read off an earlier write's handle — `writeIndex` indexes the
    *  run's `MovementRunResult.writes`, whose own per-field provenance
@@ -196,7 +200,14 @@ export type SummarisedOrigin =
       externalId?: string;
       field: string;
     }
-  | { kind: 'extraction'; site: string; field?: string; description?: string; quote?: string }
+  | {
+      kind: 'extraction';
+      site: string;
+      field?: string;
+      description?: string;
+      quote?: string;
+      item?: number;
+    }
   | { kind: 'write'; write: number; externalId?: string; field?: string }
   | { kind: 'resource'; externalId?: string; name?: string; field?: string }
   | { kind: 'enrichment'; plugin: string }
@@ -239,6 +250,7 @@ export class ProvenanceSummariser {
           ...(origin.field !== undefined ? { field: origin.field } : {}),
           ...(origin.description !== undefined ? { description: origin.description } : {}),
           ...(origin.quote !== undefined ? { quote: origin.quote } : {}),
+          ...(origin.item !== undefined ? { item: origin.item } : {}),
         };
       }
       case 'write':

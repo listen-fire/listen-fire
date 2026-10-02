@@ -18,6 +18,7 @@ export * from './checker/event_address';
 export * from './checker/link';
 export * from './checker/check';
 export * from './checker/collection_config';
+export * from './checker/extract_config';
 export * from './story/story';
 export * from './service/snapshot';
 export * from './service/constructions';
