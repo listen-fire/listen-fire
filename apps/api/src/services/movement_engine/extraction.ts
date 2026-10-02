@@ -76,7 +76,7 @@ import type {
   LlmClient,
 } from '../translation_graph/engine/batched_extraction';
 import { selectModel } from '../translation_graph/engine/batched_extraction/schema_synthesis';
-import { claudeModelId, extractionSettings, type TierCallSettings } from './ai_tiers';
+import { claudeModelId, extractionCallSettings, type ExtractionCallSettings, type TierModel } from './ai_tiers';
 import { getTransform } from '../translation_graph/engine/transforms/registry';
 import type {
   TransformImpl,
@@ -1190,7 +1190,7 @@ interface CallSite {
  *  it exists so a call that ended by THROWING can still be described — the
  *  raise is the only moment the unanswered reply is still in hand. */
 interface CallTelemetry {
-  model: TierCallSettings['model'];
+  model: TierModel;
   /** Wall clock across every attempt, so a retried call reads as the two
    *  calls it actually was. */
   durationMs?: number;
@@ -1560,7 +1560,7 @@ class Materializer {
     // extraction's, so every stage and every fence asks for the same thing.
     // With no tier the density heuristic still picks the model, exactly as it
     // did before tiers existed.
-    const settings = extractionSettings(this.tier, selectModel(countSites(region)));
+    const settings = extractionCallSettings({ tier: this.tier, densityModel: selectModel(countSites(region)) });
     const telemetry: CallTelemetry = { model: settings.model };
     let raw: unknown;
     try {
@@ -1766,7 +1766,7 @@ class Materializer {
     label: string;
     /** What the extraction's tier asks the platform for — the same on the
      *  retry, which is the same question asked again. */
-    settings: TierCallSettings;
+    settings: ExtractionCallSettings;
     schema: z.ZodTypeAny;
     /** What the call is asking about — the retry needs its answer key and its
      *  field names to be able to show the envelope it wants back. */

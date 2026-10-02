@@ -58,6 +58,10 @@ export function hasCapability<C extends Capability>(name: ModelName, capability:
   return models[name].capability === capability;
 }
 
+export const chatModelNames: readonly ChatModelName[] = modelNames.filter(
+  (name): name is ChatModelName => hasCapability(name, 'chat'),
+);
+
 /** A model name from outside the code — an env var, a CLI flag — refused with
  *  its source named when it is not one the registry knows. */
 export function parseModelName(value: string, source: string): ModelName {

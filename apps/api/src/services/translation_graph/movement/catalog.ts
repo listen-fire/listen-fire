@@ -55,6 +55,7 @@ import {
 } from 'movement-lang';
 import type { Expression } from '#shared/expression/types';
 import { neverAsAny } from '../../../lib/utils/types';
+import { availableChatModels } from '../../../lib/models/map';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { getAutomationsQb } from '../../../lib/kysely';
 import ExternalServiceType from '../../../generated/kysely/automations/ExternalServiceType';
@@ -1392,6 +1393,9 @@ export async function movementCatalogForTeam(
       // Empty array when options didn't resolve ⇒ checker skips (never mis-warns).
       return argOptions.get(`${adapter}::${credentialsId ?? ''}::${arg}`) ?? [];
     },
+    // Deployment state, read per assembly: the model map is fixed for the
+    // process, so this is the same answer the run's model layer will give.
+    models: () => availableChatModels(),
   };
 
   // The same schemas, re-addressed for a SNAPSHOT: by the credential import
@@ -1794,6 +1798,7 @@ export async function movementCatalogSnapshotForTeam(
     snapshot: {
       ...toCatalogSnapshot({ adapters, credentials, plugins }),
       files,
+      models: availableChatModels(),
     },
     notes,
     remoteConnections,

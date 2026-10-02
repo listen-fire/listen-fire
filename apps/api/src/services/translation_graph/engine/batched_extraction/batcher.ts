@@ -42,6 +42,7 @@ import type {
 import type { EphemeralNode } from '../../types';
 import type { Adapter, Fact, Resource } from '../../adapter';
 import type { StoredUniquenessConstraints } from '../../../knowledge_pipeline/uniqueness_constraints';
+import type { Effort, TierModel } from '../../../movement_engine/ai_tiers';
 import { assembleBundle, type Bundle } from './bundle';
 import { buildSyntheticSchema, type SyntheticSchema } from './schema_synthesis';
 import {
@@ -95,7 +96,9 @@ export interface LlmCallInput {
   system: string;
   userMessage: string;
   label: string;
-  model: 'opus' | 'opus5' | 'sonnet' | 'haiku';
+  /** A built-in tier alias, or the logical model a deployment's tier
+   *  assignment or an author's override named. */
+  model: TierModel;
   /**
    * How much reasoning this call is worth. ABSENT means the model's own
    * default — which on the adaptive-thinking models is the deepest setting —
@@ -103,7 +106,7 @@ export interface LlmCallInput {
    * extraction and `AI()` say whatever their tier maps to, and the tier
    * mapping is where the choice is made.
    */
-  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  effort?: Effort;
   /**
    * Room for THIS answer, replacing the ceiling the client sizes from the
    * input. Absent is the norm: that ceiling is the runaway guard, and this is

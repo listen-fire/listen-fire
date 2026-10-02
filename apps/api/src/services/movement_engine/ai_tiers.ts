@@ -17,8 +17,13 @@
  * same settings in both.
  */
 
-import { aiTier } from '#shared/expression/types';
+import { z } from 'zod';
 
+import { AI_TIERS, aiTier } from '#shared/expression/types';
+import type { AiTier } from '#shared/expression/types';
+
+import { chatModelAvailability } from '../../lib/models/map';
+import { isModelName, parseChatModelName } from '../../lib/models/registry';
 import type { ChatModelName } from '../../lib/models/registry';
 
 /**
@@ -79,7 +84,24 @@ function roomToThink(effort: TierCallSettings['effort']): { maxTokens?: number }
  *  opus-5 in the same silence thinks adaptively by default. */
 export interface TierCallSettings {
   model: 'opus' | 'opus5' | 'sonnet' | 'haiku';
-  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  effort?: Effort;
+  maxTokens?: number;
+}
+
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** What an extraction call names as its model: one of the built-in aliases
+ *  above, or a logical model that a deployment's tier assignment or an
+ *  author's override chose. The built-in table keeps its aliases so a
+ *  deployment that configures nothing calls — and traces — exactly as before. */
+export type TierModel = TierCallSettings['model'] | ChatModelName;
+
+/** One extraction call's settings, after the deployment's tier assignments
+ *  and the author's overrides. */
+export interface ExtractionCallSettings {
+  model: TierModel;
+  effort: Effort;
   maxTokens?: number;
 }
 
@@ -90,7 +112,8 @@ export interface TierCallSettings {
  * "whatever model a tier means today" (rather than the frozen chat/extraction
  * seam) should call it too, instead of copying the string.
  */
-export function claudeModelId(model: TierCallSettings['model']): ChatModelName {
+export function claudeModelId(model: TierModel): ChatModelName {
+  if (isModelName(model)) return model;
   switch (model) {
     case 'opus':
       return 'claude-opus-4-7';
@@ -160,20 +183,139 @@ export function extractionSettings(
   tier: string | undefined,
   defaultModel: 'opus' | 'sonnet',
 ): TierCallSettings {
-  switch (aiTier(tier)) {
-    case 'quick':
-      return sonnetAt(EXTRACTION_EFFORT);
-    case 'careful':
-      return sonnetAt('high');
-    case 'thorough':
-      return sonnetAt('xhigh');
-    case undefined:
-      return { model: defaultModel, effort: EXTRACTION_EFFORT };
-  }
+  const named = aiTier(tier);
+  if (named === undefined) return { model: defaultModel, effort: EXTRACTION_EFFORT };
+  const { model, effort } = BUILT_IN_EXTRACTION_TIERS[named];
+  return { model, effort, ...roomToThink(effort) };
 }
 
-/** One extraction row: sonnet-5 asked to think this hard, with the room that
- *  asking costs. */
-function sonnetAt(effort: 'low' | 'medium' | 'high' | 'xhigh'): TierCallSettings {
-  return { model: 'sonnet', effort, ...roomToThink(effort) };
+/** Each extraction tier as shipped: sonnet-5 asked to think this hard. What a
+ *  deployment that sets no `EXTRACTION_TIERS` buys. */
+const BUILT_IN_EXTRACTION_TIERS: Record<AiTier, { model: TierCallSettings['model']; effort: Effort }> = {
+  quick: { model: 'sonnet', effort: EXTRACTION_EFFORT },
+  careful: { model: 'sonnet', effort: 'high' },
+  thorough: { model: 'sonnet', effort: 'xhigh' },
+};
+
+/**
+ * One extraction call's settings on THIS deployment: the tier's assignment
+ * (built in, or `EXTRACTION_TIERS`), then the author's own `model` and
+ * `effort`, each of which wins over the tier on its own. The ceiling follows
+ * whatever effort that leaves ({@link roomToThink}), so an author who asks for
+ * `xhigh` gets the room `xhigh` needs whichever tier they named.
+ *
+ * With no tier the density heuristic picks the model and the effort stays at
+ * EXTRACTION_EFFORT — exactly {@link extractionSettings} with no tier — and a
+ * deployment cannot reassign that row.
+ *
+ * `model` is a name the checker has already found reachable here
+ * ({@link chatModelAvailability}); it is not re-validated per call, since the
+ * model layer refuses an unreachable one at the call anyway.
+ */
+export function extractionCallSettings(
+  request: {
+    tier: string | undefined;
+    densityModel: 'opus' | 'sonnet';
+    model?: ChatModelName;
+    effort?: Effort;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+): ExtractionCallSettings {
+  const named = aiTier(request.tier);
+  const row =
+    named === undefined
+      ? { model: request.densityModel, effort: EXTRACTION_EFFORT }
+      : { ...BUILT_IN_EXTRACTION_TIERS[named], ...extractionTiers(env).get(named) };
+  const effort = request.effort ?? row.effort;
+  return { model: request.model ?? row.model, effort, ...roomToThink(effort) };
+}
+
+// ── The deployment's tier assignments ──────────────────────────────────────
+//
+// `EXTRACTION_TIERS` is a JSON object from a tier to the model and effort this
+// deployment buys for it, for example
+// `{"careful": {"model": "claude-opus-5", "effort": "medium"}}`. A tier it is
+// silent about, and a field a tier's entry leaves out, keep the built-in
+// value, so an unset variable is exactly the built-in table. The model is a
+// logical name; MODEL_MAP still decides which vendor answers it.
+
+export interface ExtractionTierAssignment {
+  model?: ChatModelName;
+  effort?: Effort;
+}
+export type ExtractionTiers = ReadonlyMap<AiTier, ExtractionTierAssignment>;
+
+const TIERS_EXAMPLE = '{"careful": {"model": "claude-opus-5", "effort": "medium"}}';
+
+const tierAssignment = z.strictObject({
+  model: z.string().optional(),
+  effort: z.enum(EFFORTS).optional(),
+});
+
+function isAiTier(s: string): s is AiTier {
+  return AI_TIERS.some((tier) => tier === s);
+}
+
+/** Shape only, refusing a misspelt tier or field with its key named rather
+ *  than leaving the built-in silently in place. Whether a named model can be
+ *  reached here is {@link assertExtractionTiersConfigured}'s question. */
+export function parseExtractionTiers(raw: string | undefined): ExtractionTiers {
+  if (raw === undefined || raw.trim() === '') return new Map();
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `EXTRACTION_TIERS is not valid JSON (${error instanceof Error ? error.message : String(error)}). ` +
+        `It must be an object like ${TIERS_EXAMPLE}.`,
+    );
+  }
+  const shape = z.record(z.string(), z.unknown()).safeParse(json);
+  if (!shape.success) {
+    throw new Error(`EXTRACTION_TIERS must be a JSON object from tier to settings, like ${TIERS_EXAMPLE}.`);
+  }
+
+  const tiers = new Map<AiTier, ExtractionTierAssignment>();
+  for (const [key, value] of Object.entries(shape.data)) {
+    if (!isAiTier(key)) {
+      throw new Error(`EXTRACTION_TIERS key "${key}" is not a tier. Tiers: ${AI_TIERS.join(', ')}.`);
+    }
+    const entry = tierAssignment.safeParse(value);
+    if (!entry.success) {
+      throw new Error(
+        `EXTRACTION_TIERS["${key}"] must be an object with an optional "model" (a model name) and an ` +
+          `optional "effort" (one of ${EFFORTS.join(', ')}), and nothing else.`,
+      );
+    }
+    const { model, effort } = entry.data;
+    tiers.set(key, {
+      ...(model !== undefined ? { model: parseChatModelName(model, `EXTRACTION_TIERS["${key}"].model`) } : {}),
+      ...(effort !== undefined ? { effort } : {}),
+    });
+  }
+  return tiers;
+}
+
+// Parsed once per distinct value, as MODEL_MAP is: fixed in production, and a
+// test that sets its own does not read the previous test's.
+let memo: { raw: string | undefined; tiers: ExtractionTiers } | undefined;
+
+function extractionTiers(env: NodeJS.ProcessEnv): ExtractionTiers {
+  const raw = env.EXTRACTION_TIERS;
+  if (memo === undefined || memo.raw !== raw) memo = { raw, tiers: parseExtractionTiers(raw) };
+  return memo.tiers;
+}
+
+/** Boot: refuse a tier assignment this deployment cannot serve — a malformed
+ *  entry, or a model MODEL_MAP sends nowhere callable — rather than letting
+ *  the first extraction at that tier find out. */
+export function assertExtractionTiersConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  for (const [tier, { model }] of extractionTiers(env)) {
+    if (model === undefined) continue;
+    const availability = chatModelAvailability(model, env);
+    if (!availability.available) {
+      throw new Error(`EXTRACTION_TIERS["${tier}"].model: ${availability.reason}`);
+    }
+  }
 }

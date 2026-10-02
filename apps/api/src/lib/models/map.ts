@@ -15,8 +15,8 @@ import { isGoogleServiceAccountConfigured, missingGoogleServiceAccountVars } fro
 import { neverAsAny } from '../utils/types';
 import { embeddingDestinations } from './embedding/destinations';
 import { embeddingRange } from './embedding/range';
-import { isModelName, modelNames, models } from './registry';
-import type { Capability, ModelName } from './registry';
+import { chatModelNames, hasCapability, isModelName, modelNames, models } from './registry';
+import type { Capability, ChatModelName, ModelName } from './registry';
 
 export const providers = ['anthropic', 'vertex', 'openai', 'gemini'] as const;
 export type Provider = (typeof providers)[number];
@@ -207,8 +207,7 @@ function assertEmbeddingWidths(name: ModelName, provider: Provider, wireModel: s
  * development defaults the vendor clients fall back to.
  */
 export function assertCallable(resolved: Resolved, env: NodeJS.ProcessEnv = process.env): void {
-  if (env.NODE_ENV !== 'production') return;
-  if (providerCredentialsPresent(resolved.provider, env)) return;
+  if (isCallable(resolved, env)) return;
   if (modelMap(env).has(resolved.preferred)) {
     throw new Error(
       `MODEL_MAP["${resolved.preferred}"] sends it to ${resolved.provider}, but ${resolved.provider} ` +
@@ -221,6 +220,58 @@ export function assertCallable(resolved: Resolved, env: NodeJS.ProcessEnv = proc
       `${credentialsFor(resolved.provider, env)}, or add a line to MODEL_MAP such as ` +
       `"${resolved.preferred}": "<provider>/<wire model>".`,
   );
+}
+
+/** Whether a call to `resolved` would get past {@link assertCallable}. The
+ *  one definition of "this deployment can reach it", so a name validation
+ *  accepts is a name the call accepts, and the reverse. */
+export function isCallable(resolved: Resolved, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV !== 'production' || providerCredentialsPresent(resolved.provider, env);
+}
+
+/** The chat models a movement may name on this deployment: those the map
+ *  sends somewhere callable. A deployment property, not a language one — the
+ *  same movement can name a model one deployment reaches and another does not. */
+export function availableChatModels(env: NodeJS.ProcessEnv = process.env): ChatModelName[] {
+  return chatModelNames.filter((name) => isCallable(resolveModel(name, env), env));
+}
+
+export type ChatModelAvailability =
+  | { available: true; model: ChatModelName }
+  | { available: false; reason: string };
+
+/**
+ * Whether a logical model name, as written by an author or an operator, is a
+ * chat model this deployment can reach — and if not, why, in words naming what
+ * to change. What validation and the deploy check call for a movement's model
+ * override, and what boot calls for a tier assignment.
+ */
+export function chatModelAvailability(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ChatModelAvailability {
+  if (!isModelName(name)) {
+    return {
+      available: false,
+      reason: `"${name}" is not a model name this code uses. Chat models: ${chatModelNames.join(', ')}.`,
+    };
+  }
+  if (!hasCapability(name, 'chat')) {
+    return {
+      available: false,
+      reason: `"${name}" is not a chat model (it serves ${models[name].capability}).`,
+    };
+  }
+  const resolved = resolveModel(name, env);
+  if (!isCallable(resolved, env)) {
+    return {
+      available: false,
+      reason:
+        `"${name}" goes to ${resolved.provider}, which has no credentials on this deployment — ` +
+        `set ${credentialsFor(resolved.provider, env)}, or send it to a configured provider via MODEL_MAP.`,
+    };
+  }
+  return { available: true, model: name };
 }
 
 /** One name the process calls without being asked — nobody chose it, it's a
