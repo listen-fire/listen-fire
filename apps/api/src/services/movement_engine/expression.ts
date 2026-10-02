@@ -516,7 +516,16 @@ export type Binding =
    *  declaration, `library` for an imported one (its environment is built
    *  only if a description actually interpolates). Neither = the running
    *  file's. */
-  | { kind: 'shape'; declaration: ShapeDeclaration; fileEnv?: Environment; library?: LinkedFile }
+  | {
+      kind: 'shape';
+      declaration: ShapeDeclaration;
+      fileEnv?: Environment;
+      library?: LinkedFile;
+      /** Declared in a body (or in an `extract(…)` argument) rather than at
+       *  file level — not in the re-parsed file scope, so a park carries the
+       *  declaration itself rather than its name. */
+      local?: true;
+    }
   /** A movement declaration — callable (composition, §G). An IMPORTED
    *  movement carries its library's file environment (`fileEnv`): the
    *  callee executes against ITS OWN file scope, not the importer's
@@ -1049,6 +1058,25 @@ export type MovementTraceEntry =
       };
       /** Entities yielded, by node alias. */
       emissions: Record<string, number>;
+      /** `call` on an entry the extraction CALL (`extract(content, Shape)`)
+       *  wrote; absent on the keyword's. Its `inputs` are the content items,
+       *  one per block, in the author's order. */
+      form?: 'call';
+      /**
+       * How the extraction call used the prompt cache — what measuring the
+       * cache-sensitive layout reads. `breakpoints` are the content items
+       * whose block ended in a cache breakpoint; `sharedItems` is how many
+       * leading items an earlier call in this run had already sent. The token
+       * counts are the provider's, across both attempts when the call was
+       * retried; absent where the client reported none.
+       */
+      cache?: {
+        breakpoints: number[];
+        sharedItems: number;
+        inputTokens?: number;
+        readTokens?: number;
+        writeTokens?: number;
+      };
       /** Per node alias, count of emitted entities whose declared fields
        *  all came back null/absent — present only when nonzero. */
       empty?: Record<string, number>;

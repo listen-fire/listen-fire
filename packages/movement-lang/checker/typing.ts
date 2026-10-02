@@ -43,7 +43,7 @@ import {
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
 import { neverAsAny } from '../never';
-import { before, type LanguageVersion } from '../language_version';
+import { before, since, type LanguageVersion } from '../language_version';
 import { Span } from '../parser/ast';
 import {
   describeFieldType,
@@ -72,6 +72,10 @@ import {
 } from './meta';
 
 export const TypedDiagnosticCodes = {
+  /** `ONLY(extract(content, Shape))` — the extraction call inside another
+   *  expression. Its shape is a TYPE, which an expression cannot hold, so the
+   *  call is read where a binding's value is; bind it, then use the name. */
+  EXTRACT_CALL_NESTED: 'MOV_EXTRACT_CALL_NESTED',
   WRITE_UNKNOWN_ROOT: 'MOV_WRITE_UNKNOWN_ROOT',
   WRITE_UNKNOWN_FIELD: 'MOV_WRITE_UNKNOWN_FIELD',
   WRITE_FIELD_TYPE: 'MOV_WRITE_FIELD_TYPE',
@@ -3647,6 +3651,14 @@ export class ExpressionTyping {
         // every other bare function stays untyped (silent).
         if (expr.fn === 'isnull' && expr.args.length === 1) {
           this.refuseTextPresenceTest(expr.args[0], 'absent');
+        }
+        // Before version 3 there is no extraction call, and the name means
+        // what any unknown function does.
+        if (expr.fn === 'extract' && since(this.options.languageVersion, 3)) {
+          this.report(
+            TypedDiagnosticCodes.EXTRACT_CALL_NESTED,
+            "'extract(…)' is read on its own line, not inside another expression — its shape is a declaration, which an expression cannot hold. Bind it first, then use the name: `found = extract(content, Shape)` then `ONLY(found)`",
+          );
         }
         if (expr.fn === FILE_FUNCTION_ID) return 'file';
         if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);

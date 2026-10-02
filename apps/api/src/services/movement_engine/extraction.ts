@@ -361,7 +361,7 @@ async function buildDeclaredNodeSpec(
  * base's — but each part is built with the resolvers of the declaration that
  * WROTE it, so an inherited word interpolates in its own file.
  */
-async function buildDeclarationSpec(
+export async function buildDeclarationSpec(
   name: string,
   declared: DeclaredNodeShape,
   options: ExtractSpecOptions | undefined,
@@ -701,7 +701,7 @@ const EXTRACTION_MIN_TOKENS = 8000;
 /** Hard ceiling regardless of input size — and the DEFAULT flat ceiling when
  *  the guard is off. Streaming in the wrapper is what makes a ceiling this
  *  high safe against HTTP timeouts. */
-const EXTRACTION_MAX_TOKENS = 32000;
+export const EXTRACTION_MAX_TOKENS = 32000;
 /** Rough tokens-per-character for English prose. Only ever used to size a
  *  budget or estimate one after the fact, so being off by a third costs
  *  nothing. */
@@ -712,7 +712,7 @@ const CHARS_PER_TOKEN = 4;
  * asked about. Only consulted when the guard ({@link extractionOutputBudgetEnabled})
  * is on — do not delete this on the assumption the flat ceiling replaced it.
  */
-function extractionMaxTokens(input: { system: string; userMessage: string }): number {
+export function extractionMaxTokens(input: { system: string; userMessage: string }): number {
   const inputTokens = (input.system.length + input.userMessage.length) / CHARS_PER_TOKEN;
   const proportional = Math.ceil(inputTokens * EXTRACTION_OUTPUT_RATIO);
   return Math.min(EXTRACTION_MAX_TOKENS, Math.max(EXTRACTION_MIN_TOKENS, proportional));
@@ -726,7 +726,7 @@ function extractionMaxTokens(input: { system: string; userMessage: string }): nu
  * covers a genuine near-miss; past that the truncation raises and
  * `callWithRetry` gets its one clean retry.
  */
-const EXTRACTION_MAX_CONTINUATIONS = 1;
+export const EXTRACTION_MAX_CONTINUATIONS = 1;
 
 /**
  * Opt-in switch for the loop guard above. Read directly off `process.env`
@@ -734,7 +734,7 @@ const EXTRACTION_MAX_CONTINUATIONS = 1;
  * is an ops calibration knob, not a required deployment setting — unset must
  * fall back to trusting the model, in every environment including production.
  */
-function extractionOutputBudgetEnabled(): boolean {
+export function extractionOutputBudgetEnabled(): boolean {
   const raw = process.env.EXTRACTION_OUTPUT_BUDGET;
   return raw === '1' || raw === 'true';
 }
@@ -957,7 +957,7 @@ async function mapConcurrent<T, R>(
  * Refusing preemption is fine at a boundary this coarse: a fetch already in
  * flight runs to its own timeout, and the cancel lands before the NEXT one.
  */
-async function throwIfCancelled(): Promise<void> {
+export async function throwIfCancelled(): Promise<void> {
   const cancelGate = currentLlmUsageContext()?.data.cancelGate;
   if (cancelGate && (await cancelGate.cancelled())) throw new RunCancelledSignal();
 }
@@ -988,7 +988,7 @@ function countPartialEntities(parsed: unknown): number {
  *  reaches `TraceSink` (this seam sits below it; `LlmClient.call` has no trace
  *  to write into, unlike the schema-rejection path in `failedCall`, which logs
  *  a slice of the reply onto the run's own trace instead). */
-function logTruncatedExtraction(input: { label: string; userMessage: string }, reply: { text: string }): void {
+export function logTruncatedExtraction(input: { label: string; userMessage: string }, reply: { text: string }): void {
   const partial = parseJsonReply(reply.text, { label: input.label, prompt: input.userMessage });
   logger.warn('[extraction] truncated', {
     label: input.label,
@@ -1011,7 +1011,7 @@ function logTruncatedExtraction(input: { label: string; userMessage: string }, r
  * it sent the incident's readers looking for a long answer that was never
  * written.
  */
-function describeTruncation(reply: ChatReply, ceiling: number): string {
+export function describeTruncation(reply: ChatReply, ceiling: number): string {
   const spent = `${reply.continuations} continuation${reply.continuations === 1 ? '' : 's'}`;
   if (reply.thinkingOnly) {
     return `the model spent the whole ${ceiling}-token output ceiling thinking${reply.effort ? ` at effort ${reply.effort}` : ''} and produced no text, after ${spent}`;
@@ -1132,7 +1132,7 @@ function maxFileChars(): number {
 
 /** A source file's text as the PROMPT sees it. `chars` is how much of the
  *  file's own text went in; the marker the model reads is extra. */
-interface BoundedFileText {
+export interface BoundedFileText {
   content: string;
   chars: number;
   truncatedFrom?: number;
@@ -1143,7 +1143,7 @@ interface BoundedFileText {
  *  sentence cut mid-word as the end of the document. The stored copy
  *  (`rawTextId`) and the carry-forward FILE resource keep the whole text —
  *  only the prompt is bounded. */
-function boundFileText(text: string, ref: FileRef): BoundedFileText {
+export function boundFileText(text: string, ref: FileRef): BoundedFileText {
   const ceiling = maxFileChars();
   if (text.length <= ceiling) return { content: text, chars: text.length };
   logger.warn('[movement:extract] truncating a source file for the prompt', {
@@ -2217,7 +2217,7 @@ function dropEmptyEmissions(
  * A blank entry drops out of a list for the same reason, and a list left with
  * nothing is itself absent — an unproduced list is not "a list of nothing".
  */
-function absentIfBlank(value: unknown): unknown {
+export function absentIfBlank(value: unknown): unknown {
   if (value === undefined) return null;
   if (typeof value === 'string') return value.trim() === '' ? null : value;
   if (Array.isArray(value)) {
@@ -2481,7 +2481,7 @@ function wrapFieldEvidence(valueSchema: z.ZodTypeAny, ctx?: FieldCoercions): z.Z
 }
 
 /** Where one field's coercions are recorded, and under what key. */
-interface FieldCoercions {
+export interface FieldCoercions {
   key: string;
   sink: CoercionTracker;
 }
@@ -2507,7 +2507,7 @@ interface FieldCoercions {
  * region call and reused for both the first and the retry parse, so without
  * a reset a succeeding retry would inherit the failed attempt's diagnostics.
  */
-class CoercionTracker {
+export class CoercionTracker {
   private byField: Record<string, string[]> = {};
   private evidenceByField: Record<string, string[]> = {};
   private envelope: string | undefined;
@@ -2552,7 +2552,7 @@ function pushCoercion(into: Record<string, string[]>, key: string, rendered: str
   (into[key] ??= []).push(truncated);
 }
 
-function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.ZodTypeAny {
+export function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.ZodTypeAny {
   if (type === undefined) return z.unknown();
   const variant = variantOf(type);
   switch (variant.kind) {
@@ -2831,7 +2831,7 @@ function countSites(site: CallSite): number {
 
 // ── Prompt assembly (the TG batcher's conventions, nested) ─────────────────
 
-function describeGuideType(type: FieldType | undefined): string {
+export function describeGuideType(type: FieldType | undefined): string {
   if (type === undefined) return 'text';
   const variant = variantOf(type);
   switch (variant.kind) {
@@ -2875,7 +2875,7 @@ function describeGuideType(type: FieldType | undefined): string {
 
 /** `: <words>` after a name in the guide — nothing when there are no words
  *  (an undescribed declared field is extracted by its name alone). */
-function described(description: string): string {
+export function described(description: string): string {
   return description === '' ? '' : `: ${description}`;
 }
 

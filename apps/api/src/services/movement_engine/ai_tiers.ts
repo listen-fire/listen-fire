@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-import { AI_TIERS, aiTier } from '#shared/expression/types';
+import { AI_EFFORTS, AI_TIERS, aiTier } from '#shared/expression/types';
 import type { AiTier } from '#shared/expression/types';
 
 import { chatModelAvailability } from '../../lib/models/map';
@@ -88,7 +88,7 @@ export interface TierCallSettings {
   maxTokens?: number;
 }
 
-export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+export const EFFORTS = AI_EFFORTS;
 export type Effort = (typeof EFFORTS)[number];
 
 /** What an extraction call names as its model: one of the built-in aliases

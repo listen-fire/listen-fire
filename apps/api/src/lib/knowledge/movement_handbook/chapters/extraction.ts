@@ -7,6 +7,58 @@ export const extraction: Chapter = {
 
 Use \`extract\` to turn free text and documents into records you can traverse and write from. One declared tree produces the whole result in a single pass, and afterwards its values read as plain properties. For a single value — a summary, a category — use \`AI()\` instead.
 
+### the extraction call
+
+\`extract(content, Shape, settings)\` is extraction as a function: a list of text and files in, a list of \`Shape\` records out.
+
+\`\`\`
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+  node person: "each person at the company named in the message" {
+    name: <text> "the person's full name"
+  }
+}
+
+node Profile: "more about the company described last" {
+  summary: <text> "one line on what the company does"
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  files     = COLLECT(m-[a:Attachments]->.\`File\`)
+  content   = [m.\`Body\`, ...files]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
+    return ONLY(found)
+  })
+
+  MAP(companies, (c) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: c.name }
+    c-[p:person]-> {
+      write record-[:Team]-> { unique by (FUZZY \`Name\`) Name: p.name }
+    }
+  })
+}
+\`\`\`
+
+- **Content** is a list, read in the order you write it: text, files (read as text, as \`from [ … ]\` reads them), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save — the rendering is part of what the model reads, so you choose it. Spread a list of files in with \`...\`.
+- **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a name worked out at run time.
+- **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), take the single one with \`ONLY\`, write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
+- **Bind it, then use it**: \`found = extract(…)\` then \`ONLY(found)\`, or \`return extract(…)\`. Written inside another expression it is refused, with that fix.
+- **Settings**, each written as a quoted word: \`tier\` (\`'quick'\`, \`'careful'\`, \`'thorough'\` — see *how hard it works*), \`model\` (a model this installation can reach, by name), \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`). A model or effort you name wins over the tier's. An unknown setting, or a model this installation cannot reach, is refused when you save.
+- A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
+
+**Write the content so repeated calls are cheap.** The model reads content it has already seen in this run for a fraction of the price, but only the part that comes first and is identical:
+
+- Put what every call shares first and what belongs to one record last — \`[...content, TEXT.SERIALISE(c, 'JSON')]\`, never the other way round.
+- Keep the tier (or the model and effort) the same across calls that read the same content.
+- Give the \`MAP\` an \`initialConcurrency: 1\`, so the first record's call has read the shared content before the others start.
+- The shape is always placed after the content, so a second extraction with a different shape over the same content reuses it too.
+
+The \`extract … from [ … ] { … }\` form below still runs exactly as before, and everything in the rest of this chapter about it holds.
+
 ### basics
 
 \`\`\`
@@ -189,6 +241,47 @@ c-[r:_resources WHERE type == "FILE"]-> {
 
 Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A document a \`through [ … ]\` stage downloaded is a \`"FILE"\` too. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
   engineClaims: [
+    {
+      construct: 'the extraction call — extract(content, Shape, settings), then a per-record extraction in MAP',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+  node person: "each person at the company named in the message" {
+    name: <text> "the person's full name"
+  }
+}
+
+node Profile: "more about the company described last" {
+  summary: <text> "one line on what the company does"
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  files     = COLLECT(m-[a:Attachments]->.\`File\`)
+  content   = [m.\`Body\`, ...files]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
+    return ONLY(found)
+  })
+
+  MAP(companies, (c) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: c.name }
+    c-[p:person]-> {
+      write record-[:Team]-> { unique by (FUZZY \`Name\`) Name: p.name }
+    }
+  })
+}
+`,
+    },
     {
       construct: 'a <boolean> extraction field, guarded then branched on directly with if',
       status: 'runs',

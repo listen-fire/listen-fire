@@ -64,6 +64,8 @@ import {
   ErrorStatement,
   ExprSlot,
   UniqueClause,
+  ExtractCallExpression,
+  ExtractCallShape,
   ExtractExpression,
   ExtractField,
   ExtractStage,
@@ -150,6 +152,7 @@ import {
   surfaceNotEnumerated,
   unionKey,
   unionVariants,
+  variantOf,
   WritableRootSchema,
 } from './catalog';
 import {
@@ -199,6 +202,7 @@ import {
 import { terminates } from './flow';
 import { didYouMean } from './meta';
 import { readCollectionConfig } from './collection_config';
+import { readExtractCallConfig } from './extract_config';
 import { genericLandingKey, literalStringValuesOf } from './generics';
 import { parseTraversalPath } from '../service/selectors';
 import { Resolution, Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
@@ -253,6 +257,7 @@ import {
   recordHeadPosition,
   recordOf,
   recordValueOf,
+  readsAsPresentText,
   stripAbsent,
   TypedDiagnosticCodes,
   mixedTupleMessage,
@@ -434,6 +439,18 @@ export const DiagnosticCodes = {
   /** `node entry: <X>` where `X` is not a node declaration — an extraction
    *  node's shape is a declared structure, never a system's record type. */
   EXTRACT_SHAPE_NOT_DECLARED: 'MOV_EXTRACT_SHAPE_NOT_DECLARED',
+  /** `extract(content, s)` where `s` is worked out rather than a node
+   *  declaration known when the program is checked — the result's type IS
+   *  the shape, so a shape nobody can see types nothing. */
+  EXTRACT_SHAPE_COMPUTED: 'MOV_EXTRACT_SHAPE_COMPUTED',
+  /** `extract(content, …)` where the content is not a list of text and files:
+   *  a record, a map or json handed over raw (render it with
+   *  `TEXT.SERIALISE`), a number or a date, or one value where a list goes. */
+  EXTRACT_CONTENT: 'MOV_EXTRACT_CONTENT',
+  /** `extract(content, Shape, { … })` with settings the call cannot run with:
+   *  an unknown key, a tier or effort outside its words, a model this
+   *  deployment does not reach, or a value worked out rather than written. */
+  EXTRACT_CONFIG: 'MOV_EXTRACT_CONFIG',
   /** `node X extends Y` where `Y` is not a node declaration in scope. */
   EXTENDS_NOT_A_NODE: 'MOV_EXTENDS_NOT_A_NODE',
   /** `node A extends B` where `B` extends `A` — directly or further up. */
@@ -2274,6 +2291,93 @@ function recordSurface(type: PositionTypeRef): SuppliedSurface | undefined {
   }
 }
 
+/**
+ * One record `extract(content, Shape)` hands back: a run-local record (the
+ * graph literal's kind, so it walks, filters, takes writes and links in the
+ * run) whose fields read by the keyword's rule for the same declaration —
+ * plain text present, anything typed `T | absent`, an annotation that did not
+ * resolve here unknown. Each nested node is an edge of records of its own,
+ * in the order the content gave them.
+ */
+function extractedRecordType(node: ExtractNodeType): Extract<PositionTypeRef, { kind: 'local' }> {
+  const reads: Record<string, FieldType | undefined> = {};
+  for (const [name, field] of node.properties) {
+    reads[name] = readsAsPresentText(field)
+      ? 'text'
+      : field.explicit !== undefined
+        ? maybeAbsent(field.explicit)
+        : undefined;
+  }
+  const edges: Record<string, LocalEdge> = {};
+  for (const [name, child] of node.children) {
+    edges[name] = {
+      schema: { target: name, readable: true, sequenced: 'document' },
+      target: extractedRecordType(child),
+      structural: true,
+    };
+  }
+  return { kind: 'local', label: `an extracted '${node.name}' record`, reads, edges };
+}
+
+/** Why `extract` cannot read this content as it is, or undefined. `written` is
+ *  the content as the author wrote it, for the fix. */
+function extractContentProblem(type: FieldType, written: string): string | undefined {
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'list':
+      return extractContentItemProblem(variant.of, 'each item');
+    case 'tuple': {
+      for (const [index, slot] of variant.of.entries()) {
+        if (slot === null) continue;
+        const problem = extractContentItemProblem(slot, `item ${index}`);
+        if (problem !== undefined) return problem;
+      }
+      return variant.rest?.of != null
+        ? extractContentItemProblem(variant.rest.of, 'each item the spread adds')
+        : undefined;
+    }
+    case 'record':
+      return `'extract' reads text and files, and this is a record — render it as text in the content list: \`extract([TEXT.SERIALISE(${written}, 'JSON')], …)\``;
+    default:
+      return `'extract' reads a LIST of text and files, and this is ${describeFieldType(type)} — write it as a list: \`extract([${written}], …)\``;
+  }
+}
+
+function extractContentItemProblem(type: FieldType, which: string): string | undefined {
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'text':
+    case 'enum':
+    case 'file':
+    case 'absent':
+      return undefined;
+    case 'union': {
+      for (const member of variant.of) {
+        const problem = extractContentItemProblem(member, which);
+        if (problem !== undefined) return problem;
+      }
+      return undefined;
+    }
+    case 'record':
+      return `${which} of the content is a record, and 'extract' reads text and files — render the record as text first: \`TEXT.SERIALISE(record, 'JSON')\``;
+    case 'dict':
+    case 'json':
+      return `${which} of the content is ${describeFieldType(type)}, and 'extract' reads text and files — render it as text first: \`TEXT.SERIALISE(value, 'JSON')\``;
+    case 'list':
+    case 'tuple':
+      return `${which} of the content is itself a list — spread it into the content so each of its items is one item: \`[a, ...items]\``;
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+      return `${which} of the content is ${describeFieldType(type)}, and 'extract' reads text and files — write it into text (\`"… \${value} …"\`) or render it with \`TEXT.SERIALISE(value, 'JSON')\``;
+    case 'maybeAbsent':
+      return extractContentItemProblem(variant.of, which);
+    default:
+      return neverAsAny(variant);
+  }
+}
+
 function extractSurface(node: ExtractNodeType): SuppliedSurface {
   return {
     properties: Object.fromEntries(
@@ -4024,6 +4128,17 @@ class Checker {
       case 'extract': {
         const result = this.checkExtract(value.extract, scope, name);
         symbol = { ...symbol, posType: result, bindingPlane: 'node' };
+        break;
+      }
+      case 'extractCall': {
+        // A list of records, on the value plane — the currency a plugin's
+        // records and a MAP's answers already travel in.
+        const records = this.checkExtractCall(value.extractCall, scope, name);
+        symbol = {
+          ...symbol,
+          ...(records !== undefined ? { fieldType: records } : {}),
+          bindingPlane: 'scalar',
+        };
         break;
       }
       case 'block': {
@@ -9812,6 +9927,120 @@ class Checker {
       node,
     });
     return { kind: 'extract', node };
+  }
+
+  /**
+   * `extract(content, Shape, { … })` — content in, a list of `Shape` records
+   * out. The records read the way an extracted record of the same declaration
+   * reads under the keyword (`readsAsPresentText`): plain text is always
+   * there, anything typed may be absent. They are run-local records, so a
+   * walk, a WHERE, a write or a link into one stays in the run, as it does for
+   * a graph literal.
+   */
+  private checkExtractCall(
+    call: ExtractCallExpression,
+    scope: Scope,
+    binding: string | undefined,
+  ): FieldType | undefined {
+    this.effects?.flag('ai');
+    this.checkExtractCallContent(call.content, scope);
+    if (call.config !== undefined) this.checkExtractCallConfig(call.config);
+    const shape = this.resolveExtractCallShape(call.shape, scope);
+    if (shape === undefined) return undefined;
+    const { declaration, schema } = shape;
+    const node = shapeExtractGraph(declaration.name, declaration.root, declaration.name, schema);
+    this.recordNode({
+      kind: 'extract',
+      span: call.span,
+      scope,
+      ...(binding !== undefined ? { binding } : {}),
+      node,
+    });
+    return listOf(recordOf(extractedRecordType(node)), 'ordered');
+  }
+
+  /** The declaration the shape argument names or writes in place — refused,
+   *  with the fix, when it is anything else. */
+  private resolveExtractCallShape(
+    shape: ExtractCallShape,
+    scope: Scope,
+  ): DeclaredExtractShape | undefined {
+    switch (shape.kind) {
+      case 'inline': {
+        // The declaration's own path, in a scope of its own: written in the
+        // argument, it names the shape for this call and nothing after it.
+        const own = new Scope('branch', scope);
+        this.checkStatement(shape.declaration, own);
+        return declaredExtractShape(own.resolve(shape.declaration.name));
+      }
+      case 'named': {
+        const resolution = scope.resolve(shape.name);
+        if (resolution.kind !== 'found') {
+          this.reportResolutionFailure(shape.name, shape.span, resolution);
+          return undefined;
+        }
+        const declared = declaredExtractShape(resolution);
+        if (declared !== undefined) return declared;
+        if (resolution.symbol.kind !== 'shape') {
+          this.report(
+            DiagnosticCodes.EXTRACT_SHAPE_COMPUTED,
+            `'${shape.name}' is ${describeKind[resolution.symbol.kind]}, and 'extract' takes a node declaration — the records it hands back are of that shape, so the shape has to be known when the program is checked. Declare it (\`node ${shape.name}: "…" { … }\`) and pass its name, or write it in place.`,
+            shape.span,
+          );
+        }
+        return undefined;
+      }
+      case 'computed':
+        this.checkExprSlot(shape.expr, scope);
+        this.report(
+          DiagnosticCodes.EXTRACT_SHAPE_COMPUTED,
+          `'extract' takes a node declaration by its name (\`extract(content, Company)\`) or written in place (\`extract(content, node Company: "…" { … })\`) — the records it hands back are of that shape, so a shape worked out at run time types nothing`,
+          shape.span,
+        );
+        return undefined;
+      default:
+        return neverAsAny(shape);
+    }
+  }
+
+  /** The content is a list of text and files. A record goes in as TEXT, which
+   *  the author renders — the rendering is part of the prompt, and only the
+   *  author knows which one they want. */
+  private checkExtractCallContent(content: ExprSlot, scope: Scope): void {
+    // HELD, not read: each item is its own block of the prompt, so a list
+    // literal keeps its tuple type and every item is judged on its own — a
+    // record among the text is named as one, not folded into a mixed list.
+    const { valueType, parsed } = this.checkExprSlot(content, scope, { holdsValue: true });
+    if (this.bareNodeSymbol(content.raw, parsed, scope) !== undefined) {
+      this.report(
+        DiagnosticCodes.EXTRACT_CONTENT,
+        `'${content.raw.trim()}' is a record, and 'extract' reads text and files — render it as text and put it in the content list: \`extract([TEXT.SERIALISE(${content.raw.trim()}, 'JSON')], …)\``,
+        content.span,
+      );
+      return;
+    }
+    if (valueType === undefined) return; // unknown stays silent
+    const problem = extractContentProblem(valueType, content.raw.trim());
+    if (problem !== undefined) this.report(DiagnosticCodes.EXTRACT_CONTENT, problem, content.span);
+  }
+
+  /** A settings record is read, not typed — the engine's own reader settles
+   *  it here, against the models this deployment reaches when that is known. */
+  private checkExtractCallConfig(config: ExprSlot): void {
+    let parsed: Expression;
+    try {
+      parsed = parseMovementExpression(config.raw);
+    } catch (e) {
+      if (!(e instanceof BridgeError)) throw e;
+      this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(config, e.pos));
+      return;
+    }
+    const models = this.catalog.models?.();
+    const reading = readExtractCallConfig(parsed, models !== undefined ? { models } : {});
+    if (reading.ok) return;
+    for (const problem of reading.problems) {
+      this.report(DiagnosticCodes.EXTRACT_CONFIG, problem, config.span);
+    }
   }
 
   /**

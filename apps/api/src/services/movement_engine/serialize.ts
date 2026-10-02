@@ -34,7 +34,7 @@
 // injected `RehydrationContext`, exactly as the interpreter keeps `resolveAdapter`
 // / `parkSink` behind seams.
 
-import type { ClosureExpression, NodeLiteral, PathHead } from 'movement-lang';
+import type { ClosureExpression, NodeLiteral, PathHead, ShapeDeclaration } from 'movement-lang';
 import type { FileRef, Resource } from '../translation_graph/adapter';
 import type { SourcePosition } from '../translation_graph/types';
 import type { ExtractEmission } from './extraction';
@@ -149,6 +149,10 @@ export type BindingDescriptor =
   // Bucket 3 — code refs carry ONLY the re-resolution tag (the name). The live
   // declaration / fileEnv comes from the re-parsed program.
   | { kind: 'shape'; name: string }
+  /** A node declaration made in a BODY: the re-parsed file scope does not hold
+   *  it, so it travels as the declaration — code that is already data, as a
+   *  closure's body is. */
+  | { kind: 'localShape'; declaration: ShapeDeclaration }
   | { kind: 'movement'; name: string }
   | { kind: 'shapePosition'; shape: string; node: string; fields: Record<string, unknown>; fieldProvenance: Extract<Binding, { kind: 'shapePosition' }>['fieldProvenance'] }
   /** Bucket 3 (recursive) — a synthesised node. Its entry VALUES are already
@@ -462,7 +466,9 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       };
     // ── Bucket 3 — code refs (name only; re-resolved from the re-parsed AST) ──
     case 'shape':
-      return { kind: 'shape', name: binding.declaration.name };
+      return binding.local === true
+        ? { kind: 'localShape', declaration: binding.declaration }
+        : { kind: 'shape', name: binding.declaration.name };
     case 'movement':
       return { kind: 'movement', name: binding.declaration.name };
     case 'plugin':
@@ -657,6 +663,10 @@ export async function rehydrateBinding(
     case 'movement':
     case 'opaque':
       return ctx.resolveCodeRef(descriptor.name);
+    // Its words read the running file's scope after a resume — the body
+    // scope it was declared in is the one being rebuilt.
+    case 'localShape':
+      return { kind: 'shape', declaration: descriptor.declaration, local: true };
     case 'positions':
       return {
         kind: 'positions',
