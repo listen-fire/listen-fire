@@ -22,6 +22,7 @@ jest.mock('../store', () => ({
 jest.mock('../version_store', () => ({ movementSourceHash: () => 'hash' }));
 
 import {
+  CURRENT_LANGUAGE_VERSION,
   checkProgram,
   mockCatalog,
   parseProgram,
@@ -344,7 +345,7 @@ describe('which checks are upgrade checks', () => {
     });
 
     expect(result.status).toBe('needs_acknowledgement');
-    expect(told(validations)).toEqual([['old', 2, 1]]);
+    expect(told(validations)).toEqual([['old', CURRENT_LANGUAGE_VERSION, 1]]);
   });
 });
 

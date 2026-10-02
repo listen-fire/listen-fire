@@ -8,7 +8,7 @@
 //   3. a deprecated pin runs, with a warning on the run's own trace;
 //   4. validation (`diagnoseMovementSource`) honours the same pin.
 
-import type { InstanceSchema, LanguageRelease } from 'movement-lang';
+import { CURRENT_LANGUAGE_VERSION, type InstanceSchema, type LanguageRelease } from 'movement-lang';
 import { runMovement } from '../run';
 import { currentLanguageVersion } from '../run_scope';
 import { MovementEngineError } from '../errors';
@@ -154,11 +154,11 @@ describe('a run honours its language version pin', () => {
   it('runs under the current version when given none (unchanged for every existing caller)', async () => {
     const kg = makeKgFake();
     await run(kg);
-    expect(kg.seenVersions).toEqual([2]);
+    expect(kg.seenVersions).toEqual([CURRENT_LANGUAGE_VERSION]);
   });
 
   it('outside a run there is no pin: the current version', () => {
-    expect(currentLanguageVersion()).toBe(2);
+    expect(currentLanguageVersion()).toBe(CURRENT_LANGUAGE_VERSION);
   });
 
   it('refuses a pin this release does not support, naming it and the fix, before writing anything', async () => {
