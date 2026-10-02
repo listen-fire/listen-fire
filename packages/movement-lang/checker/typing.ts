@@ -1366,6 +1366,16 @@ function tupleSlotType(tuple: TupleType, index: number | undefined): FieldType |
   return fromEnd >= rest.at ? tuple.of[fromEnd] ?? undefined : anyOf([...tuple.of.slice(0, rest.at), rest.of]);
 }
 
+/** A tuple that holds records and no value — what read as a list of records
+ *  before list literals were tuples. A member nobody could type, or a bare
+ *  `null`, does not make it mixed, as neither does in `mixedTupleMessage`. */
+function holdsOnlyRecords(tuple: TupleType): boolean {
+  const typed = tupleMembers(tuple).filter(
+    (member): member is FieldType => member !== null && stripAbsent(member) !== 'absent',
+  );
+  return typed.some(member => isRecordType(member)) && typed.every(member => isRecordType(member));
+}
+
 /** The integer an index expression is FIXED at, when it is written down. */
 function literalIndex(expr: Expression): number | undefined {
   if (expr.type !== 'static' || typeof expr.value !== 'number') return undefined;
@@ -3291,8 +3301,20 @@ export class ExpressionTyping {
           // A TUPLE has a slot per position, so a LITERAL index reads that slot
           // and nothing else — present, because a fixed-length list always has
           // it. That exactness is the whole reason the tuple type exists.
+          //
+          // Except a tuple of RECORDS, which reads a slot as the list it widens
+          // to, the way every list literal's index read was typed before it was
+          // a tuple: unequal records unify to a record of any position, so a
+          // walk or a read off the slot was never checked against the slot's
+          // own record. Reading it exactly refuses saved movements that
+          // validated (`AT(both, 1)-[t:missing]->`), and a refusal that
+          // breaks one belongs behind a new language version. A record
+          // alongside a value is new — refused outright before — so it reads
+          // exactly.
           case 'tuple':
-            return tupleSlotType(variant, literalIndex(expr.index));
+            return holdsOnlyRecords(variant)
+              ? maybeAbsent(tupleAsList(variant)?.of)
+              : tupleSlotType(variant, literalIndex(expr.index));
           // Indexing can miss — an out-of-range index reads null at run time,
           // so the element is `T | absent`, exactly as FIRST/LAST are.
           case 'list':

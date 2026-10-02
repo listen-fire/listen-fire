@@ -244,3 +244,42 @@ describe('a record and a value in one literal', () => {
     expect(codes('  one = node { name: "Acme" }\n  n = COUNT([one, "label"])')).toContain('MOV_LIST_MIXED');
   });
 });
+
+// A list literal of records read at an index is typed as its index read was
+// before literals were tuples: the records it holds unify to a record of any
+// position, so a walk off the slot is not checked against the slot's own
+// record. Reading it exactly would refuse saved movements that validated;
+// that refusal waits for a language version that can make it.
+describe('a slot of a tuple of records reads as it did before tuples', () => {
+  const TWO = [
+    '  one = node { label: "A", tag: node { name: "A" } }',
+    '  two = node { label: "B", tag: node { name: "B" } }',
+    '  both = [one, two]',
+  ].join('\n');
+  const walk = (root: string) => `  ${root}-[t:missing]-> {\n    write inbox-[:log]-> { note: t.name }\n  }`;
+
+  it('reads the record the members unify to, maybe absent, as an index read of a list does', () => {
+    expect(fieldTypeOf(`${TWO}\n  s = AT(both, 1)`, 's')).toEqual({ kind: 'maybeAbsent', of: { kind: 'record' } });
+  });
+
+  it('walking an edge the slot has not got validates — the walk runs zero times', () => {
+    expect(codes(`${TWO}\n${walk('AT(both, 1)')}`)).toEqual([]);
+  });
+
+  it('the same walk off the slot bound to a name first', () => {
+    expect(codes(`${TWO}\n  s = AT(both, 1)\n${walk('s')}`)).toEqual([]);
+  });
+
+  it('the same walk off a tuple of records held in a dict', () => {
+    expect(codes(`${TWO}\n  d = { k: both }\n${walk('AT(AT(d, "k"), 0)')}`)).toEqual([]);
+  });
+
+  it('a null alongside the records does not make the slot read exactly', () => {
+    expect(codes(`${TWO}\n  some = [one, null]\n${walk('AT(some, 0)')}`)).toEqual([]);
+  });
+
+  it('a record alongside a value was refused before, so its slot still reads exactly', () => {
+    const body = `${TWO}\n  mixed = [one, e.\`Subject\`]\n${walk('AT(mixed, 0)')}`;
+    expect(codes(body)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
+  });
+});
