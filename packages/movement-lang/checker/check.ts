@@ -241,6 +241,7 @@ import {
   isEnumType,
   isListType,
   isRecordType,
+  isWalkProjection,
   positionRefIn,
   positionsMatch,
   positionSchemaOfRef,
@@ -2697,6 +2698,7 @@ class Checker {
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       isPluralName: name => this.isPluralSymbol(name, scope),
+      isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: () => {},
@@ -2741,6 +2743,7 @@ class Checker {
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       isPluralName: name => this.isPluralSymbol(name, scope),
+      isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
@@ -2764,6 +2767,7 @@ class Checker {
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
       isPluralName: name => this.isPluralSymbol(name, scope),
+      isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
       report: (code, message, at, severity) =>
@@ -4011,6 +4015,7 @@ class Checker {
           ...symbol,
           bindingPlane: 'scalar',
           ...(fieldType !== undefined ? { fieldType } : {}),
+          ...(this.isManyValuedValue(value.expr, parsed, scope) ? { plural: true as const } : {}),
         };
         break;
       }
@@ -4225,13 +4230,34 @@ class Checker {
     return symbol.posType !== undefined || symbol.bindingPlane === 'node' ? symbol : undefined;
   }
 
+  /** A value that is many values under one value's type — a walk read for a
+   *  field, or a name already bound to one (`ScopeSymbol.plural`) — so the
+   *  name it is bound to keeps the fact the type does not carry. */
+  private isManyValuedValue(slot: ExprSlot, parsed: Expression | undefined, scope: Scope): boolean {
+    if (parsed !== undefined) return isWalkProjection(parsed);
+    // A bare name never reaches the parse (`checkExprSlot`).
+    const name = slot.raw.trim();
+    return BARE_IDENT.test(name) && this.isManyValuedSymbol(name, scope);
+  }
+
+  /** Is `name` a value-plane binding of a walk read for a field
+   *  (`ScopeSymbol.plural`) — many values, typed as one? Read by a spread. */
+  private isManyValuedSymbol(name: string, scope: Scope): boolean {
+    const resolution = scope.resolve(name);
+    return resolution.kind === 'found'
+      && resolution.symbol.plural === true
+      && resolution.symbol.bindingPlane === 'scalar';
+  }
+
   /** Is `name` bound to a whole traversal block's return (`ScopeSymbol.plural`)
    *  — a collection, not the one record its type says? Read by
    *  `checkStdlibRecordArg` (`TEXT.PAIRS`'s argument), the one place that
    *  distinction matters: the type is silent on it by design. */
   private isPluralSymbol(name: string, scope: Scope): boolean {
     const resolution = scope.resolve(name);
-    return resolution.kind === 'found' && resolution.symbol.plural === true;
+    return resolution.kind === 'found'
+      && resolution.symbol.plural === true
+      && resolution.symbol.bindingPlane !== 'scalar';
   }
 
   /**

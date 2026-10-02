@@ -695,3 +695,83 @@ describe('graph { … } and spreads', () => {
     expect(attio.creates).toEqual([]);
   });
 });
+
+// A walk read for a field is one value per landing; a spread splices those
+// values, however many landed — the plan's content idiom, against the source
+// graph and against a local one.
+describe('a spread of a walk read for a field', () => {
+  function emailWith(files: Array<ReturnType<typeof attachment>>) {
+    return makeFakeAdapter('email', { related: { files } });
+  }
+
+  async function contentOf(body: string[], files: Array<ReturnType<typeof attachment>>): Promise<unknown> {
+    const email = emailWith(files);
+    const dropbox = makeFakeAdapter('dropbox');
+    await run(
+      MESSAGE +
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  drive = dropbox(credentials: team_drive)',
+          ...body,
+          '  write drive-[:file]-> { parts: TEXT.SERIALISE(content, "JSON") }',
+          '}',
+        ].join('\n'),
+      { subject: 'Series A' },
+      { email: email.adapter, dropbox: dropbox.adapter },
+    );
+    expect(dropbox.creates).toHaveLength(1);
+    return JSON.parse(String(dropbox.creates[0].fields.parts));
+  }
+
+  const deck = attachment('deck.pdf', 'application/pdf');
+  const memo = attachment('memo.pdf', 'application/pdf');
+  const photo = attachment('photo.png', 'image/png');
+  // A file serialises as its name, type and size — enough to say which one.
+  const pdf = (name: string) => ({ kind: 'file', name, contentType: 'application/pdf', size: null });
+
+  const BOUND = [
+    '  pdfs = msg-[a:files WHERE a.contentType = "application/pdf"]->.`data`',
+    '  content = [msg.subject, ...pdfs]',
+  ];
+
+  it('bound to a name, off the source: the WHERE keeps the PDFs and the spread splices them', async () => {
+    await expect(contentOf(BOUND, [deck, photo, memo])).resolves.toEqual(['Series A', pdf('deck.pdf'), pdf('memo.pdf')]);
+  });
+
+  it('one landing splices its one value', async () => {
+    await expect(contentOf(BOUND, [photo, deck])).resolves.toEqual(['Series A', pdf('deck.pdf')]);
+  });
+
+  it('nothing landed splices nothing', async () => {
+    await expect(contentOf(BOUND, [photo])).resolves.toEqual(['Series A']);
+    await expect(contentOf(BOUND, [])).resolves.toEqual(['Series A']);
+  });
+
+  it("inline, off a local graph — the plan's second form", async () => {
+    const body = [
+      '  m = from_email(m: msg)',
+      '  content = [m.text, ...m-[a:attachment WHERE a.type = "application/pdf"]->.file]',
+    ];
+    await expect(contentOf(body, [deck, photo, memo])).resolves.toEqual(['Series A', pdf('deck.pdf'), pdf('memo.pdf')]);
+    await expect(contentOf(body, [deck])).resolves.toEqual(['Series A', pdf('deck.pdf')]);
+    await expect(contentOf(body, [photo])).resolves.toEqual(['Series A']);
+  });
+
+  it('the name still reads as one value where one value is written, as it always did', async () => {
+    const email = emailWith([photo, deck]);
+    const attio = makeFakeAdapter('attio');
+    await run(
+      MESSAGE +
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  crm = attio(credentials: acme_main)',
+          '  name = msg-[a:files WHERE a.contentType = "application/pdf"]->.filename',
+          '  write crm-[:companies]-> { name: name }',
+          '}',
+        ].join('\n'),
+      { subject: 'Acme' },
+      { email: email.adapter, attio: attio.adapter },
+    );
+    expect(attio.creates).toEqual([{ recordType: 'company', fields: { name: 'deck.pdf' } }]);
+  });
+});

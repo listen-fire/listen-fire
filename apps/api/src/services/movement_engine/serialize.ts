@@ -123,7 +123,7 @@ export type BindingDescriptor =
    * one. Its capture serialises by the ordinary rules.
    */
   | { kind: 'closure'; closure: ClosureExpression; captured: Record<string, BindingDescriptor> }
-  | { kind: 'value'; value: unknown; provenance?: Provenance }
+  | { kind: 'value'; value: unknown; provenance?: Provenance; many?: true }
   /**
    * Bucket 3 (recursive) — a VALUE that holds records: a `MAP` answer whose
    * function returned the member, a list literal of them, a `GROUPBY` dict.
@@ -135,7 +135,7 @@ export type BindingDescriptor =
    * Its own descriptor kind rather than a richer `value`: a parked run written
    * before this existed still reads as `value`, and one written after says so.
    */
-  | { kind: 'recordValue'; value: ValueDescriptor; provenance?: Provenance }
+  | { kind: 'recordValue'; value: ValueDescriptor; provenance?: Provenance; many?: true }
   /** Bucket 1 — a minted callback is pure data: its id, its link, its fire-time
    *  signature. The CALLS are deliberately NOT here (they arrive after the park
    *  and are read live from the store), and neither is the body (it is code, at
@@ -451,12 +451,14 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
           kind: 'recordValue',
           value: serializeValue(binding.value),
           ...(binding.provenance !== undefined ? { provenance: binding.provenance } : {}),
+          ...(binding.many === true ? { many: true } : {}),
         };
       }
       return {
         kind: 'value',
         value: assertJsonSerializable(binding.value, 'value binding'),
         ...(binding.provenance !== undefined ? { provenance: binding.provenance } : {}),
+        ...(binding.many === true ? { many: true } : {}),
       };
     // ── Bucket 3 — code refs (name only; re-resolved from the re-parsed AST) ──
     case 'shape':
@@ -629,12 +631,14 @@ export async function rehydrateBinding(
         kind: 'value',
         value: descriptor.value,
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
+        ...(descriptor.many === true ? { many: true } : {}),
       };
     case 'recordValue':
       return {
         kind: 'value',
         value: await rehydrateValue(descriptor.value, ctx),
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
+        ...(descriptor.many === true ? { many: true } : {}),
       };
     case 'callback':
       return {

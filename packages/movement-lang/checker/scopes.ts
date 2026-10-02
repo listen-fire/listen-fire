@@ -103,6 +103,10 @@ export interface ScopeSymbol {
    * see `planeOfReturn`), so this is the one place that fact survives past
    * the assignment. A `recordArg` stdlib function (`TEXT.PAIRS`) reads it to
    * refuse a collection it would otherwise mistake for one record.
+   *
+   * On the VALUE plane, the same fact for a walk read for a field (`pdfs =
+   * m-[a:Attachments]->.\`File\``): `fieldType` is the field's own, one value,
+   * and the name holds one per landing. A spread reads it as those values.
    */
   plural?: true;
   /**

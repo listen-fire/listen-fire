@@ -83,6 +83,7 @@ import {
   CHUNKS_FUNCTION_ID,
   estimateEntities,
   FILE_FUNCTION_ID,
+  isWalkProjection,
   POSITION_SENTINEL,
   READ_FUNCTION_ID,
   readChunkSpec,
@@ -502,8 +503,11 @@ export type Binding =
    */
   | { kind: 'closure'; closure: ClosureExpression; captured: Map<string, Binding> }
   /** `prompt = "…"` — a plain runtime value, carrying the trail of the
-   *  expression that produced it so later reads keep propagating. */
-  | { kind: 'value'; value: unknown; provenance?: Provenance }
+   *  expression that produced it so later reads keep propagating. `many`
+   *  marks a walk read for a field (`pdfs = m-[a:Attachments]->.\`File\``):
+   *  the value is the walk's collapse (nothing, the one value, or the values),
+   *  and a spread reads it as the values (`membersOf`). */
+  | { kind: 'value'; value: unknown; provenance?: Provenance; many?: true }
   /** A file-level `shape` declaration — a configuration-free graph;
    *  `write <Shape>.<node> { … }` materialises in-memory positions.
    *  Where it was DECLARED is where its descriptions read their bindings,
@@ -1323,7 +1327,10 @@ export async function evalMovementExpr(
           provenances.push(member.provenance);
           continue;
         }
-        const spread = await evalMovementExpr(e.expression, ctx);
+        const evaluated = await evalMovementExpr(e.expression, ctx);
+        const spread = isManyValued(e.expression, ctx)
+          ? { ...evaluated, value: membersOf(evaluated.value) }
+          : evaluated;
         if (!Array.isArray(spread.value)) {
           throw new MovementEngineError(
             'MOVENG_RUNTIME',
@@ -3655,6 +3662,34 @@ function readTerminal(
   }
   if (field === POSITION_SENTINEL) return options.positions();
   return options.readField(field);
+}
+
+/**
+ * Is this spread operand a walk read for a field — inline, or a name bound to
+ * one — whose value is a `collapse`? The checker's own test (`isWalkProjection`,
+ * `ScopeSymbol.plural`), on the same shape. A bare name under a position scope
+ * still resolves a value binding first, as `property` does.
+ */
+function isManyValued(expr: Expression, ctx: MovementExprContext): boolean {
+  if (isWalkProjection(expr)) return true;
+  const name =
+    expr.type === 'property' ? expr.propertyTypeId : expr.type === 'alias_ref' ? expr.name : undefined;
+  if (name === undefined) return false;
+  const binding = ctx.env.resolve(name);
+  return binding?.kind === 'value' && binding.many === true;
+}
+
+/**
+ * A `collapse` read back as the values it collapsed — the reading every fold
+ * already gives a walk's field (`aggregate`): nothing landed is none, one
+ * landing is its one value, several are theirs. A field that itself holds a
+ * list is spliced as that list's members, which is the reading the checker
+ * gives it (it only reads a walk as one value per landing where each landing's
+ * value stands alone).
+ */
+export function membersOf(value: unknown): unknown[] {
+  if (value === null || value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
 }
 
 /** 0 → null, 1 → the result (provenance intact — a single un-transformed
