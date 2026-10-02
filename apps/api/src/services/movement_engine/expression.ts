@@ -2554,7 +2554,7 @@ function describeHeldValue(value: unknown): string {
  * the ordinary `source_field` trail — a pass-through edge fabricates nothing);
  * an in-memory landing reads locally.
  */
-async function readLandingField(
+export async function readLandingField(
   binding: Binding,
   field: string,
   name: string,
@@ -3536,8 +3536,19 @@ async function walkMetaSteps(
         reached.push(...(await resolveDeferred(edge.walk, rest, ctx, name)));
         continue;
       }
-      if (step.expressionFilter) throw synthesisedEdgeFilter(name);
-      reached.push(...(await walkMetaSteps(edge?.landings ?? [], rest, name, ctx)));
+      // A landed edge holds its landings in hand — a local graph's own — so a
+      // hop WHERE keeps the ones it holds for, through the same keep decision
+      // every other walker makes.
+      const kept: Binding[] = [];
+      for (const landed of edge?.landings ?? []) {
+        if (
+          step.expressionFilter === undefined
+          || (await hopFilterKeeps({ step, filter: step.expressionFilter, landed, ctx }))
+        ) {
+          kept.push(landed);
+        }
+      }
+      reached.push(...(await walkMetaSteps(kept, rest, name, ctx)));
       continue;
     }
     if (step.expressionFilter) {

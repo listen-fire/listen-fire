@@ -42,7 +42,7 @@ import {
   type LinkExpression,
   type WriteExpression,
 } from '../parser/ast';
-import { constructionAsCall, pathRootName, spellPathHead } from '../parser/ast';
+import { constructionAsCall, pathRootName, spellName, spellPathHead } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { parseMovementExpression } from '../expression/bridge';
 import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
@@ -1882,6 +1882,11 @@ class Projection {
           fields[entry.name] = this.pathChip(entry.head, scope);
           break;
       }
+    }
+    // A graph literal's `...v`: its keys are only known when it runs, so the
+    // honest thing to show is the map they come from.
+    for (const spread of literal.spreads ?? []) {
+      fields[`...${spread.source}`] = this.chip({ raw: spellName(spread.source), span: spread.span }, scope);
     }
     return { fields, children };
   }

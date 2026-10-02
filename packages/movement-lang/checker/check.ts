@@ -81,6 +81,8 @@ import {
   MovementDeclaration,
   MovementParam,
   NamedArg,
+  CopyPlan,
+  MapSpread,
   NodeEntry,
   NodeLiteral,
   PathHead,
@@ -331,6 +333,32 @@ export const DiagnosticCodes = {
    *  compared STRUCTURALLY: it fits when it has every field and edge the
    *  parameter declares (extras are fine — the callee can't see them). */
   NODE_ARG_SHAPE: 'MOV_NODE_ARG_SHAPE',
+  // Graph literals (`graph<Shape> { … }` — a local graph built as a value,
+  // checked against the shape the way TypeScript's `satisfies` checks an
+  // object literal)
+  /** `graph<X>` where `X` is not a node declaration. */
+  GRAPH_SHAPE: 'MOV_GRAPH_SHAPE',
+  /** An entry the shape doesn't declare — a misspelling, with a did-you-mean.
+   *  TS's excess-property check: the literal is the one place the extra name
+   *  can only be a mistake. */
+  GRAPH_FIELD_UNKNOWN: 'MOV_GRAPH_FIELD_UNKNOWN',
+  /** A field value whose type is not the one the shape declares. */
+  GRAPH_FIELD_TYPE: 'MOV_GRAPH_FIELD_TYPE',
+  /** A required field (not `<T | null>`) the literal never writes. */
+  GRAPH_FIELD_MISSING: 'MOV_GRAPH_FIELD_MISSING',
+  /** A value where the shape has a child node, or a body/walk where it has a
+   *  field. */
+  GRAPH_ENTRY_KIND: 'MOV_GRAPH_ENTRY_KIND',
+  /** A bare walk whose records don't carry what the shape's child node needs. */
+  GRAPH_COPY_SHAPE: 'MOV_GRAPH_COPY_SHAPE',
+  /** A bare walk, without a shape, over records nothing describes — there is
+   *  no field list to copy. */
+  GRAPH_COPY_UNKNOWN: 'MOV_GRAPH_COPY_UNKNOWN',
+  /** `...v` where `v` is not a map. */
+  GRAPH_SPREAD_NOT_MAP: 'MOV_GRAPH_SPREAD_NOT_MAP',
+  /** `...v`, without a shape, where nothing says which keys `v` holds (or
+   *  whether a key holds a nested map) — so nothing could type the graph. */
+  GRAPH_SPREAD_UNTYPED: 'MOV_GRAPH_SPREAD_UNTYPED',
   /** A declared entry (`companies: <Company>`) whose marker names neither a
    *  node this file declares nor an address. An entry that starts EMPTY is an
    *  edge, so its type has to say what LANDS there, and only those two
@@ -2008,6 +2036,109 @@ function suppliedSurface(type: PositionTypeRef): SuppliedSurface | undefined {
   }
 }
 
+/**
+ * The type of `graph<Shape> { … }`: a run-local node (so writes, links and
+ * deletes into it stay in the run) whose planes are the declaration's. Each
+ * child edge lands on the declaration's nested node and is compared
+ * STRUCTURALLY, as a declared entry's edge is — the nested node belongs to no
+ * system either.
+ */
+function declaredLocalGraph(
+  instance: InstanceRef,
+  position: string,
+): Extract<PositionTypeRef, { kind: 'local' }> {
+  const declared = instance.schema.positions[position];
+  const edges: Record<string, LocalEdge> = {};
+  for (const [name, edge] of Object.entries(declared?.edges ?? {})) {
+    const target = positionRefIn(instance, edge.target);
+    edges[name] = {
+      schema: {
+        target: name,
+        readable: true,
+        ...(edge.sequenced !== undefined ? { sequenced: edge.sequenced } : {}),
+      },
+      ...(target !== undefined ? { target, structural: true as const } : {}),
+    };
+  }
+  return {
+    kind: 'local',
+    label: `a ${describeShapeNode(position)} graph`,
+    reads: { ...declared?.properties },
+    edges,
+  };
+}
+
+/** What a graph literal's spread supplies: its keys on the two planes. */
+interface SpreadKeys {
+  reads: Record<string, FieldType | undefined>;
+  edges: Record<string, LocalEdge>;
+}
+
+/** A declared node as the author reads it: `<Message>`, or a nested node by
+ *  its path (`<Message> → attachment`). The key is a path, so this only
+ *  re-spells it; nothing is parsed out of it but its segments for display. */
+function describeShapeNode(position: string): string {
+  const [root, ...path] = position.split('.');
+  return [`<${root}>`, ...path].join(' → ');
+}
+
+function isMaybeAbsentType(type: FieldType): boolean {
+  return typeof type === 'object' && type.kind === 'maybeAbsent';
+}
+
+/** What a bare walk copies when a shape node says what to keep: its fields,
+ *  and through each nested node the source's edge of the same name. A shape
+ *  that cycles back on itself stops at the repeat. */
+function copyPlanOf(required: RequiredPosition, seen: ReadonlySet<string> = new Set()): CopyPlan {
+  const declared = required.schema.positions[required.position];
+  const edges: Record<string, CopyPlan> = {};
+  for (const [name, edge] of Object.entries(declared?.edges ?? {})) {
+    if (seen.has(edge.target)) continue;
+    edges[name] = copyPlanOf(
+      { schema: required.schema, position: edge.target },
+      new Set([...seen, required.position]),
+    );
+  }
+  return { fields: Object.keys(declared?.properties ?? {}), edges };
+}
+
+/** The keys of a map value whose keys were written down — itself, or the
+ *  members of a list of them (a plural child). */
+function nestedMapKeys(type: FieldType): Record<string, FieldType | null> | undefined {
+  const bare = stripAbsent(type);
+  if (typeof bare !== 'object') return undefined;
+  if (bare.kind === 'dict') return bare.shape;
+  if (bare.kind === 'list') return nestedMapKeys(bare.of);
+  if (bare.kind !== 'tuple') return undefined;
+  // A list literal of maps is a tuple of them: the child lands on what EVERY
+  // member carries, as a plural child written as bodies does.
+  const members = [...bare.of, ...(bare.rest !== undefined ? [bare.rest.of] : [])];
+  const keyed = members.map(member => (member !== null ? nestedMapKeys(member) : undefined));
+  const [first, ...rest] = keyed;
+  if (first === undefined || rest.some(keys => keys === undefined)) return undefined;
+  const common: Record<string, FieldType | null> = {};
+  for (const [key, keyType] of Object.entries(first)) {
+    const others = rest.map(keys => keys?.[key]);
+    if (others.some(other => other === undefined)) continue;
+    const agreed = others.every(other => other != null && keyType !== null && fieldTypeEquals(other, keyType));
+    common[key] = agreed ? keyType : null;
+  }
+  return common;
+}
+
+/** Could a value of this type be a map (or a list of them) at run time? */
+function mayHoldMap(type: FieldType): boolean {
+  const bare = stripAbsent(type);
+  if (bare === 'json') return true;
+  if (typeof bare !== 'object') return false;
+  if (bare.kind === 'dict') return true;
+  if (bare.kind === 'list') return mayHoldMap(bare.of);
+  if (bare.kind === 'tuple') {
+    return [...bare.of, bare.rest?.of ?? null].some(member => member !== null && mayHoldMap(member));
+  }
+  return false;
+}
+
 /** Is this graph a node DECLARATION (rather than a constructed system)? */
 function isDeclaredNode(instance: InstanceRef): boolean {
   const { token } = instance;
@@ -2096,7 +2227,7 @@ function nodeMisfitAgainst(
   // An entry we couldn't type is UNKNOWN, and unknown fits anything — the same
   // benefit of the doubt every other unchecked read gets.
   if (supplied === undefined) return undefined;
-  return surfaceMisfit(suppliedSurface(supplied), { schema: instance.schema, position }, path);
+  return surfaceMisfit(suppliedSurface(supplied), { schema: instance.schema, position }, { path });
 }
 
 /**
@@ -7512,43 +7643,18 @@ class Checker {
    *
    */
   private checkNodeLiteral(literal: NodeLiteral, scope: Scope): PositionTypeRef {
+    if (literal.graph !== undefined) return this.checkGraphLiteral(literal, scope);
     const reads: Record<string, FieldType | undefined> = {};
     const edges: Record<string, LocalEdge> = {};
     const seen = new Set<string>();
     for (const entry of literal.entries) {
-      if (seen.has(entry.name)) {
-        this.report(
-          DiagnosticCodes.NODE_ENTRY_DUPLICATE,
-          `'${entry.name}' is written twice in this node — each entry names one thing`,
-          entry.span,
-        );
-      }
-      seen.add(entry.name);
+      this.noteEntryName(entry, seen);
       switch (entry.kind) {
         case 'value': {
-          const { valueType, parsed } = this.checkExprSlot(entry.value, scope);
-          // A NODE in a field slot is an error, not a silent untyped read —
-          // the value plane is scalar, and the author meant an edge. Two
-          // discernible shapes: a bare name bound on the node plane, and
-          // ONLY/FIRST/LAST over a bare walk (which pick a position).
-          const nodeRef = this.bareNodeSymbol(entry.value.raw, parsed, scope);
-          if (nodeRef !== undefined) {
-            this.report(
-              DiagnosticCodes.NODE_ENTRY_NODE_VALUE,
-              `'${entry.name}: ${nodeRef.name}' puts a node in a field — an entry value is a scalar. A node becomes a child by synthesis ('${entry.name}: node { … }') or by a walk ('${entry.name}: ${nodeRef.name}-[:Edge]->')`,
-              entry.span,
-            );
-          } else if (parsed !== undefined && aggregatedBarePath(parsed) !== undefined) {
-            this.report(
-              DiagnosticCodes.NODE_ENTRY_NODE_VALUE,
-              `'${entry.name}' is given a record — ONLY/FIRST/LAST over a bare walk pick a NODE, and an entry value is a scalar. Walk the edge instead ('${entry.name}: <source>-[:Edge]->') or aggregate a field ('ONLY(….\`Field\`)')`,
-              entry.span,
-            );
-          }
           // The name lands on the read plane whether or not we could type it:
           // "I haven't typed this" and "there is no such entry" are different
           // facts, and only the second is an error at the read.
-          reads[entry.name] = valueType ?? scalarLiteralType(entry.value.raw);
+          reads[entry.name] = this.checkNodeValueEntry(entry, scope);
           break;
         }
         case 'nodes': {
@@ -7614,6 +7720,409 @@ class Checker {
       }
     }
     return { kind: 'local', label: 'a node', reads, edges };
+  }
+
+  /** One entry name, once per literal — one name, one meaning. */
+  private noteEntryName(entry: { name: string; span: Span }, seen: Set<string>): void {
+    if (seen.has(entry.name)) {
+      this.report(
+        DiagnosticCodes.NODE_ENTRY_DUPLICATE,
+        `'${entry.name}' is written twice in this node — each entry names one thing`,
+        entry.span,
+      );
+    }
+    seen.add(entry.name);
+  }
+
+  /** A field entry's value — its type, or undefined where it can't be typed. */
+  private checkNodeValueEntry(
+    entry: Extract<NodeEntry, { kind: 'value' }>,
+    scope: Scope,
+  ): FieldType | undefined {
+    const { valueType, parsed } = this.checkExprSlot(entry.value, scope);
+    // A NODE in a field slot is an error, not a silent untyped read — the
+    // value plane is scalar, and the author meant an edge. Two discernible
+    // shapes: a bare name bound on the node plane, and ONLY/FIRST/LAST over a
+    // bare walk (which pick a position).
+    const nodeRef = this.bareNodeSymbol(entry.value.raw, parsed, scope);
+    if (nodeRef !== undefined) {
+      this.report(
+        DiagnosticCodes.NODE_ENTRY_NODE_VALUE,
+        `'${entry.name}: ${nodeRef.name}' puts a node in a field — an entry value is a scalar. A node becomes a child by synthesis ('${entry.name}: node { … }') or by a walk ('${entry.name}: ${nodeRef.name}-[:Edge]->')`,
+        entry.span,
+      );
+    } else if (parsed !== undefined && aggregatedBarePath(parsed) !== undefined) {
+      this.report(
+        DiagnosticCodes.NODE_ENTRY_NODE_VALUE,
+        `'${entry.name}' is given a record — ONLY/FIRST/LAST over a bare walk pick a NODE, and an entry value is a scalar. Walk the edge instead ('${entry.name}: <source>-[:Edge]->') or aggregate a field ('ONLY(….\`Field\`)')`,
+        entry.span,
+      );
+    }
+    return valueType ?? scalarLiteralType(entry.value.raw);
+  }
+
+  // ── Graph literals ──
+
+  /**
+   * `graph<Shape> { … }` / `graph { … }` — a local graph built as a value.
+   *
+   * With a shape it is TypeScript's `satisfies` applied to an object literal:
+   * every entry must be something the shape declares, of the type it declares,
+   * and every field the shape requires must be written — only a `<T | null>`
+   * field may be left out (it is then absent, which is what a write that never
+   * mentions a field leaves too). The value is then OF the shape, the way
+   * `const m: Message = { … }` is, so whatever reads it reads the declaration,
+   * and an omitted nullable field reads as `T | absent`. Without a shape the
+   * literal's own structure is its type, exactly as a node literal's is.
+   *
+   * Either way the type is a run-local node — a local graph — so a write, a
+   * link or a delete into it is the local graph's own, never a system's.
+   */
+  private checkGraphLiteral(literal: NodeLiteral, scope: Scope): PositionTypeRef {
+    const shape = literal.graph?.shape;
+    if (shape === undefined) return this.checkGraphBody(literal, scope, undefined);
+    const symbol = this.resolveName(shape.name, shape.span, scope);
+    if (symbol !== undefined && symbol.kind !== 'shape') {
+      this.report(
+        DiagnosticCodes.GRAPH_SHAPE,
+        `'graph<${shape.name}>' takes a node declaration, and '${shape.name}' is ${describeKind[symbol.kind]} — declare the structure ('node ${shape.name} { … }'), or drop '<${shape.name}>' to infer it from the literal`,
+        shape.span,
+      );
+    }
+    const root = symbol?.kind === 'shape' ? declaredRootPosition(symbol) : undefined;
+    if (root?.kind !== 'position') return this.checkGraphBody(literal, scope, undefined);
+    const required = { schema: root.instance.schema, position: root.position };
+    this.checkGraphBody(literal, scope, required);
+    return declaredLocalGraph(root.instance, root.position);
+  }
+
+  /**
+   * One graph body, checked against the shape node it has to satisfy (none
+   * without a shape) — returns the body's own inferred structure.
+   */
+  private checkGraphBody(
+    literal: NodeLiteral,
+    scope: Scope,
+    required: RequiredPosition | undefined,
+  ): Extract<PositionTypeRef, { kind: 'local' }> {
+    const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
+    const reads: Record<string, FieldType | undefined> = {};
+    const edges: Record<string, LocalEdge> = {};
+    const spread: SpreadKeys = { reads: {}, edges: {} };
+    // A spread whose keys nobody can name: what it supplies is checked when
+    // the graph is built, so no field can be called missing here.
+    let opaqueSpread = false;
+    for (const source of literal.spreads ?? []) {
+      const keys = this.checkGraphSpread(source, scope, required);
+      if (keys === undefined) {
+        opaqueSpread = true;
+        continue;
+      }
+      // A later spread wins over an earlier one, key by key.
+      for (const name of Object.keys(keys.reads)) delete spread.edges[name];
+      for (const name of Object.keys(keys.edges)) delete spread.reads[name];
+      Object.assign(spread.reads, keys.reads);
+      Object.assign(spread.edges, keys.edges);
+    }
+    const seen = new Set<string>();
+    for (const entry of literal.entries) {
+      this.noteEntryName(entry, seen);
+      switch (entry.kind) {
+        case 'value': {
+          const valueType = this.checkNodeValueEntry(entry, scope);
+          reads[entry.name] = valueType;
+          if (required !== undefined) this.checkGraphField(entry.name, valueType, required, entry.span);
+          break;
+        }
+        case 'nodes': {
+          const child = this.graphChild(entry.name, required, entry.span);
+          const landings = entry.nodes.map(node => this.checkGraphBody(node, scope, child));
+          edges[entry.name] = {
+            schema: { target: entry.name, readable: true },
+            target: this.mergeLandings(landings, entry),
+          };
+          break;
+        }
+        case 'traversal': {
+          const child = this.graphChild(entry.name, required, entry.span);
+          const target = this.checkGraphWalk(entry, scope, child);
+          edges[entry.name] = {
+            schema: { target: entry.name, readable: true },
+            ...(target !== undefined ? { target } : {}),
+          };
+          break;
+        }
+        case 'declared':
+          // The parser refuses a declared edge in a graph body.
+          break;
+        default:
+          neverAsAny(entry);
+      }
+    }
+    // A written entry wins over a spread's key of the same name.
+    for (const name of [...Object.keys(reads), ...Object.keys(edges)]) {
+      delete spread.reads[name];
+      delete spread.edges[name];
+    }
+    const allReads = { ...spread.reads, ...reads };
+    if (required !== undefined && !opaqueSpread) {
+      this.reportMissingGraphFields(required, allReads, literal.span);
+    }
+    return {
+      kind: 'local',
+      label: 'a graph',
+      reads: allReads,
+      edges: { ...spread.edges, ...edges },
+    };
+  }
+
+  /** Every field `required` declares that nothing supplied — refused unless it
+   *  is declared `<T | null>`, which may be left out and is then absent. */
+  private reportMissingGraphFields(
+    required: RequiredPosition,
+    supplied: Record<string, unknown>,
+    span: Span,
+  ): void {
+    const declared = required.schema.positions[required.position];
+    for (const [name, want] of Object.entries(declared?.properties ?? {})) {
+      if (Object.hasOwn(supplied, name) || isMaybeAbsentType(want)) continue;
+      this.report(
+        DiagnosticCodes.GRAPH_FIELD_MISSING,
+        `${describeShapeNode(required.position)} needs \`${name}\` (${describeFieldType(want)}) and this graph doesn't write it — only a field declared '<T | null>' may be left out`,
+        span,
+      );
+    }
+  }
+
+  /** A field written in a body that has to satisfy `required`. */
+  private checkGraphField(
+    name: string,
+    have: FieldType | undefined,
+    required: RequiredPosition,
+    span: Span,
+  ): void {
+    const declared = required.schema.positions[required.position];
+    if (declared === undefined) return;
+    const want = declared.properties[name];
+    if (want === undefined) {
+      this.reportGraphUnknown(name, required, span, 'field');
+      return;
+    }
+    if (have !== undefined && !fieldAssignable(have, want)) {
+      this.report(
+        DiagnosticCodes.GRAPH_FIELD_TYPE,
+        `${describeShapeNode(required.position)} declares \`${name}\` as ${describeFieldType(want)}, and this is ${describeFieldType(have)}${textRepair(have, want)}`,
+        span,
+      );
+    }
+  }
+
+  /**
+   * The shape node a child entry has to satisfy — the parent shape's nested
+   * node of the same name — or undefined, reported, when the parent declares
+   * no such child.
+   */
+  private graphChild(
+    name: string,
+    required: RequiredPosition | undefined,
+    span: Span,
+  ): RequiredPosition | undefined {
+    if (required === undefined) return undefined;
+    const declared = required.schema.positions[required.position];
+    if (declared === undefined) return undefined;
+    const edge = declared.edges[name];
+    if (edge === undefined) {
+      this.reportGraphUnknown(name, required, span, 'child');
+      return undefined;
+    }
+    return { schema: required.schema, position: edge.target };
+  }
+
+  /** An entry the shape doesn't declare as what it was written as — a field
+   *  where the shape has a child node, the reverse, or neither. */
+  private reportGraphUnknown(
+    name: string,
+    required: RequiredPosition,
+    span: Span,
+    writtenAs: 'field' | 'child',
+  ): void {
+    const declared = required.schema.positions[required.position];
+    const shape = describeShapeNode(required.position);
+    if (writtenAs === 'field' && declared?.edges[name] !== undefined) {
+      this.report(
+        DiagnosticCodes.GRAPH_ENTRY_KIND,
+        `\`${name}\` is a child node of ${shape}, not a field — build it with a body ('${name}: { … }') or from a walk ('${name}: m-[x:Edge]-> { … }')`,
+        span,
+      );
+      return;
+    }
+    if (writtenAs === 'child' && declared?.properties[name] !== undefined) {
+      this.report(
+        DiagnosticCodes.GRAPH_ENTRY_KIND,
+        `\`${name}\` is a field of ${shape}, not a child node — give it a value ('${name}: …')`,
+        span,
+      );
+      return;
+    }
+    const known = [...Object.keys(declared?.properties ?? {}), ...Object.keys(declared?.edges ?? {})];
+    this.report(
+      DiagnosticCodes.GRAPH_FIELD_UNKNOWN,
+      `${shape} has no \`${name}\`${didYouMean(name, known)} — it declares: ${known.join(', ') || '(nothing)'}`,
+      span,
+    );
+  }
+
+  /**
+   * A walk in a graph body — a SNAPSHOT of the records it lands on. Followed by
+   * a field body, each record builds one child from that body, written in the
+   * landing's scope (the hop's alias names the record there and nowhere else).
+   * Bare, each record is copied: the shape's child node says which fields, and
+   * which of the source's edges of the same name are followed; without a shape
+   * the records' own fields are copied and no edge is followed.
+   *
+   * The copy plan is recorded on the entry for the engine — a system's record
+   * has no field list in hand at run time, so the checker's is the one list.
+   */
+  private checkGraphWalk(
+    entry: Extract<NodeEntry, { kind: 'traversal' }>,
+    scope: Scope,
+    required: RequiredPosition | undefined,
+  ): PositionTypeRef | undefined {
+    const head = this.checkPathHead(entry.head, scope);
+    const typing = this.slotTyping(scope, entry.head.span);
+    const landed =
+      head.steps && head.rootType !== undefined
+        ? typing.walkSteps(head.rootType, head.steps)
+        : undefined;
+    if (entry.mapping !== undefined) {
+      const landing = this.landingScope(
+        { head: entry.head, mapping: entry.mapping, span: entry.span },
+        head,
+        typing,
+        scope,
+      );
+      return { ...this.checkGraphBody(entry.mapping, landing, required), label: `a '${entry.name}' landing` };
+    }
+    const supplied = landed !== undefined ? recordSurface(landed) : undefined;
+    if (required !== undefined) {
+      const misfit = surfaceMisfit(supplied, required, { absentMayBeMissing: true });
+      if (misfit !== undefined) {
+        this.report(
+          DiagnosticCodes.GRAPH_COPY_SHAPE,
+          `'${entry.name}' copies the records it walks to, and ${describeShapeNode(required.position)} doesn't fit them: ${misfit} — write the fields it needs with a body ('${entry.name}: … -> { field: x.Field }')`,
+          entry.span,
+        );
+      }
+      entry.copy = copyPlanOf(required);
+      return undefined;
+    }
+    if (supplied === undefined) {
+      if (landed !== undefined) {
+        this.report(
+          DiagnosticCodes.GRAPH_COPY_UNKNOWN,
+          `'${entry.name}' copies the records it walks to, and nothing says which fields they have — write the fields with a body ('${entry.name}: … -> { field: x.Field }'), or give the graph a shape ('graph<Shape> { … }')`,
+          entry.span,
+        );
+      }
+      return undefined;
+    }
+    entry.copy = { fields: Object.keys(supplied.properties), edges: {} };
+    return { kind: 'local', label: `a '${entry.name}' copy`, reads: { ...supplied.properties } };
+  }
+
+  /**
+   * `...v` in a graph body: what the map supplies, key by key — or undefined
+   * when its keys can't be named here, in which case a SHAPE is what the
+   * graph is checked against when it is built. Without a shape nothing could
+   * say what such a graph holds, so that is refused.
+   *
+   * No excess check for a spread's keys, as TypeScript makes none: a key the
+   * shape doesn't declare rides along unseen by the type.
+   */
+  private checkGraphSpread(
+    entry: MapSpread,
+    scope: Scope,
+    required: RequiredPosition | undefined,
+  ): SpreadKeys | undefined {
+    const symbol = this.resolveName(entry.source, entry.span, scope);
+    if (symbol === undefined) return undefined;
+    const valueType = symbol.posType === undefined ? symbol.fieldType : undefined;
+    const map = valueType !== undefined ? stripAbsent(valueType) : undefined;
+    if (map === undefined || (map !== 'json' && (typeof map !== 'object' || map.kind !== 'dict'))) {
+      this.report(
+        DiagnosticCodes.GRAPH_SPREAD_NOT_MAP,
+        `'...${entry.source}' converts a MAP into the graph, and '${entry.source}' is ${map !== undefined ? describeFieldType(map) : 'not a value'} — spread a map (plugin output, JSON, '{ … }'), or write the fields one by one`,
+        entry.span,
+      );
+      return undefined;
+    }
+    const keys = map === 'json' ? undefined : map.shape;
+    if (keys === undefined) {
+      if (required === undefined) {
+        this.report(
+          DiagnosticCodes.GRAPH_SPREAD_UNTYPED,
+          `nothing says which keys '${entry.source}' holds, so nothing could say what this graph holds — give the graph a shape ('graph<Shape> { ...${entry.source} }'), and it is checked against the shape when it is built`,
+          entry.span,
+        );
+      }
+      return undefined;
+    }
+    return this.checkSpreadKeys(keys, required, entry);
+  }
+
+  /** A known map's keys, read as a graph body: a nested map (or a list of
+   *  them) is a child where the shape says so — everywhere, without one. */
+  private checkSpreadKeys(
+    keys: Record<string, FieldType | null>,
+    required: RequiredPosition | undefined,
+    entry: MapSpread,
+  ): SpreadKeys {
+    const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
+    const reads: Record<string, FieldType | undefined> = {};
+    const edges: Record<string, LocalEdge> = {};
+    for (const [key, valueType] of Object.entries(keys)) {
+      const nested = valueType !== null ? nestedMapKeys(valueType) : undefined;
+      const asChild =
+        declared !== undefined ? declared.edges[key] !== undefined : nested !== undefined;
+      if (!asChild) {
+        if (declared === undefined && valueType !== null && mayHoldMap(valueType)) {
+          this.report(
+            DiagnosticCodes.GRAPH_SPREAD_UNTYPED,
+            `'${entry.source}.${key}' may hold a nested map, and without a shape nothing says whether that is a child node or a value — give the graph a shape ('graph<Shape> { ...${entry.source} }')`,
+            entry.span,
+          );
+        }
+        if (required !== undefined && declared?.properties[key] !== undefined && valueType !== null) {
+          this.checkGraphField(key, valueType, required, entry.span);
+        }
+        reads[key] = valueType ?? undefined;
+        continue;
+      }
+      const child =
+        required !== undefined && declared !== undefined
+          ? { schema: required.schema, position: declared.edges[key].target }
+          : undefined;
+      if (nested === undefined) {
+        // A child the shape declares, from a value nobody can see into: the
+        // build checks it. Anything that can't be a map is wrong now.
+        if (valueType !== null && !mayHoldMap(valueType)) {
+          this.report(
+            DiagnosticCodes.GRAPH_ENTRY_KIND,
+            `'${entry.source}.${key}' is ${describeFieldType(valueType)}, and \`${key}\` is a child node of ${describeShapeNode(required?.position ?? '')} — it needs a map, or a list of maps`,
+            entry.span,
+          );
+        }
+        edges[key] = { schema: { target: key, readable: true } };
+        continue;
+      }
+      const landing = this.checkSpreadKeys(nested, child, entry);
+      if (child !== undefined) this.reportMissingGraphFields(child, landing.reads, entry.span);
+      edges[key] = {
+        schema: { target: key, readable: true },
+        target: { kind: 'local', label: `a '${key}' landing`, ...landing },
+      };
+    }
+    return { reads, edges };
   }
 
   /**

@@ -142,6 +142,8 @@ import type {
   MovementCondition,
   MovementDeclaration,
   NodeLiteral,
+  CopyPlan,
+  MapSpread,
   PathHead,
   Program,
   ProgramLink,
@@ -222,9 +224,11 @@ import {
   evalMovementExpr,
   evaluateMovementExpression,
   hopFilterKeeps,
+  isDictValue,
   hopMemberGate,
   hopOrderKeyReader,
   nodeEdgeLandings,
+  readLandingField,
   unsupported,
   type Binding,
   type DeferredWalk,
@@ -968,6 +972,85 @@ function declaredLandingShape(node: ShapeNode): LocalLandingShape {
     edges: Object.fromEntries(node.children.map((child) => [child.name, declaredLandingShape(child)])),
   };
 }
+
+type NodePositionBinding = Extract<Binding, { kind: 'nodePosition' }>;
+
+/** A field name onto a graph node's dot plane, once, in the order first met. */
+function noteGraphField(node: NodePositionBinding, name: string): void {
+  if (!node.fieldOrder.includes(name)) node.fieldOrder.push(name);
+}
+
+/** A child edge of a graph node, built here. A shape child says what a landing
+ *  the run writes into it later carries, as a declared edge does. */
+function setGraphEdge(
+  node: NodePositionBinding,
+  name: string,
+  landings: Binding[],
+  child: ShapeNode | undefined,
+): void {
+  delete node.fields[name];
+  node.fieldOrder = node.fieldOrder.filter((f) => f !== name);
+  node.edges[name] = {
+    kind: 'landed',
+    landings,
+    ...(child !== undefined ? { landingShape: declaredLandingShape(child) } : {}),
+  };
+}
+
+/** A spread value read as child nodes: one map, or a list of nothing but maps. */
+function asMapList(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (isDictValue(value)) return [value];
+  if (Array.isArray(value) && value.length > 0 && value.every(isDictValue)) return value;
+  return undefined;
+}
+
+/**
+ * Does a graph built from a spread map hold what its shape requires? The
+ * checker answered this for everything it could see; a map it couldn't
+ * (plugin output, JSON) is only seen here. Every non-null field must be there
+ * and be the primitive it says, recursively through the children the map
+ * brought.
+ */
+function graphValueMisfit(node: Binding, shape: ShapeNode, path = ''): string | undefined {
+  if (node.kind !== 'nodePosition') return undefined;
+  for (const field of shape.fields) {
+    const value = node.fields[field.name];
+    if (value === undefined || value === null) {
+      if (field.nullable === true) continue;
+      return `it has no ${path}\`${field.name}\``;
+    }
+    const want = PRIMITIVE_RUNTIME_TYPES[field.type];
+    if (want !== undefined && typeof value !== want) {
+      return `its ${path}\`${field.name}\` is a ${typeof value}, not ${field.type}`;
+    }
+  }
+  for (const child of shape.children) {
+    const edge = node.edges[child.name];
+    for (const landing of edge?.kind === 'landed' ? edge.landings : []) {
+      const misfit = graphValueMisfit(landing, child, `${path}${child.name} → `);
+      if (misfit !== undefined) return misfit;
+    }
+  }
+  return undefined;
+}
+
+/** Does any body of this graph literal take keys from a map? */
+function spreadsAnywhere(literal: NodeLiteral): boolean {
+  if (literal.spreads !== undefined) return true;
+  return literal.entries.some((entry) => {
+    if (entry.kind === 'nodes') return entry.nodes.some(spreadsAnywhere);
+    if (entry.kind === 'traversal' && entry.mapping !== undefined) return spreadsAnywhere(entry.mapping);
+    return false;
+  });
+}
+
+/** The declared primitives a JSON value carries as itself. The rest (dates,
+ *  files, declared option sets) arrive in forms this check doesn't judge. */
+const PRIMITIVE_RUNTIME_TYPES: Readonly<Record<string, 'string' | 'number' | 'boolean'>> = {
+  text: 'string',
+  number: 'number',
+  boolean: 'boolean',
+};
 
 type ShapeBinding = Extract<Binding, { kind: 'shape' }>;
 
@@ -6112,9 +6195,9 @@ class Interpreter {
         );
       }
       const edge = path.binding.edges[step.edgeTypeId];
-      if (step.expressionFilter) {
+      if (step.expressionFilter && edge?.kind === 'deferred') {
         throw unsupported(
-          'WHERE filters on synthesised-node block heads',
+          "WHERE filters on a lazy entry's hop",
           "narrow the entry's own traversal instead — the WHERE belongs on the hop the node's edge is built from",
         );
       }
@@ -6133,11 +6216,26 @@ class Interpreter {
         );
         continue;
       }
-      const next = (edge?.kind === 'landed' ? edge.landings : []).map((landing) => {
+      // A landed edge holds its landings in hand — a local graph's own — so a
+      // hop WHERE keeps the ones it holds for, by the keep decision every
+      // walker makes.
+      const next: Array<{ aliases: Map<string, Binding>; binding: Binding }> = [];
+      for (const landing of edge?.kind === 'landed' ? edge.landings : []) {
+        if (
+          step.expressionFilter
+          && !(await hopFilterKeeps({
+            step,
+            filter: step.expressionFilter,
+            landed: landing,
+            ctx: this.exprContext(env),
+          }))
+        ) {
+          continue;
+        }
         const aliases = new Map(path.aliases);
         if (step.alias !== undefined) aliases.set(step.alias, landing);
-        return { aliases, binding: landing };
-      });
+        next.push({ aliases, binding: landing });
+      }
       reached.push(...(await this.walkNodePlane(next, rest, env)));
     }
     return reached;
@@ -7389,6 +7487,7 @@ class Interpreter {
    *
    */
   private async synthesiseNode(literal: NodeLiteral, env: Environment): Promise<Binding> {
+    if (literal.graph !== undefined) return this.buildGraph(literal, env);
     const fields: Record<string, unknown> = {};
     const fieldOrder: string[] = [];
     const fieldProvenance: Record<string, Provenance> = {};
@@ -7449,6 +7548,235 @@ class Interpreter {
       }
     }
     return { kind: 'nodePosition', fields, fieldOrder, fieldProvenance, edges };
+  }
+
+  /**
+   * `graph<Shape> { … }` — a LOCAL GRAPH built as a value: the same
+   * `nodePosition` a node literal makes, so a path, a WHERE, a write, a link or
+   * a delete reads and changes it the way it does any run-local node.
+   *
+   * What differs from a node literal is that a walk is a SNAPSHOT. A walk with
+   * a field body builds one child per record; a bare walk copies each record
+   * by the plan the checker resolved. Either way the child is this graph's
+   * own — no landing is a system's record, so nothing done to the graph can
+   * reach the source. A file field is copied as the handle it is: nothing
+   * downloads.
+   *
+   * With a shape, each child edge the shape declares exists (empty when the
+   * literal wrote none) and carries the shape's nested nodes, so a write into
+   * it mints them as a write into a declared edge does. A graph that took keys
+   * from a map nobody could type is checked against the shape here, where the
+   * keys are finally known.
+   */
+  private async buildGraph(literal: NodeLiteral, env: Environment): Promise<Binding> {
+    const shapeName = literal.graph?.shape?.name;
+    const shape = shapeName !== undefined ? this.graphShape(shapeName, env) : undefined;
+    const built = await this.buildGraphBody(literal, env, shape);
+    if (shape !== undefined && spreadsAnywhere(literal)) {
+      const misfit = graphValueMisfit(built, shape);
+      if (misfit !== undefined) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `the map spread into 'graph<${shapeName}>' doesn't fit it: ${misfit}`,
+        );
+      }
+    }
+    return built;
+  }
+
+  private graphShape(name: string, env: Environment): ShapeNode {
+    const declared = env.resolve(name);
+    if (declared?.kind !== 'shape') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'graph<${name}>' names no node declaration in scope`,
+      );
+    }
+    return this.resolvedShape(declared).declaration.root;
+  }
+
+  private async buildGraphBody(
+    literal: NodeLiteral,
+    env: Environment,
+    shape: ShapeNode | undefined,
+  ): Promise<Extract<Binding, { kind: 'nodePosition' }>> {
+    const node: Extract<Binding, { kind: 'nodePosition' }> = {
+      kind: 'nodePosition',
+      fields: {},
+      fieldOrder: [],
+      fieldProvenance: {},
+      edges: {},
+    };
+    // Spreads first, in order, so a later one overwrites an earlier one and
+    // every written entry overwrites them all — wherever it stands.
+    for (const spread of literal.spreads ?? []) {
+      this.spreadIntoGraph(node, this.spreadMap(spread, env), shape);
+    }
+    for (const entry of literal.entries) {
+      const child = shape?.children.find((c) => c.name === entry.name);
+      switch (entry.kind) {
+        case 'value': {
+          const { value, provenance } = await this.evaluateSlot(entry.value, { env });
+          delete node.edges[entry.name];
+          noteGraphField(node, entry.name);
+          if (value === undefined) {
+            delete node.fields[entry.name];
+            delete node.fieldProvenance[entry.name];
+            break;
+          }
+          node.fields[entry.name] = value;
+          node.fieldProvenance[entry.name] = provenance;
+          break;
+        }
+        case 'nodes': {
+          const landings: Binding[] = [];
+          for (const nested of entry.nodes) landings.push(await this.buildGraphBody(nested, env, child));
+          setGraphEdge(node, entry.name, landings, child);
+          break;
+        }
+        case 'traversal': {
+          if (entry.mapping !== undefined) {
+            const landings: Binding[] = [];
+            for (const iteration of await this.resolveHeadIterations(entry.head, env)) {
+              const itemEnv = env.child();
+              for (const [name, binding] of iteration.bindings) itemEnv.declare(name, binding);
+              landings.push(await this.buildGraphBody(entry.mapping, itemEnv, child));
+            }
+            setGraphEdge(node, entry.name, landings, child);
+            break;
+          }
+          const plan = entry.copy;
+          if (plan === undefined) {
+            throw new MovementEngineError(
+              'MOVENG_RUNTIME',
+              `'${entry.name}' copies the records it walks to, and has no copy plan — the program was not checked`,
+            );
+          }
+          const copies: Binding[] = [];
+          for (const landing of await this.walkLandings(entry.head, env)) {
+            copies.push(await this.snapshotRecord(landing, plan, env));
+          }
+          setGraphEdge(node, entry.name, copies, child);
+          break;
+        }
+        case 'declared':
+          // The parser refuses a declared edge inside a graph literal.
+          throw new MovementEngineError('MOVENG_RUNTIME', `a declared edge ('${entry.name}') inside a graph literal — the parser refuses one`);
+        default:
+          neverAsAny(entry);
+      }
+    }
+    if (shape !== undefined) {
+      for (const child of shape.children) {
+        if (node.edges[child.name] === undefined) setGraphEdge(node, child.name, [], child);
+      }
+      // Declaration order, then whatever else a spread brought along.
+      const declared = shape.fields.map((f) => f.name);
+      node.fieldOrder = [...declared, ...node.fieldOrder.filter((f) => !declared.includes(f))];
+    }
+    return node;
+  }
+
+  /** The map a `...v` spreads, as it is at run time. */
+  private spreadMap(spread: MapSpread, env: Environment): Record<string, unknown> {
+    const bound = env.resolve(spread.source);
+    const value = bound?.kind === 'value' ? bound.value : undefined;
+    if (!isDictValue(value)) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'...${spread.source}' spreads a map into a graph, and '${spread.source}' holds ${value === undefined ? 'no value' : Array.isArray(value) ? 'a list' : `a ${typeof value}`}`,
+      );
+    }
+    return value;
+  }
+
+  /** A map's keys into a graph node: a nested map (or a list of them) is a
+   *  child where the shape says so, and everywhere without one. */
+  private spreadIntoGraph(
+    node: Extract<Binding, { kind: 'nodePosition' }>,
+    map: Record<string, unknown>,
+    shape: ShapeNode | undefined,
+  ): void {
+    for (const [key, value] of Object.entries(map)) {
+      const child = shape?.children.find((c) => c.name === key);
+      const maps = asMapList(value);
+      const asChild = shape !== undefined ? child !== undefined : maps !== undefined;
+      if (!asChild) {
+        delete node.edges[key];
+        noteGraphField(node, key);
+        if (value === undefined || value === null) {
+          delete node.fields[key];
+          delete node.fieldProvenance[key];
+          continue;
+        }
+        node.fields[key] = value;
+        node.fieldProvenance[key] = NO_PROVENANCE;
+        continue;
+      }
+      if (maps === undefined) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `'${key}' is a child node, and the map spread into the graph holds ${Array.isArray(value) ? 'a list that is not all maps' : `a ${typeof value}`} there — it needs a map, or a list of maps`,
+        );
+      }
+      delete node.fields[key];
+      node.fieldOrder = node.fieldOrder.filter((f) => f !== key);
+      const landings = maps.map((nested) => {
+        const landing: Extract<Binding, { kind: 'nodePosition' }> = {
+          kind: 'nodePosition',
+          fields: {},
+          fieldOrder: [],
+          fieldProvenance: {},
+          edges: {},
+        };
+        this.spreadIntoGraph(landing, nested, child);
+        return landing;
+      });
+      setGraphEdge(node, key, landings, child);
+    }
+  }
+
+  /**
+   * One record, copied by a plan: the plan's fields read now (each with its
+   * trail), and through each planned edge the records there, copied in turn.
+   * The copy is a run-local node, so no edge out of it leads back into the
+   * source.
+   */
+  private async snapshotRecord(
+    record: Binding,
+    plan: CopyPlan,
+    env: Environment,
+  ): Promise<Extract<Binding, { kind: 'nodePosition' }>> {
+    const copy: Extract<Binding, { kind: 'nodePosition' }> = {
+      kind: 'nodePosition',
+      fields: {},
+      fieldOrder: [...plan.fields],
+      fieldProvenance: {},
+      edges: {},
+    };
+    const ctx = this.exprContext(env);
+    for (const field of plan.fields) {
+      const { value, provenance } = await readLandingField(record, field, field, ctx);
+      // An absent field is copied absent, as a node literal's empty entry is.
+      if (value === undefined || value === null) continue;
+      copy.fields[field] = value;
+      copy.fieldProvenance[field] = provenance;
+    }
+    for (const [edge, nested] of Object.entries(plan.edges)) {
+      const reached = await this.walkNodePlane(
+        [{ aliases: new Map(), binding: record }],
+        [{ type: 'edge', edgeTypeId: edge, direction: 'outgoing' }],
+        env,
+      );
+      const landings: Binding[] = [];
+      for (const iteration of reached) {
+        if (iteration.landing !== undefined) {
+          landings.push(await this.snapshotRecord(iteration.landing, nested, env));
+        }
+      }
+      copy.edges[edge] = { kind: 'landed', landings };
+    }
+    return copy;
   }
 
   /**

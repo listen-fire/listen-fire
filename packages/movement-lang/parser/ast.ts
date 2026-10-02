@@ -486,7 +486,47 @@ export interface UniqueClause {
  */
 export interface NodeLiteral {
   entries: NodeEntry[];
+  /** Present when the literal was written `graph<Shape> { … }` / `graph { … }`,
+   *  and on every body nested inside one. See {@link GraphForm}. */
+  graph?: GraphForm;
+  /** A graph body's `...v` entries, in source order — see {@link MapSpread}. */
+  spreads?: MapSpread[];
   span: Span;
+}
+
+/**
+ * `graph<Message> { text: m.Body, attachment: m-[a:Attachments]-> { … } }` — a
+ * LOCAL GRAPH built as a value. In the modern spelling `node` only declares a
+ * shape and `graph` only builds a value; the anonymous `node { … }` literal
+ * stays as it was.
+ *
+ * It is the node literal's own structure with two differences, both carried by
+ * this marker rather than by a second AST:
+ *
+ *   - `shape` checks the body against a declared node the way TypeScript's
+ *     `satisfies` checks an object literal (a misspelt or mistyped field is
+ *     refused, a required field may not be missing), and the value is then of
+ *     that shape. Only the outermost body carries it; a nested body takes the
+ *     child node of the same name from its parent's shape.
+ *   - a walk is a SNAPSHOT, never a reference. A bare walk copies each record
+ *     it lands on (see `CopyPlan`), and a walk followed by a field body builds
+ *     one child per record. A local graph never holds an edge into a system.
+ */
+export interface GraphForm {
+  shape?: { name: string; span: Span };
+}
+
+/**
+ * What a bare walk in a graph literal copies from each record it lands on:
+ * these fields, and through each named edge, the records there — copied by the
+ * nested plan. The CHECKER resolves it (from the shape when there is one, from
+ * the walked records' own fields otherwise) and records it on the entry; the
+ * engine copies exactly this and refuses an entry nobody resolved, because a
+ * system's record has no field list in hand at run time.
+ */
+export interface CopyPlan {
+  fields: readonly string[];
+  edges: Readonly<Record<string, CopyPlan>>;
 }
 
 /**
@@ -536,8 +576,26 @@ export type NodeEntry =
       head: PathHead;
       lazy: boolean;
       mapping?: NodeLiteral;
+      /** A bare walk in a graph literal: what each landing's snapshot copies,
+       *  as the checker resolved it. Absent until checked, and on every walk
+       *  outside a graph literal. */
+      copy?: CopyPlan;
       span: Span;
     };
+
+/**
+ * `...v` in a graph literal — a computed MAP (plugin output, JSON, a dict)
+ * converted into the graph: each key a field, and a nested map (or a list of
+ * them) a child node. With a shape, the shape decides which keys are children;
+ * without one, every nested map is. As in a write body, an entry written in
+ * the body wins over a spread's key wherever it stands, and a later spread
+ * over an earlier one — so the spreads keep their own order and nothing else.
+ */
+export interface MapSpread {
+  /** The map's bound name. */
+  source: string;
+  span: Span;
+}
 
 /** A name re-spelled as SOURCE TEXT: bare when it scans as an identifier,
  *  backtick-quoted otherwise. The scanner STRIPS backticks (a name root
