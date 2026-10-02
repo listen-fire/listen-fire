@@ -2595,6 +2595,12 @@ function zodForFieldType(type: FieldType | undefined, ctx?: FieldCoercions): z.Z
     // written. Opaque, like the other two program-only shapes.
     case 'record':
       return z.unknown().nullable();
+    // A UNION is what a list literal's disagreeing members widen to, inside the
+    // program — never an annotation. Any of its members, should one arrive.
+    case 'union': {
+      const [first, second, ...rest] = variant.of.map(member => zodForFieldType(member, ctx));
+      return first !== undefined && second !== undefined ? z.union([first, second, ...rest]) : z.unknown().nullable();
+    }
     case 'enum':
       return zodForEnumFieldType(variant, ctx);
     default:
@@ -2853,6 +2859,9 @@ function describeGuideType(type: FieldType | undefined): string {
     // model is never asked for a record. Described rather than crashed on.
     case 'record':
       return 'a record';
+    // Program-only, like a tuple; described rather than crashed on.
+    case 'union':
+      return variant.of.map(describeGuideType).join(' or ');
     case 'enum':
       // `open` (known-values, not a closed enum): the model must learn other
       // values are legal too, so this reads distinguishably from a closed enum.

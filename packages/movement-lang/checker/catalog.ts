@@ -480,8 +480,8 @@ export type FieldType =
    * write the coercion down, never a silent stringification.
    *
    * `of` is what a key nobody wrote down may hold: the value type every key
-   * shares, or `json` when they disagree — the model has no unions, and json
-   * is the data type every value flows into.
+   * shares, or `json` when they disagree — json is the data type every value
+   * flows into. (A value union exists, but only as what a tuple widens to.)
    *
    * `shape` is the TypeScript object literal's type: a dict WRITTEN as a
    * literal knows its keys, so a lookup by a literal key reads that key's own
@@ -514,6 +514,27 @@ export type FieldType =
    * runtime data (the engine, trpc) never carries it. `of` is never itself
    * `maybeAbsent` — construct via the `maybeAbsent()` helper, which flattens. */
   | { kind: 'maybeAbsent'; of: FieldType }
+  /**
+   * `T | U` — a value that is one of several types, TypeScript's union. It
+   * arises where a tuple is READ as a list: `[text, number]` widens to a list
+   * of `text | number`, as TypeScript widens `[string, number]` to
+   * `(string | number)[]` (language version 3; earlier versions read such a
+   * tuple as a list nobody can type).
+   *
+   * A union IS its member set, as a record-position union is: build one only
+   * through `valueUnion`, which keeps the set canonical — flattened (no member
+   * is a union), de-duplicated, sorted by display, at least two members (one
+   * member is that member), absence hoisted out (`maybeAbsent` wraps the
+   * union, never sits inside it), a member another member already accepts
+   * absorbed (`json` takes every data shape, `text` every enum). Members are
+   * VALUES: records and values have no union (a list of both is
+   * `MOV_LIST_MIXED`), and records of different positions are already one
+   * record type.
+   *
+   * Produced only by the checker's typing layer; no adapter surface declares
+   * one.
+   */
+  | { kind: 'union'; of: FieldType[] }
   /**
    * A RECORD held as a value — a traversed record, a write handle, a
    * synthesised node, an extraction result. One type universe: a record is
@@ -719,16 +740,19 @@ export function describeFieldType(type: FieldType): string {
     case 'json':
       return variant.kind;
     case 'maybeAbsent':
-      return `${describeFieldType(variant.of)} (or absent)`;
+      return `${describeMember(variant.of)} (or absent)`;
     case 'list':
-      return `list of ${describeFieldType(variant.of)}`;
+      return `list of ${describeMember(variant.of)}`;
+    // TypeScript's own notation, because that is what the type is.
+    case 'union':
+      return variant.of.map(describeFieldType).join(' | ');
     // A tuple IS its slots, in order — the surface spelling, so a diagnostic
     // can paste it back. An untyped slot reads as `?`, which is what the
     // checker knows, not a type it is claiming.
     case 'tuple': {
       const slots = variant.of.map(slot => (slot === null ? '?' : describeFieldType(slot)));
       if (variant.rest !== undefined) {
-        const run = variant.rest.of === null ? '?' : describeFieldType(variant.rest.of);
+        const run = variant.rest.of === null ? '?' : describeMember(variant.rest.of);
         slots.splice(variant.rest.at, 0, `...list of ${run}`);
       }
       return `[${slots.join(', ')}]`;
@@ -742,7 +766,7 @@ export function describeFieldType(type: FieldType): string {
         );
         return `{ ${keys.join(', ')} }`;
       }
-      return `dict of ${describeFieldType(variant.of)}`;
+      return `dict of ${describeMember(variant.of)}`;
     // A record reads as the record it IS, in the arrow plane's own words. A
     // record nobody can name is still definitely a record, which is what the
     // absent ref means and what the reader needs to hear.
@@ -757,6 +781,14 @@ export function describeFieldType(type: FieldType): string {
     default:
       return neverAsAny(variant);
   }
+}
+
+/** A type spelled inside another — parenthesised when it is a union, as
+ *  TypeScript writes `(string | number)[]`, so `list of (text | number)` cannot
+ *  be read as `(list of text) | number`. */
+function describeMember(type: FieldType): string {
+  const described = describeFieldType(type);
+  return typeof type !== 'string' && type.kind === 'union' ? `(${described})` : described;
 }
 
 // ── Per-instance schema ──

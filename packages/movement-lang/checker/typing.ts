@@ -908,6 +908,7 @@ export function maybeAbsent(type: FieldType | undefined): FieldType | undefined 
     case 'dict':
     case 'enum':
     case 'record':
+    case 'union':
       return { kind: 'maybeAbsent', of: type };
     default:
       return neverAsAny(variant);
@@ -936,6 +937,7 @@ export function stripAbsent(type: FieldType): FieldType {
     case 'dict':
     case 'enum':
     case 'record':
+    case 'union':
       return type;
     default:
       return neverAsAny(variant);
@@ -963,6 +965,8 @@ export function isMaybeAbsent(type: FieldType | undefined): boolean {
     case 'dict':
     case 'enum':
     case 'record':
+    // A union's absence is hoisted outside it (`valueUnion`).
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -1014,11 +1018,15 @@ function unwrapList(type: FieldType): FieldType {
     // share nothing have no element type, and the tuple stays itself
     // (`baseKind` calls that `json`: structured data whose shape nothing here
     // describes). The expression walker widens a tuple before any of this sees
-    // it (`widenTuples`), so this answers only a tuple handed in directly.
+    // it (`widenTuples`), so this answers only a tuple handed in directly —
+    // which widens only to what its members share, as every version agrees.
     case 'tuple': {
-      const list = tupleAsList(variant);
+      const list = widenTuple(variant, 'shared');
       return list !== undefined ? unwrapList(list) : t;
     }
+    // A union is the element itself — one of several kinds, each rule
+    // distributing over its members.
+    case 'union':
     case 'text':
     case 'number':
     case 'boolean':
@@ -1043,12 +1051,31 @@ function unwrapList(type: FieldType): FieldType {
 //
 // A list literal is a TUPLE — its slots were written down, so `AT(t, 0)` reads
 // exactly the first one — and everywhere else it is read as the list it widens
-// to, TypeScript's tuple-to-array assignability. The widened element is what
-// the members UNIFY to, the rule a list literal was typed by before it was a
-// tuple, so a literal read as a list is the very type it always was.
+// to, TypeScript's tuple-to-array assignability: `[T, U]` read as a list is
+// `(T | U)[]`. Members that share a type widen to a list of it, the type a list
+// literal had before it was a tuple; members that do not widen to a list of
+// their UNION (language version 3). Versions 1 and 2 had no value unions, so
+// there such a tuple read as a list nobody could type — silent wherever it
+// went. That one difference is decided here (`wideningUnder`) and nowhere else:
+// a union exists only where this produced one, so no rule downstream asks the
+// version again.
+//
+// The union is the READER's to build, because only a reader knows the
+// program's version — the expression walker and the statement layer read
+// through `widenTuples`. A tuple handed unread to a free predicate
+// (`fieldAssignable`, `fieldTypeCompatible`, `unwrapList`) widens only to what
+// its members share, which is what every version agrees on.
 
 type TupleType = Extract<FieldType, { kind: 'tuple' }>;
 type ListType = Extract<FieldType, { kind: 'list' }>;
+
+/** How a tuple's disagreeing members widen: to no element anyone can type
+ *  (`shared` — the members' one shared type, or nothing), or to their union. */
+type Widening = 'shared' | 'union';
+
+function wideningUnder(languageVersion: LanguageVersion): Widening {
+  return before(languageVersion, 3) ? 'shared' : 'union';
+}
 
 /** Every type a tuple's members can have — its variadic run's included. */
 function tupleMembers(tuple: TupleType): Array<FieldType | null> {
@@ -1056,29 +1083,112 @@ function tupleMembers(tuple: TupleType): Array<FieldType | null> {
 }
 
 /**
- * The list a tuple widens to — `[T, U]` read as `(T | U)[]`. The model has no
- * unions, so the element is what the members unify to (`unifyValueTypes`): one
- * shared type, or records of any position. Members that share nothing, or one
- * nobody could type, leave no element to name, and the widened list is
- * UNKNOWN — silent wherever it goes, as such a literal always was. (Reading a
- * record and a value as one list is still refused, where it is read:
- * `mixedTupleMessage`.)
+ * The list a tuple widens to under `languageVersion` — `[T, U]` read as
+ * `(T | U)[]`. A member nobody could type leaves no element to name (TS's
+ * `unknown` swallows a union), and the widened list is UNKNOWN. So does a
+ * mixture of records and values, which no list holds (refused where it is
+ * read: `mixedTupleMessage`).
  */
-export function tupleAsList(tuple: TupleType): ListType | undefined {
-  const members = tupleMembers(tuple);
-  if (members.some(member => member === null)) return undefined;
-  const element = unifyValueTypes(members.map(member => widenTuples(member ?? undefined)));
-  return element !== undefined ? { kind: 'list', of: element } : undefined;
+export function tupleAsList(tuple: TupleType, languageVersion: LanguageVersion): ListType | undefined {
+  return widenTuple(tuple, wideningUnder(languageVersion));
 }
 
-/** `type` with a tuple at its top read as the list it widens to, absence kept;
- *  any other type unchanged. */
-export function widenTuples(type: FieldType | undefined): FieldType | undefined {
+function widenTuple(tuple: TupleType, widening: Widening): ListType | undefined {
+  const members = tupleMembers(tuple).map(member => widenTuplesBy(member ?? undefined, widening));
+  // What the members share comes first, so a tuple that widened before still
+  // widens to exactly that (a dict's written keys forgotten, records of
+  // different positions one record type).
+  const shared = unifyValueTypes(members);
+  if (shared !== undefined) return { kind: 'list', of: shared };
+  if (widening === 'shared') return undefined;
+  const typed = members.filter((member): member is FieldType => member !== undefined);
+  if (typed.length !== members.length) return undefined;
+  const union = valueUnion(typed);
+  return union !== undefined ? { kind: 'list', of: union } : undefined;
+}
+
+/** `type` with a tuple at its top read as the list it widens to under
+ *  `languageVersion`, absence kept; any other type unchanged. */
+export function widenTuples(type: FieldType | undefined, languageVersion: LanguageVersion): FieldType | undefined {
+  return widenTuplesBy(type, wideningUnder(languageVersion));
+}
+
+function widenTuplesBy(type: FieldType | undefined, widening: Widening): FieldType | undefined {
   if (type === undefined) return undefined;
   const present = stripAbsent(type);
   if (!isTupleType(present)) return type;
-  const list = tupleAsList(present);
+  const list = widenTuple(present, widening);
   return isMaybeAbsent(type) ? maybeAbsent(list) : list;
+}
+
+// ── Value unions ────────────────────────────────────────────────────────────
+
+/**
+ * `A | B | …` in its one canonical form — the only constructor of a union, so
+ * the set semantics hold everywhere one is compared or shown:
+ *
+ * - nested unions flatten, and a member twice is there once;
+ * - absence is hoisted: `text | absent | number` is `(text | number) | absent`,
+ *   which is how every require-present site already reads absence;
+ * - a member another member accepts is absorbed — `json` takes every data
+ *   shape, `text` every enum — as TS reduces `"a" | string` to `string`;
+ * - one member left is that member; none is the `null` literal's type;
+ * - members are sorted by display, so equal sets are one value.
+ *
+ * Records and values have no union — a list holds one or the other — so a
+ * mixture answers undefined, and so does an empty set. Records of different
+ * positions are one record type already (`unifyValueTypes`).
+ */
+export function valueUnion(types: readonly FieldType[]): FieldType | undefined {
+  if (types.length === 0) return undefined;
+  let absent = false;
+  const flat: FieldType[] = [];
+  const add = (type: FieldType): void => {
+    if (isMaybeAbsent(type)) absent = true;
+    const present = stripAbsent(type);
+    if (present === 'absent') {
+      absent = true;
+      return;
+    }
+    if (isUnionType(present)) present.of.forEach(add);
+    else flat.push(present);
+  };
+  types.forEach(add);
+  const withAbsence = (one: FieldType): FieldType => (absent ? maybeAbsent(one)! : one);
+  if (flat.length === 0) return 'absent';
+  const records = flat.filter(member => isRecordType(member));
+  if (records.length > 0) {
+    if (records.length !== flat.length) return undefined;
+    return withAbsence(unifyValueTypes(flat)!);
+  }
+  const kept = flat.filter((member, i) =>
+    !flat.some((other, j) => j !== i && memberAbsorbs(other, member) && (j < i || !memberAbsorbs(member, other))),
+  );
+  if (kept.length === 1) return withAbsence(kept[0]!);
+  const sorted = kept
+    .map(member => ({ member, key: describeFieldType(member) }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map(({ member }) => member);
+  return withAbsence({ kind: 'union', of: sorted });
+}
+
+/** Does a union holding `wide` already hold every `narrow`? */
+function memberAbsorbs(wide: FieldType, narrow: FieldType): boolean {
+  if (fieldTypeEquals(wide, narrow)) return true;
+  if (wide === 'json') return isDataShaped(narrow);
+  if (wide === 'text') return isEnumType(narrow);
+  return false;
+}
+
+/** The members of a union, or the one type that is not one — absence peeled,
+ *  as every rule that distributes over members reads them. */
+export function unionMembers(type: FieldType): FieldType[] {
+  const present = stripAbsent(type);
+  return isUnionType(present) ? present.of : [present];
+}
+
+function isUnionType(type: FieldType): type is Extract<FieldType, { kind: 'union' }> {
+  return typeof type !== 'string' && type.kind === 'union';
 }
 
 /**
@@ -1097,7 +1207,7 @@ export function mixedTupleMessage(type: FieldType | undefined): string | undefin
   const record = members.find(member => isRecordType(member));
   const value = members.find(member => !isRecordType(member) && stripAbsent(member) !== 'absent');
   if (record !== undefined && value !== undefined) {
-    return `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(record))} is a record, and another member is ${describeFieldType(widenTuples(value) ?? value)}. A tuple may hold both — read one slot with 'AT(t, 0)' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`;
+    return `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(record))} is a record, and another member is ${describeFieldType(widenTuplesBy(value, 'shared') ?? value)}. A tuple may hold both — read one slot with 'AT(t, 0)' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`;
   }
   return members.map(mixedTupleMessage).find(message => message !== undefined);
 }
@@ -1154,6 +1264,8 @@ function isKeyedValue(type: FieldType): boolean {
     case 'dict':
     case 'record':
       return true;
+    case 'union':
+      return variant.of.every(isKeyedValue);
     case 'text':
     case 'number':
     case 'boolean':
@@ -1185,6 +1297,8 @@ function isPlainValue(type: FieldType): boolean {
     // An enum's values ARE text, so it orders as text does.
     case 'enum':
       return true;
+    case 'union':
+      return variant.of.every(isPlainValue);
     case 'file':
     case 'json':
     case 'absent':
@@ -1271,9 +1385,18 @@ export function collectionElementOf(type: FieldType): FieldType | undefined {
     case 'list':
       return variant.of;
     // Members that share nothing leave a tuple with no element type — the
-    // collection is real, but nothing here can say what one member is.
+    // collection is real, but nothing here can say what one member is. (A
+    // tuple handed in unread widens as every version agrees; a reader widened
+    // it first — see "Tuples read as lists".)
     case 'tuple':
-      return tupleAsList(variant)?.of;
+      return widenTuple(variant, 'shared')?.of;
+    // A union of collections is a collection of what any of them holds.
+    case 'union': {
+      const elements = variant.of.map(collectionElementOf);
+      return elements.every((element): element is FieldType => element !== undefined)
+        ? valueUnion(elements)
+        : undefined;
+    }
     case 'text':
     case 'number':
     case 'boolean':
@@ -1309,6 +1432,7 @@ function valueOrdering(type: FieldType | undefined): CollectionOrder {
       return 'ordered';
     case 'list':
       return variant.unordered === true ? 'unordered' : 'ordered';
+    case 'union':
     case 'text':
     case 'number':
     case 'boolean':
@@ -1343,15 +1467,19 @@ const FOLD_SPELLING: Partial<Record<AggregationFunction | 'at', string>> = {
 
 /** The type a LITERAL index reads off a tuple. Out of range is knowably null —
  *  a fixed length is a fact, so the read is `absent` rather than an unknown.
- *  A non-literal index cannot pick a slot, so it reads the members' shared type
- *  (or nothing, when they share none), possibly absent as any index read is.
+ *  A non-literal index cannot pick a slot, so it reads any member — what the
+ *  tuple widens to a list of, under the program's version — possibly absent as
+ *  any index read is.
  *
  *  A VARIADIC tuple's length is not a fact, so only the slots on the near side
  *  of its run are fixed: `[text, ...file[]]` reads `text` at 0, and at 1 a
  *  member that may be any of what follows — or nothing at all. */
-function tupleSlotType(tuple: TupleType, index: number | undefined): FieldType | undefined {
+function tupleSlotType(
+  tuple: TupleType,
+  { index, languageVersion }: { index: number | undefined; languageVersion: LanguageVersion },
+): FieldType | undefined {
   const anyOf = (members: Array<FieldType | null>): FieldType | undefined =>
-    maybeAbsent(tupleAsList({ kind: 'tuple', of: members })?.of);
+    maybeAbsent(tupleAsList({ kind: 'tuple', of: members }, languageVersion)?.of);
   if (index === undefined) return anyOf(tupleMembers(tuple));
   const rest: TupleRest | undefined = tuple.rest;
   if (rest === undefined) {
@@ -1377,9 +1505,21 @@ function literalKey(expr: Expression): string | undefined {
   return expr.type === 'static' && typeof expr.value === 'string' ? expr.value : undefined;
 }
 
-function baseKind(
-  type: FieldType,
-): 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' | 'record' {
+type BaseKind = 'text' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'json' | 'absent' | 'record';
+
+/** The base kind of a value, or `mixed` for a union whose members have more
+ *  than one — the rules that can say more read each member (`baseKinds`). */
+function baseKind(type: FieldType): BaseKind | 'mixed' {
+  const kinds = baseKinds(type);
+  return kinds.every(kind => kind === kinds[0]) ? kinds[0]! : 'mixed';
+}
+
+/** The base kind of each member a value may be — one, unless it is a union. */
+function baseKinds(type: FieldType): BaseKind[] {
+  return unionMembers(unwrapList(type)).map(memberBaseKind);
+}
+
+function memberBaseKind(type: FieldType): BaseKind {
   const variant = variantOf(unwrapList(type));
   switch (variant.kind) {
     // A RECORD is its own base kind and reaches no other. It is not data (so a
@@ -1416,6 +1556,10 @@ function baseKind(
     // above; a plain list is already unwrapped to its element.
     case 'list':
       return 'text';
+    // `baseKinds` reads a union's members one by one, so none arrives here —
+    // a union never holds one (`valueUnion` flattens).
+    case 'union':
+      return 'json';
     default:
       return neverAsAny(variant);
   }
@@ -1425,10 +1569,9 @@ function baseKind(
  *  `file`, which is a HANDLE (a byte channel the adapter pulls), not a value
  *  that serializes into a JSON document. */
 function isDataShaped(type: FieldType): boolean {
-  const base = baseKind(type);
   // A record is the second handle: it is a place in a graph, not a document,
   // and nothing serialises one into a json field.
-  return base !== 'file' && base !== 'record';
+  return baseKinds(type).every(base => base !== 'file' && base !== 'record');
 }
 
 /**
@@ -1489,9 +1632,25 @@ export function comparisonCategory(type: FieldType): ComparisonCategory {
       return 'opaque';
     case 'absent':
       return 'absent';
+    // A union's members in one category are that category; members in more
+    // than one compare only to an identical type, as a collection does. The
+    // comparison rules read the members themselves (`checkComparable`).
+    case 'union': {
+      const categories = variant.of.map(comparisonCategory);
+      return categories.every(category => category === categories[0]) ? categories[0]! : 'structural';
+    }
     default:
       return neverAsAny(variant);
   }
+}
+
+/** Could a value of one union member compare to a value of another — the
+ *  category rule, read pairwise. A union holds values only, and no `json`
+ *  (`valueUnion`), so the record and opaque rules have nothing to say here. */
+function membersComparable(left: FieldType, right: FieldType): boolean {
+  const category = comparisonCategory(left);
+  if (category !== comparisonCategory(right)) return false;
+  return category !== 'structural' || fieldTypeEquals(left, right);
 }
 
 /** A type-only enum shape — the membership check's subject. */
@@ -1516,6 +1675,7 @@ export function isEnumType(type: FieldType | undefined): type is EnumType {
     case 'dict':
     case 'record':
     case 'maybeAbsent':
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -1542,6 +1702,7 @@ function isTupleType(type: FieldType): type is Extract<FieldType, { kind: 'tuple
     case 'enum':
     case 'record':
     case 'maybeAbsent':
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -1568,6 +1729,7 @@ export function isListType(type: FieldType | undefined): type is Extract<FieldTy
     case 'enum':
     case 'record':
     case 'maybeAbsent':
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -1593,6 +1755,7 @@ function isDictType(type: FieldType): type is Extract<FieldType, { kind: 'dict' 
     case 'enum':
     case 'record':
     case 'maybeAbsent':
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -1695,7 +1858,7 @@ export function checkJsonOpaque(
   type: FieldType | undefined,
   operation: string,
 ): { code: string; message: string } | null {
-  if (type === undefined || baseKind(type) !== 'json') return null;
+  if (type === undefined || !baseKinds(type).includes('json')) return null;
   return {
     code: TypedDiagnosticCodes.JSON_OPAQUE,
     message:
@@ -1718,7 +1881,7 @@ export function checkRecordAsValue(
   type: FieldType | undefined,
   operation: string,
 ): { code: string; message: string } | null {
-  if (type === undefined || baseKind(type) !== 'record') return null;
+  if (type === undefined || !baseKinds(type).includes('record')) return null;
   return {
     code: TypedDiagnosticCodes.RECORD_NOT_A_VALUE,
     message:
@@ -1754,8 +1917,9 @@ export function checkArithmeticOperands(
     { label: 'left', expr: expr.left, type: left },
     { label: 'right', expr: expr.right, type: right },
   ];
-  if (sides.some(s => s.type !== undefined && baseKind(s.type) === 'json')) return null;
-  const offenders = sides.filter(s => s.type !== undefined && baseKind(s.type) !== 'number');
+  if (sides.some(s => s.type !== undefined && baseKinds(s.type).includes('json'))) return null;
+  // A union is numeric only when every member is — `text | number` may be text.
+  const offenders = sides.filter(s => s.type !== undefined && baseKinds(s.type).some(kind => kind !== 'number'));
   if (offenders.length === 0) return null;
 
   const described = offenders.map(o => describeFieldType(stripAbsent(o.type!)));
@@ -1768,7 +1932,7 @@ export function checkArithmeticOperands(
 
   return {
     code: TypedDiagnosticCodes.ARITH_NON_NUMERIC,
-    message: `An arithmetic operation requires numeric operands — ${subject}.${hintFor(expr, offenders.map(o => baseKind(o.type!)))}`,
+    message: `An arithmetic operation requires numeric operands — ${subject}.${hintFor(expr, offenders.flatMap(o => baseKinds(o.type!)))}`,
   };
 }
 
@@ -1780,12 +1944,13 @@ export function checkArithmeticOperands(
 export function checkNegateOperand(
   type: FieldType | undefined,
 ): { code: string; message: string } | null {
-  if (type === undefined || baseKind(type) === 'json' || baseKind(type) === 'number') return null;
+  if (type === undefined) return null;
+  const kinds = baseKinds(type);
+  if (kinds.includes('json') || kinds.every(kind => kind === 'number')) return null;
   const described = describeFieldType(stripAbsent(type));
-  const kind = baseKind(type);
   const hint =
-    kind === 'text' ? ' Wrap it in NUMBER(…) if it holds a number.'
-    : kind === 'date' || kind === 'datetime' ? ' Shift a date with DATE.ADD_DAYS(date, days) instead.'
+    kinds.includes('text') ? ' Wrap it in NUMBER(…) if it holds a number.'
+    : kinds.includes('date') || kinds.includes('datetime') ? ' Shift a date with DATE.ADD_DAYS(date, days) instead.'
     : '';
   return {
     code: TypedDiagnosticCodes.ARITH_NON_NUMERIC,
@@ -1799,7 +1964,7 @@ export function checkNegateOperand(
  *  wants the shift function. Anything else gets no guess. */
 function hintFor(
   expr: Extract<Expression, { type: 'arithmetic' }>,
-  offending: ReturnType<typeof baseKind>[],
+  offending: BaseKind[],
 ): string {
   if (offending.includes('text')) {
     if (expr.op !== '+') return ' Wrap it in NUMBER(…) if it holds a number.';
@@ -1878,13 +2043,19 @@ function operandSource(expr: Expression): string | undefined {
  */
 export function fieldTypeCompatible(value: FieldType, target: FieldType): boolean {
   // A tuple is written as the list it widens to; one whose members share
-  // nothing is a list nobody can type, and unknown says nothing.
-  const written = widenTuples(value);
+  // nothing is a list nobody can type, and unknown says nothing. (A reader
+  // that knows the program's version has already widened it to its union.)
+  const written = widenTuplesBy(value, 'shared');
   if (written === undefined) return true;
   // Absence is a require-present concern (checked separately at the write site),
-  // not a shape mismatch — compare the present shapes.
-  const v = baseKind(written);
-  const t = baseKind(target);
+  // not a shape mismatch — compare the present shapes. A union is written when
+  // every member it may be is — `text | number` into a number field is not —
+  // and a union target takes what any member takes.
+  const targets = baseKinds(target);
+  return baseKinds(written).every(v => targets.some(t => baseKindWritable(v, t)));
+}
+
+function baseKindWritable(v: BaseKind, t: BaseKind): boolean {
   // A literal `null` has no shape to mismatch — it is the ABSENCE of one, which
   // the require-present sites police. Saying it twice, in the shape vocabulary,
   // would send the author hunting for a coercer that could never help.
@@ -1935,9 +2106,12 @@ function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'reco
       return variant;
     case 'list':
       return recordIn(variant.of);
-    // A tuple of records walks as the list of records it widens to.
+    // A tuple of records walks as the list of records it widens to — records
+    // are one type whatever their position, so no version reads it otherwise.
     case 'tuple':
-      return recordIn(tupleAsList(variant));
+      return recordIn(widenTuple(variant, 'shared'));
+    // A union's members are values (`valueUnion`).
+    case 'union':
     case 'text':
     case 'number':
     case 'boolean':
@@ -2003,6 +2177,7 @@ export function isRecordType(type: FieldType | undefined): boolean {
     case 'dict':
     case 'enum':
     case 'maybeAbsent':
+    case 'union':
       return false;
     default:
       return neverAsAny(variant);
@@ -2126,6 +2301,12 @@ export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
     // arrive; absence is transparent to sameness either way.
     case 'maybeAbsent':
       return right.kind === 'maybeAbsent' && fieldTypeEquals(left.of, right.of);
+    // A union IS its member set — the same members in any order.
+    case 'union': {
+      if (right.kind !== 'union' || left.of.length !== right.of.length) return false;
+      const others = right.of;
+      return left.of.every(member => others.some(other => fieldTypeEquals(member, other)));
+    }
     default:
       return neverAsAny(left);
   }
@@ -2163,6 +2344,10 @@ function targetConstrainsExtraction(target: FieldType): boolean {
     case 'record':
     case 'maybeAbsent':
       return false;
+    // A wrong annotation could produce a value the target rejects when it could
+    // for any member.
+    case 'union':
+      return variant.of.some(targetConstrainsExtraction);
     default:
       return neverAsAny(variant);
   }
@@ -2176,11 +2361,16 @@ export function fieldAssignable(source: FieldType, target: FieldType): boolean {
   source = stripAbsent(source);
   target = stripAbsent(target);
   if (fieldTypeEquals(source, target)) return true;
+  // TypeScript's union rules: a union reads as X when every member it may be
+  // does, and X reads as a union when it reads as some member.
+  if (isUnionType(source)) return source.of.every(member => fieldAssignable(member, target));
+  if (isUnionType(target)) return target.of.some(member => fieldAssignable(source, member));
   // A tuple reads as the list it widens to — TypeScript's tuple-to-array
   // assignability. Members that share nothing widen to a list nobody can type,
-  // which says nothing here, as unknown says nothing everywhere.
+  // which says nothing here, as unknown says nothing everywhere. (A reader that
+  // knows the program's version has already widened it to its union.)
   if (isTupleType(source) && !isTupleType(target)) {
-    const list = tupleAsList(source);
+    const list = widenTuple(source, 'shared');
     return list === undefined || fieldAssignable(list, target);
   }
   // `json` widens the same way in a read position as in a write: any data shape
@@ -3117,7 +3307,7 @@ export class ExpressionTyping {
   private widen(type: FieldType | undefined): FieldType | undefined {
     const mixed = mixedTupleMessage(type);
     if (mixed !== undefined) this.report(TypedDiagnosticCodes.LIST_MIXED, mixed);
-    return widenTuples(type);
+    return widenTuples(type, this.options.languageVersion);
   }
 
   /** The type of a sub-expression as the expression around it READS it — a
@@ -3292,7 +3482,10 @@ export class ExpressionTyping {
           // and nothing else — present, because a fixed-length list always has
           // it. That exactness is the whole reason the tuple type exists.
           case 'tuple':
-            return tupleSlotType(variant, literalIndex(expr.index));
+            return tupleSlotType(variant, {
+              index: literalIndex(expr.index),
+              languageVersion: this.options.languageVersion,
+            });
           // Indexing can miss — an out-of-range index reads null at run time,
           // so the element is `T | absent`, exactly as FIRST/LAST are.
           case 'list':
@@ -3311,6 +3504,7 @@ export class ExpressionTyping {
           case 'enum':
           case 'record':
           case 'maybeAbsent':
+          case 'union':
             return maybeAbsent(element);
           default:
             return neverAsAny(variant);
@@ -3524,7 +3718,7 @@ export class ExpressionTyping {
       };
     }
     // Two runs: nothing past the first one has a fixed place any more.
-    const folded = tupleAsList({ kind: 'tuple', of: slotsOf(parts.slice(firstRun)) });
+    const folded = tupleAsList({ kind: 'tuple', of: slotsOf(parts.slice(firstRun)) }, this.options.languageVersion);
     return { kind: 'tuple', of: prefix, rest: { at: prefix.length, of: folded?.of ?? null } };
   }
 
@@ -3556,6 +3750,18 @@ export class ExpressionTyping {
       }
       case 'list':
         return [{ run: variant.of }];
+      // One of several lists splices whatever any of them holds. A union with
+      // a member that is not a collection may be one thing, and is refused as
+      // one is.
+      case 'union': {
+        const run = collectionElementOf(present);
+        if (run !== undefined) return [{ run }];
+        this.report(
+          TypedDiagnosticCodes.LIST_SPREAD_NOT_A_LIST,
+          `'...' splices a list's members into this list, and this is ${describeFieldType(present)} — which may be one thing, not several. Spread a list ('[a, ...xs]').`,
+        );
+        return [{ run: null }];
+      }
       // `json` may hold a list at run time, but nothing here says it does —
       // the opaque type is passed through, never taken apart.
       case 'text':
@@ -3598,6 +3804,9 @@ export class ExpressionTyping {
       case 'text':
       case 'enum':
         return;
+      case 'union':
+        if (variant.of.every(member => member === 'text' || isEnumType(member))) return;
+        break;
       case 'number':
       case 'boolean':
       case 'date':
@@ -3648,6 +3857,7 @@ export class ExpressionTyping {
   private checkComparable(
     left: FieldType | undefined,
     right: FieldType | undefined,
+    need: 'overlap' | 'every',
   ): void {
     if (left === undefined || right === undefined) return;
     // A RECORD is compared by IDENTITY: the same landing reached two ways is
@@ -3662,6 +3872,18 @@ export class ExpressionTyping {
     // ahead of the category rule so the author gets the pass-it-through
     // guidance instead of a coercer hint that couldn't help.
     if (this.requireTransparent(left, 'compared') || this.requireTransparent(right, 'compared')) {
+      return;
+    }
+    // A union compares member by member, as TypeScript's does: equality and
+    // membership need one pair that could be equal (`text | number` against
+    // "x" asks a real question), ordering needs every pair ordered alike.
+    const leftMembers = unionMembers(left);
+    const rightMembers = unionMembers(right);
+    if (leftMembers.length > 1 || rightMembers.length > 1) {
+      const pairs = leftMembers.flatMap(l => rightMembers.map(r => membersComparable(l, r)));
+      if (!(need === 'overlap' ? pairs.some(Boolean) : pairs.every(Boolean))) {
+        this.reportCompareMismatch(left, right);
+      }
       return;
     }
     const leftCategory = comparisonCategory(left);
@@ -3742,7 +3964,7 @@ export class ExpressionTyping {
       case 'element-wise': {
         const left = leftType === undefined ? undefined : unwrapList(leftType);
         const right = rightType === undefined ? undefined : unwrapList(rightType);
-        this.checkComparable(left, right);
+        this.checkComparable(left, right, 'overlap');
         this.checkEnumLiteralOperand(expr.left, left, right);
         this.checkEnumLiteralOperand(expr.right, right, left);
         return;
@@ -3761,7 +3983,7 @@ export class ExpressionTyping {
         // thing this reports.
         if (isMaybeAbsent(leftType)) this.reportAbsentInComparison(leftType!);
         if (isMaybeAbsent(rightType)) this.reportAbsentInComparison(rightType!);
-        this.checkComparable(leftType, rightType);
+        this.checkComparable(leftType, rightType, 'every');
         this.checkEnumLiteralOperand(expr.left, leftType, rightType);
         this.checkEnumLiteralOperand(expr.right, rightType, leftType);
         return;
@@ -4218,6 +4440,8 @@ export class ExpressionTyping {
     const type = args[declared.index];
     if (type === undefined) return; // unknown stays silent
     const stripped = stripAbsent(type);
+    // One of several dicts is still a dict whose keys the author wrote.
+    if (unionMembers(stripped).length > 1 && unionMembers(stripped).every(isDictType)) return;
     if (!isRecordType(stripped) && !isDictType(stripped)) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,

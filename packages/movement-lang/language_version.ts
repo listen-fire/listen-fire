@@ -30,15 +30,20 @@ export interface LanguageVersionInfo {
 
 export const LANGUAGE_VERSIONS: readonly LanguageVersionInfo[] = [
   { version: 1, name: 'Quiet Heron', is: 'the language as of tag v0.6.0' },
-  { version: 2, name: 'Bright Otter', is: 'the language as of v0.7.0 and everything after' },
+  { version: 2, name: 'Bright Otter', is: 'the language from v0.7.0 through v0.9.1' },
+  {
+    version: 3,
+    name: 'Swift Wren',
+    is: 'the language after v0.9.1: a list literal whose members disagree reads as a list of their union',
+  },
 ];
 
 /** What a movement saved today is pinned to, and what an entry point given no
  *  version compiles and runs under. */
-export const CURRENT_LANGUAGE_VERSION: LanguageVersion = 2;
+export const CURRENT_LANGUAGE_VERSION: LanguageVersion = 3;
 
 /** The versions this release parses, checks and runs. */
-export const SUPPORTED_LANGUAGE_VERSIONS: ReadonlySet<LanguageVersion> = new Set([1, 2]);
+export const SUPPORTED_LANGUAGE_VERSIONS: ReadonlySet<LanguageVersion> = new Set([1, 2, 3]);
 
 /** Supported versions that will be removed: they still run, with a warning. */
 export const DEPRECATED_LANGUAGE_VERSIONS: ReadonlySet<LanguageVersion> = new Set<LanguageVersion>();

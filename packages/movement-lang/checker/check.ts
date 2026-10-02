@@ -9370,7 +9370,7 @@ class Checker {
   private readHeldValue(type: FieldType | undefined, span: Span): FieldType | undefined {
     const mixed = mixedTupleMessage(type);
     if (mixed !== undefined) this.report(TypedDiagnosticCodes.LIST_MIXED, mixed, span);
-    return widenTuples(type);
+    return widenTuples(type, this.languageVersion);
   }
 
   /**

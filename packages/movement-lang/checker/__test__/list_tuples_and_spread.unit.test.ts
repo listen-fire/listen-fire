@@ -147,9 +147,11 @@ describe('a spread splices into the tuple', () => {
     ].join('\n');
     expect(fieldTypeOf(body, 'first')).toEqual('text');
     expect(fieldTypeOf(body, 'last')).toEqual('number');
-    // Past the run's start a member may be a file, the 3, or nothing — and a
-    // file and a number share no type.
-    expect(fieldTypeOf(body, 'second')).toBeUndefined();
+    // Past the run's start a member may be a file, the 3, or nothing.
+    expect(fieldTypeOf(body, 'second')).toEqual({
+      kind: 'maybeAbsent',
+      of: { kind: 'union', of: ['file', 'number'] },
+    });
     expect(fieldTypeOf('  t = [e.`Subject`, ...e.`Files`]\n  s = AT(t, 1)', 's')).toEqual({
       kind: 'maybeAbsent',
       of: 'file',
