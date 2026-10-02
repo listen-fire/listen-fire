@@ -1163,9 +1163,11 @@ export type MovementTraceEntry =
     }
   | { kind: 'ai'; prompt: string; hasValue: boolean }
   /**
-   * A warning about the run as a whole that did not stop it — today, a
-   * movement pinned to a deprecated language version. `code` is the
-   * diagnostic's; `message` names the version and what to do.
+   * A warning about the run that did not stop it — a movement pinned to a
+   * deprecated language version (`code` is the diagnostic's; `message` names
+   * the version and what to do), or a member `MAP` / `FILTER` left out under
+   * `onError: "warn"` (`MOVENG_COLLECTION_MEMBER_FAILED`; `message` names the
+   * member and why its function failed).
    */
   | { kind: 'warning'; code: string; message: string }
   | { kind: 'gate'; outcome: boolean }

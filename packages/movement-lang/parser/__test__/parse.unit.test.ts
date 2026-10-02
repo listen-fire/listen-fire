@@ -516,6 +516,43 @@ describe('a bare collection-op statement (no binding)', () => {
     expect(as(reduceProgram.statements[1], 'collection').collection.op).toBe('reduce');
   });
 
+  it('MAP and FILTER take a settings record between the collection and the function', () => {
+    const program = parseProgram(
+      [
+        'xs = [1, 2, 3]',
+        'ys = MAP(xs, { onError: "warn", concurrency: 4 }, (n) => { return n })',
+        'FILTER(xs, {\n  concurrency: 2,\n  initialConcurrency: 1\n}, (n) => { return n > 1 })',
+      ].join('\n'),
+    );
+    const mapped = rv(as(program.statements[1], 'assign').value, 'collection').collection;
+    expect(mapped.op).toBe('map');
+    expect(mapped.config?.raw).toBe('{ onError: "warn", concurrency: 4 }');
+    expect(mapped.fn.kind).toBe('closure');
+    const filtered = as(program.statements[2], 'collection').collection;
+    expect(filtered.config?.raw).toContain('initialConcurrency: 1');
+    expect(filtered.fn.kind).toBe('closure');
+  });
+
+  it('the two-argument forms carry no settings', () => {
+    const program = parseProgram(['xs = [1, 2, 3]', 'MAP(xs, (n) => { return n })'].join('\n'));
+    expect(as(program.statements[1], 'collection').collection.config).toBeUndefined();
+  });
+
+  it("REDUCE's middle argument is still its starting value, even when it is a record", () => {
+    const program = parseProgram(
+      ['xs = [1, 2, 3]', 'REDUCE(xs, { total: 0 }, (acc, n) => { return acc })'].join('\n'),
+    );
+    const reduced = as(program.statements[1], 'collection').collection;
+    expect(reduced.init?.raw).toBe('{ total: 0 }');
+    expect(reduced.config).toBeUndefined();
+  });
+
+  it('settings held in a name are refused, naming the in-place record', () => {
+    expect(() =>
+      parseProgram(['xs = [1, 2, 3]', 'MAP(xs, cfg, (n) => { return n })'].join('\n')),
+    ).toThrow(/settings as a record written in place/);
+  });
+
   it('a name that merely happens to be spelled MAP but is not called stays an ordinary name', () => {
     const program = parseProgram(['MAP = 3', 'y = MAP + 1'].join('\n'));
     expect(program.statements).toHaveLength(2);

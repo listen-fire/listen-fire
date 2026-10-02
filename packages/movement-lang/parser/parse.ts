@@ -2670,25 +2670,46 @@ class Parser {
    * a collection and a function; `REDUCE(xs, init, f)` puts the starting value
    * between them, where a reader expects it (the value the fold begins at,
    * then what carries it forward).
+   *
+   * `MAP(xs, { … }, f)` / `FILTER(xs, { … }, f)` — three arguments, the middle
+   * one the settings record. The function is always last and is never a
+   * record, so a third argument is what tells the two forms apart. `REDUCE`
+   * takes none: its three-argument form is already the starting value, which
+   * may itself be a record.
    */
   private parseCollectionOp(start: number, spelling: string, op: CollectionOp): CollectionOpExpression {
     this.skipInlineWs();
     this.expect('(', `to open '${spelling}(…)'`);
+    const configurable = op === 'map' || op === 'filter';
     const shape = op === 'reduce'
       ? `${spelling}(<collection>, <starting value>, <function>)`
-      : `${spelling}(<collection>, <function>)`;
+      : configurable
+        ? `${spelling}(<collection>, <function>) or ${spelling}(<collection>, { <settings> }, <function>)`
+        : `${spelling}(<collection>, <function>)`;
     const source = this.readCollectionArg(spelling, `the collection '${spelling}' reads`, shape);
     const init = op === 'reduce'
       ? this.readCollectionArg(spelling, `the value '${spelling}' starts from`, shape)
       : undefined;
     this.skipAllWs();
+    const config = configurable && this.peekCh() === '{'
+      ? this.readCollectionArg(spelling, `the settings '${spelling}' runs with`, shape)
+      : undefined;
+    this.skipAllWs();
+    const fnStart = this.pos;
     const fn = this.parseArm(spelling, 'The function for');
     this.skipAllWs();
+    if (configurable && config === undefined && this.peekCh() === ',') {
+      this.error(
+        `'${spelling}' takes its settings as a record written in place, between the collection and the function — \`${spelling}(xs, { onError: "warn", concurrency: 4 }, f)\``,
+        fnStart,
+      );
+    }
     this.expect(')', `to close '${spelling}(…)'`);
     return {
       op,
       source,
       ...(init !== undefined ? { init } : {}),
+      ...(config !== undefined ? { config } : {}),
       fn,
       span: this.spanFrom(start),
     };
