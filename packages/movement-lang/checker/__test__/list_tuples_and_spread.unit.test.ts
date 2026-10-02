@@ -11,6 +11,7 @@ import { parseProgram } from '../../parser/parse';
 import { parseMovementExpression } from '../../expression/bridge';
 import { checkProgram, checkProgramWithLink, Diagnostic } from '../check';
 import { InstanceSchema, mockCatalog } from '../catalog';
+import type { LanguageVersion } from '../../language_version';
 
 const mailSchema: InstanceSchema = {
   positions: {
@@ -47,16 +48,20 @@ ${body}
 }`;
 }
 
-function check(body: string): Diagnostic[] {
-  return checkProgram(parseProgram(source(body)), catalog).filter(
+function check(body: string, languageVersion?: LanguageVersion): Diagnostic[] {
+  const options = languageVersion !== undefined ? { languageVersion } : undefined;
+  return checkProgram(parseProgram(source(body), options), catalog, options).filter(
     (d) => (d.severity ?? 'error') === 'error',
   );
 }
-const codes = (body: string): string[] => check(body).map((d) => d.code);
+const codes = (body: string, languageVersion?: LanguageVersion): string[] =>
+  check(body, languageVersion).map((d) => d.code);
 const messages = (body: string): string => check(body).map((d) => d.message).join('\n');
 
-function fieldTypeOf(body: string, name: string): unknown {
-  const { recording } = checkProgramWithLink(parseProgram(source(body)), catalog, {
+function fieldTypeOf(body: string, name: string, languageVersion?: LanguageVersion): unknown {
+  const options = languageVersion !== undefined ? { languageVersion } : {};
+  const { recording } = checkProgramWithLink(parseProgram(source(body), options), catalog, {
+    ...options,
     recordAnalysis: true,
   });
   const symbols = (recording?.frames ?? []).flatMap((f) => [...f.scope.symbols.values()]);
@@ -244,5 +249,79 @@ describe('a record and a value in one literal', () => {
 
   it('is refused when written in place where a list is read', () => {
     expect(codes('  one = node { name: "Acme" }\n  n = COUNT([one, "label"])')).toContain('MOV_LIST_MIXED');
+  });
+});
+
+// Versions 1 and 2 typed a list literal as the list it reads as, so an index
+// read off one was `T | absent` for whatever the members share: a walk off a
+// slot of records was never checked against the slot's own record. Version 3
+// reads the slot exactly, which refuses programs those versions accepted — so
+// a movement pinned to either keeps the list typing.
+const TWO = [
+  '  one = node { label: "A", tag: node { name: "A" } }',
+  '  two = node { label: "B", tag: node { name: "B" } }',
+  '  both = [one, two]',
+].join('\n');
+const walk = (root: string) => `  ${root}-[t:missing]-> {\n    write inbox-[:log]-> { note: t.name }\n  }`;
+
+describe('under version 2, a list literal is the list it reads as', () => {
+  const V2 = 2;
+
+  it('a slot reads the record the members unify to, maybe absent, as an index read of a list does', () => {
+    expect(fieldTypeOf(`${TWO}\n  s = AT(both, 1)`, 's', V2)).toEqual({ kind: 'maybeAbsent', of: { kind: 'record' } });
+  });
+
+  it('walking an edge the slot has not got validates — the walk runs zero times', () => {
+    expect(codes(`${TWO}\n${walk('AT(both, 1)')}`, V2)).toEqual([]);
+  });
+
+  it('the same walk off the slot bound to a name first', () => {
+    expect(codes(`${TWO}\n  s = AT(both, 1)\n${walk('s')}`, V2)).toEqual([]);
+  });
+
+  it('the same walk off a list of records held in a dict', () => {
+    expect(codes(`${TWO}\n  d = { k: both }\n${walk('AT(AT(d, "k"), 0)')}`, V2)).toEqual([]);
+  });
+
+  it('a null alongside the records leaves the slot unknown', () => {
+    expect(codes(`${TWO}\n  some = [one, null]\n${walk('AT(some, 0)')}`, V2)).toEqual([]);
+  });
+
+  it('a slot of values reads what the values share', () => {
+    expect(fieldTypeOf('  t = ["a", "b"]\n  s = AT(t, 0)', 's', V2)).toEqual({ kind: 'maybeAbsent', of: 'text' });
+    expect(codes('  t = ["a", 1]\n  n = AT(t, 0) * 2', V2)).toEqual([]);
+  });
+
+  it('a key off a dict slot is not checked against that dict', () => {
+    expect(codes('  d = [{ a: 1 }, { b: 2 }]\n  x = AT(AT(d, 0), "b")', V2)).toEqual([]);
+  });
+
+  it('a record beside a value is refused where the literal is written', () => {
+    expect(codes(`${TWO}\n  mixed = [one, e.\`Subject\`]`, V2)).toEqual(['MOV_LIST_MIXED']);
+  });
+});
+
+describe('under version 3, a literal index reads its slot exactly', () => {
+  it('a slot of records is that record', () => {
+    expect(codes(`${TWO}\n  s = AT(both, 1)`)).toEqual([]);
+    expect(fieldTypeOf(`${TWO}\n  s = AT(both, 1)`, 's')).toMatchObject({ kind: 'record' });
+  });
+
+  it('walking an edge the slot has not got is refused', () => {
+    expect(codes(`${TWO}\n${walk('AT(both, 1)')}`)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
+    expect(codes(`${TWO}\n  d = { k: both }\n${walk('AT(AT(d, "k"), 0)')}`)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
+  });
+
+  it('arithmetic on a text slot is refused', () => {
+    expect(codes('  t = ["a", 1]\n  n = AT(t, 0) * 2')).toEqual(['MOV_ARITH_NON_NUMERIC']);
+  });
+
+  it('a key the dict slot was not written with is refused', () => {
+    expect(codes('  d = [{ a: 1 }, { b: 2 }]\n  x = AT(AT(d, 0), "b")')).toEqual(['MOV_DICT_UNKNOWN_KEY']);
+  });
+
+  it('a record beside a value is a tuple, and its slot reads exactly', () => {
+    const body = `${TWO}\n  mixed = [one, e.\`Subject\`]\n${walk('AT(mixed, 0)')}`;
+    expect(codes(body)).toEqual(['MOV_TRAVERSE_UNKNOWN_EDGE']);
   });
 });

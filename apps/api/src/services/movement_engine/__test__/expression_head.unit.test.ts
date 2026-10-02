@@ -265,9 +265,11 @@ function run(
     text?: string;
     llm?: { call(input: LlmCallInput): Promise<LlmCallResult> };
     attio: Adapter;
+    languageVersion?: number;
   },
 ): Promise<Awaited<ReturnType<typeof runMovement>>> {
   return runMovement({
+    ...(opts.languageVersion !== undefined ? { languageVersion: opts.languageVersion } : {}),
     source: PRELUDE + source,
     movementName: 'intake',
     event: webhookEvent({ subject: 'Deals', text: opts.text ?? '' }),
@@ -353,13 +355,27 @@ describe('a block head rooted at an expression', () => {
     expect(attio.creates.map((w) => w.fields.name)).toEqual(['B']);
   });
 
-  it('a hop the root has not got runs the body zero times, like any empty traversal', async () => {
+  // Version 2 read a literal's slot as what its members share — a record of
+  // no named position — so this walk was never checked against the second
+  // record, and it runs zero times. Version 3 reads the slot exactly and
+  // refuses the walk at save.
+  it('a hop the root has not got runs the body zero times, like any empty traversal (version 2)', async () => {
     const attio = makeFakeAdapter('attio');
 
     await run(TWO_NODES + ['  AT(both, 1)-[t:missing]-> {', WRITE_TAG].join('\n'), {
       attio: attio.adapter,
+      languageVersion: 2,
     });
 
+    expect(attio.creates).toEqual([]);
+  });
+
+  it('a hop the slot has not got is refused before the run under version 3', async () => {
+    const attio = makeFakeAdapter('attio');
+
+    await expect(
+      run(TWO_NODES + ['  AT(both, 1)-[t:missing]-> {', WRITE_TAG].join('\n'), { attio: attio.adapter }),
+    ).rejects.toThrow('MOV_TRAVERSE_UNKNOWN_EDGE');
     expect(attio.creates).toEqual([]);
   });
 });

@@ -29,7 +29,7 @@ describe('the versions table', () => {
     expect(LANGUAGE_VERSIONS.map((v) => [v.version, v.name])).toEqual([
       [1, 'Quiet Heron'],
       [2, 'Bright Otter'],
-      [3, 'Swift Wren'],
+      [3, 'Steady Lynx'],
     ]);
     expect(CURRENT_LANGUAGE_VERSION).toBe(3);
     expect([...SUPPORTED_LANGUAGE_VERSIONS]).toEqual([1, 2, 3]);
@@ -70,7 +70,7 @@ describe('standing against a release', () => {
     expect(d?.code).toBe(V.UNSUPPORTED);
     expect(d?.severity).toBeUndefined(); // absent ⇒ error
     expect(d?.message).toContain('"Quiet Heron" (1)');
-    expect(d?.message).toContain('upgrade it to "Swift Wren" (3)');
+    expect(d?.message).toContain('upgrade it to "Steady Lynx" (3)');
   });
 
   it('a deprecated version is a warning naming it and that it will be removed', () => {

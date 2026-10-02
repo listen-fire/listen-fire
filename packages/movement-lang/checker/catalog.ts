@@ -452,7 +452,8 @@ export type FieldType =
   | { kind: 'list'; of: FieldType; unordered?: true }
   /**
    * `<[T, U]>` — a heterogeneous list whose slots were written down: a list
-   * literal (`[m.Body, file]` is `[text, file]`) and the receipt of a
+   * literal (`[m.Body, file]` is `[text, file]`, from language version 3;
+   * earlier versions type a literal as the list it reads as) and the receipt of a
    * combinator written with literal arms (`await parallel([f, g])`). Every slot
    * is its own type, so a literal-index read (`AT(r, 0)`) types exactly; every
    * other operation reads a tuple as the list it widens to — TypeScript's

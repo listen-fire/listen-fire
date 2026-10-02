@@ -33,8 +33,8 @@ export const LANGUAGE_VERSIONS: readonly LanguageVersionInfo[] = [
   { version: 2, name: 'Bright Otter', is: 'the language from v0.7.0 through v0.9.1' },
   {
     version: 3,
-    name: 'Swift Wren',
-    is: 'the language after v0.9.1: a list literal whose members disagree reads as a list of their union',
+    name: 'Steady Lynx',
+    is: 'the language after v0.9.1: a list literal is a tuple — exact at a literal index, a list of its members\' union elsewhere',
   },
 ];
 

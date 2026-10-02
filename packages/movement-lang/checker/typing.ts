@@ -1049,16 +1049,19 @@ function unwrapList(type: FieldType): FieldType {
 
 // ── Tuples read as lists ────────────────────────────────────────────────────
 //
-// A list literal is a TUPLE — its slots were written down, so `AT(t, 0)` reads
-// exactly the first one — and everywhere else it is read as the list it widens
-// to, TypeScript's tuple-to-array assignability: `[T, U]` read as a list is
-// `(T | U)[]`. Members that share a type widen to a list of it, the type a list
-// literal had before it was a tuple; members that do not widen to a list of
-// their UNION (language version 3). Versions 1 and 2 had no value unions, so
-// there such a tuple read as a list nobody could type — silent wherever it
-// went. That one difference is decided here (`wideningUnder`) and nowhere else:
-// a union exists only where this produced one, so no rule downstream asks the
-// version again.
+// A list literal is a TUPLE (language version 3) — its slots were written
+// down, so `AT(t, 0)` reads exactly the first one — and everywhere else it is
+// read as the list it widens to, TypeScript's tuple-to-array assignability:
+// `[T, U]` read as a list is `(T | U)[]`. Members that share a type widen to a
+// list of it; members that do not widen to a list of their UNION. A
+// combinator's receipt is a tuple under every version and widens the same way.
+//
+// Versions 1 and 2 had no value unions: there a tuple whose members share
+// nothing reads as a list nobody can type — silent wherever it goes — and a
+// list literal is no tuple at all (the `list` case of the walker reads it where
+// it is written). The widening half of that difference is decided here
+// (`wideningUnder`) and nowhere else: a union exists only where this produced
+// one, so no rule downstream asks the version again.
 //
 // The union is the READER's to build, because only a reader knows the
 // program's version — the expression walker and the statement layer read
@@ -3364,8 +3367,17 @@ export class ExpressionTyping {
         return 'boolean';
       // A list literal is a TUPLE — a slot per member, as written — and a
       // spread splices in the members of what it spreads (`listLiteralType`).
-      case 'list':
-        return this.listLiteralType(expr.elements, position);
+      //
+      // Versions 1 and 2 typed a list literal as the list it reads as, so an
+      // index read off one was `T | absent` for whatever its members share,
+      // never a slot: a walk off `AT(both, 1)` was not checked against the
+      // second record, nor `AT(t, 0) * 2` against the first value. Under them
+      // the literal is read where it is written — a record beside a value is
+      // refused there, as it always was.
+      case 'list': {
+        const tuple = this.listLiteralType(expr.elements, position);
+        return before(this.options.languageVersion, 3) ? this.widen(tuple) : tuple;
+      }
       case 'object': {
         // `{ k: v, … }` — typed by its keys, as TypeScript types an object
         // literal: the keys were written down, so each one carries its own
@@ -3481,6 +3493,8 @@ export class ExpressionTyping {
           // A TUPLE has a slot per position, so a LITERAL index reads that slot
           // and nothing else — present, because a fixed-length list always has
           // it. That exactness is the whole reason the tuple type exists.
+          // (Before language version 3 a list literal is no tuple — see
+          // `listLiteralType` — so only a combinator's receipt reads here.)
           case 'tuple':
             return tupleSlotType(variant, {
               index: literalIndex(expr.index),

@@ -6,7 +6,7 @@ const config: KnipConfig = {
     'src/services/document_sources/tome.ts', // not enabling tome support yet
     'src/lib/portfolio/secondaries.ts', // hooking this up soon
     'build/**',
-    'src/__conformance__/**', // an older release's tests, verbatim — run by jest-conformance-v1.config.ts
+    'src/__conformance__/**', // an older language version's tests, verbatim — run by jest-conformance-v<n>.config.ts
   ],
   entry: [
     'src/server.ts', // entrypoint for server
