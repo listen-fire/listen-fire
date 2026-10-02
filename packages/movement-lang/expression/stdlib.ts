@@ -114,6 +114,16 @@ interface StdlibFunctionCommon {
    * its keys) while accepting a dict literal or a positioned record.
    */
   recordArg?: { index: number };
+  /**
+   * The one argument that is taken WHOLE — any value at all, with every record
+   * inside it (at any depth: the argument itself, a list's member, a dict's
+   * entry) read down to its fields and its landed edges before the function
+   * sees it (`TEXT.SERIALISE`'s first). `recordArg` asks for one flat record;
+   * this asks for the value as a tree, so `apply` stays a pure function over
+   * plain data (dicts, lists, scalars, dates, file refs) and never meets the
+   * engine's own binding objects.
+   */
+  wholeValueArg?: { index: number };
 }
 
 /** The ordinary member: its arguments are everything it sees. */
@@ -857,6 +867,96 @@ function textPairs(args: unknown[]): unknown {
   return parts.join(sep);
 }
 
+// ── TEXT.SERIALISE ───────────────────────────────────────────────────────────
+
+// A value written out as text for a prompt. The point is that the SAME value
+// always yields the SAME bytes: a prompt that begins with a serialised record
+// is only cached when the prefix is identical, so nothing here may depend on
+// insertion order, locale, or the host's float printing.
+//
+//   - objects: keys sorted (UTF-16 code-unit order), recursively. A record's
+//     declaration order is not stable across a park (jsonb reorders keys), so
+//     it is deliberately not what is printed.
+//   - two-space indent, one member per line. Compact JSON would be a few
+//     tokens cheaper, but a model reads a field per line far better, and the
+//     bytes are just as stable.
+//   - numbers: JSON.stringify's shortest round-trip form; -0 is 0; NaN and
+//     ±Infinity (not JSON) are null.
+//   - dates and datetimes: a Date is its UTC ISO-8601 instant; a date or
+//     datetime already held as text is printed as that text.
+//   - absent: null, always. A record's absent field keeps its key (the
+//     record's shape does not change with its data); an absent list member is
+//     null; an absent value as a whole is the text `null`.
+//   - a file: a descriptor `{ contentType, kind: "file", name, size }` (a
+//     missing part is null) — never its bytes, which are not in hand and are
+//     not what a prompt wants from a record.
+
+export const SERIALISE_FORMATS = ['JSON'] as const;
+type SerialiseFormat = (typeof SERIALISE_FORMATS)[number];
+
+function checkSerialiseFormat(format: string): string | undefined {
+  if ((SERIALISE_FORMATS as readonly string[]).includes(format)) return undefined;
+  const near = SERIALISE_FORMATS.find((f) => f.toLowerCase() === format.toLowerCase());
+  return `'${format}' isn't a format TEXT.SERIALISE writes — ${
+    near !== undefined ? `did you mean "${near}"? ` : ''
+  }the formats are ${SERIALISE_FORMATS.map((f) => `"${f}"`).join(', ')}.`;
+}
+
+function isFileDescriptorSource(value: object): value is {
+  name?: unknown;
+  contentType?: unknown;
+  size?: unknown;
+} {
+  return (value as { __brand?: unknown }).__brand === 'FileRef';
+}
+
+/** The value as plain, ordered-by-key JSON data — everything JSON cannot say
+ *  (a Date, a file, a non-finite number) already turned into what it should
+ *  print as. */
+function toStableJson(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return value;
+    case 'number':
+      return Number.isFinite(value) ? (value === 0 ? 0 : value) : null;
+    case 'bigint':
+      return value.toString();
+    case 'object':
+      break;
+    default:
+      return null;
+  }
+  const obj = value as object;
+  if (obj instanceof Date) return Number.isNaN(obj.getTime()) ? null : obj.toISOString();
+  if (Array.isArray(obj)) return obj.map(toStableJson);
+  if (isFileDescriptorSource(obj)) {
+    return {
+      contentType: toStableJson(obj.contentType),
+      kind: 'file',
+      name: toStableJson(obj.name),
+      size: toStableJson(obj.size),
+    };
+  }
+  const entries = Object.entries(obj as Record<string, unknown>).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  return Object.fromEntries(entries.map(([k, v]) => [k, toStableJson(v)]));
+}
+
+function textSerialise(args: unknown[]): unknown {
+  const [value, format] = args;
+  switch (format as SerialiseFormat) {
+    case 'JSON':
+      return JSON.stringify(toStableJson(value), null, 2);
+    default:
+      // Unreachable from a saved movement: a format is a literal the checker
+      // has compared.
+      throw new Error(`TEXT.SERIALISE: unknown format ${JSON.stringify(format)}`);
+  }
+}
+
 // ── URL ──────────────────────────────────────────────────────────────────────
 
 // This package declares no DOM/Node lib (`tsconfig.json`'s `lib: ["es2022"]`
@@ -919,6 +1019,7 @@ function spec(
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
     recordArg?: StdlibFunctionCommon['recordArg'];
+    wholeValueArg?: StdlibFunctionCommon['wholeValueArg'];
     apply: StdlibPureFunctionSpec['apply'];
   },
 ): StdlibPureFunctionSpec {
@@ -954,6 +1055,7 @@ function common(
     maybeAbsent?: boolean;
     literalArgs?: StdlibFunctionCommon['literalArgs'];
     recordArg?: StdlibFunctionCommon['recordArg'];
+    wholeValueArg?: StdlibFunctionCommon['wholeValueArg'];
   },
 ): StdlibFunctionCommon {
   return {
@@ -967,6 +1069,7 @@ function common(
     ...(options.maybeAbsent !== undefined ? { maybeAbsent: options.maybeAbsent } : {}),
     ...(options.literalArgs !== undefined ? { literalArgs: options.literalArgs } : {}),
     ...(options.recordArg !== undefined ? { recordArg: options.recordArg } : {}),
+    ...(options.wholeValueArg !== undefined ? { wholeValueArg: options.wholeValueArg } : {}),
   };
 }
 
@@ -1090,6 +1193,16 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
         returns: 'text',
         recordArg: { index: 0 },
         apply: textPairs,
+      }),
+      spec('TEXT', 'SERIALISE', {
+        args: 'value, format',
+        summary:
+          'any value written out as text for a prompt, the same bytes every time it is the same value — TEXT.SERIALISE(deal, "JSON") is the record\'s fields as indented JSON with keys sorted, its nested nodes under their edge names as lists; an absent value is null, a file is its name/type/size and never its contents. The format is written down; "JSON" is the only one so far',
+        arity: { min: 2, max: 2 },
+        returns: 'text',
+        literalArgs: [{ index: 1, what: 'the format', check: checkSerialiseFormat }],
+        wholeValueArg: { index: 0 },
+        apply: textSerialise,
       }),
     ],
   },

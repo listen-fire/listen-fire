@@ -457,6 +457,15 @@ line = "candidate — \${TEXT.PAIRS({ name: c.\`Name\`, url: c.\`Website\` }, ",
 # "candidate — name=Acme, url=acme.com"
 \`\`\`
 
+### TEXT.SERIALISE
+
+\`TEXT.SERIALISE(value, "JSON")\` → \`text\`, always present — any value written out as text for a prompt, the same bytes every time it is the same value (so a prompt that opens with it stays cacheable). The format is written down and \`"JSON"\` is the only one so far; any other literal, or a computed one, is refused at save. The JSON has two-space indent and keys sorted at every level, so the order you wrote fields in never shows. A record is its fields, plus one key per edge it carries holding the nodes on that edge as a list (always a list, even for one node). A dict, list or record inside the value is written out the same way. Absent is \`null\` (a record's absent field keeps its key; a whole absent value is the text \`null\`). Dates and datetimes are ISO text; a file is \`{ contentType, kind: "file", name, size }\`, never its contents. A record read live from a system is refused (build a dict of the fields you want), as is an edge written as \`lazy\` and not yet awaited.
+
+\`\`\`
+card = TEXT.SERIALISE({ name: "Acme", stage: c.\`Stage\` }, "JSON")
+# two lines of "name" and "stage", sorted, indented two spaces, inside braces
+\`\`\`
+
 ### URL.HOST
 
 \`URL.HOST(text)\` → \`text | absent\` — the host, lowercased and otherwise verbatim (\`www.\` kept, no port, no path). Takes a full URL (\`https://acme.com\`) or a scheme-less address (\`acme.com\`, \`acme.com:8080\`, \`www.Acme.com/path\`) — the bare form is read as if \`http://\` were in front of it. Absent for an email (\`joe@acme.com\` names an account, not a host) and for text that names no address at all.

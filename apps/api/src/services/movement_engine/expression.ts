@@ -1549,7 +1549,9 @@ export async function evalMovementExpr(
           stdlibArgs.push(
             index === stdlib.recordArg?.index
               ? await evalRecordArgument(a, ctx)
-              : await evalMovementExpr(a, ctx),
+              : index === stdlib.wholeValueArg?.index
+                ? await evalWholeValueArgument(a, ctx)
+                : await evalMovementExpr(a, ctx),
           );
         }
         return {
@@ -3677,6 +3679,96 @@ async function evalRecordArgument(
   const record = bindingOf(result.value);
   if (record === undefined) return result;
   return { value: recordFields(record), provenance: result.provenance };
+}
+
+/**
+ * A stdlib argument declared `wholeValueArg` (`TEXT.SERIALISE`'s first),
+ * evaluated as the VALUE it is with every record inside it read down to plain
+ * data — see `plainValueOf`.
+ */
+async function evalWholeValueArgument(
+  expr: Expression,
+  ctx: MovementExprContext,
+): Promise<MovementEvalResult> {
+  const result = await evalValueMember(expr, ctx);
+  return { value: plainValueOf(result.value, new Set()), provenance: result.provenance };
+}
+
+/**
+ * A value as plain data: a record (at any depth — the value itself, a list's
+ * member, a dict's entry) becomes a keyed object of its dot plane, plus one
+ * key per edge it carries holding the records landed on that edge as a LIST
+ * (an edge's cardinality is not a fact the run holds, and a shape that
+ * changed between one landing and two would change the bytes of an otherwise
+ * identical prompt). Lists and dicts are walked; everything else is already
+ * plain.
+ *
+ * Edges that are only DEFERRED (a `lazy` walk) are refused rather than
+ * walked: running one here would be a live read hidden inside a pure
+ * function. A record that contains itself through its edges is refused for
+ * the same reason a cycle always is — there is no finite text for it.
+ */
+function plainValueOf(value: unknown, path: Set<Binding>): unknown {
+  const binding = bindingOf(value);
+  if (binding !== undefined) return plainRecordOf(binding, path);
+  if (Array.isArray(value)) return value.map((member) => plainValueOf(member, path));
+  if (isDictValue(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, member]) => [key, plainValueOf(member, path)]),
+    );
+  }
+  return value;
+}
+
+function plainRecordOf(binding: Binding, path: Set<Binding>): unknown {
+  if (path.has(binding)) {
+    throw unsupported('writing out a record that contains itself through its edges');
+  }
+  path.add(binding);
+  try {
+    switch (binding.kind) {
+      case 'positions':
+        return binding.landings.map((landing) => plainRecordOf(landing, path));
+      case 'tuple':
+        return binding.slots.map((slot) => plainRecordOf(slot, path));
+      case 'value':
+        return plainValueOf(binding.value, path);
+      default:
+        break;
+    }
+    const plain: Record<string, unknown> = {};
+    for (const [field, member] of Object.entries(recordFields(binding))) {
+      plain[field] = plainValueOf(member, path);
+    }
+    const edges: Array<[string, unknown]> = [];
+    if (binding.kind === 'nodePosition') {
+      for (const [name, edge] of Object.entries(binding.edges)) {
+        if (edge.kind === 'deferred') {
+          throw unsupported(
+            `writing out the '${name}' edge of a record, which is a lazy walk that has not been run`,
+            'await it first',
+          );
+        }
+        edges.push([name, edge.landings.map((landing) => plainRecordOf(landing, path))]);
+      }
+    } else if (binding.kind === 'extractPosition' || binding.kind === 'extractRoot') {
+      for (const [name, children] of binding.emission.children) {
+        edges.push([
+          name,
+          children.map((emission) => plainRecordOf({ kind: 'extractPosition', emission }, path)),
+        ]);
+      }
+    }
+    for (const [name, landed] of edges) {
+      if (name in plain) {
+        throw unsupported(`writing out a record whose field and edge are both called '${name}'`);
+      }
+      plain[name] = landed;
+    }
+    return plain;
+  } finally {
+    path.delete(binding);
+  }
 }
 
 /**

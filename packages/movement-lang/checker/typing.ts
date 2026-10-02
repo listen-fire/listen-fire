@@ -3608,6 +3608,7 @@ export class ExpressionTyping {
         if (stdlibSpec === undefined) return undefined;
         this.checkStdlibLiteralArgs(stdlibSpec, expr.args);
         this.checkStdlibRecordArg(stdlibSpec, args, expr.args);
+        this.checkStdlibWholeValueArg(stdlibSpec, args);
         // `DATE.TODAY(zone)` reads the run's clock, exactly as `@current_date`
         // does — same effect, so the row says so from the registry rather than
         // from a second list of names.
@@ -4471,6 +4472,32 @@ export class ExpressionTyping {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
         `\`${spec.namespace}.${spec.name}\` takes a record whose fields the program spells out — a dict literal, a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
+      );
+    }
+  }
+
+  /**
+   * `TEXT.SERIALISE`'s first argument (any `wholeValueArg`): takes any value,
+   * so the only author-time mistake is the one the engine would otherwise
+   * throw for — a record whose fields the program does not hold (read live
+   * from a system, one field at a time, or the movement's own trigger).
+   * Same test as `checkStdlibRecordArg`, same reason; a record nested inside
+   * a list or dict is beyond what the type says here and fails the run, named.
+   */
+  private checkStdlibWholeValueArg(
+    spec: StdlibFunctionSpec,
+    args: ReadonlyArray<FieldType | undefined>,
+  ): void {
+    const declared = spec.wholeValueArg;
+    if (declared === undefined) return;
+    const type = args[declared.index];
+    if (type === undefined) return;
+    const stripped = stripAbsent(type);
+    if (!isRecordType(stripped)) return;
+    if (!this.holdsSpelledFields(recordIn(stripped)?.position)) {
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+        `\`${spec.namespace}.${spec.name}\` writes out a record whose fields the program spells out — a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
       );
     }
   }

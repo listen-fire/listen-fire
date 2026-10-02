@@ -657,6 +657,79 @@ describe('TEXT.PAIRS', () => {
   });
 });
 
+describe('TEXT.SERIALISE', () => {
+  const json = (value: unknown): unknown => apply('text.serialise', value, 'JSON');
+
+  it('writes keys sorted, two-space indented, one member per line', () => {
+    expect(json({ b: 1, a: { d: true, c: 'x' } })).toBe(
+      ['{', '  "a": {', '    "c": "x",', '    "d": true', '  },', '  "b": 1', '}'].join('\n'),
+    );
+  });
+
+  it('the same value is the same bytes whatever order its keys were written in', () => {
+    const one = { name: 'Acme', founder: { last: 'B', first: 'A' }, raised: 5 };
+    const other = { raised: 5, founder: { first: 'A', last: 'B' }, name: 'Acme' };
+    expect(json(one)).toBe(json(other));
+  });
+
+  it('keys sort by code unit, not locale', () => {
+    expect(json({ b: 1, B: 2, a: 3, é: 4 })).toBe('{\n  "B": 2,\n  "a": 3,\n  "b": 1,\n  "é": 4\n}');
+  });
+
+  it('scalars are their JSON', () => {
+    expect(json('hi "there"')).toBe('"hi \\"there\\""');
+    expect(json(3.5)).toBe('3.5');
+    expect(json(true)).toBe('true');
+  });
+
+  it('numbers: -0 is 0, non-finite is null', () => {
+    expect(json([-0, NaN, Infinity, 1e21])).toBe('[\n  0,\n  null,\n  null,\n  1e+21\n]');
+  });
+
+  it('a Date is its UTC ISO instant; an invalid one is null; text dates stay as written', () => {
+    expect(json({ at: new Date('2026-03-12T10:00:00Z'), bad: new Date('x'), day: '2026-03-12' })).toBe(
+      '{\n  "at": "2026-03-12T10:00:00.000Z",\n  "bad": null,\n  "day": "2026-03-12"\n}',
+    );
+  });
+
+  it('absent is null — a key keeps its place, a whole absent value is the text null', () => {
+    expect(json({ a: null, b: undefined })).toBe('{\n  "a": null,\n  "b": null\n}');
+    expect(json([null, undefined])).toBe('[\n  null,\n  null\n]');
+    expect(json(null)).toBe('null');
+    expect(json(undefined)).toBe('null');
+  });
+
+  it('a list keeps its order and an empty one is []', () => {
+    expect(json(['b', 'a'])).toBe('[\n  "b",\n  "a"\n]');
+    expect(json([])).toBe('[]');
+    expect(json({})).toBe('{}');
+  });
+
+  it('a file is a descriptor, never its contents', () => {
+    const file = {
+      __brand: 'FileRef',
+      name: 'deck.pdf',
+      size: 12,
+      contentType: 'application/pdf',
+      retrieve: () => 'bytes',
+    };
+    expect(json({ deck: file })).toBe(
+      '{\n  "deck": {\n    "contentType": "application/pdf",\n    "kind": "file",\n    "name": "deck.pdf",\n    "size": 12\n  }\n}',
+    );
+    expect(json({ f: { __brand: 'FileRef' } })).toBe(
+      '{\n  "f": {\n    "contentType": null,\n    "kind": "file",\n    "name": null,\n    "size": null\n  }\n}',
+    );
+  });
+
+  it('declares the format as a written-down literal', () => {
+    const spec = stdlibFunctionById('text.serialise');
+    expect(spec?.signature).toBe('TEXT.SERIALISE(value, format)');
+    expect(spec?.literalArgs?.[0]?.check('JSON')).toBeUndefined();
+    expect(spec?.literalArgs?.[0]?.check('json')).toContain('did you mean "JSON"');
+    expect(spec?.literalArgs?.[0]?.check('YAML')).toContain('"JSON"');
+  });
+});
+
 // The coercers DATE / DATETIME / NUMBER are BARE built-in functions (like
 // COALESCE / TRIM): the formula grammar parses them straight to a flat
 // `{ fn: 'date' | 'datetime' | 'number' }` node — NOT a namespaced family
