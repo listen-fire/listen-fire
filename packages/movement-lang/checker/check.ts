@@ -34,7 +34,8 @@
 // NOT scope references and are deliberately not resolved here; ambient
 // property validity is M2b's schema work.
 
-import type { Expression, TraversalStep } from '@listen-fire/shared/expression/types';
+import type { Expression, ListElement, TraversalStep } from '@listen-fire/shared/expression/types';
+import { listElementExpression } from '@listen-fire/shared/expression/types';
 import { quoteName } from '@listen-fire/shared/expression/formula';
 import {
   flattenAndConjuncts,
@@ -245,6 +246,8 @@ import {
   recordValueOf,
   stripAbsent,
   TypedDiagnosticCodes,
+  mixedTupleMessage,
+  widenTuples,
   WriteTargetRef,
 } from './typing';
 
@@ -1247,7 +1250,7 @@ function collectNames(expr: Expression, out: CollectedNames, position: NamePosit
       if (expr.promptExpression) collectNames(expr.promptExpression, out, 'value');
       return;
     case 'list':
-      expr.elements.forEach(e => collectNames(e, out, position));
+      expr.elements.forEach(e => collectNames(listElementExpression(e), out, position));
       return;
     // An object literal's KEYS are the target API's own spelling, never names
     // to resolve; its values carry the position through unchanged.
@@ -1432,7 +1435,7 @@ function staticStringValues(slot: ExprSlot): string[] | undefined {
     if (e instanceof BridgeError) return undefined;
     throw e;
   }
-  const stringOf = (node: Expression): string | undefined =>
+  const stringOf = (node: ListElement): string | undefined =>
     node.type === 'static' && typeof node.value === 'string' ? node.value : undefined;
   if (parsed.type === 'static') {
     const value = stringOf(parsed);
@@ -1556,6 +1559,10 @@ interface SlotOptions {
   /** The typed write target the slot flows into — drives extract-field
    *  annotation suggestions and annotation-vs-write conflict checks. */
   writeTarget?: WriteTargetRef;
+  /** The slot's value is HELD, not read — bound to a name — so a tuple stays
+   *  a tuple (`AT(t, 0)` off the name reads the slot). Every other slot reads
+   *  its value, and a tuple read is the list it widens to. */
+  holdsValue?: true;
 }
 
 interface HeadInfo {
@@ -3823,7 +3830,15 @@ class Checker {
         break;
       }
       case 'expr': {
-        const { valueType, parsed } = this.checkExprSlot(value.expr, scope);
+        // A NAME holds the value as written — a list literal stays the tuple it
+        // is, so `AT(t, 0)` off the name reads its slot. A value handed back
+        // (`return`, no name) is read, and a returned tuple is the list it
+        // widens to: a body's return type stays a list.
+        const { valueType, parsed } = this.checkExprSlot(
+          value.expr,
+          scope,
+          name !== undefined ? { holdsValue: true } : undefined,
+        );
         // `channel = ONLY(chat-[ch:Channels WHERE …]->)` picks a POSITION, not
         // a value: it binds the landed node (arrow plane), maybe-empty because
         // the selection may match nothing. The same absence an awaited
@@ -7119,7 +7134,8 @@ class Checker {
       root?.kind === 'expression'
         ? this.checkExprSlot(root.expr, scope).valueType
         : rootSymbol?.bindingPlane === 'scalar'
-          ? rootSymbol.fieldType
+          // Walking a held tuple reads it as the list of records it widens to.
+          ? this.readHeldValue(rootSymbol.fieldType, head.span)
           : undefined;
     // The hops are the same hops whatever the root is, so the probe roots them
     // at a NAME the formula grammar accepts — the author's, or the stand-in an
@@ -9323,7 +9339,8 @@ class Checker {
       // A bare name short-circuits the parse, but it still HAS a value type —
       // the binding's own. Without this its absence would die here, at the very
       // sites (a plain write field) that require presence.
-      const valueType = this.bareNameValueType(scope, trimmed);
+      const held = this.bareNameValueType(scope, trimmed);
+      const valueType = options?.holdsValue === true ? held : this.readHeldValue(held, slot.span);
       return valueType !== undefined ? { valueType } : {};
     }
     let parsed: Expression;
@@ -9340,8 +9357,20 @@ class Checker {
       this.resolveNameWithFields(ref, slot.span, scope, options?.fields);
     }
     this.reportBlockReadBack(names, scope, slot.span);
-    const valueType = this.slotTyping(scope, slot.span).infer(parsed, options?.writeTarget);
+    const typing = this.slotTyping(scope, slot.span);
+    const valueType = options?.holdsValue === true
+      ? typing.inferExact(parsed, options.writeTarget)
+      : typing.infer(parsed, options?.writeTarget);
     return { parsed, ...(valueType !== undefined ? { valueType } : {}) };
+  }
+
+  /** A held value READ — a tuple as the list it widens to, refused where it
+   *  holds records and values both. The walker's `widen`, for a bare name the
+   *  statement layer typed without walking. */
+  private readHeldValue(type: FieldType | undefined, span: Span): FieldType | undefined {
+    const mixed = mixedTupleMessage(type);
+    if (mixed !== undefined) this.report(TypedDiagnosticCodes.LIST_MIXED, mixed, span);
+    return widenTuples(type);
   }
 
   /**

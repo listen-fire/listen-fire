@@ -4376,13 +4376,17 @@ describe('CHUNKS(text, { size | entities, overlap })', () => {
   });
 
   it('a size that may not answer is refused where it is written, not at the run', () => {
-    // A read off a list may find nothing there, so the size is `number |
+    // The first of a list may find nothing there, so the size is `number |
     // absent` — which at the run is a size of nothing.
     const found = check(
-      inMovement('  pieces = CHUNKS(msg.`text`, { size: AT([1000, 2000], 0) })'),
+      inMovement('  pieces = CHUNKS(msg.`text`, { size: FIRST([1000, 2000]) })'),
     );
     expect(found.map(d => d.code)).toContain(C.OPTION_INVALID);
     expect(found.find(d => d.code === C.OPTION_INVALID)?.message).toContain('may not answer');
+    // A literal index into a literal reads a slot that is always there.
+    expect(
+      check(inMovement('  pieces = CHUNKS(msg.`text`, { size: AT([1000, 2000], 0) })')).map(d => d.code),
+    ).not.toContain(C.OPTION_INVALID);
   });
 
   it('an option key nobody has reaches the author as a diagnostic, not a silence', () => {

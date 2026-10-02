@@ -1308,12 +1308,30 @@ export async function evalMovementExpr(
     }
 
     case 'list': {
-      const elements: MovementEvalResult[] = [];
-      for (const e of expr.elements) elements.push(await evalValueMember(e, ctx));
-      return {
-        value: elements.map((e) => e.value),
-        provenance: unionProvenance(elements.map((e) => e.provenance)),
-      };
+      // `...xs` splices xs's members in place (TypeScript's array spread); any
+      // other member is one value. The checker refuses a spread of what is not
+      // a collection where it can see the type; one it could not see that turns
+      // out not to be a list fails the run here rather than splicing nothing.
+      const values: unknown[] = [];
+      const provenances: Provenance[] = [];
+      for (const e of expr.elements) {
+        if (e.type !== 'spread') {
+          const member = await evalValueMember(e, ctx);
+          values.push(member.value);
+          provenances.push(member.provenance);
+          continue;
+        }
+        const spread = await evalMovementExpr(e.expression, ctx);
+        if (!Array.isArray(spread.value)) {
+          throw new MovementEngineError(
+            'MOVENG_RUNTIME',
+            `'...' splices a list's members into a list, and this value is ${spread.value === null || spread.value === undefined ? 'null' : `not a list (${typeof spread.value})`}`,
+          );
+        }
+        values.push(...spread.value);
+        provenances.push(spread.provenance);
+      }
+      return { value: values, provenance: unionProvenance(provenances) };
     }
 
     case 'object': {

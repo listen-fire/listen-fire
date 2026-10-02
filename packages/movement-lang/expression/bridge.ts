@@ -71,6 +71,7 @@
 
 import { parse, ParseError, translateStringEscape } from '@listen-fire/shared/expression/formula';
 import type { Expression, TraversalStep, MetaEdgeStep } from '@listen-fire/shared/expression/types';
+import { mapListElement } from '@listen-fire/shared/expression/types';
 import {
   FILE_FUNCTION_ID,
   FILE_ARTIFACT_TYPES,
@@ -570,7 +571,7 @@ function substitute(expr: Expression, repl: Map<string, Expression>): Expression
         ? { ...expr, promptExpression: substitute(expr.promptExpression, repl) }
         : expr;
     case 'list':
-      return { ...expr, elements: expr.elements.map(e => substitute(e, repl)) };
+      return { ...expr, elements: expr.elements.map(e => mapListElement(e, x => substitute(x, repl))) };
     case 'object':
       return {
         ...expr,
@@ -936,7 +937,7 @@ function normalizeCalls(expr: Expression): Expression {
         ? { ...expr, promptExpression: normalizeCalls(expr.promptExpression) }
         : expr;
     case 'list':
-      return { ...expr, elements: expr.elements.map((e) => normalizeCalls(e)) };
+      return { ...expr, elements: expr.elements.map((e) => mapListElement(e, normalizeCalls)) };
     case 'object':
       return {
         ...expr,

@@ -120,7 +120,8 @@ describe('an expression that is not a record', () => {
     const body = '  AT(["a", "b"], 0)-[f:Founders]-> {\n    x = f.`Name`\n  }';
     expect(codes(body)).toContain('MOV_HEAD_NOT_A_POSITION');
     expect(messages(body)).toMatch(
-      /'AT\(\["a", "b"\], 0\)' is text \(or absent\), and a hop walks from a POSITION/,
+      // A literal index into a literal reads a slot that is always there.
+      /'AT\(\["a", "b"\], 0\)' is text, and a hop walks from a POSITION/,
     );
   });
 

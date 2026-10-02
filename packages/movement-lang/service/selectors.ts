@@ -20,6 +20,7 @@
 // STATIC narrowing there, never a wrong result.
 
 import type { Expression, TraversalStep } from '@listen-fire/shared/expression/types';
+import { listElementExpression } from '@listen-fire/shared/expression/types';
 import type {
   AwaitExpression,
   CallArg,
@@ -241,7 +242,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
         visitExpression(expr.expression, aliasScope);
         return;
       case 'list':
-        expr.elements.forEach((e) => visitExpression(e, aliasScope));
+        expr.elements.forEach((e) => visitExpression(listElementExpression(e), aliasScope));
         return;
       case 'object':
         expr.entries.forEach((e) => visitExpression(e.value, aliasScope));

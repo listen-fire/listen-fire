@@ -19,10 +19,12 @@ import {
   AI_TIER_ALIASES,
   AI_TIERS,
   FOLD_ALGEBRA,
+  listElementExpression,
   type AggregationFunction,
   type EdgeCapability,
   type Expression,
   type FilterOperator,
+  type ListElement,
   type TraversalStep,
 } from '@listen-fire/shared/expression/types';
 import { isNullLiteral, isPurePredicate } from '@listen-fire/shared/expression/filter';
@@ -55,6 +57,7 @@ import {
   refinementKey,
   type SchemaFieldType,
   surfaceNotEnumerated,
+  type TupleRest,
   variantOf,
 } from './catalog';
 import type { EffectRow } from './effects';
@@ -195,11 +198,18 @@ export const TypedDiagnosticCodes = {
    *  one spelling as text, and there is no implicit one. Read a field off it,
    *  or walk it. */
   RECORD_NOT_A_VALUE: 'MOV_RECORD_NOT_A_VALUE',
-  /** A list literal holding both records and values — `[one, "label"]`. A list
-   *  holds one kind of thing: a list of records is walked, a list of values is
-   *  read, and nothing reads both. Reported only where both halves are known;
-   *  a member nobody can type keeps the honesty rule and stays silent. */
+  /** A tuple holding both records and values — `[one, "label"]` — READ as a
+   *  list: handed to `MAP`, written into a list field, folded. A list holds
+   *  one kind of thing: a list of records is walked, a list of values is read,
+   *  and nothing reads both. The literal itself is a tuple and may hold both
+   *  (`AT(t, 0)` reads a slot); the refusal is where it is read as a list.
+   *  Reported only where both halves are known; a member nobody can type keeps
+   *  the honesty rule and stays silent. */
   LIST_MIXED: 'MOV_LIST_MIXED',
+  /** `...x` inside a list literal where `x` is not a collection — a text, a
+   *  number, a record, a dict. A spread splices a list's (or tuple's) members
+   *  in; one thing has no members to splice. */
+  LIST_SPREAD_NOT_A_LIST: 'MOV_LIST_SPREAD_NOT_A_LIST',
   /** An arithmetic operand (`+ - * /`) whose KNOWN type is not numeric — the
    *  classic being `"a" + b`, since `+` is addition and the language has no
    *  concat overload. The engine coerces through `Number()`, so such an
@@ -999,15 +1009,15 @@ function unwrapList(type: FieldType): FieldType {
   switch (variant.kind) {
     case 'list':
       return unwrapList(variant.of);
-    // A tuple behaves as the list it is wherever the slots agree — one element
-    // type, so every list rule applies unchanged. Slots that DISAGREE have no
-    // element type, and the tuple stays itself (`baseKind` calls that `json`:
-    // structured data whose shape nothing here describes).
+    // A tuple behaves as the list it widens to wherever its members unify —
+    // one element type, so every list rule applies unchanged. Members that
+    // share nothing have no element type, and the tuple stays itself
+    // (`baseKind` calls that `json`: structured data whose shape nothing here
+    // describes). The expression walker widens a tuple before any of this sees
+    // it (`widenTuples`), so this answers only a tuple handed in directly.
     case 'tuple': {
-      const slots = variant.of;
-      if (slots.length === 0 || slots.some(slot => slot === null)) return t;
-      const first = slots[0]!;
-      return slots.every(slot => fieldTypeEquals(slot!, first)) ? unwrapList(first) : t;
+      const list = tupleAsList(variant);
+      return list !== undefined ? unwrapList(list) : t;
     }
     case 'text':
     case 'number':
@@ -1027,6 +1037,69 @@ function unwrapList(type: FieldType): FieldType {
     default:
       return neverAsAny(variant);
   }
+}
+
+// ── Tuples read as lists ────────────────────────────────────────────────────
+//
+// A list literal is a TUPLE — its slots were written down, so `AT(t, 0)` reads
+// exactly the first one — and everywhere else it is read as the list it widens
+// to, TypeScript's tuple-to-array assignability. The widened element is what
+// the members UNIFY to, the rule a list literal was typed by before it was a
+// tuple, so a literal read as a list is the very type it always was.
+
+type TupleType = Extract<FieldType, { kind: 'tuple' }>;
+type ListType = Extract<FieldType, { kind: 'list' }>;
+
+/** Every type a tuple's members can have — its variadic run's included. */
+function tupleMembers(tuple: TupleType): Array<FieldType | null> {
+  return tuple.rest === undefined ? tuple.of : [...tuple.of, tuple.rest.of];
+}
+
+/**
+ * The list a tuple widens to — `[T, U]` read as `(T | U)[]`. The model has no
+ * unions, so the element is what the members unify to (`unifyValueTypes`): one
+ * shared type, or records of any position. Members that share nothing, or one
+ * nobody could type, leave no element to name, and the widened list is
+ * UNKNOWN — silent wherever it goes, as such a literal always was. (Reading a
+ * record and a value as one list is still refused, where it is read:
+ * `mixedTupleMessage`.)
+ */
+export function tupleAsList(tuple: TupleType): ListType | undefined {
+  const members = tupleMembers(tuple);
+  if (members.some(member => member === null)) return undefined;
+  const element = unifyValueTypes(members.map(member => widenTuples(member ?? undefined)));
+  return element !== undefined ? { kind: 'list', of: element } : undefined;
+}
+
+/** `type` with a tuple at its top read as the list it widens to, absence kept;
+ *  any other type unchanged. */
+export function widenTuples(type: FieldType | undefined): FieldType | undefined {
+  if (type === undefined) return undefined;
+  const present = stripAbsent(type);
+  if (!isTupleType(present)) return type;
+  const list = tupleAsList(present);
+  return isMaybeAbsent(type) ? maybeAbsent(list) : list;
+}
+
+/**
+ * Reading a tuple of records AND values as a list — `[one, "label"]` handed to
+ * `MAP`, written into a list field. A tuple may hold both (each slot is its
+ * own type); a LIST holds one kind of thing, because a list of records is
+ * walked, a list of values is read, and nothing reads both. The message, or
+ * undefined when the tuple (at any depth) holds one kind. A member nobody
+ * could type says nothing, as everywhere.
+ */
+export function mixedTupleMessage(type: FieldType | undefined): string | undefined {
+  if (type === undefined) return undefined;
+  const present = stripAbsent(type);
+  if (!isTupleType(present)) return undefined;
+  const members = tupleMembers(present).filter((member): member is FieldType => member !== null);
+  const record = members.find(member => isRecordType(member));
+  const value = members.find(member => !isRecordType(member) && stripAbsent(member) !== 'absent');
+  if (record !== undefined && value !== undefined) {
+    return `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(record))} is a record, and another member is ${describeFieldType(widenTuples(value) ?? value)}. A tuple may hold both — read one slot with 'AT(t, 0)' — but read as a list it may not. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`;
+  }
+  return members.map(mixedTupleMessage).find(message => message !== undefined);
 }
 
 // ── The order discipline (set vs list) ──────────────────────────────────────
@@ -1174,7 +1247,7 @@ function subExpressions(expr: Expression): Expression[] {
     case 'conditional':
       return [expr.condition, expr.then, expr.else];
     case 'list':
-      return expr.elements;
+      return expr.elements.map(listElementExpression);
     case 'object':
       return expr.entries.map(entry => entry.value);
     case 'function':
@@ -1197,12 +1270,10 @@ export function collectionElementOf(type: FieldType): FieldType | undefined {
   switch (variant.kind) {
     case 'list':
       return variant.of;
-    case 'tuple': {
-      const shared = unwrapList(t);
-      // Slots that disagree leave a tuple with no element type — the collection
-      // is real, but nothing here can say what one member is.
-      return isTupleType(shared) ? undefined : shared;
-    }
+    // Members that share nothing leave a tuple with no element type — the
+    // collection is real, but nothing here can say what one member is.
+    case 'tuple':
+      return tupleAsList(variant)?.of;
     case 'text':
     case 'number':
     case 'boolean':
@@ -1272,19 +1343,27 @@ const FOLD_SPELLING: Partial<Record<AggregationFunction | 'at', string>> = {
 
 /** The type a LITERAL index reads off a tuple. Out of range is knowably null —
  *  a fixed length is a fact, so the read is `absent` rather than an unknown.
- *  A non-literal index cannot pick a slot, so it reads the slots' shared type
- *  (or nothing, when they disagree), possibly absent as any index read is. */
-function tupleSlotType(
-  tuple: Extract<FieldType, { kind: 'tuple' }>,
-  index: number | undefined,
-): FieldType | undefined {
-  if (index === undefined) {
-    const element = unwrapList(tuple);
-    return isTupleType(element) ? undefined : maybeAbsent(element);
+ *  A non-literal index cannot pick a slot, so it reads the members' shared type
+ *  (or nothing, when they share none), possibly absent as any index read is.
+ *
+ *  A VARIADIC tuple's length is not a fact, so only the slots on the near side
+ *  of its run are fixed: `[text, ...file[]]` reads `text` at 0, and at 1 a
+ *  member that may be any of what follows — or nothing at all. */
+function tupleSlotType(tuple: TupleType, index: number | undefined): FieldType | undefined {
+  const anyOf = (members: Array<FieldType | null>): FieldType | undefined =>
+    maybeAbsent(tupleAsList({ kind: 'tuple', of: members })?.of);
+  if (index === undefined) return anyOf(tupleMembers(tuple));
+  const rest: TupleRest | undefined = tuple.rest;
+  if (rest === undefined) {
+    const resolved = index < 0 ? tuple.of.length + index : index;
+    if (resolved < 0 || resolved >= tuple.of.length) return 'absent';
+    return tuple.of[resolved] ?? undefined;
   }
-  const resolved = index < 0 ? tuple.of.length + index : index;
-  if (resolved < 0 || resolved >= tuple.of.length) return 'absent';
-  return tuple.of[resolved] ?? undefined;
+  if (index >= 0) {
+    return index < rest.at ? tuple.of[index] ?? undefined : anyOf([rest.of, ...tuple.of.slice(rest.at)]);
+  }
+  const fromEnd = tuple.of.length + index;
+  return fromEnd >= rest.at ? tuple.of[fromEnd] ?? undefined : anyOf([...tuple.of.slice(0, rest.at), rest.of]);
 }
 
 /** The integer an index expression is FIXED at, when it is written down. */
@@ -1798,9 +1877,13 @@ function operandSource(expr: Expression): string | undefined {
  * mistakes.
  */
 export function fieldTypeCompatible(value: FieldType, target: FieldType): boolean {
+  // A tuple is written as the list it widens to; one whose members share
+  // nothing is a list nobody can type, and unknown says nothing.
+  const written = widenTuples(value);
+  if (written === undefined) return true;
   // Absence is a require-present concern (checked separately at the write site),
   // not a shape mismatch — compare the present shapes.
-  const v = baseKind(value);
+  const v = baseKind(written);
   const t = baseKind(target);
   // A literal `null` has no shape to mismatch — it is the ABSENCE of one, which
   // the require-present sites police. Saying it twice, in the shape vocabulary,
@@ -1852,6 +1935,9 @@ function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'reco
       return variant;
     case 'list':
       return recordIn(variant.of);
+    // A tuple of records walks as the list of records it widens to.
+    case 'tuple':
+      return recordIn(tupleAsList(variant));
     case 'text':
     case 'number':
     case 'boolean':
@@ -1860,9 +1946,8 @@ function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'reco
     case 'file':
     case 'json':
     case 'absent':
-    // A DICT is deliberately not one, per the note above; a tuple of records
-    // is not a walk head either, and an enum is a value.
-    case 'tuple':
+    // A DICT is deliberately not one, per the note above, and an enum is a
+    // value.
     case 'dict':
     case 'enum':
     case 'maybeAbsent':
@@ -1959,6 +2044,15 @@ function withoutShape(type: FieldType): FieldType {
   return isMaybeAbsent(type) ? maybeAbsent(unshaped)! : unshaped;
 }
 
+/** Two runs of tuple slots, slot by slot. */
+function slotsAgree(left: Array<FieldType | null>, right: Array<FieldType | null>): boolean {
+  return left.length === right.length && left.every((slot, i) => {
+    const other = right[i];
+    if (slot === null || other === null) return slot === other;
+    return fieldTypeEquals(slot, other);
+  });
+}
+
 /** Strict sameness (number vs text IS different; enum options compared).
  *  Absence is transparent to sameness — `T | absent` equals `T` here (the
  *  require-present sites police absence, not the shape checks). */
@@ -1982,16 +2076,13 @@ export function fieldTypeEquals(a: FieldType, b: FieldType): boolean {
     // Two tuples are the same type iff they are the same LENGTH and agree slot
     // by slot — an untyped slot matches only another untyped one, because "we
     // could not see" is not a type two tuples can agree on.
-    case 'tuple':
-      return (
-        right.kind === 'tuple'
-        && left.of.length === right.of.length
-        && left.of.every((slot, i) => {
-          const other = right.of[i];
-          if (slot === null || other === null) return slot === other;
-          return fieldTypeEquals(slot, other);
-        })
-      );
+    // A variadic run agrees the same way, and only with a run in the same
+    // place.
+    case 'tuple': {
+      if (right.kind !== 'tuple' || !slotsAgree(left.of, right.of)) return false;
+      if (left.rest === undefined || right.rest === undefined) return left.rest === right.rest;
+      return left.rest.at === right.rest.at && slotsAgree([left.rest.of], [right.rest.of]);
+    }
     // Two dicts agree when what they hold agrees. Where the keys were written
     // down they ARE type, so two shaped dicts also agree key by key — an
     // untyped key matching only another untyped one, as a tuple's slot does —
@@ -2085,6 +2176,13 @@ export function fieldAssignable(source: FieldType, target: FieldType): boolean {
   source = stripAbsent(source);
   target = stripAbsent(target);
   if (fieldTypeEquals(source, target)) return true;
+  // A tuple reads as the list it widens to — TypeScript's tuple-to-array
+  // assignability. Members that share nothing widen to a list nobody can type,
+  // which says nothing here, as unknown says nothing everywhere.
+  if (isTupleType(source) && !isTupleType(target)) {
+    const list = tupleAsList(source);
+    return list === undefined || fieldAssignable(list, target);
+  }
   // `json` widens the same way in a read position as in a write: any data shape
   // reads AS json, and a json value reads as nothing else (see
   // `fieldTypeCompatible`). Cardinality stays strict here, unlike the write
@@ -2992,6 +3090,15 @@ export class ExpressionTyping {
    * annotations alone constrain extraction (adoption is demoted).
    */
   infer(expr: Expression, writeTarget?: WriteTargetRef): FieldType | undefined {
+    return this.widen(this.inferExact(expr, writeTarget));
+  }
+
+  /**
+   * `infer`, with a tuple kept AS a tuple rather than read as the list it
+   * widens to — for the one place that holds a value without reading it: a
+   * name it is bound to, so that `AT(t, 0)` off the name reads the slot.
+   */
+  inferExact(expr: Expression, writeTarget?: WriteTargetRef): FieldType | undefined {
     if (writeTarget !== undefined && expr.type === 'traverse' && expr.expression.type === 'property') {
       const start = expr.aliasRoot !== undefined ? this.walkStart(expr.aliasRoot) : undefined;
       const position = this.walkSteps(start, expr.steps);
@@ -2999,11 +3106,30 @@ export class ExpressionTyping {
       this.recordWalked(expr);
       return this.readProperty(position, expr.expression.propertyTypeId, writeTarget);
     }
-    return this.inferAt(expr, undefined);
+    return this.inferExactAt(expr, undefined);
+  }
+
+  /**
+   * A tuple READ — as the list it widens to, the way every rule that reads a
+   * collection sees one. Reading a tuple of records and values as one list is
+   * the mixture a list cannot hold, refused here, where it is read.
+   */
+  private widen(type: FieldType | undefined): FieldType | undefined {
+    const mixed = mixedTupleMessage(type);
+    if (mixed !== undefined) this.report(TypedDiagnosticCodes.LIST_MIXED, mixed);
+    return widenTuples(type);
+  }
+
+  /** The type of a sub-expression as the expression around it READS it — a
+   *  tuple widened to its list. Only the readers that know a tuple's slots
+   *  (`AT`, a list literal's own members and spreads, an object literal's
+   *  keys) ask `inferExactAt` instead. */
+  private inferAt(expr: Expression, position: PositionTypeRef | undefined): FieldType | undefined {
+    return this.widen(this.inferExactAt(expr, position));
   }
 
   /** `position` is the ambient position for rootless reads (a traversal's destination). */
-  private inferAt(expr: Expression, position: PositionTypeRef | undefined): FieldType | undefined {
+  private inferExactAt(expr: Expression, position: PositionTypeRef | undefined): FieldType | undefined {
     switch (expr.type) {
       case 'static':
         if (typeof expr.value === 'string') return 'text';
@@ -3046,12 +3172,10 @@ export class ExpressionTyping {
       case 'exists':
         this.checkExistsSteps(expr.steps, expr.where, position);
         return 'boolean';
-      case 'list': {
-        const elementTypes = expr.elements.map(e => this.inferAt(e, position));
-        this.reportMixedList(elementTypes);
-        const element = unifyValueTypes(elementTypes);
-        return element !== undefined ? { kind: 'list', of: element } : undefined;
-      }
+      // A list literal is a TUPLE — a slot per member, as written — and a
+      // spread splices in the members of what it spreads (`listLiteralType`).
+      case 'list':
+        return this.listLiteralType(expr.elements, position);
       case 'object': {
         // `{ k: v, … }` — typed by its keys, as TypeScript types an object
         // literal: the keys were written down, so each one carries its own
@@ -3061,7 +3185,11 @@ export class ExpressionTyping {
         // union to name and json is where every value flows. Every value is
         // walked either way, since a traversal inside one must be validated
         // like any other.
-        const valueTypes = expr.entries.map(e => this.inferAt(e.value, position));
+        // A key keeps its value's own type (a tuple stays one, so `AT(AT(d,
+        // "k"), 0)` reads a slot); whether the values agree is a question about
+        // them READ, so it is asked of their widened types.
+        const exactTypes = expr.entries.map(e => this.inferExactAt(e.value, position));
+        const valueTypes = exactTypes.map(widenTuples);
         // Version 1 typed a literal as its values alone: a dict when they
         // agree, `json` when they do not (or there are none), and its keys
         // unknown — so every lookup may miss, and no key is a typo.
@@ -3074,7 +3202,7 @@ export class ExpressionTyping {
         }
         const shape: Record<string, FieldType | null> = {};
         expr.entries.forEach((entry, i) => {
-          shape[entry.key] = valueTypes[i] ?? null;
+          shape[entry.key] = exactTypes[i] ?? null;
         });
         const first = valueTypes[0];
         const agree =
@@ -3133,7 +3261,8 @@ export class ExpressionTyping {
         return undefined;
       }
       case 'at': {
-        const inner = this.inferAt(expr.expression, position);
+        // AT reads a SLOT, so it is the one reader that sees a tuple as one.
+        const inner = this.inferExactAt(expr.expression, position);
         const indexType = this.inferAt(expr.index, position);
         const innerShape = inner === undefined ? undefined : stripAbsent(inner);
         // A DICT is looked up, not indexed: there is no order to demand, and
@@ -3364,22 +3493,91 @@ export class ExpressionTyping {
    * strings. Unknown stays silent, like every other rule in this layer.
    */
   /**
-   * A list literal holding both records and values — `[one, "label"]`. A list
-   * holds one kind of thing: a list of records is walked, a list of values is
-   * read, and nothing reads both.
+   * A list literal's type: a TUPLE, one slot per member as written — `[m.Body,
+   * file]` is `[text, file]`. A spread splices in what it spreads: a tuple's
+   * own slots, or, for a list, a variadic run of its element (`[m.Body,
+   * ...files]` is `[text, ...file[]]`). A second run folds everything from the
+   * first run onward into one, as TypeScript does: `[...a, x, ...b]` is
+   * `[...T[]]` for whatever the members unify to.
    *
-   * By TYPE, so the rule is the same one everywhere and a member nobody could
-   * type keeps the honesty rule: an untyped member says nothing about the list,
-   * and it is the head or the read that names what it turned out to be.
+   * A member keeps its own type exactly (a tuple slot holding a tuple stays
+   * one); it is the READ of the literal that widens it to a list.
    */
-  private reportMixedList(elements: Array<FieldType | undefined>): void {
-    const records = elements.filter(t => isRecordType(t));
-    const values = elements.filter(t => t !== undefined && !isRecordType(t) && stripAbsent(t) !== 'absent');
-    if (records.length === 0 || values.length === 0) return;
-    this.report(
-      TypedDiagnosticCodes.LIST_MIXED,
-      `a list holds one kind of thing, and this one holds both: ${describeFieldType(stripAbsent(records[0]!))} is a record, and another member is ${describeFieldType(values[0]!)}. Build a list of records and walk it ('both = [one, two]' … 'both-[c:company]-> { … }'), or read the records' fields first and build a list of the values.`,
-    );
+  private listLiteralType(elements: ListElement[], position: PositionTypeRef | undefined): FieldType {
+    type Part = { slot: FieldType | null } | { run: FieldType | null };
+    const parts: Part[] = elements.flatMap((element): Part[] => {
+      if (element.type !== 'spread') return [{ slot: this.inferExactAt(element, position) ?? null }];
+      return this.spreadParts(this.inferExactAt(element.expression, position));
+    });
+    const firstRun = parts.findIndex(part => 'run' in part);
+    const slotsOf = (run: Part[]): Array<FieldType | null> =>
+      run.map(part => ('slot' in part ? part.slot : part.run));
+    if (firstRun === -1) return { kind: 'tuple', of: slotsOf(parts) };
+    const prefix = slotsOf(parts.slice(0, firstRun));
+    const tail = parts.slice(firstRun + 1);
+    if (tail.every(part => 'slot' in part)) {
+      const run = parts[firstRun]!;
+      return {
+        kind: 'tuple',
+        of: [...prefix, ...slotsOf(tail)],
+        rest: { at: prefix.length, of: 'run' in run ? run.run : null },
+      };
+    }
+    // Two runs: nothing past the first one has a fixed place any more.
+    const folded = tupleAsList({ kind: 'tuple', of: slotsOf(parts.slice(firstRun)) });
+    return { kind: 'tuple', of: prefix, rest: { at: prefix.length, of: folded?.of ?? null } };
+  }
+
+  /**
+   * What `...x` splices into a list literal, by `x`'s type: a tuple's slots
+   * (and its run), or a list's element as a run of any length. A spread of one
+   * thing — text, a record, a dict — is refused: it has no members to splice.
+   * A spread that may be absent is refused too, as TypeScript refuses spreading
+   * `T[] | undefined`: there would be nothing to splice, and the run would
+   * fail. A spread nobody could type is a run nobody can type.
+   */
+  private spreadParts(
+    spread: FieldType | undefined,
+  ): Array<{ slot: FieldType | null } | { run: FieldType | null }> {
+    if (spread === undefined) return [{ run: null }];
+    if (isMaybeAbsent(spread)) {
+      this.report(
+        TypedDiagnosticCodes.ABSENT_REQUIRED,
+        `'...' splices a list's members into this list, and what it spreads may be absent (${describeFieldType(stripAbsent(spread))}, or nothing) — guard it, or spread a list that is always there ('...COALESCE(xs, [])').`,
+      );
+    }
+    const present = stripAbsent(spread);
+    const variant = variantOf(present);
+    switch (variant.kind) {
+      case 'tuple': {
+        const slots = variant.of.map(slot => ({ slot }));
+        if (variant.rest === undefined) return slots;
+        return [...slots.slice(0, variant.rest.at), { run: variant.rest.of }, ...slots.slice(variant.rest.at)];
+      }
+      case 'list':
+        return [{ run: variant.of }];
+      // `json` may hold a list at run time, but nothing here says it does —
+      // the opaque type is passed through, never taken apart.
+      case 'text':
+      case 'number':
+      case 'boolean':
+      case 'date':
+      case 'datetime':
+      case 'file':
+      case 'json':
+      case 'absent':
+      case 'dict':
+      case 'enum':
+      case 'record':
+      case 'maybeAbsent':
+        this.report(
+          TypedDiagnosticCodes.LIST_SPREAD_NOT_A_LIST,
+          `'...' splices a list's members into this list, and this is ${describeFieldType(present)} — one thing, not several. Write it as a member ('[a, x]') rather than spreading it, or spread a list ('[a, ...xs]').`,
+        );
+        return [{ run: null }];
+      default:
+        return neverAsAny(variant);
+    }
   }
 
   private reportUnknownDictKey(key: string, keys: string[]): void {

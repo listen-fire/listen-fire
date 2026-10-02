@@ -340,7 +340,9 @@ function walkExpression(
       return {
         ...expr,
         elements: expr.elements.map((el, i) =>
-          walkExpression(el, ctx, propertyCtxKey, `${path}.elements[${i}]`),
+          el.type === 'spread'
+            ? { ...el, expression: walkExpression(el.expression, ctx, propertyCtxKey, `${path}.elements[${i}].expression`) }
+            : walkExpression(el, ctx, propertyCtxKey, `${path}.elements[${i}]`),
         ),
       };
     case 'object':

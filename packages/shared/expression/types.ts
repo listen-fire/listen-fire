@@ -381,6 +381,34 @@ export type FilterExpression =
 
 // ── Expression AST ──
 
+/**
+ * `...xs` inside a list literal — `[a, ...xs, b]` splices `xs`'s members in
+ * place, TypeScript's array spread. It is a list MEMBER, not a value: there is
+ * no spread anywhere else in an expression, so it lives in the list's element
+ * type rather than among the expressions, where every walker would have to
+ * answer for one that cannot occur.
+ */
+export interface ListSpread {
+  type: 'spread';
+  expression: Expression;
+}
+
+/** One member of a list literal: a value, or a spread of a collection's. */
+export type ListElement = Expression | ListSpread;
+
+/** The expression a list member is written with — the value itself, or the
+ *  collection a spread splices in. For walkers that visit sub-expressions and
+ *  have nothing to say about the splice. */
+export function listElementExpression(element: ListElement): Expression {
+  return element.type === 'spread' ? element.expression : element;
+}
+
+/** A list member rebuilt with `rewrite` applied to its expression — a spread
+ *  stays a spread. For rewriters that carry the literal through unchanged. */
+export function mapListElement(element: ListElement, rewrite: (expr: Expression) => Expression): ListElement {
+  return element.type === 'spread' ? { type: 'spread', expression: rewrite(element.expression) } : rewrite(element);
+}
+
 /** One `key: value` pair of an object literal. */
 export interface ObjectEntry {
   key: string;
@@ -441,7 +469,7 @@ export type Expression =
    * significant per the syntax spec, but preserved here so the
    * serializer can round-trip stably.
    */
-  | { type: 'list'; elements: Expression[] }
+  | { type: 'list'; elements: ListElement[] }
   /**
    * Object literal — `{ key: <expr>, … }`. Keys are the verbatim keys of
    * the structured value being assembled (an API's own spelling: Slack

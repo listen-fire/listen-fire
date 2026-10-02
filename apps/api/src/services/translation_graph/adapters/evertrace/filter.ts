@@ -86,6 +86,8 @@ function stringsOf(expr: Expression): string[] | undefined {
   if (expr.type !== 'list') return undefined;
   const out: string[] = [];
   for (const element of expr.elements) {
+    // A spread's members are computed — no literal to push down.
+    if (element.type === 'spread') return undefined;
     const value = scalarOf(element);
     if (value === undefined || value === null) return undefined;
     out.push(String(value));

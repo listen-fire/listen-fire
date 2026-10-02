@@ -44,7 +44,14 @@ const _expressionSchema: z.ZodTypeAny = z.lazy(() =>
     z.object({ type: z.literal('alias_ref'), name: z.string() }),
     // `list` — set literal used inside meta-edge config objects
     // (notably `#extract`'s `data:` parameter).
-    z.object({ type: z.literal('list'), elements: z.array(_expressionSchema) }),
+    // A member is a value or a spread of a collection's (`[a, ...xs]`).
+    z.object({
+      type: z.literal('list'),
+      elements: z.array(z.union([
+        _expressionSchema,
+        z.object({ type: z.literal('spread'), expression: _expressionSchema }),
+      ])),
+    }),
     // `object` — object literal (`{ key: expr, … }`); keys are the target
     // API's verbatim spelling, values are ordinary expressions.
     z.object({

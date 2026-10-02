@@ -41,6 +41,7 @@ import type {
   WriteExpression,
 } from 'movement-lang';
 import type { Expression } from '#shared/expression/types';
+import { listElementExpression } from '#shared/expression/types';
 import { isMovementBuiltinFunction } from './expression';
 
 /** Expression kinds the interpreter's evaluator executes today —
@@ -554,7 +555,7 @@ class InterpretabilityScan {
     }
     switch (expr.type) {
       case 'list':
-        for (const e of expr.elements) this.scanExpression(e);
+        for (const e of expr.elements) this.scanExpression(listElementExpression(e));
         return;
       case 'object':
         for (const entry of expr.entries) this.scanExpression(entry.value);

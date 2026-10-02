@@ -23,8 +23,8 @@
  *   identifier = [a-zA-Z_][a-zA-Z0-9_ ]* | `backtick quoted`
  */
 
-import type { Expression, FilterOperator, ObjectEntry, TraversalStep, EdgeStep, MetaEdgeStep, EnrichWithEntry } from './types';
-import { AI_TIERS } from './types';
+import type { Expression, FilterOperator, ListElement, ObjectEntry, TraversalStep, EdgeStep, MetaEdgeStep, EnrichWithEntry } from './types';
+import { AI_TIERS, listElementExpression, mapListElement } from './types';
 
 // ── Property name resolution ──
 
@@ -246,7 +246,7 @@ export function serialize(
     case 'alias_ref':
       return quoteName(expr.name);
     case 'list':
-      return `[${expr.elements.map(e => ser(e)).join(', ')}]`;
+      return `[${expr.elements.map(e => (e.type === 'spread' ? `...${ser(e.expression)}` : ser(e))).join(', ')}]`;
     case 'object':
       return `{${expr.entries.map(e => `${serializeObjectKey(e.key)}: ${ser(e.value)}`).join(', ')}}`;
     case 'traverse': {
@@ -491,7 +491,7 @@ function serializeConditional(expr: Expression & { type: 'conditional' }, ser: (
 // Hand-rolled Pratt parser for performance and small bundle size.
 
 interface Token {
-  type: 'ident' | 'string' | 'number' | 'op' | 'paren' | 'comma' | 'keyword' | 'special' | 'traverse' | 'lbracket' | 'rbracket' | 'lbrace' | 'rbrace' | 'colon' | 'unknown' | 'eof';
+  type: 'ident' | 'string' | 'number' | 'op' | 'paren' | 'comma' | 'keyword' | 'special' | 'traverse' | 'lbracket' | 'rbracket' | 'lbrace' | 'rbrace' | 'colon' | 'spread' | 'unknown' | 'eof';
   value: string;
   pos: number;
   end: number;
@@ -899,7 +899,14 @@ function parseConfigObject(
           basePos,
         );
       }
-      cfg.data = value.elements;
+      // `data:` names the values the extraction reads, one by one — a spread
+      // would hand it a collection nobody listed, so it is refused here rather
+      // than read as one opaque member.
+      const spread = value.elements.find(e => e.type === 'spread');
+      if (spread !== undefined) {
+        throw new ParseError(`data: lists its values one by one — a spread ('...') is not accepted here`, basePos);
+      }
+      cfg.data = value.elements.map(listElementExpression);
     }
     else if (key === 'plugin') cfg.plugin = value;
     else {
@@ -1100,7 +1107,7 @@ function toResourcePredicate(expr: Expression): Expression {
     case 'negate':
       return { ...expr, expression: toResourcePredicate(expr.expression) };
     case 'list':
-      return { ...expr, elements: expr.elements.map(toResourcePredicate) };
+      return { ...expr, elements: expr.elements.map(e => mapListElement(e, toResourcePredicate)) };
     default:
       throw new ParseError(
         `a _resources WHERE compares resource fields — '${expr.type}' is not supported here`,
@@ -1331,6 +1338,12 @@ function tokenize(input: string): Token[] {
         tokens.push({ type: 'ident', value, pos, end: i });
       }
       continue;
+    }
+
+    // `...` — a list literal's spread. One token, so the parser never has to
+    // reassemble it from three dots.
+    if (input[i] === '.' && input[i + 1] === '.' && input[i + 2] === '.') {
+      tokens.push({ type: 'spread', value: '...', pos, end: i + 3 }); i += 3; continue;
     }
 
     // Dot (for edge. prefix etc)
@@ -1722,11 +1735,19 @@ class Parser {
     // A TRAILING comma is allowed — what TypeScript does, and the reason it
     // does: a multi-line literal that grows by a line, not by a line plus an
     // edit to the line above.
+    //
+    // A member written `...xs` SPLICES `xs`'s members in place — TypeScript's
+    // array spread, and only here: there is no spread anywhere else in an
+    // expression.
     if (t.type === 'lbracket') {
       this.advance();
-      const elements: Expression[] = [];
+      const elements: ListElement[] = [];
       while (this.peek().type !== 'rbracket') {
-        elements.push(this.parseExpr());
+        if (this.match('spread')) {
+          elements.push({ type: 'spread', expression: this.parseExpr() });
+        } else {
+          elements.push(this.parseExpr());
+        }
         if (!this.match('comma')) break;
       }
       this.expect('rbracket');
@@ -1801,6 +1822,12 @@ class Parser {
     if (t.type === 'keyword' && t.value === 'CONTAINS') {
       throw new ParseError(
         "CONTAINS is written between its operands — 'a CONTAINS b', not 'CONTAINS(a, b)'",
+        t.pos,
+      );
+    }
+    if (t.type === 'spread') {
+      throw new ParseError(
+        "'...' splices a list's members into a list literal — it is written only inside '[ … ]' ('[a, ...xs]')",
         t.pos,
       );
     }
@@ -2394,7 +2421,7 @@ function validateExpressionTree(expr: Expression, ctx: PropertyContext): string 
       return expr.promptExpression ? validateExpressionTree(expr.promptExpression, ctx) : null;
     case 'list':
       for (const e of expr.elements) {
-        const err = validateExpressionTree(e, ctx);
+        const err = validateExpressionTree(listElementExpression(e), ctx);
         if (err) return err;
       }
       return null;
@@ -2610,7 +2637,7 @@ function walkTgExpression(
       for (const a of expr.args) walkTgExpression(a, ctx, errors);
       return;
     case 'list':
-      for (const e of expr.elements) walkTgExpression(e, ctx, errors);
+      for (const e of expr.elements) walkTgExpression(listElementExpression(e), ctx, errors);
       return;
     case 'object':
       for (const entry of expr.entries) walkTgExpression(entry.value, ctx, errors);
@@ -3764,7 +3791,9 @@ export function inferType(expr: Expression, ctx: PropertyContext): ExprType {
       // list collapses to `many { unknown }`.
       if (expr.elements.length === 0) return { kind: 'many', elementType: { kind: 'unknown' } };
       const elementType = mergeTypes(
-        ...expr.elements.map((e) => unwrapMany(inferType(e, ctx))),
+        // A spread's members are its collection's elements — `unwrapMany`
+        // reads them off the same way it reads a single member's own type.
+        ...expr.elements.map((e) => unwrapMany(inferType(listElementExpression(e), ctx))),
       );
       return { kind: 'many', elementType };
     }

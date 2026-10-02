@@ -451,19 +451,27 @@ export type FieldType =
    */
   | { kind: 'list'; of: FieldType; unordered?: true }
   /**
-   * `<[T, U]>` — a FIXED-LENGTH heterogeneous list, the type of a combinator
-   * receipt written with literal arms (`await parallel([f, g])`). Every slot is
-   * its own type, so a literal-index read (`AT(r, 0)`) types exactly; every
-   * other operation treats a tuple as the list it is.
+   * `<[T, U]>` — a heterogeneous list whose slots were written down: a list
+   * literal (`[m.Body, file]` is `[text, file]`) and the receipt of a
+   * combinator written with literal arms (`await parallel([f, g])`). Every slot
+   * is its own type, so a literal-index read (`AT(r, 0)`) types exactly; every
+   * other operation reads a tuple as the list it widens to — TypeScript's
+   * tuple-to-array assignability.
    *
-   * A slot is `null` where the arm's value could not be typed — "we could
-   * not see", spelled with the one nothing-value JSON can carry, since this
-   * type crosses the wire verbatim. `'absent'` is the other answer and means
-   * the opposite: this arm hands nothing back, so the slot's VALUE is always
-   * null at run time.
+   * A slot is `null` where the value could not be typed — "we could not see",
+   * spelled with the one nothing-value JSON can carry, since this type crosses
+   * the wire verbatim. `'absent'` is the other answer and means the opposite:
+   * this arm hands nothing back, so the slot's VALUE is always null at run
+   * time.
    *
+   * `rest` makes the tuple VARIADIC — TypeScript's `[T, ...U[]]`: a run of
+   * any length (zero included) of `rest.of`, sitting just before slot
+   * `rest.at` (`at === of.length` puts it last). A spread of a list into a
+   * literal is what writes one: `[m.Body, ...files]` is `[text, ...file[]]`.
+   * There is at most one run — a second spread folds everything from the
+   * first run onward into it, as TypeScript does.
    */
-  | { kind: 'tuple'; of: Array<FieldType | null> }
+  | { kind: 'tuple'; of: Array<FieldType | null>; rest?: TupleRest }
   /**
    * `{ k: v, … }` — a collection keyed by TEXT. Keys are strings and nothing
    * else: a dict is JSON-object-shaped, which is the whole value world's one
@@ -527,6 +535,13 @@ export type FieldType =
    * checked.
    */
   | { kind: 'record'; position?: PositionTypeRef };
+
+/** A variadic tuple's run: any number of `of`, just before slot `at`. `of` is
+ *  `null` where the run's members could not be typed. */
+export interface TupleRest {
+  at: number;
+  of: FieldType | null;
+}
 
 /**
  * What an adapter SURFACE can declare — every field type except a record,
@@ -710,8 +725,14 @@ export function describeFieldType(type: FieldType): string {
     // A tuple IS its slots, in order — the surface spelling, so a diagnostic
     // can paste it back. An untyped slot reads as `?`, which is what the
     // checker knows, not a type it is claiming.
-    case 'tuple':
-      return `[${variant.of.map(slot => (slot === null ? '?' : describeFieldType(slot))).join(', ')}]`;
+    case 'tuple': {
+      const slots = variant.of.map(slot => (slot === null ? '?' : describeFieldType(slot)));
+      if (variant.rest !== undefined) {
+        const run = variant.rest.of === null ? '?' : describeFieldType(variant.rest.of);
+        slots.splice(variant.rest.at, 0, `...list of ${run}`);
+      }
+      return `[${slots.join(', ')}]`;
+    }
     // A shaped dict IS its keys — the literal's own spelling, the way a tuple
     // reads as its slots.
     case 'dict':

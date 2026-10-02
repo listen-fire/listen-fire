@@ -39,6 +39,7 @@
 
 import type { ActionNode, ExpressionType, SchemaFieldDescriptor, TGFieldMapping } from '../../types';
 import type { Expression } from '../../../knowledge_pipeline/output_v3/expression';
+import { listElementExpression, type ListElement } from '#shared/expression/types';
 import type { TraversalStep } from '../../../knowledge_pipeline/output_v3/schemas';
 import type { FieldShape } from './schema_synthesis';
 
@@ -392,9 +393,9 @@ function walkExpression(input: {
     }
 
     case 'list': {
-      const e = expr as Expression & { elements: Expression[] };
+      const e = expr as Expression & { elements: ListElement[] };
       for (const elem of e.elements) {
-        walkExpression({ expr: elem, ancestorAliasStack, onExtractValue });
+        walkExpression({ expr: listElementExpression(elem), ancestorAliasStack, onExtractValue });
       }
       return;
     }
@@ -618,8 +619,8 @@ function walkTraversalSteps(
       }
       return;
     case 'list':
-      for (const e of (expr as Expression & { elements: Expression[] }).elements) {
-        walkTraversalSteps(e, visit);
+      for (const e of (expr as Expression & { elements: ListElement[] }).elements) {
+        walkTraversalSteps(listElementExpression(e), visit);
       }
       return;
     case 'exists': {

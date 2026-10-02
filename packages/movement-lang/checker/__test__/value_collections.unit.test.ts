@@ -471,19 +471,26 @@ describe('a list literal of records', () => {
     ).toEqual([]);
   });
 
-  it('a record and a value together are refused — a list holds one kind of thing', () => {
+  // A literal holding a record and a value is a TUPLE, which may hold both —
+  // each slot is its own type. What a list may not do is hold both, so the
+  // mixture is refused where the tuple is READ as a list.
+  const READ_AS_LIST = '\n  each = MAP(both, (b) => { return b })';
+
+  it('a record and a value together make a tuple — refused where it is read as a list', () => {
     const body = [
       '  one = node { name: "Acme" }',
       '  label = "hello"',
       '  both = [one, label]',
     ].join('\n');
-    expect(codes(body)).toContain('MOV_LIST_MIXED');
-    expect(messages(body)).toContain('one kind of thing');
-    expect(messages(body)).toContain('is text');
+    expect(codes(body)).toEqual([]);
+    expect(codes(`${body}\n  first = AT(both, 0)`)).toEqual([]);
+    expect(codes(body + READ_AS_LIST)).toContain('MOV_LIST_MIXED');
+    expect(messages(body + READ_AS_LIST)).toContain('one kind of thing');
+    expect(messages(body + READ_AS_LIST)).toContain('is text');
   });
 
   it('a literal member is refused the same way', () => {
-    expect(codes('  one = node { name: "Acme" }\n  both = [one, 3]')).toContain('MOV_LIST_MIXED');
+    expect(codes('  one = node { name: "Acme" }\n  both = [one, 3]' + READ_AS_LIST)).toContain('MOV_LIST_MIXED');
   });
 
   it('a nested list is refused — a record and a list of them are not one kind', () => {
@@ -491,7 +498,7 @@ describe('a list literal of records', () => {
       '  one = node { name: "Acme" }',
       '  two = node { name: "Zenith" }',
       '  both = [one, [two]]',
-    ].join('\n');
+    ].join('\n') + READ_AS_LIST;
     expect(codes(body)).toContain('MOV_LIST_MIXED');
     expect(messages(body)).toContain('list of');
   });
@@ -505,7 +512,7 @@ describe('a list literal of records', () => {
         '  one = node { name: "Acme" }',
         '  names = COLLECT(c-[m:Messages]->.`Text`)',
         '  both = [one, AT(names, 0)]',
-      ].join('\n')),
+      ].join('\n') + READ_AS_LIST),
     ).toContain('MOV_LIST_MIXED');
   });
 
@@ -517,7 +524,7 @@ describe('a list literal of records', () => {
       codes([
         '  one = node { name: "Acme" }',
         '  both = [one, KG_VALUE("x")]',
-      ].join('\n')),
+      ].join('\n') + READ_AS_LIST),
     ).not.toContain('MOV_LIST_MIXED');
   });
 

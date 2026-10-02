@@ -19,6 +19,7 @@
 // engine-over-local-values capability handled by the engine's async path.
 
 import type { Expression, FilterOperator } from './types';
+import { listElementExpression, mapListElement } from './types';
 
 /** A synchronous reader for the leaf names a predicate references — a field of
  *  the record under evaluation, or an in-engine value the engine pre-resolved.
@@ -171,7 +172,7 @@ export function replacePureLeaves(
   if (replacement !== undefined) return replacement;
   switch (expr.type) {
     case 'list':
-      return { ...expr, elements: expr.elements.map((e) => replacePureLeaves(e, replacements)) };
+      return { ...expr, elements: expr.elements.map((e) => mapListElement(e, (x) => replacePureLeaves(x, replacements))) };
     case 'compare':
       return {
         ...expr,
@@ -214,7 +215,7 @@ export function replacePureLeaves(
 function childExpressions(expr: Expression): Expression[] {
   switch (expr.type) {
     case 'list':
-      return expr.elements;
+      return expr.elements.map(listElementExpression);
     case 'compare':
     case 'arithmetic':
       return [expr.left, expr.right];
@@ -273,7 +274,17 @@ export function evaluatePredicate(expr: Expression, scope: FilterScope): unknown
       );
 
     case 'list':
-      return expr.elements.map((e) => evaluatePredicate(e, scope));
+      return expr.elements.flatMap((e) => {
+        if (e.type !== 'spread') return [evaluatePredicate(e, scope)];
+        // `...xs` splices the members in. Spreading anything but a list is a
+        // mistake the checker refuses where it can see the type; here, at run
+        // time, it fails loudly rather than splicing nothing.
+        const spread = evaluatePredicate(e.expression, scope);
+        if (!Array.isArray(spread)) {
+          throw new Error(`'...' spreads a list into a list, and this value is ${spread === null || spread === undefined ? 'null' : typeof spread}`);
+        }
+        return spread;
+      });
 
     case 'concat':
       return expr.parts

@@ -900,9 +900,20 @@ export async function evalExpr(
     case 'list': {
       // Inline list literal — evaluate each element in order. Result
       // is an array of values (NOT flattened — the consumer decides
-      // whether nested lists should spread).
-      const elems = await Promise.all(expr.elements.map((e) => evaluateExpression(e, ctx)));
-      return bare(elems);
+      // whether nested lists should spread), except where the author
+      // wrote a spread: `...xs` splices xs's members in place.
+      const evaluated = await Promise.all(expr.elements.map(async (e) =>
+        e.type === 'spread'
+          ? { spread: true as const, value: await evaluateExpression(e.expression, ctx) }
+          : { spread: false as const, value: await evaluateExpression(e, ctx) },
+      ));
+      return bare(evaluated.flatMap(({ spread, value }) => {
+        if (!spread) return [value];
+        if (!Array.isArray(value)) {
+          throw new Error(`'...' spreads a list into a list, and this value is ${value === null || value === undefined ? 'null' : typeof value}`);
+        }
+        return value;
+      }));
     }
 
     case 'object': {

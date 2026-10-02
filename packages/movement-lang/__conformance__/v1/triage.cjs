@@ -57,4 +57,27 @@ exports.triage = [
     reason:
       "the test uses COALESCE as its stand-in for a call the checker cannot type; COALESCE now types as the kind its arguments share (a bug fix under every version, so a yes/no reaching a declared text field is refused), and a typed return over a lazy entry meets the order rule exactly as `return f.`Name`` already did under v1",
   },
+  ...[
+    'a record and a value together are refused — a list holds one kind of thing',
+    'a literal member is refused the same way',
+    'a nested list is refused — a record and a list of them are not one kind',
+    'a computed member is judged by its TYPE, like every other member',
+  ].map((test) => ({
+    file: 'checker/__test__/value_collections.unit.test.ts',
+    test,
+    reason:
+      `${ACCEPTED}: a list literal is a tuple, which may hold a record and a value; MOV_LIST_MIXED still fires wherever the tuple is read as a list`,
+  })),
+  {
+    file: 'checker/__test__/check_typed.unit.test.ts',
+    test: 'a size that may not answer is refused where it is written, not at the run',
+    reason:
+      `${ACCEPTED}: the test's stand-in for a size that may not answer was \`AT([1000, 2000], 0)\`, and a literal index into a list literal now reads its tuple slot, which is always there`,
+  },
+  {
+    file: 'checker/__test__/expression_head.unit.test.ts',
+    test: 'is refused at the head, naming the expression and what it is',
+    reason:
+      'still refused with the same code; the message now says `text` rather than `text (or absent)`, because a literal index into a list literal reads its tuple slot, which is always there',
+  },
 ];
