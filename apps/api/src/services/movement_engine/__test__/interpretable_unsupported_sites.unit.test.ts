@@ -42,7 +42,7 @@ interface Site {
 
 /** Only ever goes DOWN. Closing a gap (a checker diagnostic, a dry-run flag,
  *  engine support) lowers it; nothing may raise it. */
-const KNOWN_GAPS = 68;
+const KNOWN_GAPS = 66;
 
 // Sites in source order within each file; a construct thrown from two places
 // is listed twice, in the order it appears.
@@ -110,9 +110,9 @@ const SITES: Site[] = [
   { file: "expression.ts", construct: "writing out a record that contains itself through its edges",
     cover: { by: 'unreachable', why: "a record is built bottom-up from values already in hand, so no program can make one hold itself; the guard is for a structure the engine does not build" } },
   { file: "expression.ts", construct: "writing out the '${name}' edge of a record, which is a lazy walk that has not been run",
-    cover: { by: 'uncovered', gap: "`TEXT.SERIALISE(n)` on a `node { items: lazy a-[f:\u2026]-> }`: the checker's whole-value test asks only whether the fields are spelled out, not whether an edge is still deferred" } },
+    cover: { by: 'checker', codes: ["MOV_STDLIB_ARG_LAZY_EDGE"] } },
   { file: "expression.ts", construct: "writing out a record whose field and edge are both called '${name}'",
-    cover: { by: 'partial', codes: ["MOV_NODE_ENTRY_DUPLICATE"], gap: "a node literal's field and edge share one namespace and are refused; an extract node whose child shares a name with one of its fields is not (EXTRACT_FIELD_DUPLICATE compares fields only)" } },
+    cover: { by: 'checker', codes: ["MOV_NODE_ENTRY_DUPLICATE", "MOV_EXTRACT_FIELD_DUPLICATE"] } },
   { file: "expression.ts", construct: "reading every field of ${describeHeldValue(binding.value)}",
     cover: { by: 'checker', codes: ["MOV_STDLIB_ARG_NOT_RECORD"] } },
   { file: "expression.ts", construct: "reading every field of ${describeBinding[binding.kind]}",

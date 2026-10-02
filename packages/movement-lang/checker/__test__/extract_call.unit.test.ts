@@ -325,4 +325,14 @@ movement under_test(e: <inbox-[:message]->>) {
       value: { kind: 'extract' },
     });
   });
+
+  it('a shape written in place with a field and a child of one name is refused', () => {
+    const body = [
+      '  found = extract([e.`Subject`], node Firm: "each firm" {',
+      '    round: <text> "the latest round"',
+      '    node round: "each funding round" { stage: <text> "the stage" }',
+      '  })',
+    ].join('\n');
+    expect(codes(body)).toEqual([C.EXTRACT_FIELD_DUPLICATE]);
+  });
 });

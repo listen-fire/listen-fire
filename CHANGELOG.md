@@ -15,6 +15,8 @@ Language version 3 arrives: **Steady Lynx**. A new automation is written in it, 
 
 ### Fixed
 
+- `TEXT.SERIALISE` of a value holding a `lazy` edge that has not run (`TEXT.SERIALISE(node { items: lazy a-[f:…]-> }, 'JSON')`) is now refused at save as `MOV_STDLIB_ARG_LAZY_EDGE`, saying to read the walk first. Before, it saved and failed when the movement ran. Nothing that ran changes.
+- An extraction shape with a field and a child node of the same name (an `extract … from` block, a `node X: "…" { … }` declaration, or the shape of `extract(content, Shape)`) is now refused at save as `MOV_EXTRACT_FIELD_DUPLICATE`. Before, it saved and failed when a record of it was written out.
 - A payout to a fund that holds a company both directly and through an SPV now reaches the cheque it was paid on: a payment is attributed to the holdings whose asset the paying entity issued, so the SPV's payout goes to the SPV cheque. Before, the SPV cheque valued on its own received nothing, and the fund's cheques valued one at a time added up to less than the fund's position valued whole. A payout on holdings that share no unit (fund-of-funds interests, capital calls) is split by the cash each cheque invested instead of being lost; one nothing held can explain is attributed the same way and logged at `warn`.
 - A connector client closing its event stream no longer logs an unhandled rejection on the API; the session is released quietly.
 

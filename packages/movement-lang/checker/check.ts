@@ -10152,6 +10152,7 @@ class Checker {
    * anywhere gets the words the declaration's own scope gives them.
    */
   private checkShapeDescriptions(node: ShapeNode, scope: Scope): void {
+    this.checkFieldChildNamesApart(node.fields, node.children);
     if (node.description !== undefined) this.checkExprSlot(node.description, scope);
     for (const field of node.fields) {
       if (field.description !== undefined) this.checkExprSlot(field.description, scope);
@@ -10208,7 +10209,20 @@ class Checker {
    * interpolates that nothing in scope provides is reported here rather than
    * reaching the extractor as literal `${…}` text.
    */
-  private checkExtractStages(stages: ExtractStage[], scope: Scope, inherited: Set<string>): void {
+  private checkExtractStages(
+    stages: ExtractStage[],
+    scope: Scope,
+    inherited: Set<string>,
+    declared?: ShapeNode,
+  ): void {
+    // The declaration's own names were checked where it was declared; only the
+    // clashes the stages add are reported here.
+    const stageFieldList = stages.flatMap(stage => stage.fields);
+    this.checkFieldChildNamesApart(
+      [...(declared?.fields ?? []), ...stageFieldList],
+      stages.flatMap(stage => stage.children),
+    );
+    this.checkFieldChildNamesApart(stageFieldList, declared?.children ?? []);
     const stageFields = stages.map(stage => stage.fields.map(f => f.name));
     const prior = new Set(inherited);
     for (let k = 0; k < stages.length; k++) {
@@ -10241,8 +10255,34 @@ class Checker {
         // declared, against the scope it was declared in.
         const shape = this.resolveExtractShape(child, scope);
         const declaredFields = shape?.declaration.root.fields.map(f => f.name) ?? [];
-        this.checkExtractStages(child.stages, scope, new Set([...prior, ...declaredFields]));
+        this.checkExtractStages(
+          child.stages,
+          scope,
+          new Set([...prior, ...declaredFields]),
+          shape?.declaration.root,
+        );
       }
+    }
+  }
+
+  /**
+   * A record's fields and the edges to its child nodes are one namespace — the
+   * record is written out, and read, by name — so a field and a child node
+   * called the same thing leave `x.name` meaning two things. Refused where the
+   * shape is written, the way a node literal's twin entries are.
+   */
+  private checkFieldChildNamesApart(
+    fields: ReadonlyArray<{ name: string }>,
+    children: ReadonlyArray<{ name: string; span: Span }>,
+  ): void {
+    const fieldNames = new Set(fields.map(field => field.name));
+    for (const child of children) {
+      if (!fieldNames.has(child.name)) continue;
+      this.report(
+        DiagnosticCodes.EXTRACT_FIELD_DUPLICATE,
+        `'${child.name}' is both a field and a child node here — a record's fields and its child nodes share one namespace, so give one of them another name`,
+        child.span,
+      );
     }
   }
 

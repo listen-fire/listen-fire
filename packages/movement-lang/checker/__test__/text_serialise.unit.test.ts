@@ -9,7 +9,10 @@ import { InstanceSchema, mockCatalog } from '../catalog';
 
 const schema: InstanceSchema = {
   positions: {
-    message: { properties: { Subject: 'text', Seen: 'datetime', Count: 'number' }, edges: {} },
+    message: {
+      properties: { Subject: 'text', Seen: 'datetime', Count: 'number' },
+      edges: { Parts: { target: 'note', readable: true } },
+    },
     note: { properties: { Body: 'text' }, edges: {} },
   },
   collections: { messages: { target: 'message' }, note: { target: 'note' } },
@@ -69,6 +72,23 @@ describe('TEXT.SERIALISE checks at save', () => {
         ].join('\n'),
       ),
     ).toEqual([]);
+  });
+
+  it('a record holding a lazy edge is refused — the walk has not run', () => {
+    const body = [
+      '  r = node { items: lazy e-[p:Parts]-> }',
+      '  write inbox-[:note]-> { Body: TEXT.SERIALISE(r, "JSON") }',
+    ].join('\n');
+    expect(codes(body)).toEqual(['MOV_STDLIB_ARG_LAZY_EDGE']);
+    expect(messages(body)).toContain("'items'");
+  });
+
+  it('a lazy edge inside a nested node is refused too', () => {
+    const body = [
+      '  r = node { inner: node { items: lazy e-[p:Parts]-> } }',
+      '  write inbox-[:note]-> { Body: TEXT.SERIALISE(r, "JSON") }',
+    ].join('\n');
+    expect(codes(body)).toEqual(['MOV_STDLIB_ARG_LAZY_EDGE']);
   });
 
   it('an unknown literal format is refused, with the known formats', () => {

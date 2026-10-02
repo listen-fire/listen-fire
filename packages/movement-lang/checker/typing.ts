@@ -362,6 +362,9 @@ export const TypedDiagnosticCodes = {
    *  that may itself be ABSENT is not this error: absence propagates through
    *  the call the way it does everywhere else. */
   STDLIB_ARG_NOT_RECORD: 'MOV_STDLIB_ARG_NOT_RECORD',
+  /** `TEXT.SERIALISE` of a value holding a `lazy` edge: the walk has not run,
+   *  so there is nothing to write out until it is read. */
+  STDLIB_ARG_LAZY_EDGE: 'MOV_STDLIB_ARG_LAZY_EDGE',
   /** `READ(x)` where `x` is not a file. READ turns a FILE into its text, and
    *  nothing else has bytes to read — a text argument is either a value the
    *  author already has (so the call does nothing) or the wrong name. The
@@ -649,6 +652,22 @@ export interface LocalEdge {
    *  so there is no array for a `link` to append to — appending to one would be
    *  a landing that vanishes at the next read. */
   deferred?: true;
+}
+
+/** The name of a `lazy` edge anywhere inside a checker-local node (its own
+ *  edges, or the local nodes those land on): a value holding one cannot be
+ *  written out, because the walk has not run. */
+function deferredEdgeWithin(position: PositionTypeRef, seen = new Set<PositionTypeRef>()): string | undefined {
+  if (seen.has(position)) return undefined;
+  seen.add(position);
+  if (position.kind === 'maybeEmpty') return deferredEdgeWithin(position.of, seen);
+  if (position.kind !== 'local') return undefined;
+  for (const [name, edge] of Object.entries(position.edges ?? {})) {
+    if (edge.deferred === true) return name;
+    const nested = edge.target === undefined ? undefined : deferredEdgeWithin(edge.target, seen);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
 }
 
 // ── The callback surface (one declaration; checker and editor both read it) ──
@@ -4576,10 +4595,19 @@ export class ExpressionTyping {
     if (type === undefined) return;
     const stripped = stripAbsent(type);
     if (!isRecordType(stripped)) return;
-    if (!this.holdsSpelledFields(recordIn(stripped)?.position)) {
+    const position = recordIn(stripped)?.position;
+    if (!this.holdsSpelledFields(position)) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
         `\`${spec.namespace}.${spec.name}\` writes out a record whose fields the program spells out — a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
+      );
+      return;
+    }
+    const lazyEdge = position === undefined ? undefined : deferredEdgeWithin(position);
+    if (lazyEdge !== undefined) {
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_LAZY_EDGE,
+        `\`${spec.namespace}.${spec.name}\` writes out a record whose '${lazyEdge}' edge is a lazy walk that has not run yet — read it first (bind the walk, or await it) and write out what it gave back`,
       );
     }
   }

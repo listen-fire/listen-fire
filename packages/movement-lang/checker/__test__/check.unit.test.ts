@@ -999,6 +999,36 @@ describe('extract field duplicates', () => {
     expect(diagnostics[0].message).toContain("'description'");
   });
 
+  it('MOV_EXTRACT_FIELD_DUPLICATE for a child node named like a field of its parent', () => {
+    const diagnostics = check(
+      inMovement(
+        [
+          '  deals = extract from [msg.`text`] {',
+          '    node company: "each company" {',
+          '      round: "the latest round"',
+          '      node round: "each funding round" { stage: "the stage" }',
+          '    }',
+          '  }',
+        ].join('\n'),
+      ),
+    );
+    expect(diagnostics.map(d => d.code)).toEqual([C.EXTRACT_FIELD_DUPLICATE]);
+    expect(diagnostics[0].message).toContain("'round'");
+  });
+
+  it('MOV_EXTRACT_FIELD_DUPLICATE for a declared node whose child shares a field name', () => {
+    const diagnostics = check(
+      [
+        PRELUDE,
+        'node Company: "each company" {',
+        '  round: <text> "the latest round"',
+        '  node round: "each funding round" { stage: <text> "the stage" }',
+        '}',
+      ].join('\n'),
+    );
+    expect(diagnostics.map(d => d.code)).toEqual([C.EXTRACT_FIELD_DUPLICATE]);
+  });
+
   it('a later stage may redeclare an earlier stage\'s field (transformation wins)', () => {
     expectClean(
       inMovement(
