@@ -42,7 +42,7 @@ interface Site {
 
 /** Only ever goes DOWN. Closing a gap (a checker diagnostic, a dry-run flag,
  *  engine support) lowers it; nothing may raise it. */
-const KNOWN_GAPS = 64;
+const KNOWN_GAPS = 68;
 
 // Sites in source order within each file; a construct thrown from two places
 // is listed twice, in the order it appears.
@@ -107,6 +107,12 @@ const SITES: Site[] = [
     cover: { by: 'unreachable', why: "walkDeferred is always wired: every evaluator context the interpreter builds carries it" } },
   { file: "expression.ts", construct: "this read shape on ${options.what} ('${options.name}')",
     cover: { by: 'uncovered', gap: "something other than a field after the final `.` over an extract result or meta-node (`deals.TRIM(\u2026)`)" } },
+  { file: "expression.ts", construct: "writing out a record that contains itself through its edges",
+    cover: { by: 'unreachable', why: "a record is built bottom-up from values already in hand, so no program can make one hold itself; the guard is for a structure the engine does not build" } },
+  { file: "expression.ts", construct: "writing out the '${name}' edge of a record, which is a lazy walk that has not been run",
+    cover: { by: 'uncovered', gap: "`TEXT.SERIALISE(n)` on a `node { items: lazy a-[f:\u2026]-> }`: the checker's whole-value test asks only whether the fields are spelled out, not whether an edge is still deferred" } },
+  { file: "expression.ts", construct: "writing out a record whose field and edge are both called '${name}'",
+    cover: { by: 'partial', codes: ["MOV_NODE_ENTRY_DUPLICATE"], gap: "a node literal's field and edge share one namespace and are refused; an extract node whose child shares a name with one of its fields is not (EXTRACT_FIELD_DUPLICATE compares fields only)" } },
   { file: "expression.ts", construct: "reading every field of ${describeHeldValue(binding.value)}",
     cover: { by: 'checker', codes: ["MOV_STDLIB_ARG_NOT_RECORD"] } },
   { file: "expression.ts", construct: "reading every field of ${describeBinding[binding.kind]}",
@@ -125,6 +131,8 @@ const SITES: Site[] = [
     cover: { by: 'dryRun', label: "file-level calls", snippet: `import { fetch_url } from plugins\npage = fetch_url(url: "https://example.com")\n` } },
   { file: "run.ts", construct: "traversing the deferred edge '${edge}' of a synthesised node reached through a block meta-node",
     cover: { by: 'uncovered', gap: "a race receipt holding a synthesised node with a `lazy` edge, then hops past it; unconfirmed" } },
+  { file: "run.ts", construct: "WHERE on the target of '${at}' — an edge of a node this run built",
+    cover: { by: 'partial', codes: ["MOV_TARGET_WHERE_LOCAL"], gap: "silent when the checker cannot type the target's parent node (it returns before the local-node test)" } },
   { file: "run.ts", construct: "a movement parameter typed against '${paramType.graph}'",
     cover: { by: 'uncovered', gap: "a movement parameter typed against a shape (`movement m(msg: <Lead>)`) fired by a listen; the checker takes the shape-conformance path" } },
   { file: "run.ts", construct: "the file import \"${statement.source.path}\"",
@@ -213,8 +221,12 @@ const SITES: Site[] = [
     cover: { by: 'uncovered', gap: "a legacy `#transform` hop off the event" } },
   { file: "run.ts", construct: "incoming block-head hops ('${step.edgeTypeId}')",
     cover: { by: 'uncovered', gap: "an incoming block-head hop on an adapter without incoming traversal; the checker never looks at hop direction" } },
+  { file: "run.ts", construct: "a WHERE on the target of a 'bind ${write.bind.name}' write",
+    cover: { by: 'partial', codes: ["MOV_TARGET_WHERE_BIND", "MOV_TARGET_WHERE_LOCAL"], gap: "silent when the checker cannot type the target's parent or resolve its instance (it returns before the bind test)" } },
   { file: "run.ts", construct: "'bind' on a write into a node this run built (${at})",
     cover: { by: 'uncovered', gap: "`write d-[:companies]-> bind msg { \u2026 }` into a node this run built; the bind check skips local targets" } },
+  { file: "run.ts", construct: "WHERE on a shape write",
+    cover: { by: 'checker', codes: ["MOV_WRITE_SHAPE_RETIRED"] } },
   { file: "run.ts", construct: "unique by on a shape write",
     cover: { by: 'checker', codes: ["MOV_WRITE_SHAPE_RETIRED"] } },
   { file: "run.ts", construct: "link ${link.from} -[:${link.edge}]-> { \u2026 } on a node this run built",
@@ -225,6 +237,10 @@ const SITES: Site[] = [
     cover: { by: 'checker', codes: ["MOV_WRITE_SHAPE_RETIRED", "MOV_NODE_EDGE_UNDECLARED"] } },
   { file: "run.ts", construct: "multi-hop linked writes",
     cover: { by: 'uncovered', gap: "`write msg-[:channel]->-[:messages]-> { \u2026 }` off a handle or event root" } },
+  { file: "run.ts", construct: "a 'unique by' clause with no key ('${clause.predicate.raw}')",
+    cover: { by: 'checker', codes: ["MOV_UNIQUE_CONJUNCT_NEEDS_WHERE"] } },
+  { file: "run.ts", construct: "a 'unique by' test that reads beyond the candidate",
+    cover: { by: 'checker', codes: ["MOV_UNIQUE_CONJUNCT_NEEDS_WHERE"] } },
   { file: "run.ts", construct: "'${event.triggerType}' trigger events",
     cover: { by: 'unreachable', why: "the trigger type comes from dispatch, not the program; nothing in apps/api emits the two unhandled types" } },
 ];

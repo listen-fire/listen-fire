@@ -25,7 +25,7 @@ node Profile: "more about the company described last" {
 }
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  files     = COLLECT(m-[a:Attachments]->.\`File\`)
+  files     = m-[a:Attachments]->.\`File\`
   content   = [m.\`Body\`, ...files]
   companies = extract(content, Company, { tier: 'careful' })
 
@@ -264,7 +264,7 @@ node Profile: "more about the company described last" {
 }
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  files     = COLLECT(m-[a:Attachments]->.\`File\`)
+  files     = m-[a:Attachments]->.\`File\`
   content   = [m.\`Body\`, ...files]
   companies = extract(content, Company, { tier: 'careful' })
 
