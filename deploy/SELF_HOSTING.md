@@ -230,6 +230,18 @@ Google spells a Claude model whose name carries a date with the date behind an `
 
 An embedding line must name a model the product knows the widths of, and one wide enough for the column: `"text-embedding-3-large": "openai/text-embedding-3-small"` is refused at boot, because that model tops out at 1536 and the column stores 3072. Vectors written by one vendor are not comparable with vectors written by another, so moving an embedding line on a deployment that already has vectors means re-embedding what is stored.
 
+**`EXTRACTION_TIERS` decides what each extraction tier buys.** An automation's extraction asks for a tier, `quick`, `careful` or `thorough`, and the deployment decides which model answers it and how hard that model thinks. Left unset, every tier is `claude-sonnet-5`: `quick` at effort `low`, `careful` at `high`, `thorough` at `xhigh`. An extraction that names no tier is not configurable: its model is chosen by how many kinds of record it reads (`claude-opus-4-7` or `claude-sonnet-5`), at effort `low`. `EXTRACTION_TIERS` is a JSON object from tier to `{ "model": …, "effort": … }`; a tier or a field it leaves out keeps the default.
+
+```json
+{ "careful": { "model": "claude-opus-5", "effort": "medium" }, "quick": { "effort": "medium" } }
+```
+
+- The model is a model name from the product's list, and `MODEL_MAP` still decides which vendor answers it.
+- Effort is one of `low`, `medium`, `high` or `xhigh`; each vendor gets its nearest control, and a vendor with none refuses the call.
+- `high` and `xhigh` get a 64k output ceiling, because thinking at those depths comes out of the same ceiling as the answer.
+- Boot refuses a tier that is not one of the three, a field that is not `model` or `effort`, a name that is not a chat model, and a model this deployment cannot call (no credentials for wherever `MODEL_MAP` sends it).
+- The defaults cap effort low on purpose: production extractions at the models' own default depth spent their whole output on thinking. Raise it knowing that.
+
 **Upgrading a deployment from before `MODEL_MAP`.** Three things behave differently with no map set:
 
 - The system, movement and ontology agents used to run on GPT 5 when `KNOWLEDGE_AGENT_PROVIDER` was unset. They now run on Claude (`claude-sonnet-5`). To keep them on GPT, map `claude-sonnet-5` to `openai/gpt-5`.
@@ -611,6 +623,7 @@ Everything here is set by you, in `deploy/.env`. Nothing in this table is genera
 | `OPENAI_API_KEY` | only for names the map leaves at OpenAI | the key for OpenAI's own names: transcription, embeddings and image generation, plus any chat name the map sends to `openai`. Absent, each fails naming it when asked for |
 | `OPENAI_ORGANIZATION` | no | none — no `organization` is sent, and OpenAI uses the key's own default org |
 | `MODEL_MAP` | no | empty — every model name goes to its own vendor under its own name. A JSON object from model name to `provider/wire-model` sends names elsewhere; see "What you configure" for three worked maps (vendor keys, everything on OpenAI, everything on Gemini) and the Claude on Google Cloud one. Boot refuses a map it cannot serve |
+| `EXTRACTION_TIERS` | no | empty — `quick`, `careful` and `thorough` are `claude-sonnet-5` at effort `low`, `high` and `xhigh`. A JSON object from tier to `{ "model", "effort" }` reassigns them; see "What you configure". Boot refuses a model this deployment cannot call |
 | `GOOGLE_MODEL_REGION` | no | `global` — where models are addressed on Google Cloud, for both the `vertex` (Claude) and `gemini` providers. `GOOGLE_PROJECT_LOCATION` is separate and stays the location OCR uses |
 | `GEMINI_BASE_URL` | no | unset — every call the map sends to `gemini` (chat, transcription, embeddings, images) goes to Google Cloud, signed with the service account. Set it only to point those calls at a stand-in such as the dev loop's fake Gemini (`http://localhost:<fake channels port>/gemini`); a redirected client sends a placeholder key instead of a Google token |
 | `GOOGLE_PRIVATE_KEY` / `GOOGLE_CLIENT_EMAIL` / `GOOGLE_PROJECT_ID` | when the map names `vertex` or `gemini`, or for OCR | the deployment's one Google service account. `GOOGLE_PROJECT_LOCATION` (default `europe-west1`) joins these for OCR |

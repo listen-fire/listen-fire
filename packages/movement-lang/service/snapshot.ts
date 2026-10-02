@@ -23,7 +23,7 @@ import type {
   InstanceSchema,
   PluginSpec,
 } from '../checker/catalog';
-import { credentialArgOf, entryPositionKeyOf } from '../checker/catalog';
+import { credentialArgOf, entryPositionKeyOf, modelsMember } from '../checker/catalog';
 import type { ResolveFile } from '../checker/link';
 import { unwrapCredentialArg } from '../parser/scan';
 
@@ -87,6 +87,10 @@ export interface CatalogSnapshot {
    * exports complete, imported movements typecheck at call sites.
    */
   files?: Record<string, { source: string }>;
+  /** The logical model names this deployment can reach (`Catalog.models`),
+   *  so the editor refuses a model the save would refuse. Absent on a
+   *  snapshot written before it existed: the model is then left unchecked. */
+  models?: string[];
 }
 
 export const EMPTY_CATALOG_SNAPSHOT: CatalogSnapshot = {
@@ -271,6 +275,7 @@ export function fromCatalogSnapshot(snapshot: CatalogSnapshot): Catalog {
       // connection.
       return undefined;
     },
+    ...modelsMember(snapshot.models),
   };
 }
 

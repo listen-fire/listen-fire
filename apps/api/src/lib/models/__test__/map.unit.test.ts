@@ -1,6 +1,8 @@
 import {
   assertCallable,
   assertModelMapConfigured,
+  availableChatModels,
+  chatModelAvailability,
   modelKeyWarning,
   parseModelMap,
   providerCredentialsPresent,
@@ -201,6 +203,43 @@ describe('calling a name with nothing behind it', () => {
   it('passes a vendor that has its key', () => {
     const env = { NODE_ENV: 'production', OPENAI_API_KEY: 'k' };
     expect(() => assertCallable(resolveModel('gpt-image-1', env), env)).not.toThrow();
+  });
+});
+
+describe('which chat models a deployment can reach', () => {
+  // The same movement is valid on one deployment and not another: it is the
+  // deployment's map and keys that answer, not the language.
+  it('answers per deployment', () => {
+    const anthropicOnly = { NODE_ENV: 'production', ANTHROPIC_API_KEY: 'k' };
+    const vertexOnly = {
+      NODE_ENV: 'production',
+      ...GOOGLE,
+      MODEL_MAP: mapOf({ 'claude-sonnet-5': 'vertex/claude-sonnet-5' }),
+    };
+    expect(chatModelAvailability('claude-opus-5', anthropicOnly)).toEqual({ available: true, model: 'claude-opus-5' });
+    expect(chatModelAvailability('claude-sonnet-5', vertexOnly)).toEqual({ available: true, model: 'claude-sonnet-5' });
+    const opus = chatModelAvailability('claude-opus-5', vertexOnly);
+    expect(opus.available).toBe(false);
+    expect(opus.available ? '' : opus.reason).toMatch(/goes to anthropic, which has no credentials.*ANTHROPIC_API_KEY/);
+    expect(availableChatModels(vertexOnly)).toEqual(['claude-sonnet-5']);
+    expect(availableChatModels(anthropicOnly)).toContain('claude-opus-5');
+    expect(availableChatModels(anthropicOnly)).not.toContain('whisper-1');
+  });
+
+  it('refuses a name the registry does not know, listing the chat models', () => {
+    const answer = chatModelAvailability('claude-sonnet-9', { ANTHROPIC_API_KEY: 'k' });
+    expect(answer.available ? '' : answer.reason).toMatch(/"claude-sonnet-9" is not a model name.*claude-sonnet-5/);
+  });
+
+  it('refuses a model that is not a chat model', () => {
+    const answer = chatModelAvailability('whisper-1', { OPENAI_API_KEY: 'k' });
+    expect(answer.available ? '' : answer.reason).toMatch(/not a chat model \(it serves transcription\)/);
+  });
+
+  // Exactly what a call would do, so validation never accepts a name the call
+  // refuses, nor refuses one it accepts.
+  it('agrees with the call: development reaches every chat model', () => {
+    expect(chatModelAvailability('claude-opus-5', {}).available).toBe(true);
   });
 });
 

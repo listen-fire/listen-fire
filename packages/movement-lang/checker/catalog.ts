@@ -1605,6 +1605,22 @@ export interface Catalog {
     credentialName?: string;
     arg: string;
   }): readonly string[] | undefined;
+  /**
+   * The logical model names a movement may ask an LLM call for on THIS
+   * deployment — the ones its model map sends somewhere it can call. A
+   * deployment property, like the credentials: the same movement can name a
+   * model one deployment reaches and another does not, so a name outside this
+   * list is refused at validate and at the deploy check, not by language
+   * version. Undefined ⇒ the catalog does not know (a hand-built fixture), and
+   * a named model is left unchecked.
+   */
+  models?(): readonly string[];
+}
+
+/** A catalog's `models` member over a list, or none when the list is not
+ *  known — absent and empty are different facts. */
+export function modelsMember(models: readonly string[] | undefined): Pick<Catalog, 'models'> {
+  return models !== undefined ? { models: () => models } : {};
 }
 
 export function mockCatalog(spec: {
@@ -1613,6 +1629,7 @@ export function mockCatalog(spec: {
   plugins?: Record<string, PluginSpec>;
   instantiate?: Catalog['instantiate'];
   constructionArgOptions?: Catalog['constructionArgOptions'];
+  models?: readonly string[];
 }): Catalog {
   return {
     // Fixtures declare the surface they're testing, not the whole manifest, so
@@ -1634,5 +1651,6 @@ export function mockCatalog(spec: {
     ...(spec.constructionArgOptions !== undefined
       ? { constructionArgOptions: spec.constructionArgOptions }
       : {}),
+    ...modelsMember(spec.models),
   };
 }

@@ -37,6 +37,7 @@ import { requireEnv } from './lib/utils/environment';
 import { assertModelMapConfigured, modelKeyWarning, providerCredentialsPresent, resolveModel } from './lib/models/map';
 import { assertKnowledgeLlmModelConfigured, isKnowledgeLlmConfigured, knowledgeLlmModel } from './lib/knowledge/llm';
 import { assertJevConfigured } from './lib/jev/client';
+import { assertExtractionTiersConfigured } from './services/movement_engine/ai_tiers';
 import { healthCheck, workersHealthCheck } from './lib/middleware/health_check';
 import { rootHandler } from './lib/middleware/root_handler';
 import { HEALTH_CHECK_ENDPOINT, WORKERS_HEALTH_ENDPOINT } from './constants';
@@ -84,6 +85,8 @@ requireEnv('NODE_ENV');
 // map sends one can actually be called. Checked here rather than at the first
 // model call: a run is the wrong place to find out a map line is wrong.
 assertModelMapConfigured();
+// Each extraction tier's model must be one that map can reach here.
+assertExtractionTiersConfigured();
 assertKnowledgeLlmModelConfigured();
 
 // Same posture, one env var over: a deployment that turns on the Jev entity

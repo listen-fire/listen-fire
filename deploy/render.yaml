@@ -272,6 +272,10 @@ services:
       # everything on Gemini, and Claude through Google Cloud.
       - key: MODEL_MAP
         sync: false
+      # What each extraction tier (quick, careful, thorough) buys: model and
+      # effort. Unset, claude-sonnet-5 at low, high and xhigh.
+      - key: EXTRACTION_TIERS
+        sync: false
       # Transcription, embeddings and image generation go to OpenAI unless
       # MODEL_MAP sends their names elsewhere; unset, each fails naming the key.
       - key: OPENAI_API_KEY
