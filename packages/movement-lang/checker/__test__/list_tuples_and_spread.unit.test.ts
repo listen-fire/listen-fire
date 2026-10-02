@@ -21,6 +21,15 @@ const mailSchema: InstanceSchema = {
         Files: { kind: 'list', of: 'file' },
         Tags: { kind: 'list', of: 'text' },
       },
+      edges: { Attachments: { target: 'attachment', readable: true } },
+    },
+    attachment: {
+      properties: {
+        Type: 'text',
+        File: 'file',
+        Labels: { kind: 'list', of: 'text' },
+        Meta: 'json',
+      },
       edges: {},
     },
     log: { properties: { note: 'text' }, edges: {} },
@@ -193,6 +202,58 @@ describe('a spread splices into the tuple', () => {
       '  t = [...AT(d, k)]',
     ].join('\n');
     expect(codes(body)).toContain('MOV_ABSENT_REQUIRED');
+  });
+});
+
+// A walk read for a field — `e-[a:Attachments]->.\`File\`` — is one value
+// per landing, typed as the field's own type (the walk chooses the values, the
+// field says what each is). Read as one value it collapses, which is what a
+// write field still sees; a spread reads it as the values, exactly as a fold
+// does — inline, or through a name bound to it.
+describe('a spread of a walk read for a field splices one value per landing', () => {
+  const PDFS = "e-[a:Attachments WHERE a.Type = 'application/pdf']->.`File`";
+
+  it('bound to a name first — the plan\'s idiom', () => {
+    const body = `  pdfs = ${PDFS}\n  content = [e.\`Subject\`, ...pdfs]`;
+    expect(codes(body)).toEqual([]);
+    expect(fieldTypeOf(body, 'content')).toEqual({ kind: 'tuple', of: ['text'], rest: { at: 1, of: 'file' } });
+  });
+
+  it('written inline', () => {
+    const body = `  content = [e.\`Subject\`, ...${PDFS}]`;
+    expect(codes(body)).toEqual([]);
+    expect(fieldTypeOf(body, 'content')).toEqual({ kind: 'tuple', of: ['text'], rest: { at: 1, of: 'file' } });
+  });
+
+  it('through a second name for the first', () => {
+    const body = `  pdfs = ${PDFS}\n  docs = pdfs\n  content = [e.\`Subject\`, ...docs]`;
+    expect(codes(body)).toEqual([]);
+  });
+
+  it('the name keeps the field\'s own type everywhere else — a write reads it as one value, as before', () => {
+    const body = "  first = e-[a:Attachments]->.`Type`\n  write inbox-[:log]-> { note: first }";
+    expect(codes(body)).toEqual([]);
+    expect(fieldTypeOf(body, 'first')).toEqual('text');
+  });
+
+  it('under every language version', () => {
+    for (const version of [1, 2, 3] as const) {
+      expect(codes(`  pdfs = ${PDFS}\n  t = [e.\`Subject\`, ...pdfs]`, version)).toEqual([]);
+    }
+  });
+
+  it('a field that itself holds a list keeps the reading it had — its members', () => {
+    const body = '  t = [e.`Subject`, ...e-[a:Attachments]->.`Labels`]';
+    expect(codes(body)).toEqual([]);
+    expect(fieldTypeOf(body, 't')).toEqual({ kind: 'tuple', of: ['text'], rest: { at: 1, of: 'text' } });
+  });
+
+  it('a json field is still refused — one landing\'s list would read as several landings', () => {
+    expect(codes('  t = [...e-[a:Attachments]->.`Meta`]')).toContain('MOV_LIST_SPREAD_NOT_A_LIST');
+  });
+
+  it('a value bound from one landing\'s field is still one value', () => {
+    expect(codes('  s = e.`Subject`\n  t = [...s]')).toContain('MOV_LIST_SPREAD_NOT_A_LIST');
   });
 });
 

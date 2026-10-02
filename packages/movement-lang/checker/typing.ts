@@ -1249,11 +1249,55 @@ function isBareWalk(expr: Expression): boolean {
   );
 }
 
+/** Does each value of this type stand alone — not a collection of several?
+ *  `json` may hold a list at run time, so it is not known to. */
+function holdsOneValue(type: FieldType): boolean {
+  const variant = variantOf(stripAbsent(type));
+  switch (variant.kind) {
+    case 'list':
+    case 'tuple':
+    case 'json':
+      return false;
+    case 'union':
+      return variant.of.every(holdsOneValue);
+    case 'text':
+    case 'number':
+    case 'boolean':
+    case 'date':
+    case 'datetime':
+    case 'file':
+    case 'absent':
+    case 'dict':
+    case 'enum':
+    case 'record':
+    case 'maybeAbsent':
+      return true;
+    default:
+      return neverAsAny(variant);
+  }
+}
+
 /** Is this the end of a path the bridge marked "the positions themselves"? The
  *  one test that tells a walk read for its LANDINGS from one read for a field,
  *  and it is the shape the bridge already produces — nothing re-parsed. */
 export function isPositionTerminal(expr: Expression): boolean {
   return expr.type === 'property' && expr.propertyTypeId === POSITION_SENTINEL;
+}
+
+/**
+ * A walk read for a FIELD — `m-[a:Attachments]->.\`File\`` — which is
+ * many-valued: one value per landing. Its type is the field's own (the walk
+ * chooses the values, the field says what each one is, and plurality lives in
+ * the traversal, never in a second type), and read as ONE value it collapses —
+ * nothing landed is absent, one landing is its value, several are their
+ * values. A reader that takes a COLLECTION (a fold, a spread) reads it as the
+ * values themselves. The engine asks the same question of the same shape.
+ */
+export function isWalkProjection(expr: Expression): boolean {
+  if (expr.type !== 'traverse' || expr.steps.length === 0) return false;
+  const terminal = expr.expression;
+  return (terminal.type === 'property' && terminal.propertyTypeId !== POSITION_SENTINEL)
+    || terminal.type === 'edge_property';
 }
 
 /** A value read BY NAME — a dict. It has parts, so a key can name one, and no
@@ -3113,6 +3157,11 @@ export class ExpressionTyping {
        *  (`TEXT.PAIRS`'s argument): the engine reads a record's fields off
        *  ONE landing, never a fan-out of them. */
       isPluralName?: (name: string) => boolean;
+      /** The value plane's half of the same fact: is this name bound to a
+       *  walk read for a field (`pdfs = m-[a:Attachments]->.\`File\``) — one
+       *  value per landing, typed as the one value? A spread reads it as the
+       *  values. */
+      isManyValuedName?: (name: string) => boolean;
       /** Is this graph identity token (`PositionTypeRef.instance.token`, a
        *  `position` / `union` ref) a declared shape (`node X {…}`) rather than
        *  a real adapter instance? The schema itself does not say — a graph is
@@ -3716,7 +3765,7 @@ export class ExpressionTyping {
     type Part = { slot: FieldType | null } | { run: FieldType | null };
     const parts: Part[] = elements.flatMap((element): Part[] => {
       if (element.type !== 'spread') return [{ slot: this.inferExactAt(element, position) ?? null }];
-      return this.spreadParts(this.inferExactAt(element.expression, position));
+      return this.spreadParts(element.expression, position);
     });
     const firstRun = parts.findIndex(part => 'run' in part);
     const slotsOf = (run: Part[]): Array<FieldType | null> =>
@@ -3744,11 +3793,22 @@ export class ExpressionTyping {
    * A spread that may be absent is refused too, as TypeScript refuses spreading
    * `T[] | undefined`: there would be nothing to splice, and the run would
    * fail. A spread nobody could type is a run nobody can type.
+   *
+   * A walk read for a field (`...m-[a:Attachments]->.\`File\``, or a name
+   * bound to one) is a COLLECTION, as a fold reads it: one value per landing,
+   * so it splices a run of the field's type — empty when nothing landed, and
+   * never absent, so there is nothing to guard. That holds where each landing
+   * gives ONE value; a field that itself holds several (a list, json) keeps
+   * the reading it always had, since one landing's list and several landings'
+   * values are indistinguishable once read.
    */
   private spreadParts(
-    spread: FieldType | undefined,
+    expr: Expression,
+    position: PositionTypeRef | undefined,
   ): Array<{ slot: FieldType | null } | { run: FieldType | null }> {
+    const spread = this.inferExactAt(expr, position);
     if (spread === undefined) return [{ run: null }];
+    if (this.isManyValued(expr, position) && holdsOneValue(spread)) return [{ run: spread }];
     if (isMaybeAbsent(spread)) {
       this.report(
         TypedDiagnosticCodes.ABSENT_REQUIRED,
@@ -3799,6 +3859,16 @@ export class ExpressionTyping {
       default:
         return neverAsAny(variant);
     }
+  }
+
+  /** A walk read for a field, or a bare name bound to one — many values the
+   *  type, being one value's, does not count. A bare name under a position is that position's field instead, as
+   *  `inferExactAt` reads it. */
+  private isManyValued(expr: Expression, position: PositionTypeRef | undefined): boolean {
+    if (isWalkProjection(expr)) return true;
+    if (position !== undefined) return false;
+    const name = bareName(expr);
+    return name !== undefined && this.options.isManyValuedName?.(name) === true;
   }
 
   private reportUnknownDictKey(key: string, keys: string[]): void {

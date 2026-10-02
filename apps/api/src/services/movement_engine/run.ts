@@ -84,6 +84,7 @@ import {
   credentialArgOf,
   aggregatedBarePath,
   bareName,
+  isWalkProjection,
   pathRootName,
   probePathHead,
   spellPathHead,
@@ -3024,7 +3025,12 @@ class Interpreter {
               return;
             }
             const { value, provenance } = await this.evaluateSlot(statement.value.expr, { env });
-            env.declare(statement.name, { kind: 'value', value, provenance });
+            env.declare(statement.name, {
+              kind: 'value',
+              value,
+              provenance,
+              ...(this.bindsManyValues(statement.value.expr, env) ? { many: true } : {}),
+            });
             return;
           }
           case 'extract':
@@ -9631,7 +9637,24 @@ class Interpreter {
     const selected = await this.selectedPositionBinding(slot, env);
     if (selected !== undefined) return selected;
     const evaluated = await this.evaluateSlot(slot, { env });
-    return { kind: 'value', value: evaluated.value, provenance: evaluated.provenance };
+    return {
+      kind: 'value',
+      value: evaluated.value,
+      provenance: evaluated.provenance,
+      ...(this.bindsManyValues(slot, env) ? { many: true } : {}),
+    };
+  }
+
+  /** A walk read for a field, or a second name for one: the value bound is
+   *  the walk's collapse, and the binding keeps the fact a spread reads
+   *  (`isManyValued` in expression.ts; the checker's `ScopeSymbol.plural`). */
+  private bindsManyValues(slot: ExprSlot, env: Environment): boolean {
+    const expr = parseMovementExpression(slot.raw);
+    if (isWalkProjection(expr)) return true;
+    const name = bareName(expr);
+    if (name === undefined) return false;
+    const binding = env.resolve(name);
+    return binding?.kind === 'value' && binding.many === true;
   }
 
   private async evaluateSlot(

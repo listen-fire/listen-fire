@@ -76,6 +76,11 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       expect(await roundTrip(binding)).toEqual(binding);
     });
 
+    it('a walk read for a field keeps that it is many values — a spread after a park reads them', async () => {
+      const binding: Binding = { kind: 'value', value: 'only.pdf', many: true };
+      expect(await roundTrip(binding)).toEqual(binding);
+    });
+
     it('handle (a WriteRecord — already-happened write) round-trips', async () => {
       const handle: WriteRecord = {
         adapterType: 'attio',
