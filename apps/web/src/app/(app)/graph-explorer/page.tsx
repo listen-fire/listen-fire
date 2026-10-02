@@ -80,6 +80,12 @@ function Chip({ kind, label }: { kind: string; label: string }) {
   );
 }
 
+// Parenthesised when a union, as TypeScript writes `(string | number)[]`.
+function typeMember(t: FieldType): string {
+  const name = typeName(t);
+  return variantOf(t).kind === "union" ? `(${name})` : name;
+}
+
 function typeName(t: FieldType): string {
   const v = variantOf(t);
   switch (v.kind) {
@@ -94,7 +100,7 @@ function typeName(t: FieldType): string {
     case "absent":
       return v.kind;
     case "list":
-      return `${typeName(v.of)}[]`;
+      return `${typeMember(v.of)}[]`;
     case "enum":
       return v.open ? "enum (open)" : "enum";
     case "tuple":
@@ -102,7 +108,9 @@ function typeName(t: FieldType): string {
     case "dict":
       return `{${typeName(v.of)}}`;
     case "maybeAbsent":
-      return `${typeName(v.of)}?`;
+      return `${typeMember(v.of)}?`;
+    case "union":
+      return v.of.map(typeName).join(" | ");
     case "record":
       return "record";
     default:
@@ -121,6 +129,9 @@ function enumOptions(t: FieldType): string[] {
     case "dict":
     case "maybeAbsent":
       return enumOptions(v.of);
+    // A union's options are its members' together, each listed once.
+    case "union":
+      return [...new Set(v.of.flatMap(enumOptions))];
     case "text":
     case "number":
     case "boolean":

@@ -21,6 +21,8 @@ export function typeWord(type: FieldType): string {
       return type.of
         .map((slot) => (slot ? typeWord(slot) : "something"))
         .join(", then ");
+    case "union":
+      return type.of.map(typeWord).join(" or ");
     case "dict":
       return `${typeWord(type.of)}, looked up by name`;
     case "record":
