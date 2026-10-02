@@ -34,7 +34,7 @@ import type {
   WriteExpression,
   WriteTarget,
 } from '../parser/ast';
-import { pathRootName, probePathHead } from '../parser/ast';
+import { pathRootName, probePathHead, typeNameOf } from '../parser/ast';
 import { parseProgram } from '../parser/parse';
 import { unwrapCredentialArg } from '../parser/scan';
 import { parseMovementExpression } from '../expression/bridge';
@@ -615,13 +615,14 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           // edges), so ground each typed param for the body's scope.
           const paramScope = new Map(aliasScope);
           for (const param of statement.params) {
-            if (param.type?.position === undefined) continue;
-            const instanceBinding = bindings.get(param.type.graph);
+            const type = typeNameOf(param.type);
+            if (type?.position === undefined) continue;
+            const instanceBinding = bindings.get(type.graph);
             if (!instanceBinding) continue;
             paramScope.set(param.name, {
               binding: instanceBinding,
               prefix: [],
-              startPosition: param.type.position,
+              startPosition: type.position,
             });
           }
           walk(statement.body, paramScope);

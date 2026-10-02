@@ -23,8 +23,10 @@ import {
   linkImports,
   parseMovementCondition,
   parseMovementExpression,
+  parseFieldTypeName,
   parseProgram,
   pathRootName,
+  typeNameOf,
 } from 'movement-lang';
 import type {
   CallArg,
@@ -150,6 +152,9 @@ class InterpretabilityScan {
   /** Names a file-scope `x = f(…)` would CALL rather than construct: the
    *  file's own movements and its imported plugins. */
   private readonly callableNames = new Set<string>();
+  /** The refinements this file declares (`type Thesis = <"A" | "B">`) — a
+   *  parameter typed by one takes a VALUE, as a scalar-typed one does. */
+  private readonly declaredTypes = new Set<string>();
   /** > 0 while scanning the field slots of an adapter-target write —
    *  the only place a non-built-in function can resolve at runtime. */
   private writeFieldDepth = 0;
@@ -163,6 +168,7 @@ class InterpretabilityScan {
         this.graphRoots.add(statement.name);
         this.shapeNames.add(statement.name);
       }
+      if (statement.kind === 'type') this.declaredTypes.add(statement.name);
       if (statement.kind === 'movement') this.callableNames.add(statement.name);
       if (
         statement.kind === 'import'
@@ -242,14 +248,19 @@ class InterpretabilityScan {
       case 'movement': {
         // Arity is the CHECKER's territory now: listen/run entries take
         // exactly one parameter (dispatch supplies one event); library
-        // movements take any arity (call-fit covers them). Every param
-        // must still be typed against a file-scope graph root (a
-        // construction or a shape).
+        // movements take any arity (call-fit covers them). Every POSITION
+        // param must still be typed against a file-scope graph root (a
+        // construction or a shape); a VALUE param (a scalar, a refinement, a
+        // list or record of them) is bound to what its argument evaluates to.
         for (const param of statement.params) {
           // An unannotated parameter is refused at save; nothing here to place.
-          if (param.type === undefined) continue;
-          if (!this.graphRoots.has(param.type.graph)) {
-            this.flag(`a movement seeded from '${param.type.graph}' (not a constructed instance or shape)`);
+          const type = typeNameOf(param.type);
+          if (type === undefined) continue;
+          const takesValue =
+            type.hopsRaw === undefined
+            && (parseFieldTypeName(type.graph) !== undefined || this.declaredTypes.has(type.graph));
+          if (!takesValue && !this.graphRoots.has(type.graph)) {
+            this.flag(`a movement seeded from '${type.graph}' (not a constructed instance or shape)`);
           }
         }
         this.scanBody(statement.body);

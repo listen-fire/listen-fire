@@ -6,7 +6,7 @@
 // `=>` is what decides, not a guess at the first token.
 
 import { MovementParseError, parseProgram } from '../parse';
-import { MovementDeclaration, Statement } from '../ast';
+import { MovementDeclaration, Statement, typeNameOf } from '../ast';
 
 function bodyOf(source: string): Statement[] {
   const first = parseProgram(source).statements[0];
@@ -66,7 +66,7 @@ describe('closures', () => {
     if (statement.kind !== 'assign' || statement.value.kind !== 'closure') {
       throw new Error('expected a closure binding');
     }
-    expect(statement.value.closure.params.map((p) => [p.name, p.type?.graph])).toEqual([
+    expect(statement.value.closure.params.map((p) => [p.name, typeNameOf(p.type)?.graph])).toEqual([
       ['n', 'number'],
       ['t', 'text'],
     ]);

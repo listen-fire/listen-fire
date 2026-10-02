@@ -1740,7 +1740,7 @@ export function isListType(type: FieldType | undefined): type is Extract<FieldTy
 }
 
 /** A dict — a value looked up by key rather than indexed. */
-function isDictType(type: FieldType): type is Extract<FieldType, { kind: 'dict' }> {
+export function isDictType(type: FieldType): type is Extract<FieldType, { kind: 'dict' }> {
   const variant = variantOf(type);
   switch (variant.kind) {
     case 'dict':

@@ -12,7 +12,7 @@ import {
   WriteExpression,
   WriteTarget,
 } from '../ast';
-import { pathRootName } from '../ast';
+import { pathRootName, typeNameOf } from '../ast';
 
 function as<K extends Statement['kind']>(
   s: Statement | undefined,
@@ -97,8 +97,8 @@ describe('§A instances and movements', () => {
     expect(movement.name).toBe('dealflow_intake');
     expect(movement.params).toHaveLength(1);
     expect(movement.params[0].name).toBe('msg');
-    expect(movement.params[0].type?.graph).toBe('inbox');
-    expect(movement.params[0].type?.position).toBe('message');
+    expect(typeNameOf(movement.params[0].type)?.graph).toBe('inbox');
+    expect(typeNameOf(movement.params[0].type)?.position).toBe('message');
 
     const ifStmt = as(movement.body[0], 'if');
     expect(ifStmt.arms).toHaveLength(1);
@@ -667,8 +667,8 @@ describe('§E ordering and parallel', () => {
   it('parses nightly_mirror as two sequential block statements', () => {
     const program = parseProgram(E1);
     const movement = as(program.statements[0], 'movement');
-    expect(movement.params[0].type?.graph).toBe('crm');
-    expect(movement.params[0].type?.position).toBeUndefined(); // bare instance = meta position
+    expect(typeNameOf(movement.params[0].type)?.graph).toBe('crm');
+    expect(typeNameOf(movement.params[0].type)?.position).toBeUndefined(); // bare instance = meta position
     expect(movement.body).toHaveLength(2);
 
     const first = as(movement.body[0], 'block').block;
@@ -910,7 +910,7 @@ describe('§G node declarations and composition', () => {
     const movement = as(program.statements[3], 'movement');
     expect(movement.name).toBe('files_to_dropbox');
     expect(movement.params[0].type).toMatchObject({ graph: 'Files' });
-    expect(movement.params[0].type?.hopsRaw).toBeUndefined();
+    expect(typeNameOf(movement.params[0].type)?.hopsRaw).toBeUndefined();
     expect(movement.body).toHaveLength(2);
     const construct = rv(as(movement.body[0], 'assign').value, 'construct').construct;
     expect(construct.callee).toBe('dropbox');
@@ -1700,9 +1700,9 @@ describe('type markers (every type slot wears angle brackets)', () => {
   it('movement parameters: the meta-position form `<crm>` parses', () => {
     const program = parseProgram('movement m(root: <crm>) {\n  …\n}');
     const movement = as(program.statements[0], 'movement');
-    expect(movement.params[0].type?.graph).toBe('crm');
-    expect(movement.params[0].type?.position).toBeUndefined();
-    expect(movement.params[0].type?.hopsRaw).toBeUndefined();
+    expect(typeNameOf(movement.params[0].type)?.graph).toBe('crm');
+    expect(typeNameOf(movement.params[0].type)?.position).toBeUndefined();
+    expect(typeNameOf(movement.params[0].type)?.hopsRaw).toBeUndefined();
   });
 
   it('movement parameters: the dotted form is a parse error with the exact address replacement', () => {
@@ -1798,14 +1798,25 @@ describe('named call arguments (parens = callable arguments, always named)', () 
     expect(call.args[0].kind).toBe('write');
   });
 
-  it('positional arguments are a parse error with the naming fix-it', () => {
+  it('positional arguments parse, unnamed, in order', () => {
+    const program = parseProgram(
+      'movement m(msg: <inbox-[:message]->>) {\n  send(msg, write Files-[:file]-> { name: "x" })\n}',
+    );
+    const call = as(as(program.statements[0], 'movement').body[0], 'call');
+    expect(call.args.map(arg => [arg.kind, arg.name])).toEqual([
+      ['expr', undefined],
+      ['write', undefined],
+    ]);
+  });
+
+  it('a call mixing positional and named arguments is a parse error', () => {
     expectParseError(
-      'movement m(msg: <inbox-[:message]->>) {\n  send(msg)\n}',
-      /Arguments to 'send' are named — write each as '<parameter>: <value>'/,
+      'movement m(msg: <inbox-[:message]->>) {\n  send(msg, to: "x")\n}',
+      /The arguments to 'send' are positional, and 'to:' names this one/,
     );
     expectParseError(
-      'movement m(msg: <inbox-[:message]->>) {\n  send(write Files-[:file]-> { name: "x" })\n}',
-      /Arguments to 'send' are named/,
+      'movement m(msg: <inbox-[:message]->>) {\n  send(to: "x", msg)\n}',
+      /The arguments to 'send' are named, and this one isn't/,
     );
   });
 

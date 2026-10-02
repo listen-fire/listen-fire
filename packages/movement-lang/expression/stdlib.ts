@@ -56,6 +56,7 @@
 // to the engine.
 
 import { cronTimezoneError } from '@listen-fire/shared/cron';
+import { FORMULA_SPECIAL_FUNCTIONS, KEYWORDS } from '@listen-fire/shared/expression/formula';
 import {
   instantAtZonedWallTime,
   readWallClockTime,
@@ -173,6 +174,48 @@ export const READ_SIGNATURE = 'READ(file)';
 export const CHUNKS_FUNCTION_ID = 'chunks';
 
 export const CHUNKS_SIGNATURE = 'CHUNKS(text, { size | entities, overlap })';
+
+// ── The built-in function vocabulary ────────────────────────────────────────
+
+/**
+ * The flat built-ins the engine evaluates directly — the frozen engine's
+ * pure set, mirrored. The engine's evaluator runs exactly these, so this is
+ * the one list both it and the parser read.
+ */
+export const INTERPRETED_FUNCTION_IDS: readonly string[] = [
+  'isnull', 'coalesce', 'trim', 'lower', 'upper', 'length',
+  'abs', 'round', 'floor', 'ceil', 'tostring', 'tonumber', 'multi', 'split',
+  // Bare coercers — DATE/DATETIME normalise any readable date/timestamp,
+  // NUMBER parses a number; null-safe.
+  'date', 'datetime', 'number',
+];
+
+/** `EXISTS(…)` — lifted by the bridge before the formula grammar sees it. */
+const EXISTS_FUNCTION_ID = 'exists';
+
+const BUILTIN_FUNCTION_IDS: ReadonlySet<string> = new Set([
+  ...INTERPRETED_FUNCTION_IDS,
+  ...[...FORMULA_SPECIAL_FUNCTIONS].map((name) => name.toLowerCase()),
+  // The grammar's own words (`NOT(x)`, `IF(…)`, a prefix `CONTAINS(a, b)` the
+  // grammar refuses with its fix-it) are the expression's to read, never a call.
+  ...[...KEYWORDS].map((name) => name.toLowerCase()),
+  FILE_FUNCTION_ID,
+  READ_FUNCTION_ID,
+  CHUNKS_FUNCTION_ID,
+  EXISTS_FUNCTION_ID,
+]);
+
+/**
+ * Is `name(…)` a BUILT-IN function call? Case-insensitive, as the expression
+ * grammar is. The built-ins are a closed vocabulary, which is what lets
+ * `doc = email_to_doc(msg)` read as a call of a movement while
+ * `name = UPPER(msg)` reads as an expression: the name is COMPARED against
+ * the list, never parsed for a hint. (A namespaced stdlib member is written
+ * `DATE.ADD_DAYS(…)` — a dotted name, never this shape.)
+ */
+export function isBuiltinFunctionName(name: string): boolean {
+  return BUILTIN_FUNCTION_IDS.has(name.toLowerCase());
+}
 
 /**
  * One key a built-in's options map may carry.

@@ -19,6 +19,7 @@ import {
   type PropertyInfo,
 } from '@listen-fire/shared/expression/formula';
 import type { Loc, Span } from '../parser/ast';
+import { spellParamType } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import { scanName } from '../parser/scan';
@@ -1740,9 +1741,9 @@ function hoverContents(symbol: ScopeSymbol, snapshot: CatalogSnapshot): string[]
       // hint the author can paste, not a generic `param: value`.
       const params = symbol.movement?.decl.params ?? [];
       const sig = params.length
-        ? params.map(p => (p.type === undefined ? p.name : `${p.name}: <${p.type.graph}${p.type.hopsRaw ?? ''}>`)).join(', ')
+        ? params.map(p => (p.type === undefined ? p.name : `${p.name}: <${spellParamType(p.type)}>`)).join(', ')
         : 'param: value';
-      return [`${symbol.name} — movement (call it with named arguments: ${symbol.name}(${sig}))`];
+      return [`${symbol.name} — movement (call it with its arguments in order, or named: ${symbol.name}(${sig}))`];
     }
     case 'type': {
       const type = symbol.fieldType;

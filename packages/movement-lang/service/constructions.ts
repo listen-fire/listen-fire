@@ -19,6 +19,7 @@
 // (which the consumer's catalog membership check filters out anyway).
 
 import type { ConstructionCall, Program, Statement } from '../parser/ast';
+import { typeNameOf } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
 import { unwrapCredentialArg } from '../parser/scan';
 import { eventAddressOfHops } from '../checker/event_address';
@@ -399,10 +400,11 @@ export function referencedEventAddresses(source: string): EventAddressRef[] {
           break;
         case 'movement': {
           for (const param of statement.params) {
-            if (param.type?.hopsRaw === undefined) continue;
-            const construction = bindings.get(param.type.graph);
+            const type = typeNameOf(param.type);
+            if (type?.hopsRaw === undefined) continue;
+            const construction = bindings.get(type.graph);
             if (!construction) break; // not an instance — the checker reports it
-            const address = addressOfHops(param.type.hopsRaw);
+            const address = addressOfHops(type.hopsRaw);
             if (address === undefined) continue; // not an address — stays silent
             addresses.push({ construction, ...address, movement: statement.name });
           }
