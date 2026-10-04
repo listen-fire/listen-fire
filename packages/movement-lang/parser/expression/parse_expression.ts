@@ -28,6 +28,7 @@
 
 import { translateStringEscape, unrecognisedCharacterMessage } from '@listen-fire/shared/expression/formula';
 import { BridgeError } from '../../expression/error';
+import { callStyleIfMessage } from '../scan';
 import type {
   At,
   BinaryOp,
@@ -36,6 +37,7 @@ import type {
   Hop,
   LiteralEntry,
   MapEntry,
+  MapMember,
   MExpr,
   Name,
   NodeDeclaration,
@@ -747,6 +749,8 @@ class ExpressionParser {
 
   private parseIf(): MExpr {
     const start = this.expectKeyword('IF', '').start;
+    const callStyle = callStyleIfMessage(this.src.slice(0, this.limit), this.lookPast(this.pos));
+    if (callStyle !== undefined) this.fail(callStyle, start);
     return this.withNewlines(false, () => {
       const condition = this.parseOr();
       this.expectKeyword('THEN', 'after the IF condition');
@@ -793,9 +797,17 @@ class ExpressionParser {
   private parseMap(): Extract<MExpr, { kind: 'map' }> {
     const open = this.advance();
     return this.withNewlines(false, () => {
-      const entries: MapEntry[] = [];
+      const entries: MapMember[] = [];
       while (!this.isPunct(this.peek(), '}')) {
         const tok = this.peek();
+        if (this.isPunct(tok, '...')) {
+          this.advance();
+          const expr = this.parseWhere();
+          entries.push({ kind: 'spread', expr, at: this.span(tok.start) });
+          if (!this.isPunct(this.peek(), ',')) break;
+          this.advance();
+          continue;
+        }
         let key: MapEntry['key'];
         if (tok.t === 'name') {
           key = this.readName('as a map key');
@@ -805,7 +817,7 @@ class ExpressionParser {
         } else if (tok.t === 'keyword') {
           this.fail(`'${tok.text}' is a reserved word — quote it to use it as a map key`, tok.start);
         } else {
-          this.fail(`A map key is a name or a quoted string, got ${describe(tok, this.src)}`, tok.start);
+          this.fail(`A map key is a name or a quoted string (or '...m' to copy a map's keys), got ${describe(tok, this.src)}`, tok.start);
         }
         this.expectPunct(':', `after the map key '${key.text}'`);
         entries.push({ key, value: this.parseWhere() });

@@ -94,3 +94,44 @@ export function unwrapCredentialArg(raw: string): string | null {
   if (ident && ident.end === trimmed.length) return ident.name;
   return null;
 }
+
+/**
+ * `IF(cond, a, b)` — IF called like a spreadsheet function. The language writes
+ * it `IF cond THEN a ELSE b END`; a parenthesised condition (`IF (a OR b) THEN
+ * …`) is the ordinary form, and only a top-level comma inside the parentheses
+ * says the author meant a call. `open` is the offset of the `(` after `IF`.
+ * Returns the message refusing it, with the rewrite where there are three
+ * arguments; undefined when this is not a call.
+ */
+export function callStyleIfMessage(src: string, open: number): string | undefined {
+  if (src[open] !== '(') return undefined;
+  const args: string[] = [];
+  let depth = 0;
+  let argStart = open + 1;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === '`') {
+      const close = src.indexOf(c, i + 1);
+      if (close === -1) return undefined;
+      i = close;
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) {
+        args.push(src.slice(argStart, i).trim());
+        break;
+      }
+    } else if (c === ',' && depth === 1) {
+      args.push(src.slice(argStart, i).trim());
+      argStart = i + 1;
+    }
+  }
+  if (args.length < 2) return undefined;
+  const rewrite =
+    args.length === 3
+      ? `IF ${args[0]} THEN ${args[1]} ELSE ${args[2]} END`
+      : 'IF <condition> THEN <value> ELSE <otherwise> END';
+  return `IF is written 'IF … THEN … ELSE … END', not called like a function — write '${rewrite}'`;
+}

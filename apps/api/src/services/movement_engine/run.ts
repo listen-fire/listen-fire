@@ -1059,7 +1059,11 @@ function asMapList(value: unknown): Array<Record<string, unknown>> | undefined {
  * and be the primitive it says, recursively through the children the map
  * brought.
  */
-function graphValueMisfit(node: Binding, shape: ShapeNode, path = ''): string | undefined {
+function graphValueMisfit(
+  node: Binding,
+  shape: ShapeNode,
+  { path = '', presenceOnly = false }: { path?: string; presenceOnly?: boolean } = {},
+): string | undefined {
   if (node.kind !== 'nodePosition') return undefined;
   for (const field of shape.fields) {
     const value = node.fields[field.name];
@@ -1067,6 +1071,7 @@ function graphValueMisfit(node: Binding, shape: ShapeNode, path = ''): string | 
       if (field.nullable === true) continue;
       return `it has no ${path}\`${field.name}\``;
     }
+    if (presenceOnly) continue;
     const want = PRIMITIVE_RUNTIME_TYPES[field.type];
     if (want !== undefined && typeof value !== want) {
       return `its ${path}\`${field.name}\` is a ${typeof value}, not ${field.type}`;
@@ -1075,11 +1080,38 @@ function graphValueMisfit(node: Binding, shape: ShapeNode, path = ''): string | 
   for (const child of shape.children) {
     const edge = node.edges[child.name];
     for (const landing of edge?.kind === 'landed' ? edge.landings : []) {
-      const misfit = graphValueMisfit(landing, child, `${path}${child.name} → `);
+      const misfit = graphValueMisfit(landing, child, { path: `${path}${child.name} → `, presenceOnly });
       if (misfit !== undefined) return misfit;
     }
   }
   return undefined;
+}
+
+/**
+ * The one record `...r` copies — held as a value or bound on the arrow plane —
+ * or undefined when it is absent. Anything else is a program the checker
+ * should have refused.
+ */
+function spreadRecord(spread: MapSpread, bound: Binding | undefined): Binding | undefined {
+  const held = bound?.kind === 'value' ? bound.value : bound;
+  if (held === undefined || held === null) return undefined;
+  const record = bindingOf(held);
+  if (record?.kind === 'positions') {
+    if (record.landings.length > 1) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'...${spread.source}' copies one record's fields, and '${spread.source}' holds ${record.landings.length}`,
+      );
+    }
+    return record.landings[0];
+  }
+  if (record === undefined) {
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `'...${spread.source}' copies a record's fields, and '${spread.source}' holds no record — the program was not checked`,
+    );
+  }
+  return record;
 }
 
 /** Does any body of this graph literal take keys from a map? */
@@ -8129,12 +8161,18 @@ class Interpreter {
     const shapeName = literal.graph?.shape?.name;
     const shape = shapeName !== undefined ? this.graphShape(shapeName, env) : undefined;
     const built = await this.buildGraphBody(literal, env, shape);
-    if (shape !== undefined && spreadsAnywhere(literal)) {
-      const misfit = graphValueMisfit(built, shape);
+    if (shape === undefined) return built;
+    // A spread's keys may be ones nobody could type, so the whole value is
+    // checked. From version 3 every graph is checked for what its shape
+    // requires, so a value that turned out absent never leaves a required
+    // field silently empty (the checker refuses one that may be absent).
+    const spreads = spreadsAnywhere(literal);
+    if (spreads || since(this.languageVersion, 3)) {
+      const misfit = graphValueMisfit(built, shape, { presenceOnly: !spreads });
       if (misfit !== undefined) {
         throw new MovementEngineError(
           'MOVENG_RUNTIME',
-          `the map spread into 'graph<${shapeName}>' doesn't fit it: ${misfit}`,
+          `the value built for 'graph<${shapeName}>' doesn't fit it: ${misfit}`,
         );
       }
     }
@@ -8167,7 +8205,12 @@ class Interpreter {
     // Spreads first, in order, so a later one overwrites an earlier one and
     // every written entry overwrites them all — wherever it stands.
     for (const spread of literal.spreads ?? []) {
-      this.spreadIntoGraph(node, this.spreadMap(spread, env), shape);
+      if (spread.copy !== undefined) {
+        await this.spreadRecordIntoGraph(node, { spread, plan: spread.copy, env, shape });
+        continue;
+      }
+      const map = this.spreadMap(spread, env);
+      if (map !== undefined) this.spreadIntoGraph(node, map, shape);
     }
     for (const entry of literal.entries) {
       const child = shape?.children.find((c) => c.name === entry.name);
@@ -8234,10 +8277,12 @@ class Interpreter {
     return node;
   }
 
-  /** The map a `...v` spreads, as it is at run time. */
-  private spreadMap(spread: MapSpread, env: Environment): Record<string, unknown> {
+  /** The map a `...v` spreads, as it is at run time — undefined when it is
+   *  absent, which copies nothing, as TypeScript's `...undefined` does. */
+  private spreadMap(spread: MapSpread, env: Environment): Record<string, unknown> | undefined {
     const bound = env.resolve(spread.source);
     const value = bound?.kind === 'value' ? bound.value : undefined;
+    if (bound?.kind === 'value' && (value === undefined || value === null)) return undefined;
     if (!isDictValue(value)) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
@@ -8245,6 +8290,37 @@ class Interpreter {
       );
     }
     return value;
+  }
+
+  /**
+   * `...r` where `r` is one record: a snapshot of it by the checker's plan, its
+   * fields and planned edges laid over what the node holds so far (an absent
+   * field overwrites, as a spread's null key does). A record that is absent
+   * copies nothing.
+   */
+  private async spreadRecordIntoGraph(
+    node: Extract<Binding, { kind: 'nodePosition' }>,
+    { spread, plan, env, shape }: { spread: MapSpread; plan: CopyPlan; env: Environment; shape: ShapeNode | undefined },
+  ): Promise<void> {
+    const record = spreadRecord(spread, env.resolve(spread.source));
+    if (record === undefined) return;
+    const copy = await this.snapshotRecord(record, plan, env);
+    for (const field of plan.fields) {
+      delete node.edges[field];
+      noteGraphField(node, field);
+      if (Object.hasOwn(copy.fields, field)) {
+        node.fields[field] = copy.fields[field];
+        node.fieldProvenance[field] = copy.fieldProvenance[field] ?? NO_PROVENANCE;
+      } else {
+        delete node.fields[field];
+        delete node.fieldProvenance[field];
+      }
+    }
+    for (const [name, edge] of Object.entries(copy.edges)) {
+      delete node.fields[name];
+      node.fieldOrder = node.fieldOrder.filter((f) => f !== name);
+      setGraphEdge(node, name, edge.kind === 'landed' ? edge.landings : [], shape?.children.find((c) => c.name === name));
+    }
   }
 
   /** A map's keys into a graph node: a nested map (or a list of them) is a

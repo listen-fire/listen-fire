@@ -3,7 +3,7 @@
 // (parser/expression/lower.ts), so every consumer — checker, interpretability
 // scan, engine — shares the refusal.
 
-import type { Expression } from '@listen-fire/shared/expression/types';
+import { isObjectSpread, type Expression } from '@listen-fire/shared/expression/types';
 import { BridgeError } from './error';
 import {
   FILE_FUNCTION_ID,
@@ -90,6 +90,11 @@ function validateOptionsCall(expr: Extract<Expression, { type: 'function' }>): v
   const literals = new Map<string, string | number | boolean | null>();
   const seen = new Set<string>();
   for (const entry of map.entries) {
+    if (isObjectSpread(entry)) {
+      throw new BridgeError(
+        `${spec.signature} takes its options written out one by one — a spread ('...') is not accepted here. The options are: ${inventory}`,
+      );
+    }
     const option = spec.options.find((o) => o.key === entry.key);
     if (option === undefined) {
       throw new BridgeError(

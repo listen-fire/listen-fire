@@ -596,10 +596,17 @@ export type NodeEntry =
  * without one, every nested map is. As in a write body, an entry written in
  * the body wins over a spread's key wherever it stands, and a later spread
  * over an earlier one — so the spreads keep their own order and nothing else.
+ *
+ * `v` may instead be ONE RECORD, whose fields are copied as a snapshot by the
+ * rule a bare walk copies by (`CopyPlan`). A value that is absent copies
+ * nothing.
  */
 export interface MapSpread {
-  /** The map's bound name. */
+  /** The map's (or the record's) bound name. */
   source: string;
+  /** A record spread: what the snapshot copies, as the checker resolved it.
+   *  Absent until checked, and on every map spread. */
+  copy?: CopyPlan;
   span: Span;
 }
 

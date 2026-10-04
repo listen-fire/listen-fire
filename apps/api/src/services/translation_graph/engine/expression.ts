@@ -12,6 +12,7 @@
 
 import type { Expression } from '../../knowledge_pipeline/output_v3/expression';
 import type { AggregationFunction, TraversalStep } from '#shared/expression/types';
+import { isObjectSpread, objectMemberExpression } from '#shared/expression/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import type {
   ActingUser,
@@ -920,8 +921,22 @@ export async function evalExpr(
       // Inline object literal — every value evaluated, keys verbatim. Same
       // value semantics as the movement engine's `object` case, so the two
       // evaluators can't disagree about a structured value.
-      const values = await Promise.all(expr.entries.map((e) => evaluateExpression(e.value, ctx)));
-      return bare(Object.fromEntries(expr.entries.map((e, i) => [e.key, values[i]])));
+      // A spread copies a map's keys in place, a later key winning.
+      const values = await Promise.all(expr.entries.map((e) => evaluateExpression(objectMemberExpression(e), ctx)));
+      const object: Record<string, unknown> = {};
+      expr.entries.forEach((e, i) => {
+        if (!isObjectSpread(e)) {
+          object[e.key] = values[i];
+          return;
+        }
+        const spread = values[i];
+        if (spread === null || spread === undefined) return;
+        if (typeof spread !== 'object' || Array.isArray(spread)) {
+          throw new Error(`'...' copies a map's keys into a map, and this value is ${Array.isArray(spread) ? 'a list' : typeof spread}`);
+        }
+        Object.assign(object, spread);
+      });
+      return bare(object);
     }
   }
 }

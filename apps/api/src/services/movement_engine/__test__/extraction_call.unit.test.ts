@@ -341,7 +341,8 @@ describe('the call nests inside an expression (language version 3)', () => {
     const { calls, writes } = await run(
       [
         '  first = ONLY(extract([msg.`text`], Detail))',
-        '  write crm-[:companies]-> { name: first.summary }',
+        // ONLY may find nothing, so a field read off it may be absent.
+        '  write crm-[:companies]-> { name: COALESCE(first.summary, "") }',
       ],
       [detail('Acme builds infra')],
     );
@@ -478,7 +479,7 @@ describe('a reply the shape does not describe', () => {
         "    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Detail)",
         '    return ONLY(found)',
         '  })',
-        '  MAP(details, (d) => { write crm-[:companies]-> { name: d.summary } })',
+        '  MAP(details, (d) => { write crm-[:companies]-> { name: COALESCE(d.summary, "") } })',
       ],
       [COMPANIES, { answer: [] }, { answer: [] }, detail('Beta does fintech')],
     );

@@ -35,7 +35,12 @@
 // property validity is M2b's schema work.
 
 import type { Expression, ListElement, TraversalStep } from '@listen-fire/shared/expression/types';
-import { listElementExpression } from '@listen-fire/shared/expression/types';
+import {
+  isObjectSpread,
+  listElementExpression,
+  objectMemberExpression,
+  type ObjectEntry,
+} from '@listen-fire/shared/expression/types';
 import { quoteName } from '@listen-fire/shared/expression/formula';
 import {
   flattenAndConjuncts,
@@ -1488,7 +1493,7 @@ function collectNames(expr: Expression, out: CollectedNames, position: NamePosit
     // An object literal's KEYS are the target API's own spelling, never names
     // to resolve; its values carry the position through unchanged.
     case 'object':
-      expr.entries.forEach(e => collectNames(e.value, out, position));
+      expr.entries.forEach(e => collectNames(objectMemberExpression(e), out, position));
       return;
     case 'arithmetic':
     case 'compare':
@@ -2294,6 +2299,42 @@ function describeShapeNode(position: string): string {
 
 function isMaybeAbsentType(type: FieldType): boolean {
   return typeof type === 'object' && type.kind === 'maybeAbsent';
+}
+
+/** A map's written keys, each `T | absent` — what a spread of a map that may
+ *  not be there supplies. */
+function absentKeys(keys: Record<string, FieldType | null>): Record<string, FieldType | null> {
+  return Object.fromEntries(
+    Object.entries(keys).map(([key, type]) => [key, type !== null ? maybeAbsent(type) ?? null : null]),
+  );
+}
+
+/**
+ * The ONE record a name holds, for a spread — off the arrow plane (a landing,
+ * a declared or built node) or held as a value (`ONLY(…)`, a `MAP` member) —
+ * and whether it may not be there. Undefined for anything else, a list of
+ * records included: a spread copies one record's fields.
+ */
+function spreadRecordOf(
+  symbol: ScopeSymbol,
+): { position: PositionTypeRef | undefined; mayBeAbsent: boolean } | undefined {
+  if (symbol.posType !== undefined) {
+    if (symbol.plural === true && symbol.bindingPlane !== 'scalar') return undefined;
+    switch (symbol.posType.kind) {
+      case 'meta':
+      case 'closure':
+        return undefined;
+      case 'maybeEmpty':
+        return { position: symbol.posType.of, mayBeAbsent: true };
+      default:
+        return { position: symbol.posType, mayBeAbsent: false };
+    }
+  }
+  const held = symbol.fieldType;
+  if (held === undefined) return undefined;
+  const value = stripAbsent(held);
+  if (typeof value !== 'object' || value.kind !== 'record') return undefined;
+  return { position: value.position, mayBeAbsent: isMaybeAbsentType(held) };
 }
 
 /** What a bare walk copies when a shape node says what to keep: its fields,
@@ -8676,7 +8717,9 @@ class Checker {
     for (const [key, keyType] of Object.entries(keys)) {
       const given = supplied[key];
       if (keyType === null || given === undefined || given === null) continue;
-      const literal = stringLiteralOf(written.find(entry => entry.key === key)?.value);
+      const literal = stringLiteralOf(
+        written.find((entry): entry is ObjectEntry => !isObjectSpread(entry) && entry.key === key)?.value,
+      );
       if (literal !== undefined && this.reportEnumLiteral(literal, stripAbsent(keyType), span)) continue;
       if (isMaybeAbsent(given) && !isMaybeAbsent(keyType)) {
         this.report(
@@ -8949,8 +8992,11 @@ class Checker {
     // A spread whose keys nobody can name: what it supplies is checked when
     // the graph is built, so no field can be called missing here.
     let opaqueSpread = false;
+    // A written entry wins over a spread's key wherever it stands, so the
+    // spread's value for it is never what the field holds.
+    const written = new Set(literal.entries.map(entry => entry.name));
     for (const source of literal.spreads ?? []) {
-      const keys = this.checkGraphSpread(source, scope, required);
+      const keys = this.checkGraphSpread(source, { scope, required, written });
       if (keys === undefined) {
         opaqueSpread = true;
         continue;
@@ -8968,7 +9014,7 @@ class Checker {
         case 'value': {
           const valueType = this.checkNodeValueEntry(entry, scope);
           reads[entry.name] = valueType;
-          if (required !== undefined) this.checkGraphField(entry.name, valueType, required, entry.span);
+          if (required !== undefined) this.checkGraphField(entry.name, valueType, { required, span: entry.span });
           break;
         }
         case 'nodes': {
@@ -9031,12 +9077,12 @@ class Checker {
     }
   }
 
-  /** A field written in a body that has to satisfy `required`. */
+  /** A field written in a body that has to satisfy `required` — or supplied
+   *  by a spread, named by `via`. */
   private checkGraphField(
     name: string,
     have: FieldType | undefined,
-    required: RequiredPosition,
-    span: Span,
+    { required, span, via }: { required: RequiredPosition; span: Span; via?: string },
   ): void {
     const declared = required.schema.positions[required.position];
     if (declared === undefined) return;
@@ -9049,6 +9095,22 @@ class Checker {
       this.report(
         DiagnosticCodes.GRAPH_FIELD_TYPE,
         `${describeShapeNode(required.position)} declares \`${name}\` as ${describeFieldType(want)}, and this is ${describeFieldType(have)}${textRepair(have, want)}`,
+        span,
+      );
+      return;
+    }
+    // TypeScript's strict null rule, as for a write field or a required
+    // parameter: a value that may not be there can't fill a field that must
+    // be. Before version 3 the field was silently left empty at run time.
+    if (
+      have !== undefined &&
+      isMaybeAbsentType(have) &&
+      !isMaybeAbsentType(want) &&
+      since(this.languageVersion, 3)
+    ) {
+      this.report(
+        DiagnosticCodes.ABSENT_REQUIRED,
+        `${describeShapeNode(required.position)} needs \`${name}\` (${describeFieldType(want)}), and ${via !== undefined ? `'...${via}' supplies one that` : 'this value'} may be absent (${describeFieldType(have)}) — fall back to a value that is always there ('${name}: COALESCE(…, "…")'), or declare the field '<${describeFieldType(stripAbsent(want))} | null>' if it may be left empty`,
         span,
       );
     }
@@ -9178,22 +9240,24 @@ class Checker {
    */
   private checkGraphSpread(
     entry: MapSpread,
-    scope: Scope,
-    required: RequiredPosition | undefined,
+    { scope, required, written }: { scope: Scope; required: RequiredPosition | undefined; written: ReadonlySet<string> },
   ): SpreadKeys | undefined {
     const symbol = this.resolveName(entry.source, entry.span, scope);
     if (symbol === undefined) return undefined;
+    const record = spreadRecordOf(symbol);
+    if (record !== undefined) return this.checkGraphRecordSpread(entry, { record, required, written });
     const valueType = symbol.posType === undefined ? symbol.fieldType : undefined;
     const map = valueType !== undefined ? stripAbsent(valueType) : undefined;
     if (map === undefined || (map !== 'json' && (typeof map !== 'object' || map.kind !== 'dict'))) {
       this.report(
         DiagnosticCodes.GRAPH_SPREAD_NOT_MAP,
-        `'...${entry.source}' converts a MAP into the graph, and '${entry.source}' is ${map !== undefined ? describeFieldType(map) : 'not a value'} — spread a map (plugin output, JSON, '{ … }'), or write the fields one by one`,
+        `'...${entry.source}' copies a map's keys or a record's fields into the graph, and '${entry.source}' is ${map !== undefined ? describeFieldType(map) : 'not a value'} — spread a map (plugin output, JSON, '{ … }') or one record, or write the fields one by one`,
         entry.span,
       );
       return undefined;
     }
-    const keys = map === 'json' ? undefined : map.shape;
+    const mayBeAbsent = valueType !== undefined && isMaybeAbsentType(valueType);
+    const keys = map === 'json' ? undefined : mayBeAbsent && map.shape !== undefined ? absentKeys(map.shape) : map.shape;
     if (keys === undefined) {
       if (required === undefined) {
         this.report(
@@ -9204,15 +9268,93 @@ class Checker {
       }
       return undefined;
     }
-    return this.checkSpreadKeys(keys, required, entry);
+    return this.checkSpreadKeys(keys, { required, entry, written });
+  }
+
+  /**
+   * `...r` in a graph body where `r` is ONE record: its fields copied as a
+   * snapshot, by the rule a bare walk copies by — the shape decides which
+   * fields and how deep (a child node in the shape is followed through the
+   * record's edge of the same name), files stay lazy handles, and nothing in
+   * the graph refers back into the record's system. Without a shape the
+   * record's own fields are copied and no edge is followed. A record that may
+   * not be there copies nothing when it isn't, so every key it supplies is
+   * `T | absent` — TypeScript's `...undefined`.
+   *
+   * The copy plan is recorded on the spread for the engine, as a walk's is.
+   */
+  private checkGraphRecordSpread(
+    entry: MapSpread,
+    {
+      record,
+      required,
+      written,
+    }: {
+      record: { position: PositionTypeRef | undefined; mayBeAbsent: boolean };
+      required: RequiredPosition | undefined;
+      written: ReadonlySet<string>;
+    },
+  ): SpreadKeys | undefined {
+    const supplied = record.position !== undefined ? recordSurface(record.position) : undefined;
+    const absent = (type: FieldType | undefined): FieldType | undefined =>
+      record.mayBeAbsent && type !== undefined ? maybeAbsent(type) : type;
+    if (supplied === undefined) {
+      if (required === undefined) {
+        this.report(
+          DiagnosticCodes.GRAPH_SPREAD_UNTYPED,
+          `nothing says which fields '${entry.source}' has, so nothing could say what this graph holds — give the graph a shape ('graph<Shape> { ...${entry.source} }'), and it is checked against the shape when it is built`,
+          entry.span,
+        );
+        return undefined;
+      }
+      entry.copy = copyPlanOf(required);
+      return undefined;
+    }
+    if (required === undefined) {
+      entry.copy = { fields: Object.keys(supplied.properties), edges: {} };
+      return {
+        reads: Object.fromEntries(Object.entries(supplied.properties).map(([name, type]) => [name, absent(type)])),
+        edges: {},
+      };
+    }
+    const declared = required.schema.positions[required.position];
+    const reads: Record<string, FieldType | undefined> = {};
+    const edges: Record<string, LocalEdge> = {};
+    const plan: { fields: string[]; edges: Record<string, CopyPlan> } = { fields: [], edges: {} };
+    for (const name of Object.keys(declared?.properties ?? {})) {
+      if (!Object.hasOwn(supplied.properties, name)) continue;
+      const type = absent(supplied.properties[name]);
+      if (!written.has(name)) this.checkGraphField(name, type, { required, span: entry.span, via: entry.source });
+      reads[name] = type;
+      plan.fields.push(name);
+    }
+    for (const [name, edge] of Object.entries(declared?.edges ?? {})) {
+      if (!Object.hasOwn(supplied.edges, name) || written.has(name)) continue;
+      const child: RequiredPosition = { schema: required.schema, position: edge.target };
+      const misfit = surfaceMisfit(supplied.edges[name]?.(), child, { absentMayBeMissing: true });
+      if (misfit !== undefined) {
+        this.report(
+          DiagnosticCodes.GRAPH_COPY_SHAPE,
+          `'...${entry.source}' copies its '${name}' records, and ${describeShapeNode(child.position)} doesn't fit them: ${misfit} — write '${name}' after the spread with a body ('${name}: ${entry.source}-[x:${name}]-> { field: x.Field }')`,
+          entry.span,
+        );
+      }
+      plan.edges[name] = copyPlanOf(child);
+      edges[name] = { schema: { target: name, readable: true } };
+    }
+    entry.copy = plan;
+    return { reads, edges };
   }
 
   /** A known map's keys, read as a graph body: a nested map (or a list of
    *  them) is a child where the shape says so — everywhere, without one. */
   private checkSpreadKeys(
     keys: Record<string, FieldType | null>,
-    required: RequiredPosition | undefined,
-    entry: MapSpread,
+    {
+      required,
+      entry,
+      written = new Set(),
+    }: { required: RequiredPosition | undefined; entry: MapSpread; written?: ReadonlySet<string> },
   ): SpreadKeys {
     const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
     const reads: Record<string, FieldType | undefined> = {};
@@ -9229,8 +9371,8 @@ class Checker {
             entry.span,
           );
         }
-        if (required !== undefined && declared?.properties[key] !== undefined && valueType !== null) {
-          this.checkGraphField(key, valueType, required, entry.span);
+        if (required !== undefined && declared?.properties[key] !== undefined && valueType !== null && !written.has(key)) {
+          this.checkGraphField(key, valueType, { required, span: entry.span, via: entry.source });
         }
         reads[key] = valueType ?? undefined;
         continue;
@@ -9252,7 +9394,7 @@ class Checker {
         edges[key] = { schema: { target: key, readable: true } };
         continue;
       }
-      const landing = this.checkSpreadKeys(nested, child, entry);
+      const landing = this.checkSpreadKeys(nested, { required: child, entry });
       if (child !== undefined) this.reportMissingGraphFields(child, landing.reads, entry.span);
       edges[key] = {
         schema: { target: key, readable: true },

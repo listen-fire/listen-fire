@@ -12,6 +12,7 @@
 //   3. The CHECKER walks object values (a name inside one still resolves,
 //      or is reported).
 
+import { objectMemberExpression } from '@listen-fire/shared/expression/types';
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, DiagnosticCodes as C } from '../../checker/check';
 import { mockCatalog } from '../../checker/catalog';
@@ -55,23 +56,38 @@ describe('bridge — object literals in an expression slot', () => {
   it('lifts a prefix EXISTS(…) inside an object value and splices it back', () => {
     const expr = parseMovementExpression('{ has_files: EXISTS(msg-[:files]->) }');
     if (expr.type !== 'object') throw new Error(`expected object, got ${expr.type}`);
-    expect(expr.entries[0].key).toBe('has_files');
-    expect(expr.entries[0].value).toEqual({
-      type: 'traverse',
-      aliasRoot: 'msg',
-      steps: [],
-      expression: { type: 'exists', steps: [{ type: 'edge', edgeTypeId: 'files', direction: 'outgoing' }] },
+    expect(expr.entries[0]).toEqual({
+      key: 'has_files',
+      value: {
+        type: 'traverse',
+        aliasRoot: 'msg',
+        steps: [],
+        expression: { type: 'exists', steps: [{ type: 'edge', edgeTypeId: 'files', direction: 'outgoing' }] },
+      },
     });
   });
 
   it('folds a namespaced stdlib call inside an object value', () => {
     const expr = parseMovementExpression('{ amount: CURRENCY.GET_NUMBER_FROM_FIGURE("£1.2m") }');
     if (expr.type !== 'object') throw new Error(`expected object, got ${expr.type}`);
-    expect(expr.entries[0].value).toEqual({
-      type: 'function',
-      fn: 'currency.get_number_from_figure',
-      args: [{ type: 'static', value: '£1.2m' }],
+    expect(expr.entries[0]).toEqual({
+      key: 'amount',
+      value: {
+        type: 'function',
+        fn: 'currency.get_number_from_figure',
+        args: [{ type: 'static', value: '£1.2m' }],
+      },
     });
+  });
+
+  it('keeps a spread among the entries, in the order written', () => {
+    const expr = parseMovementExpression('{ ...base, k: 1, ...more }');
+    if (expr.type !== 'object') throw new Error(`expected object, got ${expr.type}`);
+    expect(expr.entries).toEqual([
+      { type: 'spread', expression: { type: 'property', propertyTypeId: 'base' } },
+      { key: 'k', value: { type: 'static', value: 1 } },
+      { type: 'spread', expression: { type: 'property', propertyTypeId: 'more' } },
+    ]);
   });
 
   it('composes with list literals to a Block Kit shape', () => {
@@ -81,7 +97,7 @@ describe('bridge — object literals in an expression slot', () => {
     if (expr.type !== 'list') throw new Error(`expected list, got ${expr.type}`);
     const block = expr.elements[0];
     if (block.type !== 'object') throw new Error(`expected object, got ${block.type}`);
-    const elements = block.entries[1].value;
+    const elements = objectMemberExpression(block.entries[1]);
     if (elements.type !== 'list') throw new Error(`expected list, got ${elements.type}`);
     expect(elements.elements[0].type).toBe('object');
   });

@@ -102,7 +102,7 @@ line     = AT(sections, "body")
 
 A **dict** is a set of values looked up by name — write it in braces, read it with \`AT(dict, "key")\`. Keys are text and nothing else: a key of some other kind is refused when you save, with the coercion for you to write (\`DATE.FORMAT(d, "YYYY-MM-DD")\` for a day, or a template for anything else) — there is no one right spelling, and a silent choice is how two halves of the same automation come to disagree about the same day.
 
-A dict written in braces knows its keys, each with its own type. Looked up by a key written in quotes, it answers that key's value, always there; a key it was not written with is refused when you save, naming the closest one. Looked up by a key worked out while the automation runs, it answers \`T | absent\`: a key that is not there is the everyday case, not a failure, so discharge it the way you discharge any other possibly-missing value. A dict whose keys came from data — \`GROUPBY\`'s answer — is always looked up that way.
+A dict written in braces knows its keys, each with its own type. Looked up by a key written in quotes — or read with a dot, \`sections.body\`, which is the same lookup — it answers that key's value, always there; a key it was not written with is refused when you save, naming the closest one. Looked up by a key worked out while the automation runs, it answers \`T | absent\`: a key that is not there is the everyday case, not a failure, so discharge it the way you discharge any other possibly-missing value. A dict whose keys came from data — \`GROUPBY\`'s answer — is always looked up that way.
 
 ### iterating-values
 
@@ -222,6 +222,21 @@ function \`Match Mentions\`(m: <inbox-[:Email]->>) {
 
 A file-scope list of dict literals is a small table any function in the file can read, declared once rather than rebuilt per call. \`MAP\` turns each row into a line and \`JOIN\` turns the lines into one string — the same string that goes into a prompt (here, an extraction's own description) or into code: \`KEYBY\` turns the table into a dict keyed by one of its own fields, so a later lookup (\`AT(byName, "Ada")\`) is a plain read rather than a search — a computed key still needs the ordinary guard, since \`KEYBY\`'s keys are data, not a written literal.
 
+### spreading-maps-and-records
+
+\`\`\`
+base   = { stage: "Seed", source: "email" }
+row    = { ...base, stage: "Series A" }
+merged = { ...c, ...details }
+\`\`\`
+
+- \`...m\` copies a dict's keys into the literal, and \`...r\` copies a record's fields (its values, not its nested nodes), as TypeScript's object spread does. A later key wins over an earlier one, in the order written: \`row.stage\` is \`"Series A"\`.
+- A key written before a spread that always has it is refused when you save, since the spread overwrites it. Move it after the spread to override.
+- A spread of something that may not be there copies nothing when it isn't, so its keys may be absent: with \`details = ONLY(extract(…))\`, \`merged.summary\` is \`text | absent\`. \`COALESCE\` it before a field that needs a value.
+- The result is a dict. Read it with a dot or with \`AT\`; a misspelt key is caught when you save.
+- A record read live from a system has no field list in hand, so spreading one into a dict is refused: build the dict from the fields you want. To walk the result, write into it, or check it against a declaration, build a graph instead — \`graph<Detailed> { ...c, ...details }\` copies the record's fields as a snapshot, the declaration deciding which (see *the extraction call* in the extraction chapter).
+- A spread of text, a number or a list is refused. A settings record (\`MAP\`'s, \`extract\`'s, a built-in's options) is written out key by key, so a spread is refused there.
+
 ### values-that-may-not-be-there
 
 \`\`\`
@@ -235,6 +250,7 @@ A separate and stronger thing is a value typed as *possibly not there at all* �
 - **an aggregate that can come up empty.** \`ONLY\`, \`FIRST\`, \`LAST\`, \`MIN\`, \`MAX\`, and \`AT\` all answer null when there's nothing to aggregate over, so \`ONLY(msg-[:Attachments]->.\`Name\`)\` may be absent exactly when there are no attachments. Over a *bare* traversal (no field on the end) they bind the whole record, not one of its fields — \`channel = ONLY(chat-[ch:Channels WHERE …]->)\` — see *looking-up-existing-records* in the writes chapter for that idiom;
 - **a landing that can resolve empty** — awaiting an answer that was cancelled rather than given yields nothing to read;
 - **a \`race\` slot** — \`AT(r, 0)\` reads what the first arm of a \`race\` returned, and only the arm that settled first has its slot filled, so every slot off a \`race\` may be absent. (\`parallel\` waits for every arm, so its slots are not.)
+- **a field read off a record that may not be there.** \`details = ONLY(extract(…))\` may have found nothing, so \`details.summary\` is \`text | absent\`, as TypeScript types \`details?.summary\`. Test \`details != null\` first, or \`COALESCE\` the field. A graph literal's required field refuses such a value too: declare the field \`<text | null>\`, or fall back.
 - **a typed extracted field, and a lookup by a computed key.** A \`<number>\`, \`<date>\`, \`<boolean>\` or set-of-values field of an \`extract\` is something the model was asked for and may not have found, so reading one is \`T | absent\` — a write field takes it with the \`?:\` fill rather than plainly. A text field is never absent: one the model did not find reads as \`""\`, so test it with \`!= ""\` — a null test on it is refused. Annotate it \`<text | null>\` to have a missing one arrive null instead: it is then \`text | absent\` like the rest, and a null test narrows it. \`AT(dict, key)\` with a key worked out at run time is the same: a key that is not there reads nothing.
 
 Reading such a value is always fine, and so is interpolating it — it prints as nothing. Testing it needs no guard either. \`==\` and \`!=\` take it on either side: a missing value equals only \`null\`, so \`o.stage == "Seed"\` is false and \`o.stage != "Seed"\` true when the model found nothing. A condition takes a \`<boolean>\` that may be missing and reads a missing one as false — \`if o.viable { … }\`, \`IF o.viable THEN … ELSE … END\`, \`a AND o.viable\`, \`NOT o.viable\`.
@@ -676,6 +692,44 @@ function \`Tidy\`(m: <inbox-[:Email]->>) {
   })
 }
 
+`,
+    },
+    {
+      construct: 'dict literals — spread of a dict and of a record, later keys winning, read with a dot',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+}
+
+node Profile: "more about the company described last" {
+  summary: <text> "one line on what the company does"
+}
+
+function \`Merge\`(m: <inbox-[:Email]->>) {
+  base      = { stage: "Seed", source: "email" }
+  row       = { ...base, stage: "Series A" }
+  content   = [m.\`Body\`]
+  companies = extract(content, Company, { tier: 'careful' })
+  merged    = MAP(companies, (c) => {
+    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    return { ...c, ...details }
+  })
+  MAP(merged, (d) => {
+    write crm-[:Companies]-> {
+      unique by (\`Name\`)
+      Name:        d.name
+      Description: "\${row.stage}: \${COALESCE(d.summary, "")}"
+    }
+  })
+}
 `,
     },
     {

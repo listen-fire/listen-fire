@@ -104,6 +104,7 @@ import type {
   Span,
 } from 'movement-lang';
 import type { EdgeStep, Expression, FilterOperator } from '#shared/expression/types';
+import { isObjectSpread, objectMemberExpression } from '#shared/expression/types';
 import { serialize as serializeExpression } from '#shared/expression/formula';
 import { aiExpressionSettings } from './ai_tiers';
 import {
@@ -1406,15 +1407,19 @@ export async function evalMovementExpr(
     }
 
     case 'object': {
-      // `{ key: expr, … }` — a plain JSON object, keys verbatim. No
+      // `{ key: expr, ...m, … }` — a plain JSON object, keys verbatim. No
       // laziness: every value is evaluated, exactly as a list literal
-      // evaluates every element.
-      const values: MovementEvalResult[] = [];
-      for (const entry of expr.entries) values.push(await evalValueMember(entry.value, ctx));
-      return {
-        value: Object.fromEntries(expr.entries.map((entry, i) => [entry.key, values[i].value])),
-        provenance: unionProvenance(values.map((v) => v.provenance)),
-      };
+      // evaluates every element. Members take effect in the order written,
+      // so a later key wins — TypeScript's object literal.
+      const value: Record<string, unknown> = {};
+      const results: MovementEvalResult[] = [];
+      for (const member of expr.entries) {
+        const result = await evalValueMember(objectMemberExpression(member), ctx);
+        results.push(result);
+        if (isObjectSpread(member)) Object.assign(value, spreadKeysOf(result.value));
+        else value[member.key] = result.value;
+      }
+      return { value, provenance: unionProvenance(results.map((r) => r.provenance)) };
     }
 
     case 'concat': {
@@ -3909,6 +3914,22 @@ function plainRecordOf(binding: Binding, path: Set<Binding>): unknown {
  * a write handle's written fields, then what the system handed back. A kind
  * with no field list in hand refuses, named, rather than rendering nothing.
  */
+/**
+ * What `...m` copies into a map literal: a map's keys, or a record's fields as
+ * the record holds them (its dot plane — an edge is a walk, not a key). An
+ * absent value copies nothing, as TypeScript's `...undefined` does.
+ */
+function spreadKeysOf(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) return {};
+  const record = bindingOf(value);
+  if (record !== undefined) return recordFields(record);
+  if (isDictValue(value)) return value;
+  throw unsupported(
+    `copying the keys of ${describeHeldValue(value)} into a map`,
+    'a spread copies a map\'s keys or a record\'s fields — write the value under a key instead (the checker should have caught this)',
+  );
+}
+
 export function recordFields(binding: Binding): Record<string, unknown> {
   switch (binding.kind) {
     case 'nodePosition':

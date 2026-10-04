@@ -66,17 +66,41 @@ A shape can also be written in place, for an extraction used once:
 people = extract(content, node Person: "each person named in the message" { name: <text> "their name" })
 \`\`\`
 
-**Enrichment is plain composition**: extract, map over the results, call plugins as ordinary functions, extract again over what they returned, then write.
+**Enrichment is plain composition**: extract, map over the results, call plugins as ordinary functions, extract again over what they returned, then merge the record with its detail and write.
 
 \`\`\`
 detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-  page   = fetch_url(url: c.website)
-  detail = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful' }))
-  return detail
+  page    = fetch_url(url: c.website)
+  details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful' }))
+  return { ...c, ...details }
 })
 \`\`\`
 
 A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before it goes into the content. A plugin's arguments stay named.
+
+**Merging a record with its detail.** \`{ ...c, ...details }\` is a dict holding the company's fields and then the detail's, a later key winning, as TypeScript's object spread does. \`ONLY\` may have found nothing, and a spread of nothing copies nothing, so a key only the detail has is \`T | absent\`: \`COALESCE(d.summary, "")\` before a field that needs a value. Read the dict with a dot, \`d.name\`.
+
+To walk the result, write or link into it, or have it checked against a declaration, build a graph instead:
+
+\`\`\`
+node Detailed {
+  name:    <text>
+  website: <text | null>
+  summary: <text | null>
+  node person {
+    name: <text>
+  }
+}
+
+detailed = MAP(companies, (c) => {
+  details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+  return graph<Detailed> { ...c, ...details }
+})
+\`\`\`
+
+- \`...c\` in a graph copies one record's fields as a snapshot: the declaration decides which fields, and a nested node it declares is followed through the record's edge of the same name (\`c\`'s \`person\` records here). Files stay lazy handles, and nothing in the graph refers back to where the record came from.
+- A field the declaration requires can't be filled by something that may be absent. \`summary: <text>\` above would be refused when you save, because \`details\` may be nothing. Declare it \`<text | null>\`, or write it after the spread with a fallback: \`graph<Detailed> { ...c, ...details, summary: COALESCE(details.summary, "") }\` (a field written in the body wins over a spread's).
+- If a value the save could not see as missing turns out missing when the graph is built, the run fails there, naming the field, rather than leaving it empty.
 
 The \`extract … from [ … ] { … }\` form below still runs exactly as before, and everything in the rest of this chapter about it holds.
 
@@ -300,6 +324,62 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   MAP(companies, (c) => {
     record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: c.name }
     c-[p:person]-> {
+      write record-[:Team]-> { unique by (FUZZY \`Name\`) Name: p.name }
+    }
+  })
+}
+`,
+    },
+    {
+      construct: 'merging an extracted record with its detail — { ...c, ...details } and graph<Shape> { ...c, ...details }',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+  node person: "each person at the company named in the message" {
+    name: <text> "the person's full name"
+  }
+}
+
+node Profile: "more about the company described last" {
+  summary: <text> "one line on what the company does"
+}
+
+node Detailed {
+  name:    <text>
+  website: <text | null>
+  summary: <text | null>
+  node person {
+    name: <text>
+  }
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  content   = [m.\`Body\`]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  merged = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    return { ...c, ...details }
+  })
+  MAP(merged, (d) => {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: d.name, Description: COALESCE(d.summary, "") }
+  })
+
+  detailed = MAP(companies, (c) => {
+    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    return graph<Detailed> { ...c, ...details }
+  })
+  MAP(detailed, (d) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: d.name, Description: COALESCE(d.summary, "") }
+    d-[p:person]-> {
       write record-[:Team]-> { unique by (FUZZY \`Name\`) Name: p.name }
     }
   })

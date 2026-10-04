@@ -24,7 +24,7 @@
  */
 
 import type { Expression, FilterOperator, ListElement, ObjectEntry, TraversalStep, EdgeStep, MetaEdgeStep, EnrichWithEntry } from './types';
-import { AI_TIERS, listElementExpression, mapListElement } from './types';
+import { AI_TIERS, isObjectSpread, listElementExpression, mapListElement, objectMemberExpression } from './types';
 
 // ── Property name resolution ──
 
@@ -248,7 +248,7 @@ export function serialize(
     case 'list':
       return `[${expr.elements.map(e => (e.type === 'spread' ? `...${ser(e.expression)}` : ser(e))).join(', ')}]`;
     case 'object':
-      return `{${expr.entries.map(e => `${serializeObjectKey(e.key)}: ${ser(e.value)}`).join(', ')}}`;
+      return `{${expr.entries.map(e => (isObjectSpread(e) ? `...${ser(e.expression)}` : `${serializeObjectKey(e.key)}: ${ser(e.value)}`)).join(', ')}}`;
     case 'traverse': {
       const steps = expr.steps.map(s => serializeTraversalStep(s, resolve, resolveStaticValue, resolveEdgeInfo));
       const inner = ser(expr.expression);
@@ -2444,7 +2444,7 @@ function validateExpressionTree(expr: Expression, ctx: PropertyContext): string 
       return null;
     case 'object':
       for (const entry of expr.entries) {
-        const err = validateExpressionTree(entry.value, ctx);
+        const err = validateExpressionTree(objectMemberExpression(entry), ctx);
         if (err) return err;
       }
       return null;
@@ -2657,7 +2657,7 @@ function walkTgExpression(
       for (const e of expr.elements) walkTgExpression(listElementExpression(e), ctx, errors);
       return;
     case 'object':
-      for (const entry of expr.entries) walkTgExpression(entry.value, ctx, errors);
+      for (const entry of expr.entries) walkTgExpression(objectMemberExpression(entry), ctx, errors);
       return;
     case 'llm':
       if (expr.promptExpression) walkTgExpression(expr.promptExpression, ctx, errors);

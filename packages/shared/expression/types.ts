@@ -383,10 +383,12 @@ export type FilterExpression =
 
 /**
  * `...xs` inside a list literal — `[a, ...xs, b]` splices `xs`'s members in
- * place, TypeScript's array spread. It is a list MEMBER, not a value: there is
- * no spread anywhere else in an expression, so it lives in the list's element
- * type rather than among the expressions, where every walker would have to
- * answer for one that cannot occur.
+ * place, TypeScript's array spread — and `...m` inside an object literal —
+ * `{ ...a, k: v, ...b }` copies `m`'s keys in place, TypeScript's object
+ * spread. It is a literal's MEMBER, not a value: there is no spread anywhere
+ * else in an expression, so it lives in the literals' member types rather than
+ * among the expressions, where every walker would have to answer for one that
+ * cannot occur.
  */
 export interface ListSpread {
   type: 'spread';
@@ -413,6 +415,28 @@ export function mapListElement(element: ListElement, rewrite: (expr: Expression)
 export interface ObjectEntry {
   key: string;
   value: Expression;
+}
+
+/** One member of an object literal, in the order written: a `key: value` pair,
+ *  or a spread of a map's keys (or a record's fields). A later member's key
+ *  wins over an earlier one's, as in TypeScript. */
+export type ObjectMember = ObjectEntry | ListSpread;
+
+export function isObjectSpread(member: ObjectMember): member is ListSpread {
+  return 'type' in member;
+}
+
+/** The expression an object member is written with — the pair's value, or
+ *  what a spread copies from. For walkers with nothing to say about keys. */
+export function objectMemberExpression(member: ObjectMember): Expression {
+  return isObjectSpread(member) ? member.expression : member.value;
+}
+
+/** An object member rebuilt with `rewrite` applied to its expression. */
+export function mapObjectMember(member: ObjectMember, rewrite: (expr: Expression) => Expression): ObjectMember {
+  return isObjectSpread(member)
+    ? { type: 'spread', expression: rewrite(member.expression) }
+    : { ...member, value: rewrite(member.value) };
 }
 
 export type Expression =
@@ -479,7 +503,7 @@ export type Expression =
    * Entry order is the author's and is preserved so the serializer
    * round-trips stably.
    */
-  | { type: 'object'; entries: ObjectEntry[] }
+  | { type: 'object'; entries: ObjectMember[] }
   // Traversal
   /**
    * `traverse.aliasRoot`: when present, traversal starts from the

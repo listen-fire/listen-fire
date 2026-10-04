@@ -50,6 +50,21 @@ export interface MapEntry {
   value: MExpr;
 }
 
+/** `...m` among a map literal's entries — `m`'s keys (a map's, or a record's
+ *  fields) copied in place, a later key winning over an earlier one. */
+export interface MapSpread {
+  kind: 'spread';
+  expr: MExpr;
+  at: At;
+}
+
+/** One member of a map literal, in the order written. */
+export type MapMember = MapEntry | MapSpread;
+
+export function isMapSpread(member: MapMember): member is MapSpread {
+  return 'kind' in member;
+}
+
 /**
  * One hop of a walk: `-[alias:label WHERE … {config} ORDER BY … DESC LIMIT n]->`.
  *
@@ -129,7 +144,7 @@ export type MExpr =
   | { kind: 'special'; text: string; at: At }
   | { kind: 'paren'; expr: MExpr; at: At }
   | { kind: 'list'; elements: Array<MExpr | { kind: 'spread'; expr: MExpr; at: At }>; at: At }
-  | { kind: 'map'; entries: MapEntry[]; at: At }
+  | { kind: 'map'; entries: MapMember[]; at: At }
   | { kind: 'member'; object: MExpr; property: Name; at: At }
   | { kind: 'index'; object: MExpr; index: MExpr; at: At }
   | { kind: 'call'; callee: MExpr; args: CallArg[]; at: At }

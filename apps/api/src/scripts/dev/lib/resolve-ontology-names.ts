@@ -348,10 +348,11 @@ function walkExpression(
     case 'object':
       return {
         ...expr,
-        entries: expr.entries.map((entry) => ({
-          ...entry,
-          value: walkExpression(entry.value, ctx, propertyCtxKey, `${path}.${entry.key}`),
-        })),
+        entries: expr.entries.map((entry, i) =>
+          'type' in entry
+            ? { ...entry, expression: walkExpression(entry.expression, ctx, propertyCtxKey, `${path}.entries[${i}].expression`) }
+            : { ...entry, value: walkExpression(entry.value, ctx, propertyCtxKey, `${path}.${entry.key}`) },
+        ),
       };
     case 'exists':
       return {

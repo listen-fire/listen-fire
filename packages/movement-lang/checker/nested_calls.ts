@@ -25,7 +25,7 @@
 // when the closure is called and is read as that body's own expression.
 
 import type { Loc } from '../parser/ast';
-import type { At, MExpr } from '../parser/expression/tree';
+import { isMapSpread, type At, type MExpr } from '../parser/expression/tree';
 import type { CalleeResolution } from './calls';
 
 export type CallNode = Extract<MExpr, { kind: 'call' }>;
@@ -112,7 +112,7 @@ export function valueChildren(e: MExpr): MExpr[] {
     case 'list':
       return e.elements.map(x => (x.kind === 'spread' ? x.expr : x));
     case 'map':
-      return e.entries.map(x => x.value);
+      return e.entries.map(x => (isMapSpread(x) ? x.expr : x.value));
     case 'member':
       return [e.object];
     case 'index':
@@ -162,7 +162,7 @@ export function withValueChildren(e: MExpr, replace: (child: MExpr) => MExpr | u
     case 'list':
       return { ...e, elements: e.elements.map(x => (x.kind === 'spread' ? { ...x, expr: r(x.expr) } : r(x))) };
     case 'map':
-      return { ...e, entries: e.entries.map(x => ({ ...x, value: r(x.value) })) };
+      return { ...e, entries: e.entries.map(x => (isMapSpread(x) ? { ...x, expr: r(x.expr) } : { ...x, value: r(x.value) })) };
     case 'member':
       return { ...e, object: r(e.object) };
     case 'index':

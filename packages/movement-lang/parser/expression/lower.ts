@@ -20,6 +20,7 @@ import type {
   Expression,
   ListElement,
   MetaEdgeStep,
+  ObjectMember,
   TraversalStep,
 } from '@listen-fire/shared/expression/types';
 import { AI_TIERS } from '@listen-fire/shared/expression/types';
@@ -27,7 +28,7 @@ import { validateBuiltinCallShape } from '../../expression/call_shape';
 import { BridgeError } from '../../expression/error';
 import { describeStdlibFamily, listStdlibNamespaces, stdlibFamily } from '../../expression/stdlib';
 import { neverAsAny } from '../../never';
-import type { BinaryOp, CallArg, Hop, MExpr, Name, TypeExpr } from './tree';
+import { isMapSpread, type BinaryOp, type CallArg, type Hop, type MapEntry, type MExpr, type Name, type TypeExpr } from './tree';
 import { parseExpression } from './parse_expression';
 
 export class LoweringError extends BridgeError {
@@ -237,7 +238,11 @@ class Lowering {
       case 'map':
         return {
           type: 'object',
-          entries: expr.entries.map(e => ({ key: e.key.text, value: this.lower(e.value, ctx) })),
+          entries: expr.entries.map((e): ObjectMember =>
+            isMapSpread(e)
+              ? { type: 'spread', expression: this.lower(e.expr, ctx) }
+              : { key: e.key.text, value: this.lower(e.value, ctx) },
+          ),
         };
       case 'member':
       case 'call':
@@ -533,13 +538,15 @@ class Lowering {
   private metaConfig(config: Extract<MExpr, { kind: 'map' }>, ctx: Ctx): MetaEdgeStep['config'] | undefined {
     const cfg: NonNullable<MetaEdgeStep['config']> = {};
     for (const entry of config.entries) {
+      if (isMapSpread(entry)) throw new LoweringError("A hop's settings are written out one by one — a spread ('...') is not accepted here");
       const key = entry.key.text;
       if (key === 'enrich_with') {
         if (entry.value.kind !== 'list') throw new LoweringError('enrich_with: expects a list literal');
         cfg.enrichWith = entry.value.elements.map((e): EnrichWithEntry => {
           if (e.kind !== 'map') throw new LoweringError('enrich_with: each entry must be an object literal');
-          const transform = e.entries.find(x => x.key.text === 'transform');
-          const argument = e.entries.find(x => x.key.text === 'argument');
+          const pairs = e.entries.filter((x): x is MapEntry => !isMapSpread(x));
+          const transform = pairs.find(x => x.key.text === 'transform');
+          const argument = pairs.find(x => x.key.text === 'argument');
           if (!transform || !argument || e.entries.length !== 2) {
             throw new LoweringError('enrich_with entry: requires exactly "transform" and "argument"');
           }
@@ -883,7 +890,7 @@ export function children(e: MExpr): MExpr[] {
     case 'list':
       return e.elements.map(x => (x.kind === 'spread' ? x.expr : x));
     case 'map':
-      return e.entries.map(x => x.value);
+      return e.entries.map(x => (isMapSpread(x) ? x.expr : x.value));
     case 'member':
       return [e.object];
     case 'index':

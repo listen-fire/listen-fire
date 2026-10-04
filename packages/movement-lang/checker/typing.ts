@@ -19,8 +19,11 @@ import {
   AI_TIER_ALIASES,
   AI_TIERS,
   FOLD_ALGEBRA,
+  isObjectSpread,
   listElementExpression,
+  objectMemberExpression,
   type AggregationFunction,
+  type ObjectMember,
   type EdgeCapability,
   type Expression,
   type FilterOperator,
@@ -217,6 +220,13 @@ export const TypedDiagnosticCodes = {
    *  number, a record, a dict. A spread splices a list's (or tuple's) members
    *  in; one thing has no members to splice. */
   LIST_SPREAD_NOT_A_LIST: 'MOV_LIST_SPREAD_NOT_A_LIST',
+  /** `...x` inside a map literal where `x` has no keys to copy — a text, a
+   *  list, a number — or is a record whose fields the program does not hold
+   *  (a system's record, read one field at a time). */
+  MAP_SPREAD_NOT_KEYED: 'MOV_MAP_SPREAD_NOT_KEYED',
+  /** `{ k: v, ...m }` where `m` always has `k`: the written value is
+   *  overwritten before anything reads it — TypeScript's error 2783. */
+  MAP_KEY_OVERWRITTEN: 'MOV_MAP_KEY_OVERWRITTEN',
   /** An arithmetic operand (`+ - * /`) whose KNOWN type is not numeric — the
    *  classic being `"a" + b`, since `+` is addition and the language has no
    *  concat overload. The engine coerces through `Number()`, so such an
@@ -1538,7 +1548,7 @@ function subExpressions(expr: Expression): Expression[] {
     case 'list':
       return expr.elements.map(listElementExpression);
     case 'object':
-      return expr.entries.map(entry => entry.value);
+      return expr.entries.map(objectMemberExpression);
     case 'function':
       return expr.args;
     case 'exists':
@@ -2750,6 +2760,49 @@ export function positionSchemaOfRef(type: PositionTypeRef): PositionSchema | und
  * field's type is ambiguous all degrade to undefined (which keeps the
  * comparison check permissive). `readProperty` is the reporting counterpart.
  */
+/**
+ * A record's fields and their types, as a read of each would type it — the
+ * record's dot plane, which is what spreading it copies. Undefined where
+ * nothing says which fields it has.
+ */
+export function recordFieldTypes(position: PositionTypeRef): Record<string, FieldType | null> | undefined {
+  const typed = (names: Iterable<string>): Record<string, FieldType | null> =>
+    Object.fromEntries([...names].map(name => [name, lookupPropertyType(position, name) ?? null]));
+  switch (position.kind) {
+    case 'local':
+      return typed(Object.keys(position.reads));
+    case 'position':
+    case 'handle': {
+      const schema = positionSchemaOfRef(position)?.properties ?? {};
+      const result = position.kind === 'handle' ? position.resultShape : {};
+      if (position.kind === 'position' && positionSchemaOfRef(position) === undefined) return undefined;
+      return typed(new Set([...Object.keys(schema), ...Object.keys(result)]));
+    }
+    case 'extract':
+      return Object.fromEntries(
+        [...position.node.properties].map(([name, field]) => [
+          name,
+          readsAsPresentText(field) || position.present?.has(name) === true
+            ? field.explicit !== undefined ? stripAbsent(field.explicit) : 'text'
+            : field.explicit !== undefined ? maybeAbsent(field.explicit)! : null,
+        ]),
+      );
+    case 'maybeEmpty': {
+      const inner = recordFieldTypes(position.of);
+      if (inner === undefined) return undefined;
+      return Object.fromEntries(
+        Object.entries(inner).map(([name, type]) => [name, type !== null ? maybeAbsent(type)! : null]),
+      );
+    }
+    case 'union':
+    case 'meta':
+    case 'closure':
+      return undefined;
+    default:
+      return neverAsAny(position);
+  }
+}
+
 export function lookupPropertyType(
   position: PositionTypeRef | undefined,
   propertyId: string,
@@ -3397,7 +3450,25 @@ export class ExpressionTyping {
    * each member, which is what a walk already means.
    */
   private walkStart(name: string): PositionTypeRef | undefined {
-    return this.rootType(name) ?? recordHeadPosition(this.scalarType(name));
+    const root = this.rootType(name);
+    if (root !== undefined) return root;
+    const scalar = this.scalarType(name);
+    const position = recordHeadPosition(scalar);
+    // A record that may not be there (`ONLY(…)`, `FIRST(…)`, `AT(rows, 0)`) is
+    // read as the maybe-empty landing it is, so a field read off it is
+    // `T | absent` — TypeScript's `r?.name`. Before version 3 the absence was
+    // dropped at the read, and a required slot it reached never heard of it.
+    if (
+      position !== undefined &&
+      position.kind !== 'maybeEmpty' &&
+      scalar !== undefined &&
+      isMaybeAbsent(scalar) &&
+      variantOf(stripAbsent(scalar)).kind === 'record' &&
+      since(this.options.languageVersion, 3)
+    ) {
+      return { kind: 'maybeEmpty', of: position };
+    }
+    return position;
   }
 
   private scalarType(name: string): FieldType | undefined {
@@ -3433,6 +3504,31 @@ export class ExpressionTyping {
       `'${name}' always has a value here, so '${test}' is ${verdict} — nothing on this path can make it absent.`,
       'info',
     );
+  }
+
+  /**
+   * `d.k` where `d` is a DICT — TypeScript's property read of an object, and
+   * the same lookup `AT(d, "k")` is: a key the literal was written with reads
+   * its own type (absent only if the dict may be), a key it lacks is refused,
+   * and a dict whose keys are data reads `T | absent`. Undefined when the read
+   * is not one (a record's field, a walk). Before version 3 such a read fell
+   * through to the record plane and typed nothing.
+   */
+  private dictMemberRead(expr: Extract<Expression, { type: 'traverse' }>): { type: FieldType | undefined } | undefined {
+    if (before(this.options.languageVersion, 3)) return undefined;
+    if (expr.aliasRoot === undefined || expr.steps.length > 0 || expr.expression.type !== 'property') return undefined;
+    if (this.rootType(expr.aliasRoot) !== undefined) return undefined;
+    const held = this.scalarType(expr.aliasRoot);
+    const dict = held !== undefined ? stripAbsent(held) : undefined;
+    if (dict === undefined || !isDictType(dict)) return undefined;
+    const key = expr.expression.propertyTypeId;
+    if (dict.shape === undefined) return { type: maybeAbsent(dict.of) };
+    if (!Object.hasOwn(dict.shape, key)) {
+      this.reportUnknownDictKey(key, Object.keys(dict.shape));
+      return { type: undefined };
+    }
+    const slot = dict.shape[key] ?? undefined;
+    return { type: isMaybeAbsent(held) ? maybeAbsent(slot) : slot };
   }
 
   /** Walk `body` with `proofs`' subjects read as PRESENT — the narrowing an
@@ -3472,7 +3568,7 @@ export class ExpressionTyping {
    * name it is bound to, so that `AT(t, 0)` off the name reads the slot.
    */
   inferExact(expr: Expression, writeTarget?: WriteTargetRef): FieldType | undefined {
-    if (writeTarget !== undefined && expr.type === 'traverse' && expr.expression.type === 'property') {
+    if (writeTarget !== undefined && expr.type === 'traverse' && expr.expression.type === 'property' && this.dictMemberRead(expr) === undefined) {
       const start = expr.aliasRoot !== undefined ? this.walkStart(expr.aliasRoot) : undefined;
       const position = this.walkSteps(start, expr.steps);
       this.rememberOrdering(expr, position);
@@ -3518,6 +3614,8 @@ export class ExpressionTyping {
         if (position === undefined) return this.bareNameType(expr.propertyTypeId);
         return this.readProperty(position, expr.propertyTypeId);
       case 'traverse': {
+        const keyRead = this.dictMemberRead(expr);
+        if (keyRead !== undefined) return keyRead.type;
         const exists = existsSubject(expr);
         if (exists !== undefined) {
           this.reportConstantPresenceTest(exists, `EXISTS(${exists})`, 'always true');
@@ -3558,45 +3656,8 @@ export class ExpressionTyping {
         const tuple = this.listLiteralType(expr.elements, position);
         return before(this.options.languageVersion, 3) ? this.widen(tuple) : tuple;
       }
-      case 'object': {
-        // `{ k: v, … }` — typed by its keys, as TypeScript types an object
-        // literal: the keys were written down, so each one carries its own
-        // value's type (`shape`), and a lookup by a written key reads exactly
-        // that. `of` answers a key nobody wrote down — the values' shared type
-        // where they agree, and `json` where they do not, since there is no
-        // union to name and json is where every value flows. Every value is
-        // walked either way, since a traversal inside one must be validated
-        // like any other.
-        // A key keeps its value's own type (a tuple stays one, so `AT(AT(d,
-        // "k"), 0)` reads a slot); whether the values agree is a question about
-        // them READ, so it is asked of their widened types.
-        const exactTypes = expr.entries.map(e => this.inferExactAt(e.value, position));
-        const valueTypes = exactTypes.map(widenTuples);
-        // Version 1 typed a literal as its values alone: a dict when they
-        // agree, `json` when they do not (or there are none), and its keys
-        // unknown — so every lookup may miss, and no key is a typo.
-        if (before(this.options.languageVersion, 2)) {
-          const head = valueTypes[0];
-          if (head === undefined || !valueTypes.every(t => t !== undefined && fieldTypeEquals(t, head))) {
-            return 'json';
-          }
-          return { kind: 'dict', of: valueTypes.some(isMaybeAbsent) ? maybeAbsent(head)! : head };
-        }
-        const shape: Record<string, FieldType | null> = {};
-        expr.entries.forEach((entry, i) => {
-          shape[entry.key] = exactTypes[i] ?? null;
-        });
-        const first = valueTypes[0];
-        const agree =
-          first !== undefined && valueTypes.every(t => t !== undefined && fieldTypeEquals(t, first));
-        // Sameness is transparent to absence, so it has to be carried
-        // separately: one entry that may not answer makes every read of this
-        // dict one that may not answer.
-        const of: FieldType = agree
-          ? valueTypes.some(isMaybeAbsent) ? maybeAbsent(first)! : first
-          : 'json';
-        return { kind: 'dict', of, shape };
-      }
+      case 'object':
+        return this.objectLiteralType(expr.entries, position);
       case 'concat': {
         const parts = expr.parts.map(p => this.inferAt(p, position));
         parts.forEach(t => this.requireTransparent(t, 'combined into text'));
@@ -3972,6 +4033,114 @@ export class ExpressionTyping {
     // Two runs: nothing past the first one has a fixed place any more.
     const folded = tupleAsList({ kind: 'tuple', of: slotsOf(parts.slice(firstRun)) }, this.options.languageVersion);
     return { kind: 'tuple', of: prefix, rest: { at: prefix.length, of: folded?.of ?? null } };
+  }
+
+  /**
+   * `{ k: v, ...m, … }` — typed by its keys, as TypeScript types an object
+   * literal: the keys were written down, so each one carries its own value's
+   * type (`shape`), and a lookup by a written key reads exactly that. `of`
+   * answers a key nobody wrote down — the values' shared type where they
+   * agree, and `json` where they do not, since there is no union to name and
+   * json is where every value flows. Every value is walked either way, since a
+   * traversal inside one must be validated like any other.
+   *
+   * A key keeps its value's own type (a tuple stays one, so `AT(AT(d, "k"), 0)`
+   * reads a slot); whether the values agree is a question about them READ, so
+   * it is asked of their widened types.
+   *
+   * A spread copies another map's keys, or a record's fields, in place —
+   * TypeScript's object spread, members taking effect in the order written so
+   * a later key wins. A spread that may be absent copies nothing when it is,
+   * as TypeScript's `...undefined` does: its keys are then `T | absent`, or
+   * whatever an earlier member gave them. A spread whose keys nobody can name
+   * (json, a dict built from data) leaves the literal's keys unnamed too.
+   */
+  private objectLiteralType(members: ObjectMember[], position: PositionTypeRef | undefined): FieldType {
+    const shape: Record<string, FieldType | null> = {};
+    // Keys a WRITTEN entry gave, until something overwrites them.
+    const written = new Set<string>();
+    const readTypes: Array<FieldType | undefined> = [];
+    let keysNamed = true;
+    for (const member of members) {
+      if (!isObjectSpread(member)) {
+        const exact = this.inferExactAt(member.value, position);
+        shape[member.key] = exact ?? null;
+        written.add(member.key);
+        readTypes.push(widenTuples(exact, this.options.languageVersion));
+        continue;
+      }
+      const spread = this.spreadKeys(member.expression, position);
+      if (spread.keys === undefined) {
+        keysNamed = false;
+        readTypes.push(spread.of);
+        continue;
+      }
+      for (const [key, type] of Object.entries(spread.keys)) {
+        const earlier = Object.hasOwn(shape, key) ? shape[key] : undefined;
+        if (!spread.mayBeAbsent) {
+          if (written.has(key)) {
+            this.report(
+              TypedDiagnosticCodes.MAP_KEY_OVERWRITTEN,
+              `'${key}' is written before a spread that always has '${key}', so the spread overwrites it — move '${key}: …' after the spread to override it, or drop it`,
+            );
+          }
+          shape[key] = type;
+        } else if (earlier === undefined) {
+          shape[key] = type !== null ? maybeAbsent(type)! : null;
+        } else {
+          shape[key] = earlier !== null && type !== null ? valueUnion([earlier, type]) ?? null : null;
+        }
+        written.delete(key);
+        readTypes.push(widenTuples(shape[key] ?? undefined, this.options.languageVersion));
+      }
+    }
+    const first = readTypes[0];
+    const agree = first !== undefined && readTypes.every(t => t !== undefined && fieldTypeEquals(t, first));
+    // Sameness is transparent to absence, so it has to be carried separately:
+    // one entry that may not answer makes every read of this dict one that may
+    // not answer.
+    const of: FieldType = agree ? (readTypes.some(isMaybeAbsent) ? maybeAbsent(first)! : first) : 'json';
+    // Version 1 typed a literal as its values alone: a dict when they agree,
+    // `json` when they do not (or there are none), and its keys unknown — so
+    // every lookup may miss, and no key is a typo.
+    if (before(this.options.languageVersion, 2)) return agree ? { kind: 'dict', of } : 'json';
+    return keysNamed ? { kind: 'dict', of, shape } : { kind: 'dict', of };
+  }
+
+  /**
+   * What `...x` copies into a map literal: a map's keys (named when the map
+   * was written as a literal), or a record's FIELDS — its dot plane, as the
+   * record's own value; an edge is a walk, not a key. `mayBeAbsent` when `x`
+   * may not be there. A record is copied from what the binding holds, so it
+   * has to be one whose fields the program spells out (`holdsSpelledFields`):
+   * a system's record has no field list in hand.
+   */
+  private spreadKeys(
+    expr: Expression,
+    position: PositionTypeRef | undefined,
+  ): { keys?: Record<string, FieldType | null>; of?: FieldType; mayBeAbsent: boolean } {
+    const spread = this.inferExactAt(expr, position);
+    if (spread === undefined) return { mayBeAbsent: false };
+    const mayBeAbsent = isMaybeAbsent(spread);
+    const present = stripAbsent(spread);
+    if (present === 'json') return { of: 'json', mayBeAbsent };
+    if (isDictType(present)) {
+      return present.shape !== undefined
+        ? { keys: present.shape, mayBeAbsent }
+        : { of: present.of, mayBeAbsent };
+    }
+    const record = variantOf(present).kind === 'record' ? recordIn(present)?.position : undefined;
+    if (record !== undefined && this.holdsSpelledFields(record)) {
+      const fields = recordFieldTypes(record);
+      return fields !== undefined ? { keys: fields, mayBeAbsent } : { of: 'json', mayBeAbsent };
+    }
+    this.report(
+      TypedDiagnosticCodes.MAP_SPREAD_NOT_KEYED,
+      variantOf(present).kind === 'record'
+        ? `'...' copies a record's fields into this map, and this record's fields are read from its system one at a time — the program doesn't hold them. Write the fields you want ('{ name: r.name, … }')`
+        : `'...' copies a map's keys (or a record's fields) into this map, and this is ${describeFieldType(present)} — it has no keys. Write it under a key ('{ k: x }'), or spread a map or a record`,
+    );
+    return { mayBeAbsent };
   }
 
   /**
@@ -4645,6 +4814,8 @@ export class ExpressionTyping {
   ): undefined {
     if (arg.type !== 'object') return undefined; // the bridge already refused it
     for (const entry of arg.entries) {
+      // The bridge refuses a spread among a built-in's options.
+      if (isObjectSpread(entry)) continue;
       const got = this.inferAt(entry.value, position);
       const option = spec.options.find(o => o.key === entry.key);
       if (option === undefined || option.type === 'literal' || got === undefined) continue;

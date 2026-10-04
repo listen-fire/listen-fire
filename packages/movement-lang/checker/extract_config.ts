@@ -8,7 +8,7 @@
 // misspelt one, and a computed value would move that refusal into the middle
 // of a run. Unknown keys are refused, TypeScript's excess-property check.
 
-import type { Expression } from '@listen-fire/shared/expression/types';
+import { isObjectSpread, type Expression } from '@listen-fire/shared/expression/types';
 import { AI_EFFORTS, AI_TIERS, aiTier, type AiEffort, type AiTier } from '@listen-fire/shared/expression/types';
 
 import { didYouMean } from './meta';
@@ -56,6 +56,10 @@ export function readExtractCallConfig(
   const problems: string[] = [];
   const written = new Map<keyof ExtractCallSettings, Expression>();
   for (const entry of record.entries) {
+    if (isObjectSpread(entry)) {
+      problems.push(`'extract' takes its settings written out one by one — a spread ('...') is not accepted here. The settings are: ${inventory}`);
+      continue;
+    }
     if (!isSettingKey(entry.key)) {
       problems.push(
         `'extract' has no setting '${entry.key}'${didYouMean(entry.key, SETTING_KEYS)}. The settings are: ${inventory}`,

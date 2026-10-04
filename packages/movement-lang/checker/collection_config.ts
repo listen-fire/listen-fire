@@ -13,7 +13,7 @@
 // line TypeScript draws: an options object written in place is checked key by
 // key (excess-property checking), which is exactly what this does.
 
-import type { Expression } from '@listen-fire/shared/expression/types';
+import { isObjectSpread, type Expression } from '@listen-fire/shared/expression/types';
 
 import { didYouMean } from './meta';
 
@@ -75,6 +75,10 @@ export function readCollectionConfig(record: Expression, spelling: string): Coll
   const problems: string[] = [];
   const written = new Map<string, Expression>();
   for (const entry of record.entries) {
+    if (isObjectSpread(entry)) {
+      problems.push(`'${spelling}' takes its settings written out one by one — a spread ('...') is not accepted here. The settings are: ${inventory}`);
+      continue;
+    }
     if (!isSettingKey(entry.key)) {
       problems.push(
         `'${spelling}' has no setting '${entry.key}'${didYouMean(entry.key, SETTING_KEYS)}. The settings are: ${inventory}`,

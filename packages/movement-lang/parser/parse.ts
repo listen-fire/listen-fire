@@ -84,7 +84,7 @@ import {
 } from './ast';
 import { spellName } from './ast';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
-import { scanBacktickName, scanIdent, scanName } from './scan';
+import { callStyleIfMessage, scanBacktickName, scanIdent, scanName } from './scan';
 import { KEYWORDS } from '@listen-fire/shared/expression/formula';
 
 /** The two spellings of a movement declaration — `function` is a pure parser
@@ -800,6 +800,12 @@ class Parser {
         const wordStart = this.pos;
         while (!this.eof() && /[A-Za-z0-9_]/.test(this.peekCh()!)) this.pos++;
         const word = this.src.slice(wordStart, this.pos);
+        if (word === 'IF') {
+          let after = this.pos;
+          while (after < this.src.length && /[ \t]/.test(this.src[after])) after++;
+          const callStyle = callStyleIfMessage(this.src, after);
+          if (callStyle !== undefined) this.error(callStyle, wordStart);
+        }
         if (word === 'IF' && prevWord !== 'ELSE') ifDepth++;
         else if (word === 'END' && ifDepth > 0) ifDepth--;
         prevWord = word;
