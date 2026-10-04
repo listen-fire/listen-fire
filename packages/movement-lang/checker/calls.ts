@@ -235,6 +235,22 @@ function isTextWrittenInPlace(e: MExpr): boolean {
   return e.kind === 'string' && e.parts.every(part => typeof part === 'string');
 }
 
+/**
+ * The built-ins the catalog lists that the movement engine has no way to run.
+ * A call to one passed the save check and then failed the run. `LLM_AGG`'s
+ * instruction never reached a model either: it was lowered into the place
+ * JOIN's separator goes.
+ */
+const NOT_RUN: Readonly<Record<string, string>> = {
+  LLM_AGG:
+    "is not run by the movement engine — the run would fail where it is reached, and its instruction never reaches a model. Join the members and ask the model directly: `notes = JOIN(xs, \"\\n\")`, then `AI(\"Summarise these: ${notes}\")`",
+};
+
+/** Why the movement engine cannot run `builtin`, when it cannot. */
+export function builtinNotRun(builtin: Builtin): string | undefined {
+  return NOT_RUN[builtin.name];
+}
+
 /** The message for a call the engine runs written inside a `SORT` key, which
  *  is read once per member — the call would run once, and every member would
  *  sort by its one answer. */
