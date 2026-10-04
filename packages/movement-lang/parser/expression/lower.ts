@@ -94,8 +94,10 @@ const AGG_FNS: Record<string, Extract<Expression, { type: 'aggregate' }>['fn']> 
 /**
  * The aggregates whose bare-walk argument takes a property written after the
  * call (`FIRST(orgs-[:co]->).url`). The old bridge found these by a
- * CASE-SENSITIVE regex over the text, so the rule keeps to an upper-case,
- * unquoted callee: `first(orgs-[:co]->).url` is still refused.
+ * case-sensitive regex over the text, which refused `first(orgs-[:co]->).url`;
+ * a function's name is the same name in any letter case (language version 3),
+ * so the rule is read with the case folded. Accepting what was refused is
+ * additive, so it holds under every version.
  */
 const BARE_PATH_AGGREGATES = new Set([
   'FIRST', 'LAST', 'ONLY', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'JOIN', 'COLLECT', 'SORT', 'LLM_AGG',
@@ -144,7 +146,11 @@ class Lowering {
     if (expr.kind === 'is') {
       return {
         kind: 'isTest',
-        subjectRaw: this.source.slice(expr.subject.at.start, expr.subject.at.end).trim(),
+        // A name is spelled from the tree: a nested call's bound name stands
+        // where the call's text is (checker/nested_calls.ts).
+        subjectRaw: expr.subject.kind === 'name'
+          ? (expr.subject.name.quoted ? `\`${expr.subject.name.text}\`` : expr.subject.name.text)
+          : this.source.slice(expr.subject.at.start, expr.subject.at.end).trim(),
         type: this.isType(expr.type),
       };
     }
@@ -563,7 +569,7 @@ class Lowering {
     const next = after[0];
     if (
       !name.quoted &&
-      BARE_PATH_AGGREGATES.has(name.text) &&
+      BARE_PATH_AGGREGATES.has(upper) &&
       values.length > 0 &&
       this.isBareWalk(values[0]) &&
       next?.kind === 'member'

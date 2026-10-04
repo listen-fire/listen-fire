@@ -14,6 +14,8 @@ export * from './checker/generics';
 export * from './checker/effects';
 export * from './checker/standard_library';
 export * from './checker/calls';
+export * from './checker/nested_calls';
+export type { MExpr } from './parser/expression/tree';
 export * from './checker/typing';
 export * from './checker/conformance';
 export * from './checker/event_address';

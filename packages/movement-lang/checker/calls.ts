@@ -80,19 +80,18 @@ export function resolveCallee(
 /**
  * Why a built-in call cannot be read as written. `args` — it was handed an
  * argument it does not take (or the wrong number); `unused` — it computes a
- * value, written where nothing receives one; `nested` — it takes a function
- * or a type, which an expression cannot carry yet, so it is read on its own
- * line.
+ * value, written where nothing receives one.
  */
 export type CallRefusal = {
-  kind: 'args' | 'unused' | 'nested' | 'extractNested';
+  kind: 'args' | 'unused';
   message: string;
   span: Span;
 };
 
-/** The extraction call written inside another call or expression. */
+/** The extraction call written inside a walk's `WHERE`, where it would run
+ *  once per landing. */
 export const EXTRACT_CALL_NESTED_MESSAGE =
-  "'extract(…)' is read on its own line, not inside another expression — its shape is a declaration, which an expression cannot hold. Bind it first, then use the name: `found = extract(content, Shape)` then `ONLY(found)`";
+  "'extract(…)' runs a model over its content, and a walk's WHERE is read once per landing — bind it first, then use the name: `found = extract(content, Shape)`";
 
 export type CallReading =
   /** Run the function the program declares (or report its name unknown). */
@@ -108,15 +107,18 @@ export type CallPosition =
   | 'statement'
   /** A value bound or returned — `n = UPPER(x)`. */
   | 'value'
-  /** An argument of another call — `log(UPPER(x))`. */
+  /** An argument of another call — `log(UPPER(x))`, `log(MAP(xs, f))`. Any
+   *  built-in written there is the expression it is (`CallStatement.
+   *  expression`), and the expression reads a collection op, `MEMBERS` or
+   *  `extract` among it as a nested call (./nested_calls.ts). */
   | 'argument';
 
 /**
  * How the call reads at `position`. `resolve` looks a callee up where the call
  * is written (`resolveCallee` over the reader's scope). A built-in's reading
- * also reads every call among its arguments, as an argument: `MAP(MEMBERS(<T>),
- * f)` is refused for the `MEMBERS` it holds, whatever `MAP` would make of it.
- * A function's call reads its arguments where it checks or runs them.
+ * also reads every call among its arguments, as an argument, so a refusal
+ * there is the whole call's. A function's call reads its arguments where it
+ * checks or runs them.
  */
 export function readCall(
   call: CallStatement,
@@ -147,6 +149,12 @@ function readOneCall(
   if (call.args.some((arg) => arg.name !== undefined)) {
     return refused('args', `'${call.callee}' is a built-in, and a built-in takes its arguments in order — ${describeBuiltin(builtin)}`);
   }
+  // In an argument, every built-in is the value it computes: the call read as
+  // one expression, which reads a collection op, `MEMBERS` or `extract` as a
+  // nested call — `log(MAP(xs, f))` is `log(#call)` with `#call = MAP(xs, f)`.
+  if (position === 'argument' && builtin.form.kind !== 'value' && call.expression !== undefined) {
+    return { kind: 'value', expr: call.expression };
+  }
   switch (builtin.form.kind) {
     case 'value': {
       if (position === 'statement') {
@@ -165,10 +173,8 @@ function readOneCall(
       return { kind: 'value', expr: call.expression };
     }
     case 'collection':
-      if (position === 'argument') return refused('nested', nestedMessage(call.callee));
       return collectionReading(call, builtin.form.op);
     case 'members': {
-      if (position === 'argument') return refused('nested', nestedMessage(call.callee));
       if (position === 'statement') {
         return refused('unused', `'${call.callee}(…)' reads a type's values and does nothing else — bind it: \`values = ${call.callee}(<…>)\``);
       }
@@ -179,15 +185,15 @@ function readOneCall(
       return { kind: 'members', members: { type: only.type, span: call.span, typeSpan: only.span } };
     }
     case 'extract':
-      if (position === 'argument') return refused('extractNested', EXTRACT_CALL_NESTED_MESSAGE);
       return refused('args', `'${call.callee}' is the extraction call, spelled \`extract(content, Shape)\``);
   }
 }
 
-/** The message for a call that takes a function or a type, written inside
- *  another expression — and for a function's call written there. */
+/** The message for a call the engine runs — a function's, a collection op,
+ *  `MEMBERS` — written inside a walk's `WHERE`, `ORDER BY` or settings, which
+ *  are read once per landing. */
 export function nestedMessage(callee: string): string {
-  return `'${callee}(…)' is read on its own line, not inside another expression — bind it first, then pass the name: \`answer = ${callee}(…)\``;
+  return `'${callee}(…)' runs once where it is written, and a walk's WHERE, ORDER BY and settings are read once per landing — bind it first, then use the name: \`answer = ${callee}(…)\``;
 }
 
 function describeArgForm(arg: CallArg): string {

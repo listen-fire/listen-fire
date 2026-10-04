@@ -89,10 +89,12 @@ import {
   READ_FUNCTION_ID,
   readChunkSpec,
   refinementKey,
+  since,
   stdlibFunctionById,
 } from 'movement-lang';
 import type {
   ClosureExpression,
+  LanguageVersion,
   InstanceSchema,
   LinkedFile,
   MovementDeclaration,
@@ -821,6 +823,10 @@ export interface SourceRead {
 
 export interface MovementExprContext {
   env: Environment;
+  /** The movement's pin, for the evaluation rules a version changed
+   *  (`COALESCE` reaches only the arguments it needs from version 3). Absent
+   *  ⇒ the oldest behaviour. */
+  languageVersion?: LanguageVersion;
   /**
    * The event side, when interpreting inside a movement body. File-level
    * expressions evaluate without one (they cannot reach the event
@@ -1623,6 +1629,23 @@ export async function evalMovementExpr(
           `the function ${expr.fn.toUpperCase()}()`,
           'built-in functions run everywhere; an integration-provided function runs only as a write-field value on a field that advertises it',
         );
+      }
+      if (
+        expr.fn === 'coalesce'
+        && ctx.languageVersion !== undefined
+        && since(ctx.languageVersion, 3)
+      ) {
+        // From version 3 COALESCE short-circuits, as TypeScript's `??` does: an
+        // argument after the first present one is never evaluated, so its
+        // effects (a model call, a read) never happen and its failures are
+        // never raised. Before it every argument was evaluated first.
+        const seen: MovementEvalResult[] = [];
+        for (const a of expr.args) {
+          const result = await evalMovementExpr(a, ctx);
+          if (result.value !== null && result.value !== undefined) return result;
+          seen.push(result);
+        }
+        return { value: null, provenance: unionProvenance(seen.map((a) => a.provenance)) };
       }
       const args: MovementEvalResult[] = [];
       for (const a of expr.args) args.push(await evalMovementExpr(a, ctx));

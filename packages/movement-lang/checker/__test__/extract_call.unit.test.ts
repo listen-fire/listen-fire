@@ -79,10 +79,13 @@ describe('extract(content, Shape) — the worked example', () => {
     ).toEqual([]);
   });
 
-  it('is read on its own line: inside another expression it is refused, with the binding to write', () => {
-    const body = "  first = ONLY(extract([e.Body], Company))";
-    expect(codes(body)).toEqual([TypedDiagnosticCodes.EXTRACT_CALL_NESTED]);
-    expect(messages(body)).toContain('`found = extract(content, Shape)` then `ONLY(found)`');
+  it('nests inside another expression as the records it finds', () => {
+    expect(codes("  first = ONLY(extract([e.Body], Company))")).toEqual([]);
+    // Typed by its shape: a Company's headcount is a number, which UPPER refuses.
+    expect(codes("  n = UPPER(ONLY(MAP(extract([e.Body], Company), (r) => r.employees)))")).toEqual([
+      TypedDiagnosticCodes.BUILTIN_ARG_TYPE,
+    ]);
+    expect(codes("  n = UPPER(ONLY(MAP(extract([e.Body], Company), (r) => r.name)))")).toEqual([]);
   });
 
   it('is an expression: it may be returned', () => {

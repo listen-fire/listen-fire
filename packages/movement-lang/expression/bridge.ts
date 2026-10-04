@@ -67,6 +67,25 @@ export function treeOfSlot(slot: ExprSlot): MExpr {
   return treeOf(slot);
 }
 
+/**
+ * A slot whose tree is `tree` — a rewriting of `slot`'s own tree (a nested
+ * call replaced by the name it is bound to), or one of its sub-expressions.
+ * Offsets in `tree` are `slot.raw`'s, so the text is kept: for a
+ * sub-expression, with everything outside it blanked, so a reader of the text
+ * sees only the part the tree is.
+ */
+export function slotOfTree(slot: ExprSlot, tree: MExpr): ExprSlot {
+  const whole = tree.at.start === 0 && tree.at.end === slot.raw.length;
+  const raw = whole
+    ? slot.raw
+    : slot.raw.slice(0, tree.at.start).replace(/[^\n]/g, ' ')
+      + slot.raw.slice(tree.at.start, tree.at.end)
+      + slot.raw.slice(tree.at.end).replace(/[^\n]/g, ' ');
+  const derived: ExprSlot = { raw, span: slot.span };
+  slotTrees.set(derived, tree);
+  return derived;
+}
+
 /** The slot as a value expression. */
 export function expressionOfSlot(slot: ExprSlot): Expression {
   return lowerExpression(treeOf(slot), slot.raw);

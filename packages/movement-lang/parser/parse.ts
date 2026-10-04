@@ -147,6 +147,23 @@ export function parseProgram(source: string, options?: ParseOptions): Program {
 }
 
 /**
+ * A call written inside an expression — `f(x)` in `f(x) + 1`, `extract(c, S)`
+ * in `ONLY(extract(c, S))` — read as the right-hand side of a binding, which
+ * is what it means (language version 3): the expression is the same as binding
+ * the call to a fresh name first and reading the name. `at` is the call's
+ * extent in `slot.raw`, as the expression grammar found it; the statement
+ * grammar reads it because a call's arguments are its own (a closure's
+ * statements, a type, a node literal). Spans are the file's.
+ */
+export function parseNestedCall(
+  slot: ExprSlot,
+  at: { start: number; end: number },
+  languageVersion: LanguageVersion,
+): RValue {
+  return new Parser(slot.raw.slice(0, at.end), languageVersion, slot.span.start).parseNestedCallValue(at.start);
+}
+
+/**
  * The bare name a WHERE-less single hop lands on (`-[:company]->`; an alias is
  * tolerated), or undefined for anything pinned or longer. This is the same
  * judgement the checker's address reading makes (`eventAddressKey`: no pins ⇒
@@ -246,11 +263,32 @@ class Parser {
     /** Read by `since`/`before` conditionals where the grammar differs by
      *  version; none do yet. */
     readonly languageVersion: LanguageVersion,
+    /** Where `src` starts in the file, when it is a slot's text rather than
+     *  the whole file — so every span read from it is the file's. */
+    private readonly origin: Loc = { line: 1, col: 1 },
   ) {
     this.lineStarts = [0];
     for (let i = 0; i < src.length; i++) {
       if (src[i] === '\n') this.lineStarts.push(i + 1);
     }
+  }
+
+  /** `parseNestedCall`'s reading: one call from `start` to the end of the
+   *  text — the extraction call, or any other callee's call. */
+  parseNestedCallValue(start: number): RValue {
+    this.pos = start;
+    let value: RValue;
+    if (this.atExtractCall()) {
+      value = { kind: 'extractCall', extractCall: this.parseExtractCall(start) };
+    } else {
+      const callee = this.readName('the name being called');
+      this.skipInlineWs();
+      this.expect('(', `to open the call to '${callee}'`);
+      value = { kind: 'call', call: this.callNode(callee, this.parseCallArgs(callee, start), start) };
+    }
+    this.skipAllWs();
+    if (!this.eof()) this.error(`Expected the call to end here, found ${this.describeHere()}`);
+    return value;
   }
 
   parseProgram(): Program {
@@ -288,7 +326,10 @@ class Parser {
       if (this.lineStarts[mid] <= offset) lo = mid;
       else hi = mid - 1;
     }
-    return { line: lo + 1, col: offset - this.lineStarts[lo] + 1 };
+    const col = offset - this.lineStarts[lo] + 1;
+    return lo === 0
+      ? { line: this.origin.line, col: this.origin.col + col - 1 }
+      : { line: this.origin.line + lo, col };
   }
 
   private spanFrom(start: number, end = this.pos): Span {
@@ -2449,7 +2490,7 @@ class Parser {
       // for every callee — the parser does not know which takes one — and
       // refused by resolution wherever the callee does not.
       if (since(this.languageVersion, 3) && this.atClosure()) {
-        const closure = this.parseClosure(this.pos);
+        const closure = this.parseClosure(this.pos, ',)');
         args.push({ kind: 'closure', ...named, closure, span: closure.span });
         this.endCallArg('closure');
         continue;
@@ -2793,7 +2834,7 @@ class Parser {
           );
         }
         if (this.atClosure()) {
-          condition = { kind: 'closure', closure: this.parseClosure(this.pos) };
+          condition = { kind: 'closure', closure: this.parseClosure(this.pos, ',)') };
         } else {
           const { slot } = this.readExprSlot({
             stops: ',)',
@@ -3001,7 +3042,7 @@ class Parser {
   private parseArm(what: string, role = 'An arm of'): ArmExpression {
     const start = this.pos;
     if (this.atClosure()) {
-      return { kind: 'closure', closure: this.parseClosure(start), span: this.spanFrom(start) };
+      return { kind: 'closure', closure: this.parseClosure(start, ',)]'), span: this.spanFrom(start) };
     }
     if (this.peekCh() === '{') {
       this.error(
@@ -3362,12 +3403,23 @@ class Parser {
    * declaration's grammar verbatim; the body is an ordinary block body, so it
    * `return`s like every other body.
    */
-  private parseClosure(start: number): ClosureExpression {
+  private parseClosure(start: number, stops = '\n}'): ClosureExpression {
     this.expect('(', 'to open the closure parameter list');
     const params = this.parseParamList();
     this.skipAllWs();
     this.expect('=>', "between a closure's parameters and its body");
     this.skipAllWs();
+    // `(x) => x * 2` is `(x) => { return x * 2 }` with the ceremony elided, as
+    // TypeScript's concise body is (language version 3) — so a function
+    // written in place is a value like any other expression's.
+    if (this.peekCh() !== '{' && since(this.languageVersion, 3)) {
+      const { slot } = this.readExprSlot({ stops, context: 'for the closure body' });
+      return {
+        params,
+        body: [{ kind: 'return', value: { kind: 'expr', expr: slot }, span: slot.span }],
+        span: this.spanFrom(start),
+      };
+    }
     const body = this.parseBlockBody('a closure body');
     return { params, body, span: this.spanFrom(start) };
   }

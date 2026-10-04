@@ -923,6 +923,7 @@ function readsAsValue(param: BuiltinParamType): boolean {
     case 'options':
     case 'function':
     case 'type':
+    case 'shape':
       return false;
     default:
       return neverAsAny(param);
@@ -994,6 +995,8 @@ function describeParamType(param: BuiltinParamType): string {
       return 'a function';
     case 'type':
       return 'a type';
+    case 'shape':
+      return 'a node declaration';
     default:
       return neverAsAny(param);
   }

@@ -122,8 +122,22 @@ import {
   surfaceMisfit,
   readCall,
   resolveCallee,
+  since,
+  conjunctsOf,
+  holdsNestedCall,
+  nameNode,
+  parseNestedCall,
+  runsAsCall,
+  shortCircuitOf,
+  slotOfTree,
+  treeOfSlot,
+  valueChildren,
+  withValueChildren,
 } from 'movement-lang';
 import type {
+  CallNode,
+  MExpr,
+  ShortCircuit,
   AwaitExpression,
   AwaitSource,
   LanguageVersion,
@@ -1358,6 +1372,33 @@ interface BodyContext {
   address: Address;
 }
 
+/** A statement as the site of the calls nested in its expressions. */
+interface StatementSite {
+  body: BodyContext;
+  stmtAddress: Address;
+}
+
+/** One slot's nested calls, being run: the slot their offsets are in, the
+ *  scope their bound names go into, and which calls are the engine's. */
+interface NestedCallStaging {
+  slot: ExprSlot;
+  scratch: Environment;
+  runs: (call: CallNode) => boolean;
+  isCoalesce: (callee: string) => boolean;
+  bound: number;
+}
+
+/** Truthiness as the evaluator's `AND` / `OR` / `IF` read it: a value by its
+ *  own truthiness, a record by being there. */
+function bindingTruthy(binding: Binding): boolean {
+  return binding.kind === 'value' ? Boolean(binding.value) : true;
+}
+
+/** Presence as `COALESCE` reads it. */
+function bindingPresent(binding: Binding): boolean {
+  return binding.kind === 'value' ? binding.value !== null && binding.value !== undefined : true;
+}
+
 /**
  * What one collection-op member's run owns while it runs — the dynamic state
  * that would otherwise be shared by members running at once.
@@ -1820,6 +1861,9 @@ class Interpreter {
    *  calling the same movement are not a recursion, and one member's trace
    *  entries are not another's. */
   private readonly memberFrames = new AsyncLocalStorage<MemberFrame>();
+  /** The statement running in this flow, which a call nested in one of its
+   *  expressions runs as (`settleNestedCall`). */
+  private readonly statementSites = new AsyncLocalStorage<StatementSite>();
   /** The tail of the queue members' effects wait in (`oneEffectAtATime`). */
   private effectQueue: Promise<void> = Promise.resolve();
   /** The running movement's body — the extraction module's backward
@@ -2976,8 +3020,15 @@ class Interpreter {
   }
 
   private selectMovement(movements: MovementDeclaration[]): MovementDeclaration {
-    const movement = this.input.movementName
-      ? movements.find((m) => m.name === this.input.movementName)
+    const wanted = this.input.movementName;
+    // The fired movement is a function's name, so from version 3 it is the
+    // same name in any letter case (the checker resolved the listen's `fire`
+    // the same way).
+    const movement = wanted !== undefined && wanted !== ''
+      ? movements.find((m) => m.name === wanted)
+        ?? (since(this.languageVersion, 3)
+          ? movements.find((m) => m.name.toLowerCase() === wanted.toLowerCase())
+          : undefined)
       : movements.length === 1
         ? movements[0]
         : undefined;
@@ -3426,89 +3477,106 @@ class Interpreter {
       if (this.input.cancelGate && (await this.input.cancelGate.cancelled())) {
         throw new RunCancelledSignal();
       }
-      switch (statement.kind) {
-        case 'import':
-          await this.interpretFileStatement(statement, env);
-          break;
-        case 'assign':
-          await this.declareAssign(statement.name, statement.value, env, body, stmtAddress);
-          break;
-        // `return <value>` is a binding into a reserved slot: the same
-        // right-hand side, evaluated the same way, into a name the grammar
-        // cannot spell — which is what carries it across a park.
-        case 'return': {
-          await this.declareAssign(RETURN_SLOT, statement.value, env, body, stmtAddress);
-          const value = env.resolveOwn(RETURN_SLOT);
-          return value !== undefined ? { returned: true, value } : FELL_THROUGH;
-        }
-        case 'write':
-          await this.executeWrite(statement.write, undefined, env, body);
-          break;
-        case 'error':
-          await this.interpretError(statement, env);
-          break;
-        case 'if': {
-          // An arm is transparent: a `return` inside one returns from THIS
-          // body, so its outcome rides straight out — and lands in this scope
-          // too, so a park anywhere above still carries it.
-          const outcome = await this.interpretIf(statement, env, {
-            ...body,
-            address: stmtAddress,
-          });
-          if (outcome.returned) {
-            env.declare(RETURN_SLOT, outcome.value);
-            return outcome;
-          }
-          break;
-        }
-        case 'call': {
-          // `MAP(xs, f)` run bare is the iteration it resolved to; every other
-          // call runs its callee.
-          const reading = this.readCallIn(statement, env, 'statement');
-          if (reading.kind === 'collection') {
-            await this.interpretCollectionOp(reading.collection, undefined, env, body, stmtAddress);
-            break;
-          }
-          await this.executeCall(statement, env, { ...body, address: stmtAddress });
-          break;
-        }
-        case 'match':
-          await this.executeMatch(statement.match, undefined, env);
-          break;
-        case 'link':
-          await this.executeLink(statement.link, undefined, env);
-          break;
-        case 'unlink':
-          await this.executeUnlinkStatement(statement, env);
-          break;
-        case 'delete':
-          await this.executeDeleteStatement(statement, env);
-          break;
-        case 'refresh':
-          await this.interpretRefresh(statement, env);
-          break;
-        case 'block':
-          await this.interpretBlock(statement.block, undefined, env, stmtAddress);
-          break;
-        case 'await':
-          await this.interpretAwait(statement.await, undefined, env, stmtAddress, body);
-          break;
-        case 'combinator':
-          await this.interpretCombinator(statement.combinator, undefined, env, stmtAddress, body);
-          break;
-        case 'collection':
-          // Bare — the function's effects are the point; the answer (if any)
-          // is unbound, exactly as an unbound 'call' statement's return is.
-          await this.interpretCollectionOp(statement.collection, undefined, env, body, stmtAddress);
-          break;
-        case 'shape':
-          // Hoisted above.
-          break;
-        case 'movement':
-          throw unsupported(`nested ${statement.kind} declarations inside a movement body`);
-      }
+      // The statement is the SITE of any call nested in its expressions: such a
+      // call runs as this statement's (movement-lang checker/nested_calls.ts).
+      const outcome = await this.statementSites.run({ body, stmtAddress }, () =>
+        this.interpretStatement(statement, env, body, stmtAddress),
+      );
+      if (outcome !== undefined) return outcome;
     }
     return FELL_THROUGH;
+  }
+
+  /** One statement of a body. A `BodyOutcome` ends the body (a `return`, or an
+   *  `if` arm that returned); undefined goes on to the next statement. */
+  private async interpretStatement(
+    statement: Statement,
+    env: Environment,
+    body: BodyContext,
+    stmtAddress: Address,
+  ): Promise<BodyOutcome | undefined> {
+    switch (statement.kind) {
+      case 'import':
+        await this.interpretFileStatement(statement, env);
+        break;
+      case 'assign':
+        await this.declareAssign(statement.name, statement.value, env, body, stmtAddress);
+        break;
+      // `return <value>` is a binding into a reserved slot: the same
+      // right-hand side, evaluated the same way, into a name the grammar
+      // cannot spell — which is what carries it across a park.
+      case 'return': {
+        await this.declareAssign(RETURN_SLOT, statement.value, env, body, stmtAddress);
+        const value = env.resolveOwn(RETURN_SLOT);
+        return value !== undefined ? { returned: true, value } : FELL_THROUGH;
+      }
+      case 'write':
+        await this.executeWrite(statement.write, undefined, env, body);
+        break;
+      case 'error':
+        await this.interpretError(statement, env);
+        break;
+      case 'if': {
+        // An arm is transparent: a `return` inside one returns from THIS
+        // body, so its outcome rides straight out — and lands in this scope
+        // too, so a park anywhere above still carries it.
+        const outcome = await this.interpretIf(statement, env, {
+          ...body,
+          address: stmtAddress,
+        });
+        if (outcome.returned) {
+          env.declare(RETURN_SLOT, outcome.value);
+          return outcome;
+        }
+        break;
+      }
+      case 'call': {
+        // `MAP(xs, f)` run bare is the iteration it resolved to; every other
+        // call runs its callee.
+        const reading = this.readCallIn(statement, env, 'statement');
+        if (reading.kind === 'collection') {
+          await this.interpretCollectionOp(reading.collection, undefined, env, body, stmtAddress);
+          break;
+        }
+        await this.executeCall(statement, env, { ...body, address: stmtAddress });
+        break;
+      }
+      case 'match':
+        await this.executeMatch(statement.match, undefined, env);
+        break;
+      case 'link':
+        await this.executeLink(statement.link, undefined, env);
+        break;
+      case 'unlink':
+        await this.executeUnlinkStatement(statement, env);
+        break;
+      case 'delete':
+        await this.executeDeleteStatement(statement, env);
+        break;
+      case 'refresh':
+        await this.interpretRefresh(statement, env);
+        break;
+      case 'block':
+        await this.interpretBlock(statement.block, undefined, env, stmtAddress);
+        break;
+      case 'await':
+        await this.interpretAwait(statement.await, undefined, env, stmtAddress, body);
+        break;
+      case 'combinator':
+        await this.interpretCombinator(statement.combinator, undefined, env, stmtAddress, body);
+        break;
+      case 'collection':
+        // Bare — the function's effects are the point; the answer (if any)
+        // is unbound, exactly as an unbound 'call' statement's return is.
+        await this.interpretCollectionOp(statement.collection, undefined, env, body, stmtAddress);
+        break;
+      case 'shape':
+        // Hoisted above.
+        break;
+      case 'movement':
+        throw unsupported(`nested ${statement.kind} declarations inside a movement body`);
+    }
+    return undefined;
   }
 
   /**
@@ -4222,6 +4290,183 @@ class Interpreter {
    * A call's value is what the callee RETURNED — undefined when it returned
    * binds it. Effects are unchanged — the value is additional.
    */
+  // ── Nested calls (movement-lang checker/nested_calls.ts) ──
+  //
+  // A call written inside an expression — `f(x) + 1`, `ONLY(extract(c, S))`,
+  // `COUNT(MAP(xs, g))` — that the shared evaluator cannot run means what
+  // binding it to a fresh name first and reading the name means. The split:
+  //
+  //   - the shared evaluator runs every PURE part of the expression, as it
+  //     always has (lowered to the shared `Expression`);
+  //   - this engine runs each nested call, through the same path a binding of
+  //     it takes (`declareAssign`), into a scratch scope under a name only the
+  //     engine can spell (`#…`), and the expression reads the name.
+  //
+  // Order is the text's: an operator's operands are read left to right, every
+  // operand up to the last one holding a nested call is settled to a value
+  // before the next is touched, and a call's arguments are evaluated before
+  // its body runs (`executeCall` evaluates them in order). `AND`, `OR`, `IF`
+  // and `COALESCE` short-circuit: an operand they do not need is never
+  // reached, so a call in it never runs. What is left is pure, and evaluates
+  // over the settled names exactly as it would have over the values.
+  //
+  // A call that may wait is refused nested by the checker, so nothing settled
+  // here parks; it runs as the enclosing statement's (its site's) body.
+
+  /** Whether a call in an expression is one this engine runs. */
+  private runsAsCall(call: CallNode, env: Environment): boolean {
+    const scope = this.callScope(env);
+    return runsAsCall(
+      call,
+      (callee) => resolveCallee(callee, scope, this.languageVersion),
+      (declared) => {
+        const kind = env.resolve(declared)?.kind;
+        return kind === 'movement' || kind === 'plugin' || kind === 'opaque';
+      },
+    );
+  }
+
+  /**
+   * A slot holding nested calls, with those calls run: the slot reading the
+   * names they were bound to, and the scope those names are in. Undefined when
+   * the slot holds none — before language version 3 nothing nests.
+   */
+  private async stageNestedCalls(
+    slot: ExprSlot,
+    env: Environment,
+  ): Promise<{ slot: ExprSlot; env: Environment } | undefined> {
+    if (before(this.languageVersion, 3)) return undefined;
+    let tree: MExpr;
+    try {
+      tree = treeOfSlot(slot);
+    } catch {
+      return undefined; // the evaluator reports the syntax error
+    }
+    const runs = (call: CallNode): boolean => this.runsAsCall(call, env);
+    if (!holdsNestedCall(tree, runs)) return undefined;
+    const scope = this.callScope(env);
+    const staging: NestedCallStaging = {
+      slot,
+      scratch: env.child(),
+      runs,
+      isCoalesce: (callee) => {
+        const resolved = resolveCallee(callee, scope, this.languageVersion);
+        return resolved.kind === 'builtin' && resolved.builtin.name === 'COALESCE';
+      },
+      bound: 0,
+    };
+    const staged = await this.stageTree(tree, staging);
+    return { slot: slotOfTree(slot, staged), env: staging.scratch };
+  }
+
+  /** `tree` with its nested calls run, in order — what is left is pure. */
+  private async stageTree(tree: MExpr, staging: NestedCallStaging): Promise<MExpr> {
+    if (!holdsNestedCall(tree, staging.runs)) return tree;
+    if (tree.kind === 'call' && staging.runs(tree)) return this.settleNestedCall(tree, staging);
+    const short = shortCircuitOf(tree, staging.isCoalesce);
+    if (short !== undefined) return this.bindSettled(await this.settleShortCircuit(short, staging), tree, staging);
+    const operands = valueChildren(tree);
+    let last = -1;
+    operands.forEach((operand, index) => {
+      if (holdsNestedCall(operand, staging.runs)) last = index;
+    });
+    const settled = new Map<MExpr, MExpr>();
+    for (const operand of operands.slice(0, last + 1)) {
+      settled.set(operand, this.bindSettled(await this.settledBinding(operand, staging), operand, staging));
+    }
+    return withValueChildren(tree, (operand) => settled.get(operand));
+  }
+
+  /** One nested call, run as the right-hand side of a binding. */
+  private async settleNestedCall(call: CallNode, staging: NestedCallStaging): Promise<MExpr> {
+    let value: RValue;
+    try {
+      value = parseNestedCall(staging.slot, call.at, this.languageVersion);
+    } catch (e) {
+      if (e instanceof MovementParseError) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `invalid nested call (the checker should have caught this): ${e.message}`,
+        );
+      }
+      throw e;
+    }
+    const site = this.statementSites.getStore() ?? {
+      body: { atAnchor: false, address: ROOT_ADDRESS },
+      stmtAddress: ROOT_ADDRESS,
+    };
+    const name = this.nestedBindingName(staging);
+    await this.declareAssign(name, value, staging.scratch, site.body, site.stmtAddress);
+    return nameNode(name, call.at);
+  }
+
+  /** `AND` / `OR` / `IF` / `COALESCE`, reaching only the operands it needs. */
+  private async settleShortCircuit(short: ShortCircuit, staging: NestedCallStaging): Promise<Binding> {
+    const constant = (value: unknown): Binding => ({ kind: 'value', value, provenance: NO_PROVENANCE });
+    switch (short.kind) {
+      case 'and':
+      case 'or': {
+        const left = bindingTruthy(await this.settledBinding(short.left, staging));
+        if (short.kind === 'and' ? !left : left) return constant(left);
+        return constant(bindingTruthy(await this.settledBinding(short.right, staging)));
+      }
+      case 'if': {
+        const taken = bindingTruthy(await this.settledBinding(short.condition, staging));
+        if (taken) return this.settledBinding(short.then, staging);
+        // An IF with no ELSE is the empty text there, as the lowering reads it.
+        return short.else !== undefined ? this.settledBinding(short.else, staging) : constant('');
+      }
+      case 'coalesce': {
+        for (const arg of short.args) {
+          const binding = await this.settledBinding(arg, staging);
+          if (bindingPresent(binding)) return binding;
+        }
+        return constant(null);
+      }
+      default:
+        return neverAsAny(short);
+    }
+  }
+
+  /** A sub-expression's binding, with its nested calls run first. */
+  private async settledBinding(expr: MExpr, staging: NestedCallStaging): Promise<Binding> {
+    const staged = await this.stageTree(expr, staging);
+    return this.bindSlotValue(slotOfTree(staging.slot, staged), staging.scratch);
+  }
+
+  /** `binding` under a fresh name, read where `at` was written. */
+  private bindSettled(binding: Binding, at: MExpr, staging: NestedCallStaging): MExpr {
+    const name = this.nestedBindingName(staging);
+    staging.scratch.declare(name, binding);
+    return nameNode(name, at.at);
+  }
+
+  /** A name only the engine can spell (`#`, as `RETURN_SLOT`'s), unique in
+   *  its scratch scope. */
+  private nestedBindingName(staging: NestedCallStaging): string {
+    staging.bound += 1;
+    return `#nested ${staging.bound}`;
+  }
+
+  /** A condition holding nested calls: its top-level `AND` conjuncts in order,
+   *  each with its own nested calls run only once the ones before it held. */
+  private async evaluateStagedCondition(slot: ExprSlot, env: Environment): Promise<boolean | undefined> {
+    if (before(this.languageVersion, 3)) return undefined;
+    let tree: MExpr;
+    try {
+      tree = treeOfSlot(slot);
+    } catch {
+      return undefined;
+    }
+    if (!holdsNestedCall(tree, (call) => this.runsAsCall(call, env))) return undefined;
+    for (const conjunct of conjunctsOf(tree)) {
+      const part = slotOfTree(slot, conjunct);
+      const staged = await this.stageNestedCalls(part, env);
+      if (!(await this.evaluateCondition(staged?.slot ?? part, staged?.env ?? env))) return false;
+    }
+    return true;
+  }
+
   // ── Call resolution (movement-lang checker/calls.ts) ──
 
   /** What a call site can see: the environment, asked exactly, and its
@@ -4679,7 +4924,7 @@ class Interpreter {
       subject.kind === 'inline'
         ? subject.closure.params
         : (() => {
-            const binding = env.resolve(subject.movement);
+            const binding = env.resolve(this.calleeName(subject.movement, env));
             if (binding?.kind !== 'movement') {
               throw new MovementEngineError(
                 'MOVENG_RUNTIME',
@@ -5473,6 +5718,8 @@ class Interpreter {
   }
 
   private async evaluateCondition(slot: ExprSlot, env: Environment): Promise<boolean> {
+    const staged = await this.evaluateStagedCondition(slot, env);
+    if (staged !== undefined) return staged;
     let condition: MovementCondition;
     try {
       condition = conditionOfSlot(slot);
@@ -5882,7 +6129,10 @@ class Interpreter {
         `'${shapeName}' is not a node declaration in scope, so 'extract' has no shape to fill (the checker should have caught this)`,
       );
     }
-    const spec = await buildDeclarationSpec(shapeName, this.declaredNodeShape(shape, shapeEnv), {
+    // The shape is its declaration, whatever name reached it (`S = Company`
+    // binds the same one): the extractor is told the declaration's own name.
+    const declaredName = shape.declaration.name;
+    const spec = await buildDeclarationSpec(declaredName, this.declaredNodeShape(shape, shapeEnv), {
       resolveBorrowed: ([instanceName, rootName, fieldName]) => {
         const schema = this.graphSchemaOf(instanceName, env);
         return schema ? resolveBorrowedField(schema, rootName, fieldName) : undefined;
@@ -5895,7 +6145,7 @@ class Interpreter {
       contentProvenance: provenance,
       spec,
       settings,
-      siteId: `xc:${shapeName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}#${++this.extractCallCount}`,
+      siteId: `xc:${declaredName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}#${++this.extractCallCount}`,
       runtime: {
         llm: this.extractCallClient(),
         resolveFileText: this.fileTextResolver(),
@@ -9695,6 +9945,7 @@ class Interpreter {
   private exprContext(env: Environment): MovementExprContext {
     return {
       env,
+      languageVersion: this.languageVersion,
       source: this.source,
       graphRead: (name, binding) => this.graphReadFor(name, binding),
       walkDeferred: async (walk, extraSteps) =>
@@ -9770,9 +10021,12 @@ class Interpreter {
       case 'closure':
       case 'tuple':
         return binding;
+      // `S = Company`: a declaration's name, read as a value, is the shape
+      // itself from version 3 — a second name for it.
+      case 'shape':
+        return since(this.languageVersion, 3) ? binding : undefined;
       case 'value':
       case 'instance':
-      case 'shape':
       case 'movement':
       case 'plugin':
       case 'opaque':
@@ -9843,6 +10097,8 @@ class Interpreter {
    * the value it evaluated to, records included.
    */
   private async bindSlotValue(slot: ExprSlot, env: Environment): Promise<Binding> {
+    const staged = await this.stageNestedCalls(slot, env);
+    if (staged !== undefined) return this.bindSlotValue(staged.slot, staged.env);
     const aliased = this.aliasedNodeBinding(slot, env);
     if (aliased !== undefined) return aliased;
     const selected = await this.selectedPositionBinding(slot, env);
@@ -9877,6 +10133,8 @@ class Interpreter {
       fieldFunctions?: MovementExprContext['fieldFunctions'];
     },
   ): Promise<MovementEvalResult> {
+    const staged = await this.stageNestedCalls(slot, options.env);
+    if (staged !== undefined) return this.evaluateSlot(staged.slot, { ...options, env: staged.env });
     let expr: Expression;
     try {
       expr = expressionOfSlot(slot);

@@ -336,6 +336,48 @@ describe('cache breakpoints', () => {
   });
 });
 
+describe('the call nests inside an expression (language version 3)', () => {
+  it('ONLY(extract(…)) is the one record it found', async () => {
+    const { calls, writes } = await run(
+      [
+        '  first = ONLY(extract([msg.`text`], Detail))',
+        '  write crm-[:companies]-> { name: first.summary }',
+      ],
+      [detail('Acme builds infra')],
+    );
+    expect(calls).toHaveLength(1);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme builds infra' }]);
+  });
+
+  it('as a collection op reads it, inside a write field', async () => {
+    const { writes } = await run(
+      ['  write crm-[:companies]-> { name: JOIN(MAP(extract([msg.`text`], Company), (c) => c.name), ", ") }'],
+      [COMPANIES],
+    );
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme, Beta' }]);
+  });
+
+  it("a declaration's name bound to another name is the same shape", async () => {
+    const aliased = await run(
+      [
+        '  D = Detail',
+        '  found = extract([msg.`text`], D)',
+        '  MAP(found, (d) => { write crm-[:companies]-> { name: d.summary } })',
+      ],
+      [detail('hello')],
+    );
+    const direct = await run(
+      [
+        '  found = extract([msg.`text`], Detail)',
+        '  MAP(found, (d) => { write crm-[:companies]-> { name: d.summary } })',
+      ],
+      [detail('hello')],
+    );
+    expect(aliased.writes.map((w) => w.fields)).toEqual([{ name: 'hello' }]);
+    expect(aliased.calls[0].blocks.at(-1)!.text).toBe(direct.calls[0].blocks.at(-1)!.text);
+  });
+});
+
 describe('the records', () => {
   it('read by field and path; evidence names the content item it came from', async () => {
     const { writes, result } = await run(

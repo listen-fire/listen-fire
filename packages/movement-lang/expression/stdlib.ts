@@ -97,7 +97,10 @@ export type BuiltinParamType =
   | 'record'
   | 'options'
   | 'function'
-  | 'type';
+  | 'type'
+  /** A node declaration, passed by its name — `extract`'s shape. A
+   *  declaration name in value position resolves by scope to the shape. */
+  | 'shape';
 
 export interface BuiltinParam {
   name: string;

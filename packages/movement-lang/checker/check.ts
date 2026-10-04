@@ -129,10 +129,20 @@ import {
   expressionOfSlot,
   parseMovementExpression,
   authoredStringText,
+  slotOfTree,
   treeOfSlot,
 } from '../expression/bridge';
 import { children as expressionChildren } from '../parser/expression/lower';
-import type { MExpr } from '../parser/expression/tree';
+import { ExpressionSyntaxError, parseExpression } from '../parser/expression/parse_expression';
+import type { At, MExpr } from '../parser/expression/tree';
+import { MovementParseError, parseNestedCall } from '../parser/parse';
+import {
+  nestedCallName,
+  nestedCalls,
+  readingBoundNames,
+  runsAsCall,
+  type CallNode,
+} from './nested_calls';
 import {
   nestedMessage,
   readCall,
@@ -344,9 +354,23 @@ export const DiagnosticCodes = {
   BUILTIN_ARGS: 'MOV_BUILTIN_ARGS',
   /** A built-in that only computes a value, written as a whole statement. */
   BUILTIN_UNUSED: 'MOV_BUILTIN_UNUSED',
-  /** A call that is read on its own line — a function's, or a built-in that
-   *  takes a function or a type — written inside another expression. */
+  /** A call the engine runs — a function's, a collection op, `MEMBERS` —
+   *  written in a walk's `WHERE`, `ORDER BY` or settings, which are read once
+   *  per landing. Anywhere else in an expression such a call is a nested call
+   *  (language version 3; checker/nested_calls.ts). */
   CALL_NESTED: 'MOV_CALL_NESTED',
+  /** A call to a function that may WAIT, written inside an expression. A wait
+   *  parks the run at an address, and a position inside an expression has
+   *  none — so a call that can park is a whole statement, or the whole
+   *  right-hand side of a binding (language version 3). Mirrors
+   *  `COLLECTION_OP_SUSPENDS`. */
+  NESTED_CALL_SUSPENDS: 'MOV_NESTED_CALL_SUSPENDS',
+  /** A call to a movement that may WAIT (language version 3). The run's resume
+   *  address has no step for a position inside a called movement: the callee
+   *  would park at an address rooted at its own body, and the resume walks the
+   *  dispatched movement's. Refused until that step exists, rather than parked
+   *  where it cannot come back. */
+  CALL_SUSPENDS: 'MOV_CALL_SUSPENDS',
   // Named-argument matching (calls and `run` both: parens = callable
   // arguments, always named; the checker matches arguments to parameters
   // by name, so order carries no meaning).
@@ -1565,6 +1589,11 @@ function rawPath(path: PathHead): string {
 }
 
 /** Maps a character offset inside a slot's raw text back to a source location. */
+/** The span of `at` — an extent of `slot.raw` — in the file. */
+function spanOfExtent(slot: ExprSlot, at: At): Span {
+  return { start: spanWithin(slot, at.start).start, end: spanWithin(slot, at.end).start };
+}
+
 function spanWithin(slot: ExprSlot, pos: number | undefined): Span {
   if (pos === undefined || pos < 0 || pos > slot.raw.length) return slot.span;
   let { line, col } = slot.span.start;
@@ -3444,6 +3473,7 @@ class Checker {
    *  enclosing body. */
   private checkReturn(statement: Extract<Statement, { kind: 'return' }>, scope: Scope): void {
     const shape = this.checkRValue(statement.value, scope, undefined, statement.span);
+    this.refuseSuspendingValue(statement.value, scope, statement.span);
     const collector = this.returnStack[this.returnStack.length - 1];
     if (collector === undefined) {
       this.report(
@@ -3871,6 +3901,7 @@ class Checker {
         switch (reading.kind) {
           case 'function':
             this.checkCall(statement, scope);
+            this.refuseSuspendingCall(statement.callee, scope, statement.span);
             return;
           case 'collection':
             this.checkCollectionOp(reading.collection, scope);
@@ -4116,6 +4147,7 @@ class Checker {
       );
     }
     const shape = this.checkRValue(statement.value, scope, statement.name, statement.span);
+    this.refuseSuspendingValue(statement.value, scope, statement.span);
     const symbol: ScopeSymbol = {
       name: statement.name,
       kind: 'binding',
@@ -4374,6 +4406,20 @@ class Checker {
         // a value: it binds the landed node (arrow plane), maybe-empty because
         // the selection may match nothing. The same absence an awaited
         // `resolvesEmpty` landing carries, from the other direction.
+        // `S = Company`: a declaration's name, read as a value, is the shape
+        // itself (language version 3) — a second name for it, as an import's
+        // `as` is, so `extract(content, S)` fills the same declaration.
+        const shape = since(this.languageVersion, 3) ? this.shapeNamed(value.expr.raw, parsed, scope) : undefined;
+        if (shape !== undefined) {
+          symbol = {
+            ...symbol,
+            kind: 'shape',
+            ...(shape.schema !== undefined ? { schema: shape.schema } : {}),
+            ...(shape.declaration !== undefined ? { declaration: shape.declaration } : {}),
+            graphToken: shape.graphToken ?? shape,
+          };
+          break;
+        }
         const landed =
           parsed !== undefined
             ? this.landedAggregatePosition(parsed, scope, span)
@@ -4508,8 +4554,13 @@ class Checker {
   /** The scope's answer for a callee — under the name it was DECLARED with,
    *  which from version 3 may differ from the call's by letter case. */
   private calleeResolution(written: string, scope: Scope): Resolution {
+    return scope.resolve(this.calleeName(written, scope));
+  }
+
+  /** The name a callee was declared with (`written` when nothing declares it). */
+  private calleeName(written: string, scope: Scope): string {
     const resolved = resolveCallee(written, this.callScope(scope), this.languageVersion);
-    return scope.resolve(resolved.kind === 'declared' ? resolved.name : written);
+    return resolved.kind === 'declared' ? resolved.name : written;
   }
 
   private reportCallRefusal(refusal: CallRefusal): void {
@@ -4519,12 +4570,6 @@ class Checker {
         return;
       case 'unused':
         this.report(DiagnosticCodes.BUILTIN_UNUSED, refusal.message, refusal.span);
-        return;
-      case 'nested':
-        this.report(DiagnosticCodes.CALL_NESTED, refusal.message, refusal.span);
-        return;
-      case 'extractNested':
-        this.report(TypedDiagnosticCodes.EXTRACT_CALL_NESTED, refusal.message, refusal.span);
         return;
       default:
         neverAsAny(refusal.kind);
@@ -4583,6 +4628,94 @@ class Checker {
   }
 
   /**
+   * The calls in a slot the engine runs, standing where a value is read
+   * (language version 3; ./nested_calls.ts). Each is checked as the
+   * right-hand side of a binding to a name only the engine can spell, in
+   * `scope`, and the slot comes back reading those names in the calls' places
+   * — so every reader of the slot after this sees the rewritten one. Its
+   * effects are the function's around it; a call that may WAIT is refused
+   * here, where it has no address to park at. Undefined when the slot holds
+   * no such call.
+   */
+  private hoistNestedCalls(slot: ExprSlot, scope: Scope): ExprSlot | undefined {
+    if (before(this.languageVersion, 3)) return undefined;
+    let tree: MExpr;
+    try {
+      tree = treeOfSlot(slot);
+    } catch {
+      return undefined; // the syntax error is reported where the slot is read
+    }
+    const calls = nestedCalls(tree, call => this.runsAsCall(call, scope));
+    if (calls.length === 0) return undefined;
+    for (const call of calls) {
+      const span = spanOfExtent(slot, call.at);
+      const name = nestedCallName(span);
+      let shape: Partial<ScopeSymbol> = {};
+      let value: RValue | undefined;
+      try {
+        value = parseNestedCall(slot, call.at, this.languageVersion);
+      } catch (e) {
+        if (!(e instanceof MovementParseError)) throw e;
+        this.report(DiagnosticCodes.EXPR_PARSE, e.message, span);
+      }
+      if (value !== undefined) {
+        const checked = value;
+        const { value: bound, row } = this.withEffectFrame(() => this.checkRValue(checked, scope, undefined, span));
+        shape = bound;
+        if (row.suspend && (checked.kind === 'call' || checked.kind === 'construct')) {
+          const callee = checked.kind === 'call' ? checked.call.callee : checked.construct.callee;
+          this.report(
+            DiagnosticCodes.NESTED_CALL_SUSPENDS,
+            `'${callee}' may wait ('await'), and a wait parks the run where it is written — inside an expression there is no place to come back to. Call it on its own line and use the name: \`answer = ${callee}(…)\``,
+            span,
+          );
+        }
+        this.effects?.absorb(row);
+      }
+      scope.declare({ name, kind: 'binding', span, ...shape });
+    }
+    return slotOfTree(slot, readingBoundNames(tree, calls, call => nestedCallName(spanOfExtent(slot, call.at))));
+  }
+
+  /** Whether a call in an expression is one the engine runs (./nested_calls.ts). */
+  private runsAsCall(call: CallNode, scope: Scope): boolean {
+    const callScope = this.callScope(scope);
+    return runsAsCall(
+      call,
+      callee => resolveCallee(callee, callScope, this.languageVersion),
+      declared => {
+        const found = scope.resolve(declared);
+        return found.kind === 'found' && isFunctionSymbol(found.symbol);
+      },
+    );
+  }
+
+  /** A bound or returned call to a movement that may wait (`CALL_SUSPENDS`). */
+  private refuseSuspendingValue(value: RValue, scope: Scope, span: Span): void {
+    if (value.kind === 'call') this.refuseSuspendingCall(value.call.callee, scope, span);
+    else if (value.kind === 'construct') this.refuseSuspendingCall(value.construct.callee, scope, span);
+  }
+
+  /**
+   * A call to a movement that may wait (language version 3). The run's resume
+   * address has steps for statements, loop iterations and branches, and none
+   * for a position inside a called movement: the callee parks at an address
+   * rooted at its own body, and a resume walks the dispatched movement's body
+   * from it. Refused, rather than parked where the run cannot come back.
+   */
+  private refuseSuspendingCall(written: string, scope: Scope, span: Span): void {
+    if (before(this.languageVersion, 3)) return;
+    const resolution = this.calleeResolution(written, scope);
+    if (resolution.kind !== 'found' || resolution.symbol.kind !== 'movement') return;
+    if (!this.movementEffects(resolution.symbol).suspend) return;
+    this.report(
+      DiagnosticCodes.CALL_SUSPENDS,
+      `'${written}' may wait ('await'), and a wait inside a called movement cannot be resumed yet — the run would park inside '${written}' and come back to the wrong place. Wait in this movement instead: move the 'await' out of '${written}', or run it as an arm of 'await parallel([…])' / 'await race([…])'`,
+      span,
+    );
+  }
+
+  /**
    * Every call written inside an expression (version 3), resolved by scope as
    * a statement-level call is. The expression grammar reads a built-in it
    * knows by name; what only scope can say is checked here:
@@ -4602,9 +4735,18 @@ class Checker {
     } catch {
       return; // the syntax error is reported where the slot is read
     }
+    this.checkCallsInTree(tree, { spanOf: (at) => spanWithin(slot, at.start), scope, writeField: options?.writeField === true });
+  }
+
+  /** `checkCallsInSlot` over a tree that is not a slot's — a block head's hops,
+   *  read through the probe the head is parsed as. */
+  private checkCallsInTree(
+    tree: MExpr,
+    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean },
+  ): void {
     const visit = (expr: MExpr): void => {
       if (expr.kind === 'call' && expr.callee.kind === 'name') {
-        this.checkCallInExpression(expr, expr.callee.name.text, { slot, scope, writeField: options?.writeField === true });
+        this.checkCallInExpression(expr, expr.callee.name.text, at);
       }
       for (const child of expressionChildren(expr)) visit(child);
     };
@@ -4614,9 +4756,9 @@ class Checker {
   private checkCallInExpression(
     call: Extract<MExpr, { kind: 'call' }>,
     written: string,
-    at: { slot: ExprSlot; scope: Scope; writeField: boolean },
+    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean },
   ): void {
-    const span = spanWithin(at.slot, call.at.start);
+    const span = at.spanOf(call.at);
     const resolution = resolveCallee(written, this.callScope(at.scope), this.languageVersion);
     switch (resolution.kind) {
       case 'builtin': {
@@ -4643,11 +4785,7 @@ class Checker {
         const found = at.scope.resolve(resolution.name);
         if (found.kind !== 'found') return; // reported where the name is read
         if (isFunctionSymbol(found.symbol)) {
-          this.report(
-            DiagnosticCodes.CALL_NESTED,
-            `'${written}(…)' runs a function, and a function is called on its own line, not inside another expression — bind it first, then use the name: \`answer = ${written}(…)\``,
-            span,
-          );
+          this.report(DiagnosticCodes.CALL_NESTED, nestedMessage(written), span);
           return;
         }
         this.report(
@@ -4791,6 +4929,15 @@ class Checker {
           : undefined;
     if (name === undefined) return undefined;
     return this.nodePlaneSymbol(name, scope);
+  }
+
+  /** The shape a value slot names, when it is a declaration's bare name. */
+  private shapeNamed(raw: string, parsed: Expression | undefined, scope: Scope): ScopeSymbol | undefined {
+    const trimmed = raw.trim();
+    const name = BARE_IDENT.test(trimmed) ? trimmed : parsed !== undefined ? bareName(parsed) : undefined;
+    if (name === undefined) return undefined;
+    const resolution = scope.resolve(name);
+    return resolution.kind === 'found' && resolution.symbol.kind === 'shape' ? resolution.symbol : undefined;
   }
 
   /** The symbol `name` is bound to, when it is bound on the NODE plane — a
@@ -5742,7 +5889,7 @@ class Checker {
     subject: Extract<CallbackSubject, { kind: 'named' }>,
     scope: Scope,
   ): CallbackParams {
-    const resolution = scope.resolve(subject.movement);
+    const resolution = this.calleeResolution(subject.movement, scope);
     const callee = resolution.kind === 'found' ? resolution.symbol : undefined;
     if (callee === undefined || (callee.kind !== 'movement' && callee.kind !== 'fileImport')) {
       // A file import may be a movement — the linker resolves it; benefit of
@@ -7933,6 +8080,19 @@ class Checker {
       }
       // The arrow half of the retired block read-back (`orgs-[o:co]->`).
       this.reportBlockReadBack(names, scope, head.span);
+      // The calls in the hops' WHERE, ORDER BY and settings resolve by scope as
+      // a slot's do (version 3); they are read once per landing.
+      if (since(this.languageVersion, 3)) {
+        let tree: MExpr | undefined;
+        try {
+          tree = parseExpression(probeText);
+        } catch (e) {
+          if (!(e instanceof ExpressionSyntaxError)) throw e;
+        }
+        if (tree !== undefined) {
+          this.checkCallsInTree(tree, { spanOf: () => head.span, scope, writeField: false });
+        }
+      }
       // A `_resources`-headed path parses to resource_traverse (no steps) —
       // it stays untyped; a plain hop chain yields the steps to type-walk.
       if (parsed.type === 'traverse') steps = parsed.steps;
@@ -9405,7 +9565,9 @@ class Checker {
     // listen the author wrote, and the story renders the truth. What the config
     // decides — the selection, the address, the derived event types — is filled
     // in below as the same walk learns it.
-    const firesResolution = scope.resolve(statement.movement);
+    // The fired movement is a function's name, so from version 3 it is the
+    // same name in any letter case — as at a call.
+    const firesResolution = this.calleeResolution(statement.movement, scope);
     const recorded = this.recordNode<RecordedListen>({
       kind: 'listen',
       span: statement.span,
@@ -9754,7 +9916,7 @@ class Checker {
       }
     }
 
-    const movementSymbol = this.resolveName(statement.movement, statement.span, scope);
+    const movementSymbol = this.resolveName(this.calleeName(statement.movement, scope), statement.span, scope);
     if (!movementSymbol) return;
     if (movementSymbol.kind === 'fileImport') return; // may be a movement — M3 resolves it
     if (movementSymbol.kind !== 'movement') {
@@ -10881,6 +11043,8 @@ class Checker {
       const valueType = options?.holdsValue === true ? held : this.readHeldValue(held, slot.span);
       return valueType !== undefined ? { valueType } : {};
     }
+    const hoisted = this.hoistNestedCalls(slot, scope);
+    if (hoisted !== undefined) return this.checkExprSlot(hoisted, scope, options);
     let parsed: Expression;
     try {
       parsed = expressionOfSlot(slot);
@@ -10939,6 +11103,8 @@ class Checker {
 
   /** `narrowInto`: the scope IS-test narrowings are declared into (the if-arm's scope). */
   private checkConditionSlot(slot: ExprSlot, scope: Scope, narrowInto?: Scope): void {
+    const hoisted = this.hoistNestedCalls(slot, scope);
+    if (hoisted !== undefined) return this.checkConditionSlot(hoisted, scope, narrowInto);
     let condition: MovementCondition;
     try {
       condition = conditionOfSlot(slot);

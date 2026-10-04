@@ -30,8 +30,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   companies = extract(content, Company, { tier: 'careful' })
 
   profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
-    return ONLY(found)
+    return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
   })
 
   MAP(companies, (c) => {
@@ -44,9 +43,9 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 \`\`\`
 
 - **Content** is a list, read in the order you write it: text, files (read as text, as \`from [ … ]\` reads them), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save — the rendering is part of what the model reads, so you choose it. Spread a list of files in with \`...\`.
-- **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a name worked out at run time.
+- **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. A declaration's name bound to another name (\`S = Company\`) is the same shape. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a shape worked out at run time.
 - **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), take the single one with \`ONLY\`, write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
-- **Bind it, then use it**: \`found = extract(…)\` then \`ONLY(found)\`, or \`return extract(…)\`. Written inside another expression it is refused, with that fix.
+- **It is a value like any other**: use it where you need the records — \`ONLY(extract(…))\` for the single one, \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once.
 - **Settings**, each written as a quoted word: \`tier\` (\`'quick'\`, \`'careful'\`, \`'thorough'\` — see *how hard it works*), \`model\` (a model this installation can reach, by name), \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`). A model or effort you name wins over the tier's. An unknown setting, or a model this installation cannot reach, is refused when you save.
 - A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
 
@@ -269,8 +268,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   companies = extract(content, Company, { tier: 'careful' })
 
   profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
-    return ONLY(found)
+    return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
   })
 
   MAP(companies, (c) => {

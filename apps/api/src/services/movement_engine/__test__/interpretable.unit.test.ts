@@ -283,6 +283,30 @@ movement intake(m: <inbox-[:message]->>) {
     ]);
   });
 
+  it('a call nested in an expression (version 3) is the binding it means, and scans as one', () => {
+    const source = `${PRELUDE}
+movement double(n: <number>) {
+  return n * 2
+}
+
+movement intake(m: <inbox-[:message]->>) {
+  if double(LENGTH(m.\`subject\`)) > 4 AND COUNT(MAP([1], (v) => v)) == 1 {
+    write crm-[:companies]-> { name: UPPER(m.\`subject\`) }
+  }
+}
+`;
+    expect(listUnsupportedConstructs(source)).toEqual([]);
+    // What a nested call runs is still scanned: its closure's body here.
+    const inner = `${PRELUDE}
+movement intake(m: <inbox-[:message]->>) {
+  if COUNT(MAP([m.\`subject\`], (v) => DOMAIN_OF(v))) == 1 {
+    write crm-[:companies]-> { name: m.\`subject\` }
+  }
+}
+`;
+    expect(listUnsupportedConstructs(inner)).toEqual(['non-built-in function calls (DOMAIN_OF())']);
+  });
+
   it('names non-built-in functions in SHAPE-write fields (shapes have no adapter to bind functions from)', () => {
     const source = `${PRELUDE}
 node Files {

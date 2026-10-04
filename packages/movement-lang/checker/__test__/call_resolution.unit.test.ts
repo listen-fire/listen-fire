@@ -8,9 +8,9 @@
 //     or one that is a built-in's name, collide;
 //   - a built-in's arguments are checked against its signature, and its call
 //     is typed by its return;
-//   - a call read on its own line (a function's, MAP's) is refused inside an
-//     expression, and a built-in that only computes a value is refused as a
-//     statement.
+//   - a call the engine runs (a function's, MAP's) nests inside an
+//     expression as the binding it means (checker/nested_calls.ts), and a
+//     built-in that only computes a value is refused as a statement.
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, DiagnosticCodes as C, type Diagnostic } from '../check';
@@ -160,17 +160,19 @@ describe("a built-in's arguments are checked against its signature", () => {
 describe('where a call is read', () => {
   const fileLevel = 'movement to_note(n: <text>) {\n  return n\n}\n';
 
-  it("a function's call inside an expression is refused, with the binding to write", () => {
-    expect(codes('  x = COALESCE(to_note(c.`Name`), "!")', 3, fileLevel)).toEqual([C.CALL_NESTED]);
-    expect(messages('  x = COALESCE(to_note(c.`Name`), "!")', 3, fileLevel)).toContain('bind it first');
+  it("a function's call inside an expression is the value it returns", () => {
+    expect(codes('  x = COALESCE(to_note(c.`Name`), "!")', 3, fileLevel)).toEqual([]);
+    // Typed by what the function returns: text, which a number field refuses.
+    expect(codes('  write chat-[:note]-> { Count: to_note(c.`Name`) }', 3, fileLevel)).toEqual([C.WRITE_FIELD_TYPE]);
   });
 
   it('a built-in that only computes a value is refused as a statement', () => {
     expect(codes('  UPPER(c.`Name`)')).toEqual([C.BUILTIN_UNUSED]);
   });
 
-  it("MAP inside an expression is read on its own line", () => {
-    expect(codes('  x = COUNT(MAP([1, 2], (n) => { return n }))')).toEqual([C.CALL_NESTED]);
+  it('MAP inside an expression is the list it builds', () => {
+    expect(codes('  x = COUNT(MAP([1, 2], (n) => { return n }))')).toEqual([]);
+    expect(codes('  write chat-[:note]-> { Count: COUNT(MAP([1, 2], (n) => { return n })) }')).toEqual([]);
   });
 
   it('a built-in as a function\'s argument is the value it computes', () => {

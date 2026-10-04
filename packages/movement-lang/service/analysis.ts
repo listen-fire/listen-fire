@@ -22,6 +22,7 @@ import {
   type RecordedWrite,
 } from '../checker/check';
 import type { Declaration, Scope, ScopeSymbol } from '../checker/scopes';
+import { isNestedCallName } from '../checker/nested_calls';
 import { fromCatalogSnapshot, resolveFileFromSnapshot, type CatalogSnapshot } from './snapshot';
 
 // ── Offsets ↔ locations ──
@@ -94,6 +95,8 @@ function bindingsAt(scope: Scope, loc: Loc): Map<string, ScopeSymbol | undefined
   const bindings = new Map<string, ScopeSymbol | undefined>();
   for (const declaration of scope.declarations ?? []) {
     const name = declaration.symbol.name;
+    // A nested call's bound name is the checker's, not the author's.
+    if (isNestedCallName(name)) continue;
     if (visibleAt(declaration, loc)) bindings.set(name, declaration.symbol);
     else if (!bindings.has(name)) bindings.set(name, undefined);
   }

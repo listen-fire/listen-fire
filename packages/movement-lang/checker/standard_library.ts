@@ -151,7 +151,7 @@ const COLLECTION_OPS: Builtin[] = [
 
 const STATEMENT_FORMS: Builtin[] = [
   builtin('MEMBERS', [p('type', 'type')], 'derived', "a closed type's values, in declaration order", { form: { kind: 'members' } }),
-  builtin('EXTRACT', [p('content', 'any'), p('shape', 'type'), p('settings', 'options', { optional: true })], 'derived', 'the records a model finds in content, of a declared shape', { effects: AI_ROW, form: { kind: 'extract' } }),
+  builtin('EXTRACT', [p('content', 'any'), p('shape', 'shape'), p('settings', 'options', { optional: true })], 'derived', 'the records a model finds in content, of a declared shape', { effects: AI_ROW, form: { kind: 'extract' } }),
 ];
 
 /** A namespaced member's entry — its signature is declared beside its
