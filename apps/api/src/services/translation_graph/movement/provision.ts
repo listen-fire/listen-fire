@@ -65,7 +65,7 @@ import {
   BridgeError,
   MovementParseError,
   checkProgram,
-  parseMovementExpression,
+  expressionOfSlot,
   parseProgram,
   scanName,
   unwrapCredentialArg,
@@ -178,7 +178,7 @@ interface FileListener {
 function configValueOf(arg: NamedArg): unknown {
   if (arg.isType) return arg.value.raw.trim();
   try {
-    const parsed = parseMovementExpression(arg.value.raw);
+    const parsed = expressionOfSlot(arg.value);
     if (parsed.type === 'static') return parsed.value;
     if (parsed.type === 'list') {
       const elements = parsed.elements.map((e) =>

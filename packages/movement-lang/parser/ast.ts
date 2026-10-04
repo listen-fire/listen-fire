@@ -2,8 +2,9 @@
 // Spec: plans/2026-06-10-data-movement-language/ (3_syntax_sketch.md is the surface).
 //
 // Value expressions are NOT parsed here: every expression position is captured as a
-// raw source span (ExprSlot) and handed to expression/bridge.ts, which delegates to
-// the existing formula grammar in @listen-fire/shared. The statement layer owns only the
+// raw source span (ExprSlot) and read through expression/bridge.ts, which parses it
+// with the expression grammar (parser/expression) and lowers it to the shared formula
+// `Expression`. The statement layer owns only the
 // constructs the language adds: import, assignment, construction, shape, extract,
 // movement, listen (the one invoker), write (root + linked + tuple),
 // traversal-headed block, link, if, parallel, call.
@@ -20,7 +21,9 @@ export interface Span {
   end: Loc;
 }
 
-/** A value-expression position, captured verbatim for the expression bridge. */
+/** A value-expression position, captured verbatim. Read it through
+ *  `expressionOfSlot` / `conditionOfSlot` (expression/bridge.ts), which parse
+ *  its text once and keep the tree beside the slot. */
 export interface ExprSlot {
   raw: string;
   span: Span;
@@ -1399,8 +1402,8 @@ export interface ExtractField {
    * The words the extractor is given for this field — an ORDINARY string
    * expression, so it interpolates wherever it is written, exactly as a write
    * field's value or an `AI()` prompt does. The slot's `raw` is the whole
-   * literal INCLUDING its quotes, which is what `parseMovementExpression`
-   * takes: a plain literal desugars to a `static`, an interpolating one to a
+   * literal INCLUDING its quotes, which is what `expressionOfSlot` reads:
+   * a plain literal lowers to a `static`, an interpolating one to a
    * `concat`. Nothing downstream may paste `raw` — it is source, not text.
    */
   description: ExprSlot;

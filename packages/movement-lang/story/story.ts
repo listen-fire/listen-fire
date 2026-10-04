@@ -52,7 +52,7 @@ import {
   typeNameOf,
 } from '../parser/ast';
 import { MovementParseError, parseProgram } from '../parser/parse';
-import { parseMovementExpression } from '../expression/bridge';
+import { expressionOfSlot } from '../expression/bridge';
 import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
 import { EMPTY_ROW, instanceNames, type EffectRow } from '../checker/effects';
 import { terminates } from '../checker/flow';
@@ -1041,7 +1041,7 @@ class Projection {
     const source = slot.raw.trim();
     let parsed: Expression;
     try {
-      parsed = parseMovementExpression(slot.raw);
+      parsed = expressionOfSlot(slot);
     } catch {
       return { source, role: 'unparsed', refs: [], parts: [{ kind: 'text', text: source }] };
     }

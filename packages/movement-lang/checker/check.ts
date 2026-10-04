@@ -25,8 +25,8 @@
 // every problem it can find with the most precise span it has.
 //
 // Name references inside expression slots come from the expression bridge:
-// each slot is parsed by `parseMovementExpression` / `parseMovementCondition`
-// (bridge parse failures become MOV_EXPR_PARSE), and the resulting formula
+// each slot is read by `expressionOfSlot` / `conditionOfSlot` (a refusal
+// becomes MOV_EXPR_PARSE), and the resulting formula
 // AST is walked for the names that resolve against statement scope —
 // `traverse.aliasRoot` / `alias_ref` nodes, plus slots that are exactly one
 // bare identifier. Formula `property` references relative to the ambient
@@ -125,7 +125,8 @@ import {
   splitUniquenessConjuncts,
   identityKeyOf,
   MovementCondition,
-  parseMovementCondition,
+  conditionOfSlot,
+  expressionOfSlot,
   parseMovementExpression,
   authoredStringText,
 } from '../expression/bridge';
@@ -1553,7 +1554,7 @@ function uniqueClauseRefs(clause: UniqueClause): string[] | undefined {
 function staticStringValues(slot: ExprSlot): string[] | undefined {
   let parsed: Expression;
   try {
-    parsed = parseMovementExpression(slot.raw);
+    parsed = expressionOfSlot(slot);
   } catch (e) {
     if (e instanceof BridgeError) return undefined;
     throw e;
@@ -1580,7 +1581,7 @@ function staticStringValues(slot: ExprSlot): string[] | undefined {
  */
 function isListSlot(slot: ExprSlot): boolean {
   try {
-    return parseMovementExpression(slot.raw).type === 'list';
+    return expressionOfSlot(slot).type === 'list';
   } catch (e) {
     if (e instanceof BridgeError) return false;
     throw e;
@@ -1598,7 +1599,7 @@ function bareNameValues(slot: ExprSlot): string[] | undefined {
   if (BARE_IDENT.test(trimmed)) return [trimmed];
   let parsed: Expression;
   try {
-    parsed = parseMovementExpression(slot.raw);
+    parsed = expressionOfSlot(slot);
   } catch (e) {
     if (e instanceof BridgeError) return undefined;
     throw e;
@@ -1619,7 +1620,7 @@ function bareNameValues(slot: ExprSlot): string[] | undefined {
 function staticStringLiteralOf(slot: ExprSlot): string | undefined {
   let parsed: Expression;
   try {
-    parsed = parseMovementExpression(slot.raw);
+    parsed = expressionOfSlot(slot);
   } catch (e) {
     if (e instanceof BridgeError) return undefined;
     throw e;
@@ -5020,7 +5021,7 @@ class Checker {
   private checkCollectionConfig(config: ExprSlot, spelling: string): void {
     let parsed: Expression;
     try {
-      parsed = parseMovementExpression(config.raw);
+      parsed = expressionOfSlot(config);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(config, e.pos));
@@ -6536,7 +6537,7 @@ class Checker {
     if (!input.uniqueBy.some(clause => uniqueClauseRefs(clause)?.includes(field.name) === true)) return;
     let value: Expression;
     try {
-      value = parseMovementExpression(field.value.raw);
+      value = expressionOfSlot(field.value);
     } catch (e) {
       if (e instanceof BridgeError) return;
       throw e;
@@ -8866,7 +8867,7 @@ class Checker {
   ): void {
     let condition: MovementCondition;
     try {
-      condition = parseMovementCondition(slot.raw);
+      condition = conditionOfSlot(slot);
     } catch {
       return; // the parse failure is reported by the arm's own check
     }
@@ -8931,7 +8932,7 @@ class Checker {
   private narrowConditionNegation(slot: ExprSlot, scope: Scope, guardEnd: Loc): void {
     let condition: MovementCondition;
     try {
-      condition = parseMovementCondition(slot.raw);
+      condition = conditionOfSlot(slot);
     } catch {
       return; // the parse failure is reported by the arm's own check
     }
@@ -10029,7 +10030,7 @@ class Checker {
   private checkExtractCallConfig(config: ExprSlot): void {
     let parsed: Expression;
     try {
-      parsed = parseMovementExpression(config.raw);
+      parsed = expressionOfSlot(config);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(config, e.pos));
@@ -10558,7 +10559,7 @@ class Checker {
     }
     let parsed: Expression;
     try {
-      parsed = parseMovementExpression(slot.raw);
+      parsed = expressionOfSlot(slot);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
@@ -10615,7 +10616,7 @@ class Checker {
   private checkConditionSlot(slot: ExprSlot, scope: Scope, narrowInto?: Scope): void {
     let condition: MovementCondition;
     try {
-      condition = parseMovementCondition(slot.raw);
+      condition = conditionOfSlot(slot);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));

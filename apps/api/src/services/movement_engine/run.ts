@@ -93,7 +93,8 @@ import {
   eventAddressKey,
   eventAddressOfHops,
   isEnumType,
-  parseMovementCondition,
+  conditionOfSlot,
+  expressionOfSlot,
   parseMovementExpression,
   parseProgram,
   readExtractCallConfig,
@@ -3789,7 +3790,7 @@ class Interpreter {
     if (expr.config === undefined) return SEQUENTIAL_COLLECTION_SETTINGS;
     let reading: ReturnType<typeof readCollectionConfig>;
     try {
-      reading = readCollectionConfig(parseMovementExpression(expr.config.raw), spelling);
+      reading = readCollectionConfig(expressionOfSlot(expr.config), spelling);
     } catch (e) {
       if (!(e instanceof BridgeError)) throw e;
       reading = { ok: false, problems: [e.message] };
@@ -5385,7 +5386,7 @@ class Interpreter {
   private async evaluateCondition(slot: ExprSlot, env: Environment): Promise<boolean> {
     let condition: MovementCondition;
     try {
-      condition = parseMovementCondition(slot.raw);
+      condition = conditionOfSlot(slot);
     } catch (e) {
       if (e instanceof BridgeError) {
         throw new MovementEngineError(
@@ -5821,7 +5822,7 @@ class Interpreter {
     let written: ReturnType<typeof readExtractCallConfig> = { ok: true, settings: {} };
     if (call.config !== undefined) {
       try {
-        written = readExtractCallConfig(parseMovementExpression(call.config.raw));
+        written = readExtractCallConfig(expressionOfSlot(call.config));
       } catch (e) {
         if (!(e instanceof BridgeError)) throw e;
         throw new MovementEngineError('MOVENG_RUNTIME', `invalid 'extract' settings (the checker should have caught this): ${e.message}`);
@@ -9656,7 +9657,7 @@ class Interpreter {
     } else {
       // Backtick-coined names only exist parsed.
       try {
-        name = bareName(parseMovementExpression(trimmed));
+        name = bareName(expressionOfSlot(slot));
       } catch {
         return undefined; // a parse failure is the evaluator's to report
       }
@@ -9696,7 +9697,7 @@ class Interpreter {
   ): Promise<Binding | undefined> {
     let path: ReturnType<typeof aggregatedBarePath>;
     try {
-      path = aggregatedBarePath(parseMovementExpression(slot.raw));
+      path = aggregatedBarePath(expressionOfSlot(slot));
     } catch {
       return undefined; // a parse failure is the evaluator's to report
     }
@@ -9770,7 +9771,7 @@ class Interpreter {
    *  the walk's collapse, and the binding keeps the fact a spread reads
    *  (`isManyValued` in expression.ts; the checker's `ScopeSymbol.plural`). */
   private bindsManyValues(slot: ExprSlot, env: Environment): boolean {
-    const expr = parseMovementExpression(slot.raw);
+    const expr = expressionOfSlot(slot);
     if (isWalkProjection(expr)) return true;
     const name = bareName(expr);
     if (name === undefined) return false;
@@ -9789,7 +9790,7 @@ class Interpreter {
   ): Promise<MovementEvalResult> {
     let expr: Expression;
     try {
-      expr = parseMovementExpression(slot.raw);
+      expr = expressionOfSlot(slot);
     } catch (e) {
       if (e instanceof BridgeError) {
         throw new MovementEngineError(

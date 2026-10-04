@@ -37,7 +37,7 @@ import type {
 import { pathRootName, probePathHead, typeNameOf } from '../parser/ast';
 import { parseProgram } from '../parser/parse';
 import { unwrapCredentialArg } from '../parser/scan';
-import { parseMovementExpression } from '../expression/bridge';
+import { expressionOfSlot, parseMovementExpression } from '../expression/bridge';
 
 export interface InstanceChain {
   /** The construction's adapter slug (import aliases resolved back). */
@@ -291,7 +291,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
   const visitSlot = (slot: ExprSlot, aliasScope: Map<string, AliasGrounding>): void => {
     let parsed: Expression;
     try {
-      parsed = parseMovementExpression(slot.raw);
+      parsed = expressionOfSlot(slot);
     } catch {
       // Unparseable slot — any parser error class. The checker reports it to
       // the author; the scan must never throw (a prod save 500'd otherwise).

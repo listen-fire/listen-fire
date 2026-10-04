@@ -1,4 +1,4 @@
-// Folds the harvest's JSON lines (./harvest.setup.cjs) into the differential's
+// Folds the harvest's JSON lines (./harvest.setup.cjs) into the lowering regression's
 // fixture: one record per distinct expression text, with every way it reached
 // the current code. Usage, from packages/movement-lang:
 //

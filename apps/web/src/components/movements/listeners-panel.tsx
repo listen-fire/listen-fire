@@ -22,7 +22,7 @@
 
 import { useMemo, useState } from "react";
 import { Check, Copy, Pause, Play, Plus } from "lucide-react";
-import { MovementParseError, parseMovementExpression, parseProgram } from "movement-lang";
+import { MovementParseError, expressionOfSlot, parseProgram } from "movement-lang";
 import type { ExprSlot, ListenDeclaration, Program } from "movement-lang";
 
 import { ServiceIcon } from "@/components/service-icon";
@@ -70,7 +70,7 @@ export interface PausedListen {
  *  spelling, which is what the server's surface key uses for those. */
 function configValueString(slot: ExprSlot): string {
   try {
-    const expr = parseMovementExpression(slot.raw);
+    const expr = expressionOfSlot(slot);
     if (expr.type === "static" && typeof expr.value === "string") return expr.value;
   } catch {
     // not parseable as an expression — fall through to the raw spelling

@@ -21,7 +21,8 @@ import {
   BridgeError,
   MovementParseError,
   linkImports,
-  parseMovementCondition,
+  conditionOfSlot,
+  expressionOfSlot,
   parseMovementExpression,
   parseFieldTypeName,
   parseProgram,
@@ -520,7 +521,7 @@ class InterpretabilityScan {
   private scanCondition(slot: ExprSlot): void {
     let condition: MovementCondition;
     try {
-      condition = parseMovementCondition(slot.raw);
+      condition = conditionOfSlot(slot);
     } catch (e) {
       if (e instanceof BridgeError) return; // checker territory
       throw e;
@@ -534,7 +535,7 @@ class InterpretabilityScan {
         // Runtime IS runs (a type test against the runtime position's
         // type where known; falsy-skip otherwise — run.ts). The subject
         // may itself be an expression — scan it.
-        this.scanSlotRaw(condition.subjectRaw);
+        this.scanParsed(() => parseMovementExpression(condition.subjectRaw));
         return;
       case 'and':
         for (const conjunct of condition.conjuncts) this.scanParsedCondition(conjunct);
@@ -553,13 +554,13 @@ class InterpretabilityScan {
   }
 
   private scanSlot(slot: ExprSlot): void {
-    this.scanSlotRaw(slot.raw);
+    this.scanParsed(() => expressionOfSlot(slot));
   }
 
-  private scanSlotRaw(raw: string): void {
+  private scanParsed(read: () => Expression): void {
     let expr: Expression;
     try {
-      expr = parseMovementExpression(raw);
+      expr = read();
     } catch (e) {
       if (e instanceof BridgeError) return; // checker territory
       throw e;

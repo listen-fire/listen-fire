@@ -1,13 +1,13 @@
 // Records every expression text the current code produces while a test corpus
-// runs, for the one-grammar differential (../__test__/differential.unit.test.ts).
+// runs, for the lowering regression (../__test__/lowering_regression.unit.test.ts).
 //
 // Two sources, because they disagree about what an "expression slot" is:
 //   - every ExprSlot in every program the statement parser returns, under the
 //     language version that parse ran with (`slot`);
 //   - every text actually handed to the expression bridge from outside it — the
 //     checker, service and story build probe texts of their own (a path head
-//     plus a sentinel property) that no ExprSlot carries (`expression` /
-//     `condition`, by which bridge entry received it).
+//     plus a sentinel property) that no ExprSlot carries — and every slot read
+//     through it (`expression` / `condition`, by which bridge entry received it).
 //
 // Appends JSON lines to $HARVEST_OUT. Run through ./jest.harvest.cjs.
 const fs = require('fs');
@@ -91,11 +91,19 @@ jest.mock(BRIDGE, () => {
       records.push({ raw, entry: 'condition', version: version(), file: testFile });
       return actual.parseMovementCondition(raw);
     },
+    expressionOfSlot: (slot) => {
+      records.push({ raw: slot.raw, entry: 'expression', version: version(), file: testFile });
+      return actual.expressionOfSlot(slot);
+    },
+    conditionOfSlot: (slot) => {
+      records.push({ raw: slot.raw, entry: 'condition', version: version(), file: testFile });
+      return actual.conditionOfSlot(slot);
+    },
   };
 });
 
 afterAll(() => {
-  // The differential's own tests replay the fixture through the bridge; their
+  // The regression's own tests replay the fixture through the bridge; their
   // calls are the harvest's output, not corpus.
   if (testFile.startsWith(path.join('parser', 'expression'))) return;
   if (!OUT || records.length === 0) return;

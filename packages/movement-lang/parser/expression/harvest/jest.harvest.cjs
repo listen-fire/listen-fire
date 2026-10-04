@@ -3,7 +3,7 @@
 // conformance corpora, under their own language version) or `current` (this
 // package's own tests, under the current version); HARVEST_OUT names the JSON
 // lines file to append to. ./build_fixture.cjs folds the output into the
-// differential's fixture. From packages/movement-lang:
+// lowering regression's fixture (then UPDATE_LOWERED_FIXTURE=1 pins the new texts). From packages/movement-lang:
 //
 //   HARVEST_CORPUS=v1 HARVEST_OUT=/tmp/slots.jsonl \
 //     node ../../apps/api/node_modules/jest/bin/jest.js \

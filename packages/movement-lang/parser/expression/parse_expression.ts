@@ -1,10 +1,10 @@
 // One expression grammar for the movement language — a precedence-climbing
 // parser that builds the structured tree in ./tree.ts. Plan:
-// plans/functional-extract-2026-10-02/2_one_grammar.md, step 1.
+// plans/functional-extract-2026-10-02/2_one_grammar.md.
 //
-// NOT wired in: the statement parser, checker and engine still go through the
-// expression bridge. ./lower.ts converts this tree to the shared `Expression`
-// and the differential test compares the two over every slot the corpora hold.
+// Every expression slot is read here: ./lower.ts converts the tree to the
+// shared `Expression`, and expression/bridge.ts is the entry the statement
+// parser's consumers (checker, story, engine) call.
 //
 // Precedence and associativity are the formula grammar's
 // (packages/shared/expression/formula.ts), loosest first:
@@ -26,7 +26,8 @@
 // `CURRENCY.PARSE(s)` are calls; which built-in (if any) a call reaches is
 // decided by whoever has a scope.
 
-import { translateStringEscape } from '@listen-fire/shared/expression/formula';
+import { translateStringEscape, unrecognisedCharacterMessage } from '@listen-fire/shared/expression/formula';
+import { BridgeError } from '../../expression/error';
 import type {
   At,
   BinaryOp,
@@ -42,12 +43,12 @@ import type {
   TypeExpr,
 } from './tree';
 
-export class ExpressionSyntaxError extends Error {
+export class ExpressionSyntaxError extends BridgeError {
   constructor(
     message: string,
     public readonly offset: number,
   ) {
-    super(message);
+    super(message, offset);
     this.name = 'ExpressionSyntaxError';
   }
 }
@@ -57,6 +58,15 @@ const KEYWORDS = new Set([
   'AND', 'OR', 'NOT', 'IF', 'THEN', 'ELSE', 'END', 'TRUE', 'FALSE', 'NULL',
   'CONTAINS', 'EXISTS', 'IN',
 ]);
+
+const STRAY_PUNCT = new Set(['|', '?', ';']);
+
+/** `crm.company` / `<crm.company>` — the retired dotted type spelling. */
+const IS_DOTTED_TYPE =
+  /^<?\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\s*>?$/;
+/** `crm` / `crm-[:company]->` — a type without its angle brackets. */
+const IS_BARE_TYPE =
+  /^(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(?:-\[\s*:\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\s*\]->)?$/;
 
 type Interpolation = { start: number; end: number };
 
@@ -107,7 +117,7 @@ class ExpressionParser {
   parseWhole(): MExpr {
     const expr = this.parseWhere();
     const tok = this.peek();
-    if (tok.t !== 'eof') this.fail(`Unexpected ${describe(tok, this.src)}`, tok.start);
+    if (tok.t !== 'eof') this.unexpected(tok, `Unexpected ${describe(tok, this.src)}`);
     return expr;
   }
 
@@ -120,6 +130,14 @@ class ExpressionParser {
 
   private fail(message: string, offset = this.pos): never {
     throw new ExpressionSyntaxError(message, offset);
+  }
+
+  /** A token that cannot stand here. `|`, `?` and `;` lex only for the type
+   *  grammar (`<a | b>`, `{ k?: … }`); anywhere else they are the characters
+   *  an author reached for from another language, and are refused as such. */
+  private unexpected(tok: Token, message: string): never {
+    if (tok.t === 'punct' && STRAY_PUNCT.has(tok.text)) this.fail(unrecognisedCharacterMessage(tok.text), tok.start);
+    this.fail(message, tok.start);
   }
 
   private skipWs(): boolean {
@@ -217,7 +235,7 @@ class ExpressionParser {
     }
     if (c === '.') return { ...base, end: start + 1, t: 'op', text: '.' };
     if ('()[]{},:|?;'.includes(c)) return { ...base, end: start + 1, t: 'punct', text: c };
-    this.fail(`Unrecognised character '${c}'`, start);
+    this.fail(unrecognisedCharacterMessage(c), start);
   }
 
   /** `start` is just inside `-[` / `<-[`: a hop opens with `:`, `#`, or an
@@ -359,25 +377,25 @@ class ExpressionParser {
 
   private expectPunct(text: string, context: string): Token {
     const tok = this.peek();
-    if (!this.isPunct(tok, text)) this.fail(`Expected '${text}' ${context}, got ${describe(tok, this.src)}`, tok.start);
+    if (!this.isPunct(tok, text)) this.unexpected(tok, `Expected '${text}' ${context}, got ${describe(tok, this.src)}`);
     return this.advance();
   }
 
   private expectOp(text: string, context: string): Token {
     const tok = this.peek();
-    if (!this.isOp(tok, text)) this.fail(`Expected '${text}' ${context}, got ${describe(tok, this.src)}`, tok.start);
+    if (!this.isOp(tok, text)) this.unexpected(tok, `Expected '${text}' ${context}, got ${describe(tok, this.src)}`);
     return this.advance();
   }
 
   private expectKeyword(text: string, context: string): Token {
     const tok = this.peek();
-    if (!this.isKeyword(tok, text)) this.fail(`Expected ${text} ${context}, got ${describe(tok, this.src)}`, tok.start);
+    if (!this.isKeyword(tok, text)) this.unexpected(tok, `Expected ${text} ${context}, got ${describe(tok, this.src)}`);
     return this.advance();
   }
 
   private readName(context: string): Name {
     const tok = this.peek();
-    if (tok.t !== 'name') this.fail(`Expected a name ${context}, got ${describe(tok, this.src)}`, tok.start);
+    if (tok.t !== 'name') this.unexpected(tok, `Expected a name ${context}, got ${describe(tok, this.src)}`);
     this.advance();
     return { text: tok.text, quoted: tok.quoted, at: { start: tok.start, end: tok.end } };
   }
@@ -483,10 +501,40 @@ class ExpressionParser {
     }
     if (this.isWord(tok, 'IS')) {
       this.advance();
-      const type = this.parseTypeMarker('after IS');
+      const typeStart = this.lastEnd;
+      let type: TypeExpr;
+      try {
+        type = this.parseTypeMarker('after IS');
+      } catch (e) {
+        if (e instanceof ExpressionSyntaxError) this.refuseIsType(typeStart);
+        throw e;
+      }
       return { kind: 'is', subject: left, type, at: this.span(start) };
     }
     return left;
+  }
+
+  /** The fix-it for a type after IS written without its angle brackets, or in
+   *  the retired dotted spelling. A bracketed type with a fault inside keeps
+   *  the parser's own, more precise, error. */
+  private refuseIsType(from: number): void {
+    const rest = this.src.slice(from, this.limit);
+    const lead = rest.length - rest.trimStart().length;
+    const rhs = rest.trim().split(/\s+(?:AND|OR)\s/i)[0].trim();
+    const at = from + lead;
+    const dotted = IS_DOTTED_TYPE.exec(rhs);
+    if (dotted) {
+      this.fail(
+        `'.' reads a property — a type names an EDGE, and an edge is an address. Write '<${dotted[1]}-[:${dotted[2]}]->>' instead of '<${dotted[1]}.${dotted[2]}>'.`,
+        at,
+      );
+    }
+    if (IS_BARE_TYPE.test(rhs)) {
+      this.fail(`Types are written in angle brackets — wrap the type in angle brackets: <${rhs}>`, at);
+    }
+    if (!rhs.startsWith('<')) {
+      this.fail(`IS expects a position type in angle brackets like <graph> or <graph-[:position]->>, got "${rhs}"`, at);
+    }
   }
 
   private parseDuration(): { text: string; quoted: boolean; at: At } {
@@ -639,7 +687,7 @@ class ExpressionParser {
       case 'eof':
         this.fail('Unexpected end of input', tok.start);
     }
-    this.fail(`Unexpected ${describe(tok, this.src)}`, tok.start);
+    this.unexpected(tok, `Unexpected ${describe(tok, this.src)}`);
   }
 
   private interpolation(segment: string | Interpolation): string | MExpr {
@@ -805,6 +853,9 @@ class ExpressionParser {
     let config: Extract<MExpr, { kind: 'map' }> | undefined;
     if (/^WHERE\s/i.test(this.src.slice(this.pos, this.limit))) {
       this.consumedTo(this.pos + 5);
+      if (/^\s*\]/.test(this.src.slice(this.pos, this.limit))) {
+        this.fail("a hop's WHERE needs a condition — write one after WHERE, or drop the WHERE to keep every landing", this.pos);
+      }
       this.previous = 'start';
       where = this.withNewlines(false, () => this.parseOr());
     } else if (this.ch() === '{') {

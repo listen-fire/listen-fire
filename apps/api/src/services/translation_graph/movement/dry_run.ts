@@ -14,7 +14,7 @@
 import {
   collectExpressionNames,
   extractHopAliases,
-  parseMovementExpression,
+  expressionOfSlot,
   pathRootName,
 } from 'movement-lang';
 import type {
@@ -51,7 +51,7 @@ function headOwner(
   if (root.kind === 'name') return resolveOwner(root.name);
   let names: Set<string>;
   try {
-    names = new Set(collectExpressionNames(parseMovementExpression(root.expr.raw)).refs);
+    names = new Set(collectExpressionNames(expressionOfSlot(root.expr)).refs);
   } catch {
     return undefined; // unparseable — the checker owns that diagnostic
   }

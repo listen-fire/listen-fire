@@ -49,7 +49,7 @@ import {
   borrowedTypeSegments,
   isEnumType,
   parseFieldTypeName,
-  parseMovementExpression,
+  expressionOfSlot,
   variantOf,
 } from 'movement-lang';
 import type {
@@ -245,7 +245,7 @@ async function describeSlot(
 ): Promise<string> {
   let expr;
   try {
-    expr = parseMovementExpression(slot.raw);
+    expr = expressionOfSlot(slot);
   } catch (e) {
     if (!(e instanceof BridgeError)) throw e;
     throw new MovementEngineError(

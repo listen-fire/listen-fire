@@ -1,18 +1,18 @@
 // Lowering: the movement expression tree (./tree.ts) → the shared `Expression`
-// (packages/shared/expression/types.ts), producing exactly what the bridge
-// (expression/bridge.ts) produces today. This is where a NAME first means
-// something: `COUNT` becomes an aggregate, `AI` an llm node, `EXISTS` a
-// quantifier, `CURRENCY.PARSE` a stdlib function — the decisions the formula
-// grammar's `parseFunctionCall` and the bridge's text rewrites make today.
+// (packages/shared/expression/types.ts) that the checker, the engine, the web
+// app's formula input and every adapter's filter pushdown read. This is where
+// a NAME first means something: `COUNT` becomes an aggregate, `AI` an llm
+// node, `EXISTS` a quantifier, `CURRENCY.PARSE` a stdlib function.
 //
-// Each rule the bridge implements by rewriting text before parsing is written
-// here as a rule over the tree, with a comment naming the rewrite it replaces.
-// Where the bridge's behaviour depends on something a tree has no word for
-// (the letter case of an aggregate's name, whether a path is the WHOLE slot),
-// the rule says so — those are the places one grammar needs a decision.
+// It reproduces what the old text-rewriting bridge produced, apart from four
+// bridge defects fixed under every language version (2_one_grammar.md,
+// rulings after step 1): an `if` condition binds AND tighter than OR, an
+// `IF … AND … END` reads whole, a walk inside `EXISTS(…)` reads its own
+// interpolations and nested `EXISTS`, and an empty hop `WHERE` is refused.
+// A bare walk is the records it lands on wherever a value goes.
 //
-// Step 1 of plans/functional-extract-2026-10-02/2_one_grammar.md: nothing
-// calls this outside the differential test.
+// Where a rule depends on something the tree has no word for (the letter case
+// of an aggregate's name), the rule says so.
 
 import type {
   EdgeStep,
@@ -23,26 +23,38 @@ import type {
   TraversalStep,
 } from '@listen-fire/shared/expression/types';
 import { AI_TIERS } from '@listen-fire/shared/expression/types';
-import {
-  POSITION_SENTINEL,
-  validateBuiltinCallShape,
-  type MovementCondition,
-} from '../../expression/bridge';
+import { validateBuiltinCallShape } from '../../expression/call_shape';
+import { BridgeError } from '../../expression/error';
 import { describeStdlibFamily, listStdlibNamespaces, stdlibFamily } from '../../expression/stdlib';
 import { neverAsAny } from '../../never';
 import type { BinaryOp, CallArg, Hop, MExpr, Name, TypeExpr } from './tree';
 import { parseExpression } from './parse_expression';
 
-export class LoweringError extends Error {
-  constructor(
-    message: string,
-    /** The diagnostic code the bridge gives the same refusal, when it has one. */
-    public readonly code?: string,
-  ) {
-    super(message);
+export class LoweringError extends BridgeError {
+  constructor(message: string, code?: string) {
+    super(message, undefined, code);
     this.name = 'LoweringError';
   }
 }
+
+/** Terminal property id meaning "the landings themselves": a bare walk
+ *  (`orgs-[:co]->`) lowers to a traverse ending in a read of this property.
+ *  A read of it is not a property read; the traversal yields its positions. */
+export const POSITION_SENTINEL = '__movement_position__';
+
+export type MovementCondition =
+  | { kind: 'and'; conjuncts: MovementCondition[] }
+  | {
+      kind: 'isTest';
+      subjectRaw: string;
+      /** `position`: the single unpinned hop's name (`<crm-[:company]->>`).
+       *  `hopsRaw`: the raw hop text when the marker carries a WHERE — an
+       *  event ADDRESS (`<at-[:`Record Change` WHERE `action` == "…"]->>`),
+       *  resolved by the checker/engine via `eventAddressOfHops`. Exactly one
+       *  of the two is set for a hop-form marker; neither for `<graph>`. */
+      type: { graph: string; position?: string; hopsRaw?: string };
+    }
+  | { kind: 'expr'; expr: Expression };
 
 /** Where a name is read. Inside a hop's WHERE a bare name is a property of
  *  the EDGE's landing (`edge_property`) — the formula grammar's edge-property
@@ -53,14 +65,25 @@ interface Ctx {
 
 const TOP: Ctx = { edgeProps: false };
 
-/** Parse and lower one expression slot — the new path's `parseMovementExpression`. */
-export function lowerMovementExpression(raw: string): Expression {
-  return new Lowering(raw).top(parseExpression(raw));
+/** Lower one expression; `source` is the text `tree` was parsed from. */
+export function lowerExpression(tree: MExpr, source: string): Expression {
+  return new Lowering(source).lower(tree, TOP);
 }
 
-/** Parse and lower one condition slot — the new path's `parseMovementCondition`. */
+/** Lower one `if` condition into its top-level
+ *  `AND` conjuncts, each an `IS` type guard or an expression. */
+export function lowerCondition(tree: MExpr, source: string): MovementCondition {
+  return new Lowering(source).condition(tree);
+}
+
+/** Parse and lower one expression text. */
+export function lowerMovementExpression(raw: string): Expression {
+  return lowerExpression(parseExpression(raw), raw);
+}
+
+/** Parse and lower one condition text. */
 export function lowerMovementCondition(raw: string): MovementCondition {
-  return new Lowering(raw).condition(parseExpression(raw));
+  return lowerCondition(parseExpression(raw), raw);
 }
 
 const AGG_FNS: Record<string, Extract<Expression, { type: 'aggregate' }>['fn']> = {
@@ -69,10 +92,10 @@ const AGG_FNS: Record<string, Extract<Expression, { type: 'aggregate' }>['fn']> 
 };
 
 /**
- * The aggregates whose first argument may be a bare walk (`COUNT(orgs-[:co]->)`
- * counts the landings). The bridge finds these by a CASE-SENSITIVE regex over
- * the text, so `count(orgs-[:co]->)` is refused while `count(orgs.x)` is an
- * aggregate: the rule is reproduced as written (upper-case, unquoted callee).
+ * The aggregates whose bare-walk argument takes a property written after the
+ * call (`FIRST(orgs-[:co]->).url`). The old bridge found these by a
+ * CASE-SENSITIVE regex over the text, so the rule keeps to an upper-case,
+ * unquoted callee: `first(orgs-[:co]->).url` is still refused.
  */
 const BARE_PATH_AGGREGATES = new Set([
   'FIRST', 'LAST', 'ONLY', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'JOIN', 'COLLECT', 'SORT', 'LLM_AGG',
@@ -102,18 +125,7 @@ type Segment =
 class Lowering {
   constructor(private readonly source: string) {}
 
-  // ── Whole slots ──
-
-  /**
-   * A whole slot. The one rule that depends on being the WHOLE slot: a bare
-   * walk (`c-[m:Messages]->`) is its landings — the bridge appends the
-   * position sentinel when the entire text is a path, and refuses one written
-   * anywhere else that is not an aggregate's first argument.
-   */
-  top(expr: MExpr): Expression {
-    if (this.isBareWalk(expr)) return this.lower(this.positions(expr), TOP);
-    return this.lower(expr, TOP);
-  }
+  // ── Conditions ──
 
   condition(expr: MExpr): MovementCondition {
     const conjuncts: MExpr[] = [];
@@ -141,10 +153,10 @@ class Lowering {
         'IS type tests under OR/NOT (or nested in parentheses) are not yet supported — use IS only as a top-level AND conjunct',
       );
     }
-    return { kind: 'expr', expr: this.top(expr) };
+    return { kind: 'expr', expr: this.lower(expr, TOP) };
   }
 
-  /** The bridge's IS marker: `<graph>`, `<graph-[:position]->>` (one plain hop),
+  /** An IS marker: `<graph>`, `<graph-[:position]->>` (one plain hop),
    *  or an ADDRESS kept as its raw hop text for `eventAddressOfHops`. */
   private isType(type: TypeExpr): Extract<MovementCondition, { kind: 'isTest' }>['type'] {
     if (type.kind !== 'named' || type.array || type.field !== undefined) {
@@ -171,7 +183,7 @@ class Lowering {
 
   // ── Expressions ──
 
-  private lower(expr: MExpr, ctx: Ctx): Expression {
+  lower(expr: MExpr, ctx: Ctx): Expression {
     switch (expr.kind) {
       case 'literal':
         return { type: 'static', value: expr.value };
@@ -248,14 +260,14 @@ class Lowering {
   }
 
   /** A quoted string: a literal, or — with `${…}` — a concat whose holes are
-   *  each a WHOLE slot of their own (the bridge parses each one afresh). */
+   *  each a slot of their own: a hole in a hop WHERE reads a property, not an edge property. */
   private string(expr: Extract<MExpr, { kind: 'string' }>): Expression {
     if (expr.parts.every(p => typeof p === 'string')) return { type: 'static', value: expr.parts.join('') };
     return {
       type: 'concat',
       parts: expr.parts
         .filter(p => p !== '')
-        .map(p => (typeof p === 'string' ? { type: 'static', value: p } : this.top(p))),
+        .map(p => (typeof p === 'string' ? { type: 'static', value: p } : this.lower(p, TOP))),
     };
   }
 
@@ -376,16 +388,19 @@ class Lowering {
       steps.push(this.edgeStep(hop, ctx));
     }
     const [terminal, ...after] = rest;
+    let expression: Expression;
     if (terminal === undefined) {
-      throw new LoweringError("a walk written as a value needs a '.property' after it, or to be the whole slot");
+      // A bare walk is the records it lands on, wherever a value goes.
+      const last = hops[hops.length - 1];
+      if (last.direction !== 'out' || last.arrow !== '->') {
+        throw new LoweringError("a walk written as a value ends in ']->', or reads a '.property' after it");
+      }
+      expression = this.leaf({ text: POSITION_SENTINEL, quoted: true, at: last.at }, ctx);
+    } else {
+      if (terminal.kind !== 'member') throw new LoweringError("Expected '.' after the walk");
+      expression = this.fromName(terminal.name, after, ctx, false);
     }
-    if (terminal.kind !== 'member') throw new LoweringError("Expected '.' after the walk");
-    return {
-      type: 'traverse',
-      ...(aliasRoot !== undefined ? { aliasRoot } : {}),
-      steps,
-      expression: this.fromName(terminal.name, after, ctx, false),
-    };
+    return { type: 'traverse', ...(aliasRoot !== undefined ? { aliasRoot } : {}), steps, expression };
   }
 
   private edgeStep(hop: Hop, ctx: Ctx): EdgeStep {
@@ -537,23 +552,24 @@ class Lowering {
     if (named) throw new LoweringError(`a named argument (${named.name?.text}: …) is a movement call's, not an expression's`);
     const upper = name.text.toUpperCase();
 
-    // `EXISTS(…)` — the bridge lifts every one out of the text (in any letter
-    // case) and parses its interior itself. Here it is a call like any other,
-    // resolved by name.
+    // `EXISTS(…)`, in any letter case, is the quantifier; resolved by name
+    // like any other call, unless scoped or quoted.
     if (!name.quoted && upper === 'EXISTS' && !scoped) return { expression: this.exists(args), consumed: 0 };
 
-    // `AGG(<bare walk>)` counts the landings; `AGG(<bare walk>).prop` reads a
-    // property of them — the bridge's text rewrite moves `.prop` inside.
+    // `AGG(<bare walk>).prop` reads a property of the aggregated landing: the
+    // property moves inside the walk (the first url is the url of the first).
     let values = args.map(a => a.value);
     let consumed = 0;
-    if (!name.quoted && BARE_PATH_AGGREGATES.has(name.text) && values.length > 0 && this.isBareWalk(values[0])) {
-      const next = after[0];
-      if (next?.kind === 'member') {
-        values = [this.member(values[0], next.name), ...values.slice(1)];
-        consumed = 1;
-      } else {
-        values = [this.positions(values[0]), ...values.slice(1)];
-      }
+    const next = after[0];
+    if (
+      !name.quoted &&
+      BARE_PATH_AGGREGATES.has(name.text) &&
+      values.length > 0 &&
+      this.isBareWalk(values[0]) &&
+      next?.kind === 'member'
+    ) {
+      values = [this.member(values[0], next.name), ...values.slice(1)];
+      consumed = 1;
     }
 
     if (scoped) {
@@ -641,9 +657,9 @@ class Lowering {
 
   /**
    * `EXISTS(walk [WHERE predicate])` — true when the walk lands anywhere (that
-   * the predicate holds). The interior is read afresh, whatever surrounds the
-   * call: the bridge parses it out of the text as a slot of its own, so a
-   * name in its predicate is never an edge property of an enclosing hop.
+   * the predicate holds). The interior is read as a slot of its own, whatever
+   * surrounds the call, so a name in its predicate is never an edge property
+   * of an enclosing hop.
    */
   private exists(args: CallArg[]): Expression {
     if (args.length !== 1) throw new LoweringError('EXISTS(…) expects a traversal path');
@@ -658,7 +674,7 @@ class Lowering {
       const exists: Expression = {
         type: 'exists',
         steps: steps.steps,
-        ...(predicate !== undefined ? { where: this.top(predicate) } : {}),
+        ...(predicate !== undefined ? { where: this.lower(predicate, TOP) } : {}),
       };
       return steps.root !== undefined
         ? this.foldNamespace({ type: 'traverse', aliasRoot: steps.root, steps: [], expression: exists })
@@ -667,7 +683,7 @@ class Lowering {
     // `EXISTS(x.Field)` asks a VALUE's presence: `x.Field != null`.
     if (predicate !== undefined) throw new LoweringError('EXISTS(… WHERE …) needs a traversal path — a value has nothing to filter');
     if (walk.kind === 'member' && walk.object.kind === 'name' && walk.object.name.text.toLowerCase() !== 'edge') {
-      const read = this.top(walk);
+      const read = this.lower(walk, TOP);
       return { type: 'compare', op: 'neq', left: read, right: { type: 'static', value: null } };
     }
     throw new LoweringError(
@@ -694,10 +710,6 @@ class Lowering {
     return last !== undefined && last.direction === 'out' && last.arrow === '->';
   }
 
-  private positions(walk: MExpr): MExpr {
-    return this.member(walk, { text: POSITION_SENTINEL, quoted: true, at: walk.at });
-  }
-
   private member(object: MExpr, property: Name): MExpr {
     return { kind: 'member', object, property, at: object.at };
   }
@@ -721,7 +733,11 @@ class Lowering {
       }
       const args = expr.expression.args;
       if (args.length < member.arity.min || args.length > member.arity.max) {
-        throw new LoweringError(`${member.signature} takes ${member.arity.min}–${member.arity.max} arguments, got ${args.length}`);
+        const { min, max } = member.arity;
+        const expected = min === max ? `${min}` : `${min}–${max}`;
+        throw new LoweringError(
+          `${member.signature} takes ${expected} argument${max === 1 ? '' : 's'}, got ${args.length}`,
+        );
       }
       return { type: 'function', fn: member.id, args };
     }

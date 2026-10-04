@@ -1390,11 +1390,15 @@ const UNRECOGNISED_HINTS: Record<string, string> = {
  *  the character), not in the text: a caller may have rewritten the slot
  *  before parsing, so an offset in the message could name the wrong column. */
 function unrecognisedCharacter(token: Token): ParseError {
-  const hint = UNRECOGNISED_HINTS[token.value];
-  return new ParseError(
-    `Unrecognised character '${token.value}'${hint !== undefined ? ` — ${hint}` : ''}`,
-    token.pos,
-  );
+  return new ParseError(unrecognisedCharacterMessage(token.value), token.pos);
+}
+
+/** The refusal of a character no expression grammar reads, with the spelling
+ *  the author most likely meant. Shared with the movement language's grammar
+ *  (packages/movement-lang/parser/expression), so both say the same thing. */
+export function unrecognisedCharacterMessage(ch: string): string {
+  const hint = UNRECOGNISED_HINTS[ch];
+  return `Unrecognised character '${ch}'${hint !== undefined ? ` — ${hint}` : ''}`;
 }
 
 /** The aggregate function names, and the AST kind each reads as. */

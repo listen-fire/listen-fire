@@ -6,7 +6,7 @@
 // double-quoted strings (which may span newlines and carry ${…} interpolation), and inside
 // backtick-quoted names. `#` starts a comment to end of line, outside strings/backticks.
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
-// for the expression bridge (existing formula grammar).
+// for the expression grammar (./expression), read through expression/bridge.ts.
 
 import { CURRENT_LANGUAGE_VERSION, since, type LanguageVersion } from '../language_version';
 import {
