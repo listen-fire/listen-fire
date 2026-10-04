@@ -28,9 +28,19 @@ import {
   parseProgram,
   pathRootName,
   typeNameOf,
+  CURRENT_LANGUAGE_VERSION,
+  programCallScope,
+  readCall,
+  resolveCallee,
 } from 'movement-lang';
 import type {
   CallArg,
+  CallPosition,
+  CallReading,
+  CallScope,
+  CallStatement,
+  CollectionOpExpression,
+  RValue,
   CombinatorExpression,
   ExprSlot,
   ExtractExpression,
@@ -159,8 +169,12 @@ class InterpretabilityScan {
   /** > 0 while scanning the field slots of an adapter-target write —
    *  the only place a non-built-in function can resolve at runtime. */
   private writeFieldDepth = 0;
+  /** What a call can name here: the file's functions, then the standard
+   *  library — so a call reads as the checker and the engine read it. */
+  private callScope: CallScope = programCallScope({ statements: [] });
 
   scan(program: Program): string[] {
+    this.callScope = programCallScope(program);
     for (const statement of program.statements) {
       if (statement.kind === 'assign' && statement.value.kind === 'construct') {
         this.graphRoots.add(statement.name);
@@ -209,8 +223,9 @@ class InterpretabilityScan {
         // resolveFile); the imported library's own constructs are
         // scanned by listUnsupportedConstructs' link walk.
         return;
-      case 'assign':
-        switch (statement.value.kind) {
+      case 'assign': {
+        const value = this.resolvedValue(statement.value);
+        switch (value.kind) {
           case 'extract':
           case 'extractCall':
             this.flag('file-level extract expressions');
@@ -228,7 +243,7 @@ class InterpretabilityScan {
             this.flag('file-level links');
             return;
           case 'expr':
-            this.scanSlot(statement.value.expr);
+            this.scanSlot(value.expr);
             return;
           case 'callback':
             // The engine mints it, the router fires it — an interpretable
@@ -238,7 +253,7 @@ class InterpretabilityScan {
           case 'construct':
             // The construction spelling of a CALL (`page = fetch_url(url: …)`)
             // is a call, and the engine refuses it at file scope like one.
-            if (this.callableNames.has(statement.value.construct.callee)) {
+            if (this.callableNames.has(value.construct.callee)) {
               this.flag('file-level calls');
             }
             return;
@@ -247,6 +262,7 @@ class InterpretabilityScan {
             return;
         }
         return;
+      }
       case 'movement': {
         // Arity is the CHECKER's territory now: listen/run entries take
         // exactly one parameter (dispatch supplies one event); library
@@ -298,52 +314,53 @@ class InterpretabilityScan {
         // A binding and a `return` take the same right-hand side, so what a
         // scan makes of one it makes of the other.
         case 'assign':
-        case 'return':
-          switch (statement.value.kind) {
+        case 'return': {
+          const value = this.resolvedValue(statement.value);
+          switch (value.kind) {
             case 'construct':
               break;
             case 'call':
-              for (const arg of statement.value.call.args) this.scanCallArg(arg);
+              for (const arg of value.call.args) this.scanCallArg(arg);
               break;
             case 'write':
-              this.scanWrite(statement.value.write);
+              this.scanWrite(value.write);
               break;
             case 'match':
-              this.scanWrite(statement.value.match);
+              this.scanWrite(value.match);
               break;
             case 'link':
-              this.scanWrite(statement.value.link.to.match);
+              this.scanWrite(value.link.to.match);
               break;
             case 'expr':
-              this.scanSlot(statement.value.expr);
+              this.scanSlot(value.expr);
               break;
             case 'extract':
-              this.scanExtract(statement.value.extract);
+              this.scanExtract(value.extract);
               break;
             case 'extractCall':
               // The content is an ordinary expression; the shape and the
               // settings are the extraction module's, which runs them.
-              this.scanSlot(statement.value.extractCall.content);
+              this.scanSlot(value.extractCall.content);
               break;
             case 'block':
-              this.scanHead(statement.value.block.head);
-              this.scanBody(statement.value.block.body);
+              this.scanHead(value.block.head);
+              this.scanBody(value.block.body);
               break;
             case 'node':
-              this.scanNode(statement.value.node);
+              this.scanNode(value.node);
               break;
             case 'lazy':
               // A deferred traversal is a traversal — the same head every
               // block runs, held rather than walked. Its per-item tail is a
               // node literal, and gets scanned as one.
-              this.scanHead(statement.value.lazy.head);
-              if (statement.value.lazy.mapping) this.scanNode(statement.value.lazy.mapping);
+              this.scanHead(value.lazy.head);
+              if (value.lazy.mapping) this.scanNode(value.lazy.mapping);
               break;
             case 'callback': {
               // Interpretable since chunk 2 — but what it DEFERS is scanned
               // like any other body: an unsupported construct inside a callback
               // body is one this movement cannot run, whenever it runs.
-              const subject = statement.value.callback.subject;
+              const subject = value.callback.subject;
               if (subject.kind === 'inline') this.scanBody(subject.closure.body);
               else {
                 for (const arg of subject.args) this.scanCallArg(arg);
@@ -353,18 +370,18 @@ class InterpretabilityScan {
             case 'closure':
               // A closure's body runs when it is CALLED, and an unsupported
               // construct inside one is unsupported whenever that happens.
-              this.scanBody(statement.value.closure.body);
+              this.scanBody(value.closure.body);
               break;
             case 'inlineBlock':
               this.flag("reading a block's inner binding by name ('{ … }.name')");
               break;
             case 'combinator':
-              this.scanArms(statement.value.combinator);
+              this.scanArms(value.combinator);
               break;
             case 'collection': {
               // The op runs its function once per member, so the function's
               // body is body this movement runs.
-              const op = statement.value.collection;
+              const op = value.collection;
               this.scanSlot(op.source);
               if (op.init !== undefined) this.scanSlot(op.init);
               if (op.fn.kind === 'closure') this.scanBody(op.fn.closure.body);
@@ -374,17 +391,18 @@ class InterpretabilityScan {
               // A list of a type's own values — nothing runs.
               break;
             case 'await':
-              if (statement.value.await.source.kind === 'combinator') {
-                this.scanArms(statement.value.await.source.combinator);
+              if (value.await.source.kind === 'combinator') {
+                this.scanArms(value.await.source.combinator);
               } else if (
-                statement.value.await.source.kind === 'until'
-                && statement.value.await.source.condition.kind === 'closure'
+                value.await.source.kind === 'until'
+                && value.await.source.condition.kind === 'closure'
               ) {
-                this.scanBody(statement.value.await.source.condition.closure.body);
+                this.scanBody(value.await.source.condition.closure.body);
               }
               break;
           }
           break;
+        }
         case 'write':
           this.scanWrite(statement.write);
           break;
@@ -412,12 +430,19 @@ class InterpretabilityScan {
             this.scanBody(statement.await.source.condition.closure.body);
           }
           break;
-        case 'call':
+        case 'call': {
+          // `MAP(xs, f)` run bare is the collection statement it resolves to.
+          const reading = this.reading(statement, 'statement');
+          if (reading.kind === 'collection') {
+            this.scanCollection(reading.collection);
+            break;
+          }
           // Calls run (composition) — same-file and imported callees
           // alike (E8). Arguments still carry expression slots / inline
           // shape-writes — scan them.
           for (const arg of statement.args) this.scanCallArg(arg);
           break;
+        }
         case 'match':
           // A match runs the write path's identity half (resolve +
           // arbitrate, never create); its body is a write body.
@@ -472,8 +497,50 @@ class InterpretabilityScan {
   private scanCallArg(arg: CallArg): void {
     if (arg.kind === 'write') this.scanWrite(arg.write);
     else if (arg.kind === 'node') this.scanNode(arg.node);
-    else if (arg.kind === 'call') for (const nested of arg.call.args) this.scanCallArg(nested);
+    else if (arg.kind === 'call') {
+      // A built-in's call is the expression it computes, scanned as one.
+      const reading = this.reading(arg.call, 'argument');
+      if (reading.kind === 'value') this.scanSlot(reading.expr);
+      else for (const nested of arg.call.args) this.scanCallArg(nested);
+    }
+    // A function handed to a built-in runs once per member, so its body is
+    // body this movement runs; a type runs nothing.
+    else if (arg.kind === 'closure') this.scanBody(arg.closure.body);
+    else if (arg.kind === 'type') return;
     else this.scanSlot(arg.expr);
+  }
+
+  /** How a call reads once its callee is resolved, as the checker and the
+   *  engine read it. Scanned at the version a program parses at here. */
+  private reading(call: CallStatement, position: CallPosition): CallReading {
+    return readCall(call, (callee) => resolveCallee(callee, this.callScope, CURRENT_LANGUAGE_VERSION), position);
+  }
+
+  /** A bound or returned call to a built-in, as the form it resolves to;
+   *  every other right-hand side unchanged. */
+  private resolvedValue(value: RValue): RValue {
+    if (value.kind !== 'call') return value;
+    const reading = this.reading(value.call, 'value');
+    switch (reading.kind) {
+      case 'value':
+        return { kind: 'expr', expr: reading.expr };
+      case 'collection':
+        return { kind: 'collection', collection: reading.collection };
+      case 'members':
+        return { kind: 'members', members: reading.members };
+      case 'function':
+      case 'refused':
+        // A refusal is the checker's to report; its arguments still scan.
+        return value;
+    }
+  }
+
+  /** A collection op runs its function once per member, so the function's
+   *  body is body this movement runs. */
+  private scanCollection(op: CollectionOpExpression): void {
+    this.scanSlot(op.source);
+    if (op.init !== undefined) this.scanSlot(op.init);
+    if (op.fn.kind === 'closure') this.scanBody(op.fn.closure.body);
   }
 
   /** A node literal computes and nothing else — its value entries are ordinary

@@ -60,6 +60,13 @@ function treeOf(slot: ExprSlot): MExpr {
   return tree;
 }
 
+/** The slot's tree as the grammar read it, before lowering decides what any
+ *  name in it means — what call resolution walks. Throws the slot's syntax
+ *  error, as the lowerings below do. */
+export function treeOfSlot(slot: ExprSlot): MExpr {
+  return treeOf(slot);
+}
+
 /** The slot as a value expression. */
 export function expressionOfSlot(slot: ExprSlot): Expression {
   return lowerExpression(treeOf(slot), slot.raw);

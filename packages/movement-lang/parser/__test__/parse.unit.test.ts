@@ -3,8 +3,10 @@
 // verbatim below and must parse, with structural assertions per example.
 
 import { MovementParseError, parseProgram } from '../parse';
+import { fileCallScope, readCall, resolveCallee } from '../../checker/calls';
 import {
   CallArg,
+  CallStatement,
   ExtractExpression,
   RValue,
   Statement,
@@ -494,26 +496,46 @@ describe('§C traversal-headed blocks', () => {
   });
 });
 
+// From language version 3 a collection op is a call like any other: the parser
+// records `MAP(…)` as a call, and resolution reads it as the op once `MAP`
+// resolves to the standard library (`checker/calls.ts`). These read each one
+// through that resolution; under version 2 the op is still parsed by name.
+const noFunctions = fileCallScope([]);
+function readOp(call: CallStatement, position: 'statement' | 'value') {
+  const reading = readCall(call, (callee) => resolveCallee(callee, noFunctions, 3), position);
+  if (reading.kind !== 'collection') throw new Error(`expected a collection op, got ${reading.kind}`);
+  return reading.collection;
+}
+const bareOp = (s: Statement | undefined) => readOp(as(s, 'call'), 'statement');
+const boundOp = (s: Statement | undefined) => readOp(rv(as(s, 'assign').value, 'call').call, 'value');
+
 describe('a bare collection-op statement (no binding)', () => {
   it('MAP(...) run bare parses — the function runs for its effects, the answer unbound', () => {
     const program = parseProgram(
       ['xs = [1, 2, 3]', 'MAP(xs, (n) => { write crm-[:note]-> { text: "x" } })'].join('\n'),
     );
     expect(program.statements).toHaveLength(2);
-    const statement = as(program.statements[1], 'collection');
-    expect(statement.collection.op).toBe('map');
+    expect(bareOp(program.statements[1]).op).toBe('map');
+  });
+
+  it('under version 2 it is the collection statement, read by name', () => {
+    const program = parseProgram(
+      ['xs = [1, 2, 3]', 'MAP(xs, (n) => { write crm-[:note]-> { text: "x" } })'].join('\n'),
+      { languageVersion: 2 },
+    );
+    expect(as(program.statements[1], 'collection').collection.op).toBe('map');
   });
 
   it('FILTER(...) and REDUCE(...) parse bare too — the checker, not the parser, decides whether the function must return', () => {
     const filterProgram = parseProgram(
       ['xs = [1, 2, 3]', 'FILTER(xs, (n) => { return n > 1 })'].join('\n'),
     );
-    expect(as(filterProgram.statements[1], 'collection').collection.op).toBe('filter');
+    expect(bareOp(filterProgram.statements[1]).op).toBe('filter');
 
     const reduceProgram = parseProgram(
       ['xs = [1, 2, 3]', 'REDUCE(xs, 0, (acc, n) => { return acc + n })'].join('\n'),
     );
-    expect(as(reduceProgram.statements[1], 'collection').collection.op).toBe('reduce');
+    expect(bareOp(reduceProgram.statements[1]).op).toBe('reduce');
   });
 
   it('MAP and FILTER take a settings record between the collection and the function', () => {
@@ -524,32 +546,36 @@ describe('a bare collection-op statement (no binding)', () => {
         'FILTER(xs, {\n  concurrency: 2,\n  initialConcurrency: 1\n}, (n) => { return n > 1 })',
       ].join('\n'),
     );
-    const mapped = rv(as(program.statements[1], 'assign').value, 'collection').collection;
+    const mapped = boundOp(program.statements[1]);
     expect(mapped.op).toBe('map');
     expect(mapped.config?.raw).toBe('{ onError: "warn", concurrency: 4 }');
     expect(mapped.fn.kind).toBe('closure');
-    const filtered = as(program.statements[2], 'collection').collection;
+    const filtered = bareOp(program.statements[2]);
     expect(filtered.config?.raw).toContain('initialConcurrency: 1');
     expect(filtered.fn.kind).toBe('closure');
   });
 
   it('the two-argument forms carry no settings', () => {
     const program = parseProgram(['xs = [1, 2, 3]', 'MAP(xs, (n) => { return n })'].join('\n'));
-    expect(as(program.statements[1], 'collection').collection.config).toBeUndefined();
+    expect(bareOp(program.statements[1]).config).toBeUndefined();
   });
 
   it("REDUCE's middle argument is still its starting value, even when it is a record", () => {
     const program = parseProgram(
       ['xs = [1, 2, 3]', 'REDUCE(xs, { total: 0 }, (acc, n) => { return acc })'].join('\n'),
     );
-    const reduced = as(program.statements[1], 'collection').collection;
+    const reduced = bareOp(program.statements[1]);
     expect(reduced.init?.raw).toBe('{ total: 0 }');
     expect(reduced.config).toBeUndefined();
   });
 
   it('settings held in a name are refused, naming the in-place record', () => {
+    const program = parseProgram(['xs = [1, 2, 3]', 'MAP(xs, cfg, (n) => { return n })'].join('\n'));
+    const reading = readCall(as(program.statements[1], 'call'), (callee) => resolveCallee(callee, noFunctions, 3), 'statement');
+    expect(reading).toMatchObject({ kind: 'refused', refusal: { kind: 'args' } });
+    expect(reading.kind === 'refused' ? reading.refusal.message : '').toMatch(/settings as a record written in place/);
     expect(() =>
-      parseProgram(['xs = [1, 2, 3]', 'MAP(xs, cfg, (n) => { return n })'].join('\n')),
+      parseProgram(['xs = [1, 2, 3]', 'MAP(xs, cfg, (n) => { return n })'].join('\n'), { languageVersion: 2 }),
     ).toThrow(/settings as a record written in place/);
   });
 

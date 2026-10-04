@@ -72,6 +72,7 @@ import {
   type RecordedAwait,
   type RecordedBranch,
   type RecordedCall,
+  type RecordedCallReading,
   type RecordedExtract,
   type RecordedInstance,
   type RecordedLanding,
@@ -1644,8 +1645,14 @@ class Projection {
           record: this.addRecord(statement.write, this.writes.get(spanKey(statement.write.span))),
           at: statement.span,
         };
-      case 'call':
+      case 'call': {
+        // `MAP(xs, f)` run bare is the collection statement it resolved to.
+        const reading = this.builtinReading(statement);
+        if (reading?.kind === 'collection') {
+          return this.step({ kind: 'collection', collection: reading.collection, span: statement.span });
+        }
         return this.callStep(statement, undefined);
+      }
       case 'block': {
         const scope = this.blockScope(statement.block.span);
         return {
@@ -1711,6 +1718,8 @@ class Projection {
    *  movement DOES, which a return must never hide. Undefined where the value
    *  is just a value; the `return` step then carries it. */
   private returnedEffectStep(value: RValue, at: Span): Step | Step[] | undefined {
+    const resolved = this.resolvedValue(value);
+    if (resolved !== value) return this.returnedEffectStep(resolved, at);
     switch (value.kind) {
       case 'write':
         return {
@@ -1739,6 +1748,8 @@ class Projection {
   }
 
   private assignStep(binding: string, value: RValue, at: Span): Step | Step[] | undefined {
+    const resolved = this.resolvedValue(value);
+    if (resolved !== value) return this.assignStep(binding, resolved, at);
     switch (value.kind) {
       case 'write':
         return {
@@ -1840,6 +1851,30 @@ class Projection {
     }
   }
 
+  /** How the checker read a call whose callee is a built-in — undefined for
+   *  a function's call (and wherever the checker recorded nothing). */
+  private builtinReading(call: CallStatement): RecordedCallReading['reading'] | undefined {
+    const recorded = this.nodes.get(`callReading:${spanKey(call.span)}`);
+    return recorded?.kind === 'callReading' ? recorded.reading : undefined;
+  }
+
+  /** A bound or returned call to a built-in, as the value form it resolved
+   *  to; any other right-hand side unchanged. */
+  private resolvedValue(value: RValue): RValue {
+    if (value.kind !== 'call') return value;
+    const reading = this.builtinReading(value.call);
+    switch (reading?.kind) {
+      case 'value':
+        return { kind: 'expr', expr: reading.expr };
+      case 'collection':
+        return { kind: 'collection', collection: reading.collection };
+      case 'members':
+        return { kind: 'members', members: reading.members };
+      default:
+        return value;
+    }
+  }
+
   private callStep(call: CallStatement, binding: string | undefined): Step {
     const recorded = this.nodes.get(`call:${spanKey(call.span)}`);
     const node = recorded?.kind === 'call' ? (recorded as RecordedCall) : undefined;
@@ -1864,8 +1899,18 @@ class Projection {
     switch (arg.kind) {
       case 'expr':
         return { name, kind: 'value', chip: this.chip(arg.expr, scope) };
-      case 'call':
+      case 'call': {
+        const reading = this.builtinReading(arg.call);
+        if (reading?.kind === 'value') return { name, kind: 'value', chip: this.chip(reading.expr, scope) };
         return { name, kind: 'call', movement: arg.call.callee };
+      }
+      // Only a built-in takes either; handed to a function they are refused,
+      // and shown as written.
+      case 'closure':
+      case 'type': {
+        const source = arg.kind === 'type' ? `<${arg.type}>` : '(a function)';
+        return { name, kind: 'value', chip: { source, role: 'unparsed', refs: [], parts: [{ kind: 'text', text: source }] } };
+      }
       case 'node':
         return { name, kind: 'node', node: this.nodeLiteral(arg.node, scope) };
       case 'write':

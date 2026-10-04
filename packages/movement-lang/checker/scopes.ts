@@ -190,6 +190,12 @@ export interface Declaration {
   visibleFrom: Loc;
 }
 
+/** A name a call can run: a movement, a plugin, or a file import (which may
+ *  be a movement the linker could not follow). */
+export function isFunctionSymbol(symbol: ScopeSymbol): boolean {
+  return symbol.kind === 'movement' || symbol.kind === 'plugin' || symbol.kind === 'fileImport';
+}
+
 export class Scope {
   readonly symbols = new Map<string, ScopeSymbol>();
   readonly pending = new Set<string>();
@@ -233,6 +239,34 @@ export class Scope {
       if (scope.pending.has(name)) return { kind: 'pending' };
     }
     return undefined;
+  }
+
+  /**
+   * The FUNCTION in scope written `name` in any letter case — a movement, a
+   * plugin, or an imported name that may be one. Function names are
+   * case-insensitive from language version 3 (variable names are not), and
+   * two functions whose names differ only by case are refused where they are
+   * declared, so at most one answers.
+   */
+  resolveFunction(name: string): ScopeSymbol | undefined {
+    const folded = name.toLowerCase();
+    for (let scope: Scope | undefined = this; scope; scope = scope.parent) {
+      for (const symbol of scope.symbols.values()) {
+        if (isFunctionSymbol(symbol) && symbol.name.toLowerCase() === folded) return symbol;
+      }
+    }
+    return undefined;
+  }
+
+  /** Every function name visible from here, innermost first. */
+  functionNames(): string[] {
+    const names: string[] = [];
+    for (let scope: Scope | undefined = this; scope; scope = scope.parent) {
+      for (const symbol of scope.symbols.values()) {
+        if (isFunctionSymbol(symbol) && !names.includes(symbol.name)) names.push(symbol.name);
+      }
+    }
+    return names;
   }
 
   resolve(name: string): Resolution {

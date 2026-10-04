@@ -56,13 +56,61 @@
 // to the engine.
 
 import { cronTimezoneError } from '@listen-fire/shared/cron';
-import { FORMULA_SPECIAL_FUNCTIONS, KEYWORDS } from '@listen-fire/shared/expression/formula';
 import {
   instantAtZonedWallTime,
   readWallClockTime,
   wallClockTimeError,
   zonedDateString,
 } from '@listen-fire/shared/timezone';
+
+// ── Parameters ───────────────────────────────────────────────────────────────
+
+/**
+ * What a built-in's parameter takes. The vocabulary is the checker's value
+ * types, coarsened to what a built-in can honestly promise:
+ *
+ *   - `any`      — anything, a record included (held, counted, or written out whole);
+ *   - `scalar`   — one plain value: text, a number, a boolean, a date or a datetime;
+ *   - `text`     — text, or a refinement of it;
+ *   - `number`   — a number;
+ *   - `temporal` — a date, a datetime, or text read as one;
+ *   - `file`     — a file;
+ *   - `textOrList` — text (its characters) or a list (its members);
+ *   - `list`     — a collection;
+ *   - `record`   — a record or a dict, whose fields the program spells out;
+ *   - `options`  — a map literal of settings, each checked against the built-in's own contract;
+ *   - `function` — a function: a closure written in place, or a function's name;
+ *   - `type`     — a type: `<Thesis>`.
+ *
+ * The checker reads it (checker/standard_library.ts); it lives here, beside
+ * the registry, so a member declares what it takes where it is implemented.
+ */
+export type BuiltinParamType =
+  | 'any'
+  | 'scalar'
+  | 'text'
+  | 'number'
+  | 'temporal'
+  | 'file'
+  | 'textOrList'
+  | 'list'
+  | 'record'
+  | 'options'
+  | 'function'
+  | 'type';
+
+export interface BuiltinParam {
+  name: string;
+  type: BuiltinParamType;
+  optional?: true;
+  /** Takes every argument from here on (`COALESCE(a, b, …)`). */
+  rest?: true;
+}
+
+/** One parameter, as the registries spell them. */
+export function param(name: string, type: BuiltinParamType, flags: { optional?: true; rest?: true } = {}): BuiltinParam {
+  return { name, type, ...flags };
+}
 
 // ── Specs ────────────────────────────────────────────────────────────────────
 
@@ -80,6 +128,9 @@ interface StdlibFunctionCommon {
   /** One-line description (diagnostics list these per family). */
   summary: string;
   arity: { min: number; max: number };
+  /** What each argument takes — the member's entry in the standard-library
+   *  scope (checker/standard_library.ts), which checks a call against it. */
+  params: ReadonlyArray<BuiltinParam>;
   /** Shallow value type for the checker's write-field compatibility. */
   returns: 'text' | 'number' | 'date' | 'datetime';
   /**
@@ -189,43 +240,17 @@ export const CHUNKS_SIGNATURE = 'CHUNKS(text, { size | entities, overlap })';
 
 /**
  * The flat built-ins the engine evaluates directly — the frozen engine's
- * pure set, mirrored. The engine's evaluator runs exactly these, so this is
- * the one list both it and the parser read.
+ * pure set, mirrored. The engine's evaluator runs exactly these, and the
+ * standard-library scope (checker/standard_library.ts) gives each its
+ * signature.
  */
-export const INTERPRETED_FUNCTION_IDS: readonly string[] = [
+export const INTERPRETED_FUNCTION_IDS = [
   'isnull', 'coalesce', 'trim', 'lower', 'upper', 'length',
   'abs', 'round', 'floor', 'ceil', 'tostring', 'tonumber', 'multi', 'split',
-  // Bare coercers — DATE/DATETIME normalise any readable date/timestamp,
+  // Bare coercers — DATE/DATETIME/NUMBER normalise any readable date/timestamp,
   // NUMBER parses a number; null-safe.
   'date', 'datetime', 'number',
-];
-
-/** `EXISTS(…)` — lifted by the bridge before the formula grammar sees it. */
-const EXISTS_FUNCTION_ID = 'exists';
-
-const BUILTIN_FUNCTION_IDS: ReadonlySet<string> = new Set([
-  ...INTERPRETED_FUNCTION_IDS,
-  ...[...FORMULA_SPECIAL_FUNCTIONS].map((name) => name.toLowerCase()),
-  // The grammar's own words (`NOT(x)`, `IF(…)`, a prefix `CONTAINS(a, b)` the
-  // grammar refuses with its fix-it) are the expression's to read, never a call.
-  ...[...KEYWORDS].map((name) => name.toLowerCase()),
-  FILE_FUNCTION_ID,
-  READ_FUNCTION_ID,
-  CHUNKS_FUNCTION_ID,
-  EXISTS_FUNCTION_ID,
-]);
-
-/**
- * Is `name(…)` a BUILT-IN function call? Case-insensitive, as the expression
- * grammar is. The built-ins are a closed vocabulary, which is what lets
- * `doc = email_to_doc(msg)` read as a call of a movement while
- * `name = UPPER(msg)` reads as an expression: the name is COMPARED against
- * the list, never parsed for a hint. (A namespaced stdlib member is written
- * `DATE.ADD_DAYS(…)` — a dotted name, never this shape.)
- */
-export function isBuiltinFunctionName(name: string): boolean {
-  return BUILTIN_FUNCTION_IDS.has(name.toLowerCase());
-}
+] as const;
 
 /**
  * One key a built-in's options map may carry.
@@ -1056,6 +1081,7 @@ function spec(
   name: string,
   options: {
     args: string;
+    params: StdlibFunctionCommon['params'];
     summary: string;
     arity: StdlibFunctionSpec['arity'];
     returns: StdlibFunctionSpec['returns'];
@@ -1076,6 +1102,7 @@ function clockSpec(
   name: string,
   options: {
     args: string;
+    params: StdlibFunctionCommon['params'];
     summary: string;
     arity: StdlibFunctionSpec['arity'];
     returns: StdlibFunctionSpec['returns'];
@@ -1092,6 +1119,7 @@ function common(
   name: string,
   options: {
     args: string;
+    params: StdlibFunctionCommon['params'];
     summary: string;
     arity: StdlibFunctionSpec['arity'];
     returns: StdlibFunctionSpec['returns'];
@@ -1107,6 +1135,7 @@ function common(
     id: `${namespace.toLowerCase()}.${name.toLowerCase()}`,
     signature: `${namespace}.${name}(${options.args})`,
     summary: options.summary,
+    params: options.params,
     arity: options.arity,
     returns: options.returns,
     ...(options.maybeAbsent !== undefined ? { maybeAbsent: options.maybeAbsent } : {}),
@@ -1122,6 +1151,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('CURRENCY', 'GET_NUMBER_FROM_FIGURE', {
         args: 'figure',
+        params: [param('figure', 'text')],
         summary: 'the numeric amount in a money figure — CURRENCY.GET_NUMBER_FROM_FIGURE("£1.2m") is 1200000',
         arity: { min: 1, max: 1 },
         returns: 'number',
@@ -1129,6 +1159,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('CURRENCY', 'GET_CODE_FROM_FIGURE', {
         args: 'figure',
+        params: [param('figure', 'text')],
         summary: 'the ISO currency code in a money figure — CURRENCY.GET_CODE_FROM_FIGURE("£1.2m") is "GBP"',
         arity: { min: 1, max: 1 },
         returns: 'text',
@@ -1136,6 +1167,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('CURRENCY', 'FORMAT_FIGURE', {
         args: 'number, code',
+        params: [param('number', 'number'), param('code', 'text')],
         summary:
           'a number as a money figure — the inverse of GET_NUMBER_FROM_FIGURE — CURRENCY.FORMAT_FIGURE(1200000, "EUR") is "€1.2M"; a code with no symbol prints after the amount ("1.2M CHF"); an empty or unknown code prints the bare number',
         arity: { min: 2, max: 2 },
@@ -1150,6 +1182,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('DATE', 'PARSE', {
         args: 'text',
+        params: [param('text', 'text')],
         summary: 'a written date as an ISO date — DATE.PARSE("12 March 2026") is "2026-03-12"; unreadable text is absent',
         arity: { min: 1, max: 1 },
         returns: 'date',
@@ -1160,6 +1193,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('DATE', 'ADD_DAYS', {
         args: 'date, days',
+        params: [param('date', 'temporal'), param('days', 'number')],
         summary: 'a date shifted by whole days — DATE.ADD_DAYS("2026-03-12", 7) is "2026-03-19"',
         arity: { min: 2, max: 2 },
         returns: 'date',
@@ -1167,6 +1201,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('DATE', 'FORMAT', {
         args: 'value, pattern',
+        params: [param('value', 'temporal'), param('pattern', 'text')],
         summary:
           'a date written out — DATE.FORMAT("2026-08-31", "MMMM D, YYYY") is "August 31, 2026". Tokens: YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s; anything else is printed as written',
         arity: { min: 2, max: 2 },
@@ -1178,6 +1213,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('DATE', 'FORMAT_ISO', {
         args: 'value',
+        params: [param('value', 'temporal')],
         summary: 'any readable date or timestamp normalised to a full ISO 8601 UTC timestamp',
         arity: { min: 1, max: 1 },
         returns: 'date',
@@ -1185,6 +1221,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       clockSpec('DATE', 'TODAY', {
         args: 'zone',
+        params: [param('zone', 'text')],
         summary:
           'the calendar date it is right now in a place — DATE.TODAY("Europe/Berlin") is "2026-03-12" from 00:00 to 23:59 there. The zone is written down (an IANA name like "Europe/Berlin", "America/New_York", "UTC")',
         arity: { min: 1, max: 1 },
@@ -1199,6 +1236,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('DATETIME', 'AT', {
         args: 'date, time, zone',
+        params: [param('date', 'temporal'), param('time', 'text'), param('zone', 'text')],
         summary:
           'the instant a wall-clock time on a date names in a place — DATETIME.AT("2026-06-15", "07:00", "Europe/Berlin") is 05:00 UTC. Move days with DATE.ADD_DAYS on the date and anchor each end separately, and a daylight-saving change takes care of itself',
         arity: { min: 3, max: 3 },
@@ -1216,6 +1254,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('TEXT', 'REGEX_EXTRACT', {
         args: 'text, pattern, group?',
+        params: [param('text', 'text'), param('pattern', 'text'), param('group', 'number', { optional: true })],
         summary: 'the first regex match (the first capture group when the pattern has one) — null when nothing matches',
         arity: { min: 2, max: 3 },
         returns: 'text',
@@ -1223,6 +1262,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('TEXT', 'SLUG', {
         args: 'text',
+        params: [param('text', 'text')],
         summary: 'a lowercase-hyphen slug — TEXT.SLUG("Acme Corp Ltd.") is "acme-corp-ltd"',
         arity: { min: 1, max: 1 },
         returns: 'text',
@@ -1230,6 +1270,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('TEXT', 'PAIRS', {
         args: 'record, separator?',
+        params: [param('record', 'record'), param('separator', 'text', { optional: true })],
         summary:
           'a record or dict rendered as key=value pairs, keys in written order, joined by `separator` (default " | ") — TEXT.PAIRS({ name: "Acme", url: "acme.com" }) is "name=Acme | url=acme.com"; a nested node/edge field is skipped, not stringified',
         arity: { min: 1, max: 2 },
@@ -1239,6 +1280,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
       }),
       spec('TEXT', 'SERIALISE', {
         args: 'value, format',
+        params: [param('value', 'any'), param('format', 'text')],
         summary:
           'any value written out as text for a prompt, the same bytes every time it is the same value — TEXT.SERIALISE(deal, "JSON") is the record\'s fields as indented JSON with keys sorted, its nested nodes under their edge names as lists; an absent value is null, a file is its name/type/size and never its contents. The format is written down; "JSON" is the only one so far',
         arity: { min: 2, max: 2 },
@@ -1254,6 +1296,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('URL', 'HOST', {
         args: 'text',
+        params: [param('text', 'text')],
         summary:
           'the host of a URL or a scheme-less address, lowercased and otherwise verbatim (`www.` kept, no port, no path) — URL.HOST("https://WWW.Acme.com:8080/x") is "www.acme.com", URL.HOST("acme.com:8080") is "acme.com"; an email (`joe@acme.com`) is not a host, and text that names no address at all is absent',
         arity: { min: 1, max: 1 },
@@ -1268,6 +1311,7 @@ export const STDLIB_FAMILIES: ReadonlyArray<StdlibFamily> = [
     functions: [
       spec('NUMBER', 'FORMAT', {
         args: 'number, style',
+        params: [param('number', 'number'), param('style', 'text')],
         summary:
           'a number written out — "compact" abbreviates with K/M/B/T (NUMBER.FORMAT(1200000, "compact") is "1.2M"); "grouped" adds thousands separators (NUMBER.FORMAT(1200000, "grouped") is "1,200,000")',
         arity: { min: 2, max: 2 },

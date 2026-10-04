@@ -5,7 +5,9 @@
 // left in the expression slot, because a call's value is a NODE and no
 // expression can hold one. The signal is the NAMED-argument form, which is the
 // whole grammar of a call and no part of any expression: every stdlib function
-// is positional. These pin that signal from both sides.
+// is positional. These pin that signal from both sides. From language version 3
+// a positional invocation is a call as well, whatever it names; resolution says
+// whether that is a built-in (`checker/calls.ts`).
 
 import { parseProgram, MovementParseError } from '../parse';
 import type { CallStatement, Statement } from '../ast';
@@ -58,9 +60,26 @@ describe('a call as an argument', () => {
 });
 
 describe('what is NOT a call argument', () => {
-  it('a POSITIONAL invocation is an expression — every stdlib function is one', () => {
-    expect(call('log(d: UPPER(e.`Subject`))').args.map((a) => a.kind)).toEqual(['expr']);
-    expect(call('log(d: COALESCE(e.`A`, e.`B`))').args.map((a) => a.kind)).toEqual(['expr']);
+  it('a POSITIONAL invocation is a call too — resolution, not the parser, reads a built-in as its value', () => {
+    // Language version 3: the parser no longer keeps a list of built-in names,
+    // so `UPPER(…)` is recorded as the call it is, carrying its reading as one
+    // expression (`checker/calls.ts` reads it so once `UPPER` resolves).
+    const [upper] = call('log(d: UPPER(e.`Subject`))').args;
+    if (upper?.kind !== 'call') throw new Error('expected a call argument');
+    expect(upper.call.callee).toBe('UPPER');
+    expect(upper.call.expression?.raw).toBe('UPPER(e.`Subject`)');
+    expect(call('log(d: COALESCE(e.`A`, e.`B`))').args.map((a) => a.kind)).toEqual(['call']);
+  });
+
+  it('under version 2 a positional invocation is still an expression argument', () => {
+    const program = parseProgram('movement m(e: <inbox-[:message]->>) {\n  log(d: UPPER(e.`Subject`))\n}', {
+      languageVersion: 2,
+    });
+    const found = program.statements.find((s) => s.kind === 'movement');
+    if (found?.kind !== 'movement') throw new Error('expected a movement');
+    const [statement] = found.body;
+    if (statement?.kind !== 'call') throw new Error('expected a call');
+    expect(statement.args.map((a) => a.kind)).toEqual(['expr']);
   });
 
   it('a zero-argument invocation stays an expression', () => {
@@ -123,10 +142,10 @@ describe('a bound call and a construction are one form', () => {
     expect(statement.value.kind).toBe('construct');
   });
 
-  it('a positional call stays a plain expression binding', () => {
+  it('a positional call of a built-in is a call, read as its expression once resolved', () => {
     const [statement] = body('x = UPPER(e.`Subject`)');
-    if (statement?.kind !== 'assign') throw new Error('expected an assignment');
-    expect(statement.value.kind).toBe('expr');
+    if (statement?.kind !== 'assign' || statement.value.kind !== 'call') throw new Error('expected a bound call');
+    expect(statement.value.call.expression?.raw).toBe('UPPER(e.`Subject`)');
   });
 
   it('an unterminated invocation fails AS a call, naming the argument it was reading', () => {

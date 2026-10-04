@@ -401,12 +401,15 @@ describe('MEMBERS — a closed type, in declaration order', () => {
   });
 
   it('written inside a collection op it is refused, naming the bind-first fix', () => {
-    // A collection op and MEMBERS are read as their own statement (one takes a
+    // A collection op and MEMBERS are read on their own line (one takes a
     // function, the other a type — neither is an expression), so nesting one
-    // gets a pointed refusal rather than a stray-character parse error.
-    expect(() =>
-      parseProgram(`${PRELUDE}\nmovement m(c: <chat-[:channel]->>) {\n  x = MAP(MEMBERS(<Thesis>), (t) => { return t })\n}`),
-    ).toThrow(/bind it first/);
+    // gets a pointed refusal. From language version 3 they are calls, so the
+    // refusal is resolution's (the checker's) rather than the parser's.
+    const source = `${PRELUDE}\nmovement m(c: <chat-[:channel]->>) {\n  x = MAP(MEMBERS(<Thesis>), (t) => { return t })\n}`;
+    const found = checkProgram(parseProgram(source), catalog).filter((d) => d.code === 'MOV_CALL_NESTED');
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toMatch(/bind it first/);
+    expect(() => parseProgram(source, { languageVersion: 2 })).toThrow(/bind it first/);
   });
 
   it('a borrowed CLOSED option set works the same way', () => {

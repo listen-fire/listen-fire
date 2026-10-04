@@ -162,7 +162,7 @@ describe('value parameters', () => {
 
   it('a scalar parameter reads as its type inside the movement', () => {
     expect(
-      codes('', '\nmovement sum(n: <number>) {\n  x = n + 1\n  write chat-[:note]-> { Body: n }\n}\n'),
+      codes('', '\nmovement total(n: <number>) {\n  x = n + 1\n  write chat-[:note]-> { Body: n }\n}\n'),
     ).toEqual([]);
   });
 
@@ -214,7 +214,7 @@ describe('record (config) parameters — TypeScript object types', () => {
 });
 
 describe('value parameters arrived with language version 3', () => {
-  const source = 'movement sum(n: <number>) {\n}\n';
+  const source = 'movement total(n: <number>) {\n}\n';
   const errors = (languageVersion: number) =>
     checkProgram(parseProgram(source, { languageVersion }), catalog, { languageVersion })
       .filter((d) => (d.severity ?? 'error') === 'error')

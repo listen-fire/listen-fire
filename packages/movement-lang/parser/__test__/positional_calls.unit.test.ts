@@ -1,10 +1,11 @@
 // Parser coverage for POSITIONAL calls and VALUE parameter types.
 //
 // `f(a, b)` binds by declared order, as TypeScript does. A positional
-// invocation is told from a built-in function call by the callee's name alone —
-// compared against the closed list of built-ins — so `x = email_to_doc(msg)`
-// is a call and `x = UPPER(msg)` stays an expression. A parameter may spell a
-// value type in full: `<text[]>`, `<{ mode: text, owner?: text }>`.
+// invocation is a call whatever it names: `x = email_to_doc(msg)` and
+// `x = UPPER(msg)` are both calls, and resolution reads the second as the
+// expression it carries once `UPPER` resolves to the standard library
+// (`checker/calls.ts`). A parameter may spell a value type in full: `<text[]>`,
+// `<{ mode: text, owner?: text }>`.
 
 import { parseProgram, MovementParseError } from '../parse';
 import type { CallStatement, MovementDeclaration, Statement } from '../ast';
@@ -37,12 +38,26 @@ describe('positional calls', () => {
     expect(call.args.map((a) => [a.kind, a.name])).toEqual([['expr', undefined]]);
   });
 
-  it('a built-in function call stays an expression, whatever its case', () => {
+  it('a built-in function call is a call too, carrying its reading as one expression', () => {
     for (const source of ['x = UPPER(e.`Subject`)', 'x = upper(e.`Subject`)', 'x = COALESCE(e.`A`, "b")', 'x = AT(xs, 0)']) {
+      const call = boundCall(source);
+      expect(call.expression?.raw).toBe(source.slice('x = '.length));
+    }
+  });
+
+  it('a word of the expression grammar is never a callee', () => {
+    for (const source of ['x = NOT(e.`Done`)', 'x = EXISTS(e-[:files]->)']) {
       const [statement] = body(source);
       if (statement?.kind !== 'assign') throw new Error('expected an assignment');
       expect(statement.value.kind).toBe('expr');
     }
+  });
+
+  it('a function or a type is an argument a call can carry', () => {
+    const map = boundCall('x = MAP(xs, (n) => { return n })');
+    expect(map.args.map((a) => a.kind)).toEqual(['expr', 'closure']);
+    const members = boundCall('x = MEMBERS(<Thesis>)');
+    expect(members.args).toMatchObject([{ kind: 'type', type: 'Thesis' }]);
   });
 
   it('an invocation followed by more expression is left to the expression slot', () => {
@@ -54,7 +69,7 @@ describe('positional calls', () => {
   it('a positional call passed as an argument is a call argument', () => {
     const [statement] = body('log_doc(email_to_doc(e), UPPER(e.`Subject`))');
     if (statement?.kind !== 'call') throw new Error('expected a call');
-    expect(statement.args.map((a) => a.kind)).toEqual(['call', 'expr']);
+    expect(statement.args.map((a) => a.kind)).toEqual(['call', 'call']);
   });
 
   it('a record literal argument is an expression', () => {

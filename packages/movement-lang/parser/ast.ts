@@ -1065,12 +1065,24 @@ export type CallArg =
    * the expression plane can hold one.
    *
    * Recognised by the NAMED-argument form (`f(x: …)`), or by a POSITIONAL
-   * invocation of a name that is not a built-in function (`f(x)`, where `f`
-   * is not `UPPER`): the built-ins are a closed vocabulary, so the name is
-   * compared, never guessed at.
-   *
+   * invocation (`f(x)`). From language version 3 a positional one may name a
+   * built-in (`f(UPPER(x))`): resolution reads it as the value it computes,
+   * an ordinary expression argument (`checker/calls.ts`).
    */
-  | { kind: 'call'; name?: string; call: CallStatement };
+  | { kind: 'call'; name?: string; call: CallStatement }
+  /**
+   * A function written in place — `MAP(xs, (x) => { … })` (language version 3).
+   * Only a built-in that takes a function (`MAP`, `FILTER`, `REDUCE`,
+   * `GROUPBY`, `KEYBY`) accepts one; anywhere else it is refused by name,
+   * because a function is not yet a value an argument can carry.
+   */
+  | { kind: 'closure'; name?: string; closure: ClosureExpression; span: Span }
+  /**
+   * A type — `MEMBERS(<Thesis>)` (language version 3). The annotation as
+   * written, unbracketed, as `MembersExpression.type` holds it. Only a
+   * built-in that takes a type accepts one.
+   */
+  | { kind: 'type'; name?: string; type: string; span: Span };
 
 /** One argument and the parameter it binds — `param` is undefined for a
  *  positional argument past the callee's last parameter. */
@@ -1095,16 +1107,30 @@ export function isPositionalCall(args: readonly CallArg[]): boolean {
 }
 
 /**
- * `log_doc(d: msg)` — a movement invoked. A call is a STATEMENT and an
+ * `log_doc(d: msg)` — a function invoked. A call is a STATEMENT and an
  * ARGUMENT (`CallArg`'s `call` kind) with one AST node, because it is one
  * thing: a call's value is what the callee RETURNS, and using it is optional
  * (a callee that returns nothing is a statement and nothing else).
  *
+ * The parser records the call and decides nothing about what the callee IS.
+ * From language version 3 that includes a built-in: `n = UPPER(m.Subject)`,
+ * `xs = MAP(items, f)` and `doc = email_to_doc(m)` are all this node, and
+ * resolution (`checker/calls.ts`) reads each one once its callee is looked up
+ * — a movement or plugin runs, a built-in is read as the value, collection op
+ * or type query it is.
  */
 export interface CallStatement {
   kind: 'call';
   callee: string;
   args: CallArg[];
+  /**
+   * The same call read as ONE expression — the reading it takes when its
+   * callee resolves to a built-in that computes a value (`UPPER(x)`,
+   * `COUNT(c-[p:Members]->)`, `SORT(xs, name, DESC)`), whose arguments are the
+   * expression grammar's rather than a call's. Set on every positional call;
+   * a named call (`f(x: …)`) is never a built-in's.
+   */
+  expression?: ExprSlot;
   span: Span;
 }
 

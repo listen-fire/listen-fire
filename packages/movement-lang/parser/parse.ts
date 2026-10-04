@@ -8,7 +8,7 @@
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
 // for the expression grammar (./expression), read through expression/bridge.ts.
 
-import { CURRENT_LANGUAGE_VERSION, since, type LanguageVersion } from '../language_version';
+import { before, CURRENT_LANGUAGE_VERSION, since, type LanguageVersion } from '../language_version';
 import {
   BindClause,
   BlockStatement,
@@ -85,7 +85,7 @@ import {
 import { spellName } from './ast';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import { scanBacktickName, scanIdent, scanName } from './scan';
-import { isBuiltinFunctionName } from '../expression/stdlib';
+import { KEYWORDS } from '@listen-fire/shared/expression/formula';
 
 /** The two spellings of a movement declaration — `function` is a pure parser
  *  alias, so this is a surface fact only; the AST keeps one node kind. */
@@ -936,10 +936,12 @@ class Parser {
 
     // A collection op run bare, for its function's effects, with the answer
     // (if any) unbound — `MAP(xs, (x) => { write … })` reads the same as a
-    // block iterated for effects. Tried here, before the identifier-led
-    // forms, exactly as `race`/`parallel` are above: a bare call would
-    // otherwise resolve `word` as a movement name and refuse it as unknown.
-    const collectionOp = word !== undefined ? Parser.COLLECTION_OPS.get(word) : undefined;
+    // block iterated for effects. Before language version 3 the op is known
+    // here by its name; from 3 it is an ordinary call statement, and
+    // resolution finds `MAP` in the standard library (checker/calls.ts).
+    const collectionOp = word !== undefined && before(this.languageVersion, 3)
+      ? Parser.COLLECTION_OPS.get(word)
+      : undefined;
     if (collectionOp !== undefined && this.followedByCall(word!)) {
       this.pos += word!.length;
       const collection = this.parseCollectionOp(start, word!, collectionOp);
@@ -1178,14 +1180,16 @@ class Parser {
       return { kind: 'callback', callback: this.parseCallback(start) };
     }
     // The collection ops and `MEMBERS` take a FUNCTION and a TYPE respectively,
-    // neither of which an expression can hold — so, like the combinators, they
-    // are read here rather than by the expression bridge.
-    const op = word !== undefined ? Parser.COLLECTION_OPS.get(word) : undefined;
+    // neither of which an expression can hold. Before language version 3 they
+    // are read here, by name, like the combinators; from 3 they are calls like
+    // any other (`tryParseInvocation` below), resolved to the standard library.
+    const legacyForms = before(this.languageVersion, 3);
+    const op = word !== undefined && legacyForms ? Parser.COLLECTION_OPS.get(word) : undefined;
     if (op !== undefined && this.followedByCall(word!)) {
       this.pos += word!.length;
       return { kind: 'collection', collection: this.parseCollectionOp(start, word!, op) };
     }
-    if (word === 'MEMBERS' && this.followedByCall(word)) {
+    if (legacyForms && word === 'MEMBERS' && this.followedByCall(word)) {
       this.pos += word.length;
       return { kind: 'members', members: this.parseMembers(start) };
     }
@@ -1244,9 +1248,9 @@ class Parser {
    * directly, not only via an `as` alias.
    *
    * A POSITIONAL invocation — `doc = email_to_doc(msg)` — is a call and nothing
-   * else: a construction's config is named, always. It is told from a built-in
-   * function call (`n = UPPER(msg)`) by the callee's name alone, which is
-   * compared against the closed list of built-ins (`isBuiltinFunctionName`).
+   * else: a construction's config is named, always. Whether its callee is a
+   * movement or a built-in (`n = UPPER(msg)`) is resolution's to say, not the
+   * parser's: the call carries both readings (`CallStatement.expression`).
    */
   private tryParseInvocation(): RValue | undefined {
     if (!this.atNamedInvocation()) {
@@ -2385,8 +2389,24 @@ class Parser {
   private parseCallStatement(callee: string, start: number): CallStatement {
     this.pos++; // '('
     const args = this.parseCallArgs(callee, start);
+    const call = this.callNode(callee, args, start);
     this.expectStatementEnd();
-    return { kind: 'call', callee, args, span: this.spanFrom(start) };
+    return call;
+  }
+
+  /** The call just read, from `start` to here — with its reading as one
+   *  expression when its arguments are positional (`CallStatement.expression`),
+   *  the reading a built-in callee takes. */
+  private callNode(callee: string, args: CallArg[], start: number): CallStatement {
+    const span = this.spanFrom(start);
+    const positional = args.length > 0 && args[0].name === undefined;
+    return {
+      kind: 'call',
+      callee,
+      args,
+      ...(positional ? { expression: { raw: this.src.slice(start, this.pos), span } } : {}),
+      span,
+    };
   }
 
   /** `node { … }` or `graph<Shape> { … }` where an argument is written —
@@ -2424,6 +2444,26 @@ class Parser {
       }
       this.refuseMixedArgs(callee, args, name, argStart);
       const named = name !== undefined ? { name } : {};
+      // A function written in place and a type: what `MAP` and `MEMBERS`
+      // take (language version 3, where they are calls like any other). Read
+      // for every callee — the parser does not know which takes one — and
+      // refused by resolution wherever the callee does not.
+      if (since(this.languageVersion, 3) && this.atClosure()) {
+        const closure = this.parseClosure(this.pos);
+        args.push({ kind: 'closure', ...named, closure, span: closure.span });
+        this.endCallArg('closure');
+        continue;
+      }
+      if (since(this.languageVersion, 3) && this.peekCh() === '<') {
+        const typeStart = this.pos;
+        const marker = this.readTypeMarker(
+          'for a type argument — a type you declare (<Thesis>) or another field\'s option set (<crm-[:companies]->.`funding_stage`>)',
+          { allowFieldTail: true },
+        );
+        args.push({ kind: 'type', ...named, type: marker.text, span: this.spanFrom(typeStart) });
+        this.endCallArg('type');
+        continue;
+      }
       this.refuseNamedNodeAsValue();
       const literal = this.tryParsePositionLiteral();
       if (literal !== undefined) {
@@ -2496,6 +2536,16 @@ class Parser {
     return undefined;
   }
 
+  /** After an argument read by its own grammar: the `,` that ends it, or
+   *  the `)` that closes the call. */
+  private endCallArg(what: string): void {
+    this.skipAllWs();
+    if (this.peekCh() === ',') this.pos++;
+    else if (this.peekCh() !== ')') {
+      this.error(`Expected ',' or ')' after the ${what} argument, found ${this.describeHere()}`);
+    }
+  }
+
   /** One call is all positional or all named — never a mix. */
   private refuseMixedArgs(
     callee: string,
@@ -2515,11 +2565,11 @@ class Parser {
 
   /**
    * A whole call written where a value goes — `f(x: …)`, or a POSITIONAL
-   * `f(…)` whose name is not a built-in function (`UPPER(x)` is an expression;
-   * `email_to_doc(msg)` is a call) — ending where the value does: at one of
-   * `stops`, or at the end of input. Consumes nothing and answers undefined
-   * when the text is not one: an invocation followed by more expression
-   * (`f(x) + 1`) is left to the expression slot, as it always was.
+   * `f(…)` (language version 3), whatever `f` turns out to name — ending where
+   * the value does: at one of `stops`, or at the end of input. Consumes nothing
+   * and answers undefined when the text is not one: an invocation followed by
+   * more expression (`f(x) + 1`) is left to the expression slot, as it always
+   * was.
    *
    * A zero-argument `f()` is deliberately NOT one: a callee that reads nothing
    * from its caller has nothing to compose, and `f()` is also how a
@@ -2532,7 +2582,7 @@ class Parser {
     this.skipInlineWs();
     this.pos++; // '('
     const args = this.parseCallArgs(callee, save);
-    const call: CallStatement = { kind: 'call', callee, args, span: this.spanFrom(save) };
+    const call = this.callNode(callee, args, save);
     const end = this.pos;
     this.skipInlineWs();
     const next = this.peekCh();
@@ -2545,22 +2595,22 @@ class Parser {
   }
 
   /**
-   * Is a POSITIONAL invocation of a name that is not a built-in function next —
-   * `f(a, …)`? A named one (`f(x: …)`) is `atNamedInvocation`'s. Consumes
-   * nothing.
+   * Is a POSITIONAL invocation next — `f(a, …)`? A named one (`f(x: …)`) is
+   * `atNamedInvocation`'s. Consumes nothing.
+   *
+   * Nothing here asks what `f` names: a movement, a plugin and a built-in are
+   * all called this way, and resolution tells them apart. The one name that is
+   * not a callee is a WORD of the expression grammar (`NOT(x)`, `IF(…)`,
+   * `EXISTS(walk)`): a reserved word is grammar, not a name, so the text stays
+   * the expression it is — unless it is backtick-quoted, which always makes a
+   * name.
    */
   private atPositionalInvocation(): boolean {
     if (!since(this.languageVersion, 3)) return false;
     const save = this.pos;
     const scanned = scanName(this.src, this.pos);
     if (!scanned) return false;
-    if (
-      isBuiltinFunctionName(scanned.name)
-      || Parser.COLLECTION_OPS.has(scanned.name.toUpperCase())
-      || scanned.name.toUpperCase() === 'MEMBERS'
-    ) {
-      return false;
-    }
+    if (this.src[this.pos] !== '`' && KEYWORDS.has(scanned.name.toUpperCase())) return false;
     this.pos = scanned.end;
     this.skipInlineWs();
     let positional = false;

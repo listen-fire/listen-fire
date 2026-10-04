@@ -129,7 +129,20 @@ import {
   expressionOfSlot,
   parseMovementExpression,
   authoredStringText,
+  treeOfSlot,
 } from '../expression/bridge';
+import { children as expressionChildren } from '../parser/expression/lower';
+import type { MExpr } from '../parser/expression/tree';
+import {
+  nestedMessage,
+  readCall,
+  resolveCallee,
+  type CallPosition,
+  type CallReading,
+  type CallRefusal,
+  type CallScope,
+} from './calls';
+import { builtinArity, describeBuiltin, flatBuiltinNames, lookupBuiltin } from './standard_library';
 import {
   borrowableFieldsOf,
   borrowedTypeSegments,
@@ -201,12 +214,12 @@ import {
   type LanguageVersion,
 } from '../language_version';
 import { terminates } from './flow';
-import { didYouMean } from './meta';
+import { closestByEditDistance, didYouMean } from './meta';
 import { readCollectionConfig } from './collection_config';
 import { readExtractCallConfig } from './extract_config';
 import { genericLandingKey, literalStringValuesOf } from './generics';
 import { parseTraversalPath } from '../service/selectors';
-import { Resolution, Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
+import { isFunctionSymbol, Resolution, Scope, ScopeKind, ScopeSymbol, SymbolKind } from './scopes';
 import {
   CALLBACK_CONFIG_KEYS,
   CallbackParams,
@@ -318,6 +331,22 @@ export const DiagnosticCodes = {
   SHADOWED_NAME: 'MOV_SHADOWED_NAME',
   CALL_NOT_MOVEMENT: 'MOV_CALL_NOT_MOVEMENT',
   CALL_ARITY: 'MOV_CALL_ARITY',
+  // Call resolution against the standard-library scope (language version 3;
+  // checker/calls.ts, checker/standard_library.ts).
+  /** A called name that nothing in scope declares and the standard library
+   *  does not have — with a did-you-mean over both. */
+  FUNCTION_UNKNOWN: 'MOV_FUNCTION_UNKNOWN',
+  /** A function declared (or imported) under a name another function in scope
+   *  already has in another letter case, or under a built-in's name. Function
+   *  names are case-insensitive, so either would make one call mean two things. */
+  FUNCTION_NAME_COLLISION: 'MOV_FUNCTION_NAME_COLLISION',
+  /** A built-in handed an argument it does not take, or the wrong number. */
+  BUILTIN_ARGS: 'MOV_BUILTIN_ARGS',
+  /** A built-in that only computes a value, written as a whole statement. */
+  BUILTIN_UNUSED: 'MOV_BUILTIN_UNUSED',
+  /** A call that is read on its own line — a function's, or a built-in that
+   *  takes a function or a type — written inside another expression. */
+  CALL_NESTED: 'MOV_CALL_NESTED',
   // Named-argument matching (calls and `run` both: parens = callable
   // arguments, always named; the checker matches arguments to parameters
   // by name, so order carries no meaning).
@@ -828,6 +857,7 @@ export type RecordedNode =
   | RecordedBranch
   | RecordedExtract
   | RecordedCall
+  | RecordedCallReading
   | RecordedTraversal
   | RecordedValuePath
   | RecordedHandleOp;
@@ -954,6 +984,20 @@ export interface RecordedCall {
    * past the last parameter.
    */
   argParams?: Array<string | undefined>;
+}
+
+/**
+ * A call whose callee resolved to a BUILT-IN, and how it reads there — the
+ * value it computes, the collection op or the type query it is (or why it
+ * cannot be read). A reader keyed by the call's span sees what the checker
+ * saw rather than deciding again by name; a call to a function records a
+ * `RecordedCall` instead.
+ */
+export interface RecordedCallReading {
+  kind: 'callReading';
+  span: Span;
+  scope: Scope;
+  reading: Exclude<CallReading, { kind: 'function' }>;
 }
 
 /**
@@ -1247,6 +1291,18 @@ function typeNamesInScope(scope: Scope): string[] {
     }
   }
   return names;
+}
+
+/** An unknown callee, with the closest function in scope or built-in.
+ *  Compared with case folded, as function names are. */
+function unknownFunctionMessage(name: string, scope: Scope): string {
+  const folded = new Map<string, string>();
+  for (const candidate of [...scope.functionNames(), ...flatBuiltinNames()]) {
+    if (!folded.has(candidate.toLowerCase())) folded.set(candidate.toLowerCase(), candidate);
+  }
+  const closest = closestByEditDistance(name.toLowerCase(), [...folded.keys()]);
+  const hint = closest !== undefined ? ` — did you mean '${folded.get(closest)}'?` : '';
+  return `Unknown function '${name}'${hint} — a call names a movement or function declared or imported here, or a built-in`;
 }
 
 /** Every movement name visible from `scope`, innermost first — the candidate
@@ -1687,6 +1743,10 @@ interface SlotOptions {
    *  a tuple (`AT(t, 0)` off the name reads the slot). Every other slot reads
    *  its value, and a tuple read is the list it widens to. */
   holdsValue?: true;
+  /** The slot is a write field's value, where the target field's own
+   *  functions are in scope (`SLACK_MESSAGE(…)`) and the catalog does not
+   *  list them — so an unknown callee there is not reported. */
+  writeField?: true;
 }
 
 interface HeadInfo {
@@ -2045,6 +2105,9 @@ function callArgSpan(arg: CallArg): Span {
       return arg.node.span;
     case 'call':
       return arg.call.span;
+    case 'closure':
+    case 'type':
+      return arg.span;
   }
 }
 
@@ -3288,6 +3351,7 @@ class Checker {
     const frame = this.effects;
     if (frame === undefined) return;
     if (effect.kind === 'read') frame.addRead(...effect.instances);
+    else if (effect.kind === 'declared') frame.absorb(rowFromDeclaration(effect.row));
     else frame.flag(effect.kind);
   }
 
@@ -3532,6 +3596,7 @@ class Checker {
               declaration: statement,
             }),
       };
+      if (statement.kind === 'movement') this.checkFunctionName(statement.name, statement.span, scope);
       const existing = this.declareAuthored(scope, symbol, statement.span);
       if (existing) {
         this.report(
@@ -3798,9 +3863,34 @@ class Checker {
       case 'match':
         this.checkMatch(statement.match, scope);
         return;
-      case 'call':
-        this.checkCall(statement, scope);
-        return;
+      case 'call': {
+        // A call is read once its callee is resolved: a function runs; `MAP`
+        // run bare iterates for its function's effects, as the bare
+        // collection statement does.
+        const reading = this.readCallAt(statement, scope, 'statement');
+        switch (reading.kind) {
+          case 'function':
+            this.checkCall(statement, scope);
+            return;
+          case 'collection':
+            this.checkCollectionOp(reading.collection, scope);
+            return;
+          case 'refused':
+            this.reportCallRefusal(reading.refusal);
+            return;
+          // A statement position reads neither (`readCall` refuses both as
+          // unused); typed for completeness, checked as what they are.
+          case 'value':
+            this.checkExprSlot(reading.expr, scope);
+            return;
+          case 'members':
+            this.checkMembers(reading.members, scope);
+            return;
+          default:
+            neverAsAny(reading);
+            return;
+        }
+      }
       case 'block':
         this.checkTraversalBlock(statement.block, scope, undefined);
         return;
@@ -3999,6 +4089,7 @@ class Checker {
           ...(namespace === 'credentials' ? { adapters: this.catalog.credential(name)?.adapters } : {}),
         };
       }
+      if (isFunctionSymbol(symbol)) this.checkFunctionName(local, statement.span, scope);
       const existing = this.declareAuthored(scope, symbol, statement.span);
       if (existing) {
         this.report(
@@ -4059,6 +4150,27 @@ class Checker {
     name: string | undefined,
     span: Span,
   ): Partial<ScopeSymbol> {
+    // A positional call is read once its callee is resolved: a built-in is
+    // the value, collection op or type query it computes, checked as that
+    // form is everywhere else; a function's call stays a call.
+    if (value.kind === 'call') {
+      const reading = this.readCallAt(value.call, scope, 'value');
+      switch (reading.kind) {
+        case 'function':
+          break;
+        case 'value':
+          return this.checkRValue({ kind: 'expr', expr: reading.expr }, scope, name, span);
+        case 'collection':
+          return this.checkRValue({ kind: 'collection', collection: reading.collection }, scope, name, span);
+        case 'members':
+          return this.checkRValue({ kind: 'members', members: reading.members }, scope, name, span);
+        case 'refused':
+          this.reportCallRefusal(reading.refusal);
+          return {};
+        default:
+          return neverAsAny(reading);
+      }
+    }
     let symbol: Partial<ScopeSymbol> = {};
     switch (value.kind) {
       case 'construct': {
@@ -4368,8 +4480,190 @@ class Checker {
    *  been reported as unresolved; saying it "returns nothing" on top would be
    *  a second, wrong accusation. */
   private calleeReturnKnown(call: CallStatement, scope: Scope): boolean {
-    const resolution = scope.resolve(call.callee);
+    const resolution = this.calleeResolution(call.callee, scope);
     return resolution.kind === 'found' && resolution.symbol.movement !== undefined;
+  }
+
+  // ── Call resolution (checker/calls.ts) ──
+
+  /** What a call site can see: this scope chain, asked exactly, and its
+   *  functions in any letter case. The standard library is `resolveCallee`'s. */
+  private callScope(scope: Scope): CallScope {
+    return {
+      binds: name => scope.resolve(name).kind !== 'unknown',
+      functionSpelled: name => scope.resolveFunction(name)?.name,
+    };
+  }
+
+  /** How a call reads where it is written, once its callee is looked up. */
+  private readCallAt(call: CallStatement, scope: Scope, position: CallPosition): CallReading {
+    const callScope = this.callScope(scope);
+    const reading = readCall(call, callee => resolveCallee(callee, callScope, this.languageVersion), position);
+    if (reading.kind !== 'function') {
+      this.recordNode<RecordedCallReading>({ kind: 'callReading', span: call.span, scope, reading });
+    }
+    return reading;
+  }
+
+  /** The scope's answer for a callee — under the name it was DECLARED with,
+   *  which from version 3 may differ from the call's by letter case. */
+  private calleeResolution(written: string, scope: Scope): Resolution {
+    const resolved = resolveCallee(written, this.callScope(scope), this.languageVersion);
+    return scope.resolve(resolved.kind === 'declared' ? resolved.name : written);
+  }
+
+  private reportCallRefusal(refusal: CallRefusal): void {
+    switch (refusal.kind) {
+      case 'args':
+        this.report(DiagnosticCodes.BUILTIN_ARGS, refusal.message, refusal.span);
+        return;
+      case 'unused':
+        this.report(DiagnosticCodes.BUILTIN_UNUSED, refusal.message, refusal.span);
+        return;
+      case 'nested':
+        this.report(DiagnosticCodes.CALL_NESTED, refusal.message, refusal.span);
+        return;
+      case 'extractNested':
+        this.report(TypedDiagnosticCodes.EXTRACT_CALL_NESTED, refusal.message, refusal.span);
+        return;
+      default:
+        neverAsAny(refusal.kind);
+    }
+  }
+
+  /**
+   * A callee nothing resolves. From version 3 the standard library is the
+   * outermost scope, so an unknown name is unknown everywhere: the message
+   * offers the closest function in scope or built-in. A name that is a system
+   * or a plugin the file never imported keeps its two-line fix.
+   */
+  private reportCalleeUnresolved(
+    name: string,
+    span: Span,
+    resolution: Exclude<Resolution, { kind: 'found' }>,
+    scope: Scope,
+  ): void {
+    if (
+      resolution.kind !== 'unknown'
+      || before(this.languageVersion, 3)
+      || this.catalog.adapter(name) !== undefined
+      || this.catalog.plugin(name) !== undefined
+    ) {
+      this.reportResolutionFailure(name, span, resolution);
+      return;
+    }
+    this.report(DiagnosticCodes.FUNCTION_UNKNOWN, unknownFunctionMessage(name, scope), span);
+  }
+
+  /**
+   * A function declared or imported under `name` (version 3): function names
+   * are case-insensitive, so it may not share a built-in's name, nor differ
+   * from another function in scope only by letter case. Asked BEFORE the
+   * symbol is declared, so the scope holds only the others.
+   */
+  private checkFunctionName(name: string, span: Span, scope: Scope): void {
+    if (before(this.languageVersion, 3)) return;
+    const builtin = lookupBuiltin(name);
+    if (builtin !== undefined && !builtin.name.includes('.')) {
+      this.report(
+        DiagnosticCodes.FUNCTION_NAME_COLLISION,
+        `'${name}' is the built-in ${builtin.name} — function names are case-insensitive, so a function cannot share a built-in's name in any letter case. Name it something else (an import can rename one: \`import { x as y }\`)`,
+        span,
+      );
+      return;
+    }
+    const other = scope.resolveFunction(name);
+    if (other !== undefined && other.name !== name) {
+      this.report(
+        DiagnosticCodes.FUNCTION_NAME_COLLISION,
+        `'${name}' and '${other.name}' differ only by letter case — function names are case-insensitive, so they would be one name. Rename one of them`,
+        span,
+      );
+    }
+  }
+
+  /**
+   * Every call written inside an expression (version 3), resolved by scope as
+   * a statement-level call is. The expression grammar reads a built-in it
+   * knows by name; what only scope can say is checked here:
+   *
+   *   - an unknown name is an error, with a did-you-mean — except inside a
+   *     write field, whose target may advertise functions of its own (a
+   *     Slack message's `SLACK_MESSAGE(…)`), which the catalog does not list;
+   *   - a function's call, or a built-in that takes a function or a type, is
+   *     read on its own line, not inside an expression;
+   *   - a built-in is handed as many arguments as its signature takes.
+   */
+  private checkCallsInSlot(slot: ExprSlot, scope: Scope, options?: { writeField?: true }): void {
+    if (before(this.languageVersion, 3)) return;
+    let tree: MExpr;
+    try {
+      tree = treeOfSlot(slot);
+    } catch {
+      return; // the syntax error is reported where the slot is read
+    }
+    const visit = (expr: MExpr): void => {
+      if (expr.kind === 'call' && expr.callee.kind === 'name') {
+        this.checkCallInExpression(expr, expr.callee.name.text, { slot, scope, writeField: options?.writeField === true });
+      }
+      for (const child of expressionChildren(expr)) visit(child);
+    };
+    visit(tree);
+  }
+
+  private checkCallInExpression(
+    call: Extract<MExpr, { kind: 'call' }>,
+    written: string,
+    at: { slot: ExprSlot; scope: Scope; writeField: boolean },
+  ): void {
+    const span = spanWithin(at.slot, call.at.start);
+    const resolution = resolveCallee(written, this.callScope(at.scope), this.languageVersion);
+    switch (resolution.kind) {
+      case 'builtin': {
+        const { builtin } = resolution;
+        // The extraction call has its own refusal, said by the typing walk.
+        if (builtin.form.kind === 'extract') return;
+        if (builtin.form.kind !== 'value') {
+          this.report(DiagnosticCodes.CALL_NESTED, nestedMessage(written), span);
+          return;
+        }
+        const { min, max } = builtinArity(builtin);
+        const count = call.args.length;
+        if (count < min || count > max) {
+          const expected = min === max ? `${min}` : max === Infinity ? `at least ${min}` : `${min} to ${max}`;
+          this.report(
+            DiagnosticCodes.BUILTIN_ARGS,
+            `'${written}' takes ${expected} argument${max === 1 ? '' : 's'}, got ${count} — ${describeBuiltin(builtin)}`,
+            span,
+          );
+        }
+        return;
+      }
+      case 'declared': {
+        const found = at.scope.resolve(resolution.name);
+        if (found.kind !== 'found') return; // reported where the name is read
+        if (isFunctionSymbol(found.symbol)) {
+          this.report(
+            DiagnosticCodes.CALL_NESTED,
+            `'${written}(…)' runs a function, and a function is called on its own line, not inside another expression — bind it first, then use the name: \`answer = ${written}(…)\``,
+            span,
+          );
+          return;
+        }
+        this.report(
+          DiagnosticCodes.CALL_NOT_MOVEMENT,
+          `'${written}' is ${describeKind[found.symbol.kind]}, not a function — only functions are called`,
+          span,
+        );
+        return;
+      }
+      case 'unknown':
+        if (at.writeField) return;
+        this.report(DiagnosticCodes.FUNCTION_UNKNOWN, unknownFunctionMessage(written, at.scope), span);
+        return;
+      default:
+        neverAsAny(resolution);
+    }
   }
 
   /** `{ … }.name` — the retired inline block. Its body is still walked, so the
@@ -5595,7 +5889,7 @@ class Checker {
     construct: ConstructionCall,
     scope: Scope,
   ): CallStatement | undefined {
-    const resolution = scope.resolve(construct.callee);
+    const resolution = this.calleeResolution(construct.callee, scope);
     if (resolution.kind !== 'found') return undefined;
     const kind = resolution.symbol.kind;
     if (kind !== 'movement' && kind !== 'plugin') return undefined;
@@ -6300,6 +6594,7 @@ class Checker {
           : undefined;
       const { valueType } = this.checkExprSlot(field.value, scope, {
         ...(writeTarget !== undefined ? { writeTarget } : {}),
+        writeField: true,
       });
       // A possibly-absent value (a partial-receipt read, a maybe-empty node's
       // field) can't fill a PLAIN write field — the `?:` (fill) marker is its
@@ -6716,6 +7011,7 @@ class Checker {
       }
       const { valueType } = this.checkExprSlot(field.value, scope, {
         ...(targetType !== undefined ? { writeTarget: { type: targetType } } : {}),
+        writeField: true,
       });
       this.reportBlankableIdentityKey({ uniqueBy: match.uniqueBy, field, valueType, rootDescription, scope });
       this.reportFieldValueType(field.name, rootDescription, targetType, valueType, field.value.span);
@@ -7797,7 +8093,7 @@ class Checker {
     scope: Scope,
     binding?: string,
   ): ReturnShape {
-    const resolution = scope.resolve(statement.callee);
+    const resolution = this.calleeResolution(statement.callee, scope);
     const recorded = this.recordNode<RecordedCall>({
       kind: 'call',
       span: statement.span,
@@ -7809,7 +8105,7 @@ class Checker {
     let params: DeclaredParams | undefined;
     let value: ReturnShape = UNKNOWN_RETURN;
     if (resolution.kind !== 'found') {
-      this.reportResolutionFailure(statement.callee, statement.span, resolution);
+      this.reportCalleeUnresolved(statement.callee, statement.span, resolution, scope);
       // Something runs here and nobody can say what: the row is a lower bound.
       this.effects?.markPartial();
     } else {
@@ -7904,7 +8200,34 @@ class Checker {
         this.checkCallArgFit(fit, synthesised, param?.type.posType, arg.node.span);
         return;
       }
+      case 'closure':
+      case 'type':
+        // What `MAP` and `MEMBERS` take. A movement's parameter holds a value
+        // or a record, and a function or a type is not yet a value.
+        this.report(
+          DiagnosticCodes.CALL_ARG_TYPE,
+          `The argument${describeArgPlace(fit)} to '${callee}' is ${arg.kind === 'closure' ? 'a function written in place' : 'a type'}, which is not a value an argument can carry — only a built-in that takes one (MAP, FILTER, REDUCE, GROUPBY, KEYBY, MEMBERS) is handed one`,
+          arg.span,
+        );
+        return;
       case 'call': {
+        // A built-in called here (`log(UPPER(x))`) is the value it computes —
+        // an ordinary expression argument.
+        const reading = this.readCallAt(arg.call, scope, 'argument');
+        if (reading.kind === 'value') {
+          this.checkCallArg(
+            callee,
+            { kind: 'expr', ...(arg.name !== undefined ? { name: arg.name } : {}), expr: reading.expr },
+            param,
+            index,
+            scope,
+          );
+          return;
+        }
+        if (reading.kind === 'refused') {
+          this.reportCallRefusal(reading.refusal);
+          return;
+        }
         // The utility idiom: one movement's value is another's argument. Its
         // value is a synthesised node like any other, so it fits the parameter
         // by the same STRUCTURAL road — a node belongs to no graph, and there
@@ -8948,6 +9271,7 @@ class Checker {
     if (!scope.symbols.has(statement.name)) {
       // Normally hoisted by checkStatementList; reached directly only as a
       // parallel sibling.
+      this.checkFunctionName(statement.name, statement.span, scope);
       this.declareAuthored(
         scope,
         {
@@ -10570,6 +10894,7 @@ class Checker {
       if (names.aliases.has(ref)) continue; // bound by a step within this expression
       this.resolveNameWithFields(ref, slot.span, scope, options?.fields);
     }
+    this.checkCallsInSlot(slot, scope, options?.writeField === true ? { writeField: true } : undefined);
     this.reportBlockReadBack(names, scope, slot.span);
     const typing = this.slotTyping(scope, slot.span);
     const valueType = options?.holdsValue === true
@@ -10622,6 +10947,7 @@ class Checker {
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
       return;
     }
+    this.checkCallsInSlot(slot, scope);
     this.checkCondition(condition, slot, scope, narrowInto);
   }
 

@@ -165,17 +165,20 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
     + `  items = digest-[md:doc]-> { return ${ret} }\n`
     + use;
 
+  // `MULTI` answers a list the walk does not type (its signature's return is
+  // derived from its arguments, and nothing derives it yet). `TRIM` was the
+  // example until the standard-library scope gave it its return, text.
   it('an untyped call over an extracted field is not a record', () => {
-    const body = overExtraction('TRIM(md.`items`)');
+    const body = overExtraction('MULTI(md.`items`)');
     expect(codes(body)).toEqual([]);
     expect(bindingType(body, 'items')?.bindingPlane).toBeUndefined();
-    expect(codes(overExtraction('TRIM(md.`items`)', '  t = JOIN(items, "\\n")'))).toEqual(
+    expect(codes(overExtraction('MULTI(md.`items`)', '  t = JOIN(items, "\\n")'))).toEqual(
       [],
     );
   });
 
   it('an untyped call that touches nothing extracted is not a record either', () => {
-    const body = overExtraction('TRIM("x")', '  t = JOIN(items, "\\n")');
+    const body = overExtraction('MULTI("x")', '  t = JOIN(items, "\\n")');
     expect(codes(body)).toEqual([]);
   });
 
@@ -186,7 +189,7 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
 
   it('the same over a TRAVERSED position', () => {
     const body =
-      '  names = e-[a:Parts]-> { return TRIM(a.`Name`) }\n'
+      '  names = e-[a:Parts]-> { return MULTI(a.`Name`) }\n'
       + '  t = JOIN(names, ", ")';
     expect(codes(body)).toEqual([]);
   });
@@ -194,7 +197,7 @@ describe("a return the checker cannot type leaves the block's value untyped", ()
   it("the same over a local node's entries", () => {
     const body =
       '  bundle = node { files: lazy e-[a:Parts]-> }\n'
-      + '  names = bundle-[f:files]-> { return TRIM(f.`Name`) }\n'
+      + '  names = bundle-[f:files]-> { return MULTI(f.`Name`) }\n'
       + '  t = JOIN(names, ", ")';
     expect(codes(body)).toEqual([]);
   });

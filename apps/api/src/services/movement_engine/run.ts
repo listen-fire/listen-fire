@@ -120,6 +120,8 @@ import {
   inheritSchema,
   shapeToSchema,
   surfaceMisfit,
+  readCall,
+  resolveCallee,
 } from 'movement-lang';
 import type {
   AwaitExpression,
@@ -134,6 +136,10 @@ import type {
   MembersExpression,
   ArmExpression,
   CallArg,
+  CallPosition,
+  CallReading,
+  CallScope,
+  CallStatement,
   Catalog,
   ConstructionCall,
   ExprSlot,
@@ -3020,40 +3026,43 @@ class Interpreter {
           env.declare(alias ?? name, { kind: 'opaque', what: 'import' });
         }
         return;
-      case 'assign':
-        switch (statement.value.kind) {
+      case 'assign': {
+        // A call whose callee is a built-in (`n = UPPER("x")`) is the value it
+        // computes, at file level as anywhere — resolution says so, once.
+        const rhs = this.resolvedRValue(statement.value, env);
+        switch (rhs.kind) {
           case 'construct':
             // The construction-shaped spelling of a CALL reaches here too, and
             // means the same thing it means anywhere: run the movement. There
             // is nothing at file scope to run it about.
             {
-              const kind = env.resolve(statement.value.construct.callee)?.kind;
+              const kind = env.resolve(this.calleeName(rhs.construct.callee, env))?.kind;
               if (kind === 'movement' || kind === 'plugin') throw fileLevelCall();
             }
             env.declare(
               statement.name,
-              this.instanceBinding(statement.name, statement.value.construct),
+              this.instanceBinding(statement.name, rhs.construct),
             );
             return;
           case 'call':
             throw fileLevelCall();
           case 'expr': {
-            const aliased = this.aliasedNodeBinding(statement.value.expr, env);
+            const aliased = this.aliasedNodeBinding(rhs.expr, env);
             if (aliased !== undefined) {
               env.declare(statement.name, aliased);
               return;
             }
-            const selected = await this.selectedPositionBinding(statement.value.expr, env);
+            const selected = await this.selectedPositionBinding(rhs.expr, env);
             if (selected !== undefined) {
               env.declare(statement.name, selected);
               return;
             }
-            const { value, provenance } = await this.evaluateSlot(statement.value.expr, { env });
+            const { value, provenance } = await this.evaluateSlot(rhs.expr, { env });
             env.declare(statement.name, {
               kind: 'value',
               value,
               provenance,
-              ...(this.bindsManyValues(statement.value.expr, env) ? { many: true } : {}),
+              ...(this.bindsManyValues(rhs.expr, env) ? { many: true } : {}),
             });
             return;
           }
@@ -3073,6 +3082,7 @@ class Interpreter {
             throw unsupported('file-level links', 'a link runs inside a movement body');
         }
         return;
+      }
       case 'shape':
         env.declare(statement.name, { kind: 'shape', declaration: statement, fileEnv: env });
         return;
@@ -3451,9 +3461,17 @@ class Interpreter {
           }
           break;
         }
-        case 'call':
+        case 'call': {
+          // `MAP(xs, f)` run bare is the iteration it resolved to; every other
+          // call runs its callee.
+          const reading = this.readCallIn(statement, env, 'statement');
+          if (reading.kind === 'collection') {
+            await this.interpretCollectionOp(reading.collection, undefined, env, body, stmtAddress);
+            break;
+          }
           await this.executeCall(statement, env, { ...body, address: stmtAddress });
           break;
+        }
         case 'match':
           await this.executeMatch(statement.match, undefined, env);
           break;
@@ -3505,6 +3523,8 @@ class Interpreter {
     body: BodyContext,
     stmtAddress: Address,
   ): Promise<void> {
+    const resolved = this.resolvedRValue(value, env);
+    if (resolved !== value) return this.declareAssign(name, resolved, env, body, stmtAddress);
     switch (value.kind) {
       case 'construct': {
         // `name(args)` is one surface form; what the name RESOLVES to
@@ -3512,7 +3532,7 @@ class Interpreter {
         // movement runs and its value is bound. The grammar cannot
         // tell them apart, so it doesn't (parser/ast `constructionAsCall`).
         const construct = value.construct;
-        const calleeKind = env.resolve(construct.callee)?.kind;
+        const calleeKind = env.resolve(this.calleeName(construct.callee, env))?.kind;
         if (calleeKind === 'movement' || calleeKind === 'plugin') {
           const call = constructionAsCall(construct);
           env.declare(
@@ -4202,12 +4222,64 @@ class Interpreter {
    * A call's value is what the callee RETURNED — undefined when it returned
    * binds it. Effects are unchanged — the value is additional.
    */
+  // ── Call resolution (movement-lang checker/calls.ts) ──
+
+  /** What a call site can see: the environment, asked exactly, and its
+   *  functions in any letter case. The standard library is `resolveCallee`'s. */
+  private callScope(env: Environment): CallScope {
+    return {
+      binds: (name) => env.resolve(name) !== undefined,
+      functionSpelled: (name) => env.resolveFunction(name),
+    };
+  }
+
+  /** How a call reads where it is written — the checker's reading, over this
+   *  run's scope. A refusal is the checker's to have reported. */
+  private readCallIn(call: CallStatement, env: Environment, position: CallPosition): CallReading {
+    const scope = this.callScope(env);
+    const reading = readCall(call, (callee) => resolveCallee(callee, scope, this.languageVersion), position);
+    if (reading.kind === 'refused') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `${reading.refusal.message} — the checker should have caught this`,
+      );
+    }
+    return reading;
+  }
+
+  /** A bound or returned call to a built-in, as the form it resolved to;
+   *  every other right-hand side unchanged. */
+  private resolvedRValue(value: RValue, env: Environment): RValue {
+    if (value.kind !== 'call') return value;
+    const reading = this.readCallIn(value.call, env, 'value');
+    switch (reading.kind) {
+      case 'function':
+        return value;
+      case 'value':
+        return { kind: 'expr', expr: reading.expr };
+      case 'collection':
+        return { kind: 'collection', collection: reading.collection };
+      case 'members':
+        return { kind: 'members', members: reading.members };
+      case 'refused':
+        // `readCallIn` threw.
+        return value;
+    }
+  }
+
+  /** The name a callee was DECLARED with — from version 3 a function's call
+   *  may spell it in another letter case. */
+  private calleeName(written: string, env: Environment): string {
+    const resolved = resolveCallee(written, this.callScope(env), this.languageVersion);
+    return resolved.kind === 'declared' ? resolved.name : written;
+  }
+
   private async executeCall(
     statement: Extract<Statement, { kind: 'call' }>,
     env: Environment,
     body: BodyContext,
   ): Promise<Binding | undefined> {
-    const callee = env.resolve(statement.callee);
+    const callee = env.resolve(this.calleeName(statement.callee, env));
     if (callee?.kind !== 'movement') {
       // One function sort: a plugin is a function whose body isn't visible, so
       // a call on one is an ordinary call and its value is what the plugin
@@ -4403,9 +4475,26 @@ class Interpreter {
       return this.synthesiseNode(arg.node, env);
     }
     if (arg.kind === 'call') {
+      // A built-in called here (`log(UPPER(x))`) is the value it computes —
+      // an ordinary expression argument.
+      const reading = this.readCallIn(arg.call, env, 'argument');
+      if (reading.kind === 'value') {
+        return this.evaluateCallArg(
+          { kind: 'expr', ...(arg.name !== undefined ? { name: arg.name } : {}), expr: reading.expr },
+          env,
+          body,
+          options,
+        );
+      }
       // The utility idiom — the nested call runs (its effects are its own) and
       // its value is what this argument passes on.
       return requireCallValue(arg.call.callee, await this.executeCall(arg.call, env, body));
+    }
+    if (arg.kind === 'closure' || arg.kind === 'type') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `a ${arg.kind === 'closure' ? 'function' : 'type'} handed to a function's parameter — the checker should have caught this`,
+      );
     }
     const raw = arg.expr.raw.trim();
     if (BARE_IDENT.test(raw)) {

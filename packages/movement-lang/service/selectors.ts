@@ -348,7 +348,10 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     else if (arg.kind === 'write') visitWrite(arg.write, aliasScope);
     else if (arg.kind === 'call') {
       for (const nested of arg.call.args) visitCallArg(nested, aliasScope);
-    } else visitNode(arg.node, aliasScope);
+    } else if (arg.kind === 'node') visitNode(arg.node, aliasScope);
+    // A function or a type handed to a built-in (`MAP(xs, (x) => { … })`,
+    // `MEMBERS(<T>)`): the scan reads neither, as it reads neither when the
+    // collection op is written as its own statement.
   };
 
   /** A block head grounds its hop aliases for the block's body. */

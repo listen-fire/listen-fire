@@ -1425,10 +1425,10 @@ describe('cron and manual listeners', () => {
         'import { acme_workspace } from credentials',
         'team = slack(credentials: acme_workspace)',
         'box  = postbox()',
-        'movement sort(l: <box-[:letter]->>) {',
+        'movement sort_mail(l: <box-[:letter]->>) {',
         '  write team-[:message]-> { text: l.`sender` }',
         '}',
-        `listen to box { slots: ${slots} } fire sort`,
+        `listen to box { slots: ${slots} } fire sort_mail`,
       ].join('\n');
     expectClean(program('["A", "B"]'));
     for (const bad of ['[]', '"A"', '["A", ""]', '[1]']) {

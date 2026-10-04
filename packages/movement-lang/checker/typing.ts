@@ -40,8 +40,11 @@ import {
   READ_SIGNATURE,
   stdlibFunctionById,
   type BuiltinOptionsSpec,
+  type BuiltinParamType,
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
+import { builtinParamAt, describeBuiltin, lookupBuiltin, type Builtin } from './standard_library';
+import { EXTRACT_CALL_NESTED_MESSAGE } from './calls';
 import { neverAsAny } from '../never';
 import { before, since, type LanguageVersion } from '../language_version';
 import { Span } from '../parser/ast';
@@ -60,7 +63,7 @@ import {
   type TupleRest,
   variantOf,
 } from './catalog';
-import type { EffectRow } from './effects';
+import type { DeclaredEffectRow, EffectRow } from './effects';
 import { eventAddressKey, type EventAddress } from './event_address';
 import {
   closestByEditDistance,
@@ -365,6 +368,10 @@ export const TypedDiagnosticCodes = {
   /** `TEXT.SERIALISE` of a value holding a `lazy` edge: the walk has not run,
    *  so there is nothing to write out until it is read. */
   STDLIB_ARG_LAZY_EDGE: 'MOV_STDLIB_ARG_LAZY_EDGE',
+  /** A built-in's argument of a type its signature does not take —
+   *  `UPPER(record)`, `ROUND("ten")` (language version 3; the signatures are
+   *  the standard-library scope's, checker/standard_library.ts). */
+  BUILTIN_ARG_TYPE: 'MOV_BUILTIN_ARG_TYPE',
   /** `READ(x)` where `x` is not a file. READ turns a FILE into its text, and
    *  nothing else has bytes to read — a text argument is either a value the
    *  author already has (so the call does nothing) or the wrong name. The
@@ -896,6 +903,101 @@ const BARE_COERCER_RETURNS: Readonly<Record<string, FieldType>> = {
   datetime: 'datetime',
   number: 'number',
 };
+
+/** Whether a parameter READS its argument as a value of some kind — what
+ *  `checkBuiltinArgs` checks. The others take anything (`any`), or have a
+ *  contract of their own checked where they are read (a record argument, an
+ *  options map, a function, a type). */
+function readsAsValue(param: BuiltinParamType): boolean {
+  switch (param) {
+    case 'scalar':
+    case 'text':
+    case 'number':
+    case 'temporal':
+    case 'file':
+    case 'textOrList':
+    case 'list':
+      return true;
+    case 'any':
+    case 'record':
+    case 'options':
+    case 'function':
+    case 'type':
+      return false;
+    default:
+      return neverAsAny(param);
+  }
+}
+
+/** Whether a value of `type` is one `param` takes. Absence passes through —
+ *  every built-in answers absent for an absent argument — and a union must
+ *  fit member by member. */
+function paramAccepts(param: BuiltinParamType, type: FieldType): boolean {
+  const variant = variantOf(type);
+  switch (variant.kind) {
+    case 'maybeAbsent':
+      return paramAccepts(param, variant.of);
+    case 'absent':
+      return true;
+    case 'union':
+      return variant.of.every(member => paramAccepts(param, member));
+    case 'text':
+    case 'enum':
+      return param === 'scalar' || param === 'text' || param === 'temporal' || param === 'textOrList';
+    case 'number':
+      return param === 'scalar' || param === 'number';
+    case 'boolean':
+      return param === 'scalar';
+    case 'date':
+    case 'datetime':
+      return param === 'scalar' || param === 'temporal';
+    case 'file':
+      return param === 'file';
+    case 'list':
+    case 'tuple':
+      return param === 'list' || param === 'textOrList';
+    // A record and a json value are reported before this is asked
+    // (`requireTransparent`); a dict is keyed structure, which no value
+    // parameter reads.
+    case 'json':
+    case 'record':
+    case 'dict':
+      return false;
+    default:
+      return neverAsAny(variant);
+  }
+}
+
+function describeParamType(param: BuiltinParamType): string {
+  switch (param) {
+    case 'scalar':
+      return 'one plain value (text, a number, a boolean or a date)';
+    case 'text':
+      return 'text';
+    case 'number':
+      return 'a number';
+    case 'temporal':
+      return 'a date, a datetime, or text that reads as one';
+    case 'file':
+      return 'a file';
+    case 'textOrList':
+      return 'text or a list';
+    case 'list':
+      return 'a list';
+    case 'any':
+      return 'any value';
+    case 'record':
+      return 'a record or a dict';
+    case 'options':
+      return 'a map of settings';
+    case 'function':
+      return 'a function';
+    case 'type':
+      return 'a type';
+    default:
+      return neverAsAny(param);
+  }
+}
 
 /** The flat built-in `COALESCE(a, b, …)`. The grammar lowercases every function
  *  name, so this is the id that reaches the checker. */
@@ -3014,7 +3116,10 @@ export interface TypingReporter {
 export type ExpressionEffect =
   | { kind: 'read'; instances: Array<InstanceRef | undefined> }
   | { kind: 'ai' }
-  | { kind: 'now' };
+  | { kind: 'now' }
+  /** A built-in's DECLARED row (the standard-library scope's), folded in
+   *  as a plugin's is. */
+  | { kind: 'declared'; row: DeclaredEffectRow };
 
 /**
  * The write target an expression flows into, threaded through `infer` so
@@ -3639,17 +3744,24 @@ export class ExpressionTyping {
             return element !== undefined
               ? listOf(element, this.collectionOrdering(expr.expression, position).order)
               : undefined;
-          case 'llm':
-            this.options.onEffect?.({ kind: 'ai' });
+          case 'llm': {
+            const llmAgg = lookupBuiltin('LLM_AGG');
+            if (llmAgg !== undefined) this.absorbBuiltinEffects(llmAgg);
             return undefined;
+          }
         }
         return undefined;
       }
-      case 'llm':
-        this.options.onEffect?.({ kind: 'ai' });
+      case 'llm': {
+        const ai = lookupBuiltin('AI');
+        if (ai !== undefined) this.absorbBuiltinEffects(ai);
         for (const d of aiTierDiagnostics(expr.tier)) this.report(d.code, d.message, d.severity);
-        if (expr.promptExpression) this.inferAt(expr.promptExpression, position);
+        if (expr.promptExpression) {
+          const prompt = this.inferAt(expr.promptExpression, position);
+          if (ai !== undefined) this.checkBuiltinArgs(ai, [prompt]);
+        }
         return undefined;
+      }
       case 'function': {
         // A built-in that takes its options as a MAP walks its arguments
         // differently: each option's value is typed on its own against the
@@ -3676,8 +3788,18 @@ export class ExpressionTyping {
         if (expr.fn === 'extract' && since(this.options.languageVersion, 3)) {
           this.report(
             TypedDiagnosticCodes.EXTRACT_CALL_NESTED,
-            "'extract(…)' is read on its own line, not inside another expression — its shape is a declaration, which an expression cannot hold. Bind it first, then use the name: `found = extract(content, Shape)` then `ONLY(found)`",
+            EXTRACT_CALL_NESTED_MESSAGE,
           );
+        }
+        // The call's entry in the standard-library scope: its effects (the
+        // clock `DATE.TODAY` reads, the file `READ` fetches) are its declared
+        // row, and from version 3 its arguments are checked against its
+        // signature. A name it does not list is resolution's to report (the
+        // checker's call walk), or a write field's own function.
+        const builtin = lookupBuiltin(expr.fn);
+        if (builtin !== undefined) {
+          this.absorbBuiltinEffects(builtin);
+          this.checkBuiltinArgs(builtin, args);
         }
         if (expr.fn === FILE_FUNCTION_ID) return 'file';
         if (expr.fn === READ_FUNCTION_ID) return this.typeReadCall(args);
@@ -3685,24 +3807,26 @@ export class ExpressionTyping {
         if (expr.fn in BARE_COERCER_RETURNS) return BARE_COERCER_RETURNS[expr.fn];
         if (expr.fn === COALESCE_FUNCTION_ID) return coalesceType(args);
         const stdlibSpec = stdlibFunctionById(expr.fn);
-        if (stdlibSpec === undefined) return undefined;
+        if (stdlibSpec === undefined) {
+          // Before version 3 a flat built-in's call is untyped; from 3 it is
+          // what its signature says it gives back.
+          if (builtin === undefined || before(this.options.languageVersion, 3)) return undefined;
+          return builtin.returns === 'derived' ? undefined : builtin.returns;
+        }
         this.checkStdlibLiteralArgs(stdlibSpec, expr.args);
         this.checkStdlibRecordArg(stdlibSpec, args, expr.args);
         this.checkStdlibWholeValueArg(stdlibSpec, args);
-        // `DATE.TODAY(zone)` reads the run's clock, exactly as `@current_date`
-        // does — same effect, so the row says so from the registry rather than
-        // from a second list of names.
-        if (stdlibSpec.readsClock === true) this.options.onEffect?.({ kind: 'now' });
         // A parse that can fail (`DATE.PARSE`) types its result `T | absent`,
         // so the absence propagates and fires at the required-value site (F13).
         return stdlibSpec.maybeAbsent ? maybeAbsent(stdlibSpec.returns) : stdlibSpec.returns;
       }
       case 'kg_exists':
+      case 'kg_value': {
+        const kg = lookupBuiltin(expr.type === 'kg_exists' ? 'KG_EXISTS' : 'KG_VALUE');
+        if (kg !== undefined) this.absorbBuiltinEffects(kg);
         expr.params.forEach(p => this.inferAt(p, position));
-        return 'boolean';
-      case 'kg_value':
-        expr.params.forEach(p => this.inferAt(p, position));
-        return undefined;
+        return expr.type === 'kg_exists' ? 'boolean' : undefined;
+      }
       case 'meta':
         this.checkMetaKey(expr.key);
         if (isClockMetaKey(expr.key)) this.options.onEffect?.({ kind: 'now' });
@@ -3757,6 +3881,36 @@ export class ExpressionTyping {
       case 'linked_object':
         return undefined;
     }
+  }
+
+  /** A built-in's declared effect row, into the function around the call. */
+  private absorbBuiltinEffects(builtin: Builtin): void {
+    const row = builtin.effects;
+    const empty = row.ai !== true && row.now !== true && row.suspend !== true
+      && (row.reads ?? []).length === 0 && (row.writes ?? []).length === 0;
+    if (!empty) this.options.onEffect?.({ kind: 'declared', row });
+  }
+
+  /**
+   * A built-in's arguments against its signature (language version 3): each
+   * is a value of the kind its parameter takes. A record or a json value where
+   * a value is read is the rule every such site shares (`requireTransparent`);
+   * a value of the wrong kind is `BUILTIN_ARG_TYPE`. An argument nobody can
+   * type stays silent, as everywhere in this layer; how many arguments there
+   * are is the call walk's (it sees the call before lowering reshapes it).
+   */
+  private checkBuiltinArgs(builtin: Builtin, args: ReadonlyArray<FieldType | undefined>): void {
+    if (before(this.options.languageVersion, 3)) return;
+    args.forEach((type, index) => {
+      const param = builtinParamAt(builtin, index);
+      if (param === undefined || type === undefined || !readsAsValue(param.type)) return;
+      if (this.requireTransparent(type, `handed to ${builtin.name}`)) return;
+      if (paramAccepts(param.type, type)) return;
+      this.report(
+        TypedDiagnosticCodes.BUILTIN_ARG_TYPE,
+        `${builtin.name}'s '${param.name}' takes ${describeParamType(param.type)}, and this is ${describeFieldType(stripAbsent(type))} — ${describeBuiltin(builtin)}`,
+      );
+    });
   }
 
   /**

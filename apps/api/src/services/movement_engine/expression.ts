@@ -745,6 +745,21 @@ export class Environment {
     return this.bindings.get(name) ?? this.parent?.resolve(name);
   }
 
+  /**
+   * The declared name of a FUNCTION in scope (a movement, a plugin, an
+   * import) written `name` in another letter case — function names are
+   * case-insensitive from language version 3. The checker refuses two
+   * functions whose names differ only by case, so at most one answers.
+   */
+  resolveFunction(name: string): string | undefined {
+    const folded = name.toLowerCase();
+    for (const [bound, binding] of this.bindings) {
+      const callable = binding.kind === 'movement' || binding.kind === 'plugin' || binding.kind === 'opaque';
+      if (callable && bound.toLowerCase() === folded) return bound;
+    }
+    return this.parent?.resolveFunction(name);
+  }
+
   /** THIS scope's binding of a name, with no parent walk — what a body asks
    *  when it wants the value IT bound, not one an enclosing scope did. */
   resolveOwn(name: string): Binding | undefined {
