@@ -255,6 +255,7 @@ import {
   evalMovementExpr,
   evaluateMovementExpression,
   hopFilterKeeps,
+  isCallableBinding,
   isDictValue,
   hopMemberGate,
   hopOrderKeyReader,
@@ -3601,7 +3602,8 @@ class Interpreter {
         // tell them apart, so it doesn't (parser/ast `constructionAsCall`).
         const construct = value.construct;
         const calleeKind = env.resolve(this.calleeName(construct.callee, env))?.kind;
-        if (calleeKind === 'movement' || calleeKind === 'plugin') {
+        const callsClosure = calleeKind === 'closure' && since(this.languageVersion, 3);
+        if (calleeKind === 'movement' || calleeKind === 'plugin' || callsClosure) {
           const call = constructionAsCall(construct);
           env.declare(
             name,
@@ -4320,8 +4322,8 @@ class Interpreter {
       call,
       (callee) => resolveCallee(callee, scope, this.languageVersion),
       (declared) => {
-        const kind = env.resolve(declared)?.kind;
-        return kind === 'movement' || kind === 'plugin' || kind === 'opaque';
+        const binding = env.resolve(declared);
+        return binding !== undefined && isCallableBinding(binding);
       },
     );
   }
@@ -4532,6 +4534,10 @@ class Interpreter {
       if (callee?.kind === 'plugin') {
         return this.executePluginCall(statement, callee.plugin, env, body);
       }
+      // A closure bound to a name is a function too (language version 3).
+      if (callee?.kind === 'closure' && since(this.languageVersion, 3)) {
+        return this.executeClosureCall(statement, callee, env, body);
+      }
       if (callee?.kind === 'opaque') {
         throw unsupported(
           `calling the import '${statement.callee}'`,
@@ -4616,6 +4622,49 @@ class Interpreter {
     } finally {
       this.movementBody = callerBody;
       this.callStack.pop();
+    }
+    return outcome.returned ? outcome.value : undefined;
+  }
+
+  /**
+   * `f(3)` where `f` names a closure — called as a movement is: arguments bind
+   * by name or by order and evaluate in the caller's source order, the body
+   * runs in the closure's captured scope, and its value is what it returns.
+   * The checker refuses a call to a closure that may wait, so nothing here
+   * parks; the body's statements take addresses under the call's statement.
+   */
+  private async executeClosureCall(
+    statement: Extract<Statement, { kind: 'call' }>,
+    closure: Extract<Binding, { kind: 'closure' }>,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<Binding | undefined> {
+    const params = new Map(closure.closure.params.map((param) => [param.name, param]));
+    if (statement.args.length !== params.size) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${statement.callee}' takes ${params.size} argument(s), got ${statement.args.length} — the checker should have caught this`,
+      );
+    }
+    const types = this.typesIn(env);
+    const values: Record<string, Binding> = {};
+    for (const { arg, param } of argumentBindings(statement.args, [...params.keys()])) {
+      const declared = param !== undefined ? params.get(param) : undefined;
+      if (param === undefined || declared === undefined) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `'${statement.callee}' has no parameter ${arg.name !== undefined ? `'${arg.name}'` : 'for this argument'} — the checker should have caught this`,
+        );
+      }
+      values[param] = await this.evaluateCallArg(arg, env, body, { takesValue: isValueParam(declared, types) });
+    }
+    let outcome: BodyOutcome = FELL_THROUGH;
+    try {
+      outcome = await this.invokeClosure(closure, values, body);
+    } catch (e) {
+      // Find-on-missing inside the closure ends the closure's scope, as it
+      // ends a called movement's; the caller continues after the call.
+      if (!(e instanceof ScopeEndedQuietly)) throw e;
     }
     return outcome.returned ? outcome.value : undefined;
   }

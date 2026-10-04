@@ -141,12 +141,15 @@ import {
   nestedCalls,
   readingBoundNames,
   runsAsCall,
+  sortKeyOf,
   type CallNode,
 } from './nested_calls';
 import {
+  computedArgNotRead,
   nestedMessage,
   readCall,
   resolveCallee,
+  sortKeyNestedMessage,
   type CallPosition,
   type CallReading,
   type CallRefusal,
@@ -356,9 +359,13 @@ export const DiagnosticCodes = {
   BUILTIN_UNUSED: 'MOV_BUILTIN_UNUSED',
   /** A call the engine runs — a function's, a collection op, `MEMBERS` —
    *  written in a walk's `WHERE`, `ORDER BY` or settings, which are read once
-   *  per landing. Anywhere else in an expression such a call is a nested call
-   *  (language version 3; checker/nested_calls.ts). */
+   *  per landing, or in a `SORT` key, read once per member. Anywhere else in
+   *  an expression such a call is a nested call (language version 3;
+   *  checker/nested_calls.ts). */
   CALL_NESTED: 'MOV_CALL_NESTED',
+  /** `IF … THEN … END` with no `ELSE` (language version 3). Before it, the
+   *  missing arm silently read as `""`, whatever the THEN arm held. */
+  IF_WITHOUT_ELSE: 'MOV_IF_WITHOUT_ELSE',
   /** A call to a function that may WAIT, written inside an expression. A wait
    *  parks the run at an address, and a position inside an expression has
    *  none — so a call that can park is a whole statement, or the whole
@@ -4154,6 +4161,10 @@ class Checker {
       span: statement.span,
       ...shape,
     };
+    // A closure's name is a function's name (it is called like one), so it
+    // keeps the function-name rules: no built-in's name, and no other
+    // function's name in another letter case.
+    if (isFunctionSymbol(symbol)) this.checkFunctionName(statement.name, statement.span, scope);
     const existing = this.declareAuthored(scope, symbol, statement.span);
     // Bindings are immutable: a name means one thing for the whole scope it is
     // visible in. The cross-scope half of that rule is SHADOWED_NAME; this is
@@ -4557,6 +4568,13 @@ class Checker {
     return scope.resolve(this.calleeName(written, scope));
   }
 
+  /** The closure a callee names, when it names one (language version 3 —
+   *  before it, a name bound to a closure is passed, never called). */
+  private calledClosure(callee: ScopeSymbol): Extract<PositionTypeRef, { kind: 'closure' }> | undefined {
+    if (before(this.languageVersion, 3)) return undefined;
+    return callee.posType?.kind === 'closure' ? callee.posType : undefined;
+  }
+
   /** The name a callee was declared with (`written` when nothing declares it). */
   private calleeName(written: string, scope: Scope): string {
     const resolved = resolveCallee(written, this.callScope(scope), this.languageVersion);
@@ -4677,6 +4695,11 @@ class Checker {
     return slotOfTree(slot, readingBoundNames(tree, calls, call => nestedCallName(spanOfExtent(slot, call.at))));
   }
 
+  private isExtractCall(written: string, scope: Scope): boolean {
+    const resolution = resolveCallee(written, this.callScope(scope), this.languageVersion);
+    return resolution.kind === 'builtin' && resolution.builtin.form.kind === 'extract';
+  }
+
   /** Whether a call in an expression is one the engine runs (./nested_calls.ts). */
   private runsAsCall(call: CallNode, scope: Scope): boolean {
     const callScope = this.callScope(scope);
@@ -4706,28 +4729,38 @@ class Checker {
   private refuseSuspendingCall(written: string, scope: Scope, span: Span): void {
     if (before(this.languageVersion, 3)) return;
     const resolution = this.calleeResolution(written, scope);
-    if (resolution.kind !== 'found' || resolution.symbol.kind !== 'movement') return;
-    if (!this.movementEffects(resolution.symbol).suspend) return;
+    if (resolution.kind !== 'found') return;
+    const callee = resolution.symbol;
+    // A called closure parks inside its own body exactly as a called movement
+    // does, so it has the same missing address.
+    const closure = this.calledClosure(callee);
+    const suspends = callee.kind === 'movement'
+      ? this.movementEffects(callee).suspend
+      : closure?.effects.suspend;
+    if (suspends !== true) return;
+    const what = closure !== undefined ? 'closure' : 'movement';
     this.report(
       DiagnosticCodes.CALL_SUSPENDS,
-      `'${written}' may wait ('await'), and a wait inside a called movement cannot be resumed yet — the run would park inside '${written}' and come back to the wrong place. Wait in this movement instead: move the 'await' out of '${written}', or run it as an arm of 'await parallel([…])' / 'await race([…])'`,
+      `'${written}' may wait ('await'), and a wait inside a called ${what} cannot be resumed yet — the run would park inside '${written}' and come back to the wrong place. Wait in this movement instead: move the 'await' out of '${written}', or run it as an arm of 'await parallel([…])' / 'await race([…])'`,
       span,
     );
   }
 
   /**
-   * Every call written inside an expression (version 3), resolved by scope as
-   * a statement-level call is. The expression grammar reads a built-in it
-   * knows by name; what only scope can say is checked here:
+   * What version 3 says of an expression's tree — what the lowering to the
+   * shared expression tree would otherwise decide silently:
    *
-   *   - an unknown name is an error, with a did-you-mean — except inside a
-   *     write field, whose target may advertise functions of its own (a
-   *     Slack message's `SLACK_MESSAGE(…)`), which the catalog does not list;
+   *   - every call is resolved by scope as a statement-level call is. An
+   *     unknown name is an error, with a did-you-mean — except inside a write
+   *     field, whose target may advertise functions of its own (a Slack
+   *     message's `SLACK_MESSAGE(…)`), which the catalog does not list;
    *   - a function's call, or a built-in that takes a function or a type, is
-   *     read on its own line, not inside an expression;
-   *   - a built-in is handed as many arguments as its signature takes.
+   *     not written where it would be read per landing or per member;
+   *   - a built-in is handed exactly the arguments its signature takes, in
+   *     the form it reads them;
+   *   - an `IF` says what it is when its condition fails (`ELSE`).
    */
-  private checkCallsInSlot(slot: ExprSlot, scope: Scope, options?: { writeField?: true }): void {
+  private checkSlotExpression(slot: ExprSlot, scope: Scope, options?: { writeField?: true }): void {
     if (before(this.languageVersion, 3)) return;
     let tree: MExpr;
     try {
@@ -4735,22 +4768,37 @@ class Checker {
     } catch {
       return; // the syntax error is reported where the slot is read
     }
-    this.checkCallsInTree(tree, { spanOf: (at) => spanWithin(slot, at.start), scope, writeField: options?.writeField === true });
+    this.checkExpressionTree(tree, { spanOf: (at) => spanWithin(slot, at.start), scope, writeField: options?.writeField === true });
   }
 
-  /** `checkCallsInSlot` over a tree that is not a slot's — a block head's hops,
-   *  read through the probe the head is parsed as. */
-  private checkCallsInTree(
+  /** `checkSlotExpression` over a tree that is not a slot's — a block head's
+   *  hops, read through the probe the head is parsed as. */
+  private checkExpressionTree(
     tree: MExpr,
     at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean },
   ): void {
-    const visit = (expr: MExpr): void => {
-      if (expr.kind === 'call' && expr.callee.kind === 'name') {
-        this.checkCallInExpression(expr, expr.callee.name.text, at);
+    const visit = (expr: MExpr, perMember: boolean): void => {
+      if (expr.kind === 'if' && expr.else === undefined) {
+        this.report(
+          DiagnosticCodes.IF_WITHOUT_ELSE,
+          "this IF has no ELSE, so where its condition fails it is \"\" (empty text), whatever THEN gives — say what it is there: 'IF … THEN … ELSE … END'",
+          at.spanOf(expr.at),
+        );
       }
-      for (const child of expressionChildren(expr)) visit(child);
+      if (expr.kind === 'call' && expr.callee.kind === 'name') {
+        const written = expr.callee.name.text;
+        // The extraction call has its own refusal wherever it is not hoisted,
+        // said by the typing walk (`checkCallInExpression` leaves it too).
+        if (perMember && this.runsAsCall(expr, at.scope) && !this.isExtractCall(written, at.scope)) {
+          this.report(DiagnosticCodes.CALL_NESTED, sortKeyNestedMessage(written), at.spanOf(expr.at));
+          return;
+        }
+        this.checkCallInExpression(expr, written, at);
+      }
+      const key = expr.kind === 'call' ? sortKeyOf(expr) : undefined;
+      for (const child of expressionChildren(expr)) visit(child, perMember || child === key);
     };
-    visit(tree);
+    visit(tree, false);
   }
 
   private checkCallInExpression(
@@ -4778,6 +4826,11 @@ class Checker {
             `'${written}' takes ${expected} argument${max === 1 ? '' : 's'}, got ${count} — ${describeBuiltin(builtin)}`,
             span,
           );
+          return;
+        }
+        const unread = computedArgNotRead(builtin, call);
+        if (unread !== undefined) {
+          this.report(DiagnosticCodes.BUILTIN_ARGS, `'${written}' ${unread.message}`, at.spanOf(unread.arg.at));
         }
         return;
       }
@@ -6039,7 +6092,9 @@ class Checker {
     const resolution = this.calleeResolution(construct.callee, scope);
     if (resolution.kind !== 'found') return undefined;
     const kind = resolution.symbol.kind;
-    if (kind !== 'movement' && kind !== 'plugin') return undefined;
+    if (kind !== 'movement' && kind !== 'plugin' && this.calledClosure(resolution.symbol) === undefined) {
+      return undefined;
+    }
     return constructionAsCall(construct);
   }
 
@@ -8090,7 +8145,7 @@ class Checker {
           if (!(e instanceof ExpressionSyntaxError)) throw e;
         }
         if (tree !== undefined) {
-          this.checkCallsInTree(tree, { spanOf: () => head.span, scope, writeField: false });
+          this.checkExpressionTree(tree, { spanOf: () => head.span, scope, writeField: false });
         }
       }
       // A `_resources`-headed path parses to resource_traverse (no steps) —
@@ -8270,6 +8325,7 @@ class Checker {
       this.effects?.markPartial();
     } else {
       const callee = resolution.symbol;
+      const closure = this.calledClosure(callee);
       if (callee.kind === 'movement') {
         value = this.movementReturnType(callee);
         // Bottom-up over the call graph: a call adds what the callee does.
@@ -8285,6 +8341,20 @@ class Checker {
       } else if (callee.kind === 'plugin') {
         // One function sort: a plugin is a function whose body isn't visible.
         value = this.checkPluginApplication(statement, callee);
+      } else if (closure !== undefined) {
+        // A closure bound to a name is a function: its signature is its
+        // parameters, its value what its body returns, and calling it does
+        // what its body does.
+        value = closure.returns;
+        this.effects?.absorb(closure.effects);
+        if (statement.args.length !== closure.params.length) {
+          this.report(
+            DiagnosticCodes.CALL_ARITY,
+            `'${statement.callee}' takes ${closure.params.length} argument${closure.params.length === 1 ? '' : 's'}, got ${statement.args.length}`,
+            statement.span,
+          );
+        }
+        params = closure.params.map(({ name, ...type }) => ({ name, type }));
       } else {
         // Either an unlinked file import (a body nobody parsed) or a name that
         // is not callable at all. Both leave the row a lower bound.
@@ -11058,7 +11128,7 @@ class Checker {
       if (names.aliases.has(ref)) continue; // bound by a step within this expression
       this.resolveNameWithFields(ref, slot.span, scope, options?.fields);
     }
-    this.checkCallsInSlot(slot, scope, options?.writeField === true ? { writeField: true } : undefined);
+    this.checkSlotExpression(slot, scope, options?.writeField === true ? { writeField: true } : undefined);
     this.reportBlockReadBack(names, scope, slot.span);
     const typing = this.slotTyping(scope, slot.span);
     const valueType = options?.holdsValue === true
@@ -11113,7 +11183,7 @@ class Checker {
       this.report(e.code ?? DiagnosticCodes.EXPR_PARSE, e.message, spanWithin(slot, e.pos));
       return;
     }
-    this.checkCallsInSlot(slot, scope);
+    this.checkSlotExpression(slot, scope);
     this.checkCondition(condition, slot, scope, narrowInto);
   }
 

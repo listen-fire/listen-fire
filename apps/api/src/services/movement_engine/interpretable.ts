@@ -179,9 +179,21 @@ class InterpretabilityScan {
   /** What a call can name here: the file's functions, then the standard
    *  library — so a call reads as the checker and the engine read it. */
   private callScope: CallScope = programCallScope({ statements: [] });
+  /** The names a closure has been bound to so far in the walk — each is a
+   *  function a call can name (language version 3). Gathered as the scan
+   *  meets them, without scopes: which binding a call reaches is the
+   *  checker's to say, and this only has to know a call RUNS. */
+  private readonly closureNames = new Set<string>();
 
   scan(program: Program): string[] {
-    this.callScope = programCallScope(program);
+    const file = programCallScope(program);
+    const closures = this.closureNames;
+    const closureSpelled = (name: string): string | undefined =>
+      [...closures].find((bound) => bound.toLowerCase() === name.toLowerCase());
+    this.callScope = {
+      binds: (name) => file.binds(name) || closures.has(name),
+      functionSpelled: (name) => file.functionSpelled(name) ?? closureSpelled(name),
+    };
     for (const statement of program.statements) {
       if (statement.kind === 'assign' && statement.value.kind === 'construct') {
         this.graphRoots.add(statement.name);
@@ -412,6 +424,9 @@ class InterpretabilityScan {
         // A binding and a `return` take the same right-hand side, so what a
         // scan makes of one it makes of the other.
         case 'assign':
+          if (statement.value.kind === 'closure') this.closureNames.add(statement.name);
+          this.scanValue(statement.value);
+          break;
         case 'return':
           this.scanValue(statement.value);
           break;

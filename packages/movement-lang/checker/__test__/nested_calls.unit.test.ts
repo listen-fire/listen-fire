@@ -227,3 +227,89 @@ listen to chat fire SCAN`;
     expect(codes('  x = first(c-[m:Members]->).Name')).toEqual(codes('  x = FIRST(c-[m:Members]->).Name'));
   });
 });
+
+describe('a closure bound to a name is called like any function', () => {
+  const inc = '  inc = (v: <number>) => v + 1\n';
+
+  it('bound, nested, and on its own line', () => {
+    expect(codes(`${inc}  x = inc(2)`)).toEqual([]);
+    expect(codes(`${inc}  x = inc(v: 2)`)).toEqual([]);
+    expect(codes(`${inc}  write chat-[:note]-> { Count: inc(c.Size) + 1 }`)).toEqual([]);
+    expect(codes(`${inc}  x = double(inc(inc(1)))`)).toEqual([]);
+    expect(codes('  note = (t: <text>) => {\n    write chat-[:note]-> { Body: t }\n  }\n  note(c.Name)')).toEqual([]);
+  });
+
+  it('its parameters type the arguments, and its body types the call', () => {
+    expect(codes(`${inc}  x = inc(1, 2)`)).toEqual([C.CALL_ARITY]);
+    expect(codes(`${inc}  x = inc(c.Name)`)).not.toEqual([]);
+    expect(codes('  shout = (t: <text>) => UPPER(t)\n  write chat-[:note]-> { Count: shout(c.Name) }')).toEqual([
+      C.WRITE_FIELD_TYPE,
+    ]);
+  });
+
+  it('calling it does what its body does; binding it does not', () => {
+    const aiOf = (body: string): boolean | undefined => {
+      const { recording } = checkProgramWithLink(parseProgram(source(body)), catalog, { recordAnalysis: true });
+      const file = recording?.frames.find((frame) => frame.kind === 'file');
+      const scan = file?.scope.symbols.get('scan');
+      return scan !== undefined ? effectRowOf(scan)?.ai : undefined;
+    };
+    const ask = '  ask = (t: <text>) => AI("Summarise: ${t}")\n';
+    expect(aiOf(`${ask}  x = 1`)).not.toBe(true);
+    expect(aiOf(`${ask}  x = ask(c.Name)`)).toBe(true);
+    expect(aiOf(`${ask}  x = CONCAT(ask(c.Name), "!")`)).toBe(true);
+  });
+
+  it('its name is a function name: any letter case calls it, and it may not collide', () => {
+    expect(codes(`${inc}  x = INC(2) + Inc(3)`)).toEqual([]);
+    expect(codes('  upper = (t: <text>) => t')).toEqual([C.FUNCTION_NAME_COLLISION]);
+    expect(codes('  Double = (n: <number>) => n')).toEqual([C.FUNCTION_NAME_COLLISION]);
+  });
+
+  it('a name holding a value is still not callable', () => {
+    expect(codes('  f = 3\n  x = f(1)')).toEqual([C.CALL_NOT_MOVEMENT]);
+  });
+
+  it('a closure that may wait is refused called, nested or not', () => {
+    const w = '  w = (n: <number>) => {\n    await sleep(1h)\n    return n\n  }\n';
+    expect(codes(`${w}  x = w(1)`)).toEqual([C.CALL_SUSPENDS]);
+    expect(codes(`${w}  w(1)`)).toEqual([C.CALL_SUSPENDS]);
+    expect(codes(`${w}  x = w(1) + 1`)).toEqual([C.NESTED_CALL_SUSPENDS]);
+    // Passing it on is not calling it: a race arm still waits.
+    expect(codes('  w = () => {\n    await sleep(1h)\n  }\n  await race([w])')).toEqual([]);
+  });
+
+  it("in a walk's WHERE it would run per landing, so it is refused there", () => {
+    expect(codes(`${inc}  x = COUNT(c-[m:Members WHERE inc(m.Age) > 1]->)`)).toEqual([C.CALL_NESTED]);
+  });
+
+  it('before version 3 a closure is passed, never called — unchanged', () => {
+    const body = '  inc = () => {\n    return 1\n  }\n';
+    expect(codes(`${body}  inc()`, { languageVersion: 2 })).toEqual([C.CALL_NOT_MOVEMENT]);
+    expect(codes(`${body}  x = inc()`, { languageVersion: 2 })).toEqual([C.CONSTRUCT_NOT_ADAPTER]);
+    expect(codes('  upper = () => {\n    return 1\n  }', { languageVersion: 2 })).toEqual([]);
+  });
+});
+
+describe('a call in a SORT key would run once, not once per member, so it is refused', () => {
+  const people = '  people = c-[p:Members]-> { return p }\n';
+
+  it("a function's call, a closure's", () => {
+    expect(codes(`${people}  t = COUNT(SORT(people, double(Age)))`)).toEqual([C.CALL_NESTED]);
+    expect(codes(`${people}  t = COUNT(SORT(people, double(Age), DESC))`)).toEqual([C.CALL_NESTED]);
+    expect(codes(`${people}  inc = (v: <number>) => v + 1\n  t = COUNT(SORT(people, inc(Age)))`)).toEqual([
+      C.CALL_NESTED,
+    ]);
+    expect(messages(`${people}  t = COUNT(SORT(people, double(Age)))`)).toContain('once per member');
+  });
+
+  it('a value built-in in the key is read per member, and a call in the collection runs once — both fine', () => {
+    expect(codes(`${people}  t = COUNT(SORT(people, LENGTH(Name)))`)).toEqual([]);
+    expect(codes('  t = COUNT(SORT(MAP([3, 1], (v) => v + 1)))')).toEqual([]);
+    expect(codes('  t = COUNT(SORT(MAP([3, 1], (v) => v + 1), DESC))')).toEqual([]);
+  });
+
+  it('before version 3 nothing nests, and nothing is said — unchanged', () => {
+    expect(codes(`${people}  t = COUNT(SORT(people, waits(Name)))`, { languageVersion: 2 })).toEqual([]);
+  });
+});

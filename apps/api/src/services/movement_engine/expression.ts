@@ -729,6 +729,17 @@ export function readCallbackField(
   return null;
 }
 
+/** A binding a call can run: a movement, a plugin, an import that may be a
+ *  movement, or a closure — movements and functions are one thing. */
+export function isCallableBinding(binding: Binding): boolean {
+  return (
+    binding.kind === 'movement'
+    || binding.kind === 'plugin'
+    || binding.kind === 'opaque'
+    || binding.kind === 'closure'
+  );
+}
+
 /**
  * Lexically-scoped bindings → runtime values. `if` arms interpret in a
  * child environment so arm-local bindings don't leak; everything else is
@@ -749,14 +760,15 @@ export class Environment {
 
   /**
    * The declared name of a FUNCTION in scope (a movement, a plugin, an
-   * import) written `name` in another letter case — function names are
-   * case-insensitive from language version 3. The checker refuses two
-   * functions whose names differ only by case, so at most one answers.
+   * import, a name bound to a closure) written `name` in another letter case
+   * — function names are case-insensitive from language version 3. The
+   * checker refuses two functions whose names differ only by case, so at most
+   * one answers.
    */
   resolveFunction(name: string): string | undefined {
     const folded = name.toLowerCase();
     for (const [bound, binding] of this.bindings) {
-      const callable = binding.kind === 'movement' || binding.kind === 'plugin' || binding.kind === 'opaque';
+      const callable = isCallableBinding(binding);
       if (callable && bound.toLowerCase() === folded) return bound;
     }
     return this.parent?.resolveFunction(name);

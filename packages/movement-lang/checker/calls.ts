@@ -33,7 +33,9 @@ import type {
   MembersExpression,
   Span,
 } from '../parser/ast';
+import type { MExpr } from '../parser/expression/tree';
 import { scanName } from '../parser/scan';
+import type { CallNode } from './nested_calls';
 import { since, type LanguageVersion } from '../language_version';
 import { describeBuiltin, lookupBuiltin, type Builtin } from './standard_library';
 
@@ -88,10 +90,10 @@ export type CallRefusal = {
   span: Span;
 };
 
-/** The extraction call written inside a walk's `WHERE`, where it would run
- *  once per landing. */
+/** The extraction call written inside a walk's `WHERE` or a `SORT` key, where
+ *  it would run once per landing or per member. */
 export const EXTRACT_CALL_NESTED_MESSAGE =
-  "'extract(…)' runs a model over its content, and a walk's WHERE is read once per landing — bind it first, then use the name: `found = extract(content, Shape)`";
+  "'extract(…)' runs a model over its content, and a walk's WHERE is read once per landing (a SORT key once per member) — bind it first, then use the name: `found = extract(content, Shape)`";
 
 export type CallReading =
   /** Run the function the program declares (or report its name unknown). */
@@ -194,6 +196,50 @@ function readOneCall(
  *  are read once per landing. */
 export function nestedMessage(callee: string): string {
   return `'${callee}(…)' runs once where it is written, and a walk's WHERE, ORDER BY and settings are read once per landing — bind it first, then use the name: \`answer = ${callee}(…)\``;
+}
+
+/**
+ * The built-in arguments read only when written in place, as text: the
+ * expression grammar keeps a literal there and drops anything computed —
+ * silently, before language version 3. A knowledge-graph query is text the
+ * engine parses as a query, so it is written out and given its values as
+ * parameters, never assembled; a separator is spelled where it is used.
+ */
+const LITERAL_TEXT_ARGS: Readonly<Record<string, { index: number; message: string }>> = {
+  KG_EXISTS: {
+    index: 0,
+    message: 'reads its query only as text written in place ("MATCH …") — a computed query is not read. Write the query out, and pass the values it needs as its parameters ($0, $1, …)',
+  },
+  KG_VALUE: {
+    index: 0,
+    message: 'reads its query only as text written in place ("MATCH …") — a computed query is not read. Write the query out, and pass the values it needs as its parameters ($0, $1, …)',
+  },
+  JOIN: {
+    index: 1,
+    message: 'reads its separator only as text written in place (`JOIN(xs, ", ")`) — a computed one is not read',
+  },
+};
+
+/** The argument of `call` a built-in would drop because it is computed, not
+ *  written in place, with why. */
+export function computedArgNotRead(builtin: Builtin, call: CallNode): { arg: MExpr; message: string } | undefined {
+  const literal = LITERAL_TEXT_ARGS[builtin.name];
+  if (literal === undefined) return undefined;
+  const arg = call.args[literal.index]?.value;
+  if (arg === undefined || isTextWrittenInPlace(arg)) return undefined;
+  return { arg, message: literal.message };
+}
+
+function isTextWrittenInPlace(e: MExpr): boolean {
+  if (e.kind === 'paren') return isTextWrittenInPlace(e.expr);
+  return e.kind === 'string' && e.parts.every(part => typeof part === 'string');
+}
+
+/** The message for a call the engine runs written inside a `SORT` key, which
+ *  is read once per member — the call would run once, and every member would
+ *  sort by its one answer. */
+export function sortKeyNestedMessage(callee: string): string {
+  return `'${callee}(…)' runs once where it is written, and SORT reads its key once per member — every member would sort by that one answer. Work the key out per member first, then sort by it: \`keyed = MAP(xs, (x) => { return { item: x, key: ${callee}(…) } })\`, then \`SORT(keyed, key)\``;
 }
 
 function describeArgForm(arg: CallArg): string {

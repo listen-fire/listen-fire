@@ -272,3 +272,74 @@ listen to runs {} fire RECAP
     expect(bodies(kg.creates)).toEqual(['ran']);
   });
 });
+
+describe('a closure bound to a name is called like any function', () => {
+  it('its value is what its body returns — bound, nested, by name, in any letter case', async () => {
+    const creates = await runBody(
+      [
+        '  inc = (v: <number>) => v + 1',
+        '  a = inc(v: 2)',
+        '  b = inc(2) * 10',
+        '  c = double(INC(inc(1)))',
+        '  write graph-[:note]-> { payload: { a: a, b: b, c: c } }',
+      ].join('\n'),
+    );
+    expect(payload(creates)).toEqual({ a: 3, b: 30, c: 6 });
+  });
+
+  it('its body sees the scope it was written in', async () => {
+    const creates = await runBody(
+      ['  base = 10', '  add = (v: <number>) => v + base', '  write graph-[:note]-> { payload: { v: add(1) } }'].join(
+        '\n',
+      ),
+    );
+    expect(payload(creates)).toEqual({ v: 11 });
+  });
+
+  it('on its own line it runs for its effects; its arguments run first, left to right', async () => {
+    const creates = await runBody(
+      [
+        '  note = (a: <text>, b: <text>) => {',
+        '    write graph-[:note]-> { body: CONCAT(a, b) }',
+        '  }',
+        '  note(mark("a"), mark("b"))',
+      ].join('\n'),
+    );
+    expect(bodies(creates)).toEqual(['a', 'b', 'ab']);
+  });
+
+  it('nested in an arm that is not taken, it never runs', async () => {
+    const creates = await runBody(
+      [
+        '  loud = (t: <text>) => mark(t)',
+        '  x = IF 1 > 2 THEN loud("then") ELSE "else" END',
+        '  write graph-[:note]-> { body: x }',
+      ].join('\n'),
+    );
+    expect(bodies(creates)).toEqual(['else']);
+  });
+
+  it('before version 3 a closure is not called — the run is refused', async () => {
+    const v2 = `${PRELUDE}movement recap(go: <runs-[:Invocation]->>) {
+  one = () => {
+    return 1
+  }
+  one()
+}
+listen to runs {} fire recap
+`;
+    const kg = makeKgFake();
+    await expect(
+      runMovement({
+        source: v2,
+        event: manualEvent(),
+        teamId: TEAM_ID,
+        catalog,
+        resolveAdapter: ({ adapterType }: { adapterType: string }) =>
+          adapterType === 'manual' ? manualAdapter : kg.adapter,
+        dryRun: false,
+        languageVersion: 2,
+      }),
+    ).rejects.toThrow(/MOV_CALL_NOT_MOVEMENT/);
+  });
+});

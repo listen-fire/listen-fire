@@ -307,6 +307,18 @@ movement intake(m: <inbox-[:message]->>) {
     expect(listUnsupportedConstructs(inner)).toEqual(['non-built-in function calls (DOMAIN_OF())']);
   });
 
+  it('a closure bound to a name is a function: its call nested in an expression runs (version 3)', () => {
+    const source = `${PRELUDE}
+movement intake(m: <inbox-[:message]->>) {
+  inc = (v: <number>) => v + 1
+  if inc(LENGTH(m.\`subject\`)) > 4 {
+    write crm-[:companies]-> { name: m.\`subject\` }
+  }
+}
+`;
+    expect(listUnsupportedConstructs(source)).toEqual([]);
+  });
+
   it('names non-built-in functions in SHAPE-write fields (shapes have no adapter to bind functions from)', () => {
     const source = `${PRELUDE}
 node Files {

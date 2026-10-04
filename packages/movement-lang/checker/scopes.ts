@@ -190,10 +190,18 @@ export interface Declaration {
   visibleFrom: Loc;
 }
 
-/** A name a call can run: a movement, a plugin, or a file import (which may
- *  be a movement the linker could not follow). */
+/** A name a call can run: a movement, a plugin, a file import (which may be a
+ *  movement the linker could not follow), or a name bound to a closure —
+ *  movements and functions are one thing, so a closure's name is a function's
+ *  name, case-insensitive and collision-checked like any other (language
+ *  version 3, the only version that calls one). */
 export function isFunctionSymbol(symbol: ScopeSymbol): boolean {
-  return symbol.kind === 'movement' || symbol.kind === 'plugin' || symbol.kind === 'fileImport';
+  return (
+    symbol.kind === 'movement'
+    || symbol.kind === 'plugin'
+    || symbol.kind === 'fileImport'
+    || symbol.posType?.kind === 'closure'
+  );
 }
 
 export class Scope {

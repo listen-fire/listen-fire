@@ -21,7 +21,7 @@
 //
 // A call inside a walk's `WHERE`, `ORDER BY` or settings is not one of these:
 // those run once per landing, inside the walk, and a call there is refused
-// (`MOV_CALL_NESTED`). Neither is a call inside a closure's body, which runs
+// (`MOV_CALL_NESTED`). Nor is one in a `SORT` key, read once per member. Neither is a call inside a closure's body, which runs
 // when the closure is called and is read as that body's own expression.
 
 import type { Loc } from '../parser/ast';
@@ -71,10 +71,26 @@ export function runsAsCall(
 }
 
 /**
+ * `SORT(xs, key)`'s key — an expression over each MEMBER, read once per member
+ * before the sort, as the expression grammar lowers it (`SORT(xs, DESC)` has
+ * a direction and no key). Undefined for any other call, and for a `SORT`
+ * given no key. It is the one built-in argument read per member: every other
+ * built-in reads its arguments once, where it is called.
+ */
+export function sortKeyOf(e: CallNode): MExpr | undefined {
+  if (e.callee.kind !== 'name' || e.callee.name.text.toUpperCase() !== 'SORT') return undefined;
+  const key = e.args[1]?.value;
+  if (key === undefined) return undefined;
+  const isDirection = key.kind === 'name' && /^(ASC|DESC)$/i.test(key.name.text);
+  return isDirection && e.args.length === 2 ? undefined : key;
+}
+
+/**
  * The sub-expressions read ONCE, as values, where `e` is evaluated — the
  * positions a nested call may stand in. A walk's hops (their `WHERE`, `ORDER
- * BY`, settings) are read per landing, a `WHERE`'s predicate per member, and a
- * closure's body when it is called; a call's callee is a name.
+ * BY`, settings) are read per landing, a `WHERE`'s predicate and a `SORT` key
+ * per member, and a closure's body when it is called; a call's callee is a
+ * name.
  */
 export function valueChildren(e: MExpr): MExpr[] {
   switch (e.kind) {
@@ -101,8 +117,10 @@ export function valueChildren(e: MExpr): MExpr[] {
       return [e.object];
     case 'index':
       return [e.object, e.index];
-    case 'call':
-      return e.args.map(a => a.value);
+    case 'call': {
+      const key = sortKeyOf(e);
+      return e.args.map(a => a.value).filter(value => value !== key);
+    }
     case 'path':
       return e.root !== undefined ? [e.root] : [];
     case 'unary':
@@ -149,8 +167,10 @@ export function withValueChildren(e: MExpr, replace: (child: MExpr) => MExpr | u
       return { ...e, object: r(e.object) };
     case 'index':
       return { ...e, object: r(e.object), index: r(e.index) };
-    case 'call':
-      return { ...e, args: e.args.map(a => ({ ...a, value: r(a.value) })) };
+    case 'call': {
+      const key = sortKeyOf(e);
+      return { ...e, args: e.args.map(a => (a.value === key ? a : { ...a, value: r(a.value) })) };
+    }
     case 'path':
       return e.root !== undefined ? { ...e, root: r(e.root) } : e;
     case 'unary':
