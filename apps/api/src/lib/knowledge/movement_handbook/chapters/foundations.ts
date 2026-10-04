@@ -86,8 +86,8 @@ rather than re-deriving it.
 
 Don't copy an automation and tweak it when a new input variant needs handling.
 Factor the common steps into an automation each variant calls, handing it a
-\`node { … }\` built from whatever that variant holds (anatomy's composition
-section). Two near-identical automations are a smell.
+\`graph<Shape> { … }\` built from whatever that variant holds (anatomy's
+composition section). Two near-identical automations are a smell.
 
 ### conventions
 
@@ -103,9 +103,13 @@ These hold everywhere, in every chapter, and are not restated per situation:
   Inside a type, \`-[:…]->\` names the edge the type sits behind; \`.\` is only
   ever property access (\`msg.\`Subject\`\`, and the field tail of a borrowed
   type: \`<crm-[:companies]->.\`funding_stage\`>\`).
-- Calls name their arguments after the callee's parameters
-  (\`\`Log Lead\`(l: msg)\`) — parens are callable arguments, always named;
-  braces are declarative bodies.
+- Calls pass their arguments in the order the callee declares them
+  (\`\`Log Lead\`(msg)\`), as TypeScript calls a function; a call is all
+  positional or all named, never a mix. The named form
+  (\`\`Log Lead\`(l: msg)\`) is still supported, and a plugin's arguments stay
+  named. Braces are declarative bodies. Write your own functions as
+  \`name(data…, config record, lambda)\` — data first, then a record of
+  options, then a function — each left out when it makes no sense.
 - Fields read with a dot (\`msg.subject\`); "double quotes" are literal strings;
   \${…} interpolates into strings; == compares, = binds.
 - Backticks wrap any name that isn't a bare identifier — not just fields. A
@@ -118,7 +122,14 @@ These hold everywhere, in every chapter, and are not restated per situation:
   channel, so nobody has to translate on the way in or on the way out. Bare
   identifiers stay legal, and short instance names (\`crm = …\`) earn their
   keep; reach for the natural spelling everywhere a name carries meaning.
-- \`function\` and \`movement\` declare the same thing. Prefer \`function\`.
+- \`function\` and \`movement\` declare the same thing. Prefer \`function\`. A
+  function, a plugin, a built-in and a closure bound to a name are all called
+  the same way, and function names are case-insensitive.
+- Prefer the modern forms: \`graph<Shape> { … }\` to build a record (\`node\`
+  only declares a shape), \`extract(content, Shape, settings)\` to extract,
+  positional calls, and expression bodies for short closures. The older forms
+  (the anonymous \`node { … }\` literal, \`extract … from … through\`, named only
+  calls) are supported and documented, but not recommended for new work.
 - Real names only: type, field, credential, and plugin names come from the
   live workspace catalog, never from memory or examples.
 - Statements run in source order; a handle must be written before it is read.

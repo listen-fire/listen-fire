@@ -69,7 +69,7 @@ Writes to a dry-run instance are rehearsed — captured and reported instead of 
 
 ### records-you-build
 
-Some records exist only while the run does — one assembled from several reads, or a tidied view of what arrived. Build one with a \`node { … }\` literal:
+Some records exist only while the run does — one assembled from several reads, or a tidied view of what arrived. Build one with a \`graph<Shape> { … }\` literal (see *graph-literals* below, the form to prefer). The anonymous \`node { … }\` literal builds the same kind of record, is still supported, and is what this section and many saved automations use:
 
 \`\`\`
 deal = node {
@@ -87,6 +87,42 @@ deal = node {
 - \`both = [one, two]\` gathers records you already hold into one list, and a block head walks them in the order written: \`both-[c:company]-> { … }\`. A list holds one kind of thing — records or values, never both.
 - Nothing is provisioned: building one is not an effect, and it is checked by its structure — what it carries — not by any name.
 - A literal names every entry it carries. Copying a whole record — a literal, an extracted one, a declared parameter — into a system is a write's job: \`...n\` or \`?...n\` in the write body (see the writes chapter).
+
+### graph-literals
+
+\`graph<Shape> { … }\` builds a local graph as a value. In the modern spelling \`node\` only **declares** a shape and \`graph\` only **builds** a value, so the two never blur:
+
+\`\`\`
+node Message {
+  Body: <text>
+  node Attachments {
+    Name: <text>
+    \`Content Type\`: <text>
+  }
+}
+
+function \`Snapshot\`(m: <inbox-[:Email]->>) {
+  msg = graph<Message> {
+    Body: m.\`Body\`
+    Attachments: m-[a:Attachments]-> {
+      Name: a.\`Name\`
+      \`Content Type\`: a.\`Content Type\`
+    }
+  }
+  copy = graph<Message> {
+    Body: m.\`Body\`
+    Attachments: m-[:Attachments]->
+  }
+}
+\`\`\`
+
+- **With a shape** the literal is checked as TypeScript's \`satisfies\` checks one, and the value is then of that shape. A misspelt field is refused with the closest name, a mistyped field is refused, a field given where the shape has a nested node (or the reverse) is refused, and so is a required field never written. A \`<text | null>\` field may be left out; it then reads as absent.
+- **Without a shape** — \`graph { … }\` — the type comes from the literal. \`graph<Shape> {}\` is the typed empty graph, valid when the shape requires no field; its nested nodes start empty (an edge holds zero or more records).
+- **The body uses a write body's syntax.** \`{ … }\` is one nested record and \`[{ … }, { … }]\` several. A path followed by a field body — \`Attachments: m-[a:Attachments]-> { Name: a.\`Name\` }\` — builds one nested record per record on the path. A bare path — \`Attachments: m-[:Attachments]->\` — **copies** each record: the shape says which fields to take and follows the source's edge of the same name into every nested node; with no shape the records' own fields are copied.
+- **Copies are snapshots.** Nothing in the graph points back into the system it was read from, so writing to the graph never reaches the source. A file is copied as the handle it is; nothing downloads.
+- **\`...v\` spreads a computed map** (plugin output, JSON, a \`{ … }\` dict) into the body. With a shape, the shape decides whether a nested map is a nested record or a plain value; a map nobody can type is checked against the shape when the graph is built, and the run fails naming the first field that does not fit. Without a shape every nested map is a nested record, and a map whose keys are unknown is refused. Spreading something that is not a map is refused. A field you write wins over a spread's key, and a later spread over an earlier one.
+- The result reads by path, \`WHERE\` and dot, takes \`write\`, \`link\` and \`delete\` like any record the run built, fits a parameter of its shape, and can be a function's return value.
+- A copy whose records lack a field the shape requires is refused, and so is a shapeless copy over records nothing describes.
 
 ### collect-what-you-wrote
 
@@ -200,6 +236,43 @@ company  = write crm-[:Companies]-> { … }
 
 File-scope value bindings (a reusable prompt string, say) are allowed above the automations that use them.
 
+### functions-and-calls
+
+\`function\` and \`movement\` declare the same thing, and so do a closure bound to a name and a plugin's or a built-in's own name: all of them are **functions**, called the same way. Write your own to the convention every built-in follows:
+
+\`\`\`
+name(data…, config record, lambda)
+\`\`\`
+
+- **Data first**, in an order that is obvious and that the checker backs up: \`MAP(xs, { onError: 'warn' }, f)\`, \`extract(content, Shape, { tier: 'careful' })\`.
+- **A config record next** for options — a final record of named settings, each written down.
+- **A lambda last** when the function calls back into your code.
+- Leave out whatever makes no sense for the function. A collection is one list argument rather than a variadic run, so calls stay chainable.
+
+The convention is for authors of functions; the language does not enforce it on a call.
+
+\`\`\`
+function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) {
+  return "\${cfg.prefix}\${name} (\${JOIN(tags, ', ')})"
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  title = label(m.\`Subject\`, ["new", "inbound"], { prefix: "> " })
+  write crm-[:Companies]-> {
+    unique by (\`Name\`)
+    Name:        m.\`Subject\`
+    Description: title
+  }
+}
+\`\`\`
+
+- **A call is positional**: arguments bind to the parameters in declared order, as TypeScript calls a function — \`\`Email To Doc\`(msg)\`, \`log_doc(email_to_doc(msg))\`. The named form (\`\`Email To Doc\`(m: msg)\`) is still supported and means the same; one call is all positional or all named, and a mix is a parse error. Too few or too many arguments is refused, naming what is missing; a type mismatch names the parameter the argument binds to. A plugin's arguments stay named.
+- **A parameter can take a value, not only a record**: a scalar (\`<text>\`, \`<number>\`, \`<boolean>\`, \`<date>\`, \`<datetime>\`, \`<file>\`, \`<json>\`), a declared refinement (\`<Tone>\`), a list (\`<text[]>\`), or a config record written as a TypeScript object type (\`<{ k: T, j?: T }>\`). The argument is any expression, checked as TypeScript checks one: a record literal may not carry a key the parameter does not declare (the closest is suggested), a required key may not be missing, a string literal against a refinement must be one of its values, and a value that may be absent does not fill a required parameter. Inside the function an optional key reads as possibly absent.
+- A value handed to a parameter that takes a record (\`persist(c: m.\`Subject\`)\` where \`c: <Lead>\`) is refused when you save.
+- **Function names are case-insensitive**: \`upper(x)\`, \`UPPER(x)\` and \`Upper(x)\` are the same built-in, and \`Email_To_Doc(m)\` calls \`email_to_doc\`. Your own function \`\`Label\`\` above is called as \`label(…)\`. Variable names keep their case.
+- **Names are checked when you save.** An unknown function name is refused with the closest function or built-in suggested (a write field is the exception: its target may offer functions of its own). Two functions whose names differ only by letter case, or a function named like a built-in in any case, are refused as a collision. A name holding a value shadows a built-in as in TypeScript, so \`upper = 3\` then \`upper(x)\` is refused.
+- **A function that may wait cannot be called.** One that \`await\`s parks the run where it is written, and the run cannot yet resume inside a called function, so the call is refused when you save. Wait in the function that needs the answer, or run the wait as an arm of \`await parallel([…])\` or \`await race([…])\`.
+
 ### composition
 
 Reuse an automation by calling it, never by copying it — from the same file, or imported from a library file:
@@ -217,11 +290,12 @@ function \`Log Lead\`(l: <Lead>) {
 }
 
 function \`Intake\`(msg: <inbox-[:Email]->>) {
-  \`Log Lead\`(l: node { Name: msg.\`Subject\` })
+  \`Log Lead\`(graph<Lead> { Name: msg.\`Subject\` })
 }
 \`\`\`
 
-- Every argument is a **position**: pass a bound name (the event, a write handle) when the callee's parameter type already matches, or build one on the spot — \`\`Log Lead\`(l: node { … })\` assembles exactly what the callee declares out of whatever the caller holds, computed values included.
+- Calls are positional (see *functions-and-calls*); the examples below that name an argument (\`\`Log Lead\`(l: …)\`) are the older, still supported spelling.
+- Every argument is a **position**: pass a bound name (the event, a write handle) when the callee's parameter type already matches, or build one on the spot — \`\`Log Lead\`(graph<Lead> { … })\` (or the older \`node { … }\`) assembles exactly what the callee declares out of whatever the caller holds, computed values included.
 - A system can publish the same record kind along two edges — a readable collection and the edge a listener fires along. A record reached by walking the collection matches a parameter typed on the listener's own address with no wrapper needed, because the two promises share one position.
 - Related records travel as **edges of that literal**, so a whole small graph goes down in one argument: \`node { Name: …, files: msg-[a:Attachments]-> }\`. A call that needs two unrelated things takes two parameters instead, one per thing.
 - The callee sees only its parameters and ITS OWN file's top-level names — caller locals are invisible. An imported automation runs against its own file's imports and constructions, which is why a reusable automation constructs the instances it writes to.
@@ -530,6 +604,77 @@ inbox = email()
 function \`Intake\`(m: <inbox-[:Email]->>) {
   \`Log Lead\`(l: m)
 }
+`,
+    },
+    {
+      construct: 'graph literals — graph<Shape> with path-with-field-body children, a bare-path copy, and a spread of a map',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+node Message {
+  Body: <text>
+  node Attachments {
+    Name: <text>
+    \`Content Type\`: <text>
+  }
+}
+
+node Setting {
+  mode: <text | null>
+  limit: <number | null>
+}
+
+function \`Snapshot\`(m: <inbox-[:Email]->>) {
+  msg = graph<Message> {
+    Body: m.\`Body\`
+    Attachments: m-[a:Attachments]-> {
+      Name: a.\`Name\`
+      \`Content Type\`: a.\`Content Type\`
+    }
+  }
+  copy = graph<Message> {
+    Body: m.\`Body\`
+    Attachments: m-[:Attachments]->
+  }
+  empty = graph<Setting> {}
+  raw   = { mode: "fast", limit: 3 }
+  cfg   = graph<Setting> { ...raw }
+  loose = graph { title: m.\`Subject\` }
+  msg-[a:Attachments]-> {
+    write crm-[:Companies]-> { unique by (\`Name\`) Name: a.Name }
+  }
+}
+
+`,
+    },
+    {
+      construct: 'function convention — positional calls, value and record parameters, case-insensitive names',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) {
+  return "\${cfg.prefix}\${name} (\${JOIN(tags, ', ')})"
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  title = label(m.\`Subject\`, ["new", "inbound"], { prefix: "> " })
+  write crm-[:Companies]-> {
+    unique by (\`Name\`)
+    Name:        m.\`Subject\`
+    Description: title
+  }
+}
+
 `,
     },
   ],

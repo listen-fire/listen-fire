@@ -122,13 +122,75 @@ Iterate a collection with these five, each given a function that runs once per m
 - A map written in braces keeps its keys through all five, so \`AT(r, "who")\` in a later function reads the key's own type, and a misspelt key is caught when you save.
 - Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
-A function written in place takes its parameter's type from the collection, so there is nothing to annotate. It may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`). \`FILTER\` and \`REDUCE\` must \`return\` something — a filter needs a boolean, a reduce needs the value it is carrying. \`MAP\` alone allows a function with no \`return\`: each slot is then absent, and the writes inside it still run — \`MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })\` is legal on its own, with no binding, run purely for what it writes.
+A function written in place takes its parameter's type from the collection, so there is nothing to annotate, and its body may be a single expression (see *closures*). It may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`). \`FILTER\` and \`REDUCE\` must \`return\` something — a filter needs a boolean, a reduce needs the value it is carrying. \`MAP\` alone allows a function with no \`return\`: each slot is then absent, and the writes inside it still run — \`MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })\` is legal on its own, with no binding, run purely for what it writes.
 
 \`\`\`
 theses = MEMBERS(<Thesis>)
 \`\`\`
 
 \`MEMBERS(<T>)\` lists a closed type's values in the order they were **declared** — a refinement you wrote, or a field's option set borrowed from a system. That order is a fact about the type, so a report's sections come from the declaration instead of a list kept beside it. A field whose values are merely *known* (other values are legal there too) has no complete membership, and is refused.
+
+### map-and-filter-settings
+
+\`MAP\` and \`FILTER\` take a settings record between the collection and the function, following the convention \`name(data, config record, lambda)\`:
+
+\`\`\`
+profiles = MAP(companies, { onError: 'warn', concurrency: 4, initialConcurrency: 1 }, (c) => {
+  return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+})
+\`\`\`
+
+- \`onError\` says what a member whose function fails does: \`'error'\` (the default) fails the run, \`'warn'\` leaves the member out of the answer and puts a warning naming it and the failure on the run's trace, and \`'ignore'\` leaves it out silently. A \`FILTER\` member whose predicate fails is not kept. Only the member's own failure is forgiven; a cancelled run ends as it always does.
+- \`concurrency\` runs that many members at once.
+- \`initialConcurrency\` runs a first batch of that size to the end before the rest start. When every member's model call opens with the same content, the first batch warms the provider's prompt cache and the rest read it cheaply.
+- The answer is in input order whatever order members finish in, and so is the trace.
+- Writes inside members happen one at a time, queued, so two members writing the same \`unique by\` record make it once.
+- Each setting is written down, not computed. An unknown key, an \`onError\` outside its three words, a \`concurrency\` below 1 or not whole, and a first batch wider than the rest are refused when you save.
+- \`REDUCE\`, \`GROUPBY\` and \`KEYBY\` take no settings. Without a settings record \`MAP\` and \`FILTER\` behave as before.
+
+### closures
+
+A function written in place is a value. Its body is a block, or a single expression as in TypeScript:
+
+\`\`\`
+inc     = (v: <number>) => v + 1
+shout   = (t: <text>) => UPPER(t)
+doubled = MAP(counts, (x) => x * 2)
+\`\`\`
+
+- \`(v) => v * 2\` means \`(v) => { return v * 2 }\`.
+- Bind a closure to a name and **call it like any function**: \`inc(2)\`, \`double(inc(x)) + 1\`, or \`note(m.Subject)\` on its own line. Its parameters check the arguments, and the call is typed by what the body returns.
+- Calling it does what its body does: a model call or a write in the body counts towards the function that calls it. Binding it does nothing.
+- The name is a function's name, so it is case-insensitive (\`INC(2)\`) and cannot be a built-in's name (\`upper = (t) => t\` is refused) or another function's in a different case. A name holding a plain value is still not callable.
+- A closure that may wait is refused when called, as a function that waits is; it can still be an arm of \`await race([…])\` or \`await parallel([…])\`.
+- A closure is also what \`MAP\`, \`FILTER\` and the rest take: pass it inline or by name (\`MAP(xs, inc)\`).
+
+### calls-inside-expressions
+
+Because a function's arguments are ordinary expressions, a call can sit inside any expression: \`double(n) + 1\`, \`ONLY(extract(content, Company))\`, \`COUNT(MAP(xs, f))\`, \`MAP(MAP(xs, f), g)\`, \`log(MAP(xs, f))\`.
+
+- A nested call means exactly what binding it to a name first and reading the name means, and it is checked and typed that way. A call that returns text written into a number field is refused. Its effects count towards the function around it.
+- **Order is left to right, as the text reads.** Every operand before a nested call is read before the call runs, and a call's arguments are all evaluated before its body runs, so \`CONCAT(mark("a"), mark("b"))\` writes \`a\` and then \`b\`.
+- **\`IF\`, \`AND\`, \`OR\` and \`COALESCE\` short-circuit**, as TypeScript's \`?:\`, \`&&\`, \`||\` and \`??\` do. An operand they do not need is never evaluated, so a call in an arm that is not taken never runs and its writes never happen. \`COALESCE(x, ONLY(list))\` no longer fails when \`x\` is present, however many values \`list\` holds.
+- **Suspension is for statements only.** A call that may wait (a function that \`await\`s) is refused inside an expression, because a wait parks the run where it is written and a place inside an expression has nowhere to come back to. Call it on its own line and use the name.
+- **A walk's \`WHERE\`, \`ORDER BY\` and settings are read once per landing**, so a function call, \`MAP\`, \`FILTER\`, \`REDUCE\`, \`GROUPBY\`, \`KEYBY\` or \`MEMBERS\` inside one is refused, naming the binding to write instead. The same goes for the key of \`SORT\`, which is read per member: work the key out per member first with \`MAP\`, then sort by it. A built-in that only computes a value (\`SORT(people, LENGTH(Name))\`) is fine there.
+
+### lists-spread-and-tuples
+
+\`\`\`
+pdfs    = m-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->.\`File\`
+content = [m.\`Body\`, ...pdfs, "end"]
+inline  = [m.\`Body\`, ...m-[a:Attachments]->.\`File\`]
+\`\`\`
+
+- \`...list\` splices a list into the literal, at the start, the middle or the end, as TypeScript's spread does.
+- A walk read for a field spreads too: it splices one value per record the walk landed on, and nothing when there are none. A field that itself holds a list spreads its members.
+- Spreading something that is not a list (text, a number, a record, a dict) is refused, and so is spreading a list that may be absent. A \`<json>\` field is refused too, since one landing's list cannot be told apart from several landings.
+- **A list literal is a tuple**, one slot per member, as in TypeScript: \`[m.Subject, file]\` is a text then a file. \`AT(t, 0)\` reads the first slot exactly, always present. With a spread the tuple is open-ended: \`[text, ...files]\`.
+- **Where a list is expected** (\`MAP\`, \`FILTER\`, \`JOIN\`, a list-typed field or parameter) a tuple reads as a list of the union of its members, as TypeScript reads \`[string, number]\` as \`(string | number)[]\`. \`JOIN([name, amount], " ")\` validates, and \`[name, amount]\` written into a list of numbers is refused.
+- A literal holding both records and plain values (\`[company, "label"]\`) is accepted as a tuple, but it is refused wherever it is read as a list, such as \`MAP(both, …)\` or a write into a list field.
+- **Unions follow the same way.** \`await parallel([…])\` and \`await race([…])\` with arms whose results differ read as a list of the union of those results, so each slot carries the type of any arm, and a \`race\` slot may still be absent.
+- An automation written in an older language version keeps the older list typing: a literal is the list its members share, and members that share nothing read as a list nothing checks.
 
 ### a-table-you-declare-once
 
@@ -566,6 +628,79 @@ function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
     }
   }
 }
+`,
+    },
+    {
+      construct: 'closures — expression bodies, a closure bound to a name and called, calls nested in expressions with short-circuiting',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Summarise\`(m: <inbox-[:Email]->>) {
+  inc     = (v: <number>) => v + 1
+  shout   = (t: <text>) => UPPER(t)
+  counts  = [1, 2, 3]
+  doubled = MAP(counts, (x) => x * 2)
+  bumped  = MAP(counts, inc)
+  both    = inc(inc(3)) + COUNT(doubled) + COUNT(bumped)
+  tag     = IF both > 4 THEN shout("big") ELSE "small" END
+  name    = COALESCE(m.\`Subject\`, shout(m.\`Body\`))
+  write crm-[:Companies]-> {
+    unique by (\`Name\`)
+    Name:        name
+    Description: "\${tag} \${both}"
+  }
+}
+
+`,
+    },
+    {
+      construct: 'MAP and FILTER with a settings record — onError, concurrency, initialConcurrency',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Tidy\`(m: <inbox-[:Email]->>) {
+  lines = [m.\`Subject\`, m.\`Body\`]
+  kept  = FILTER(lines, { onError: 'ignore' }, (t) => LENGTH(t) > 0)
+  MAP(kept, { onError: 'warn', concurrency: 4, initialConcurrency: 1 }, (t) => {
+    write crm-[:Companies]-> { unique by (\`Name\`) Name: t }
+  })
+}
+
+`,
+    },
+    {
+      construct: 'list literals — spread of a list, spread of a walk read for a field, tuple indexing and tuples read as a list of a union',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function \`Gather\`(m: <inbox-[:Email]->>, n: <number>) {
+  pdfs    = m-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->.\`File\`
+  content = [m.\`Body\`, ...pdfs, "end"]
+  inline  = [m.\`Subject\`, ...m-[a:Attachments]->.\`File\`]
+  first   = AT(content, 0)
+  mixed   = JOIN([m.\`Subject\`, n], " ")
+  write crm-[:Companies]-> {
+    unique by (\`Name\`)
+    Name:        m.\`Subject\`
+    Description: "\${first} \${mixed} \${COUNT(inline)}"
+  }
+}
+
 `,
     },
   ],

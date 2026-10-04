@@ -5,7 +5,7 @@ export const builtins: Chapter = {
   title: 'Builtins',
   content: `## Builtins — every function and helper family, one entry each
 
-Every built-in function, one section each — fetch one by name (\`builtins#SUM\`) instead of the whole chapter. Each entry gives the signature, what it means, whether the result is always there or \`T | absent\`, an ordering requirement where one exists, and an example. The reference chapter's *operators-and-functions* is the one-page version of this list; come here for the detail behind one name.
+Every built-in function, one section each — fetch one by name (\`builtins#SUM\`) instead of the whole chapter. Each entry gives the signature, what it means, whether the result is always there or \`T | absent\`, an ordering requirement where one exists, and an example. The reference chapter's *operators-and-functions* is the one-page version of this list; come here for the detail behind one name. Function names are case-insensitive (\`upper(x)\`, \`UPPER(x)\` and \`Upper(x)\` are one built-in), every argument is checked when you save, and a call is typed by what it gives back (\`UPPER(x)\` is text), so a built-in's call written into a number field is refused. A call can sit inside any expression and runs left to right.
 
 ### TRIM
 
@@ -129,7 +129,7 @@ line = CONCAT(msg.\`From\`, " — ", msg.\`Subject\`)
 
 ### COALESCE
 
-\`COALESCE(a, b, …)\` → the first argument with a value, present whenever at least one argument is unconditionally present (a literal, or anything already known to be there). A \`COALESCE\` whose arguments might *all* be empty is itself \`T | absent\` and discharges nothing.
+\`COALESCE(a, b, …)\` → the first argument with a value, present whenever at least one argument is unconditionally present (a literal, or anything already known to be there). It stops at the first argument that has a value and never evaluates the rest, so a later argument that calls a model, reads a file or fails the run does nothing when an earlier one is present. A \`COALESCE\` whose arguments might *all* be empty is itself \`T | absent\` and discharges nothing.
 
 \`\`\`
 Name: COALESCE(msg-[:Sender]->.\`Name\`, msg-[:Sender]->.\`Email\`, "unknown")
@@ -193,7 +193,7 @@ names = COLLECT(co-[p:People]->.\`Name\`)
 
 ### JOIN
 
-\`JOIN(list, separator)\` → \`text\`, always present — needs an ordered sequence (an \`ORDER BY\` on the hop, a relationship the source keeps in order, or a \`SORT\`), refused otherwise naming the fix. Over a bound block it joins what the iterations returned.
+\`JOIN(list, separator)\` → \`text\`, always present — the separator is text written in place (\`", "\`), never a name or a template. Needs an ordered sequence (an \`ORDER BY\` on the hop, a relationship the source keeps in order, or a \`SORT\`), refused otherwise naming the fix. Over a bound block it joins what the iterations returned.
 
 \`\`\`
 roster = JOIN(SORT(co-[t:Team]->.\`Name\`), ", ")
@@ -225,7 +225,7 @@ oldest = LAST(SORT(co-[o:Orders]->.\`Placed At\`))
 
 ### AT
 
-Two forms, by what you index. \`AT(list, n)\` → \`T | absent\` — a number index into a list, needing an ordered sequence exactly as \`FIRST\` does (refused otherwise). \`AT(dict, "key")\` → present when \`"key"\` is a literal string that is one of the dict's own written keys (a typo is refused with a did-you-mean); \`T | absent\` when the key is computed at run time, or when the dict's per-key shape isn't known (a system value, a \`GROUPBY\`/\`KEYBY\` result — its keys are data, not declarations).
+Two forms, by what you index. \`AT(list, n)\` → \`T | absent\` — a number index into a list, needing an ordered sequence exactly as \`FIRST\` does (refused otherwise). A list literal is a tuple, so \`AT([a, b], 0)\` reads the first slot exactly and is always present. \`AT(dict, "key")\` → present when \`"key"\` is a literal string that is one of the dict's own written keys (a typo is refused with a did-you-mean); \`T | absent\` when the key is computed at run time, or when the dict's per-key shape isn't known (a system value, a \`GROUPBY\`/\`KEYBY\` result — its keys are data, not declarations).
 
 \`\`\`
 first  = AT(SORT(names), 0)
@@ -234,16 +234,19 @@ bucket = AT({ intro: "Welcome", body: "…" }, "intro")
 
 ### MAP
 
-\`MAP(list, f)\` → a list of what \`f\` returned, member by member, in the order given — always present (each slot may itself be absent when \`f\`'s value is). \`f\` is a function \`(member) => { … }\` and takes its parameter's type from the collection; it may not \`await\`. \`MAP\` alone among the five may skip \`return\` — each slot is then absent and the closure's writes still run — and a bare \`MAP(...)\` with no binding is a legal statement on its own.
+\`MAP(list, f)\` or \`MAP(list, settings, f)\` → a list of what \`f\` returned, member by member, in the order given — always present (each slot may itself be absent when \`f\`'s value is). \`f\` is a function \`(member) => { … }\` or \`(member) => expression\` and takes its parameter's type from the collection; it may not \`await\`. \`MAP\` alone among the five may skip \`return\` — each slot is then absent and the closure's writes still run — and a bare \`MAP(...)\` with no binding is a legal statement on its own.
 
 \`\`\`
 bulleted = MAP(lines, (t) => { return "• \${t}" })
+upper    = MAP(lines, (t) => UPPER(t))
 MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })
 \`\`\`
 
+\`settings\` is a record written in place: \`onError\` (\`'error'\`, the default, \`'warn'\` or \`'ignore'\`: what a member whose function fails does — the other two leave it out of the answer, \`'warn'\` with a warning on the trace), \`concurrency\` (members run at once) and \`initialConcurrency\` (a first batch of that size runs to the end before the rest start, so a prompt cache is warm before the fan-out). The answer stays in input order, and writes inside members happen one at a time. See *map-and-filter-settings* in the expressions chapter.
+
 ### FILTER
 
-\`FILTER(list, f)\` → the members \`f\` answered \`TRUE\` for, in order, always present. \`f\` must \`return\` a boolean.
+\`FILTER(list, f)\` or \`FILTER(list, settings, f)\` → the members \`f\` answered \`TRUE\` for, in order, always present. \`f\` must give a boolean — \`return\` one, or write the condition as the body. \`settings\` is the same record \`MAP\` takes; a member whose predicate fails is not kept.
 
 \`\`\`
 kept = FILTER(lines, (t) => { return LENGTH(t) > 0 })
@@ -283,7 +286,7 @@ theses = MEMBERS(<Thesis>)
 
 ### IF THEN ELSE END
 
-\`IF <cond> THEN <a> ELSE <b> END\` — the value-level conditional (uppercase; the lowercase \`if\` branches statements instead). The condition guards its own \`THEN\` the same way a statement \`if\` guards its arm, so a presence test on the condition narrows inside \`THEN\` only.
+\`IF <cond> THEN <a> ELSE <b> END\` — the value-level conditional (uppercase; the lowercase \`if\` branches statements instead). The \`ELSE\` is required: \`IF x THEN 3 END\` has no type and is refused. Only the arm that is taken is evaluated, so a call in the other arm never runs. The condition guards its own \`THEN\` the same way a statement \`if\` guards its arm, so a presence test on the condition narrows inside \`THEN\` only.
 
 \`\`\`
 line = IF EXISTS(domain) THEN "\${domain}" ELSE "" END

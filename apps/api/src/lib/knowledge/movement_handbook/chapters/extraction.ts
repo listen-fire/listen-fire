@@ -7,6 +7,8 @@ export const extraction: Chapter = {
 
 Use \`extract\` to turn free text and documents into records you can traverse and write from. One declared tree produces the whole result in a single pass, and afterwards its values read as plain properties. For a single value — a summary, a category — use \`AI()\` instead.
 
+There are two spellings. **The extraction call, \`extract(content, Shape, settings)\`, is the one to write.** It is an ordinary function over values, so it composes with \`MAP\`, \`ONLY\`, plugin calls and the rest, and it is laid out for the provider's prompt cache. The older \`extract … from [ … ] { … }\` keyword, with its \`through\` stages, is documented below as supported but not recommended: saved automations use it and it runs exactly as it always did, but a new one should use the call.
+
 ### the extraction call
 
 \`extract(content, Shape, settings)\` is extraction as a function: a list of text and files in, a list of \`Shape\` records out.
@@ -45,7 +47,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 - **Content** is a list, read in the order you write it: text, files (read as text, as \`from [ … ]\` reads them), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save — the rendering is part of what the model reads, so you choose it. Spread a list of files in with \`...\`.
 - **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. A declaration's name bound to another name (\`S = Company\`) is the same shape. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a shape worked out at run time.
 - **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), take the single one with \`ONLY\`, write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
-- **It is a value like any other**: use it where you need the records — \`ONLY(extract(…))\` for the single one, \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once.
+- **It is a value like any other**: use it where you need the records — \`ONLY(extract(…))\` for the single one, \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once. It may sit inside a lambda or another call. It is refused inside a walk's \`WHERE\` (read once per landing) and as a statement on its own line.
 - **Settings**, each written as a quoted word: \`tier\` (\`'quick'\`, \`'careful'\`, \`'thorough'\` — see *how hard it works*), \`model\` (a model this installation can reach, by name), \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`). A model or effort you name wins over the tier's. An unknown setting, or a model this installation cannot reach, is refused when you save.
 - A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
 
@@ -56,9 +58,31 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 - Give the \`MAP\` an \`initialConcurrency: 1\`, so the first record's call has read the shared content before the others start.
 - The shape is always placed after the content, so a second extraction with a different shape over the same content reuses it too.
 
+The engine does the rest of the cache work. It remembers the content each call has sent in the run and marks the end of the longest prefix a call shares with an earlier one, so the order you write is the only thing to get right.
+
+A shape can also be written in place, for an extraction used once:
+
+\`\`\`
+people = extract(content, node Person: "each person named in the message" { name: <text> "their name" })
+\`\`\`
+
+**Enrichment is plain composition**: extract, map over the results, call plugins as ordinary functions, extract again over what they returned, then write.
+
+\`\`\`
+detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+  page   = fetch_url(url: c.website)
+  detail = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful' }))
+  return detail
+})
+\`\`\`
+
+A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before it goes into the content. A plugin's arguments stay named.
+
 The \`extract … from [ … ] { … }\` form below still runs exactly as before, and everything in the rest of this chapter about it holds.
 
 ### basics
+
+This section and the ones after it describe the \`extract … from [ … ] { … }\` keyword. It is supported and unchanged, but not recommended for new automations; write the extraction call above and reach for the keyword only to read or maintain one that already exists.
 
 \`\`\`
 function \`Intake\`(go: <runs-[:Invocation]->>) {
@@ -203,6 +227,8 @@ Leave it off and the extraction sizes itself from the tree you declared, which i
 - Cut the input into pieces when a run says a reading was *continued* — \`MAP(CHUNKS(transcript, { entities: 20 }), (p) => { return extract from [p] { … } })\`. An answer that ran past its output ceiling is missing the records at the end of what it read, and \`entities\` sizes each piece by the records it is expected to hold rather than by its length.
 
 ### through — a block of plain plugin calls, then a second extraction
+
+The call form above does the same job with \`MAP\` and a plugin call inside the lambda, and keeps the content cache-friendly; this section shows the keyword form, still supported.
 
 Enrich what you extracted by walking it, calling plugins as ordinary functions, and extracting again over what they returned:
 
@@ -580,6 +606,43 @@ function \`Enrich\`(m: <inbox-[:Email]->>) {
     Domains ?:     more.website
   }
 }
+`,
+    },
+    {
+      construct: 'extraction call — an inline shape, ONLY around a nested call, a walk spread into the content, and enrichment in MAP with a plugin call',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+import { fetch_url } from plugins
+
+node Profile: "more about the company described last" {
+  summary: <text> "one line on what the company does"
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  pdfs      = m-[a:Attachments WHERE a.\`Content Type\` == "application/pdf"]->.\`File\`
+  content   = [m.\`Body\`, ...pdfs]
+  companies = extract(content, node Company: "each company named in this message" {
+    name:    <text> "the company's name"
+    website: <text | null> "its website, if given"
+  }, { tier: 'careful', effort: 'medium' })
+
+  MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    page   = fetch_url(url: c.website)
+    detail = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful', effort: 'medium' }))
+    write crm-[:Companies]-> {
+      unique by (FUZZY \`Name\`)
+      Name:          c.name
+      Description ?: detail.summary
+    }
+  })
+}
+
 `,
     },
   ],

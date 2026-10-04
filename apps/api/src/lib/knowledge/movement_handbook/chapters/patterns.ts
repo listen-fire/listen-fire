@@ -115,7 +115,7 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
 
 ### extract-and-connect
 
-Records pulled out of a message and written **with their relationships intact**: the people are declared inside the company, so each one lands attached to the right one.
+Records pulled out of a message and written **with their relationships intact**: the people are declared inside the company, so each one lands attached to the right one. (This pattern is written with the \`extract … from … through\` keyword, which is supported but not recommended for new work; the extraction call in the extraction chapter, with plugin calls and a second \`extract\` inside a \`MAP\`, does the same job and is the form to write.)
 
 \`\`\`
 extracted = extract from [msg.\`Body\`] through [vc_url_retrieval] {

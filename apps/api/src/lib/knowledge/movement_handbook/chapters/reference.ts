@@ -31,11 +31,14 @@ node Contact extends Lead { Email: <text> }    # Lead's fields and nested nodes,
 type Thesis = <"Consumer" | "Infra">           # a written set of values: an annotation, and an extract constraint
 
 listen to inbox { key: "intake" } fire intake  # the ONLY way an automation runs
-\`Log Lead\`(l: node { Name: msg.Subject })      # call another declaration, args named
-doc = \`Email To Doc\`(m: msg)                   # a call's value: what the callee returned
+\`Log Lead\`(msg.Subject)                        # call another declaration, args positional (the named form \`Log Lead\`(l: msg) still works)
+doc = \`Email To Doc\`(msg)                      # a call's value: what the callee returned; names are case-insensitive
+function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) { … }   # value parameters; convention: name(data…, config record, lambda)
+msg = graph<Message> { Body: m.Body, Files: m-[a:Attachments]-> { Name: a.Name } }   # a record built in memory, checked against a declared shape (the older node { … } literal still works)
 return node { title: msg.Subject }             # hand a value out of a body — several results in one \`node { … }\`
-deal = node { Title: msg.Subject, company: node { Name: msg.From } }  # a record built in memory: values are fields, nested literals are edges
+deal = node { Title: msg.Subject, company: node { Name: msg.From } }  # the older anonymous literal: values are fields, nested literals are edges
 f = (day: <date>) => { … }                     # a closure: a body run later, holding what was in scope here
+inc = (v: <number>) => v + 1                   # an expression body; a closure bound to a name is called like any function: inc(2)
 \`\`\`
 
 \`=\` binds a name (instance, handle, extract graph, a bound block, a call's value, a closure, a plain value). Statements run top-to-bottom; a handle must be written before it is read. An automation may not call itself. A listened automation takes exactly one parameter; a library automation takes any number.
@@ -65,7 +68,8 @@ Types **always** wear angle brackets; positions, scalar values, and handles **ne
 - \`IS\` also takes a declared node (\`rec IS <Contact>\`): true when the record carries every field that structure declares — nested nodes don't gate it, extras allowed. Narrows the same way.
 - Aggregates / lists: \`CONCAT(a, b)\`, \`COALESCE(a, b)\` (first non-empty), \`ONLY(…)\` (the one that matched — fails the run on more than one), \`COUNT(…)\`, \`SUM(…)\`, \`AVG(…)\` (always present), \`MIN(…)\`, \`MAX(…)\` (\`T | absent\`), \`COLLECT(…)\`, \`JOIN(list, ", ")\`, \`SORT(list)\` / \`SORT(list, DESC)\` / \`SORT(list, key)\` / \`SORT(list, key, DESC)\`, \`[a, b]\` (list literal). \`JOIN\` / \`FIRST\` / \`LAST\` / \`AT(list, n)\` need a sequence: a \`SORT\`, an \`ORDER BY\` on the hop, or a relationship the source keeps in order.
 - Dicts: \`{ k: v }\` (dict literal, text keys only), \`AT(dict, "k")\` (lookup — present for a key the literal wrote, refused for one it did not, \`T | absent\` for a computed key or a dict of unknown shape). \`AT(list, n)\` — a number index, \`T | absent\`, same ordering need as \`FIRST\`.
-- Value iteration (each takes a function, \`(member) => { return … }\`): \`MAP(list, f)\` (alone may skip \`return\`; legal as a bare statement too), \`FILTER(list, f)\`, \`REDUCE(list, start, f)\` (needs an ordered list; \`f\` is \`(carried, member)\`), \`GROUPBY(list, key)\` → dict of lists, \`KEYBY(list, key)\` → dict of members (a repeated key fails the run). The function may not \`await\`.
+- Calls nest inside any expression and run left to right, arguments before the callee; \`IF\`, \`AND\`, \`OR\` and \`COALESCE\` short-circuit; a call that may wait is only for a statement on its own line. A list literal is a tuple and can splice with \`...list\` (including a walk read for a field, \`...m-[a:Attachments]->.File\`). \`TEXT.SERIALISE(value, 'JSON')\` writes a value out as text for a prompt.
+- Value iteration (each takes a function, \`(member) => { return … }\` or \`(member) => expression\`): \`MAP(list, f)\` and \`MAP(list, { onError: 'warn', concurrency: 4, initialConcurrency: 1 }, f)\` (alone may skip \`return\`; legal as a bare statement too; \`FILTER\` takes the same settings), \`FILTER(list, f)\`, \`REDUCE(list, start, f)\` (needs an ordered list; \`f\` is \`(carried, member)\`), \`GROUPBY(list, key)\` → dict of lists, \`KEYBY(list, key)\` → dict of members (a repeated key fails the run). The function may not \`await\`.
 - \`MEMBERS(<T>)\` — a closed type's values, in declaration order. Refused on a known-values (open) field.
 - Value-level conditional: \`IF <cond> THEN <a> ELSE <b> END\` (uppercase; the lowercase \`if\` branches statements).
 - Strings: double-quoted, may span newlines, and interpolate with \${…} — including directly inside a call argument, e.g. \`AI("the company in \${msg.Subject}")\`. An interpolated \`T | absent\` value prints as nothing.
@@ -219,6 +223,13 @@ await until(() => { refresh co; return co.Stage == "Won" }, every: 1h)   # re-ch
 \`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). A declaration is spelled \`movement\` or \`function\` — same thing. \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now.
 
 ### extraction
+
+\`\`\`
+companies = extract([msg.Body, ...msg-[a:Attachments]->.File], Company, { tier: 'careful' })   # the call: a list of Company records
+one       = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+\`\`\`
+
+Content is a list (shared content first, record-specific content last, so repeated calls hit the prompt cache); the shape is a declared \`node\` (or written in place); settings are \`tier\`, \`model\`, \`effort\`. \`MAP(…, { initialConcurrency: 1 }, …)\` warms the cache before the fan-out. The keyword form below is supported, not recommended:
 
 \`\`\`
 mentions = extract from [msg.\`Body\`] through [vc_url_retrieval] {
