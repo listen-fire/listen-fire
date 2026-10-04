@@ -132,7 +132,12 @@ import {
   slotOfTree,
   treeOfSlot,
 } from '../expression/bridge';
-import { children as expressionChildren } from '../parser/expression/lower';
+import {
+  children as expressionChildren,
+  endingHop,
+  hopReadsConfig,
+  specialRecordField,
+} from '../parser/expression/lower';
 import { ExpressionSyntaxError, parseExpression } from '../parser/expression/parse_expression';
 import type { At, MExpr } from '../parser/expression/tree';
 import { MovementParseError, parseNestedCall } from '../parser/parse';
@@ -145,6 +150,7 @@ import {
   type CallNode,
 } from './nested_calls';
 import {
+  builtinNotRun,
   computedArgNotRead,
   nestedMessage,
   readCall,
@@ -366,6 +372,22 @@ export const DiagnosticCodes = {
   /** `IF … THEN … END` with no `ELSE` (language version 3). Before it, the
    *  missing arm silently read as `""`, whatever the THEN arm held. */
   IF_WITHOUT_ELSE: 'MOV_IF_WITHOUT_ELSE',
+  /** A `{ … }` settings object on a hop that reads none — every hop but
+   *  `#transform` (language version 3). Before it, the settings were dropped
+   *  without a word. */
+  HOP_CONFIG_UNREAD: 'MOV_HOP_CONFIG_UNREAD',
+  /** A walk ending in `-[:_resources]->` or `-[#linked …]->` that would lose
+   *  part of what was written (language version 3): as a value, its root; as
+   *  a block head, the hops before it. Before it, both were dropped silently. */
+  RESOURCE_WALK_UNREAD: 'MOV_RESOURCE_WALK_UNREAD',
+  /** `@resource.<field>` or `@parent.<field>` naming a field that record does
+   *  not have (language version 3). Before it, the field was read unchecked
+   *  and an unknown one was null. */
+  META_FIELD_UNKNOWN: 'MOV_META_FIELD_UNKNOWN',
+  /** A built-in the catalog lists that the movement engine cannot run
+   *  (`LLM_AGG`; language version 3). Before it, the call passed the save
+   *  check and failed the run. */
+  BUILTIN_NOT_RUN: 'MOV_BUILTIN_NOT_RUN',
   /** A call to a function that may WAIT, written inside an expression. A wait
    *  parks the run at an address, and a position inside an expression has
    *  none — so a call that can park is a whole statement, or the whole
@@ -4757,8 +4779,11 @@ class Checker {
    *   - a function's call, or a built-in that takes a function or a type, is
    *     not written where it would be read per landing or per member;
    *   - a built-in is handed exactly the arguments its signature takes, in
-   *     the form it reads them;
-   *   - an `IF` says what it is when its condition fails (`ELSE`).
+   *     the form it reads them, and is one the engine runs;
+   *   - an `IF` says what it is when its condition fails (`ELSE`);
+   *   - a walk keeps everything written in it: no hop settings the hop does
+   *     not read, no root or hops a resource or linked hop would drop;
+   *   - `@resource.<field>` and `@parent.<field>` name a field that exists.
    */
   private checkSlotExpression(slot: ExprSlot, scope: Scope, options?: { writeField?: true }): void {
     if (before(this.languageVersion, 3)) return;
@@ -4772,12 +4797,15 @@ class Checker {
   }
 
   /** `checkSlotExpression` over a tree that is not a slot's — a block head's
-   *  hops, read through the probe the head is parsed as. */
+   *  hops, read through the probe the head is parsed as (`head`: the walk the
+   *  head IS, as opposed to a walk written inside one of its hops). */
   private checkExpressionTree(
     tree: MExpr,
-    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean },
+    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean; head?: MExpr },
   ): void {
     const visit = (expr: MExpr, perMember: boolean): void => {
+      if (expr.kind === 'path') this.checkWalkKeepsWhatIsWritten(expr, at.spanOf(expr.at), expr === at.head);
+      if (expr.kind === 'special') this.checkSpecialRecordField(expr.text, at.spanOf(expr.at));
       if (expr.kind === 'if' && expr.else === undefined) {
         this.report(
           DiagnosticCodes.IF_WITHOUT_ELSE,
@@ -4799,6 +4827,60 @@ class Checker {
       for (const child of expressionChildren(expr)) visit(child, perMember || child === key);
     };
     visit(tree, false);
+  }
+
+  /**
+   * What the lowering would drop from a walk (language version 3): settings on
+   * a hop that reads none, and — for a walk ending in a resource or linked
+   * hop, which lowers to a node of its own — the root of a walk read as a
+   * value, or the hops before it in a block head. A block head's root is read
+   * by the engine from the head itself, so a one-hop head keeps it.
+   */
+  private checkWalkKeepsWhatIsWritten(walk: Extract<MExpr, { kind: 'path' }>, span: Span, isHead: boolean): void {
+    for (const hop of walk.hops) {
+      if (hop.config === undefined || hopReadsConfig(hop)) continue;
+      this.report(
+        DiagnosticCodes.HOP_CONFIG_UNREAD,
+        `the settings '{ … }' on the hop '${hop.label.text}' are not read — only a '#transform' hop takes settings. Remove them, or say what they mean in the hop's WHERE`,
+        span,
+      );
+    }
+    const last = walk.hops[walk.hops.length - 1];
+    const ending = last === undefined ? undefined : endingHop(last);
+    if (ending === undefined) return;
+    const hop = ending === 'resources' ? '-[:_resources]->' : '-[#linked …]->';
+    if (isHead && walk.hops.length > 1) {
+      this.report(
+        DiagnosticCodes.RESOURCE_WALK_UNREAD,
+        `a block head that ends in ${hop} walks only the hops before it — the ${hop} hop is never read, so the body would run once per record those hops reach, not once per ${ending === 'resources' ? 'resource' : 'linked record'}. `
+          + (ending === 'resources'
+            ? "Walk to the record in one block, then its resources as the one hop of a block inside: '…-[m:…]-> { m-[f:_resources]-> { … } }'"
+            : 'Walk the edge to the linked record instead'),
+        span,
+      );
+      return;
+    }
+    if (isHead || walk.root === undefined) return;
+    const root = walk.root.kind === 'name' ? walk.root.name.text : 'the root';
+    this.report(
+      DiagnosticCodes.RESOURCE_WALK_UNREAD,
+      ending === 'resources'
+        ? `a walk that ends in ${hop} is read here from no record — '${root}' would be dropped, and the resources read would not be ${root}'s. Walk ${root}'s resources as a block: '${root}-[f:_resources]-> { … f.\`url\` … }'`
+        : `${hop} is a legacy hop read from no record — '${root}' would be dropped, and the linked record read would not be ${root}'s. Walk the edge from ${root} to the record instead`,
+      span,
+    );
+  }
+
+  /** `@resource.<field>` / `@parent.<field>` names a field that record has
+   *  (language version 3). Any other `@` value is the meta-key check's. */
+  private checkSpecialRecordField(text: string, span: Span): void {
+    const read = specialRecordField(text);
+    if (read === undefined || read.known.includes(read.field)) return;
+    this.report(
+      DiagnosticCodes.META_FIELD_UNKNOWN,
+      `'@${read.record}' has no field '${read.field}' — it has ${read.known.join(', ')}${didYouMean(read.field, read.known)}`,
+      span,
+    );
   }
 
   private checkCallInExpression(
@@ -4826,6 +4908,11 @@ class Checker {
             `'${written}' takes ${expected} argument${max === 1 ? '' : 's'}, got ${count} — ${describeBuiltin(builtin)}`,
             span,
           );
+          return;
+        }
+        const notRun = builtinNotRun(builtin);
+        if (notRun !== undefined) {
+          this.report(DiagnosticCodes.BUILTIN_NOT_RUN, `'${written}' ${notRun}`, span);
           return;
         }
         const unread = computedArgNotRead(builtin, call);
@@ -8145,7 +8232,14 @@ class Checker {
           if (!(e instanceof ExpressionSyntaxError)) throw e;
         }
         if (tree !== undefined) {
-          this.checkExpressionTree(tree, { spanOf: () => head.span, scope, writeField: false });
+          // The probe reads a field off the head's walk; that walk is the head.
+          const walk = tree.kind === 'member' ? tree.object : undefined;
+          this.checkExpressionTree(tree, {
+            spanOf: () => head.span,
+            scope,
+            writeField: false,
+            ...(walk !== undefined ? { head: walk } : {}),
+          });
         }
       }
       // A `_resources`-headed path parses to resource_traverse (no steps) —

@@ -104,6 +104,25 @@ const BARE_PATH_AGGREGATES = new Set([
 ]);
 
 type ResourceField = Extract<Expression, { type: 'resource' }>['field'];
+type ParentResultField = Extract<Expression, { type: 'parent_result' }>['field'];
+const RESOURCE_FIELDS: Record<ResourceField, true> = {
+  name: true, url: true, type: true, document_url: true, content: true, contentType: true,
+};
+const PARENT_RESULT_FIELDS: Record<ParentResultField, true> = { created: true, external_id: true };
+
+/**
+ * An `@resource.<field>` or `@parent.<field>` read: which record it reads, the
+ * field written, and the fields that record has. Undefined for any other
+ * `@` value (`@current_date`).
+ */
+export function specialRecordField(
+  text: string,
+): { record: 'resource' | 'parent'; field: string; known: readonly string[] } | undefined {
+  const v = text.startsWith('@') ? text.slice(1) : text;
+  if (v.startsWith('parent.')) return { record: 'parent', field: v.slice(7), known: Object.keys(PARENT_RESULT_FIELDS) };
+  if (v.startsWith('resource.')) return { record: 'resource', field: v.slice(9), known: Object.keys(RESOURCE_FIELDS) };
+  return undefined;
+}
 const RESOURCE_TERMINALS: ReadonlyArray<ResourceField> = ['name', 'url', 'type', 'document_url', 'content'];
 const resourceTerminal = (name: string): ResourceField | undefined => RESOURCE_TERMINALS.find(f => f === name);
 const RESOURCE_WHERE_FIELDS: Record<string, 'name' | 'url' | 'type' | 'document_url' | 'content' | 'contentType'> = {
@@ -200,7 +219,9 @@ class Lowering {
       case 'special': {
         const v = expr.text.slice(1);
         // The formula grammar carries these fields unchecked; mirrored as-is.
-        if (v.startsWith('parent.')) return { type: 'parent_result', field: v.slice(7) as 'created' | 'external_id' };
+        // Language version 3 refuses a field outside the known set (the
+        // checker's MOV_META_FIELD_UNKNOWN, read off `specialRecordField`).
+        if (v.startsWith('parent.')) return { type: 'parent_result', field: v.slice(7) as ParentResultField };
         if (v.startsWith('resource.')) return { type: 'resource', field: v.slice(9) as ResourceField };
         return { type: 'meta', key: v };
       }
@@ -381,14 +402,14 @@ class Lowering {
         steps.push(step);
         continue;
       }
-      const base = label.split(/[:\s]/, 1)[0];
-      if (base === '_resources' || base === '#resources' || label === '#linked') {
+      const ending = endingHop(hop);
+      if (ending !== undefined) {
         if (i !== hops.length - 1) throw new LoweringError(`a hop cannot follow -[:${label}]->`);
-        const inner = base === '#linked' || label === '#linked'
-          ? this.linked(hop, rest)
-          : this.resources(hop, rest, ctx);
+        const inner = ending === 'linked' ? this.linked(hop, rest) : this.resources(hop, rest, ctx);
         // The formula grammar drops the root of a walk that ends in a
-        // resource or linked hop — reproduced, not endorsed.
+        // resource or linked hop — reproduced, not endorsed. Language version
+        // 3 refuses a walk that would lose something here (the checker's
+        // MOV_RESOURCE_WALK_UNREAD).
         return steps.length > 0 ? { type: 'traverse', steps, expression: inner } : inner;
       }
       steps.push(this.edgeStep(hop, ctx));
@@ -429,7 +450,8 @@ class Lowering {
       };
     }
     if (hop.where !== undefined) step.expressionFilter = this.lower(hop.where, { edgeProps: true });
-    // A config `{ … }` on a plain edge hop is dropped by the formula grammar.
+    // A config `{ … }` on a plain edge hop is dropped by the formula grammar;
+    // language version 3 refuses it (the checker's MOV_HOP_CONFIG_UNREAD).
     return step;
   }
 
@@ -754,6 +776,26 @@ class Lowering {
     }
     return expr;
   }
+}
+
+/**
+ * The meta hops a walk can only END in: `-[:_resources]->` (`#resources` is
+ * its legacy spelling, `_resources:TEXT` its type shorthand) and the legacy
+ * `-[#linked …]->`. Each lowers to a node of its own that keeps neither the
+ * walk's root nor, as a block head's probe, the hops before it.
+ */
+export function endingHop(hop: Hop): 'resources' | 'linked' | undefined {
+  const label = hop.label.text;
+  const base = label.split(/[:\s]/, 1)[0];
+  if (base === '#linked' || label === '#linked') return 'linked';
+  if (base === '_resources' || base === '#resources') return 'resources';
+  return undefined;
+}
+
+/** The one meta hop whose `{ … }` settings are read: `#transform`'s. On any
+ *  other hop the lowering has nowhere to put them. */
+export function hopReadsConfig(hop: Hop): boolean {
+  return hop.label.text === '#transform';
 }
 
 function combine(op: BinaryOp, left: Expression, right: Expression): Expression {

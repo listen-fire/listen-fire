@@ -48,7 +48,7 @@ const KNOWN_GAPS = 66;
 // is listed twice, in the order it appears.
 const SITES: Site[] = [
   { file: "expression.ts", construct: "the '${expr.fn}' aggregation",
-    cover: { by: 'uncovered', gap: "LLM_AGG(\u2026) parses to the 'llm' aggregation; the checker only records its AI effect and the scan treats aggregates as supported" } },
+    cover: { by: 'partial', codes: ["MOV_BUILTIN_NOT_RUN"], gap: "LLM_AGG(\u2026) is refused under language version 3; a movement pinned to 1 or 2 still saves it (the scan treats aggregates as supported) and fails here" } },
   { file: "expression.ts", construct: "the function ${expr.fn.toUpperCase()}()",
     cover: { by: 'partial', codes: [], gap: "the dry run flags a non-built-in function outside adapter write fields ('non-built-in function calls'); inside a write field, or in a hop WHERE, nothing refuses an unadvertised name" } },
   { file: "expression.ts", construct: "rootless EXISTS()",
