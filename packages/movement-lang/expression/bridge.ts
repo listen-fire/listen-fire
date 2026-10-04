@@ -710,6 +710,15 @@ function foldNamespacedCall(expr: Extract<Expression, { type: 'traverse' }>): Ex
   return expr;
 }
 
+/** The static shape of a built-in call — FILE's artifact type, READ's one
+ *  argument, an options map's keys. Exported for the one-grammar lowering
+ *  (parser/expression/lower.ts), so both paths refuse the same calls. */
+export function validateBuiltinCallShape(expr: Extract<Expression, { type: 'function' }>): void {
+  validateFileCall(expr);
+  validateReadCall(expr);
+  validateOptionsCall(expr);
+}
+
 /** FILE(content, "pdf" | "text") — the artifact type is static call
  *  shape; reject anything else here so every consumer agrees. */
 function validateFileCall(expr: Extract<Expression, { type: 'function' }>): void {
@@ -990,9 +999,7 @@ function normalizeCalls(expr: Expression): Expression {
       return { ...expr, expression: normalizeCalls(expr.expression) };
     case 'function': {
       const normalized = { ...expr, args: expr.args.map((a) => normalizeCalls(a)) };
-      validateFileCall(normalized);
-      validateReadCall(normalized);
-      validateOptionsCall(normalized);
+      validateBuiltinCallShape(normalized);
       return normalized;
     }
     case 'kg_exists':
