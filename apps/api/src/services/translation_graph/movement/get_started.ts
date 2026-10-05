@@ -12,10 +12,14 @@ import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/hand
 import { neverAsAny } from '../../../lib/utils/types';
 import { describeMovementInstance, movementCatalogSnapshotForTeam } from './catalog';
 import { renderConnectionsDigest, type SystemDigestInput } from './connection_digest';
+import { connectionsFor, resolveStubLandings, within } from './describe_connection';
 
-/** A system slower than this to describe keeps its construction line only, so
- *  one slow connection cannot hold the whole first call up. */
+/** A system slower than this to describe at its root keeps its construction
+ *  line only, so one slow connection cannot hold the whole first call up. */
 const DESCRIBE_TIMEOUT_MS = 8_000;
+/** The whole of one system — root, then its stubbed record types — within
+ *  this; record types not described by then stay named, without fields. */
+const SYSTEM_TIMEOUT_MS = 12_000;
 
 /** The page the handbook mode starts an agent on: the front page (lean), the
  *  annotated programs (examples), or the foundations chapter (full). */
@@ -35,28 +39,10 @@ export function firstHandbookPage(mode: HandbookMode): string {
   }
 }
 
-async function describeWithin(input: { teamId: TeamId; system: string; connection?: string }) {
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), DESCRIBE_TIMEOUT_MS);
-  });
-  try {
-    return await Promise.race([
-      describeMovementInstance({
-        teamId: input.teamId,
-        adapter: input.system,
-        ...(input.connection !== undefined ? { credentialName: input.connection } : {}),
-      }),
-      timedOut,
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
  * The team's systems: those it connected first, then those that need no
- * connection, each described at its root. A system that needs a connection the
+ * connection, each described at its root with its stubbed record types
+ * described too. A system that needs a connection the
  * team lacks is only named, so the agent knows to connect it.
  */
 export async function connectedSystemsDigest(teamId: TeamId): Promise<string> {
@@ -66,11 +52,7 @@ export async function connectedSystemsDigest(teamId: TeamId): Promise<string> {
   const notConnected: string[] = [];
 
   for (const [system, spec] of Object.entries(snapshot.adapters)) {
-    const connections = Object.entries(snapshot.credentials)
-      .filter(([, credential]) =>
-        'adapters' in credential ? credential.adapters.includes(system) : credential.adapter === system,
-      )
-      .map(([name]) => name);
+    const connections = connectionsFor(snapshot.credentials, system);
     const needsCredential = spec.constructionArgs.some((a) => a.kind === 'credential' && a.required);
     const remote = remoteConnections?.[system];
     if ((needsCredential && connections.length === 0) || remote === 'needs-secret') {
@@ -84,19 +66,31 @@ export async function connectedSystemsDigest(teamId: TeamId): Promise<string> {
 
   const systems = await Promise.all(
     [...connected, ...builtIn].map(async (entry): Promise<SystemDigestInput> => {
+      const started = Date.now();
+      const connection = entry.connections[0];
       try {
-        const described = await describeWithin({
+        const described = await within(
+          describeMovementInstance({
+            teamId,
+            adapter: entry.system,
+            ...(connection !== undefined ? { credentialName: connection } : {}),
+          }),
+          DESCRIBE_TIMEOUT_MS,
+        );
+        if (described === null) return { ...entry, note: 'its records took too long to load' };
+        if (!described.node) {
+          return { ...entry, schema: described.schema, note: described.notes[0] ?? 'its records could not be read' };
+        }
+        // The root names the record types; the ones it stubbed are the ones a
+        // builder writes to, so describe them too, inside the system's budget.
+        const node = await resolveStubLandings({
           teamId,
           system: entry.system,
-          ...(entry.connections[0] !== undefined ? { connection: entry.connections[0] } : {}),
+          ...(connection !== undefined ? { connection } : {}),
+          node: described.node,
+          timeoutMs: SYSTEM_TIMEOUT_MS - (Date.now() - started),
         });
-        if (described === null) return { ...entry, note: 'its records took too long to load' };
-        return {
-          ...entry,
-          ...(described.node ? { node: described.node } : {}),
-          schema: described.schema,
-          ...(described.node ? {} : { note: described.notes[0] ?? 'its records could not be read' }),
-        };
+        return { ...entry, node, schema: described.schema };
       } catch (err) {
         return { ...entry, note: `its records could not be read (${err instanceof Error ? err.message : String(err)})` };
       }

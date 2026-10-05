@@ -72,6 +72,7 @@ import {
   type AuthoringDiagnostic,
   type TeamMovementValidation,
 } from '../../../services/translation_graph/movement/authoring';
+import { describeConnectionCompact } from '../../../services/translation_graph/movement/describe_connection';
 import { renderGetStarted } from '../../../services/translation_graph/movement/get_started';
 import {
   describeMovementInstance,
@@ -480,42 +481,77 @@ const describeInstanceSchema = z.object({
       'Narrow a polymorphic type to one member and describe that member. ' +
         'e.g. { type: "Base", where: "`Name` == \\"CRM\\"" }',
     ),
+  // How much to say. Absent is the compact text an agent authors against;
+  // "full" is the JSON, for what the text leaves out.
+  detail: z.enum(['compact', 'full']).optional(),
 });
 
-const describeInstanceHandler: RequestHandler = jsonHandler(
-  describeInstanceSchema,
-  'body',
-  async (input) => {
+/**
+ * The describe, as asked: the full JSON with `detail: "full"`, otherwise the
+ * compact text — the digest's notation, scoped to the requested place. The
+ * JSON is what an agent needs rarely (descriptions, capabilities, write
+ * shapes); the text is what it authors against, at a fraction of the tokens.
+ */
+const describeInstanceHandler: RequestHandler = async (req, res) => {
+  const parsed = describeInstanceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
+  }
+  const input = parsed.data;
+  try {
     const teamId = (await resolveToolTeam(input.team)) as TeamId;
-    // Batch form: describe every named system in one call (concurrently) so
-    // an automation touching several systems needs one round trip, not one
-    // per system. Per-system `connection`/`types` scoping is single-system
-    // only; the batch form describes each at its default connection.
-    // Always force a fresh read: this route is `describeConnection`'s only
-    // path to introspection, and the whole point of a describe is to ground
-    // an agent on the LIVE schema — including a field the agent (or a human)
-    // just added in the external workspace, which a warm cache entry would
-    // otherwise still be hiding for up to the TTL.
-    if (Array.isArray(input.system)) {
-      const connections = await Promise.all(
-        input.system.map(async (system) => ({
+    if (input.detail === 'full') return res.status(200).json(await describeInstanceFull(teamId, input));
+    // Batch form: each system at its root, one block apiece, described
+    // concurrently. Per-system scoping is single-system only.
+    const systems = Array.isArray(input.system) ? input.system : [input.system];
+    const scoped = !Array.isArray(input.system);
+    const blocks = await Promise.all(
+      systems.map((system) =>
+        describeConnectionCompact({
+          teamId,
           system,
-          ...(await describeMovementInstance({ teamId, adapter: system, forceRefresh: true })),
-        })),
-      );
-      return { connections };
-    }
-    return describeMovementInstance({
-      teamId,
-      adapter: input.system,
-      forceRefresh: true,
-      ...(input.connection !== undefined ? { credentialName: input.connection } : {}),
-      ...(input.types !== undefined ? { types: input.types } : {}),
-      ...(input.position !== undefined ? { position: input.position } : {}),
-      ...(input.narrow !== undefined ? { narrow: input.narrow } : {}),
-    });
-  },
-);
+          ...(scoped && input.connection !== undefined ? { connection: input.connection } : {}),
+          ...(scoped && input.types !== undefined ? { types: input.types } : {}),
+          ...(scoped && input.position !== undefined ? { position: input.position } : {}),
+          ...(scoped && input.narrow !== undefined ? { narrow: input.narrow } : {}),
+        }),
+      ),
+    );
+    return res.status(200).type('text/markdown').send(blocks.join('\n\n'));
+  } catch (err) {
+    return internalError(res, err);
+  }
+};
+
+async function describeInstanceFull(teamId: TeamId, input: z.infer<typeof describeInstanceSchema>) {
+  // Batch form: describe every named system in one call (concurrently) so
+  // an automation touching several systems needs one round trip, not one
+  // per system. Per-system `connection`/`types` scoping is single-system
+  // only; the batch form describes each at its default connection.
+  // Always force a fresh read: this route is `describeConnection`'s only
+  // path to introspection, and the whole point of a describe is to ground
+  // an agent on the LIVE schema — including a field the agent (or a human)
+  // just added in the external workspace, which a warm cache entry would
+  // otherwise still be hiding for up to the TTL.
+  if (Array.isArray(input.system)) {
+    const connections = await Promise.all(
+      input.system.map(async (system) => ({
+        system,
+        ...(await describeMovementInstance({ teamId, adapter: system, forceRefresh: true })),
+      })),
+    );
+    return { connections };
+  }
+  return describeMovementInstance({
+    teamId,
+    adapter: input.system,
+    forceRefresh: true,
+    ...(input.connection !== undefined ? { credentialName: input.connection } : {}),
+    ...(input.types !== undefined ? { types: input.types } : {}),
+    ...(input.position !== undefined ? { position: input.position } : {}),
+    ...(input.narrow !== undefined ? { narrow: input.narrow } : {}),
+  });
+}
 
 const connectCredentialSchema = z.object({
   system: z.string(),
@@ -1626,7 +1662,7 @@ function registerAutomationToolRoutes(): void {
 
   // connected systems
   reg('GET', '/connections', 'The connected systems list: the workspace\'s systems (construction args + listener-config keys + `triggerExpectation` — what a listener actually fires on; ground trigger-surface claims in it), connections, plugins, and knowledge-graph type names — the ONLY names valid in automation imports/constructions. Also the top-level "listConnections" tool.', { readOnly: true, latency: 'medium' });
-  reg('POST', '/connections/describe', 'The live schema of one (system, connection): writable roots and their exact field names. Body: { system, connection?, types?, narrow? }. Call before authoring an automation against a system; every call re-reads the live schema, so call again after adding a field in the external workspace. Returns the system\'s description + triggerExpectation, plus an identity note (who a movement runs as, and whose activity triggers a listener) and a capability note (what it can read/write), even when no connection exists yet. A type listing `members` is POLYMORPHIC: it shows only what all its members share (often nothing), and you reach one member\'s real fields and edges by describing again with `narrow` — see `narrowBy` for the fields to test and `narrowingHint` for a worked example.', { inputSchema: describeInstanceSchema, readOnly: true, latency: 'medium' });
+  reg('POST', '/connections/describe', 'The live schema of one (system, connection) at one position. Body: { system, connection?, types?, position?, narrow?, detail? }. By default answers compact markdown in getStarted\'s notation (the node\'s fields, its edges with their targets\' fields one level deep; at the root, how to construct and listen); `detail: "full"` answers the JSON described below. Call before authoring an automation against a system; every call re-reads the live schema, so call again after adding a field in the external workspace. Returns the system\'s description + triggerExpectation, plus an identity note (who a movement runs as, and whose activity triggers a listener) and a capability note (what it can read/write), even when no connection exists yet. A type listing `members` is POLYMORPHIC: it shows only what all its members share (often nothing), and you reach one member\'s real fields and edges by describing again with `narrow` — see `narrowBy` for the fields to test and `narrowingHint` for a worked example.', { inputSchema: describeInstanceSchema, readOnly: true, latency: 'medium' });
   reg('POST', '/connections/connect', 'AUTHOR-TIME: if a system the automation needs isn\'t connected yet, mint a single-use link for the user to open in their browser — no popup needed. Works for OAuth systems (the link opens a browser sign-in), API-key systems (the link opens a form to paste/replace the key), intrinsic systems (one-click confirm), and handshake systems (Telegram — the link opens Telegram with the Listen-Fire bot; the user presses Start there to finish). Body: { system, connection? }. Returns a link to send the user, the connect kind ("oauth" | "key-entry" | "intrinsic" | "handshake"), the name the connection will be stored under, and when the link expires. Hand the url to the user; after they connect, poll listConnections — the connection shows up in the results. Also the top-level "connectSystem" tool.', { inputSchema: connectCredentialSchema, latency: 'fast' });
   reg('POST', '/connections/grant-access', 'AUTHOR-TIME: some systems need access granted to specific items inside an already-connected account (Google Sheets: the Drive picker — under drive.file, picking is the only way to reach an existing file). Mint a single-use link where the user picks the item(s) to grant. Body: { system, connection? }. Returns { url, connection, expiresAt }. Systems without a grant flow return a clear error. Also the top-level "grantAccess" tool.', { inputSchema: grantAccessSchema, latency: 'fast' });
 

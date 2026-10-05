@@ -84,7 +84,7 @@ import {
 } from './instance_cache';
 import { deriveCapabilityNote, deriveIdentityNote } from './adapter_notes';
 import { normaliseSchemaForAgent } from './agent_schema';
-import { walkedNodeFrom, type WalkedNode } from './walk';
+import { landingOf, walkedNodeFrom, type WalkedDescribedNode, type WalkedNode } from './walk';
 import { graftGenericLandings } from './generic_landings';
 import { narrowForInspection, refineInstanceSchema } from './refinements';
 import { narrowEventPositions } from './listen_narrowing';
@@ -1871,6 +1871,12 @@ export interface DescribedInstance {
   capability?: string;
 }
 
+/** The manifest's prose about a system — true whether or not it can be introspected. */
+type DescribedAbout = Pick<
+  DescribedInstance,
+  'description' | 'triggerExpectation' | 'authoringHints' | 'identity' | 'capability'
+>;
+
 type DescribeCandidate = { id: string; rowName: string; adapters: string[] };
 
 /**
@@ -2092,37 +2098,9 @@ export async function describeMovementInstance(input: {
   forceRefresh?: boolean;
 }): Promise<DescribedInstance> {
   const adapterType = input.adapter;
-  const manifests = await teamAdapterManifests(input.teamId, []);
-  const manifest = manifests.find((m) => m.adapterType === adapterType);
-  if (!manifest) return { schema: null, notes: [`${input.adapter}: unknown adapter`] };
-
-  // The construction-free prose the agent grounds on — carried on every
-  // return below so it's there even when introspection fails.
-  const identity = deriveIdentityNote(manifest);
-  const capability = deriveCapabilityNote(manifest);
-  const about = {
-    ...(manifest.description ? { description: manifest.description } : {}),
-    ...(manifest.triggerExpectation ? { triggerExpectation: manifest.triggerExpectation } : {}),
-    ...(manifest.authoringHints ? { authoringHints: manifest.authoringHints } : {}),
-    ...(identity ? { identity } : {}),
-    ...(capability ? { capability } : {}),
-  };
-
-  let credentialsId: string | undefined;
-  if (manifest.requiredCredentialType) {
-    const credentialRows = await loadCredentialRows(input.teamId);
-    const credentialsByName = credentialImportNames({ rows: credentialRows, manifests });
-    const resolved = resolveDescribeConnection({
-      candidates: Object.values(credentialsByName).filter((c) => c.adapters.includes(adapterType)),
-      ...(input.credentialName !== undefined ? { requested: input.credentialName } : {}),
-      systemNames: [input.adapter, adapterType, manifest.displayName],
-      credentialType: manifest.requiredCredentialType,
-    });
-    if ('note' in resolved) {
-      return { schema: null, notes: [`${input.adapter}: ${resolved.note}`], ...about };
-    }
-    credentialsId = resolved.row.id;
-  }
+  const target = await resolveDescribeTarget(input);
+  if ('note' in target) return { schema: null, notes: [target.note], ...target.about };
+  const { about, credentialsId } = target;
 
   try {
     const base = {
@@ -2181,6 +2159,85 @@ export async function describeMovementInstance(input: {
       ...about,
     };
   }
+}
+
+/**
+ * Which instance a describe reads: the adapter's manifest prose (carried on
+ * every answer, so it is there even when introspection fails) and the
+ * credential the named connection resolves to. A note instead when there is
+ * nothing to describe against.
+ */
+async function resolveDescribeTarget(input: {
+  teamId: TeamId;
+  adapter: string;
+  credentialName?: string;
+}): Promise<
+  | { about: DescribedAbout; credentialsId?: string }
+  | { note: string; about?: DescribedAbout }
+> {
+  const adapterType = input.adapter;
+  const manifests = await teamAdapterManifests(input.teamId, []);
+  const manifest = manifests.find((m) => m.adapterType === adapterType);
+  if (!manifest) return { note: `${input.adapter}: unknown adapter` };
+
+  const identity = deriveIdentityNote(manifest);
+  const capability = deriveCapabilityNote(manifest);
+  const about: DescribedAbout = {
+    ...(manifest.description ? { description: manifest.description } : {}),
+    ...(manifest.triggerExpectation ? { triggerExpectation: manifest.triggerExpectation } : {}),
+    ...(manifest.authoringHints ? { authoringHints: manifest.authoringHints } : {}),
+    ...(identity ? { identity } : {}),
+    ...(capability ? { capability } : {}),
+  };
+
+  if (!manifest.requiredCredentialType) return { about };
+  const credentialRows = await loadCredentialRows(input.teamId);
+  const credentialsByName = credentialImportNames({ rows: credentialRows, manifests });
+  const resolved = resolveDescribeConnection({
+    candidates: Object.values(credentialsByName).filter((c) => c.adapters.includes(adapterType)),
+    ...(input.credentialName !== undefined ? { requested: input.credentialName } : {}),
+    systemNames: [input.adapter, adapterType, manifest.displayName],
+    credentialType: manifest.requiredCredentialType,
+  });
+  if ('note' in resolved) return { note: `${input.adapter}: ${resolved.note}`, about };
+  return { about, credentialsId: resolved.row.id };
+}
+
+/**
+ * The record types a walk left as STUBS, described by name: each one's fields
+ * and identity, as the edge that reaches it would land on them.
+ *
+ * Through the same cached instance the compile path and describe use, scoped to
+ * just these types — so the fetches are shared (single-flight, within the
+ * cache window) with any describe or compile that names them, and a type
+ * described once costs nothing the next time. A name the instance does not
+ * publish is simply absent from the answer.
+ */
+export async function describeMovementLandings(input: {
+  teamId: TeamId;
+  adapter: string;
+  credentialName?: string;
+  types: readonly string[];
+}): Promise<Record<string, WalkedDescribedNode>> {
+  if (input.types.length === 0) return {};
+  const target = await resolveDescribeTarget(input);
+  if ('note' in target) return {};
+  const instance = await cachedAdapterInstance({
+    adapterType: input.adapter,
+    teamId: input.teamId,
+    ...(target.credentialsId !== undefined ? { credentialsId: target.credentialsId } : {}),
+    types: input.types,
+  });
+  const landings: Record<string, WalkedDescribedNode> = {};
+  await Promise.all(
+    input.types.map(async (name) => {
+      const entry = instance.rawEntries.find((e) => e.typeId === name || e.displayName === name);
+      if (!entry) return;
+      const descriptor = await instance.describeType(entry.typeId).catch(() => null);
+      if (descriptor) landings[name] = landingOf(descriptor);
+    }),
+  );
+  return landings;
 }
 
 /**

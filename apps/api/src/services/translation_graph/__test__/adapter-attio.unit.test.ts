@@ -2191,6 +2191,12 @@ describe('AttioAdapter listEntryPoints — readable means readable', () => {
         expect(metaEdgeNames.has(entry.displayName)).toBe(false);
       } else if (entry.readable || entry.writable) {
         expect(metaEdgeNames.has(entry.collectionName ?? entry.displayName)).toBe(true);
+        // ...and make the same write promise on it.
+        const edge = meta!.references.find((r) => (r.name ?? r.fieldId) === (entry.collectionName ?? entry.displayName));
+        expect({ edge: edge?.fieldId, writable: edge?.writable === true }).toEqual({
+          edge: edge?.fieldId,
+          writable: entry.writable === true,
+        });
       }
     }
     // ...no meta edge exists for ANY record-owned type (rule 0): Note and Task

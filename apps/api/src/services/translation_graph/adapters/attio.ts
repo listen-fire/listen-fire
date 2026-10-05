@@ -1448,6 +1448,11 @@ export class AttioAdapter extends BaseAdapter {
         targetTypeId: obj.name,
         cardinality: 'many',
         capability: ATTIO_NATIVE_EDGE_CAP,
+        // The same create promise the object's entry point makes. Left off, the
+        // walk called every object read-only — so describe and getStarted told
+        // an author that `write crm-[:Companies]->` was not allowed, while the
+        // checker (which reads the entry list) accepted it.
+        writable: true,
       };
     });
     // The meta node's edges state the same promises the entry list makes —
