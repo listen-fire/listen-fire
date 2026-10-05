@@ -434,7 +434,7 @@ interface OpenReview {
 
 /** The answer a person gives an approval, shaped to the interaction kind. */
 function reviewAnswerFor(interactionType: string, answer: ReviewAnswer): boolean | string {
-  return interactionType === 'Check' ? answer === 'approve' : 'ack';
+  return interactionType.toLowerCase() === 'check' ? answer === 'approve' : 'ack';
 }
 
 /**
