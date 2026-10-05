@@ -289,3 +289,64 @@ describe('a return woken after a park still returns', () => {
     expect(names(h.attio.creates)).toEqual([]);
   });
 });
+
+describe('a woken sleep binds true', () => {
+  const marker = (name: string) => `if ${name} == true { write crm-[:companies]-> { name: "${name} is true" } }`;
+
+  it('x = await sleep(…) binds true after a real timer resume', async () => {
+    const h = harness(
+      [
+        'movement intake(m: <inbox-[:message]->>) {',
+        '  x = await sleep(1h)',
+        '  if x { write crm-[:companies]-> { name: "x is true" } }',
+        '}',
+      ].join('\n'),
+    );
+    await h.start();
+    expect(h.parks.timers.size).toBe(1);
+    await h.wakeTimers();
+    expect(names(h.attio.creates)).toEqual(['x is true']);
+  });
+
+  it('a called function that returns await sleep(…) gives the caller true', async () => {
+    const h = harness(
+      [
+        'function wait_then(flag: <boolean>): <boolean> {',
+        '  if flag {',
+        '    return await sleep(1h)',
+        '  }',
+        '  return false',
+        '}',
+        'movement intake(m: <inbox-[:message]->>) {',
+        '  woke = wait_then(true)',
+        `  ${marker('woke')}`,
+        '}',
+      ].join('\n'),
+    );
+    await h.start();
+    expect(h.parks.timers.size).toBe(1);
+    await h.wakeTimers();
+    expect(names(h.attio.creates)).toEqual(['woke is true']);
+  });
+
+  it('inside a MAP member, each wake binds true', async () => {
+    const h = harness(
+      [
+        'movement intake(m: <inbox-[:message]->>) {',
+        '  d = node { entries: <Entry> }',
+        '  write d-[:entries]-> { unique by (`name`)',
+        '    name: "Acme"',
+        '  }',
+        '  d-[e:entries]-> {',
+        '    x = await sleep(1h)',
+        '    if x { write crm-[:companies]-> { name: e.`name` } }',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    await h.start();
+    expect(h.parks.timers.size).toBe(1);
+    await h.wakeTimers();
+    expect(names(h.attio.creates)).toEqual(['Acme']);
+  });
+});

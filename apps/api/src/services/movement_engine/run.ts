@@ -3036,13 +3036,15 @@ class Interpreter {
         //     RE-EVALUATED (an `await`, a recurring `until` timer, an engine
         //     suspension); bind nothing and RE-ENTER AT it — replaying the calls
         //     it had already finished — and run the rest of this branch forward.
-        if (!leaf.reenter && state.bindingName !== null && leaf.answer !== undefined) {
-          leafEnv.declare(state.bindingName, leaf.answer);
-        } else if (!leaf.reenter && state.presenceBind && state.bindingName !== null) {
+        if (!leaf.reenter && state.presenceBind && state.bindingName !== null) {
           // A bound `await sleep(…)` woke: inject the presence marker (no answer
           // channel — the clock is the wake source) so `expired` escapes onto the
-          // race receipt (chunk C, S4).
+          // race receipt (chunk C, S4). Checked first because a timer resume
+          // carries no answer, yet `resumeMovement` still hands one in as null;
+          // it must not shadow the marker.
           leafEnv.declare(state.bindingName, { kind: 'value', value: true, provenance: NO_PROVENANCE });
+        } else if (!leaf.reenter && state.bindingName !== null && leaf.answer !== undefined) {
+          leafEnv.declare(state.bindingName, leaf.answer);
         }
         await this.completeSpine(spine, 0, state.address, () =>
           leaf.reenter
