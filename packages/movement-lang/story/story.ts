@@ -55,9 +55,9 @@ import { MovementParseError, parseProgram } from '../parser/parse';
 import { expressionOfSlot } from '../expression/bridge';
 import { parseFieldTypeName, type Catalog, type SchemaFieldType } from '../checker/catalog';
 import { EMPTY_ROW, instanceNames, type EffectRow } from '../checker/effects';
-import { terminates } from '../checker/flow';
+import { bodyExits, terminates, type Exits } from '../checker/flow';
 import type { ResolveFile } from '../checker/link';
-import type { LanguageVersion } from '../language_version';
+import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import {
   EXTRACT_ROOT_NAME,
   maybeAbsent,
@@ -711,6 +711,7 @@ export function storyOf(input: StoryInput): StoryResult {
       // projection total rather than asserting.
       recording: recording ?? { frames: [], writes: [], nodes: [] },
       diagnostics,
+      languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.validityStatus !== undefined ? { validityStatus: input.validityStatus } : {}),
     }),
@@ -721,6 +722,9 @@ export interface ProjectStoryInput {
   program: Program;
   recording: CheckRecording;
   diagnostics: Diagnostic[];
+  /** The version the program was checked under — termination is version-dependent
+   *  (`return` leaves an arm from version 3), so the story asks the same rule. */
+  languageVersion: LanguageVersion;
   name?: string;
   validityStatus?: StoryValidityStatus;
 }
@@ -922,6 +926,12 @@ class Projection {
         }
       }
     }
+  }
+
+  /** What leaves an `if` arm — the checker's own rule for this version, so a
+   *  lane is capped exactly where the checker narrows below the `if`. */
+  private armExits(): Exits {
+    return bodyExits(this.input.languageVersion);
   }
 
   run(): StoryIR {
@@ -1613,7 +1623,10 @@ class Projection {
           name: statement.name,
           params: statement.params.map((p: MovementParam) => this.param(p, inside)),
           steps: this.steps(statement.body),
-          terminates: terminates(statement.body),
+          // A `return` written straight in the body is a step on the spine,
+          // not a capped lane, so it leaves the run's own ending to be drawn;
+          // only a terminator that caps its lanes stands in for that ending.
+          terminates: terminates(statement.body.filter(s => s.kind !== 'return'), this.armExits()),
           // The row is the checker's, filed on the declaration it belongs to —
           // read back through the same symbol the parameters were typed from,
           // never re-derived here.
@@ -2086,7 +2099,9 @@ class Projection {
         }
         return {
           steps: this.steps(arm.closure.body),
-          terminates: terminates(arm.closure.body),
+          // A `return` here is the arm's VALUE: the combinator takes it and the
+          // run carries on, so only an `ERROR` caps a lane.
+          terminates: terminates(arm.closure.body, { returns: false }),
           at: armAt,
         };
       }),
@@ -2108,14 +2123,14 @@ class Projection {
           node?.arms[index]?.scope ?? node?.scope ?? this.scopeOfNearest(arm.span),
         ),
         steps: this.steps(arm.body),
-        terminates: terminates(arm.body),
+        terminates: terminates(arm.body, this.armExits()),
         at: arm.span,
       })),
       ...(statement.elseArm !== undefined
         ? {
             otherwise: {
               steps: this.steps(statement.elseArm.body),
-              terminates: terminates(statement.elseArm.body),
+              terminates: terminates(statement.elseArm.body, this.armExits()),
               at: statement.elseArm.span,
             },
           }
