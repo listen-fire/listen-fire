@@ -34,7 +34,13 @@
 // injected `RehydrationContext`, exactly as the interpreter keeps `resolveAdapter`
 // / `parkSink` behind seams.
 
-import type { ClosureExpression, NodeLiteral, PathHead, ShapeDeclaration } from 'movement-lang';
+import type {
+  ClosureExpression,
+  CollectionOpExpression,
+  NodeLiteral,
+  PathHead,
+  ShapeDeclaration,
+} from 'movement-lang';
 import type { FileRef, Resource } from '../translation_graph/adapter';
 import type { SourcePosition } from '../translation_graph/types';
 import type { ExtractEmission } from './extraction';
@@ -748,9 +754,83 @@ export interface ParkedScopeState {
    * (re-armed); met ⇒ it binds and continues. The timer-resume worker reads this
    * flag to choose re-enter over step-past, and to leave a re-armed leaf alone. */
   until?: boolean;
-  /** Root-first chain of lexical scopes feeding the ask (§4.6). */
+  /** Root-first chain of lexical scopes feeding the ask (§4.6). When the
+   *  address crosses into a called body or a collection op's member
+   *  (`frames`), this is the INNERMOST body's chain — the one the leaf runs in;
+   *  each outer body's chain rides on the frame that leaves it. */
   scopeChain: SerializedScope[];
+  /**
+   * The bodies the address passes into that are not lexically inside the one
+   * before — a called movement / function / closure, a collection op's member,
+   * an arm built at run time — outermost first, one per `call` step (and per
+   * `branch` step into a run-time arm). Absent on a park whose address never
+   * left the dispatched movement's own body, which is every park written
+   * before these steps existed.
+   */
+  frames?: SerializedFrame[];
+  /**
+   * An engine-initiated suspension (`suspendFlow`): the leaf statement has not
+   * finished, and resume RE-RUNS it (`reenter`). Its calls that had already
+   * completed are journalled here, so the re-run takes their values instead of
+   * making them again.
+   */
+  suspended?: true;
+  journal?: SerializedCallEvent[];
 }
+
+/**
+ * One call a statement made and finished — the k-th, what it handed back, and
+ * how far the statement's call count had got when it did. A statement re-run on
+ * resume replays these instead of making the calls again (their effects, and
+ * their spend, already happened).
+ */
+export interface SerializedCallEvent {
+  index: number;
+  /** Null when the call handed back nothing. */
+  value: BindingDescriptor | null;
+  /** The statement's call count after this call — a replayed call skips the
+   *  calls made inside it (its arguments' calls). */
+  next: number;
+}
+
+/**
+ * One body boundary on a parked leaf's address (`ParkedScopeState.frames`).
+ *
+ *   - `call`: the statement's `index`-th call entered a movement / function /
+ *     closure body. `callee` is the name it was called by, resolved again in
+ *     the caller's rehydrated scope. `next` is the statement's call count once
+ *     the arguments were evaluated — where a replay of the statement goes on
+ *     from once the call hands back.
+ *   - `member`: the statement's `index`-th call was a collection op, and the
+ *     leaf is inside member `member`. The op travels as its AST (the version pin
+ *     keeps it byte-identical), so its settings and function are re-derived.
+ *   - `arm`: a `race` / `parallel` arm built at run time — its body has no place
+ *     in the source to be found at, so it travels as AST. Its bindings are in
+ *     the arm's scope, which is on the chain like any branch's.
+ *
+ * `call` and `member` start a new lexical body: `scopeChain` and `journal`
+ * are the CALLER's — the chain of the body the call was made in, and the calls
+ * its statement had finished.
+ */
+export type SerializedFrame =
+  | {
+      kind: 'call';
+      index: number;
+      next: number;
+      callee: string;
+      journal: SerializedCallEvent[];
+      scopeChain: SerializedScope[];
+    }
+  | {
+      kind: 'member';
+      index: number;
+      next: number;
+      member: number;
+      op: CollectionOpExpression;
+      journal: SerializedCallEvent[];
+      scopeChain: SerializedScope[];
+    }
+  | { kind: 'arm'; arm: number; body: ClosureExpression };
 
 /**
  * Serialise one `Environment`'s OWN bindings (no parent walk) to a scope-node.

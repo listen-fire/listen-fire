@@ -7,6 +7,7 @@ import {
   ROOT_ADDRESS,
   addressEquals,
   childBranch,
+  childCall,
   childIter,
   childStmt,
   commonPrefix,
@@ -83,6 +84,15 @@ describe('lexical address (§4.3)', () => {
     // A single linear ask (s0) has no enclosing join → completes directly.
     expect(enclosingJoinAddress(parseAddress('s0'))).toBeNull();
     expect(enclosingJoinAddress(ROOT_ADDRESS)).toBeNull();
+  });
+
+  it('a call step: the k-th call a statement made, under which its body or members follow', () => {
+    const memberLeaf = childStmt(childIter(childCall(childStmt(ROOT_ADDRESS, 1), 0), 2), 0);
+    expect(encodeAddress(memberLeaf)).toBe('s1.c0.i2.s0');
+    expect(parseAddress('s1.c0.i2.s0')).toEqual(memberLeaf);
+    // A member's join is the op itself — the call step; a call is not a join.
+    expect(encodeAddress(enclosingJoinAddress(memberLeaf)!)).toBe('s1.c0');
+    expect(enclosingJoinAddress(parseAddress('s0.c1.s3'))).toBeNull();
   });
 
   it('rejects malformed address text', () => {

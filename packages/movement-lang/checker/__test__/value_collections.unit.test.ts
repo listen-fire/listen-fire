@@ -180,11 +180,11 @@ describe('MAP / FILTER over a value collection', () => {
     expect(codes(body)).toContain('MOV_COLLECTION_OP_RETURNS_NOTHING');
   });
 
-  it('a function that waits is refused, naming where waiting belongs', () => {
+  it('a function that waits is allowed — each member parks on its own', () => {
     const body = `${NAMES}  x = MAP(names, (t) => { await sleep(1d)\n    return t })`;
-    expect(codes(body)).toContain('MOV_COLLECTION_OP_SUSPENDS');
-    expect(messages(body)).toContain('parallel');
+    expect(codes(body)).not.toContain('MOV_COLLECTION_OP_SUSPENDS');
   });
+  // Before version 3 it is refused: the v1 / v2 conformance corpora pin that.
 
   it('reading POSITIONS is refused, and the message names the traversal-headed block', () => {
     const body = '  x = MAP(c, (p) => { return p })';

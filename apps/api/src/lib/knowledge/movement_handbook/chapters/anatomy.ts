@@ -271,7 +271,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 - A value handed to a parameter that takes a record (\`persist(c: m.\`Subject\`)\` where \`c: <Lead>\`) is refused when you save.
 - **Function names are case-insensitive**: \`upper(x)\`, \`UPPER(x)\` and \`Upper(x)\` are the same built-in, and \`Email_To_Doc(m)\` calls \`email_to_doc\`. Your own function \`\`Label\`\` above is called as \`label(…)\`. Variable names keep their case.
 - **Names are checked when you save.** An unknown function name is refused with the closest function or built-in suggested (a write field is the exception: its target may offer functions of its own). Two functions whose names differ only by letter case, or a function named like a built-in in any case, are refused as a collision. A name holding a value shadows a built-in as in TypeScript, so \`upper = 3\` then \`upper(x)\` is refused.
-- **A function that may wait cannot be called.** One that \`await\`s parks the run where it is written, and the run cannot yet resume inside a called function, so the call is refused when you save. Wait in the function that needs the answer, or run the wait as an arm of \`await parallel([…])\` or \`await race([…])\`.
+- **A function that may wait is called on its own line.** One that \`await\`s parks the run inside it, however many calls deep, and the run resumes there: the rest of the function runs, its \`return\` comes back to the line that called it, and that line goes on. Call it as a statement, or as the whole right-hand side of a binding (\`answer = ask_partner(c)\`) — never inside an expression (see *calls-inside-expressions*).
 
 ### composition
 

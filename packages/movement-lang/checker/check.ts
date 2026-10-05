@@ -395,17 +395,10 @@ export const DiagnosticCodes = {
    *  check and failed the run. */
   BUILTIN_NOT_RUN: 'MOV_BUILTIN_NOT_RUN',
   /** A call to a function that may WAIT, written inside an expression. A wait
-   *  parks the run at an address, and a position inside an expression has
-   *  none — so a call that can park is a whole statement, or the whole
-   *  right-hand side of a binding (language version 3). Mirrors
-   *  `COLLECTION_OP_SUSPENDS`. */
+   *  parks the run at a statement, and a position inside an expression is not
+   *  one — so a call that can park is a whole statement, or the whole
+   *  right-hand side of a binding (language version 3). */
   NESTED_CALL_SUSPENDS: 'MOV_NESTED_CALL_SUSPENDS',
-  /** A call to a movement that may WAIT (language version 3). The run's resume
-   *  address has no step for a position inside a called movement: the callee
-   *  would park at an address rooted at its own body, and the resume walks the
-   *  dispatched movement's. Refused until that step exists, rather than parked
-   *  where it cannot come back. */
-  CALL_SUSPENDS: 'MOV_CALL_SUSPENDS',
   // Named-argument matching (calls and `run` both: parens = callable
   // arguments, always named; the checker matches arguments to parameters
   // by name, so order carries no meaning).
@@ -760,11 +753,10 @@ export const DiagnosticCodes = {
    *  question asked per element — what it becomes, whether it stays, what it
    *  is filed under — so a function with no `return` answers none of them. */
   COLLECTION_OP_RETURNS_NOTHING: 'MOV_COLLECTION_OP_RETURNS_NOTHING',
-  /** A collection op's function may PARK the run (it awaits). These ops run
-   *  their function over every element and hand back one value; waiting inside
-   *  one has no answer for what the half-finished collection is. Waiting
-   *  belongs to the forms built for it — a traversal-headed block, or
-   *  `race`/`parallel`. */
+  /** A collection op's function may PARK the run (it awaits) — refused before
+   *  language version 3, whose resume could not re-enter a member. From version
+   *  3 a member that waits parks on its own, and the op finishes once every
+   *  member has (a join, as a traversal-headed block is). */
   COLLECTION_OP_SUSPENDS: 'MOV_COLLECTION_OP_SUSPENDS',
   /** `MAP(xs, { … }, f)` / `FILTER(xs, { … }, f)` with a settings record the
    *  op cannot run with: a key it has no setting for (TypeScript's
@@ -3546,7 +3538,6 @@ class Checker {
    *  enclosing body. */
   private checkReturn(statement: Extract<Statement, { kind: 'return' }>, scope: Scope): void {
     const shape = this.checkRValue(statement.value, scope, undefined, statement.span);
-    this.refuseSuspendingValue(statement.value, scope, statement.span);
     const collector = this.returnStack[this.returnStack.length - 1];
     if (collector === undefined) {
       this.report(
@@ -3974,7 +3965,6 @@ class Checker {
         switch (reading.kind) {
           case 'function':
             this.checkCall(statement, scope);
-            this.refuseSuspendingCall(statement.callee, scope, statement.span);
             return;
           case 'collection':
             this.checkCollectionOp(reading.collection, scope);
@@ -4220,7 +4210,6 @@ class Checker {
       );
     }
     const shape = this.checkRValue(statement.value, scope, statement.name, statement.span);
-    this.refuseSuspendingValue(statement.value, scope, statement.span);
     const symbol: ScopeSymbol = {
       name: statement.name,
       kind: 'binding',
@@ -4776,39 +4765,6 @@ class Checker {
         const found = scope.resolve(declared);
         return found.kind === 'found' && isFunctionSymbol(found.symbol);
       },
-    );
-  }
-
-  /** A bound or returned call to a movement that may wait (`CALL_SUSPENDS`). */
-  private refuseSuspendingValue(value: RValue, scope: Scope, span: Span): void {
-    if (value.kind === 'call') this.refuseSuspendingCall(value.call.callee, scope, span);
-    else if (value.kind === 'construct') this.refuseSuspendingCall(value.construct.callee, scope, span);
-  }
-
-  /**
-   * A call to a movement that may wait (language version 3). The run's resume
-   * address has steps for statements, loop iterations and branches, and none
-   * for a position inside a called movement: the callee parks at an address
-   * rooted at its own body, and a resume walks the dispatched movement's body
-   * from it. Refused, rather than parked where the run cannot come back.
-   */
-  private refuseSuspendingCall(written: string, scope: Scope, span: Span): void {
-    if (before(this.languageVersion, 3)) return;
-    const resolution = this.calleeResolution(written, scope);
-    if (resolution.kind !== 'found') return;
-    const callee = resolution.symbol;
-    // A called closure parks inside its own body exactly as a called movement
-    // does, so it has the same missing address.
-    const closure = this.calledClosure(callee);
-    const suspends = callee.kind === 'movement'
-      ? this.movementEffects(callee).suspend
-      : closure?.effects.suspend;
-    if (suspends !== true) return;
-    const what = closure !== undefined ? 'closure' : 'movement';
-    this.report(
-      DiagnosticCodes.CALL_SUSPENDS,
-      `'${written}' may wait ('await'), and a wait inside a called ${what} cannot be resumed yet — the run would park inside '${written}' and come back to the wrong place. Wait in this movement instead: move the 'await' out of '${written}', or run it as an arm of 'await parallel([…])' / 'await race([…])'`,
-      span,
     );
   }
 
@@ -5718,7 +5674,7 @@ class Checker {
 
   /** A collection op runs its function to completion, once per member. */
   private absorbCollectionRow(row: EffectRow, spelling: string, span: Span): void {
-    if (row.suspend) {
+    if (row.suspend && before(this.languageVersion, 3)) {
       this.report(
         DiagnosticCodes.COLLECTION_OP_SUSPENDS,
         `the function for '${spelling}' waits ('await'), and '${spelling}' runs it over every member to build one value — there is no answer for what the collection is while it waits. Wait outside it: walk the positions in a traversal-headed block, or run the waits together with 'await parallel([…])'.`,

@@ -234,7 +234,7 @@ bucket = AT({ intro: "Welcome", body: "…" }, "intro")
 
 ### MAP
 
-\`MAP(list, f)\` or \`MAP(list, settings, f)\` → a list of what \`f\` returned, member by member, in the order given — always present (each slot may itself be absent when \`f\`'s value is). \`f\` is a function \`(member) => { … }\` or \`(member) => expression\` and takes its parameter's type from the collection; it may not \`await\`. \`MAP\` alone among the five may skip \`return\` — each slot is then absent and the closure's writes still run — and a bare \`MAP(...)\` with no binding is a legal statement on its own.
+\`MAP(list, f)\` or \`MAP(list, settings, f)\` → a list of what \`f\` returned, member by member, in the order given — always present (each slot may itself be absent when \`f\`'s value is). \`f\` is a function \`(member) => { … }\` or \`(member) => expression\` and takes its parameter's type from the collection; it may \`await\` (each member waits on its own). \`MAP\` alone among the five may skip \`return\` — each slot is then absent and the closure's writes still run — and a bare \`MAP(...)\` with no binding is a legal statement on its own.
 
 \`\`\`
 bulleted = MAP(lines, (t) => { return "• \${t}" })

@@ -7,6 +7,12 @@
 //   stmt i   — the i-th statement of the current sequence (LEXICAL; stable by P11)
 //   iter j   — descend into a fan-out body, iteration j (DYNAMIC; positional)
 //   branch k — a parallel branch / if-arm k
+//   call k   — the k-th call this statement made, in the order it made them: a
+//              called movement / function / closure's body (its statements
+//              follow as `stmt` steps), or a collection op (its members follow
+//              as `iter` steps). DYNAMIC within the statement, LEXICAL across
+//              statements; a statement re-run on resume makes its calls in the
+//              same order, which is what lets the k-th be found again.
 //
 // The address does quintuple duty (§4.3): it identifies the AST node, disambiguates
 // fan-out instances, encodes the tree BY PREFIX (so a join is a prefix query and a
@@ -16,7 +22,7 @@
 //
 // This module is PURE (no interpreter, no DB) — the keystone built and tested first.
 
-export type AddressStepKind = 'stmt' | 'iter' | 'branch';
+export type AddressStepKind = 'stmt' | 'iter' | 'branch' | 'call';
 
 export interface AddressStep {
   kind: AddressStepKind;
@@ -28,8 +34,8 @@ export type Address = readonly AddressStep[];
 
 export const ROOT_ADDRESS: Address = [];
 
-const KIND_LETTER: Record<AddressStepKind, string> = { stmt: 's', iter: 'i', branch: 'b' };
-const LETTER_KIND: Record<string, AddressStepKind> = { s: 'stmt', i: 'iter', b: 'branch' };
+const KIND_LETTER: Record<AddressStepKind, string> = { stmt: 's', iter: 'i', branch: 'b', call: 'c' };
+const LETTER_KIND: Record<string, AddressStepKind> = { s: 'stmt', i: 'iter', b: 'branch', c: 'call' };
 
 // ── Construction (the interpreter appends steps as it descends) ──
 
@@ -50,6 +56,10 @@ export function childIter(address: Address, index: number): Address {
 
 export function childBranch(address: Address, index: number): Address {
   return [...address, step('branch', index)];
+}
+
+export function childCall(address: Address, index: number): Address {
+  return [...address, step('call', index)];
 }
 
 /** The enclosing frame's address (drops the last step). Root has no parent → null. */

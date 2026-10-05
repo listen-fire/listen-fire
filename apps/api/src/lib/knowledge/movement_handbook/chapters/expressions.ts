@@ -122,7 +122,7 @@ Iterate a collection with these five, each given a function that runs once per m
 - A map written in braces keeps its keys through all five, so \`AT(r, "who")\` in a later function reads the key's own type, and a misspelt key is caught when you save.
 - Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
-A function written in place takes its parameter's type from the collection, so there is nothing to annotate, and its body may be a single expression (see *closures*). It may not \`await\` — these build one value out of every member, and there is no answer for what the collection is mid-wait, so wait outside the loop (a traversal-headed block, or \`await parallel([…])\`). \`FILTER\` and \`REDUCE\` must \`return\` something — a filter needs a boolean, a reduce needs the value it is carrying. \`MAP\` alone allows a function with no \`return\`: each slot is then absent, and the writes inside it still run — \`MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })\` is legal on its own, with no binding, run purely for what it writes.
+A function written in place takes its parameter's type from the collection, so there is nothing to annotate, and its body may be a single expression (see *closures*). It may \`await\`: a member that waits parks on its own while the others go on — a waiting member holds its place, so no more than \`concurrency\` members are in flight — and the op hands back its value, in member order, once every member has finished. \`FILTER\` and \`REDUCE\` must \`return\` something — a filter needs a boolean, a reduce needs the value it is carrying. \`MAP\` alone allows a function with no \`return\`: each slot is then absent, and the writes inside it still run — \`MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })\` is legal on its own, with no binding, run purely for what it writes.
 
 \`\`\`
 theses = MEMBERS(<Thesis>)
@@ -162,7 +162,7 @@ doubled = MAP(counts, (x) => x * 2)
 - Bind a closure to a name and **call it like any function**: \`inc(2)\`, \`double(inc(x)) + 1\`, or \`note(m.Subject)\` on its own line. Its parameters check the arguments, and the call is typed by what the body returns.
 - Calling it does what its body does: a model call or a write in the body counts towards the function that calls it. Binding it does nothing.
 - The name is a function's name, so it is case-insensitive (\`INC(2)\`) and cannot be a built-in's name (\`upper = (t) => t\` is refused) or another function's in a different case. A name holding a plain value is still not callable.
-- A closure that may wait is refused when called, as a function that waits is; it can still be an arm of \`await race([…])\` or \`await parallel([…])\`.
+- A closure that may wait is called on its own line, as a function that waits is, and can be an arm of \`await race([…])\` or \`await parallel([…])\`.
 - A closure is also what \`MAP\`, \`FILTER\` and the rest take: pass it inline or by name (\`MAP(xs, inc)\`).
 
 ### calls-inside-expressions

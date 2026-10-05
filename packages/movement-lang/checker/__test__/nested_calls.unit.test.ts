@@ -7,9 +7,9 @@
 // expression reads `#call`). What is pinned here:
 //   - each nesting form checks, and is typed by what the call gives back;
 //   - its effects are the function's around it;
-//   - a call that may WAIT is refused nested (`MOV_NESTED_CALL_SUSPENDS`), and
-//     a call to a movement that may wait is refused outright for now
-//     (`MOV_CALL_SUSPENDS` — the run cannot resume inside a called movement);
+//   - a call that may WAIT is refused nested (`MOV_NESTED_CALL_SUSPENDS`) —
+//     a wait parks at a statement — and allowed as a statement of its own or
+//     the whole right-hand side of a binding (the run resumes inside it);
 //   - a call in a walk's WHERE is still refused: it would run per landing;
 //   - closures and shapes are values;
 //   - the v3 consistency gaps: `fire` / `callback(…)` resolve a movement in any
@@ -153,11 +153,10 @@ describe('a call that may wait', () => {
     expect(messages('  x = waits(c.Size) + 1')).toContain('on its own line');
   });
 
-  it('on its own line, is refused while the run cannot resume inside a called movement', () => {
-    expect(codes('  waits(c.Size)')).toEqual([C.CALL_SUSPENDS]);
-    expect(codes('  y = waits(c.Size)')).toEqual([C.CALL_SUSPENDS]);
-    expect(codes('  y = waits(n: c.Size)')).toEqual([C.CALL_SUSPENDS]);
-    expect(messages('  waits(c.Size)')).toContain("cannot be resumed yet");
+  it('on its own line, or as the whole of a binding, is allowed — the run resumes inside it', () => {
+    expect(codes('  waits(c.Size)')).toEqual([]);
+    expect(codes('  y = waits(c.Size)')).toEqual([]);
+    expect(codes('  y = waits(n: c.Size)')).toEqual([]);
   });
 
   it('before version 3 the call is not refused — unchanged', () => {
@@ -270,10 +269,10 @@ describe('a closure bound to a name is called like any function', () => {
     expect(codes('  f = 3\n  x = f(1)')).toEqual([C.CALL_NOT_MOVEMENT]);
   });
 
-  it('a closure that may wait is refused called, nested or not', () => {
+  it('a closure that may wait is called on its own line, never nested', () => {
     const w = '  w = (n: <number>) => {\n    await sleep(1h)\n    return n\n  }\n';
-    expect(codes(`${w}  x = w(1)`)).toEqual([C.CALL_SUSPENDS]);
-    expect(codes(`${w}  w(1)`)).toEqual([C.CALL_SUSPENDS]);
+    expect(codes(`${w}  x = w(1)`)).toEqual([]);
+    expect(codes(`${w}  w(1)`)).toEqual([]);
     expect(codes(`${w}  x = w(1) + 1`)).toEqual([C.NESTED_CALL_SUSPENDS]);
     // Passing it on is not calling it: a race arm still waits.
     expect(codes('  w = () => {\n    await sleep(1h)\n  }\n  await race([w])')).toEqual([]);

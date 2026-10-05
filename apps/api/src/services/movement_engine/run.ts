@@ -321,6 +321,7 @@ import { makeFileTextResolver } from './file_text';
 import {
   ROOT_ADDRESS,
   childBranch,
+  childCall,
   childIter,
   childStmt,
   encodeAddress,
@@ -338,6 +339,9 @@ import {
   type InstanceIdentityDescriptor,
   type ParkedScopeState,
   type RehydrationContext,
+  type SerializedCallEvent,
+  type SerializedFrame,
+  type SerializedScope,
 } from './serialize';
 import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
@@ -465,6 +469,16 @@ export interface RunMovementInput {
    */
   cancelGate?: CancelGate;
   /**
+   * Where the ENGINE may suspend a flow of its own accord (`suspendFlow`):
+   * asked before every statement and before every call a statement makes; a
+   * `true` parks that flow just before the statement, to re-run it on resume
+   * (the calls it had already finished are replayed, not made again). This is
+   * the seam a run limit suspends through — the cost cap's check is the
+   * production caller; tests drive it directly. Absent ⇒ the engine never
+   * suspends a run on its own.
+   */
+  suspendWhen?: (point: SuspensionPoint) => boolean;
+  /**
    * The array the run appends its decision trace to. Supplied by a caller that
    * wants to READ the trace while the run is still going — the run holds it by
    * reference, so a flusher watching the same array sees each entry as it
@@ -472,6 +486,15 @@ export interface RunMovementInput {
    * result.
    */
   trace?: MovementTraceEntry[];
+}
+
+/** A place the engine may suspend a flow (`RunMovementInput.suspendWhen`):
+ *  just before a statement, or just before the k-th call a statement makes
+ *  (`address` ends in that call's `c k` step). Either way the flow parks at the
+ *  STATEMENT and re-runs it on resume. */
+export interface SuspensionPoint {
+  kind: 'statement' | 'call';
+  address: string;
 }
 
 /**
@@ -544,6 +567,15 @@ export interface ParkSink {
    * no dangling bookkeeping). Idempotent (a re-scan finds the rows gone).
    */
   cancelSubtrees(input: { subtreeAddresses: string[]; excludeLeaf?: string }): Promise<void>;
+  /**
+   * Record an ENGINE-INITIATED suspension (`suspendFlow`): a `parked_run` row
+   * whose state says `suspended` — resume re-enters AT the statement
+   * (`reenter`) and replays the calls it had finished. No correlation and no
+   * wake time: what resumes it is the operator (or whatever lifted the limit).
+   * Optional until a production reason exists for it; a run asked to suspend
+   * with no such sink fails loudly rather than carrying on past the limit.
+   */
+  commitSuspension?(input: { address: string; state: unknown }): Promise<void>;
 }
 
 /**
@@ -951,6 +983,60 @@ const FELL_THROUGH: BodyOutcome = { returned: false };
  */
 const RETURN_SLOT = '#return';
 
+/** A statement's finished calls, as a park keeps them. */
+function serializeCallRecords(records: ReadonlyMap<number, CallRecord>): SerializedCallEvent[] {
+  return [...records.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([index, record]) => ({
+      index,
+      value: record.value !== undefined ? serializeBinding(record.value) : null,
+      next: record.next,
+    }));
+}
+
+async function rehydrateCallRecords(
+  events: readonly SerializedCallEvent[],
+  ctx: RehydrationContext,
+): Promise<Map<number, CallRecord>> {
+  const out = new Map<number, CallRecord>();
+  for (const event of events) {
+    out.set(event.index, {
+      value: event.value !== null ? await rehydrateBinding(event.value, ctx) : undefined,
+      next: event.next,
+    });
+  }
+  return out;
+}
+
+/** A live body boundary as a park keeps it. */
+function serializeBoundary(boundary: LiveBoundary): SerializedFrame {
+  switch (boundary.kind) {
+    case 'call':
+      return {
+        kind: 'call',
+        index: boundary.index,
+        next: boundary.next,
+        callee: boundary.callee,
+        journal: serializeCallRecords(boundary.site.calls.completed),
+        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot()),
+      };
+    case 'member':
+      return {
+        kind: 'member',
+        index: boundary.index,
+        next: boundary.next,
+        member: boundary.member,
+        op: boundary.op,
+        journal: serializeCallRecords(boundary.site.calls.completed),
+        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot()),
+      };
+    case 'arm':
+      return { kind: 'arm', arm: boundary.arm, body: boundary.body };
+    default:
+      return neverAsAny(boundary);
+  }
+}
+
 /**
  * A flat snapshot of everything in lexical scope — what a deferred walk and a
  * closure both capture. Flat because bindings are single-assignment and nothing
@@ -1196,6 +1282,9 @@ const APPENDABLE_LANDING_KINDS: ReadonlySet<Binding['kind']> = new Set([
 interface ArmInvocation {
   body: Statement[];
   captured?: Map<string, Binding>;
+  /** An arm built at run time: its closure, which has no place in the source
+   *  for a resume to find it at, so a park inside it carries it. */
+  runtime?: ClosureExpression;
 }
 
 function isClosureBinding(value: unknown): value is Extract<Binding, { kind: 'closure' }> {
@@ -1438,6 +1527,63 @@ interface BodyContext {
 interface StatementSite {
   body: BodyContext;
   stmtAddress: Address;
+  /** The scope the statement runs in — what a park inside one of its calls
+   *  serialises as the caller's, and what a re-run of it runs in again. */
+  env: Environment;
+  calls: StatementCalls;
+}
+
+/**
+ * The calls one statement has made, in order — each a `call k` step on the
+ * address of whatever runs inside it. A statement that is re-run on resume
+ * makes its calls in the same order, so the k-th call it makes is the k-th it
+ * made before; `replay` hands those that had already finished their value
+ * back instead of making them again.
+ */
+interface StatementCalls {
+  next: number;
+  completed: Map<number, CallRecord>;
+  replay?: ReadonlyMap<number, CallRecord>;
+}
+
+/** What one finished call handed back, and the statement's call count after
+ *  it (its arguments' own calls included). */
+interface CallRecord {
+  value: Binding | undefined;
+  next: number;
+}
+
+/** The k-th call of the statement running now, as `beginCall` opened it. */
+interface CallEvent {
+  site: StatementSite | undefined;
+  index: number;
+  /** Set when the call had already finished before a park: its value. */
+  replayed?: CallRecord;
+}
+
+/**
+ * A body boundary the running flow is inside — the live form of a
+ * `SerializedFrame`. Pushed as execution crosses into a called body, a
+ * collection op's member, or a run-time arm, so a park anywhere below can say
+ * how to get back.
+ */
+type LiveBoundary =
+  | { kind: 'call'; site: StatementSite; index: number; next: number; callee: string }
+  | {
+      kind: 'member';
+      site: StatementSite;
+      index: number;
+      next: number;
+      member: number;
+      op: CollectionOpExpression;
+    }
+  | { kind: 'arm'; arm: number; body: ClosureExpression };
+
+/** How a statement sequence is entered: at which statement, and the calls of
+ *  that first statement which had already finished. */
+interface BodyEntry {
+  at?: number;
+  replay?: ReadonlyMap<number, CallRecord>;
 }
 
 /** One slot's nested calls, being run: the slot their offsets are in, the
@@ -1501,6 +1647,184 @@ type MemberAnswer = { kept: true; value: unknown } | { kept: false };
 /** The trace warning `onError: "warn"` leaves for a member it left out. */
 const COLLECTION_MEMBER_FAILED = 'MOVENG_COLLECTION_MEMBER_FAILED';
 
+function memberLeftOut(
+  spelling: string,
+  index: number,
+  count: number | undefined,
+  error: unknown,
+): MovementTraceEntry {
+  const of = count !== undefined ? ` of ${count}` : '';
+  return {
+    kind: 'warning',
+    code: COLLECTION_MEMBER_FAILED,
+    message: `'${spelling}' left out the member at index ${index}${of}, because its function failed: ${getErrorMessage(error)}`,
+  };
+}
+
+/** One collection op being run — everything its members and its answer need,
+ *  whether it started in this segment or is being finished on resume. */
+interface CollectionRun {
+  expr: CollectionOpExpression;
+  spelling: string;
+  settings: CollectionRunSettings;
+  fn: Extract<Binding, { kind: 'closure' }>;
+  /** The op's own address — its statement's `call k`; members are `iter i`
+   *  under it, and it is the JOIN frame when members park. */
+  address: Address;
+  /** The op as its statement's call: the statement its members' boundaries
+   *  name, and which call it is. */
+  event: CallEvent;
+  /** The body context its members' function bodies run under. */
+  body: BodyContext;
+  members: unknown[];
+  sourceProvenance: Provenance;
+  /** `REDUCE`'s starting value (null for the other ops). */
+  init: unknown;
+}
+
+/**
+ * What a parked op keeps at its frame (the `join_branch_export` row at the
+ * op's own address, ordered before every member's): the members it reads and
+ * `REDUCE`'s start, as they were when it began — re-reading them on resume
+ * could read something else.
+ */
+interface CollectionOpState {
+  source: BindingDescriptor;
+  init: BindingDescriptor;
+}
+
+/** A join frame's own row (an op's members, a run-time combinator's arm
+ *  count): its place in the frame's fold order, before branch 0. */
+const FRAME_STATE_INDEX = -1;
+
+/** What a combinator whose arms were built at run time keeps at its frame
+ *  when it parks: how many arms there were, which the source cannot say. */
+interface CombinatorFrameState {
+  arms: number;
+}
+
+function isCombinatorFrameState(value: unknown): value is CombinatorFrameState {
+  return typeof value === 'object' && value !== null && 'arms' in value && typeof value.arms === 'number';
+}
+
+/** A combinator's arm count: written in the source, or kept at its frame. */
+function armCountOf(
+  combinator: CombinatorExpression,
+  rows: ReadonlyArray<{ branchIndex: number; exports: unknown }>,
+): number {
+  if (combinator.arms.kind !== 'dynamic') return literalArmsOf(combinator).length;
+  const kept = rows.find((row) => row.branchIndex === FRAME_STATE_INDEX)?.exports;
+  return isCombinatorFrameState(kept) ? kept.arms : 0;
+}
+
+/** A finished member as its op's frame keeps it. */
+type MemberAnswerExport = { kept: true; answer: BindingDescriptor } | { kept: false };
+
+function serializeMemberAnswer(answer: MemberAnswer): MemberAnswerExport {
+  if (!answer.kept) return { kept: false };
+  return {
+    kept: true,
+    answer: serializeBinding({ kind: 'value', value: answer.value, provenance: NO_PROVENANCE }),
+  };
+}
+
+function isMemberAnswerExport(value: unknown): value is MemberAnswerExport {
+  return typeof value === 'object' && value !== null && 'kept' in value && typeof value.kept === 'boolean';
+}
+
+function isCollectionOpState(value: unknown): value is CollectionOpState {
+  return typeof value === 'object' && value !== null && 'source' in value && 'init' in value;
+}
+
+/** `REDUCE`'s carried value going into member `index`: the last answer a member
+ *  before it kept, or the start. */
+function carriedBefore(answers: readonly MemberAnswer[], index: number, init: unknown): unknown {
+  for (let i = index - 1; i >= 0; i--) {
+    const answer = answers[i];
+    if (answer?.kept === true) return answer.value;
+  }
+  return init;
+}
+
+/** A member's answer from what its function's body did. */
+function memberValue(run: Pick<CollectionRun, 'expr' | 'spelling'>, outcome: BodyOutcome): unknown {
+  if (!outcome.returned) {
+    // MAP alone allows this (checker: MAP_SLOT_ABSENT) — the closure ran
+    // for its statements' effects (its writes already landed, above) and
+    // this member's slot is simply absent. FILTER/REDUCE/GROUPBY/KEYBY
+    // still require a return, so reaching here for one of those really is
+    // the checker escape the message names.
+    if (run.expr.op === 'map') return null;
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `the function for '${run.spelling}' returned nothing — the checker should have caught this`,
+    );
+  }
+  return outcome.value.kind === 'value' ? outcome.value.value : outcome.value;
+}
+
+/** The op's value, from every member's answer, in MEMBER order. */
+function collectionAnswer(run: CollectionRun, answers: readonly MemberAnswer[]): Binding {
+  const { expr, spelling, members } = run;
+  if (expr.op === 'reduce') {
+    return {
+      kind: 'value',
+      value: carriedBefore(answers, members.length, run.init),
+      provenance: transformed(run.sourceProvenance),
+    };
+  }
+  if (expr.op === 'map') {
+    const out = members.flatMap((_, index) => {
+      const answer = answers[index];
+      return answer?.kept === true ? [answer.value] : [];
+    });
+    return { kind: 'value', value: out, provenance: transformed(run.sourceProvenance) };
+  }
+  if (expr.op === 'filter') {
+    // Truthiness is the language's own: the function returns a boolean, and
+    // anything else is the checker's business, not a second definition here.
+    // A member whose predicate failed (under a forgiving `onError`) answered
+    // nothing, so it is not kept.
+    const out = members.filter((_, index) => {
+      const answer = answers[index];
+      return answer?.kept === true && answer.value === true;
+    });
+    return { kind: 'value', value: out, provenance: run.sourceProvenance };
+  }
+  // GROUPBY / KEYBY — the key function's answer names the slot. A key that
+  // is not text at run time is a checker escape; say so rather than
+  // stringify it, which is the silence the save-time rule exists to avoid.
+  const filed: Record<string, unknown> = {};
+  members.forEach((member, index) => {
+    const answer = answers[index];
+    if (answer?.kept !== true) return;
+    const key = answer.value;
+    if (typeof key !== 'string') {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'${spelling}' files each member under a text key, and this one answered ${key === null || key === undefined ? 'nothing' : typeof key} — the checker should have caught this`,
+      );
+    }
+    if (expr.op === 'keyby') {
+      // Two members under one key is the author's claim turning out false —
+      // exactly `ONLY`'s situation, and it gets `ONLY`'s answer: fail the
+      // run naming the key, rather than quietly keeping one of them.
+      if (Object.hasOwn(filed, key)) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `KEYBY says each key names one member, and '${key}' names more than one. Use GROUPBY if a key can have several.`,
+        );
+      }
+      filed[key] = member;
+      return;
+    }
+    const group = filed[key];
+    if (Array.isArray(group)) group.push(member);
+    else filed[key] = [member];
+  });
+  return { kind: 'value', value: filed, provenance: transformed(run.sourceProvenance) };
+}
+
 /**
  * Did a member's function FAIL, as opposed to the run's control flow passing
  * through it? Only a failure is the member's, and only a failure can be
@@ -1548,7 +1872,7 @@ interface ResumeAncestorFrame {
   /** That level's frame address. */
   parentFrameAddress: Address;
   parentAtAnchor: boolean;
-  parentPosition: SourcePosition;
+  parentPosition?: SourcePosition;
   /** `parentStatements[containerIndex]` — the if / parallel / fan-out node. */
   container: Statement;
   containerIndex: number;
@@ -1562,6 +1886,65 @@ interface ResumeAncestorFrame {
   branchAddress: Address;
   /** The branch/iteration ordinal — the deterministic fold order (§12.1/§12.4). */
   branchIndex: number;
+}
+
+/** A container level on the resume spine — an `if` arm, a fan-out
+ *  iteration, a combinator arm (with its boundary when it was built at run
+ *  time). */
+type ResumeContainerFrame = { kind: 'container'; armBoundary?: LiveBoundary } & ResumeAncestorFrame;
+
+/** The statement sequence a call was made from, and the statement that made it. */
+interface ResumeSequence {
+  statements: Statement[];
+  env: Environment;
+  body: BodyContext;
+  stmtIndex: number;
+}
+
+/** A call level on the resume spine: the call's boundary (its calling
+ *  statement, rebuilt) and the movement it entered, when it was one. */
+interface ResumeCallFrame {
+  kind: 'call';
+  caller: ResumeSequence;
+  boundary: Extract<LiveBoundary, { kind: 'call' }>;
+  declaration?: MovementDeclaration;
+}
+
+/** A collection op as resume re-derives it from its AST, before its kept
+ *  members are read back. */
+type ResumedCollectionOp = Omit<CollectionRun, 'members' | 'sourceProvenance' | 'init'>;
+
+/** A collection-op member level on the resume spine. */
+interface ResumeMemberFrame {
+  kind: 'member';
+  caller: ResumeSequence;
+  boundary: Extract<LiveBoundary, { kind: 'member' }>;
+  op: ResumedCollectionOp;
+}
+
+/** One level the resume descent passed through, outermost first. */
+type ResumeSpineFrame = ResumeContainerFrame | ResumeCallFrame | ResumeMemberFrame;
+
+/** What finishing a level came to: the body it is in finished (with this
+ *  outcome), or the climb stops here — a join still waits on siblings. */
+type SpineCompletion = { done: true; outcome: BodyOutcome } | { done: false };
+
+const STOPPED: SpineCompletion = { done: false };
+
+/** What a resume does at its leaf statement. */
+type ResumeLeaf =
+  /** Bind the answer and step past the leaf, or re-enter it (§4.4). */
+  | { kind: 'continue'; answer?: Binding; reenter: boolean }
+  /** Run a fired callback's body (the leaf is its mint). */
+  | { kind: 'fireCallback'; values: Record<string, unknown>; callIndex: number }
+  /** Settle a race whose arms completed in a batch (the leaf is the race). */
+  | { kind: 'settleRace'; frameAddress: string };
+
+/** A closure's captured scope, as the root its body's scopes chain from. */
+function closureScope(binding: Extract<Binding, { kind: 'closure' }>): Environment {
+  const env = new Environment();
+  for (const [name, captured] of binding.captured) env.declare(name, captured);
+  return env;
 }
 
 /**
@@ -1984,6 +2367,9 @@ class Interpreter {
   /** The statement running in this flow, which a call nested in one of its
    *  expressions runs as (`settleNestedCall`). */
   private readonly statementSites = new AsyncLocalStorage<StatementSite>();
+  /** The body boundaries this flow is inside, outermost first — what a park
+   *  below them records as its `frames`, so resume can get back in. */
+  private readonly boundaries = new AsyncLocalStorage<readonly LiveBoundary[]>();
   /** What keeps concurrent flows' effects on the world from racing — see
    *  `effect_locks.ts`. */
   private readonly effectLocks = new EffectLocks();
@@ -2175,8 +2561,11 @@ class Interpreter {
         address,
         state: input.state,
         movementEnv,
-        ...(input.answer !== undefined ? { answer: input.answer } : {}),
-        reenter: input.reenter ?? false,
+        leaf: {
+          kind: 'continue',
+          ...(input.answer !== undefined ? { answer: input.answer } : {}),
+          reenter: input.reenter ?? false,
+        },
       });
     } catch (e) {
       if (e instanceof RunCancelledSignal) {
@@ -2196,14 +2585,6 @@ class Interpreter {
     return this.assembleResult(movement.name);
   }
 
-  /**
-   * Post-batch race settlement (asks-as-adapter chunk C, F18/F21). Builds the
-   * receipt from EVERY completed branch's persisted exports (all winners),
-   * cancels the still-parked losers (the one signal, P17), binds the receipt, and
-   * runs the race's continuation forward. Re-enters PAST the race STATEMENT (not a
-   * leaf): `input.state` is any completed branch's parked state — its scope chain
-   * covers the race's parent, which is all the continuation needs.
-   */
   /**
    * Run a fired callback's body as a SEGMENT of its owning run (callback-
    * primitive layer 2). The run keeps its identity, its team, its billing and
@@ -2226,8 +2607,7 @@ class Interpreter {
         address: parseAddress(input.state.address),
         state: input.state,
         movementEnv,
-        reenter: false,
-        fireCallback: { values: input.values, callIndex: input.callIndex },
+        leaf: { kind: 'fireCallback', values: input.values, callIndex: input.callIndex },
       });
     } catch (e) {
       if (e instanceof RunCancelledSignal) this.cancelled = true;
@@ -2242,6 +2622,15 @@ class Interpreter {
     return this.assembleResult(movement.name);
   }
 
+  /**
+   * Post-batch race settlement (asks-as-adapter chunk C, F18/F21). Builds the
+   * receipt from EVERY completed branch's persisted exports (all winners),
+   * cancels the still-parked losers (the one signal, P17), binds the receipt, and
+   * runs the race's continuation forward. Re-enters PAST the race STATEMENT (not a
+   * leaf): `input.state` is any completed branch's parked state — its frames and
+   * scope chains cover every body down to the race, which is all the
+   * continuation needs.
+   */
   async settleRaceFrame(input: {
     program: Program;
     state: ParkedScopeState;
@@ -2250,50 +2639,13 @@ class Interpreter {
     const { movement, movementEnv } = await this.prepareMovement(input.program);
     this.movementBody = movement.body;
     this.callStack.push(movement);
-    const frameAddr = parseAddress(input.frameAddress);
-    const race = this.raceStatementAt(movement.body, frameAddr);
-    if (race === undefined) {
-      throw new MovementEngineError(
-        'MOVENG_RUNTIME',
-        `settleRace: no race statement at frame '${input.frameAddress}'`,
-      );
-    }
-
-    // 1. The receipt = every arm that settled in this batch, in slot order —
-    //    ties included, which is what makes more than one filled slot legal.
-    const rows = await this.input.parkSink!.collectBranchExports({
-      frameAddress: input.frameAddress,
-    });
-    const receipt = await this.receiptFromExports(
-      rows,
-      race.branchCount,
-      this.rehydrationContext(),
-    );
-
-    // 2. Stop listening on the arms still parked (an arm that settled already
-    //    dropped its parked_run + correlation, so this is a no-op on those).
-    const loserSubtrees: string[] = [];
-    for (let j = 0; j < race.branchCount; j++) {
-      loserSubtrees.push(encodeAddress(childBranch(frameAddr, j)));
-    }
-    await this.input.parkSink!.cancelSubtrees({ subtreeAddresses: loserSubtrees });
-
-    // 3. Run the continuation: re-enter PAST the race statement, binding the
-    //    receipt at the race's name (a bare race binds nothing).
-    const continuationState: ParkedScopeState = {
-      version: 1,
-      address: input.frameAddress,
-      bindingName: race.bindingName ?? null,
-      scopeChain: input.state.scopeChain,
-    };
     try {
       await this.resumeAlongAddress({
         body: movement.body,
-        address: frameAddr,
-        state: continuationState,
+        address: parseAddress(input.frameAddress),
+        state: input.state,
         movementEnv,
-        ...(race.bindingName !== undefined ? { answer: receipt } : {}),
-        reenter: false,
+        leaf: { kind: 'settleRace', frameAddress: input.frameAddress },
       });
     } catch (e) {
       if (e instanceof RunCancelledSignal) this.cancelled = true;
@@ -2307,62 +2659,44 @@ class Interpreter {
     return this.assembleResult(movement.name);
   }
 
-  /** Resolve the combinator statement at a frame address (its arm count +
-   *  binding name) by walking the address' container spine — the settlement
-   *  needs these before it can build the receipt and run the continuation. */
-  private raceStatementAt(
-    body: Statement[],
-    address: Address,
-  ): { branchCount: number; bindingName?: string } | undefined {
-    let statements = body;
-    let i = 0;
-    while (i < address.length) {
-      const step = address[i];
-      if (step.kind !== 'stmt') return undefined;
-      const stmt = statements[step.index];
-      if (stmt === undefined) return undefined;
-      if (i === address.length - 1) {
-        const combinator = combinatorOf(stmt);
-        if (combinator === undefined) return undefined;
-        return {
-          branchCount: literalArmsOf(combinator).length,
-          ...(stmt.kind === 'assign' ? { bindingName: stmt.name } : {}),
-        };
-      }
-      const childBody = this.containerBody(stmt, address[i + 1]);
-      if (childBody === undefined) return undefined;
-      statements = childBody;
-      i += 2;
+  /**
+   * The race settlement's leaf: the race STATEMENT itself. The receipt is every
+   * arm that settled in this batch, in slot order — ties included, which is what
+   * makes more than one filled slot legal. The arms still parked stop being
+   * listened on (an arm that settled already dropped its parked_run +
+   * correlation, so this is a no-op on those), the receipt binds at the race's
+   * name (a bare race binds nothing), and the sequence runs on past it.
+   */
+  private async settleRaceAt(input: {
+    statement: Statement | undefined;
+    frameAddress: string;
+    env: Environment;
+  }): Promise<void> {
+    const combinator = input.statement !== undefined ? combinatorOf(input.statement) : undefined;
+    if (input.statement === undefined || combinator === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `settleRace: no race statement at frame '${input.frameAddress}'`,
+      );
     }
-    return undefined;
-  }
-
-  /** The child statement list a descent step enters (fan-out body / if-arm /
-   *  combinator arm) — the pure navigation half of `descendForResume`, used by
-   *  `raceStatementAt`. */
-  private containerBody(container: Statement, step: AddressStep): Statement[] | undefined {
-    if (step.kind === 'iter') {
-      const block =
-        container.kind === 'block'
-          ? container.block
-          : container.kind === 'assign' && container.value.kind === 'block'
-            ? container.value.block
-            : undefined;
-      return block?.body;
+    const rows = await this.input.parkSink!.collectBranchExports({ frameAddress: input.frameAddress });
+    const armCount = armCountOf(combinator, rows);
+    const receipt = await this.receiptFromExports(rows, armCount, this.rehydrationContext());
+    const frameAddr = parseAddress(input.frameAddress);
+    const loserSubtrees: string[] = [];
+    for (let j = 0; j < armCount; j++) {
+      loserSubtrees.push(encodeAddress(childBranch(frameAddr, j)));
     }
-    if (container.kind === 'if') {
-      const arm = container.arms[step.index];
-      return arm ? arm.body : container.elseArm?.body;
-    }
-    return this.armBodyAt(container, step.index);
+    await this.input.parkSink!.cancelSubtrees({ subtreeAddresses: loserSubtrees });
+    if (input.statement.kind === 'assign') input.env.declare(input.statement.name, receipt);
   }
 
   /**
    * The body of one combinator arm, by position. A closure arm carries its own
    * body; an arm that is a NAME carries a movement's, which resume finds the
-   * same way the checker resolved it — by name in this program. An arm from an
-   * imported library, or one built at run time, has no body to navigate to from
-   * here: resume says so rather than guessing.
+   * same way the checker resolved it — by name in this program. An arm built at
+   * run time has no place in the source; a park inside one carries its body
+   * (an `arm` frame), and the descent takes it from there.
    */
   private armBodyAt(container: Statement, index: number): Statement[] | undefined {
     const arm = literalArmsOf(combinatorOf(container))[index];
@@ -2383,140 +2717,196 @@ class Interpreter {
    * along the parked leaf's lexical ADDRESS — entering ONLY the branch/iteration
    * the address names (never re-running siblings), rehydrating each lexical
    * scope as it descends (the shared ancestor spine + the leaf's own local scope,
-   * §4.6) — until it reaches the leaf's enclosing statement sequence. There it
-   * binds the answer and runs FORWARD from the statement AFTER the ask, executing
-   * the rest of THAT branch (e.g. a fan-out iteration's `if ok { write }`) to its
-   * end. A re-park deeper re-throws `RunParked`.
+   * §4.6) — until it reaches the leaf's enclosing statement sequence. There the
+   * leaf rule runs (bind the answer and step past it, or re-enter it), and the
+   * levels it passed through are finished from the inside out
+   * (`completeSpine`): the rest of each body runs, exactly as it would have had
+   * the run never parked. A re-park deeper re-throws `RunParked`.
    *
    * The address structure does the routing: `stmt i` selects a statement (the
-   * final `stmt` is the ask's — resume at `i+1`); `iter j` descends a fan-out
-   * body; `branch k` descends a parallel branch / if-arm. Each `iter`/`branch`
-   * step corresponds to one child scope in the parked chain (the interpreter
-   * forks a child env at exactly those points), so the chain is consumed in
-   * lockstep with the descent.
+   * final `stmt` is the leaf's); `iter j` descends a fan-out body; `branch k`
+   * descends a parallel branch / if-arm; `call k` descends into the k-th call
+   * the statement made — a called body, or a collection op whose `iter j` is
+   * the member. Each `iter`/`branch` step corresponds to one child scope in the
+   * current body's parked chain (the interpreter forks a child env at exactly
+   * those points), so the chain is consumed in lockstep with the descent. A
+   * `call` step starts a new body, whose chain and boundary come off the
+   * state's `frames`, in order.
    */
   private async resumeAlongAddress(input: {
     body: Statement[];
     address: Address;
     state: ParkedScopeState;
     movementEnv: Environment;
-    /** The answer to bind at the ask's binding name. Absent under `reenter`. */
-    answer?: Binding;
-    /** Re-enter AT the parked (un-run) statement rather than past the ask (§4.4). */
-    reenter: boolean;
-    /**
-     * CALLBACK FIRE (callback-primitive layer 2) — a THIRD leaf rule. The leaf
-     * statement is a `callback(…)` mint, already run; what this entry runs is
-     * its BODY, in a child scope carrying the fire-time values. It deliberately
-     * does NOT continue the enclosing sequence and does NOT unwind the spine:
-     * that continuation is the MAIN one, still parked, and it wakes only through
-     * its own mechanism. One run, multiple entry points.
-     */
-    fireCallback?: { values: Record<string, unknown>; callIndex: number };
+    leaf: ResumeLeaf;
   }): Promise<void> {
     const { address, state } = input;
+    const malformed = (why: string): MovementEngineError =>
+      new MovementEngineError('MOVENG_RUNTIME', `malformed parked address '${encodeAddress(address)}' — ${why}`);
     if (address.length === 0 || address[address.length - 1].kind !== 'stmt') {
-      throw new MovementEngineError(
-        'MOVENG_RUNTIME',
-        `malformed parked address '${state.address}' — a parked leaf ends at a statement`,
-      );
+      throw malformed('a parked leaf ends at a statement');
     }
+    const frames = state.frames ?? [];
+    // Each body the address passes into keeps its own chain of scopes: an outer
+    // body's rides on the frame that leaves it, the innermost is the state's own.
+    const chains: SerializedScope[][] = [
+      ...frames.flatMap((frame) => (frame.kind === 'arm' ? [] : [frame.scopeChain])),
+      state.scopeChain,
+    ];
+    let segment = 0;
+    let nextFrame = 0;
+    const takeFrame = (): SerializedFrame => {
+      const frame = frames[nextFrame];
+      if (frame === undefined) throw malformed('it enters more bodies than its state records');
+      nextFrame += 1;
+      return frame;
+    };
+
     // The parked scope chain is root-first: [fileEnv, movementEnv, <scope per
     // iter/branch step>…]. The file scope + movement param are rebuilt live by
     // prepareMovement; index 1 (the movement-body scope) carries the body locals
-    // declared before the ask. Re-layer those onto the live movementEnv.
-    await this.rehydrateScopeInto(state, 1, input.movementEnv);
+    // declared before the park. Re-layer those onto the live movementEnv.
+    await this.rehydrateScopeInto(chains[0], 1, input.movementEnv);
 
-    // Walk the address: descend into the named container at each non-final
-    // statement, forking + rehydrating a child scope at each iter/branch, until
-    // the leaf's own statement sequence. `chainIndex` tracks the next scope to
-    // consume (2 = the first iter/branch scope after the movement body).
     let statements = input.body;
     let env = input.movementEnv;
     let frameAddress: Address = ROOT_ADDRESS;
-    let position = this.source!.position;
+    let position: SourcePosition | undefined = this.source!.position;
     let atAnchor = true;
     let chainIndex = 2;
-    // The descent spine (§3): one frame per container level we pass through, so
-    // the leaf-block completion can UNWIND back out and run each ancestor's
-    // post-container continuation (§4). Empty for a linear leaf (no-op unwind).
-    const spine: ResumeAncestorFrame[] = [];
+    // The descent spine (§3): one frame per level we pass through, so the leaf
+    // completion can finish each of them on the way back out (§4).
+    const spine: ResumeSpineFrame[] = [];
 
-    for (let i = 0; i < address.length; i++) {
+    let i = 0;
+    for (;;) {
       const stmtStep = address[i];
       if (stmtStep.kind !== 'stmt') {
-        throw new MovementEngineError(
-          'MOVENG_RUNTIME',
-          `parked address '${state.address}' step ${i} is '${stmtStep.kind}', expected a statement`,
-        );
+        throw malformed(`step ${i} is '${stmtStep.kind}', expected a statement`);
       }
+      if (i === address.length - 1) break;
       const stmtAddress = childStmt(frameAddress, stmtStep.index);
+      const descent = address[i + 1];
+      const caller: ResumeSequence = {
+        statements,
+        env,
+        body: { atAnchor, ...(position !== undefined ? { position } : {}), address: frameAddress },
+        stmtIndex: stmtStep.index,
+      };
 
-      // The FINAL step is the parked leaf's own statement. Two modes (§4.4):
-      //   - ASK resume (reenter=false): the leaf IS the ask; bind the answer at
-      //     its binding name and step FORWARD from the statement AFTER it.
-      //   - RE-ENTER resume (reenter=true): the leaf's statement must be
-      //     RE-EVALUATED (an `await`, a recurring `until` timer); bind nothing
-      //     and RE-ENTER AT it, running it and the rest of this branch forward.
-      if (i === address.length - 1) {
-        if (input.fireCallback !== undefined) {
-          await this.runCallbackBody({
-            statement: statements[stmtStep.index],
-            stmtAddress,
-            env,
-            atAnchor,
-            position,
-            values: input.fireCallback.values,
-            callIndex: input.fireCallback.callIndex,
-          });
-          return;
+      if (descent.kind === 'call') {
+        const frame = takeFrame();
+        if (frame.kind === 'arm' || frame.index !== descent.index) {
+          throw malformed(`its call step ${descent.index} has no matching frame`);
         }
-        if (!input.reenter && state.bindingName !== null && input.answer !== undefined) {
-          env.declare(state.bindingName, input.answer);
-        } else if (!input.reenter && state.presenceBind && state.bindingName !== null) {
-          // A bound `await sleep(…)` woke: inject the presence marker (no answer
-          // channel — the clock is the wake source) so `expired` escapes onto the
-          // race receipt (chunk C, S4).
-          env.declare(state.bindingName, { kind: 'value', value: true, provenance: NO_PROVENANCE });
-        }
-        const resumeIndex = input.reenter ? stmtStep.index : stmtStep.index + 1;
-        // Run the parked leaf's OWN remaining statements. May throw RunParked (a
-        // re-park deeper) — that propagates to `resume()`'s catch (§8), and the
-        // unwind below never runs (the branch is parked, not complete).
-        await this.interpretBody(
-          statements,
+        const site: StatementSite = {
+          body: caller.body,
+          stmtAddress,
           env,
-          { atAnchor, position, address: frameAddress },
-          resumeIndex,
-        );
-        // The leaf block completed — UNWIND the spine, rebuilding normal
-        // execution's return-from-block (§4), and return.
-        await this.unwindSpine(spine, state.address);
-        return;
+          calls: {
+            next: frame.next,
+            completed: await rehydrateCallRecords(frame.journal, this.rehydrationContext()),
+          },
+        };
+        segment += 1;
+        const chain = chains[segment];
+        const callAddress = childCall(stmtAddress, frame.index);
+        if (frame.kind === 'call') {
+          const callee = env.resolve(frame.callee);
+          let root: Environment;
+          let declaration: MovementDeclaration | undefined;
+          if (callee?.kind === 'movement') {
+            declaration = callee.declaration;
+            root = callee.fileEnv ?? this.fileEnv!;
+            statements = declaration.body;
+            atAnchor = false;
+            position = undefined;
+          } else if (callee?.kind === 'closure') {
+            root = closureScope(callee);
+            statements = callee.closure.body;
+          } else {
+            throw malformed(`'${frame.callee}' is no longer a function in the calling scope`);
+          }
+          spine.push({
+            kind: 'call',
+            caller,
+            boundary: { kind: 'call', site, index: frame.index, next: frame.next, callee: frame.callee },
+            ...(declaration !== undefined ? { declaration } : {}),
+          });
+          env = root.child();
+          const offset = root.chainFromRoot().length;
+          await this.rehydrateScopeInto(chain, offset, env);
+          chainIndex = offset + 1;
+          frameAddress = callAddress;
+          i += 2;
+          continue;
+        }
+        // A collection op: the next step names the member.
+        const memberStep = address[i + 2];
+        if (memberStep === undefined || memberStep.kind !== 'iter') {
+          throw malformed(`its collection op at call ${frame.index} names no member`);
+        }
+        const spelling = frame.op.op.toUpperCase();
+        const fn = this.collectionFunction(frame.op.fn, spelling, env);
+        spine.push({
+          kind: 'member',
+          caller,
+          boundary: {
+            kind: 'member',
+            site,
+            index: frame.index,
+            next: frame.next,
+            member: memberStep.index,
+            op: frame.op,
+          },
+          op: {
+            expr: frame.op,
+            spelling,
+            settings: this.collectionSettings(frame.op, spelling),
+            fn,
+            address: callAddress,
+            event: { site, index: frame.index },
+            body: caller.body,
+          },
+        });
+        env = closureScope(fn).child();
+        await this.rehydrateScopeInto(chain, 1, env);
+        chainIndex = 2;
+        statements = fn.closure.body;
+        frameAddress = childIter(callAddress, memberStep.index);
+        i += 3;
+        continue;
       }
 
-      // A non-final statement: it is a container; the NEXT step descends into it.
+      // A container statement: the next step descends into it.
       const container = statements[stmtStep.index];
-      const descent = address[i + 1];
-      const descended = this.descendForResume({
-        container,
-        step: descent,
-        stmtAddress,
-        state,
-      });
+      let armBoundary: LiveBoundary | undefined;
+      let descended: ReturnType<Interpreter['descendForResume']>;
+      if (descent.kind === 'branch' && combinatorOf(container)?.arms.kind === 'dynamic') {
+        const frame = takeFrame();
+        if (frame.kind !== 'arm' || frame.arm !== descent.index) {
+          throw malformed(`its run-time arm ${descent.index} has no matching frame`);
+        }
+        armBoundary = { kind: 'arm', arm: frame.arm, body: frame.body };
+        descended = {
+          statements: frame.body.body,
+          frameAddress: childBranch(stmtAddress, descent.index),
+          atAnchor: false,
+        };
+      } else {
+        descended = this.descendForResume({ container, step: descent, stmtAddress, state });
+      }
       // Fork a child env carrying the rehydrated scope for this iter/branch.
       const childEnv = env.child();
-      await this.rehydrateScopeInto(state, chainIndex, childEnv);
+      await this.rehydrateScopeInto(chains[segment], chainIndex, childEnv);
       chainIndex += 1;
-      // Remember this container level so the leaf-block completion can unwind back
-      // out and run its post-container continuation (§3). Captured with the CURRENT
-      // (parent) level, BEFORE the reassignment below overwrites it.
       spine.push({
+        kind: 'container',
         parentStatements: statements,
         parentEnv: env,
         parentFrameAddress: frameAddress,
         parentAtAnchor: atAnchor,
-        parentPosition: position,
+        ...(position !== undefined ? { parentPosition: position } : {}),
         container,
         containerIndex: stmtStep.index,
         containerAddress: stmtAddress,
@@ -2524,119 +2914,388 @@ class Interpreter {
         childEnv,
         branchAddress: descended.frameAddress,
         branchIndex: descent.index,
+        ...(armBoundary !== undefined ? { armBoundary } : {}),
       });
       statements = descended.statements;
       env = childEnv;
       frameAddress = descended.frameAddress;
       atAnchor = descended.atAnchor;
       if (descended.position !== undefined) position = descended.position;
-      i += 1; // consumed the descent step
+      i += 2;
+    }
+
+    const leafIndex = address[address.length - 1].index;
+    const leafStatements = statements;
+    const leafEnv = env;
+    const leafBody: BodyContext = {
+      atAnchor,
+      ...(position !== undefined ? { position } : {}),
+      address: frameAddress,
+    };
+    const leaf = input.leaf;
+    switch (leaf.kind) {
+      case 'fireCallback':
+        // CALLBACK FIRE (callback-primitive layer 2) — the leaf statement is a
+        // `callback(…)` mint, already run; what this entry runs is its BODY, in
+        // a child scope carrying the fire-time values. It deliberately does NOT
+        // continue the enclosing sequence and does NOT finish the spine: that
+        // continuation is the MAIN one, still parked, and it wakes only through
+        // its own mechanism. One run, multiple entry points.
+        await this.insideSpine(spine, () =>
+          this.runCallbackBody({
+            statement: leafStatements[leafIndex],
+            stmtAddress: childStmt(frameAddress, leafIndex),
+            env: leafEnv,
+            atAnchor: leafBody.atAnchor,
+            position: leafBody.position,
+            values: leaf.values,
+            callIndex: leaf.callIndex,
+          }),
+        );
+        return;
+      case 'settleRace':
+        await this.completeSpine(spine, 0, state.address, async () => {
+          await this.settleRaceAt({
+            statement: leafStatements[leafIndex],
+            frameAddress: leaf.frameAddress,
+            env: leafEnv,
+          });
+          return this.interpretBody(leafStatements, leafEnv, leafBody, { at: leafIndex + 1 });
+        });
+        return;
+      case 'continue': {
+        // Two modes (§4.4):
+        //   - ASK resume (reenter=false): the leaf IS the ask; bind the answer at
+        //     its binding name and step FORWARD from the statement AFTER it.
+        //   - RE-ENTER resume (reenter=true): the leaf's statement must be
+        //     RE-EVALUATED (an `await`, a recurring `until` timer, an engine
+        //     suspension); bind nothing and RE-ENTER AT it — replaying the calls
+        //     it had already finished — and run the rest of this branch forward.
+        if (!leaf.reenter && state.bindingName !== null && leaf.answer !== undefined) {
+          leafEnv.declare(state.bindingName, leaf.answer);
+        } else if (!leaf.reenter && state.presenceBind && state.bindingName !== null) {
+          // A bound `await sleep(…)` woke: inject the presence marker (no answer
+          // channel — the clock is the wake source) so `expired` escapes onto the
+          // race receipt (chunk C, S4).
+          leafEnv.declare(state.bindingName, { kind: 'value', value: true, provenance: NO_PROVENANCE });
+        }
+        const replay = leaf.reenter && state.journal !== undefined
+          ? await rehydrateCallRecords(state.journal, this.rehydrationContext())
+          : undefined;
+        await this.completeSpine(spine, 0, state.address, () =>
+          this.interpretBody(leafStatements, leafEnv, leafBody, {
+            at: leaf.reenter ? leafIndex : leafIndex + 1,
+            ...(replay !== undefined ? { replay } : {}),
+          }),
+        );
+        return;
+      }
+      default:
+        neverAsAny(leaf);
+    }
+  }
+
+  /** Run `fn` inside every boundary on the spine — what a leaf that does not
+   *  finish its spine still needs, so a park inside it records them. */
+  private insideSpine<T>(spine: readonly ResumeSpineFrame[], fn: () => Promise<T>): Promise<T> {
+    return spine.reduceRight<() => Promise<T>>((inner, frame) => {
+      const boundary = frame.kind === 'container' ? frame.armBoundary : frame.boundary;
+      return boundary === undefined ? inner : () => this.withinBoundary(boundary, inner);
+    }, fn)();
+  }
+
+  /**
+   * Run the leaf, then finish every level the descent passed through, from the
+   * inside out — rebuilding normal execution's return out of each (§4). Each
+   * level runs what is inside it within its own boundary, so a re-park deeper
+   * records how to get back; a level whose JOIN is still waiting on siblings
+   * stops the climb there (the run stays parked on them). A `RunParked` thrown
+   * anywhere (a trailing sleep / ask / suspension) propagates naturally (§8).
+   */
+  private async completeSpine(
+    spine: readonly ResumeSpineFrame[],
+    level: number,
+    leafAddress: string,
+    leaf: () => Promise<BodyOutcome>,
+  ): Promise<SpineCompletion> {
+    if (level === spine.length) return { done: true, outcome: await leaf() };
+    const frame = spine[level];
+    const inner = (): Promise<SpineCompletion> => this.completeSpine(spine, level + 1, leafAddress, leaf);
+    switch (frame.kind) {
+      case 'container': {
+        const completed = frame.armBoundary !== undefined
+          ? await this.withinBoundary(frame.armBoundary, inner)
+          : await inner();
+        if (!completed.done) return completed;
+        return this.finishContainer(frame, completed.outcome, leafAddress);
+      }
+      case 'call':
+        return this.finishResumedCall(frame, inner);
+      case 'member':
+        return this.finishResumedMember(frame, inner, leafAddress);
+      default:
+        return neverAsAny(frame);
     }
   }
 
   /**
-   * The join-aware unwind (§4). Deepest ancestor first, rebuild normal
-   * execution's return-from-block: for a JOIN frame (fan-out iteration / parallel
-   * branch) persist THIS branch's exports (§12.1), decrement the join, and — only
-   * for the unique branch that closes it — merge every branch's exports into the
-   * parent (§12.4) and run the post-container continuation. For a non-join (`if`
-   * arm) frame just run the continuation. A `RunParked` thrown by a continuation
-   * (a trailing sleep/ask/cost re-exhaustion) propagates naturally (§8).
+   * A container level (§4). For a JOIN frame (fan-out iteration / parallel
+   * branch) persist THIS branch's exports (§12.1), decrement the join, and —
+   * only for the unique branch that closes it — merge every branch's exports
+   * into the parent (§12.4) and run the post-container continuation. For an
+   * `if` arm, a `return` inside it returns from the enclosing body; otherwise
+   * the continuation runs.
    */
-  private async unwindSpine(spine: ResumeAncestorFrame[], leafAddress: string): Promise<void> {
+  private async finishContainer(
+    frame: ResumeContainerFrame,
+    outcome: BodyOutcome,
+    leafAddress: string,
+  ): Promise<SpineCompletion> {
     // The join-aware unwind coordinates durable joins through the park sink
     // (persist / decrement / collect). A resume with no sink is a degenerate
     // test-only mode with no durable join to close — complete only the leaf block,
     // exactly as before the unwind existed. Production resume always has a sink.
-    if (this.input.parkSink === undefined) return;
-    for (let f = spine.length - 1; f >= 0; f--) {
-      const frame = spine[f];
-
-      // A combinator ARM is a `branch k` frame. `race` settles on the first
-      // completer (pending 1); `parallel` is an ordinary join (pending N).
-      const combinator =
-        frame.descentKind === 'branch' ? combinatorOf(frame.container) : undefined;
-      const isRace = combinator?.kind === 'race';
-      const isJoin = frame.descentKind === 'iter' || combinator?.kind === 'parallel';
-
-      if (isRace) {
-        // A race ARM completed. Persist its export, then claim the race frame
-        // (pending 1 — FIRST completer wins). The winner stops listening on the
-        // still-parked arms (one signal per park), builds the receipt, and runs
-        // the continuation; a non-winner (already claimed) did its writes and
-        // stops — the run stays parked on the winner's continuation, if any.
-        await this.input.parkSink!.persistBranchExport({
-          frameAddress: encodeAddress(frame.containerAddress),
-          branchAddress: encodeAddress(frame.branchAddress),
-          branchIndex: frame.branchIndex,
-          exports: this.serializeBranchExport(frame),
-        });
-        const { closed } = await this.input.parkSink!.decrementJoin({
-          frameAddress: encodeAddress(frame.containerAddress),
-          branchAddress: encodeAddress(frame.branchAddress),
-          leafAddress,
-        });
-        if (this.deferRaceSettlement) {
-          // Batch mode (F18/F21): this branch WON, but other branches of the same
-          // batch may still complete. Record the export (done above) and defer the
-          // settlement — the worker runs every resolvable branch first, then
-          // settles once via `settleRaceFrame` with ALL winners. The branch's
-          // writes stand; the run stays parked until the post-batch settle.
-          this.deferredRaceFrames.add(encodeAddress(frame.containerAddress));
-          return;
-        }
-        if (!closed) return; // a sibling already won this race (inline mode)
-        await this.settleRaceWinner(frame, leafAddress);
-        await this.interpretBody(
-          frame.parentStatements,
-          frame.parentEnv,
-          {
-            atAnchor: frame.parentAtAnchor,
-            position: frame.parentPosition,
-            address: frame.parentFrameAddress,
-          },
-          frame.containerIndex + 1,
-        );
-        continue;
-      }
-
-      if (isJoin) {
-        // Persist THIS branch's export contribution durably, keyed by the join
-        // frame + this branch, BEFORE decrementing (§12.1) — so by the time ANY
-        // branch observes `closed`, every sibling's export row is committed.
-        await this.input.parkSink!.persistBranchExport({
-          frameAddress: encodeAddress(frame.containerAddress),
-          branchAddress: encodeAddress(frame.branchAddress),
-          branchIndex: frame.branchIndex,
-          exports: this.serializeBranchExport(frame),
-        });
-        const { closed } = await this.input.parkSink!.decrementJoin({
-          frameAddress: encodeAddress(frame.containerAddress),
-          branchAddress: encodeAddress(frame.branchAddress),
-          leafAddress,
-        });
-        if (!closed) {
-          // Not the last branch — this branch is done (its writes stand), the join
-          // stays pending, the run stays parked. Do NOT run the continuation.
-          return;
-        }
-        // We ARE the closer — fold ALL branches' exports into the parent (§12.4),
-        // then fall through to run the deferred post-container continuation.
-        await this.mergeJoinBranch(frame);
-      }
-      // Non-join (`if` arm): arm bindings are block-scoped — nothing to merge.
-
-      await this.interpretBody(
+    if (this.input.parkSink === undefined) return STOPPED;
+    const continuation = async (): Promise<SpineCompletion> => ({
+      done: true,
+      outcome: await this.interpretBody(
         frame.parentStatements,
         frame.parentEnv,
         {
           atAnchor: frame.parentAtAnchor,
-          position: frame.parentPosition,
+          ...(frame.parentPosition !== undefined ? { position: frame.parentPosition } : {}),
           address: frame.parentFrameAddress,
         },
-        frame.containerIndex + 1,
+        { at: frame.containerIndex + 1 },
+      ),
+    });
+
+    // A combinator ARM is a `branch k` frame. `race` settles on the first
+    // completer (pending 1); `parallel` is an ordinary join (pending N).
+    const combinator =
+      frame.descentKind === 'branch' ? combinatorOf(frame.container) : undefined;
+    const isRace = combinator?.kind === 'race';
+    const isJoin = frame.descentKind === 'iter' || combinator?.kind === 'parallel';
+
+    if (isRace) {
+      // A race ARM completed. Persist its export, then claim the race frame
+      // (pending 1 — FIRST completer wins). The winner stops listening on the
+      // still-parked arms (one signal per park), builds the receipt, and runs
+      // the continuation; a non-winner (already claimed) did its writes and
+      // stops — the run stays parked on the winner's continuation, if any.
+      await this.input.parkSink.persistBranchExport({
+        frameAddress: encodeAddress(frame.containerAddress),
+        branchAddress: encodeAddress(frame.branchAddress),
+        branchIndex: frame.branchIndex,
+        exports: this.serializeBranchExport(frame),
+      });
+      const { closed } = await this.input.parkSink.decrementJoin({
+        frameAddress: encodeAddress(frame.containerAddress),
+        branchAddress: encodeAddress(frame.branchAddress),
+        leafAddress,
+      });
+      if (this.deferRaceSettlement) {
+        // Batch mode (F18/F21): this branch WON, but other branches of the same
+        // batch may still complete. Record the export (done above) and defer the
+        // settlement — the worker runs every resolvable branch first, then
+        // settles once via `settleRaceFrame` with ALL winners. The branch's
+        // writes stand; the run stays parked until the post-batch settle.
+        this.deferredRaceFrames.add(encodeAddress(frame.containerAddress));
+        return STOPPED;
+      }
+      if (!closed) return STOPPED; // a sibling already won this race (inline mode)
+      await this.settleRaceWinner(frame, leafAddress);
+      return continuation();
+    }
+
+    if (isJoin) {
+      // Persist THIS branch's export contribution durably, keyed by the join
+      // frame + this branch, BEFORE decrementing (§12.1) — so by the time ANY
+      // branch observes `closed`, every sibling's export row is committed.
+      await this.input.parkSink.persistBranchExport({
+        frameAddress: encodeAddress(frame.containerAddress),
+        branchAddress: encodeAddress(frame.branchAddress),
+        branchIndex: frame.branchIndex,
+        exports: this.serializeBranchExport(frame),
+      });
+      const { closed } = await this.input.parkSink.decrementJoin({
+        frameAddress: encodeAddress(frame.containerAddress),
+        branchAddress: encodeAddress(frame.branchAddress),
+        leafAddress,
+      });
+      // Not the last branch — this branch is done (its writes stand), the join
+      // stays pending, the run stays parked. Do NOT run the continuation.
+      if (!closed) return STOPPED;
+      // We ARE the closer — fold ALL branches' exports into the parent (§12.4),
+      // then run the deferred post-container continuation.
+      await this.mergeJoinBranch(frame);
+      return continuation();
+    }
+
+    // An `if` arm: its bindings are block-scoped — nothing to merge — and it is
+    // transparent to `return`, which lands in the enclosing scope too.
+    if (outcome.returned) {
+      frame.parentEnv.declare(RETURN_SLOT, outcome.value);
+      return { done: true, outcome };
+    }
+    return continuation();
+  }
+
+  /**
+   * A call level: the callee's body finished on resume, so the call hands back
+   * what it returned — and the CALLING statement runs again, its earlier calls
+   * replayed and this one handing back that value, then the calling body goes
+   * on past it. A quiet scope end inside the callee ends only the callee's
+   * scope, as it does when nothing parked.
+   */
+  private async finishResumedCall(
+    frame: ResumeCallFrame,
+    inner: () => Promise<SpineCompletion>,
+  ): Promise<SpineCompletion> {
+    const { declaration } = frame;
+    const callerBody = this.movementBody;
+    if (declaration !== undefined) {
+      this.callStack.push(declaration);
+      this.movementBody = declaration.body;
+    }
+    let completed: SpineCompletion;
+    try {
+      completed = await this.withinBoundary(frame.boundary, inner);
+    } catch (e) {
+      if (!(e instanceof ScopeEndedQuietly)) throw e;
+      completed = { done: true, outcome: FELL_THROUGH };
+    } finally {
+      if (declaration !== undefined) {
+        this.movementBody = callerBody;
+        this.callStack.pop();
+      }
+    }
+    if (!completed.done) return completed;
+    const value = completed.outcome.returned ? completed.outcome.value : undefined;
+    return {
+      done: true,
+      outcome: await this.rerunStatement(frame.caller, frame.boundary.site, {
+        index: frame.boundary.index,
+        record: { value, next: frame.boundary.next },
+      }),
+    };
+  }
+
+  /**
+   * A collection op's member finished on resume. Its answer joins the op's
+   * frame like a block iteration's export (§12.1), and the join is decremented.
+   * The member that closes it finishes the OP: it runs the members that never
+   * started (with the op's own settings — which may park the op again), builds
+   * the answer in member order, and re-runs the op's statement with it. A
+   * member that fails is forgiven or not exactly as `onError` says when nothing
+   * parked.
+   */
+  private async finishResumedMember(
+    frame: ResumeMemberFrame,
+    inner: () => Promise<SpineCompletion>,
+    leafAddress: string,
+  ): Promise<SpineCompletion> {
+    const { op } = frame;
+    const flow = this.openFlowFrame();
+    const into = this.trace;
+    let answer: MemberAnswer;
+    try {
+      const completed = await this.flowFrames.run(flow, () => this.withinBoundary(frame.boundary, inner));
+      if (!completed.done) return completed;
+      answer = { kept: true, value: memberValue(op, completed.outcome) };
+    } catch (error) {
+      if (op.settings.onError === 'error' || !isMemberFailure(error)) throw error;
+      answer = { kept: false };
+      if (op.settings.onError === 'warn') {
+        flow.trace.push(memberLeftOut(op.spelling, frame.boundary.member, undefined, error));
+      }
+    } finally {
+      into.push(...flow.trace);
+    }
+
+    const sink = this.input.parkSink;
+    if (sink === undefined) return STOPPED;
+    const frameAddress = encodeAddress(op.address);
+    const branchAddress = encodeAddress(childIter(op.address, frame.boundary.member));
+    await sink.persistBranchExport({
+      frameAddress,
+      branchAddress,
+      branchIndex: frame.boundary.member,
+      exports: serializeMemberAnswer(answer),
+    });
+    const { closed } = await sink.decrementJoin({ frameAddress, branchAddress, leafAddress });
+    if (!closed) return STOPPED;
+
+    const run = await this.resumedCollectionRun(op, frameAddress);
+    const pending = run.members.map((_, index) => index).filter((index) => run.answers[index] === undefined);
+    const value = await this.runCollectionMembers(run, pending, run.answers);
+    return {
+      done: true,
+      outcome: await this.rerunStatement(frame.caller, frame.boundary.site, {
+        index: frame.boundary.index,
+        record: { value, next: frame.boundary.next },
+      }),
+    };
+  }
+
+  /** A parked op as its frame kept it: the members it reads, `REDUCE`'s
+   *  start, and every answer its members have given so far. */
+  private async resumedCollectionRun(
+    op: ResumedCollectionOp,
+    frameAddress: string,
+  ): Promise<CollectionRun & { answers: MemberAnswer[] }> {
+    const rows = await this.input.parkSink!.collectBranchExports({ frameAddress });
+    const ctx = this.rehydrationContext();
+    const stateRow = rows.find((row) => row.branchIndex === FRAME_STATE_INDEX);
+    if (stateRow === undefined || !isCollectionOpState(stateRow.exports)) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `resume: the collection op at '${frameAddress}' kept no record of its members`,
       );
     }
+    const source = await rehydrateBinding(stateRow.exports.source, ctx);
+    const init = await rehydrateBinding(stateRow.exports.init, ctx);
+    if (source.kind !== 'value' || !Array.isArray(source.value)) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `resume: the collection op at '${frameAddress}' kept members that are not a list`,
+      );
+    }
+    const answers: MemberAnswer[] = [];
+    for (const row of rows) {
+      if (row.branchIndex < 0 || !isMemberAnswerExport(row.exports)) continue;
+      if (!row.exports.kept) {
+        answers[row.branchIndex] = { kept: false };
+        continue;
+      }
+      const bound = await rehydrateBinding(row.exports.answer, ctx);
+      answers[row.branchIndex] = { kept: true, value: bound.kind === 'value' ? bound.value : bound };
+    }
+    return {
+      ...op,
+      members: source.value,
+      sourceProvenance: source.provenance ?? NO_PROVENANCE,
+      init: init.kind === 'value' ? init.value : null,
+      answers,
+    };
+  }
+
+  /**
+   * Run a calling statement again, with the call a park was inside handing back
+   * `record`, and every call it had finished before replaying its kept value —
+   * then the rest of its body.
+   */
+  private rerunStatement(
+    caller: ResumeSequence,
+    site: StatementSite,
+    resumed: { index: number; record: CallRecord },
+  ): Promise<BodyOutcome> {
+    const replay = new Map(site.calls.completed);
+    replay.set(resumed.index, resumed.record);
+    return this.interpretBody(caller.statements, caller.env, caller.body, {
+      at: caller.stmtIndex,
+      replay,
+    });
   }
 
   /**
@@ -2662,7 +3321,7 @@ class Interpreter {
       if (bindingName === undefined) return;
       frame.parentEnv.declare(
         bindingName,
-        await this.receiptFromExports(rows, literalArmsOf(combinator).length, ctx),
+        await this.receiptFromExports(rows, armCountOf(combinator, rows), ctx),
       );
       return;
     }
@@ -2692,7 +3351,11 @@ class Interpreter {
    * resumed receipt reads exactly as a never-parked one would.
    */
   private async settleRaceWinner(frame: ResumeAncestorFrame, leafAddress: string): Promise<void> {
-    const armCount = literalArmsOf(combinatorOf(frame.container)).length;
+    const combinator = combinatorOf(frame.container);
+    const kept = await this.input.parkSink!.collectBranchExports({
+      frameAddress: encodeAddress(frame.containerAddress),
+    });
+    const armCount = combinator !== undefined ? armCountOf(combinator, kept) : 0;
     // Every arm's subtree is withdrawn — the winner's own parked row may still
     // exist mid-resume, so it is spared by ADDRESS, never by ordering.
     const loserSubtrees: string[] = [];
@@ -2708,12 +3371,9 @@ class Interpreter {
 
     const bindingName = frame.container.kind === 'assign' ? frame.container.name : undefined;
     if (bindingName === undefined) return;
-    const rows = await this.input.parkSink!.collectBranchExports({
-      frameAddress: encodeAddress(frame.containerAddress),
-    });
     frame.parentEnv.declare(
       bindingName,
-      await this.receiptFromExports(rows, armCount, this.rehydrationContext()),
+      await this.receiptFromExports(kept, armCount, this.rehydrationContext()),
     );
   }
 
@@ -2862,18 +3522,20 @@ class Interpreter {
    * a no-op (a shallow leaf has fewer scopes than a deep one).
    */
   private async rehydrateScopeInto(
-    state: ParkedScopeState,
+    chain: readonly SerializedScope[],
     chainIndex: number,
     env: Environment,
   ): Promise<void> {
-    const scope = state.scopeChain[chainIndex];
+    const scope = chain[chainIndex];
     if (!scope) return;
     const ctx = this.rehydrationContext();
     for (const [name, descriptor] of Object.entries(scope.bindings)) {
-      if (descriptor.kind === 'event') continue;
+      // The trigger's event is bound live as the movement's parameter; one
+      // passed on to a called body by another name is the same event.
       if (
         env.resolve(name) !== undefined &&
-        (descriptor.kind === 'instance' ||
+        (descriptor.kind === 'event' ||
+          descriptor.kind === 'instance' ||
           descriptor.kind === 'movement' ||
           descriptor.kind === 'shape')
       ) {
@@ -3571,13 +4233,14 @@ class Interpreter {
     statements: Statement[],
     env: Environment,
     body: BodyContext,
-    /** Resume entry (async user interaction §4.4): the walk begins at this
-     *  index instead of 0, skipping the statements whose effects ran before
-     *  the park (forward-from-leaf). One-shot — NOT threaded into nested bodies
-     *  (an `if` arm / parallel branch always starts at 0). Only the movement-body
-     *  root sets it, for a single-ask linear resume (chunk 5). */
-    startIndex = 0,
+    /** Resume entry (async user interaction §4.4): the walk begins at `at`
+     *  instead of 0, skipping the statements whose effects ran before the park
+     *  (forward-from-leaf), and that first statement replays the calls it had
+     *  already finished. One-shot — NOT threaded into nested bodies (an `if`
+     *  arm / parallel branch always starts at 0). */
+    entry: BodyEntry = {},
   ): Promise<BodyOutcome> {
+    const startIndex = entry.at ?? 0;
     // A node declaration in a body names a shape for the whole body, as the
     // checker hoists it — and a resume, which re-enters past the statements
     // that already ran, finds it again here.
@@ -3601,9 +4264,19 @@ class Interpreter {
       }
       // The statement is the SITE of any call nested in its expressions: such a
       // call runs as this statement's (movement-lang checker/nested_calls.ts).
-      const outcome = await this.statementSites.run({ body, stmtAddress }, () =>
-        this.interpretStatement(statement, env, body, stmtAddress),
-      );
+      const replay = stmtIndex === startIndex ? entry.replay : undefined;
+      const site: StatementSite = {
+        body,
+        stmtAddress,
+        env,
+        calls: { next: 0, completed: new Map(), ...(replay !== undefined ? { replay } : {}) },
+      };
+      const outcome = await this.statementSites.run(site, async () => {
+        if (this.input.suspendWhen?.({ kind: 'statement', address: encodeAddress(stmtAddress) })) {
+          await this.suspendFlow();
+        }
+        return this.interpretStatement(statement, env, body, stmtAddress);
+      });
       if (outcome !== undefined) return outcome;
     }
     return FELL_THROUGH;
@@ -3764,9 +4437,16 @@ class Interpreter {
         env.declare(name, { kind: 'extractRoot', emission });
         break;
       }
-      case 'extractCall':
-        env.declare(name, await this.runExtractCall(value.extractCall, env));
+      case 'extractCall': {
+        // A call like any other: re-running its statement takes the value it
+        // already extracted instead of paying for it again.
+        const event = await this.beginCall();
+        const extracted = event.replayed !== undefined
+          ? event.replayed.value
+          : this.finishCall(event, await this.runExtractCall(value.extractCall, env));
+        env.declare(name, requireCallValue('extract', extracted));
         break;
+      }
       case 'block':
         await this.interpretBlock(value.block, name, env, stmtAddress);
         break;
@@ -3879,14 +4559,17 @@ class Interpreter {
    * `MAP(xs, f)` / `FILTER(xs, f)` / `REDUCE(xs, init, f)` / `GROUPBY(xs, key)`
    * / `KEYBY(xs, key)` — the function, once per member.
    *
-   * In-app: nothing here is pushed anywhere. The checker refuses a function
-   * that can park, so every member's run finishes, and the whole op is one
-   * statement.
-   *
-   * Each member runs as `iter i` of this statement, so a member has an address
-   * of its own rather than borrowing the enclosing sequence's. Members run one
+   * The op is one of its statement's calls (`call k`), and each member runs as
+   * `iter i` under it, so a member has an address of its own. Members run one
    * at a time unless `MAP` / `FILTER` were given a settings record saying
    * otherwise (`runMembers`); the answer is in MEMBER order either way.
+   *
+   * A member may park (an `await` in its function, or the engine suspending
+   * it). The op is then a JOIN, like a traversal-headed block: the members
+   * that finished keep their answers at the op's frame, the parked ones are
+   * its pending count, and the op parks. Whichever parked member finishes last
+   * on resume runs the members that never started, builds the answer, and
+   * re-runs the op's statement with it (`finishResumedMember`).
    */
   private async interpretCollectionOp(
     expr: CollectionOpExpression,
@@ -3895,6 +4578,22 @@ class Interpreter {
     body: BodyContext,
     stmtAddress: Address,
   ): Promise<void> {
+    const event = await this.beginCall();
+    const bound = event.replayed !== undefined
+      ? event.replayed.value
+      : this.finishCall(event, await this.runCollectionOp(expr, env, body, stmtAddress, event));
+    if (bindingName !== undefined) {
+      env.declare(bindingName, requireCallValue(expr.op.toUpperCase(), bound));
+    }
+  }
+
+  private async runCollectionOp(
+    expr: CollectionOpExpression,
+    env: Environment,
+    body: BodyContext,
+    stmtAddress: Address,
+    event: CallEvent,
+  ): Promise<Binding> {
     const spelling = expr.op.toUpperCase();
     const source = await this.evaluateSlot(expr.source, { env });
     const members = source.value;
@@ -3904,104 +4603,119 @@ class Interpreter {
         `'${spelling}' reads a collection of values and got ${members === null || members === undefined ? 'nothing' : typeof members} — the checker should have caught this`,
       );
     }
-    const settings = this.collectionSettings(expr, spelling);
-    const fn = this.collectionFunction(expr.fn, spelling, env);
-    const params = fn.closure.params.map((p) => p.name);
+    const init = expr.op === 'reduce' && expr.init !== undefined
+      ? (await this.evaluateSlot(expr.init, { env })).value
+      : null;
+    const run: CollectionRun = {
+      expr,
+      spelling,
+      settings: this.collectionSettings(expr, spelling),
+      fn: this.collectionFunction(expr.fn, spelling, env),
+      address: childCall(event.site?.stmtAddress ?? stmtAddress, event.index),
+      event,
+      body,
+      members,
+      sourceProvenance: source.provenance,
+      init,
+    };
+    return this.runCollectionMembers(run, members.map((_, index) => index), []);
+  }
 
-    const call = async (values: unknown[], index: number): Promise<unknown> => {
+  /**
+   * Run the given members of an op and build its answer — or, when any of them
+   * parked, keep what the finished ones answered at the op's frame and park the
+   * op. `answers` holds the members already answered (on resume: every member
+   * but the ones never started).
+   */
+  private async runCollectionMembers(
+    run: CollectionRun,
+    indices: readonly number[],
+    answers: MemberAnswer[],
+  ): Promise<Binding> {
+    const params = run.fn.closure.params.map((p) => p.name);
+    const member = async (index: number): Promise<unknown> => {
+      const values = run.expr.op === 'reduce'
+        ? [carriedBefore(answers, index, run.init), run.members[index]]
+        : [run.members[index]];
       const args: Record<string, unknown> = {};
       params.forEach((name, position) => {
         args[name] = values[position] ?? null;
       });
-      const outcome = await this.invokeClosure(fn, args, {
-        ...body,
-        address: childIter(stmtAddress, index),
-      });
-      if (!outcome.returned) {
-        // MAP alone allows this (checker: MAP_SLOT_ABSENT) — the closure ran
-        // for its statements' effects (its writes already landed, above) and
-        // this member's slot is simply absent. FILTER/REDUCE/GROUPBY/KEYBY
-        // still require a return, so reaching here for one of those really is
-        // the checker escape the message names.
-        if (expr.op === 'map') return null;
-        throw new MovementEngineError(
-          'MOVENG_RUNTIME',
-          `the function for '${spelling}' returned nothing — the checker should have caught this`,
-        );
-      }
-      return outcome.value.kind === 'value' ? outcome.value.value : outcome.value;
+      const outcome = await this.enterMember(run, index, () =>
+        this.invokeClosure(run.fn, args, { ...run.body, address: childIter(run.address, index) }),
+      );
+      return memberValue(run, outcome);
     };
+    const parked = await this.runMembers({
+      indices,
+      count: run.members.length,
+      settings: run.settings,
+      spelling: run.spelling,
+      answers,
+      member,
+    });
+    if (parked.length > 0) await this.parkCollectionOp(run, answers, parked.length);
+    return collectionAnswer(run, answers);
+  }
 
-    let bound: Binding;
-    if (expr.op === 'reduce') {
-      const start = expr.init !== undefined
-        ? (await this.evaluateSlot(expr.init, { env })).value
-        : null;
-      // One at a time by construction: each member's call reads the last one's
-      // answer.
-      let carried = start;
-      await this.runMembers(members.length, settings, spelling, async (index) => {
-        carried = await call([carried, members[index]], index);
-        return carried;
+  /** A member's run, inside its boundary — so a park in it records how to
+   *  get back to this member of this op. */
+  private enterMember<T>(run: CollectionRun, index: number, fn: () => Promise<T>): Promise<T> {
+    const site = run.event.site;
+    if (site === undefined) return fn();
+    return this.withinBoundary(
+      {
+        kind: 'member',
+        site,
+        index: run.event.index,
+        next: site.calls.next,
+        member: index,
+        op: run.expr,
+      },
+      fn,
+    );
+  }
+
+  /**
+   * Some members parked: the op is now a pending JOIN at its own address. Keep
+   * what resume needs to finish it — the members it reads, `REDUCE`'s start, and
+   * each finished member's answer — at that frame, count the parked members, and
+   * park.
+   */
+  private async parkCollectionOp(
+    run: CollectionRun,
+    answers: readonly MemberAnswer[],
+    parkedMembers: number,
+  ): Promise<never> {
+    const frameAddress = encodeAddress(run.address);
+    const sink = this.input.parkSink;
+    if (sink !== undefined) {
+      const state: CollectionOpState = {
+        source: serializeBinding({
+          kind: 'value',
+          value: run.members,
+          provenance: run.sourceProvenance,
+        }),
+        init: serializeBinding({ kind: 'value', value: run.init, provenance: NO_PROVENANCE }),
+      };
+      await sink.persistBranchExport({
+        frameAddress,
+        branchAddress: frameAddress,
+        branchIndex: FRAME_STATE_INDEX,
+        exports: state,
       });
-      bound = { kind: 'value', value: carried, provenance: transformed(source.provenance) };
-    } else if (expr.op === 'map') {
-      const answers = await this.runMembers(members.length, settings, spelling, (index) =>
-        call([members[index]], index),
-      );
-      const out = answers.flatMap((answer) => (answer.kept ? [answer.value] : []));
-      bound = { kind: 'value', value: out, provenance: transformed(source.provenance) };
-    } else if (expr.op === 'filter') {
-      const answers = await this.runMembers(members.length, settings, spelling, (index) =>
-        call([members[index]], index),
-      );
-      // Truthiness is the language's own: the function returns a boolean, and
-      // anything else is the checker's business, not a second definition here.
-      // A member whose predicate failed (under a forgiving `onError`) answered
-      // nothing, so it is not kept.
-      const out = members.filter((_, index) => {
-        const answer = answers[index];
-        return answer?.kept === true && answer.value === true;
-      });
-      bound = { kind: 'value', value: out, provenance: source.provenance };
-    } else {
-      // GROUPBY / KEYBY — the key function's answer names the slot. A key that
-      // is not text at run time is a checker escape; say so rather than
-      // stringify it, which is the silence the save-time rule exists to avoid.
-      const keys = await this.runMembers(members.length, settings, spelling, (index) =>
-        call([members[index]], index),
-      );
-      const filed: Record<string, unknown> = {};
-      members.forEach((member, index) => {
-        const answer = keys[index];
-        if (answer?.kept !== true) return;
-        const key = answer.value;
-        if (typeof key !== 'string') {
-          throw new MovementEngineError(
-            'MOVENG_RUNTIME',
-            `'${spelling}' files each member under a text key, and this one answered ${key === null || key === undefined ? 'nothing' : typeof key} — the checker should have caught this`,
-          );
-        }
-        if (expr.op === 'keyby') {
-          // Two members under one key is the author's claim turning out false —
-          // exactly `ONLY`'s situation, and it gets `ONLY`'s answer: fail the
-          // run naming the key, rather than quietly keeping one of them.
-          if (Object.hasOwn(filed, key)) {
-            throw new MovementEngineError(
-              'MOVENG_RUNTIME',
-              `KEYBY says each key names one member, and '${key}' names more than one. Use GROUPBY if a key can have several.`,
-            );
-          }
-          filed[key] = member;
-          return;
-        }
-        const group = filed[key];
-        if (Array.isArray(group)) group.push(member);
-        else filed[key] = [member];
-      });
-      bound = { kind: 'value', value: filed, provenance: transformed(source.provenance) };
+      for (const [index, answer] of answers.entries()) {
+        if (answer === undefined) continue;
+        await sink.persistBranchExport({
+          frameAddress,
+          branchAddress: encodeAddress(childIter(run.address, index)),
+          branchIndex: index,
+          exports: serializeMemberAnswer(answer),
+        });
+      }
+      await sink.recordJoin({ frameAddress, parkedChildren: parkedMembers });
     }
-    if (bindingName !== undefined) env.declare(bindingName, bound);
+    throw new RunParked(frameAddress);
   }
 
   /** The op's settings record, read the way the checker read it — or, with
@@ -4026,9 +4740,8 @@ class Interpreter {
   }
 
   /**
-   * Run `member(i)` for every member of a collection op, `settings.concurrency`
-   * at a time, and hand back each one's answer in MEMBER order — whatever order
-   * they finished in.
+   * Run `member(i)` for each of `indices`, `settings.concurrency` at a time,
+   * filling `answers` by MEMBER index — whatever order they finished in.
    *
    * Scheduling. The first `initialConcurrency` members are a batch of their
    * own: it runs to the end before any other member starts, so whatever the
@@ -4049,23 +4762,32 @@ class Interpreter {
    * `warn` and `ignore` leave the member out of the answer — `warn` putting a
    * warning in the trace where the member's entries are. Only a member's own
    * failure is forgiven. A run being cancelled, the run's call ceiling, its
-   * cost cap, a member parking (which the checker refuses), and a `match` that found
-   * nothing ending the scope quietly are the RUN's control flow, not a member
-   * failing, and pass through whatever `onError` says.
+   * cost cap, and a `match` that found nothing ending the scope quietly are the
+   * RUN's control flow, not a member failing, and pass through whatever
+   * `onError` says. When the op does fail, no further member starts, the
+   * members already running finish (their effects have happened, and the run's
+   * ledger has to hold them), and the failure re-thrown is the earliest
+   * MEMBER's — the one a one-at-a-time run would have stopped at.
    *
-   * When the op does fail, no further member starts, the members already
-   * running finish (their effects have happened, and the run's ledger has to
-   * hold them), and the failure re-thrown is the earliest MEMBER's — the one a
-   * one-at-a-time run would have stopped at.
+   * Parking. A member that parks holds its slot: that slot starts nothing
+   * more, while the other slots go on (so with as many slots as members, every
+   * member reaches its own park, as a block's iterations do). Nothing past the
+   * first batch starts once a member of the first batch has parked. The parked
+   * members' indices are returned; the members never started are left
+   * unanswered, for the op's resume to run.
    */
-  private async runMembers(
-    count: number,
-    settings: CollectionRunSettings,
-    spelling: string,
-    member: (index: number) => Promise<unknown>,
-  ): Promise<MemberAnswer[]> {
-    const answers: MemberAnswer[] = [];
+  private async runMembers(input: {
+    indices: readonly number[];
+    /** The op's member count, for the trace's words. */
+    count: number;
+    settings: CollectionRunSettings;
+    spelling: string;
+    answers: MemberAnswer[];
+    member: (index: number) => Promise<unknown>;
+  }): Promise<number[]> {
+    const { indices, count, settings, spelling, answers, member } = input;
     const frames: FlowFrame[] = [];
+    const parked: number[] = [];
     let failure: { index: number; error: unknown } | undefined;
     let next = 0;
     // Each member's trace joins the enclosing trace as soon as every member
@@ -4075,43 +4797,47 @@ class Interpreter {
     const finished: boolean[] = [];
     let spliced = 0;
     const splice = (): void => {
-      while (spliced < count && finished[spliced] === true) {
+      while (spliced < indices.length && finished[spliced] === true) {
         into.push(...(frames[spliced]?.trace ?? []));
         spliced += 1;
       }
     };
 
-    const runOne = async (index: number): Promise<void> => {
+    /** Run the member at `position` of `indices`; true when it parked. */
+    const runOne = async (position: number): Promise<boolean> => {
+      const index = indices[position];
       const frame = this.openFlowFrame();
-      frames[index] = frame;
+      frames[position] = frame;
       try {
         answers[index] = { kept: true, value: await this.flowFrames.run(frame, () => member(index)) };
+        return false;
       } catch (error) {
+        if (error instanceof RunParked) {
+          parked.push(index);
+          return true;
+        }
         if (settings.onError === 'error' || !isMemberFailure(error)) {
           if (failure === undefined || index < failure.index) failure = { index, error };
-          return;
+          return false;
         }
         answers[index] = { kept: false };
         if (settings.onError === 'warn') {
-          frame.trace.push({
-            kind: 'warning',
-            code: COLLECTION_MEMBER_FAILED,
-            message: `'${spelling}' left out the member at index ${index} of ${count}, because its function failed: ${getErrorMessage(error)}`,
-          });
+          frame.trace.push(memberLeftOut(spelling, index, count, error));
         }
+        return false;
       } finally {
-        finished[index] = true;
+        finished[position] = true;
         splice();
       }
     };
-    // `width` slots, each taking the next member until `end` is reached or a
-    // member has failed the op.
+    // `width` slots, each taking the next member until `end` is reached, a
+    // member has failed the op, or its own member parked.
     const runBatch = async (end: number, width: number): Promise<void> => {
       const slot = async (): Promise<void> => {
         while (failure === undefined && next < end) {
-          const index = next;
+          const position = next;
           next += 1;
-          await runOne(index);
+          if (await runOne(position)) return;
         }
       };
       await Promise.all(Array.from({ length: Math.max(0, Math.min(width, end - next)) }, slot));
@@ -4119,18 +4845,18 @@ class Interpreter {
 
     try {
       if (settings.initialConcurrency < settings.concurrency) {
-        await runBatch(Math.min(settings.initialConcurrency, count), settings.initialConcurrency);
+        await runBatch(Math.min(settings.initialConcurrency, indices.length), settings.initialConcurrency);
       }
-      await runBatch(count, settings.concurrency);
+      if (parked.length === 0) await runBatch(indices.length, settings.concurrency);
     } finally {
       // A failed op stopped starting members, so the ones after a gap never
       // ran; what the rest did still belongs on the trace, in member order.
-      for (let index = spliced; index < frames.length; index++) {
-        into.push(...(frames[index]?.trace ?? []));
+      for (let position = spliced; position < frames.length; position++) {
+        into.push(...(frames[position]?.trace ?? []));
       }
     }
     if (failure !== undefined) throw failure.error;
-    return answers;
+    return parked;
   }
 
   /** A frame for one concurrent flow started from this one: the enclosing
@@ -4244,7 +4970,12 @@ class Interpreter {
       forks.map((fork) =>
         this.flowFrames.run(fork.frame, async () => {
           try {
-            const outcome = await this.runArm(fork.arm, fork.env, body, fork.address);
+            const runtime = fork.arm.runtime;
+            const outcome = runtime === undefined
+              ? await this.runArm(fork.arm, fork.env, body, fork.address)
+              : await this.withinBoundary({ kind: 'arm', arm: fork.index, body: runtime }, () =>
+                  this.runArm(fork.arm, fork.env, body, fork.address),
+                );
             settled.set(fork.index, outcome.returned ? outcome.value : NULL_SLOT);
           } catch (e) {
             if (e instanceof RunParked) {
@@ -4288,12 +5019,26 @@ class Interpreter {
         return;
       }
       const frameAddress = encodeAddress(stmtAddress);
+      await this.keepArmCount(expr, frameAddress, forks.length);
       await this.input.parkSink?.recordJoin({ frameAddress, parkedChildren: 1 });
       throw new RunParked(frameAddress);
     }
 
     if (parked.length > 0) {
       const frameAddress = encodeAddress(stmtAddress);
+      await this.keepArmCount(expr, frameAddress, forks.length);
+      // The arms that already finished keep their slots at the frame, as a
+      // resumed arm's export does — the closer builds the receipt from them all.
+      for (const fork of forks) {
+        const value = settled.get(fork.index);
+        if (value === undefined) continue;
+        await this.input.parkSink?.persistBranchExport({
+          frameAddress,
+          branchAddress: encodeAddress(fork.address),
+          branchIndex: fork.index,
+          exports: { [RETURN_SLOT]: serializeBinding(value) },
+        });
+      }
       await this.input.parkSink?.recordJoin({
         frameAddress,
         parkedChildren: parked.length,
@@ -4301,6 +5046,19 @@ class Interpreter {
       throw new RunParked(frameAddress);
     }
     bindReceipt();
+  }
+
+  /** A parked combinator whose arms were built at run time keeps how many
+   *  there were — the source cannot say, and the receipt has a slot each. */
+  private async keepArmCount(expr: CombinatorExpression, frameAddress: string, arms: number): Promise<void> {
+    if (expr.arms.kind !== 'dynamic') return;
+    const state: CombinatorFrameState = { arms };
+    await this.input.parkSink?.persistBranchExport({
+      frameAddress,
+      branchAddress: frameAddress,
+      branchIndex: FRAME_STATE_INDEX,
+      exports: state,
+    });
   }
 
   /**
@@ -4328,7 +5086,7 @@ class Interpreter {
             `arm ${index} of '${expr.kind}' is not a function — a combinator runs what it is given, and this is ${typeof entry}`,
           );
         }
-        return { body: entry.closure.body, captured: entry.captured };
+        return { body: entry.closure.body, captured: entry.captured, runtime: entry.closure };
       });
     }
     return expr.arms.arms.map((arm) => this.armInvocation(arm, expr.kind, env));
@@ -4429,8 +5187,107 @@ class Interpreter {
   // reached, so a call in it never runs. What is left is pure, and evaluates
   // over the settled names exactly as it would have over the values.
   //
-  // A call that may wait is refused nested by the checker, so nothing settled
-  // here parks; it runs as the enclosing statement's (its site's) body.
+  // A call that may wait is refused nested by the checker; the engine may still
+  // suspend inside one (`suspendFlow`), and the call's `c k` step on its
+  // statement is what brings a resume back into it.
+
+  // ── Calls as a statement's steps (address `call k`) ──
+  //
+  // Every call a statement makes — a movement / function / closure / plugin
+  // call, an `extract(…)`, a collection op — is numbered in the order the
+  // statement makes it. What runs inside the k-th (a callee's body, an op's
+  // members) is addressed under `<statement>.c<k>`, and what it handed back is
+  // kept on the statement. A statement is only ever resumed by RE-RUNNING it:
+  // its finished calls hand back the kept value instead of running again, and
+  // the call a park was inside hands back what its resumed body returned.
+
+  /** Open the running statement's next call — or, when the statement is a
+   *  re-run, take the value the call had already handed back. */
+  private async beginCall(): Promise<CallEvent> {
+    const site = this.statementSites.getStore();
+    if (site === undefined) return { site, index: 0 };
+    const index = site.calls.next;
+    const replayed = site.calls.replay?.get(index);
+    if (replayed !== undefined) {
+      site.calls.next = replayed.next;
+      site.calls.completed.set(index, replayed);
+      return { site, index, replayed };
+    }
+    if (
+      this.input.suspendWhen?.({
+        kind: 'call',
+        address: encodeAddress(childCall(site.stmtAddress, index)),
+      })
+    ) {
+      await this.suspendFlow();
+    }
+    site.calls.next += 1;
+    return { site, index };
+  }
+
+  /** Keep what a call handed back on its statement. */
+  private finishCall(event: CallEvent, value: Binding | undefined): Binding | undefined {
+    event.site?.calls.completed.set(event.index, { value, next: event.site.calls.next });
+    return value;
+  }
+
+  /** The address what runs inside a call is under. */
+  private callAddress(event: CallEvent, body: BodyContext): Address {
+    return childCall(event.site?.stmtAddress ?? body.address, event.index);
+  }
+
+  /** Run `fn` inside one more body boundary. */
+  private withinBoundary<T>(boundary: LiveBoundary, fn: () => Promise<T>): Promise<T> {
+    return this.boundaries.run([...(this.boundaries.getStore() ?? []), boundary], fn);
+  }
+
+  /** A park's state, with the body boundaries it is inside — absent when it
+   *  is inside none, so such a park reads exactly as one always has. */
+  private parkedState(state: ParkedScopeState): ParkedScopeState {
+    const live = this.boundaries.getStore() ?? [];
+    if (live.length === 0) return state;
+    return { ...state, frames: live.map(serializeBoundary) };
+  }
+
+  /**
+   * ENGINE-INITIATED SUSPENSION: park the running flow just before its current
+   * statement. Resume re-runs that statement (`reenter`), replaying the calls it
+   * had already finished, so nothing it did is done twice. Other flows are
+   * untouched — a concurrent member or arm parks only if it suspends too.
+   *
+   * Callable from anywhere inside a statement's evaluation (a run limit's check
+   * before a priced call is the intended caller). What it cannot undo is work the
+   * statement did outside its calls before the suspension: the calls are the
+   * statement's only replayable steps.
+   */
+  private async suspendFlow(): Promise<never> {
+    const site = this.statementSites.getStore();
+    if (site === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        'the run was asked to suspend outside any statement, where there is nothing to resume',
+      );
+    }
+    const address = encodeAddress(site.stmtAddress);
+    const commit = this.input.parkSink?.commitSuspension?.bind(this.input.parkSink);
+    if (commit === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `the run was asked to suspend at '${address}' and has nowhere durable to park`,
+      );
+    }
+    const state = this.parkedState({
+      version: 1,
+      address,
+      bindingName: null,
+      suspended: true,
+      journal: serializeCallRecords(site.calls.completed),
+      scopeChain: serializeScopeChain(site.env.chainFromRoot()),
+    });
+    await commit({ address, state });
+    this.trace.push({ kind: 'gate', outcome: false });
+    throw new RunParked(address);
+  }
 
   /** Whether a call in an expression is one this engine runs. */
   private runsAsCall(call: CallNode, env: Environment): boolean {
@@ -4643,7 +5500,34 @@ class Interpreter {
     env: Environment,
     body: BodyContext,
   ): Promise<Binding | undefined> {
-    const callee = env.resolve(this.calleeName(statement.callee, env));
+    const event = await this.beginCall();
+    if (event.replayed !== undefined) return event.replayed.value;
+    return this.finishCall(event, await this.runCall(statement, env, body, event));
+  }
+
+  /** Run the body a call boundary leads into, inside that boundary — so a park
+   *  below it records how to get back. A call made outside any statement has
+   *  no statement to be re-run by, and runs as it always did. */
+  private enterCallee<T>(
+    event: CallEvent,
+    callee: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (event.site === undefined) return fn();
+    return this.withinBoundary(
+      { kind: 'call', site: event.site, index: event.index, next: event.site.calls.next, callee },
+      fn,
+    );
+  }
+
+  private async runCall(
+    statement: Extract<Statement, { kind: 'call' }>,
+    env: Environment,
+    body: BodyContext,
+    event: CallEvent,
+  ): Promise<Binding | undefined> {
+    const calleeName = this.calleeName(statement.callee, env);
+    const callee = env.resolve(calleeName);
     if (callee?.kind !== 'movement') {
       // One function sort: a plugin is a function whose body isn't visible, so
       // a call on one is an ordinary call and its value is what the plugin
@@ -4653,7 +5537,7 @@ class Interpreter {
       }
       // A closure bound to a name is a function too (language version 3).
       if (callee?.kind === 'closure' && since(this.languageVersion, 3)) {
-        return this.executeClosureCall(statement, callee, env, body);
+        return this.executeClosureCall(statement, callee, env, body, event);
       }
       if (callee?.kind === 'opaque') {
         throw unsupported(
@@ -4722,14 +5606,14 @@ class Interpreter {
     try {
       // A call re-roots the position (2_model.md "Composition") — the
       // callee runs OFF the trigger's anchor, so anchor-only bridge
-      // synthesis stays with the dispatched movement's own body. The address
-      // re-roots too (the callee is a fresh `Call` frame, §4.2): for the
-      // single-ask milestone an ask inside a callee parks at a callee-rooted
-      // address; cross-frame resume addressing lands with 3.2's frame machine.
-      outcome = await this.interpretBody(declaration.body, calleeEnv, {
-        atAnchor: false,
-        address: ROOT_ADDRESS,
-      });
+      // synthesis stays with the dispatched movement's own body. Its body's
+      // address is this call's step of the calling statement (`s… .c k`).
+      outcome = await this.enterCallee(event, calleeName, () =>
+        this.interpretBody(declaration.body, calleeEnv, {
+          atAnchor: false,
+          address: this.callAddress(event, body),
+        }),
+      );
     } catch (e) {
       // Find-on-missing inside a callee: the callee's scope is the one
       // that ends — the caller continues after the call. What it bound
@@ -4747,14 +5631,15 @@ class Interpreter {
    * `f(3)` where `f` names a closure — called as a movement is: arguments bind
    * by name or by order and evaluate in the caller's source order, the body
    * runs in the closure's captured scope, and its value is what it returns.
-   * The checker refuses a call to a closure that may wait, so nothing here
-   * parks; the body's statements take addresses under the call's statement.
+   * The body's statements take addresses under this call's step of the
+   * calling statement, so a park inside it resumes there.
    */
   private async executeClosureCall(
     statement: Extract<Statement, { kind: 'call' }>,
     closure: Extract<Binding, { kind: 'closure' }>,
     env: Environment,
     body: BodyContext,
+    event: CallEvent,
   ): Promise<Binding | undefined> {
     const params = new Map(closure.closure.params.map((param) => [param.name, param]));
     if (statement.args.length !== params.size) {
@@ -4777,7 +5662,9 @@ class Interpreter {
     }
     let outcome: BodyOutcome = FELL_THROUGH;
     try {
-      outcome = await this.invokeClosure(closure, values, body);
+      outcome = await this.enterCallee(event, this.calleeName(statement.callee, env), () =>
+        this.invokeClosure(closure, values, { ...body, address: this.callAddress(event, body) }),
+      );
     } catch (e) {
       // Find-on-missing inside the closure ends the closure's scope, as it
       // ends a called movement's; the caller continues after the call.
@@ -5005,7 +5892,7 @@ class Interpreter {
         `sleep reached at '${address}' with no park sink — the run cannot suspend on a timer without the durable trigger-run substrate`,
       );
     }
-    const state: ParkedScopeState = {
+    const state = this.parkedState({
       version: 1,
       address,
       // A plain sleep binds nothing — the leaf re-enters AT the un-run
@@ -5014,7 +5901,7 @@ class Interpreter {
       bindingName: presenceBindingName ?? null,
       ...(presenceBindingName !== undefined ? { presenceBind: true } : {}),
       scopeChain: serializeScopeChain(env.chainFromRoot()),
-    };
+    });
     const wakeAt = new Date(Date.now() + durationToMs(sleep.duration.raw));
     await parkSink.commitTimerPark({ address, state, wakeAt });
     this.trace.push({ kind: 'gate', outcome: false });
@@ -5053,14 +5940,14 @@ class Interpreter {
     const config = await this.callbackConfig(callback, env);
     // The CAPTURE. Same shape a park writes, so resume-at-entry is the resume
     // path with a different leaf rule and nothing bespoke to keep in step.
-    const state: ParkedScopeState = {
+    const state = this.parkedState({
       version: 1,
       address,
       // A callback binds nothing at fire time beyond its parameters, which the
       // fire binds into a child scope of this one.
       bindingName: null,
       scopeChain: serializeScopeChain(env.chainFromRoot()),
-    };
+    });
     const minted = await sink.mint({
       address,
       params,
@@ -5364,14 +6251,14 @@ class Interpreter {
       );
     }
     const awaitable = adapter.awaitable;
-    const state: ParkedScopeState = {
+    const state = this.parkedState({
       version: 1,
       address,
       // An await binds nothing at park time: resume RE-ENTERS here and the await
       // re-checks live, binding the landing itself (`reenter` semantics).
       bindingName: null,
       scopeChain: serializeScopeChain(env.chainFromRoot()),
-    };
+    });
     await parkSink.commitAwaitPark({
       address,
       state,
@@ -5437,13 +6324,13 @@ class Interpreter {
         'this run has no park sink — an await needs the durable trigger-run substrate',
       );
     }
-    const state: ParkedScopeState = {
+    const state = this.parkedState({
       version: 1,
       address,
       // Re-enter: the await re-reads the ledger and binds its own landing.
       bindingName: null,
       scopeChain: serializeScopeChain(env.chainFromRoot()),
-    };
+    });
     await parkSink.commitAwaitPark({
       address,
       state,
@@ -5494,7 +6381,7 @@ class Interpreter {
 
     if (subject.kind === 'named') {
       // The named form defers a whole movement with its fixed arguments — the
-      // ordinary call path, re-rooted like any call.
+      // ordinary call path.
       await this.executeCall(
         { kind: 'call', callee: subject.movement, args: subject.args, span: subject.span },
         input.env,
@@ -5574,7 +6461,7 @@ class Interpreter {
     }
     const everyMs =
       source.every !== undefined ? durationToMs(source.every.raw) : UNTIL_DEFAULT_EVERY_MS;
-    const state: ParkedScopeState = {
+    const state = this.parkedState({
       version: 1,
       address,
       // An `until` binds nothing at park time: resume RE-ENTERS here and, when the
@@ -5583,7 +6470,7 @@ class Interpreter {
       bindingName: null,
       until: true,
       scopeChain: serializeScopeChain(env.chainFromRoot()),
-    };
+    });
     await parkSink.commitTimerPark({
       address,
       state,
@@ -5658,9 +6545,7 @@ class Interpreter {
     values: Record<string, unknown>,
     body: BodyContext,
   ): Promise<BodyOutcome> {
-    const env = new Environment();
-    for (const [name, captured] of binding.captured) env.declare(name, captured);
-    const child = env.child();
+    const child = closureScope(binding).child();
     for (const param of binding.closure.params) {
       const supplied = values[param.name] ?? null;
       // A RECORD arrives as the record it is. A collection op hands each member
@@ -6405,6 +7290,7 @@ class Interpreter {
       positions: iterations.length,
     });
     const returned: Binding[] = [];
+    const finished: Array<{ index: number; value: Binding }> = [];
     let parkedIterations = 0;
     for (let iterIndex = 0; iterIndex < iterations.length; iterIndex++) {
       const iteration = iterations[iterIndex];
@@ -6439,7 +7325,10 @@ class Interpreter {
       }
       // The ONE way a value leaves an iteration is its `return`; nothing else
       // the body bound escapes.
-      if (outcome.returned) returned.push(outcome.value);
+      if (outcome.returned) {
+        returned.push(outcome.value);
+        finished.push({ index: iterIndex, value: outcome.value });
+      }
     }
     if (bindingName !== undefined) {
       env.declare(bindingName, blockValue(returned));
@@ -6451,6 +7340,16 @@ class Interpreter {
     // is the fan-out STATEMENT's address (`parentAddress`).
     if (parkedIterations > 0) {
       const frameAddress = encodeAddress(parentAddress);
+      // What the iterations that finished returned waits at the frame with the
+      // parked ones' exports, so the closer's value holds every iteration.
+      for (const { index, value } of finished) {
+        await this.input.parkSink?.persistBranchExport({
+          frameAddress,
+          branchAddress: encodeAddress(childIter(parentAddress, index)),
+          branchIndex: index,
+          exports: { [RETURN_SLOT]: serializeBinding(value) },
+        });
+      }
       await this.input.parkSink?.recordJoin({ frameAddress, parkedChildren: parkedIterations });
       throw new RunParked(frameAddress);
     }
