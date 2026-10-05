@@ -15,6 +15,9 @@ import { Environment } from '../expression';
 import type { ExtractEmission } from '../extraction';
 import {
   assertJsonSerializable,
+  assertParkRead,
+  newParkReader,
+  newParkWriter,
   rehydrateBinding,
   serializeBinding,
   serializeScopeChain,
@@ -372,6 +375,119 @@ describe('serializeBinding / rehydrateBinding (§4.1)', () => {
       expect(edge?.kind === 'landed' && edge.landingShape).toEqual({
         fields: [],
         edges: { founder: { fields: [], edges: { profile: { fields: [], edges: {} } } } },
+      });
+    });
+
+    describe('a run-built node keeps its identity across the park', () => {
+      const node = (title: string): Extract<Binding, { kind: 'nodePosition' }> => ({
+        kind: 'nodePosition',
+        fields: { title },
+        fieldOrder: ['title'],
+        fieldProvenance: {},
+        edges: { x: { kind: 'landed', landings: [] } },
+      });
+      const landingsOf = (binding: Binding | undefined, edge = 'x'): Binding[] => {
+        if (binding?.kind !== 'nodePosition') throw new Error('expected a node');
+        const found = binding.edges[edge];
+        if (found?.kind !== 'landed') throw new Error('expected a landed edge');
+        return found.landings;
+      };
+
+      it('a node reached twice is written once and comes back as one object', async () => {
+        const shared = node('n');
+        const binding: Binding = { kind: 'tuple', slots: [shared, shared] };
+        const descriptor = serializeBinding(binding);
+        if (descriptor.kind !== 'tuple') throw new Error('unreachable');
+        expect(descriptor.slots[1]).toEqual({ kind: 'nodeRef', id: 0 });
+
+        const out = await roundTrip(binding);
+        if (out.kind !== 'tuple') throw new Error('unreachable');
+        expect(out.slots[0]).toBe(out.slots[1]);
+        expect(out.slots[0]).toEqual(shared);
+      });
+
+      it('a self-cycle and a two-node cycle serialise finitely and rehydrate as cycles', async () => {
+        const self = node('self');
+        landingsOf(self).push(self);
+        const a = node('a');
+        const b = node('b');
+        landingsOf(a).push(b);
+        landingsOf(b).push(a);
+
+        const outSelf = await roundTrip(self);
+        expect(landingsOf(outSelf)[0]).toBe(outSelf);
+
+        const outA = await roundTrip(a);
+        const outB = landingsOf(outA)[0];
+        expect(landingsOf(outB)[0]).toBe(outA);
+        expect(outB).not.toBe(outA);
+      });
+
+      it('scopes written by one park share one table: two names for one node stay one node', async () => {
+        const shared = node('n');
+        const root = new Environment();
+        root.declare('n', shared);
+        const child = root.child();
+        child.declare('alias', shared);
+        const chain = JSON.parse(JSON.stringify(serializeScopeChain(child.chainFromRoot())));
+        expect(chain[1].bindings.alias).toEqual({ kind: 'nodeRef', id: 0 });
+
+        const park = newParkReader();
+        const ctx = makeCtx();
+        const n = await rehydrateBinding(chain[0].bindings.n, ctx, park);
+        const alias = await rehydrateBinding(chain[1].bindings.alias, ctx, park);
+        assertParkRead(park);
+        expect(alias).toBe(n);
+      });
+
+      it('a reference read before the node it names (jsonb reorders keys) still resolves to it', async () => {
+        const writer = newParkWriter();
+        const shared = node('n');
+        const first = serializeBinding(shared, writer);
+        const second = serializeBinding(shared, writer);
+        expect(second).toEqual({ kind: 'nodeRef', id: 0 });
+
+        const park = newParkReader();
+        const ctx = makeCtx();
+        const ref = await rehydrateBinding(second, ctx, park);
+        const def = await rehydrateBinding(first, ctx, park);
+        assertParkRead(park);
+        expect(ref).toBe(def);
+        expect(ref).toEqual(shared);
+      });
+
+      it('a reference to a node the state never wrote is refused, not resumed as an empty node', async () => {
+        await expect(rehydrateBinding({ kind: 'nodeRef', id: 7 }, makeCtx())).rejects.toThrow(/never wrote/);
+      });
+
+      it('a park written before nodes kept their identity still resumes, each sighting its own node', async () => {
+        // The old shape: no `id`, the same node written out in full twice.
+        const old: BindingDescriptor = {
+          kind: 'tuple',
+          slots: [0, 1].map(() => ({
+            kind: 'nodePosition',
+            fields: { title: 'n' },
+            fieldOrder: ['title'],
+            fieldProvenance: {},
+            edges: {
+              x: {
+                kind: 'landed',
+                landings: [{ kind: 'nodePosition', fields: { title: 'child' }, fieldProvenance: {}, edges: {} }],
+              },
+            },
+          })),
+        };
+        const out = await rehydrateBinding(JSON.parse(JSON.stringify(old)), makeCtx());
+        if (out.kind !== 'tuple') throw new Error('unreachable');
+        expect(out.slots[0]).toEqual(out.slots[1]);
+        expect(out.slots[0]).not.toBe(out.slots[1]);
+        expect(landingsOf(out.slots[0])[0]).toEqual({
+          kind: 'nodePosition',
+          fields: { title: 'child' },
+          fieldOrder: ['title'],
+          fieldProvenance: {},
+          edges: {},
+        });
       });
     });
 

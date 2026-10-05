@@ -1210,3 +1210,94 @@ describe('a spread of a walk read for a field', () => {
     expect(attio.creates).toEqual([{ recordType: 'company', fields: { name: 'deck.pdf' } }]);
   });
 });
+
+describe('a park keeps the identity of the nodes the run built', () => {
+  const TOPIC = ['node Topic {', '  title: <text>', '  node x {', '    title: <text>', '  }', '}', ''].join('\n');
+
+  /** Run `beforePark`, park on a sleep, then resume — through jsonb's
+   *  stand-in, a JSON round trip — and run `afterPark`. */
+  async function parkAndResume(beforePark: string[], afterPark: string[]) {
+    const source = [
+      TOPIC,
+      'movement intake(msg: <inbox-[:message]->>) {',
+      '  crm = attio(credentials: acme_main)',
+      ...beforePark,
+      '  await sleep(30d)',
+      ...afterPark,
+      '}',
+    ].join('\n');
+    const { sink, timerParks } = makeFakeParkSink();
+    const parked = await run(source, {}, {
+      email: makeFakeAdapter('email').adapter,
+      attio: makeFakeAdapter('attio').adapter,
+      parkSink: sink,
+    });
+    expect(parked.parked).toBe(true);
+    const state = JSON.parse(JSON.stringify(timerParks[0].state)) as ParkedScopeState;
+    const attio = makeFakeAdapter('attio');
+    const result = await resume(source, {}, { email: makeFakeAdapter('email').adapter, attio: attio.adapter }, state);
+    expect(result.parked).toBeUndefined();
+    return { state, creates: attio.creates.map((c) => c.fields) };
+  }
+
+  function bindingNamed(state: ParkedScopeState, name: string) {
+    return state.scopeChain.flatMap((scope) => Object.entries(scope.bindings)).find(([n]) => n === name)?.[1];
+  }
+
+  it('one node held by two graphs is one node after the resume: a write through one is read through the other', async () => {
+    const { state, creates } = await parkAndResume(
+      ['  n = graph<Topic> { title: "n" }', '  g1 = graph { owner: n }', '  g2 = graph { owner: n }'],
+      [
+        '  g1-[o:owner]-> {',
+        '    write o-[:x]-> { unique by (title), title: "added" }',
+        '  }',
+        '  g2-[o:owner]->-[c:x]-> {',
+        '    write crm-[:companies]-> { name: c.title }',
+        '  }',
+        '  n-[c:x]-> {',
+        '    write crm-[:companies]-> { name: c.title }',
+        '  }',
+      ],
+    );
+    expect(creates).toEqual([{ name: 'added' }, { name: 'added' }]);
+    // Written once; every later sighting names it.
+    const g2 = bindingNamed(state, 'g2');
+    if (g2?.kind !== 'nodePosition' || g2.edges.owner?.kind !== 'landed') throw new Error('expected g2 to hold n');
+    expect(g2.edges.owner.landings).toEqual([{ kind: 'nodeRef', id: expect.any(Number) }]);
+  });
+
+  it('a node linked to itself parks and resumes as the same cycle', async () => {
+    const { state, creates } = await parkAndResume(
+      ['  g = graph<Topic> { title: "t" }', '  link g -[:x]-> g'],
+      [
+        '  write g-[:x]-> { unique by (title), title: "later" }',
+        '  g-[a:x]-> {',
+        '    write crm-[:companies]-> { name: a.title }',
+        '  }',
+      ],
+    );
+    // Before, the park recursed round the loop until the stack ran out. (That
+    // the landing IS g, not a copy of it, is proved where the language cannot
+    // hop twice — in serialize.unit.test.ts.)
+    expect(creates).toEqual([{ name: 't' }, { name: 'later' }]);
+    const g = bindingNamed(state, 'g');
+    if (g?.kind !== 'nodePosition' || g.edges.x?.kind !== 'landed') throw new Error('expected g to survive the park');
+    expect(g.edges.x.landings).toEqual([{ kind: 'nodeRef', id: g.id }]);
+  });
+
+  it('two nodes linked to each other park and resume as the same two', async () => {
+    const { creates } = await parkAndResume(
+      ['  a = graph<Topic> { title: "a" }', '  b = graph<Topic> { title: "b" }', '  link a -[:x]-> b', '  link b -[:x]-> a'],
+      [
+        '  write a-[:x]-> { unique by (title), title: "new" }',
+        '  a-[q:x]-> {',
+        '    write crm-[:companies]-> { name: q.title }',
+        '  }',
+        '  b-[q:x]-> {',
+        '    write crm-[:companies]-> { name: q.title }',
+        '  }',
+      ],
+    );
+    expect(creates).toEqual([{ name: 'b' }, { name: 'new' }, { name: 'a' }]);
+  });
+});

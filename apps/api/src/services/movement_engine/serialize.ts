@@ -26,6 +26,10 @@
 //      rules). A `closure` carries its BODY as AST — it has no name to
 //      re-resolve by — plus its capture, recursively.
 //
+// A node the run built is an object held by reference, so one park numbers
+// each such node the first time it writes it and writes a reference after
+// (`ParkWriter` / `ParkReader`): sharing and cycles survive the park.
+//
 // Guard: a `value` binding's payload is `unknown`. The seam asserts it is
 // JSON-serialisable at the boundary, so a non-serialisable value fails LOUD at
 // park (never corrupts the parked scope).
@@ -175,6 +179,10 @@ export type BindingDescriptor =
    *  meta-node's) or a deferred WALK. */
   | {
       kind: 'nodePosition';
+      /** Its number in the park's identity table — what a later `nodeRef` to
+       *  the same node names. Absent on a park written before nodes kept their
+       *  identity: that node comes back on its own, as it always did. */
+      id?: number;
       fields: Record<string, unknown>;
       /** Absent on a park written before the order was kept — the stored
        *  map's own keys stand in, in whatever order jsonb returned them. */
@@ -182,6 +190,14 @@ export type BindingDescriptor =
       fieldProvenance: Extract<Binding, { kind: 'nodePosition' }>['fieldProvenance'];
       edges: Record<string, NodeEdgeDescriptor>;
     }
+  /**
+   * A run-built node this park has already written — reached again through a
+   * second binding, a second graph, or a cycle back to itself. It names the
+   * node's `id`, so the resumed run gets back the ONE node both places held:
+   * a write through one is seen through the other, and a cycle stays a cycle
+   * instead of unrolling forever.
+   */
+  | { kind: 'nodeRef'; id: number }
   /** Bucket 3 (recursive) — a stored, unrun traversal. */
   | { kind: 'lazyWalk'; walk: DeferredWalkDescriptor }
   | { kind: 'opaque'; what: string; name: string };
@@ -308,6 +324,67 @@ export interface RehydrationContext {
   resolveCodeRef(name: string): Binding;
 }
 
+// ── One park's identity table ─────────────────────────────────────────────────
+
+type NodePosition = Extract<Binding, { kind: 'nodePosition' }>;
+
+/**
+ * The run-built nodes one park has written so far, numbered as they were
+ * first reached. A run-built node is an object the run holds by reference —
+ * two graphs can hold the same node, and a node can be linked to itself — so
+ * a park that wrote it once per sighting would hand the resumed run copies
+ * that no longer see each other's writes, and would never finish writing a
+ * cycle. Everything one park writes into one stored state shares one table.
+ *
+ * Source records are already handles to their own system and need none.
+ */
+export interface ParkWriter {
+  readonly nodes: Map<NodePosition, number>;
+}
+
+export function newParkWriter(): ParkWriter {
+  return { nodes: new Map() };
+}
+
+/**
+ * The reading side: each numbered node, as the ONE object every reference to
+ * it rehydrates to. The node is registered empty and filled in place, because
+ * a reference can be read before the node it names — a cycle reaches back to
+ * a node still being read, and jsonb hands an object's keys back in its own
+ * order, so a later sighting can come first.
+ */
+export interface ParkReader {
+  readonly nodes: Map<number, NodePosition>;
+  /** Numbers a reference named whose node has not been read (yet). */
+  readonly unfilled: Set<number>;
+}
+
+export function newParkReader(): ParkReader {
+  return { nodes: new Map(), unfilled: new Set() };
+}
+
+function nodeNumbered(park: ParkReader, id: number): NodePosition {
+  const known = park.nodes.get(id);
+  if (known !== undefined) return known;
+  const node: NodePosition = { kind: 'nodePosition', fields: {}, fieldOrder: [], fieldProvenance: {}, edges: {} };
+  park.nodes.set(id, node);
+  park.unfilled.add(id);
+  return node;
+}
+
+/**
+ * Refuse a state that named a node it never wrote. Only a corrupted state
+ * can — but resuming it would hand the run an empty node where a real one
+ * stood, which is worse than not resuming.
+ */
+export function assertParkRead(park: ParkReader): void {
+  if (park.unfilled.size === 0) return;
+  throw new MovementEngineError(
+    'MOVENG_RUNTIME',
+    `the parked state refers to run-built node(s) ${[...park.unfilled].map((id) => `#${id}`).join(', ')} that it never wrote`,
+  );
+}
+
 // ── JSON-serialisability guard (the `value` boundary, §4.1) ───────────────────
 
 /**
@@ -406,7 +483,8 @@ function serializeResource(resource: Resource): ResourceDescriptor {
  * only the code ref's name. Exhaustive over every binding kind (a new one is a
  * compile error at the `default`).
  */
-export function serializeBinding(binding: Binding): BindingDescriptor {
+export function serializeBinding(binding: Binding, park: ParkWriter = newParkWriter()): BindingDescriptor {
+  const serialize = (entry: Binding): BindingDescriptor => serializeBinding(entry, park);
   switch (binding.kind) {
     // ── Bucket 1 — pure data ──
     case 'event':
@@ -440,19 +518,26 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
         fieldProvenance: binding.fieldProvenance,
       };
     case 'nodePosition': {
+      const seen = park.nodes.get(binding);
+      if (seen !== undefined) return { kind: 'nodeRef', id: seen };
+      // Numbered BEFORE its edges are walked: an edge that leads back here is
+      // a reference, not another lap.
+      const id = park.nodes.size;
+      park.nodes.set(binding, id);
       const edges: Record<string, NodeEdgeDescriptor> = {};
       for (const [name, edge] of Object.entries(binding.edges)) {
         edges[name] =
           edge.kind === 'landed'
             ? {
                 kind: 'landed',
-                landings: edge.landings.map(serializeBinding),
+                landings: edge.landings.map(serialize),
                 ...(edge.landingShape !== undefined ? { landing: edge.landingShape } : {}),
               }
-            : { kind: 'deferred', walk: serializeDeferredWalk(edge.walk) };
+            : { kind: 'deferred', walk: serializeDeferredWalk(edge.walk, park) };
       }
       return {
         kind: 'nodePosition',
+        id,
         fields: binding.fields,
         fieldOrder: binding.fieldOrder,
         fieldProvenance: binding.fieldProvenance,
@@ -460,7 +545,7 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       };
     }
     case 'lazyWalk':
-      return { kind: 'lazyWalk', walk: serializeDeferredWalk(binding.walk) };
+      return { kind: 'lazyWalk', walk: serializeDeferredWalk(binding.walk, park) };
     case 'callback':
       return {
         kind: 'callback',
@@ -478,7 +563,7 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       if (holdsRecords(binding.value)) {
         return {
           kind: 'recordValue',
-          value: serializeValue(binding.value),
+          value: serializeValue(binding.value, park),
           ...(binding.provenance !== undefined ? { provenance: binding.provenance } : {}),
           ...(binding.many === true ? { many: true } : {}),
         };
@@ -510,13 +595,13 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
       // placeholder name; the scope walk overrides `name` with the slot key.
       return { kind: 'opaque', what: binding.what, name: '' };
     case 'positions':
-      return { kind: 'positions', landings: binding.landings.map(serializeBinding) };
+      return { kind: 'positions', landings: binding.landings.map(serialize) };
     case 'tuple':
-      return { kind: 'tuple', slots: binding.slots.map(serializeBinding) };
+      return { kind: 'tuple', slots: binding.slots.map(serialize) };
     case 'closure': {
       const captured: Record<string, BindingDescriptor> = {};
       for (const [name, entry] of binding.captured) {
-        const descriptor = serializeBinding(entry);
+        const descriptor = serialize(entry);
         captured[name] = descriptor.kind === 'opaque' ? { ...descriptor, name } : descriptor;
       }
       return {
@@ -530,7 +615,7 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
     case 'blockMeta': {
       const edges: Record<string, BindingDescriptor[]> = {};
       for (const [name, bindings] of binding.edges) {
-        edges[name] = bindings.map(serializeBinding);
+        edges[name] = bindings.map(serialize);
       }
       return { kind: 'blockMeta', edges, ...(binding.plural === true ? { plural: true } : {}) };
     }
@@ -584,10 +669,10 @@ function withFiles(fields: Record<string, unknown>, ctx: RehydrationContext): Re
   return out;
 }
 
-function serializeDeferredWalk(walk: DeferredWalk): DeferredWalkDescriptor {
+function serializeDeferredWalk(walk: DeferredWalk, park: ParkWriter): DeferredWalkDescriptor {
   const captured: Record<string, BindingDescriptor> = {};
   for (const [name, binding] of walk.captured) {
-    const descriptor = serializeBinding(binding);
+    const descriptor = serializeBinding(binding, park);
     captured[name] = descriptor.kind === 'opaque' ? { ...descriptor, name } : descriptor;
   }
   return { head: walk.head, captured, ...(walk.mapping ? { mapping: walk.mapping } : {}) };
@@ -596,10 +681,11 @@ function serializeDeferredWalk(walk: DeferredWalk): DeferredWalkDescriptor {
 async function rehydrateDeferredWalk(
   descriptor: DeferredWalkDescriptor,
   ctx: RehydrationContext,
+  park: ParkReader,
 ): Promise<DeferredWalk> {
   const captured = new Map<string, Binding>();
   for (const [name, entry] of Object.entries(descriptor.captured)) {
-    captured.set(name, await rehydrateBinding(entry, ctx));
+    captured.set(name, await rehydrateInPark(entry, ctx, park));
   }
   return {
     head: descriptor.head,
@@ -617,7 +703,22 @@ async function rehydrateDeferredWalk(
 export async function rehydrateBinding(
   descriptor: BindingDescriptor,
   ctx: RehydrationContext,
+  park?: ParkReader,
 ): Promise<Binding> {
+  if (park !== undefined) return rehydrateInPark(descriptor, ctx, park);
+  // A descriptor stored on its own is its own park.
+  const own = newParkReader();
+  const binding = await rehydrateInPark(descriptor, ctx, own);
+  assertParkRead(own);
+  return binding;
+}
+
+async function rehydrateInPark(
+  descriptor: BindingDescriptor,
+  ctx: RehydrationContext,
+  park: ParkReader,
+): Promise<Binding> {
+  const rehydrate = (entry: BindingDescriptor): Promise<Binding> => rehydrateInPark(entry, ctx, park);
   switch (descriptor.kind) {
     // ── Bucket 1 — pure data ──
     case 'event':
@@ -651,27 +752,34 @@ export async function rehydrateBinding(
         fieldProvenance: descriptor.fieldProvenance,
       };
     case 'nodePosition': {
+      // Registered (and so reachable by its references) before its edges are
+      // read, which is what lets an edge lead back to it.
+      const node: NodePosition =
+        descriptor.id !== undefined
+          ? nodeNumbered(park, descriptor.id)
+          : { kind: 'nodePosition', fields: {}, fieldOrder: [], fieldProvenance: {}, edges: {} };
+      if (descriptor.id !== undefined) park.unfilled.delete(descriptor.id);
+      node.fields = withFiles(inOrder(descriptor.fields, descriptor.fieldOrder), ctx);
+      node.fieldOrder = descriptor.fieldOrder ?? Object.keys(descriptor.fields);
+      node.fieldProvenance = descriptor.fieldProvenance;
       const edges: Record<string, NodeEdge> = {};
       for (const [name, edge] of Object.entries(descriptor.edges)) {
         edges[name] =
           edge.kind === 'landed'
             ? {
                 kind: 'landed',
-                landings: await Promise.all(edge.landings.map((l) => rehydrateBinding(l, ctx))),
+                landings: await Promise.all(edge.landings.map(rehydrate)),
                 ...landingShapeOf(edge),
               }
-            : { kind: 'deferred', walk: await rehydrateDeferredWalk(edge.walk, ctx) };
+            : { kind: 'deferred', walk: await rehydrateDeferredWalk(edge.walk, ctx, park) };
       }
-      return {
-        kind: 'nodePosition',
-        fields: withFiles(inOrder(descriptor.fields, descriptor.fieldOrder), ctx),
-        fieldOrder: descriptor.fieldOrder ?? Object.keys(descriptor.fields),
-        fieldProvenance: descriptor.fieldProvenance,
-        edges,
-      };
+      node.edges = edges;
+      return node;
     }
+    case 'nodeRef':
+      return nodeNumbered(park, descriptor.id);
     case 'lazyWalk':
-      return { kind: 'lazyWalk', walk: await rehydrateDeferredWalk(descriptor.walk, ctx) };
+      return { kind: 'lazyWalk', walk: await rehydrateDeferredWalk(descriptor.walk, ctx, park) };
     case 'value':
       return {
         kind: 'value',
@@ -682,7 +790,7 @@ export async function rehydrateBinding(
     case 'recordValue':
       return {
         kind: 'value',
-        value: await rehydrateValue(descriptor.value, ctx),
+        value: await rehydrateValue(descriptor.value, ctx, park),
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
         ...(descriptor.many === true ? { many: true } : {}),
       };
@@ -710,19 +818,17 @@ export async function rehydrateBinding(
     case 'positions':
       return {
         kind: 'positions',
-        landings: await Promise.all(
-          descriptor.landings.map((l) => rehydrateBinding(l, ctx)),
-        ),
+        landings: await Promise.all(descriptor.landings.map(rehydrate)),
       };
     case 'tuple':
       return {
         kind: 'tuple',
-        slots: await Promise.all(descriptor.slots.map((slot) => rehydrateBinding(slot, ctx))),
+        slots: await Promise.all(descriptor.slots.map(rehydrate)),
       };
     case 'closure': {
       const captured = new Map<string, Binding>();
       for (const [name, entry] of Object.entries(descriptor.captured)) {
-        captured.set(name, await rehydrateBinding(entry, ctx));
+        captured.set(name, await rehydrate(entry));
       }
       return {
         kind: 'closure',
@@ -735,7 +841,7 @@ export async function rehydrateBinding(
     case 'blockMeta': {
       const edges = new Map<string, Binding[]>();
       for (const [name, descriptors] of Object.entries(descriptor.edges)) {
-        edges.set(name, await Promise.all(descriptors.map((d) => rehydrateBinding(d, ctx))));
+        edges.set(name, await Promise.all(descriptors.map(rehydrate)));
       }
       return {
         kind: 'blockMeta',
@@ -876,10 +982,10 @@ export type SerializedFrame =
  * The interpreter declares the imported / constructed / read bindings into the
  * env as it descends; this captures exactly what THIS scope added.
  */
-export function serializeScope(env: Environment): SerializedScope {
+export function serializeScope(env: Environment, park: ParkWriter = newParkWriter()): SerializedScope {
   const bindings: Record<string, BindingDescriptor> = {};
   for (const [name, binding] of env.ownBindings()) {
-    const descriptor = serializeBinding(binding);
+    const descriptor = serializeBinding(binding, park);
     // An opaque import's re-resolution tag is its slot NAME (it has no stored
     // declaration name); patch it in here where the name is known.
     bindings[name] = descriptor.kind === 'opaque' ? { ...descriptor, name } : descriptor;
@@ -894,8 +1000,8 @@ export function serializeScope(env: Environment): SerializedScope {
  * serialised once because they appear once in the chain (§4.6) — the multi-leaf
  * frontier keys them by prefix instead, a superset of this single-branch shape.
  */
-export function serializeScopeChain(chain: Environment[]): SerializedScope[] {
-  return chain.map(serializeScope);
+export function serializeScopeChain(chain: Environment[], park: ParkWriter = newParkWriter()): SerializedScope[] {
+  return chain.map((env) => serializeScope(env, park));
 }
 
 // ── Values that hold records ──────────────────────────────────────────────────
@@ -912,15 +1018,15 @@ function holdsRecords(value: unknown): boolean {
   return false;
 }
 
-function serializeValue(value: unknown): ValueDescriptor {
+function serializeValue(value: unknown, park: ParkWriter): ValueDescriptor {
   const record = bindingOf(value);
-  if (record !== undefined) return { kind: 'record', binding: serializeBinding(record) };
+  if (record !== undefined) return { kind: 'record', binding: serializeBinding(record, park) };
   // A file is a leaf: its wire form is data, and rehydrate revives it.
   if (isFileRef(value)) return { kind: 'data', value: assertJsonSerializable(value, 'value binding') };
-  if (Array.isArray(value)) return { kind: 'list', of: value.map(serializeValue) };
+  if (Array.isArray(value)) return { kind: 'list', of: value.map((entry) => serializeValue(entry, park)) };
   if (isDictValue(value)) {
     const of: Record<string, ValueDescriptor> = {};
-    for (const [key, entry] of Object.entries(value)) of[key] = serializeValue(entry);
+    for (const [key, entry] of Object.entries(value)) of[key] = serializeValue(entry, park);
     return { kind: 'map', of };
   }
   return { kind: 'data', value: assertJsonSerializable(value, 'value binding') };
@@ -929,18 +1035,19 @@ function serializeValue(value: unknown): ValueDescriptor {
 async function rehydrateValue(
   descriptor: ValueDescriptor,
   ctx: RehydrationContext,
+  park: ParkReader,
 ): Promise<unknown> {
   switch (descriptor.kind) {
     case 'data':
       return reviveFileRefs(descriptor.value, (ref) => ctx.reviveFileRef(ref));
     case 'record':
-      return rehydrateBinding(descriptor.binding, ctx);
+      return rehydrateInPark(descriptor.binding, ctx, park);
     case 'list':
-      return Promise.all(descriptor.of.map((entry) => rehydrateValue(entry, ctx)));
+      return Promise.all(descriptor.of.map((entry) => rehydrateValue(entry, ctx, park)));
     case 'map': {
       const out: Record<string, unknown> = {};
       for (const [key, entry] of Object.entries(descriptor.of)) {
-        out[key] = await rehydrateValue(entry, ctx);
+        out[key] = await rehydrateValue(entry, ctx, park);
       }
       return out;
     }

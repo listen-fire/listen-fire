@@ -334,9 +334,14 @@ import {
 } from './address';
 import { EffectLocks, bindLock, edgeLock, identityLocks, recordLock, type LockRequest } from './effect_locks';
 import {
+  assertParkRead,
+  newParkReader,
+  newParkWriter,
   rehydrateBinding,
   serializeBinding,
   serializeScopeChain,
+  type ParkReader,
+  type ParkWriter,
   type BindingDescriptor,
   type FileRefDescriptor,
   type InstanceIdentityDescriptor,
@@ -1026,12 +1031,12 @@ const FELL_THROUGH: BodyOutcome = { returned: false };
 const RETURN_SLOT = '#return';
 
 /** A statement's finished calls, as a park keeps them. */
-function serializeCallRecords(records: ReadonlyMap<number, CallRecord>): SerializedCallEvent[] {
+function serializeCallRecords(records: ReadonlyMap<number, CallRecord>, park: ParkWriter): SerializedCallEvent[] {
   return [...records.entries()]
     .sort(([a], [b]) => a - b)
     .map(([index, record]) => ({
       index,
-      value: record.value !== undefined ? serializeBinding(record.value) : null,
+      value: record.value !== undefined ? serializeBinding(record.value, park) : null,
       next: record.next,
     }));
 }
@@ -1039,11 +1044,12 @@ function serializeCallRecords(records: ReadonlyMap<number, CallRecord>): Seriali
 async function rehydrateCallRecords(
   events: readonly SerializedCallEvent[],
   ctx: RehydrationContext,
+  park: ParkReader,
 ): Promise<Map<number, CallRecord>> {
   const out = new Map<number, CallRecord>();
   for (const event of events) {
     out.set(event.index, {
-      value: event.value !== null ? await rehydrateBinding(event.value, ctx) : undefined,
+      value: event.value !== null ? await rehydrateBinding(event.value, ctx, park) : undefined,
       next: event.next,
     });
   }
@@ -1051,7 +1057,7 @@ async function rehydrateCallRecords(
 }
 
 /** A live body boundary as a park keeps it. */
-function serializeBoundary(boundary: LiveBoundary): SerializedFrame {
+function serializeBoundary(boundary: LiveBoundary, park: ParkWriter): SerializedFrame {
   switch (boundary.kind) {
     case 'call':
       return {
@@ -1059,8 +1065,8 @@ function serializeBoundary(boundary: LiveBoundary): SerializedFrame {
         index: boundary.index,
         next: boundary.next,
         callee: boundary.callee,
-        journal: serializeCallRecords(boundary.site.calls.completed),
-        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot()),
+        journal: serializeCallRecords(boundary.site.calls.completed, park),
+        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot(), park),
       };
     case 'member':
       return {
@@ -1069,8 +1075,8 @@ function serializeBoundary(boundary: LiveBoundary): SerializedFrame {
         next: boundary.next,
         member: boundary.member,
         op: boundary.op,
-        journal: serializeCallRecords(boundary.site.calls.completed),
-        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot()),
+        journal: serializeCallRecords(boundary.site.calls.completed, park),
+        scopeChain: serializeScopeChain(boundary.site.env.chainFromRoot(), park),
       };
     case 'arm':
       return { kind: 'arm', arm: boundary.arm, body: boundary.body };
@@ -2847,6 +2853,9 @@ class Interpreter {
       ...frames.flatMap((frame) => (frame.kind === 'arm' ? [] : [frame.scopeChain])),
       state.scopeChain,
     ];
+    // The whole state was written as one park, so it is read as one: a node
+    // two of its scopes (or frames, or journals) held comes back as one node.
+    const park = newParkReader();
     let segment = 0;
     let nextFrame = 0;
     const takeFrame = (): SerializedFrame => {
@@ -2860,7 +2869,7 @@ class Interpreter {
     // iter/branch step>…]. The file scope + movement param are rebuilt live by
     // prepareMovement; index 1 (the movement-body scope) carries the body locals
     // declared before the park. Re-layer those onto the live movementEnv.
-    await this.rehydrateScopeInto(chains[0], 1, input.movementEnv);
+    await this.rehydrateScopeInto(chains[0], 1, input.movementEnv, park);
 
     let statements = input.body;
     let env = input.movementEnv;
@@ -2899,7 +2908,7 @@ class Interpreter {
           env,
           calls: {
             next: frame.next,
-            completed: await rehydrateCallRecords(frame.journal, this.rehydrationContext()),
+            completed: await rehydrateCallRecords(frame.journal, this.rehydrationContext(), park),
           },
         };
         segment += 1;
@@ -2929,7 +2938,7 @@ class Interpreter {
           });
           env = root.child();
           const offset = root.chainFromRoot().length;
-          await this.rehydrateScopeInto(chain, offset, env);
+          await this.rehydrateScopeInto(chain, offset, env, park);
           chainIndex = offset + 1;
           frameAddress = callAddress;
           i += 2;
@@ -2964,7 +2973,7 @@ class Interpreter {
           },
         });
         env = closureScope(fn).child();
-        await this.rehydrateScopeInto(chain, 1, env);
+        await this.rehydrateScopeInto(chain, 1, env, park);
         chainIndex = 2;
         statements = fn.closure.body;
         frameAddress = childIter(callAddress, memberStep.index);
@@ -2994,7 +3003,7 @@ class Interpreter {
       const armName = namedArm?.kind === 'ref' ? namedArm.name : undefined;
       // Fork a child env carrying the rehydrated scope for this iter/branch.
       const childEnv = env.child();
-      await this.rehydrateScopeInto(chains[segment], chainIndex, childEnv);
+      await this.rehydrateScopeInto(chains[segment], chainIndex, childEnv, park);
       chainIndex += 1;
       spine.push({
         kind: 'container',
@@ -3030,6 +3039,13 @@ class Interpreter {
       address: frameAddress,
     };
     const leaf = input.leaf;
+    // Read whenever it was written, used or not: a node first written in the
+    // journal is the one the scopes' references name.
+    const journal = state.journal !== undefined
+      ? await rehydrateCallRecords(state.journal, this.rehydrationContext(), park)
+      : undefined;
+    assertParkRead(park);
+    const replay = leaf.kind === 'continue' && leaf.reenter ? journal : undefined;
     switch (leaf.kind) {
       case 'fireCallback':
         // CALLBACK FIRE (callback-primitive layer 2) — the leaf statement is a
@@ -3076,9 +3092,6 @@ class Interpreter {
           // race receipt (chunk C, S4).
           leafEnv.declare(state.bindingName, { kind: 'value', value: true, provenance: NO_PROVENANCE });
         }
-        const replay = leaf.reenter && state.journal !== undefined
-          ? await rehydrateCallRecords(state.journal, this.rehydrationContext())
-          : undefined;
         await this.completeSpine(spine, 0, state.address, () =>
           this.interpretBody(leafStatements, leafEnv, leafBody, {
             at: leaf.reenter ? leafIndex : leafIndex + 1,
@@ -3625,6 +3638,7 @@ class Interpreter {
     chain: readonly SerializedScope[],
     chainIndex: number,
     env: Environment,
+    park: ParkReader,
   ): Promise<void> {
     const scope = chain[chainIndex];
     if (!scope) return;
@@ -3641,7 +3655,7 @@ class Interpreter {
       ) {
         continue;
       }
-      env.declare(name, await rehydrateBinding(descriptor, ctx));
+      env.declare(name, await rehydrateBinding(descriptor, ctx, park));
     }
   }
 
@@ -5415,10 +5429,14 @@ class Interpreter {
 
   /** A park's state, with the body boundaries it is inside — absent when it
    *  is inside none, so such a park reads exactly as one always has. */
-  private parkedState(state: ParkedScopeState): ParkedScopeState {
+  private parkedState(write: (park: ParkWriter) => ParkedScopeState): ParkedScopeState {
+    // One table for the whole state: a node held both in a frame's scopes and
+    // the leaf's is written once, and resumes as one.
+    const park = newParkWriter();
+    const state = write(park);
     const live = this.boundaries.getStore() ?? [];
     if (live.length === 0) return state;
-    return { ...state, frames: live.map(serializeBoundary) };
+    return { ...state, frames: live.map((boundary) => serializeBoundary(boundary, park)) };
   }
 
   /**
@@ -5448,16 +5466,16 @@ class Interpreter {
         `the run was asked to suspend at '${address}' and has nowhere durable to park`,
       );
     }
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       bindingName: null,
       suspended: true,
       // Every call the statement has handed back, including those a re-run had
       // yet to replay — a statement suspended again on re-entry keeps them all.
-      journal: serializeCallRecords(new Map([...(site.calls.replay ?? []), ...site.calls.completed])),
-      scopeChain: serializeScopeChain(site.env.chainFromRoot()),
-    });
+      journal: serializeCallRecords(new Map([...(site.calls.replay ?? []), ...site.calls.completed]), park),
+      scopeChain: serializeScopeChain(site.env.chainFromRoot(), park),
+    }));
     await commit({ address, state });
     this.trace.push({ kind: 'gate', outcome: false });
     throw new RunParked(address);
@@ -6109,7 +6127,7 @@ class Interpreter {
         `sleep reached at '${address}' with no park sink — the run cannot suspend on a timer without the durable trigger-run substrate`,
       );
     }
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       // A plain sleep binds nothing — the leaf re-enters AT the un-run
@@ -6117,8 +6135,8 @@ class Interpreter {
       // the name + `presenceBind` so resume declares a presence marker at wake.
       bindingName: presenceBindingName ?? null,
       ...(presenceBindingName !== undefined ? { presenceBind: true } : {}),
-      scopeChain: serializeScopeChain(env.chainFromRoot()),
-    });
+      scopeChain: serializeScopeChain(env.chainFromRoot(), park),
+    }));
     const wakeAt = new Date(Date.now() + durationToMs(sleep.duration.raw));
     await parkSink.commitTimerPark({ address, state, wakeAt });
     this.trace.push({ kind: 'gate', outcome: false });
@@ -6157,14 +6175,14 @@ class Interpreter {
     const config = await this.callbackConfig(callback, env);
     // The CAPTURE. Same shape a park writes, so resume-at-entry is the resume
     // path with a different leaf rule and nothing bespoke to keep in step.
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       // A callback binds nothing at fire time beyond its parameters, which the
       // fire binds into a child scope of this one.
       bindingName: null,
-      scopeChain: serializeScopeChain(env.chainFromRoot()),
-    });
+      scopeChain: serializeScopeChain(env.chainFromRoot(), park),
+    }));
     const minted = await sink.mint({
       address,
       params,
@@ -6468,14 +6486,14 @@ class Interpreter {
       );
     }
     const awaitable = adapter.awaitable;
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       // An await binds nothing at park time: resume RE-ENTERS here and the await
       // re-checks live, binding the landing itself (`reenter` semantics).
       bindingName: null,
-      scopeChain: serializeScopeChain(env.chainFromRoot()),
-    });
+      scopeChain: serializeScopeChain(env.chainFromRoot(), park),
+    }));
     await parkSink.commitAwaitPark({
       address,
       state,
@@ -6541,13 +6559,13 @@ class Interpreter {
         'this run has no park sink — an await needs the durable trigger-run substrate',
       );
     }
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       // Re-enter: the await re-reads the ledger and binds its own landing.
       bindingName: null,
-      scopeChain: serializeScopeChain(env.chainFromRoot()),
-    });
+      scopeChain: serializeScopeChain(env.chainFromRoot(), park),
+    }));
     await parkSink.commitAwaitPark({
       address,
       state,
@@ -6678,7 +6696,7 @@ class Interpreter {
     }
     const everyMs =
       source.every !== undefined ? durationToMs(source.every.raw) : UNTIL_DEFAULT_EVERY_MS;
-    const state = this.parkedState({
+    const state = this.parkedState((park) => ({
       version: 1,
       address,
       // An `until` binds nothing at park time: resume RE-ENTERS here and, when the
@@ -6686,8 +6704,8 @@ class Interpreter {
       // the timer-resume worker to re-enter-and-re-evaluate, not step past.
       bindingName: null,
       until: true,
-      scopeChain: serializeScopeChain(env.chainFromRoot()),
-    });
+      scopeChain: serializeScopeChain(env.chainFromRoot(), park),
+    }));
     await parkSink.commitTimerPark({
       address,
       state,
