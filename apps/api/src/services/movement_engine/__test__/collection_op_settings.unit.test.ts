@@ -407,7 +407,7 @@ describe('onError: what a member whose function failed does', () => {
   });
 });
 
-describe('what members do to the world, they do one at a time', () => {
+describe('members writing the same record take turns', () => {
   it('members writing the same record at once make it once — the rest find it', async () => {
     const plugin = delayedInvoker();
     const { result, attio } = await run(

@@ -327,6 +327,7 @@ import {
   type Address,
   type AddressStep,
 } from './address';
+import { EffectLocks, bindLock, edgeLock, identityLocks, recordLock } from './effect_locks';
 import {
   rehydrateBinding,
   serializeBinding,
@@ -1433,22 +1434,21 @@ function bindingPresent(binding: Binding): boolean {
 }
 
 /**
- * What one collection-op member's run owns while it runs — the dynamic state
- * that would otherwise be shared by members running at once.
+ * What one concurrent flow owns while it runs — a collection-op member, or a
+ * `race` / `parallel` arm: the dynamic state that would otherwise be shared by
+ * flows running at once. (What flows do to the WORLD is kept apart by the
+ * run's effect locks instead — `EffectLocks`.)
  */
-interface MemberFrame {
-  /** The movements this member is inside: the op's own call stack, copied, so
-   *  a call one member makes is not on another's. */
+interface FlowFrame {
+  /** The movements this flow is inside: the enclosing call stack, copied, so
+   *  a call one flow makes is not on another's. */
   callStack: MovementDeclaration[];
-  /** This member's trace entries, spliced into the enclosing trace in MEMBER
-   *  order once every member before it has finished — so the trace reads as it
-   *  would had the members run one after another, and an extraction's entries
-   *  stay next to each other (`recordExtractedEntities` finds its own by
+  /** This flow's trace entries, spliced into the enclosing trace in the
+   *  flows' own order (member order, arm order) — so the trace reads as it
+   *  would had they run one after another, and an extraction's entries stay
+   *  next to each other (`recordExtractedEntities` finds its own by
    *  position). */
   trace: MovementTraceEntry[];
-  /** True while this flow holds the effect queue (`oneEffectAtATime`), so a
-   *  write that matches on the way does not queue behind itself. */
-  holdsEffectQueue: boolean;
 }
 
 /** One member's answer from a collection op's function — or that it has none,
@@ -1628,6 +1628,49 @@ function refuseLocalTargetWhere(where: TargetWhere | undefined, at: string): voi
  * behind it, so `graph` cannot be invented and is not asked for.
  */
 type WriteDestination = Pick<ResolvedWriteTarget, 'adapter' | 'recordType' | 'parents'>;
+
+/** What an update by id (`applyUpdate`) is handed. */
+interface UpdateInput {
+  adapter: Adapter;
+  recordType: string;
+  externalId: string;
+  fields: Record<string, unknown>;
+  /** Per-field write-precedence (absent ⇒ replace). The engine applies the
+   *  merge against current values here; the adapter writes a final value. */
+  fieldSemantics: Record<string, FieldWriteMode>;
+  /** Per-field evidence for provenance-faithful values — filtered to
+   *  the fields that survive no-op suppression, like the TG engine. */
+  fieldEvidence: Record<string, FieldEvidence>;
+  /** Node-level resource provenance (Layer 5) — the source content that fed
+   *  the extracted node(s) this write draws from, persisted against the
+   *  updated record (`WriteInput.resources`). Empty for non-extract writes. */
+  resources?: Resource[];
+  parentLinks: ParentLink[];
+}
+
+/** What the identity-resolve write path (`executeResolvedWrite`) is handed. */
+interface ResolvedWriteInput {
+  target: WriteDestination;
+  adapter: Adapter;
+  descriptor: Awaited<ReturnType<Adapter['describe']>>;
+  resolveRecord: Record<string, unknown>;
+  constraints: UniquenessConstraints;
+  /** Each `unique by` clause's non-key conjuncts (e.g. `WITHIN`), with the
+   *  key whose candidates they narrow — see `IdentityNarrowing`. */
+  identityNarrowings: IdentityNarrowing[];
+  /** The target's final-hop `WHERE`. A shortlist it empties is a MISS, and
+   *  a miss creates: the WHERE says which existing record may be matched,
+   *  not whether to write. */
+  candidateWhere?: CandidateWhere;
+  fields: Record<string, unknown>;
+  fieldSemantics: Record<string, FieldWriteMode>;
+  fieldEvidence: Record<string, FieldEvidence>;
+  /** Layer-5 node-level resource provenance — forwarded to the create/update
+   *  as `WriteInput.resources`. */
+  resources: Resource[];
+  parentLinks: ParentLink[];
+  body: BodyContext;
+}
 
 /** A standalone link statement's resolved shape (see `resolveLinkStatement`)
  *  — adapter + engine-currency endpoints, plus the endpoint handles for the
@@ -1888,17 +1931,18 @@ class Interpreter {
    *  loop forever. Read it through `callStack`, which hands a collection op's
    *  member its own copy instead. */
   private readonly runCallStack: MovementDeclaration[] = [];
-  /** The collection-op member this async flow is running, when it is one.
-   *  Members may run at once, and the interpreter's dynamic state — the call
-   *  stack, the trace being appended to — is per FLOW, not per run: two members
-   *  calling the same movement are not a recursion, and one member's trace
-   *  entries are not another's. */
-  private readonly memberFrames = new AsyncLocalStorage<MemberFrame>();
+  /** The concurrent flow (collection-op member, combinator arm) this async
+   *  flow is running, when it is one. Flows may run at once, and the
+   *  interpreter's dynamic state — the call stack, the trace being appended
+   *  to — is per FLOW, not per run: two flows calling the same movement are
+   *  not a recursion, and one flow's trace entries are not another's. */
+  private readonly flowFrames = new AsyncLocalStorage<FlowFrame>();
   /** The statement running in this flow, which a call nested in one of its
    *  expressions runs as (`settleNestedCall`). */
   private readonly statementSites = new AsyncLocalStorage<StatementSite>();
-  /** The tail of the queue members' effects wait in (`oneEffectAtATime`). */
-  private effectQueue: Promise<void> = Promise.resolve();
+  /** What keeps concurrent flows' effects on the world from racing — see
+   *  `effect_locks.ts`. */
+  private readonly effectLocks = new EffectLocks();
   /** The running movement's body — the extraction module's backward
    *  type adoption scans it for writes the extracted fields flow into. */
   private movementBody: Statement[] = [];
@@ -1938,18 +1982,18 @@ class Interpreter {
     return this.input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
   }
 
-  /** Where a trace entry lands: the running member's own buffer inside a
-   *  collection op (spliced into the run's in member order), the run's trace
-   *  everywhere else. */
+  /** Where a trace entry lands: the running flow's own buffer inside a
+   *  collection-op member or a combinator arm (spliced into the enclosing
+   *  trace in member / arm order), the run's trace everywhere else. */
   private get trace(): MovementTraceEntry[] {
-    return this.memberFrames.getStore()?.trace ?? this.runTrace;
+    return this.flowFrames.getStore()?.trace ?? this.runTrace;
   }
 
-  /** The movements this flow is inside — a member's own copy inside a
-   *  collection op, so members calling the same movement at once are not
-   *  mistaken for a recursion. */
+  /** The movements this flow is inside — its own copy inside a collection-op
+   *  member or a combinator arm, so flows calling the same movement at once
+   *  are not mistaken for a recursion. */
   private get callStack(): MovementDeclaration[] {
-    return this.memberFrames.getStore()?.callStack ?? this.runCallStack;
+    return this.flowFrames.getStore()?.callStack ?? this.runCallStack;
   }
 
   constructor(
@@ -3761,7 +3805,17 @@ class Interpreter {
    * either COMPLETED or PARKED at a suspension. A running arm is never
    * preempted, so a completion that lands before teardown counts: `race` may
    * settle with more than one filled slot, which is what "anything inside one
-   * running burst is simultaneous" means.
+   * running burst is simultaneous" means. So an arm that "loses" a race in the
+   * same burst has still done everything it did — its writes landed and stay
+   * landed, and its slot is filled; only an arm parked at settlement is
+   * withdrawn, and what it would have done after its park never happens.
+   *
+   * **Isolation.** Each arm runs in a frame of its own, as a collection op's
+   * member does: its own copy of the call stack (two arms calling the same
+   * movement are not a recursion) and its own trace, spliced in ARM order. Its
+   * effects on the world wait only for effects contending for the same key
+   * (`effect_locks.ts`), so two arms writing one `unique by` key make one
+   * record.
    *
    * **Cancellation is withdrawal, never a tear.** At settlement `race` stops
    * listening on the arms that parked — their `parked_run` rows and resume
@@ -3938,12 +3992,12 @@ class Interpreter {
    * soon as its last one finishes. With neither set, that is one member at a
    * time, in order — what every op did before it could be told otherwise.
    *
-   * Each member runs in a frame of its own (`MemberFrame`): its own copy of the
+   * Each member runs in a frame of its own (`FlowFrame`): its own copy of the
    * call stack, and its own trace, spliced into the enclosing trace in member
-   * order as the members before it finish. What members do to the WORLD is put
-   * in a queue instead (`oneEffectAtATime`), because a write's identity is a
-   * find-then-create, and two members creating the same record at once would
-   * each find nothing and each create it.
+   * order as the members before it finish. What members do to the WORLD is
+   * kept apart by the run's effect locks (`effect_locks.ts`): a write's
+   * identity is a find-then-create, so two members writing the same key wait
+   * for each other, while writes to different keys run together.
    *
    * Failure. A member's function failing is a fact about that member, and
    * `onError` says what it does: `error` fails the run (as it always has),
@@ -3966,8 +4020,7 @@ class Interpreter {
     member: (index: number) => Promise<unknown>,
   ): Promise<MemberAnswer[]> {
     const answers: MemberAnswer[] = [];
-    const frames: MemberFrame[] = [];
-    const enclosing = this.memberFrames.getStore();
+    const frames: FlowFrame[] = [];
     let failure: { index: number; error: unknown } | undefined;
     let next = 0;
     // Each member's trace joins the enclosing trace as soon as every member
@@ -3984,16 +4037,10 @@ class Interpreter {
     };
 
     const runOne = async (index: number): Promise<void> => {
-      const frame: MemberFrame = {
-        callStack: [...this.callStack],
-        trace: [],
-        // A collection op run while the effect queue is held (nothing in the
-        // grammar does this today) must not queue behind its own holder.
-        holdsEffectQueue: enclosing?.holdsEffectQueue ?? false,
-      };
+      const frame = this.openFlowFrame();
       frames[index] = frame;
       try {
-        answers[index] = { kept: true, value: await this.memberFrames.run(frame, () => member(index)) };
+        answers[index] = { kept: true, value: await this.flowFrames.run(frame, () => member(index)) };
       } catch (error) {
         if (settings.onError === 'error' || !isMemberFailure(error)) {
           if (failure === undefined || index < failure.index) failure = { index, error };
@@ -4041,32 +4088,10 @@ class Interpreter {
     return answers;
   }
 
-  /**
-   * Run one effect on the world — a write, a match, a link, an unlink, a delete
-   * — after every effect a collection op's other members queued before it.
-   *
-   * Identity is a find-then-create: two members writing `unique by` the same
-   * key at once would each find nothing and each create the record. So a
-   * member's effects wait their turn, while everything else it does (reading,
-   * extracting, calling plugins) runs alongside the other members. Outside a
-   * collection op's member nothing else is running, so the effect runs
-   * straight away, exactly as it always has; and a flow already holding the
-   * queue (a link's match, a write's own nested write) never waits on itself.
-   */
-  private async oneEffectAtATime<T>(effect: () => Promise<T>): Promise<T> {
-    const frame = this.memberFrames.getStore();
-    if (frame === undefined || frame.holdsEffectQueue) return effect();
-    const ahead = this.effectQueue;
-    let done!: () => void;
-    this.effectQueue = new Promise<void>((resolve) => {
-      done = resolve;
-    });
-    await ahead;
-    try {
-      return await this.memberFrames.run({ ...frame, holdsEffectQueue: true }, effect);
-    } finally {
-      done();
-    }
+  /** A frame for one concurrent flow started from this one: the enclosing
+   *  call stack copied, and an empty trace of its own. */
+  private openFlowFrame(): FlowFrame {
+    return { callStack: [...this.callStack], trace: [] };
   }
 
   /** The function a collection op runs: written in place, or a name bound to
@@ -4159,28 +4184,43 @@ class Interpreter {
       index,
       env: env.child(),
       address: childBranch(stmtAddress, index),
+      frame: this.openFlowFrame(),
     }));
     const settled = new Map<number, Binding>();
     const parked: typeof forks = [];
     // Real concurrency, as `parallel` has always had: each arm runs its own
     // prefix, and one arm's park does not stop the others reaching theirs.
-    await Promise.all(
-      forks.map(async (fork) => {
-        try {
-          const outcome = await this.runArm(fork.arm, fork.env, body, fork.address);
-          settled.set(fork.index, outcome.returned ? outcome.value : NULL_SLOT);
-        } catch (e) {
-          if (e instanceof RunParked) {
-            parked.push(fork);
-            return;
+    // Each arm runs in a frame of its own, as a collection op's member does —
+    // its own call stack and its own trace, spliced in ARM order once every
+    // arm has stopped — and its effects wait only for an effect contending
+    // for the same key (`effect_locks.ts`).
+    const into = this.trace;
+    const outcomes = await Promise.allSettled(
+      forks.map((fork) =>
+        this.flowFrames.run(fork.frame, async () => {
+          try {
+            const outcome = await this.runArm(fork.arm, fork.env, body, fork.address);
+            settled.set(fork.index, outcome.returned ? outcome.value : NULL_SLOT);
+          } catch (e) {
+            if (e instanceof RunParked) {
+              parked.push(fork);
+              return;
+            }
+            // A quiet scope end (find-on-missing) still COMPLETED — it ran to its
+            // end, it just bound less on the way.
+            if (!(e instanceof ScopeEndedQuietly)) throw e;
+            settled.set(fork.index, NULL_SLOT);
           }
-          // A quiet scope end (find-on-missing) still COMPLETED — it ran to its
-          // end, it just bound less on the way.
-          if (!(e instanceof ScopeEndedQuietly)) throw e;
-          settled.set(fork.index, NULL_SLOT);
-        }
-      }),
+        }),
+      ),
     );
+    for (const fork of forks) into.push(...fork.frame.trace);
+    // An arm that failed fails the combinator — once every other arm has
+    // stopped too, so what they did is on the trace and the run's ledger. The
+    // failure re-thrown is the earliest ARM's.
+    for (const outcome of outcomes) {
+      if (outcome.status === 'rejected') throw outcome.reason;
+    }
 
     const bindReceipt = (): void => {
       if (bindingName === undefined) return;
@@ -7034,16 +7074,7 @@ class Interpreter {
   /** Returns the binding the write produced (a handle, or an in-memory
    *  shape position) — declared under `bindingName` when one is given,
    *  and the argument-adaptation currency for inline call args. */
-  private executeWrite(
-    authored: WriteExpression,
-    bindingName: string | undefined,
-    env: Environment,
-    body: BodyContext,
-  ): Promise<Binding> {
-    return this.oneEffectAtATime(() => this.performWrite(authored, bindingName, env, body));
-  }
-
-  private async performWrite(
+  private async executeWrite(
     authored: WriteExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -7321,28 +7352,21 @@ class Interpreter {
    * longer pre-loads correspondence rows here; identity is `constraints`.
    *
    */
-  private async executeResolvedWrite(input: {
-    target: WriteDestination;
-    adapter: Adapter;
-    descriptor: Awaited<ReturnType<Adapter['describe']>>;
-    resolveRecord: Record<string, unknown>;
-    constraints: UniquenessConstraints;
-    /** Each `unique by` clause's non-key conjuncts (e.g. `WITHIN`), with the
-     *  key whose candidates they narrow — see `IdentityNarrowing`. */
-    identityNarrowings: IdentityNarrowing[];
-    /** The target's final-hop `WHERE`. A shortlist it empties is a MISS, and
-     *  a miss creates: the WHERE says which existing record may be matched,
-     *  not whether to write. */
-    candidateWhere?: CandidateWhere;
-    fields: Record<string, unknown>;
-    fieldSemantics: Record<string, FieldWriteMode>;
-    fieldEvidence: Record<string, FieldEvidence>;
-    /** Layer-5 node-level resource provenance — forwarded to the create/update
-     *  as `WriteInput.resources`. */
-    resources: Resource[];
-    parentLinks: ParentLink[];
-    body: BodyContext;
-  }): Promise<WriteRecord> {
+  private async executeResolvedWrite(input: ResolvedWriteInput): Promise<WriteRecord> {
+    const { target, adapter } = input;
+    // Find-then-create: held from the search until the record exists, so a
+    // flow writing the same key meanwhile finds this one's record.
+    const locks = identityLocks({
+      system: adapter,
+      recordType: target.recordType,
+      constraints: input.constraints,
+      resolveRecord: input.resolveRecord,
+      fields: input.fields,
+    });
+    return this.effectLocks.withLocks(locks, () => this.findThenWrite(input));
+  }
+
+  private async findThenWrite(input: ResolvedWriteInput): Promise<WriteRecord> {
     const { target, adapter } = input;
     const { matched, judgeUnavailable } = await this.resolveIdentity({
       adapter,
@@ -7455,38 +7479,39 @@ class Interpreter {
       return created;
     };
 
-    const bound = await findBoundCounterpart({
-      teamId: this.input.teamId,
-      endpoint: other,
-      counterpart: {
-        adapterType: adapter.adapterType,
-        ...targetInstance,
-        typeId: targetTypeId,
-      },
-    });
-    if (bound === null) return create();
+    const counterpart = { adapterType: adapter.adapterType, ...targetInstance, typeId: targetTypeId };
+    // Find-then-create on the correspondence: held until the binding is
+    // recorded, so two flows binding the same counterpart create one record.
+    return this.effectLocks.withLocks([bindLock(other, counterpart)], async () => {
+      const bound = await findBoundCounterpart({
+        teamId: this.input.teamId,
+        endpoint: other,
+        counterpart,
+      });
+      if (bound === null) return create();
 
-    // LIVE binding — update the bound target by id. The binding IS the
-    // identity, so no resolveEntity / unique-by.
-    const updated = await this.applyUpdate({
-      adapter,
-      recordType: target.recordType,
-      externalId: bound.recordId,
-      fields: input.fields,
-      fieldSemantics: input.fieldSemantics,
-      fieldEvidence: input.fieldEvidence,
-      resources: input.resources,
-      parentLinks: input.parentLinks,
-    });
-    if (!('notFound' in updated)) return updated;
+      // LIVE binding — update the bound target by id. The binding IS the
+      // identity, so no resolveEntity / unique-by.
+      const updated = await this.applyUpdate({
+        adapter,
+        recordType: target.recordType,
+        externalId: bound.recordId,
+        fields: input.fields,
+        fieldSemantics: input.fieldSemantics,
+        fieldEvidence: input.fieldEvidence,
+        resources: input.resources,
+        parentLinks: input.parentLinks,
+      });
+      if (!('notFound' in updated)) return updated;
 
-    // SELF-HEAL — the bound target was deleted externally. Drop the stale
-    // binding (keyed on the counterpart's exact stored components), then
-    // create a fresh record + record a fresh binding.
-    if (!this.input.dryRun) {
-      await deleteBinding({ teamId: this.input.teamId, from: other, to: bound });
-    }
-    return create();
+      // SELF-HEAL — the bound target was deleted externally. Drop the stale
+      // binding (keyed on the counterpart's exact stored components), then
+      // create a fresh record + record a fresh binding.
+      if (!this.input.dryRun) {
+        await deleteBinding({ teamId: this.input.teamId, from: other, to: bound });
+      }
+      return create();
+    });
   }
 
   /** The non-record-id components of a target's binding endpoint — the
@@ -8529,15 +8554,7 @@ class Interpreter {
    * here: graph mutation events reach listeners only via the knowledge
    * outbox drainer (M-38), external ones only via their webhooks.
    */
-  private executeLink(
-    link: LinkExpression,
-    bindingName: string | undefined,
-    env: Environment,
-  ): Promise<void> {
-    return this.oneEffectAtATime(() => this.performLink(link, bindingName, env));
-  }
-
-  private async performLink(
+  private async executeLink(
     link: LinkExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -8578,12 +8595,17 @@ class Interpreter {
         `${at}: the '${resolved.adapter.adapterType}' adapter cannot link two existing records (no linkRecords capability) — express the relationship as a linked write (write ${link.from}-[:${link.edge}]-> { … }) instead`,
       );
     }
-    const linked = await resolved.adapter.linkRecords({
-      from: resolved.from,
-      edgeName: resolved.edgeName,
-      to: resolved.to,
-      mutationContext: this.mutationContext,
-    });
+    const linkRecords = resolved.adapter.linkRecords.bind(resolved.adapter);
+    const linked = await this.effectLocks.withLocks(
+      [edgeLock({ system: resolved.adapter, from: resolved.from, edgeName: resolved.edgeName, to: resolved.to })],
+      () =>
+        linkRecords({
+          from: resolved.from,
+          edgeName: resolved.edgeName,
+          to: resolved.to,
+          mutationContext: this.mutationContext,
+        }),
+    );
     this.recordLinkStatement({ kind: 'link', resolved, changed: linked.created });
   }
 
@@ -8653,12 +8675,15 @@ class Interpreter {
       );
     }
     const fromRecordType = from.targetType;
-    const linked = await adapter.linkRecords({
+    const linkRecords = adapter.linkRecords.bind(adapter);
+    const edge = {
       from: { recordType: fromRecordType, externalId: fromId },
       edgeName: link.edge,
       to: { recordType, externalId: matched.externalId },
-      mutationContext: this.mutationContext,
-    });
+    };
+    const linked = await this.effectLocks.withLocks([edgeLock({ system: adapter, ...edge })], () =>
+      linkRecords({ ...edge, mutationContext: this.mutationContext }),
+    );
 
     let resultData: Record<string, unknown> = {
       ...(matched.url !== undefined ? { url: matched.url } : {}),
@@ -8768,15 +8793,7 @@ class Interpreter {
    * The run log gets a `kind: 'match'` row so an inspector sees what the run
    * resolved to. It is not a write: nothing counted as written counts it.
    */
-  private executeMatch(
-    match: MatchExpression,
-    bindingName: string | undefined,
-    env: Environment,
-  ): Promise<Binding> {
-    return this.oneEffectAtATime(() => this.performMatch(match, bindingName, env));
-  }
-
-  private async performMatch(
+  private async executeMatch(
     match: MatchExpression,
     bindingName: string | undefined,
     env: Environment,
@@ -8915,14 +8932,7 @@ class Interpreter {
    * the entry either way (kind 'unlink', `created` = whether a link was
    * actually severed) with both endpoints' write origins as provenance.
    */
-  private executeUnlinkStatement(
-    statement: Extract<Statement, { kind: 'unlink' }>,
-    env: Environment,
-  ): Promise<void> {
-    return this.oneEffectAtATime(() => this.performUnlink(statement, env));
-  }
-
-  private async performUnlink(
+  private async executeUnlinkStatement(
     statement: Extract<Statement, { kind: 'unlink' }>,
     env: Environment,
   ): Promise<void> {
@@ -8942,12 +8952,17 @@ class Interpreter {
         `${at}: the '${resolved.adapter.adapterType}' adapter cannot sever a link between two existing records (no unlinkRecords capability)`,
       );
     }
-    const unlinked = await resolved.adapter.unlinkRecords({
-      from: resolved.from,
-      edgeName: resolved.edgeName,
-      to: resolved.to,
-      mutationContext: this.mutationContext,
-    });
+    const unlinkRecords = resolved.adapter.unlinkRecords.bind(resolved.adapter);
+    const unlinked = await this.effectLocks.withLocks(
+      [edgeLock({ system: resolved.adapter, from: resolved.from, edgeName: resolved.edgeName, to: resolved.to })],
+      () =>
+        unlinkRecords({
+          from: resolved.from,
+          edgeName: resolved.edgeName,
+          to: resolved.to,
+          mutationContext: this.mutationContext,
+        }),
+    );
     this.recordLinkStatement({ kind: 'unlink', resolved, changed: unlinked.removed });
   }
 
@@ -8964,14 +8979,7 @@ class Interpreter {
    * provenance chains to the handle's own write, for a traversed record
    * the entry's ids are the provenance.
    */
-  private executeDeleteStatement(
-    statement: Extract<Statement, { kind: 'delete' }>,
-    env: Environment,
-  ): Promise<void> {
-    return this.oneEffectAtATime(() => this.performDelete(statement, env));
-  }
-
-  private async performDelete(
+  private async executeDeleteStatement(
     statement: Extract<Statement, { kind: 'delete' }>,
     env: Environment,
   ): Promise<void> {
@@ -8994,11 +9002,10 @@ class Interpreter {
     // adapter resolves it to its own id internally.
     const recordType = resolved.target.recordType;
     const externalId = resolved.externalId;
-    await adapter.deleteRecord({
-      recordType,
-      externalId,
-      mutationContext: this.mutationContext,
-    });
+    const deleteRecord = adapter.deleteRecord.bind(adapter);
+    await this.effectLocks.withLocks([recordLock(adapter, externalId)], () =>
+      deleteRecord({ recordType, externalId, mutationContext: this.mutationContext }),
+    );
 
     this.writes.push({
       kind: 'delete',
@@ -9779,23 +9786,15 @@ class Interpreter {
     };
   }
 
-  private async applyUpdate(input: {
-    adapter: Adapter;
-    recordType: string;
-    externalId: string;
-    fields: Record<string, unknown>;
-    /** Per-field write-precedence (absent ⇒ replace). The engine applies the
-     *  merge against current values here; the adapter writes a final value. */
-    fieldSemantics: Record<string, FieldWriteMode>;
-    /** Per-field evidence for provenance-faithful values — filtered to
-     *  the fields that survive no-op suppression, like the TG engine. */
-    fieldEvidence: Record<string, FieldEvidence>;
-    /** Node-level resource provenance (Layer 5) — the source content that fed
-     *  the extracted node(s) this write draws from, persisted against the
-     *  updated record (`WriteInput.resources`). Empty for non-extract writes. */
-    resources?: Resource[];
-    parentLinks: ParentLink[];
-  }): Promise<WriteRecord | { notFound: true }> {
+  /** An update by id. It reads the record's current values and merges into
+   *  them, so it holds the record while it does (`recordLock`). */
+  private async applyUpdate(input: UpdateInput): Promise<WriteRecord | { notFound: true }> {
+    return this.effectLocks.withLocks([recordLock(input.adapter, input.externalId)], () =>
+      this.mergeIntoRecord(input),
+    );
+  }
+
+  private async mergeIntoRecord(input: UpdateInput): Promise<WriteRecord | { notFound: true }> {
     // Current values against the live record, when the adapter can read one.
     // `replace` uses them for no-op suppression; `?:`/`+:`/`+?:` for the
     // set-if-empty / append merge. When the adapter can't read current values

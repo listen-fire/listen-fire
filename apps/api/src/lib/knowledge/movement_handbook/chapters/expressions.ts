@@ -144,7 +144,7 @@ profiles = MAP(companies, { onError: 'warn', concurrency: 4, initialConcurrency:
 - \`concurrency\` runs that many members at once.
 - \`initialConcurrency\` runs a first batch of that size to the end before the rest start. When every member's model call opens with the same content, the first batch warms the provider's prompt cache and the rest read it cheaply.
 - The answer is in input order whatever order members finish in, and so is the trace.
-- Writes inside members happen one at a time, queued, so two members writing the same \`unique by\` record make it once.
+- Writes inside members run at once unless they contend for the same record. Two members writing the same \`unique by\` key (or the target's own unique field) take turns, so the record is made once; writes to different keys run together. A \`FUZZY\` key has no exact value to take turns on, so fuzzy writes to one record type take turns with every identity write to that type.
 - Each setting is written down, not computed. An unknown key, an \`onError\` outside its three words, a \`concurrency\` below 1 or not whole, and a first batch wider than the rest are refused when you save.
 - \`REDUCE\`, \`GROUPBY\` and \`KEYBY\` take no settings. Without a settings record \`MAP\` and \`FILTER\` behave as before.
 

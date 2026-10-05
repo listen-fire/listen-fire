@@ -126,6 +126,7 @@ if decision == TRUE {
 - The value is a **receipt**: one slot per arm, in the order written, holding whatever that arm \`return\`ed. \`AT(r, 0)\` reads the first arm's slot, \`AT(r, 1)\` the second. An arm that hands nothing back has an always-null slot.
 - Under \`race\`, only the arm that settled first has its slot filled and every other slot is null — so **a null test on a slot is the branch**, as \`decision == null\` is here. Arms still parked when one settles are dropped where they stand: their waiting stops, and whatever they had already done stays done. Arms that settle in the same moment all land.
 - Under \`parallel\` every arm runs to the end and every slot is filled.
+- Arms run at once. Arms writing the same \`unique by\` key take turns, so the record is made once.
 - Durations are bare unit-suffixed literals: \`30s\`, \`90m\`, \`6h\`, \`2d\`, \`1h30m\`.
 - To wait on a *condition* instead — "until this record is marked done" — hand \`until\` the condition and the cadence to re-check it on:
 
