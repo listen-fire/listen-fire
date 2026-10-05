@@ -350,6 +350,32 @@ describe('the call nests inside an expression (language version 3)', () => {
     expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme builds infra' }]);
   });
 
+  it('a field reads off any call: ONLY(extract(…)).summary', async () => {
+    const { calls, writes } = await run(
+      ['  write crm-[:companies]-> { name: COALESCE(ONLY(extract([msg.`text`], Detail)).summary, "none") }'],
+      [detail('read off the call')],
+    );
+    expect(calls).toHaveLength(1);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'read off the call' }]);
+  });
+
+  it('a field reads off a call that runs nothing: FIRST(found).name', async () => {
+    const { writes } = await run(
+      ['  found = extract([msg.`text`], Company)', '  write crm-[:companies]-> { name: COALESCE(FIRST(found).name, "none") }'],
+      [COMPANIES],
+    );
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme' }]);
+  });
+
+  it('EXTRACT(…) in any letter case is the extraction call', async () => {
+    const { calls, writes } = await run(
+      ['  found = EXTRACT([msg.`text`], Company)', '  write crm-[:companies]-> { name: JOIN(MAP(found, (c) => c.name), ", ") }'],
+      [COMPANIES],
+    );
+    expect(calls).toHaveLength(1);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme, Beta' }]);
+  });
+
   it('as a collection op reads it, inside a write field', async () => {
     const { writes } = await run(
       ['  write crm-[:companies]-> { name: JOIN(MAP(extract([msg.`text`], Company), (c) => c.name), ", ") }'],

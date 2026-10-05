@@ -188,7 +188,10 @@ function readOneCall(
       return { kind: 'members', members: { type: only.type, span: call.span, typeSpan: only.span } };
     }
     case 'extract':
-      return refused('args', `'${call.callee}' is the extraction call, spelled \`extract(content, Shape)\``);
+      // The grammar reads the extraction call in any letter case, so one never
+      // arrives here as a plain call; if one does, it is still not a call
+      // this reading can run.
+      return refused('args', `'${call.callee}(…)' is the extraction call — bind what it finds: \`found = ${call.callee}(content, Shape)\``);
   }
 }
 

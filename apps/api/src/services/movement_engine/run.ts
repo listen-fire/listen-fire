@@ -124,6 +124,7 @@ import {
   resolveCallee,
   since,
   conjunctsOf,
+  hoistingMemberReads,
   holdsNestedCall,
   nameNode,
   parseNestedCall,
@@ -1958,7 +1959,13 @@ interface ResumeAncestorFrame {
 /** A container level on the resume spine — an `if` arm, a fan-out
  *  iteration, a combinator arm (with its boundary when it was built at run
  *  time). */
-type ResumeContainerFrame = { kind: 'container'; armBoundary?: LiveBoundary } & ResumeAncestorFrame;
+type ResumeContainerFrame = {
+  kind: 'container';
+  armBoundary?: LiveBoundary;
+  /** The function a combinator arm runs, when the arm names one — a call by
+   *  name that the call depth counts. */
+  armName?: string;
+} & ResumeAncestorFrame;
 
 /** The statement sequence a call was made from, and the statement that made it. */
 interface ResumeSequence {
@@ -2977,6 +2984,8 @@ class Interpreter {
       } else {
         descended = this.descendForResume({ container, step: descent, stmtAddress, state });
       }
+      const namedArm = descent.kind === 'branch' ? literalArmsOf(combinatorOf(container))[descent.index] : undefined;
+      const armName = namedArm?.kind === 'ref' ? namedArm.name : undefined;
       // Fork a child env carrying the rehydrated scope for this iter/branch.
       const childEnv = env.child();
       await this.rehydrateScopeInto(chains[segment], chainIndex, childEnv);
@@ -2996,6 +3005,7 @@ class Interpreter {
         branchAddress: descended.frameAddress,
         branchIndex: descent.index,
         ...(armBoundary !== undefined ? { armBoundary } : {}),
+        ...(armName !== undefined ? { armName } : {}),
       });
       statements = descended.statements;
       env = childEnv;
@@ -3104,9 +3114,11 @@ class Interpreter {
     const inner = (): Promise<SpineCompletion> => this.completeSpine(spine, level + 1, leafAddress, leaf);
     switch (frame.kind) {
       case 'container': {
-        const completed = frame.armBoundary !== undefined
-          ? await this.withinBoundary(frame.armBoundary, inner)
-          : await inner();
+        const armBoundary = frame.armBoundary;
+        const arm = (): Promise<SpineCompletion> => this.withinCalledName(frame.armName, inner);
+        const completed = armBoundary !== undefined
+          ? await this.withinBoundary(armBoundary, arm)
+          : await arm();
         if (!completed.done) return completed;
         return this.finishContainer(frame, completed.outcome, leafAddress);
       }
@@ -3279,7 +3291,10 @@ class Interpreter {
     const into = this.trace;
     let answer: MemberAnswer;
     try {
-      const completed = await this.flowFrames.run(flow, () => this.withinBoundary(frame.boundary, inner));
+      const named = op.expr.fn.kind === 'ref' ? op.expr.fn.name : undefined;
+      const completed = await this.flowFrames.run(flow, () =>
+        this.withinBoundary(frame.boundary, () => this.withinCalledName(named, inner)),
+      );
       if (!completed.done) return completed;
       answer = { kept: true, value: memberValue(op, completed.outcome) };
     } catch (error) {
@@ -5275,8 +5290,16 @@ class Interpreter {
   /** Run `fn` as a call of the function named `name` (when there is one, from
    *  version 3): counted towards the call depth, on this flow's stack. */
   private async withinNamedCall<T>(name: string | undefined, fn: () => Promise<T>): Promise<T> {
+    if (name !== undefined && since(this.languageVersion, 3)) this.assertCallDepth(name);
+    return this.withinCalledName(name, fn);
+  }
+
+  /** Run `fn` with the function named `name` on this flow's stack (from
+   *  version 3), without measuring it against the limit — what resume uses to
+   *  put back a named member's or arm's frame: the call was already made, and
+   *  the depth below it must count from where it really is. */
+  private async withinCalledName<T>(name: string | undefined, fn: () => Promise<T>): Promise<T> {
     if (name === undefined || before(this.languageVersion, 3)) return fn();
-    this.assertCallDepth(name);
     this.callStack.push({ name });
     try {
       return await fn();
@@ -5497,7 +5520,7 @@ class Interpreter {
     } catch {
       return undefined; // the evaluator reports the syntax error
     }
-    const runs = (call: CallNode): boolean => this.runsAsCall(call, env);
+    const runs = hoistingMemberReads(tree, (call) => this.runsAsCall(call, env));
     if (!holdsNestedCall(tree, runs)) return undefined;
     const scope = this.callScope(env);
     const staging: NestedCallStaging = {
@@ -5613,7 +5636,7 @@ class Interpreter {
     } catch {
       return undefined;
     }
-    if (!holdsNestedCall(tree, (call) => this.runsAsCall(call, env))) return undefined;
+    if (!holdsNestedCall(tree, hoistingMemberReads(tree, (call) => this.runsAsCall(call, env)))) return undefined;
     for (const conjunct of conjunctsOf(tree)) {
       const part = slotOfTree(slot, conjunct);
       const staged = await this.stageNestedCalls(part, env);

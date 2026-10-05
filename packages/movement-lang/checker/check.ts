@@ -147,6 +147,7 @@ import { ExpressionSyntaxError, parseExpression } from '../parser/expression/par
 import type { At, MExpr } from '../parser/expression/tree';
 import { MovementParseError, parseNestedCall } from '../parser/parse';
 import {
+  hoistingMemberReads,
   nestedCallName,
   nestedCalls,
   readingBoundNames,
@@ -4649,17 +4650,20 @@ class Checker {
     span: Span,
   ): Partial<ScopeSymbol> {
     const returned = this.checkCall(call, scope, name);
+    const resolution = this.calleeResolution(call.callee, scope);
+    if (resolution.kind === 'found' && this.undeclaredSelves.has(resolution.symbol)) {
+      // A closure calling itself by name before its body has said whether it
+      // returns anything: whether this binding binds nothing is known once
+      // the body has been walked (`checkClosure`).
+      const uses = this.boundSelfCalls.get(resolution.symbol) ?? [];
+      uses.push({ callee: call.callee, span });
+      this.boundSelfCalls.set(resolution.symbol, uses);
+    }
     if (!returned.returns) {
       // Silent when the callee is unknown (an unresolved name, a file import
       // the linker could not follow): nobody here knows what it returns, and
       // unknown is not a claim.
-      if (this.calleeReturnKnown(call, scope)) {
-        this.report(
-          DiagnosticCodes.CALL_RETURNS_NOTHING,
-          `'${call.callee}' returns nothing, so there is no value to bind — a call's value is what it returns. Add a 'return' to '${call.callee}', or call it as a statement.`,
-          span,
-        );
-      }
+      if (this.calleeReturnKnown(call, scope)) this.reportCallReturnsNothing(call.callee, span);
       return {};
     }
     // Same rule as a block's: the plane is the RETURNED expression's, and a
@@ -4700,13 +4704,25 @@ class Checker {
     return symbol;
   }
 
+  private reportCallReturnsNothing(callee: string, span: Span): void {
+    this.report(
+      DiagnosticCodes.CALL_RETURNS_NOTHING,
+      `'${callee}' returns nothing, so there is no value to bind — a call's value is what it returns. Add a 'return' to '${callee}', or call it as a statement.`,
+      span,
+    );
+  }
+
   /** Whether we can vouch for what a callee returns — a movement declared (or
-   *  imported and linked) in this program. An unresolved callee has already
-   *  been reported as unresolved; saying it "returns nothing" on top would be
-   *  a second, wrong accusation. */
+   *  imported and linked) in this program, or a closure bound to a name (from
+   *  version 3, the only version that calls one), whose body is right there.
+   *  An unresolved callee has already been reported as unresolved; saying it
+   *  "returns nothing" on top would be a second, wrong accusation. */
   private calleeReturnKnown(call: CallStatement, scope: Scope): boolean {
     const resolution = this.calleeResolution(call.callee, scope);
-    return resolution.kind === 'found' && resolution.symbol.movement !== undefined;
+    if (resolution.kind !== 'found') return false;
+    const { symbol } = resolution;
+    return symbol.movement !== undefined
+      || (this.calledClosure(symbol) !== undefined && !this.undeclaredSelves.has(symbol));
   }
 
   // ── Call resolution (checker/calls.ts) ──
@@ -4831,7 +4847,7 @@ class Checker {
     } catch {
       return undefined; // the syntax error is reported where the slot is read
     }
-    const calls = nestedCalls(tree, call => this.runsAsCall(call, scope));
+    const calls = nestedCalls(tree, hoistingMemberReads(tree, call => this.runsAsCall(call, scope)));
     if (calls.length === 0) return undefined;
     for (const call of calls) {
       const span = spanOfExtent(slot, call.at);
@@ -5157,6 +5173,11 @@ class Checker {
         selfCall,
       );
     }
+    // A body that hands nothing back gave its own bound self-calls nothing to
+    // bind — refused as binding any call that returns nothing is.
+    if (self !== undefined && collector.returns.length === 0) {
+      for (const use of this.boundSelfCalls.get(self) ?? []) this.reportCallReturnsNothing(use.callee, use.span);
+    }
     const returns = declared !== undefined ? { returns: true, ...declared } : inferred;
     return { params, returns, effects };
   }
@@ -5197,6 +5218,10 @@ class Checker {
 
   /** Where each such closure first called itself. */
   private readonly undeclaredSelfCalls = new WeakMap<ScopeSymbol, Span>();
+
+  /** Where each such closure's self-calls are bound — refused once its body
+   *  turns out to return nothing. */
+  private readonly boundSelfCalls = new WeakMap<ScopeSymbol, Array<{ callee: string; span: Span }>>();
 
   /** A call through a closure's own name, when that closure declared nothing. */
   private noteUndeclaredSelfCall(callee: ScopeSymbol, span: Span): void {

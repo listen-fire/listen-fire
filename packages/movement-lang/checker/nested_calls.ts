@@ -207,6 +207,28 @@ export function nestedCalls(tree: MExpr, runs: (call: CallNode) => boolean): Cal
   return found;
 }
 
+/**
+ * `runs`, widened to the calls in `tree` whose value a member access reads —
+ * `ONLY(xs).name`, `AT(rows, 0).name` — whatever they call (a family member,
+ * `TEXT.SERIALISE(…)`, is read inside its family, never bound). The shared
+ * expression tree reads a field only off a name, so such a call is bound to
+ * one first, exactly as a call the engine runs is: `f(x).field` means the
+ * field of what `f(x)` gave back, for every `f`.
+ */
+export function hoistingMemberReads(
+  tree: MExpr,
+  runs: (call: CallNode) => boolean,
+): (call: CallNode) => boolean {
+  const read = new Set<MExpr>();
+  const visit = (e: MExpr): void => {
+    if (e.kind === 'member' && e.object.kind === 'call' && e.object.callee.kind === 'name') read.add(e.object);
+    for (const child of valueChildren(e)) visit(child);
+  };
+  visit(tree);
+  if (read.size === 0) return runs;
+  return call => read.has(call) || runs(call);
+}
+
 /** Whether `tree` holds a call the engine runs, where a value is read. */
 export function holdsNestedCall(tree: MExpr, runs: (call: CallNode) => boolean): boolean {
   return nestedCalls(tree, runs).length > 0;

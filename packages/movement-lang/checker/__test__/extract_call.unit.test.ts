@@ -314,6 +314,36 @@ movement under_test(e: <inbox-[:message]->>) {
     expect(() => parseProgram(source, { languageVersion: 3 })).not.toThrow();
   });
 
+  it("is a function name, so its letter case is the author's", () => {
+    for (const spelled of ['EXTRACT', 'Extract']) {
+      const program = parseProgram(`${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  found = ${spelled}([e.Body], Company)
+}`);
+      const movement = program.statements.find((s) => s.kind === 'movement');
+      expect(movement?.kind === 'movement' && movement.body[0]).toMatchObject({
+        kind: 'assign',
+        value: { kind: 'extractCall', extractCall: { finds: 'each' } },
+      });
+      expect(codes(`  found = ${spelled}([e.Body], Company)\n  n = MAP(found, (c) => c.name)`)).toEqual([]);
+      expect(codes(`  first = ONLY(${spelled}([e.Body], Company))`)).toEqual([]);
+    }
+    expect(messages('  n = COUNT(e-[a:Attachments WHERE COUNT(EXTRACT([a.Name], Company)) > 0]->)')).toContain(
+      "'extract(…)' runs a model over its content",
+    );
+  });
+
+  it('is language version 3: under version 2, EXTRACT( is what it always was', () => {
+    const source = `${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  found = EXTRACT([e.Body], Company)
+}`;
+    const v2 = parseProgram(source, { languageVersion: 2 });
+    const movement = v2.statements.find((s) => s.kind === 'movement');
+    expect(movement?.kind === 'movement' && movement.body[0]).toMatchObject({ kind: 'assign' });
+    expect(movement?.kind === 'movement' && movement.body[0]).not.toMatchObject({ value: { kind: 'extractCall' } });
+  });
+
   it('leaves the keyword exactly as it was', () => {
     const source = `${PRELUDE}
 movement under_test(e: <inbox-[:message]->>) {
@@ -457,5 +487,38 @@ movement under_test(e: <inbox-[:message]->>) {
     expect(codes('  found = extractOne([e.Body], Company)\n  n = MAP(found, (c) => c.name)')).toEqual([
       C.COLLECTION_OP_NOT_A_COLLECTION,
     ]);
+  });
+});
+
+describe('a field read off a call', () => {
+  // Function arguments and results are ordinary expressions, so `f(x).field`
+  // reads the field of what `f(x)` gave back, whatever `f` is (version 3).
+  it('reads off any call, built-in or not', () => {
+    expect(codes('  s = COALESCE(ONLY(extract([e.Body], CompanyDetail)).summary, "none")')).toEqual([]);
+    expect(codes('  cs = extract([e.Body], Company)\n  s = COALESCE(FIRST(cs).name, "none")')).toEqual([]);
+    expect(codes('  cs = extract([e.Body], Company)\n  s = COALESCE(AT(cs, 1).employees, 0) + 1')).toEqual([]);
+  });
+
+  it('is checked as a read off the record the call gives back', () => {
+    expect(codes('  cs = extract([e.Body], Company)\n  s = FIRST(cs).nmae')).toEqual([TypedDiagnosticCodes.UNKNOWN_PROPERTY]);
+  });
+
+  it('off a record that may be absent, is absent too — plain text included', () => {
+    for (const one of ['extractOne([e.Body], CompanyDetail)', 'ONLY(extract([e.Body], CompanyDetail))']) {
+      expect(codes(`  s = ${one}.summary > "M"`)).toEqual([TypedDiagnosticCodes.ABSENT_REQUIRED]);
+      expect(codes(`  d = ${one}\n  s = d.summary > "M"`)).toEqual([TypedDiagnosticCodes.ABSENT_REQUIRED]);
+      expect(codes(`  s = COALESCE(${one}.summary, "") > "M"`)).toEqual([]);
+    }
+  });
+
+  it('is language version 3: under version 2 it is the parse error it always was', () => {
+    const source = `${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  xs = [e]
+  s = FIRST(xs).Subject
+}`;
+    const catalog = mockCatalog({ adapters: { email: { constructionArgs: [], schema: inboxSchema } } });
+    const v2 = checkProgram(parseProgram(source, { languageVersion: 2 }), catalog, { languageVersion: 2 });
+    expect(v2.map((d) => d.code)).toContain(C.EXPR_PARSE);
   });
 });

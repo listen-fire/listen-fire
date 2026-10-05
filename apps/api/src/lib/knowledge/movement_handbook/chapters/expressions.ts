@@ -136,7 +136,7 @@ theses = MEMBERS(<Thesis>)
 
 \`\`\`
 profiles = MAP(companies, { onError: 'warn', concurrency: 4, initialConcurrency: 1 }, (c) => {
-  return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+  return extractOne([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
 })
 \`\`\`
 
@@ -167,9 +167,10 @@ doubled = MAP(counts, (x) => x * 2)
 
 ### calls-inside-expressions
 
-Because a function's arguments are ordinary expressions, a call can sit inside any expression: \`double(n) + 1\`, \`ONLY(extract(content, Company))\`, \`COUNT(MAP(xs, f))\`, \`MAP(MAP(xs, f), g)\`, \`log(MAP(xs, f))\`.
+Because a function's arguments are ordinary expressions, a call can sit inside any expression: \`double(n) + 1\`, \`extractOne(content, Company)\`, \`COUNT(MAP(xs, f))\`, \`MAP(MAP(xs, f), g)\`, \`log(MAP(xs, f))\`.
 
 - A nested call means exactly what binding it to a name first and reading the name means, and it is checked and typed that way. A call that returns text written into a number field is refused. Its effects count towards the function around it.
+- A field reads off any call's result, as it reads off a name: \`extractOne(content, Company).name\`, \`FIRST(people).Name\`, \`lookup(id).email\`. A call whose result may be absent gives a field that may be absent too.
 - **Order is left to right, as the text reads.** Every operand before a nested call is read before the call runs, and a call's arguments are all evaluated before its body runs, so \`CONCAT(mark("a"), mark("b"))\` writes \`a\` and then \`b\`.
 - **\`IF\`, \`AND\`, \`OR\` and \`COALESCE\` short-circuit**, as TypeScript's \`?:\`, \`&&\`, \`||\` and \`??\` do. An operand they do not need is never evaluated, so a call in an arm that is not taken never runs and its writes never happen. \`COALESCE(x, ONLY(list))\` no longer fails when \`x\` is present, however many values \`list\` holds.
 - **Suspension is for statements only.** A call that may wait (a function that \`await\`s) is refused inside an expression, because a wait parks the run where it is written and a place inside an expression has nowhere to come back to. Call it on its own line and use the name.
@@ -232,7 +233,7 @@ merged = { ...c, ...details }
 
 - \`...m\` copies a dict's keys into the literal, and \`...r\` copies a record's fields (its values, not its nested nodes), as TypeScript's object spread does. A later key wins over an earlier one, in the order written: \`row.stage\` is \`"Series A"\`.
 - A key written before a spread that always has it is refused when you save, since the spread overwrites it. Move it after the spread to override.
-- A spread of something that may not be there copies nothing when it isn't, so its keys may be absent: with \`details = ONLY(extract(…))\`, \`merged.summary\` is \`text | absent\`. \`COALESCE\` it before a field that needs a value.
+- A spread of something that may not be there copies nothing when it isn't, so its keys may be absent: with \`details = extractOne(…)\`, \`merged.summary\` is \`text | absent\`. \`COALESCE\` it before a field that needs a value.
 - A graph literal orders its members the same way: \`graph<Note> { ...v, text: "mine" }\` keeps \`"mine"\`, and \`graph<Note> { text: "mine", ...v }\` is refused when \`v\` always has \`text\`.
 - The result is a dict. Read it with a dot or with \`AT\`; a misspelt key is caught when you save.
 - A record read live from a system has no field list in hand, so spreading one into a dict is refused: build the dict from the fields you want. To walk the result, write into it, or check it against a declaration, build a graph instead — \`graph<Detailed> { ...c, ...details }\` copies the record's fields as a snapshot, the declaration deciding which (see *the extraction call* in the extraction chapter).
@@ -251,7 +252,7 @@ A separate and stronger thing is a value typed as *possibly not there at all* �
 - **an aggregate that can come up empty.** \`ONLY\`, \`FIRST\`, \`LAST\`, \`MIN\`, \`MAX\`, and \`AT\` all answer null when there's nothing to aggregate over, so \`ONLY(msg-[:Attachments]->.\`Name\`)\` may be absent exactly when there are no attachments. Over a *bare* traversal (no field on the end) they bind the whole record, not one of its fields — \`channel = ONLY(chat-[ch:Channels WHERE …]->)\` — see *looking-up-existing-records* in the writes chapter for that idiom;
 - **a landing that can resolve empty** — awaiting an answer that was cancelled rather than given yields nothing to read;
 - **a \`race\` slot** — \`AT(r, 0)\` reads what the first arm of a \`race\` returned, and only the arm that settled first has its slot filled, so every slot off a \`race\` may be absent. (\`parallel\` waits for every arm, so its slots are not.)
-- **a field read off a record that may not be there.** \`details = ONLY(extract(…))\` may have found nothing, so \`details.summary\` is \`text | absent\`, as TypeScript types \`details?.summary\`. Test \`details != null\` first, or \`COALESCE\` the field. A graph literal's required field refuses such a value too: declare the field \`<text | null>\`, or fall back.
+- **a field read off a record that may not be there.** \`details = extractOne(…)\` may have found nothing, so \`details.summary\` is \`text | absent\`, as TypeScript types \`details?.summary\`. Test \`details != null\` first, or \`COALESCE\` the field. A graph literal's required field refuses such a value too: declare the field \`<text | null>\`, or fall back.
 - **a typed extracted field, and a lookup by a computed key.** A \`<number>\`, \`<date>\`, \`<boolean>\` or set-of-values field of an \`extract\` is something the model was asked for and may not have found, so reading one is \`T | absent\` — a write field takes it with the \`?:\` fill rather than plainly. A text field is never absent: one the model did not find reads as \`""\`, so test it with \`!= ""\` — a null test on it is refused. Annotate it \`<text | null>\` to have a missing one arrive null instead: it is then \`text | absent\` like the rest, and a null test narrows it. \`AT(dict, key)\` with a key worked out at run time is the same: a key that is not there reads nothing.
 
 Reading such a value is always fine, and so is interpolating it — it prints as nothing. Testing it needs no guard either. \`==\` and \`!=\` take it on either side: a missing value equals only \`null\`, so \`o.stage == "Seed"\` is false and \`o.stage != "Seed"\` true when the model found nothing. A condition takes a \`<boolean>\` that may be missing and reads a missing one as false — \`if o.viable { … }\`, \`IF o.viable THEN … ELSE … END\`, \`a AND o.viable\`, \`NOT o.viable\`.
@@ -720,7 +721,7 @@ function \`Merge\`(m: <inbox-[:Email]->>) {
   content   = [m.\`Body\`]
   companies = extract(content, Company, { tier: 'careful' })
   merged    = MAP(companies, (c) => {
-    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' })
     return { ...c, ...details }
   })
   MAP(merged, (d) => {

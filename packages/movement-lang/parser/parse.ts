@@ -4096,15 +4096,17 @@ class Parser {
    * (the keyword wants `from` or a tier after `extract`, and `extractOne` was
    * a name like any other), so no saved program changes meaning.
    *
-   * `extractOne` is a function name, so its letter case is the author's, as
-   * every function's is from version 3; `extract` keeps its one spelling.
+   * Both are function names, so their letter case is the author's, as every
+   * function's is from version 3 (`EXTRACT(`, `ExtractOne(`). The keyword
+   * cannot collide: it is lower case and never followed by `(`.
    */
   private extractCallAhead(): { word: string; finds: ExtractCallFinds } | undefined {
     if (before(this.languageVersion, 3)) return undefined;
     const word = this.peekIdent();
     if (word === undefined || !this.followedByCall(word)) return undefined;
-    if (word === 'extract') return { word, finds: 'each' };
-    if (word.toLowerCase() === 'extractone') return { word, finds: 'one' };
+    const folded = word.toLowerCase();
+    if (folded === 'extract') return { word, finds: 'each' };
+    if (folded === 'extractone') return { word, finds: 'one' };
     return undefined;
   }
 

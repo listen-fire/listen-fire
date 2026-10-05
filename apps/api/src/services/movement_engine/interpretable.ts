@@ -32,6 +32,7 @@ import {
   programCallScope,
   readCall,
   resolveCallee,
+  hoistingMemberReads,
   nestedCalls,
   parseNestedCall,
   readingBoundNames,
@@ -668,12 +669,15 @@ class InterpretabilityScan {
       if (e instanceof BridgeError) return slot; // checker territory
       throw e;
     }
-    const calls = nestedCalls(tree, (call) =>
-      runsAsCall(
-        call,
-        (callee) => resolveCallee(callee, this.callScope, CURRENT_LANGUAGE_VERSION),
-        // The file call scope binds only functions.
-        () => true,
+    const calls = nestedCalls(
+      tree,
+      hoistingMemberReads(tree, (call) =>
+        runsAsCall(
+          call,
+          (callee) => resolveCallee(callee, this.callScope, CURRENT_LANGUAGE_VERSION),
+          // The file call scope binds only functions.
+          () => true,
+        ),
       ),
     );
     if (calls.length === 0) return slot;
