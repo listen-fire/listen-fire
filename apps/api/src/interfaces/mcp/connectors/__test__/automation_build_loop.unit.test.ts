@@ -9,7 +9,7 @@ const tools = automationConnectorOptions().tools ?? {};
 const description = (name: string) => tools[name]?.description ?? '';
 
 describe('the build loop the connector teaches', () => {
-  it.each(['lean', 'examples', 'full'] as const)('points at getStarted first, in the %s handbook', (mode) => {
+  it.each(['lean', 'full'] as const)('points at getStarted first, in the %s handbook', (mode) => {
     const text = automationInstructions(mode);
     expect(text).toContain('Call getStarted first');
     expect(text).toContain('a separate validateAutomation is not needed');
@@ -17,8 +17,8 @@ describe('the build loop the connector teaches', () => {
     expect(text).not.toContain('listTeams');
   });
 
-  it.each(['lean', 'examples'] as const)('says in the %s handbook that chapters are not needed', (mode) => {
-    expect(automationInstructions(mode)).toContain("The handbook's chapters are not needed");
+  it('says in the lean handbook that chapters are not needed', () => {
+    expect(automationInstructions('lean')).toContain("The handbook's chapters are not needed");
   });
 
   it('offers getStarted as the place to start, read-only, behind its own route', () => {

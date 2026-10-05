@@ -14,7 +14,7 @@ describe('the handbook dimension', () => {
   it('runs every mode it is given, in order', () => {
     expect(parseHandbookModes('full, lean')).toEqual(['full', 'lean']);
     expect(parseHandbookModes('lean')).toEqual(['lean']);
-    expect(parseHandbookModes('lean,examples')).toEqual(['lean', 'examples']);
+    expect(parseHandbookModes('lean,full')).toEqual(['lean', 'full']);
   });
 
   it('refuses a mode the API does not have', () => {
