@@ -45,6 +45,7 @@ import {
   connectStack,
   ensureConnections,
   fireEvent,
+  inspectRun,
   listAutomations,
   primePolledInboxes,
   readAutomationSource,
@@ -57,6 +58,7 @@ import {
   type AutomationSummary,
   type Stack,
 } from './stack';
+import { runRecordOf } from './run_record';
 import type { Task } from './task';
 import { TASKS } from './tasks';
 import { costUsd, emptyUsage } from './usage';
@@ -155,6 +157,7 @@ async function runFixtures(input: {
       workDir: input.workDir,
     });
     const settled = await settle({ stack, since, review: fixture.review ?? 'approve' });
+    const runs = await Promise.all(settled.runs.map(async (run) => runRecordOf(run, await inspectRun(stack, run.id))));
     const after = await snapshot(stack);
     const verdict = judgeFixture(fixture, before, after);
     const outboxBefore = sentEmailCount(before);
@@ -165,7 +168,7 @@ async function runFixtures(input: {
       results: verdict.results,
       firedAt: fired.targets,
       fireNote: fired.note ?? null,
-      runs: settled.runs,
+      runs,
       reviews: settled.reviews,
       timedOut: settled.timedOut,
       sendsBeforeApproval: task.sendsToThirdParty

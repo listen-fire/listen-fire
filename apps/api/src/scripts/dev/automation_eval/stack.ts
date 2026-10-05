@@ -509,6 +509,16 @@ async function settle(input: {
   }
 }
 
+/** What a run did, from the same inspector the builder's `inspectRun` tool reads. */
+async function inspectRun(stack: Stack, runId: string): Promise<{ body: unknown } | { error: string }> {
+  try {
+    const { status, body } = await automationApi<unknown>(stack, 'POST', '/automations/inspect-run', { runId });
+    return status < 400 ? { body } : { error: `inspect-run ${status}: ${JSON.stringify(body).slice(0, 160)}` };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function snapshot(stack: Stack): Promise<Snapshot> {
   return readSnapshot(stack.fakeChannelsUrl);
 }
@@ -519,6 +529,7 @@ export {
   connectStack,
   ensureConnections,
   fireEvent,
+  inspectRun,
   listAutomations,
   primePolledInboxes,
   readAutomationSource,

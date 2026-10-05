@@ -27,8 +27,25 @@ export const inboundIntake: Task = {
       description: 'a second email about the same company does not duplicate it, and still posts',
       event: {
         kind: 'email',
-        subject: 'Fwd: Acme AI — update',
-        text: `Quick update on Acme AI (https://acme.ai): they've now closed the Series A at $6M, Sequoia leading.\n\n— A`,
+        subject: 'Fwd: Intro — Acme AI',
+        text: `Hi,
+
+Passing along another intro — Acme AI (https://acme.ai) builds AI agents that automate back-office finance work. The founders reached out to me directly and asked to be put in front of your team.
+
+Thought of you.
+
+— Dana
+
+---------- Forwarded message ----------
+From: Bob Okafor <bob@acme.ai>
+Subject: Intro — Acme AI
+
+Hello,
+
+We're building AI agents for finance teams and are raising our Series A. Would love to talk. Website: https://acme.ai
+
+Best,
+Bob`,
       },
       assertions: [
         { kind: 'created', collection: 'attio/companies', count: 0, label: 'no duplicate company' },
