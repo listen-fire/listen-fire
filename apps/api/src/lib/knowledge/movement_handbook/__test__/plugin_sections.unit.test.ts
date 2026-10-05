@@ -25,19 +25,18 @@ const SECTION_MANIFEST: PluginManifest = {
     title: 'Tidy up — trimming boilerplate before extraction',
     content: `## Tidy up — trimming boilerplate before extraction
 
-A signature block and a quoted reply are noise the extraction pays for. This stage removes them.
+A signature block and a quoted reply are noise the extraction pays for. This call removes them.
 
 ### where-to-put-it
 
 \`\`\`
-extract from [msg.\`Text\`] through [tidy_up] {
-  node company: "each company named" { name: "the company's name" }
-}
+tidy  = tidy_up(text: msg.\`Text\`)
+found = extract([COALESCE(tidy, "")], Company)
 \`\`\`
 
 ### Common mistakes
 
-- **Putting it after the stage that reads the text.** Nothing has been tidied yet.`,
+- **Calling it after the extraction that reads the text.** Nothing has been tidied yet.`,
   },
 };
 
@@ -82,21 +81,61 @@ describe('plugin-declared handbook sections', () => {
       'says "movement" outside code',
     ]);
   });
+
+  // The handbook documents only the forms to write. Each non-recommended form
+  // is caught wherever it sits — prose, inline code or a fence — and the
+  // modern spelling beside it is not.
+  const sectionWith = (content: string) =>
+    pluginSectionChapters([
+      { ...SECTION_MANIFEST, handbookSection: { title: 'Tidy up', content } },
+    ])[0];
+
+  it.each([
+    ['the extraction keyword', 'found = extract from [m.Body] { node c: "each company" { name: "its name" } }'],
+    ['a tiered extraction keyword', "found = extract 'careful' from [m.Body] { }"],
+    ['a through stage', 'x = y through [tidy_up]'],
+    ['the anonymous node literal', 'deal = node { Title: m.Subject }'],
+    ['a movement declaration', 'movement `Log Lead`(l: <Lead>) { }'],
+    ['ONLY around an extraction', 'one = ONLY(extract(content, Company))'],
+    ['a named-argument call', '`Log Lead`(l: msg)'],
+    ['a named-argument call of a declared function', 'function log_lead(l: <Lead>) { }\nlog_lead(l: msg)'],
+    ['a passage about an old form', 'The keyword is still supported for saved automations.'],
+  ])('catches %s', (_label, code) => {
+    expect(proseViolations(sectionWith(`\`\`\`\n${code}\n\`\`\``))).not.toEqual([]);
+  });
+
+  it('passes the modern forms beside them', () => {
+    const modern = [
+      'node Company: "each company" { name: <text> "its name" }',
+      'function `Log Lead`(l: <Lead>, cfg: <{ mode: text }>) { }',
+      'function log_lead(l: <Lead>) { }',
+      'crm = attio(credentials: acme, dry_run: true)',
+      'page = fetch_url(url: c.website)',
+      'found = extract(content, Company, { tier: \'careful\' })',
+      'one = extractOne(content, node Sender: "the sender" { name: <text> "their name" })',
+      'msg = graph<Message> { Body: m.Body, Files: m-[a:Attachments]-> { Name: a.Name } }',
+      '`Log Lead`(graph<Lead> { Name: msg.Subject })',
+      'log_lead(msg)',
+      'again = callback(`Chase`(company), { once: FALSE })',
+      'await until(() => done, every: 1h)',
+      'r = await parallel([() => { return 1 }])',
+    ].join('\n');
+    expect(proseViolations(sectionWith(`\`\`\`\n${modern}\n\`\`\``))).toEqual([]);
+  });
 });
 
 describe('the shipped plugin sections', () => {
-  // Every bundled plugin, a namespaced chapter each, one assembly — which is
-  // what makes this a mechanism rather than a feature of whichever plugin got
-  // a chapter first. The two retrieval markers are the choice a reader is here
-  // to make: scan a message, or load the link a record already carries; the
-  // two LinkedIn ones are the other choice — a name in, or an address in. The
-  // research one is the choice not to choose: it takes whatever the record has.
+  // Every bundled plugin that can be called plainly, a namespaced chapter
+  // each, one assembly — which is what makes this a mechanism rather than a
+  // feature of whichever plugin got a chapter first. The two retrieval markers
+  // are the choice a reader is here to make: scan a message, or load the link a
+  // record already carries. The research one is the choice not to choose: it
+  // takes whatever the record has, and resolves a profile address from a name.
   it.each([
-    ['plugin:vc_url_retrieval', 'through [vc_url_retrieval]'],
-    ['plugin:fetch_url', 'through [fetch_url(url: website)]'],
-    ['plugin:linkedin_enrichment', 'through [linkedin_enrichment]'],
-    ['plugin:linkedin_research', 'through [linkedin_research(url: linkedin)]'],
-    ['plugin:web_research', 'web_research(name: name, context: description'],
+    ['plugin:vc_url_retrieval', 'vc_url_retrieval(text: msg.`Body`)'],
+    ['plugin:fetch_url', 'fetch_url(url: c.website)'],
+    ['plugin:linkedin_research', 'linkedin_research(url: p.linkedin)'],
+    ['plugin:web_research', 'web_research(name: c.name, context: c.description'],
     ['plugin:research', 'questions: "what it does, which sector it is in, where it is based"'],
   ])('%s is on the shelf and reads back', (chapter, marker) => {
     const read = readBook({ bookId: 'automations', chapter });
@@ -113,11 +152,17 @@ describe('the shipped plugin sections', () => {
 
   it('teaches the placement choice each retrieval plugin is for', () => {
     const chapters = getMovementHandbook().chapters;
-    // The scanning one warns against a per-record stage; the targeted one
-    // warns against a top-of-extract stage. Between them an author is told
-    // which placement each is for, which is the load-bearing decision.
-    expect(chapters['plugin:vc_url_retrieval']?.content).toContain("behind a record's stage");
-    expect(chapters['plugin:fetch_url']?.content).toContain('at the top of the extract');
+    // The scanning one is called once over the message; the targeted one once
+    // per record. Between them an author is told which placement each is for,
+    // which is the load-bearing decision.
+    expect(chapters['plugin:vc_url_retrieval']?.content).toContain('Call it once, over the message');
+    expect(chapters['plugin:fetch_url']?.content).toContain('called once per record');
+  });
+
+  it('documents no plugin that runs only as an extraction stage', () => {
+    // `linkedin_enrichment` declares no output, so it cannot be called plainly;
+    // the handbook teaches only the forms to write.
+    expect(getMovementHandbook().chapters['plugin:linkedin_enrichment']).toBeUndefined();
   });
 
   it('teaches that a required argument resolving empty skips that record alone', () => {

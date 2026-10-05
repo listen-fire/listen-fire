@@ -98,7 +98,7 @@ import { team_telegram } from credentials
 tg = telegram(credentials: team_telegram)
 questions = ask()
 
-movement confirm_send(msg: <tg-[:\`Message\`]->>) {
+function confirm_send(msg: <tg-[:\`Message\`]->>) {
   q = write questions-[:Check]-> {
     Prompt: "Send the update?"
     Detail: "\${msg.\`Text\`}"
@@ -134,7 +134,7 @@ import { team_telegram } from credentials
 
 tg = telegram(credentials: team_telegram)
 
-movement wait_for_go(msg: <tg-[:\`Message\`]->>) {
+function wait_for_go(msg: <tg-[:\`Message\`]->>) {
   go = callback()
 
   write msg-[:Replies]-> {

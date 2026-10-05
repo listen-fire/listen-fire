@@ -5,292 +5,178 @@ export const extraction: Chapter = {
   title: 'Extraction — structured records from unstructured data',
   content: `## Extraction — structured records from unstructured data
 
-Use \`extract\` to turn free text and documents into records you can traverse and write from. One declared tree produces the whole result in a single pass, and afterwards its values read as plain properties. For a single value — a summary, a category — use \`AI()\` instead.
+\`extract(content, Shape, settings)\` turns text and documents into records you can walk and write from: one declared tree, one model call. For a single value — a summary, a category — use \`AI()\` instead.
 
-There are two spellings. **The extraction call, \`extract(content, Shape, settings)\`, is the one to write.** It is an ordinary function over values, so it composes with \`MAP\`, \`ONLY\`, plugin calls and the rest, and it is laid out for the provider's prompt cache. The older \`extract … from [ … ] { … }\` keyword, with its \`through\` stages, is documented below as supported but not recommended: saved automations use it and it runs exactly as it always did, but a new one should use the call.
-
-### the extraction call
-
-\`extract(content, Shape, settings)\` is extraction as a function: a list of text and files in, a list of \`Shape\` records out. \`extractOne(content, Shape, settings)\` is the same call asking for the single \`Shape\` the content describes, as TypeScript's \`find\` sits beside \`filter\`.
+### basics
 
 \`\`\`
+type Thesis = <"Consumer" | "Infra" | "Health">
+
 node Company: "each company named in this message" {
   name:    <text> "the company's name"
   website: <text | null> "its website, if given"
+  stage:   <crm-[:Onboarding]->.Stage> "how far along this company is"
+  thesis:  <Thesis> "which of our theses it fits"
   node person: "each person at the company named in the message" {
-    name: <text> "the person's full name"
+    name:  <text> "the person's full name"
+    email: <text | null> "their email address, if given"
   }
 }
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  content   = [m.\`Body\`, ...m-[a:Attachments]->.\`File\`]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  MAP(companies, (c) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name }
+    write record-[:Lists]-> { listName: "Onboarding", Stage ?: c.stage }
+    c-[p:person]-> {
+      write record-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name, Email ?: p.email }
+    }
+  })
+}
+\`\`\`
+
+- **Content** is a list, read in the order written: text, files (documents read as text, audio transcribed), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save. Spread a list of files in with \`...\`.
+- **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. A shape worked out at run time is refused. Declare a record once and extract it anywhere; \`node X extends Company { … }\` adds fields for a later step (anatomy, *declared-structures*).
+- **The description carries the cardinality**: "each company" yields every one, "the company" one. A record with nothing in any field is dropped. Where a record may genuinely not be there, say so — "the company, if mentioned" — or one gets invented to fill the slot.
+- **Every field is something the model was asked for and may not have found.** A \`<text>\` field it did not find is \`""\`: test \`!= ""\` (a null test on it is refused). A \`<text | null>\` field arrives absent instead. A typed field (\`<number>\`, \`<date>\`, \`<boolean>\`, a set of values) is \`T | absent\`: write it with \`?:\`, fall back with \`COALESCE\`, or guard it (expressions, *values-that-may-not-be-there*).
+- **A field's type is its annotation**: a primitive, a set of values you write (\`type Thesis = …\`), or a system field's type borrowed by path (\`<crm-[:Onboarding]->.Stage>\`). A set tells the model which values to pick from, and a value outside it is flagged when you save. A borrowed option field binds that field's live options, re-read every run. An annotation that disagrees with the field you write it into is flagged.
+- **Nest a \`node\`** when a child only makes sense inside its parent. It arrives attached: walk it with \`c-[p:person]->\`.
+- **The result** is a list of records. Read it with \`MAP\`, walk nested nodes, and write and link into it as into any record the run built. Each field's evidence names the content item it came from.
+- **It is a value like any other**: \`MAP(extract(…), f)\`, \`return extract(…)\`, or bound when read more than once. It is refused inside a walk's \`WHERE\` and as a statement on its own line.
+- Declare the records and fields you will use, not every one you could: a larger tree costs more.
+
+\`extractOne(content, Shape, settings)\` gives the single record the content describes, as TypeScript's \`find\` sits beside \`filter\`:
+
+\`\`\`
+sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
+\`\`\`
+
+- Describe the one thing (\`"the company"\`, not \`"each company…"\`). The result is \`Shape | absent\`; handle it like any maybe-absent value (\`COALESCE(sender.name, "unknown")\`, a guard).
+- A reply naming several is tried once more, then the call fails.
+
+A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
+
+### a-yes-or-no-field
+
+\`\`\`
+node Lead: "the company this email is about" {
+  name:      <text> "the company's name"
+  \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
+}
+
+lead = extractOne([m.\`Body\`], Lead)
+if lead == null { ERROR("no company in this email") }
+if lead.\`Is Warm\` {
+  write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: lead.name, Description: "Warm Lead" }
+}
+\`\`\`
+
+A \`<boolean>\` field is the condition itself. A missing one reads as false; guard it with \`== null\` when "couldn't tell" should stop the run. A description that argues both ways gives the model a real decision rather than a value to lean toward.
+
+### how-hard-it-works
+
+\`tier\` says how much thinking the extraction is worth — the same three words \`AI()\` takes:
+
+- \`'quick'\` — fast and cheap. Right when the values sit in the text and only have to be lifted out: names, dates, amounts.
+- \`'careful'\` — a solid general answer. Right when a field calls for a small judgement, or the source is messy.
+- \`'thorough'\` — slow and expensive, and it genuinely reasons. Worth it when a field must be worked out rather than found.
+
+Leave it off and the extraction sizes itself from the tree you declared. \`model\` (a model this installation can reach, by name) and \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`) override the tier's. An unknown setting, or an unreachable model, is refused when you save.
+
+### repeated-calls
+
+The model reads content it has already seen in this run for a fraction of the price, but only the part that comes first and is identical:
+
+- Put what every call shares first and what belongs to one record last — \`[...content, TEXT.SERIALISE(c, 'JSON')]\`.
+- Keep the tier (or the model and effort) the same across calls that read the same content.
+- Give the \`MAP\` \`initialConcurrency: 1\`, so the first call has read the shared content before the rest start.
+
+The shape always goes after the content, so a second extraction with a different shape over the same content is cheap too. The engine marks the cache itself; the order you write is the only thing to get right.
+
+### enrichment
+
+Enrich by composition: extract, map over the results, call plugins, extract again over what they returned, then merge.
+
+\`\`\`
+import { fetch_url, research } from plugins
 
 node CompanyDetail: "the company" {
   summary: <text> "one line on what the company does"
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
-  files     = m-[a:Attachments]->.\`File\`
-  content   = [m.\`Body\`, ...files]
-  companies = extract(content, Company, { tier: 'careful' })
-
-  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
-    return { ...c, ...details }
-  })
-
-  MAP(companies, (c) => {
-    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: c.name }
-    c-[p:person]-> {
-      write record-[:Team]-> { unique by (FUZZY \`Name\`) Name: p.name }
-    }
-  })
-}
-\`\`\`
-
-- **Content** is a list, read in the order you write it: text, files (read as text, as \`from [ … ]\` reads them), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save — the rendering is part of what the model reads, so you choose it. Spread a list of files in with \`...\`.
-- **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. A declaration's name bound to another name (\`S = Company\`) is the same shape. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a shape worked out at run time.
-- **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
-- **It is a value like any other**: use it where you need the records — \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once. It may sit inside a lambda or another call. It is refused inside a walk's \`WHERE\` (read once per landing) and as a statement on its own line.
-- **\`extractOne\` gives the one record, or absent.** The model is asked for the single \`Shape\` the content describes, or nothing if it describes none, so write the description as that one thing: \`"the company"\`, not \`"each company…"\`. The result is \`Shape | absent\`, handled as any maybe-absent value is (\`COALESCE(d.summary, "")\`, a guard). A reply naming several is a reply that does not fit, so it is tried once more and then the call fails. A record with nothing in it is absent. Content, settings, evidence and cost are as for \`extract\`, and the content it shares with an \`extract\` is read from the same cache. Its letter case is yours, as every function name's is.
-- **Settings**, each written as a quoted word: \`tier\` (\`'quick'\`, \`'careful'\`, \`'thorough'\` — see *how hard it works*), \`model\` (a model this installation can reach, by name), \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`). A model or effort you name wins over the tier's. An unknown setting, or a model this installation cannot reach, is refused when you save.
-- A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
-
-**Write the content so repeated calls are cheap.** The model reads content it has already seen in this run for a fraction of the price, but only the part that comes first and is identical:
-
-- Put what every call shares first and what belongs to one record last — \`[...content, TEXT.SERIALISE(c, 'JSON')]\`, never the other way round.
-- Keep the tier (or the model and effort) the same across calls that read the same content.
-- Give the \`MAP\` an \`initialConcurrency: 1\`, so the first record's call has read the shared content before the others start.
-- The shape is always placed after the content, so a second extraction with a different shape over the same content reuses it too.
-
-The engine does the rest of the cache work. It remembers the content each call has sent in the run and marks the end of the longest prefix a call shares with an earlier one, so the order you write is the only thing to get right.
-
-A shape can also be written in place, for an extraction used once:
-
-\`\`\`
-people = extract(content, node Person: "each person named in the message" { name: <text> "their name" })
-\`\`\`
-
-**Enrichment is plain composition**: extract, map over the results, call plugins as ordinary functions, extract again over what they returned, then merge the record with its detail and write.
-
-\`\`\`
-detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-  page    = fetch_url(url: c.website)
-  details = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], CompanyDetail, { tier: 'careful' })
-  return { ...c, ...details }
-})
-\`\`\`
-
-A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before it goes into the content. A plugin's arguments stay named.
-
-**Merging a record with its detail.** \`{ ...c, ...details }\` is a dict holding the company's fields and then the detail's, a later key winning, as TypeScript's object spread does. \`extractOne\` may have found nothing, and a spread of nothing copies nothing, so a key only the detail has is \`T | absent\`: \`COALESCE(d.summary, "")\` before a field that needs a value. Read the dict with a dot, \`d.name\`.
-
-To walk the result, write or link into it, or have it checked against a declaration, build a graph instead:
-
-\`\`\`
 node Detailed {
   name:    <text>
   website: <text | null>
   summary: <text | null>
-  node person {
-    name: <text>
-  }
+  node person { name: <text> }
 }
 
-detailed = MAP(companies, (c) => {
-  details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
+content   = [m.\`Body\`]
+companies = extract(content, Company, { tier: 'careful' })
+
+detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+  page    = fetch_url(url: c.website)
+  more    = research(name: c.name, context: m.\`Subject\`, questions: "what the company does")
+  details = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, ""), COALESCE(more.dossier, "")], CompanyDetail, { tier: 'careful' })
   return graph<Detailed> { ...c, ...details }
+})
+
+MAP(detailed, (d) => {
+  record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: d.name, Description ?: d.summary }
+  d-[p:person]-> { write record-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name } }
 })
 \`\`\`
 
-- \`...c\` in a graph copies one record's fields as a snapshot: the declaration decides which fields, and a nested node it declares is followed through the record's edge of the same name (\`c\`'s \`person\` records here). Files stay lazy handles, and nothing in the graph refers back to where the record came from.
-- A field the declaration requires can't be filled by something that may be absent. \`summary: <text>\` above would be refused when you save, because \`details\` may be nothing. Declare it \`<text | null>\`, or write it after the spread with a fallback: \`graph<Detailed> { ...c, ...details, summary: COALESCE(details.summary, "") }\` (a field written in the body wins over a spread's).
-- If a value the save could not see as missing turns out missing when the graph is built, the run fails there, naming the field, rather than leaving it empty.
+- A plugin is imported (\`import { fetch_url } from plugins\`) and called with named arguments. It returns a value: \`fetch_url\` the page's text, \`research\` a record read by name (\`more.summary\`, \`more.dossier\`). Anything it found nothing for is absent, so \`COALESCE\` it before it goes into content. Each plugin's own chapter (\`plugin:…\`) says what it takes and returns.
+- \`graph<Detailed> { ...c, ...details }\` copies the record and then its detail as a snapshot you can walk and write from; the declaration decides which fields, and a nested node is followed through the record's edge of the same name. A later field wins.
+- \`details\` may be absent, so a field only it supplies may be too. A required field fed from it is refused when you save: declare it \`<text | null>\`, or write it after the spread with a fallback (\`summary: COALESCE(details.summary, "")\`).
+- \`{ ...c, ...details }\` builds a dict instead, read with a dot. Use it when nothing needs to walk the result.
 
-The \`extract … from [ … ] { … }\` form below still runs exactly as before, and everything in the rest of this chapter about it holds.
+### long-documents
 
-### basics
-
-This section and the ones after it describe the \`extract … from [ … ] { … }\` keyword. It is supported and unchanged, but not recommended for new automations; write the extraction call above and reach for the keyword only to read or maintain one that already exists.
+Cut a long document into pieces, read each on its own, and gather what they found before any of it reaches a system:
 
 \`\`\`
-function \`Intake\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-    node company: "each company named in the supplied text or files" {
-      name:    "the company's name"
-      website: "the company's official website, if given"
-      stage:   <crm-[:Onboarding]->.Stage> "how far along this company is"
-
-      node person: "each person at this company named in the input" {
-        name:  "the person's full name"
-        email: "the person's email address, if given"
-      }
-    }
-  }
-
-  found-[c:company]-> {
-    record = write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:    c.name
-      Domains: c.website
-    }
-
-    write record-[:Lists]-> {
-      listName: "Onboarding"
-      Stage ?:  c.stage
-    }
-
-    c-[p:person]-> {
-      write record-[:Team]-> {
-        unique by (FUZZY \`Name\`)
-        Name:  p.name
-        Email: p.email
-      }
-    }
-
-    c-[r:_resources WHERE type == "FILE"]-> {
-      write record-[:Files]-> {
-        File: r.\`file\`
-      }
-    }
+node Found {
+  node companies {
+    name:    <text>
+    website: <text | null>
   }
 }
-\`\`\`
 
-- \`from [ … ]\` lists the source data — body text, attachment files, several at once. Documents are read as text; audio is transcribed, and the spoken words join the source text like any other file's content.
-- A source can be a walk bound to a name first — \`docs = go-[:Files]->.\`File\`\` then \`extract from [go.\`Text\`, docs]\`. A named walk is a file source exactly like the inline \`go-[:Files]->.\`File\`\` form.
-- \`node <name>: "<description>"\` declares a kind of record, and the description carries the cardinality: "the company" yields one, "each company" yields all. A record with no value in any of its fields is dropped rather than emitted all-null — say so in the description if you want the empty ones. Where a record may genuinely not be there, say so too: "the company, if mentioned" keeps one from being invented to fill the slot.
-- Every field is something the model was **asked** for and may not have found. A text field it did not find reads as \`""\`, so it prints and writes as it is — test \`c.website != ""\` to act only on a found one (a null test on it, \`EXISTS\` or \`ISNULL\` included, is refused: it could never be true). Annotated \`<text | null>\`, a missing one arrives null instead, and the null test works. A typed field (\`<number>\`, \`<date>\`, \`<boolean>\`, a set of values) has no empty value, so reading one is \`T | absent\`: a write field takes it with the \`?:\` fill (\`Stage ?: c.stage\`), or give it a fallback with \`COALESCE\`, or gate on it first. The *values-that-may-not-be-there* section of the expressions chapter has every discharge.
-- Nest a \`node\` when a child only makes sense inside its parent — a company's people, an order's line items. The child arrives already attached, so the write that links them has the relationship in hand.
-- A field's type comes from its annotation and nowhere else. A field with none is text, so writing it into a number, date or yes/no field is refused until you annotate it. The annotation is a primitive (\`amount: <number> "the order's total"\`), a set of values you write out yourself (\`type Thesis = <"Consumer" | "Infra">\` at the top of the file, then \`thesis: <Thesis> "which thesis this fits"\`), or another field's type borrowed by its path (\`<crm-[:Onboarding]->.Stage>\`). A written set does everything a borrowed one does — it tells the extraction which values to pick from, and a value that is not one of them is flagged when you save; the values are ordinary text everywhere else. Borrowing is how a value lands in an option field — the annotation binds that field's live option list, re-read every run, so an option added there is usable on the next run with no edit here. A target that publishes no options borrows as plain text. An annotation that disagrees with the field you write it into — a \`<number>\` landing in an option field — is flagged when you save.
-- **Declare a record once, extract it anywhere**: \`node entry: <Entry>\` takes a described declaration (anatomy chapter, *declared-structures*) as the node — its fields, their types, its nested nodes, and its words — exactly as if the block were written out here. Words after it (\`node entry: <Entry> "each item in this call"\`) replace the record's own for this extraction; a field the declaration leaves undescribed is extracted by its name. Types stay explicit in a declaration (\`name: <text> "…"\`); only an inline block may leave \`<text>\` off.
-- The binding (\`found\`) is the result's root: traverse it with ordinary blocks, read its fields with ordinary reads. Fields declared outside any \`node\` describe the source as a whole (\`found.sentiment\`).
-- A larger declared tree runs on a more capable model, so it costs more. Declare the records and fields you will use, not every one you could.
+pieces  = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
+deduped = graph<Found> {}
 
-Cut a long document into pieces, read each piece on its own, and gather what they found into one place before any of it reaches a system:
-
-\`\`\`
-node Company { name: <text>; website: <text> }
-
-function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
-  docs   = go-[:Files]->.\`File\`
-  pieces = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
-
-  found = MAP(pieces, (p) => {
-    return extract from [p] {
-      node company: "each company named" {
-        name:    "the company's name"
-        website: "its website, if given"
-      }
-    }
+MAP(pieces, (p) => {
+  MAP(extract([p], Company, { tier: 'quick' }), (c) => {
+    write deduped-[:companies]-> { unique by (FUZZY name), name: c.name, website ?: c.website }
   })
+})
 
-  deduped = node { companies: <Company> }
-
-  found-[c:company]-> {
-    write deduped-[:companies]-> {
-      unique by (FUZZY name)
-      name:      c.name
-      website ?: c.website
-    }
-  }
-
-  deduped-[c:companies ORDER BY \`name\`]-> {
-    page = fetch_url(url: c.website)
-    write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:          c.name
-      Description ?: page
-    }
-  }
+deduped-[c:companies ORDER BY \`name\`]-> {
+  write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name }
 }
 \`\`\`
 
-- \`extract from [pieces]\` over a list is ONE extraction reading every piece as a segment; the \`MAP\` above is one extraction per piece. Reach for the \`MAP\` where each piece should be read on its own.
-- \`found\` is then a list of results — one per piece — and a block over it (\`found-[c:company]->\`) walks each in turn, in the order the pieces were in.
-- \`READ\` and \`CHUNKS\` are in the expressions chapter, the gathering node \`deduped\` in the anatomy chapter's *collect-what-you-wrote*, and the plain plugin call in *through* below.
+- \`extract(pieces, …)\` is ONE extraction reading every piece; the \`MAP\` makes one per piece.
+- A write into the local graph merges by \`unique by\`, so a company found in two pieces lands once.
+- When a run says a reading was *continued*, the answer ran past its output ceiling: cut smaller. \`CHUNKS(text, { entities: 20 })\` sizes each piece by the records it is expected to hold.
 
-### a yes-or-no field
+### attaching-the-source-files
 
-A field that answers a yes-or-no judgement is \`<boolean>\`, branched on directly:
+The files an extraction read are the ones you put in its content, so attach them from where they came:
 
 \`\`\`
-found = extract from [m.\`Body\`] {
-  node company: "the company this email is about" {
-    name:      "the company's name"
-    \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
-  }
-}
-
-found-[c:company]-> {
-  if c.\`Is Warm\` == null { ERROR("couldn't tell whether this is a warm contact") }
-  if c.\`Is Warm\` {
-    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description: "Warm Lead" }
-  }
+record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name }
+m-[a:Attachments]-> {
+  write record-[:Files]-> { File: a.\`File\` }
 }
 \`\`\`
 
-A \`<boolean>\` field is a typed field like any other, so it's \`T | absent\` until guarded — the guard clause above proves it present for the rest of the block. Once present it *is* the condition: \`if c.\`Is Warm\` { … }\` needs no comparison, and a description that argues both ways ("true when… false otherwise") gives the model a real decision to make rather than a value to lean toward.
-
-### how hard it works
-
-\`\`\`
-found = extract "thorough" from [go.\`Text\`] {
-  node company: "each company named in the supplied text" {
-    name:   "the company's name"
-    thesis: "how this company fits the fund's thesis, argued in a sentence"
-  }
-}
-\`\`\`
-
-A tier after \`extract\` says how much thinking the extraction is worth — the same three words \`AI()\` takes, meaning the same things:
-
-- \`"quick"\` — fast and cheap. Right when the values are sitting in the text and only have to be lifted out: names, dates, amounts, addresses.
-- \`"careful"\` — a solid general answer. Right when a field calls for a small judgement, or the source is messy.
-- \`"thorough"\` — slow and expensive, and it genuinely reasons. Worth it when a field needs the model to work something out from the source rather than find it there.
-
-It applies to the whole extraction — every stage, every record, the nested trees too. There is no per-field or per-stage tier: one declared tree is one job, and its cost should be one thing you can read off the top of it.
-
-Leave it off and the extraction sizes itself from the tree you declared, which is what it has always done. Naming a tier is you overriding that, in either direction: \`"quick"\` on a big tree of plain fields is the cheapest thing here, and \`"thorough"\` on a small tree of hard ones is worth what it costs.
-
-- Cut the input into pieces when a run says a reading was *continued* — \`MAP(CHUNKS(transcript, { entities: 20 }), (p) => { return extract from [p] { … } })\`. An answer that ran past its output ceiling is missing the records at the end of what it read, and \`entities\` sizes each piece by the records it is expected to hold rather than by its length.
-
-### through — a block of plain plugin calls, then a second extraction
-
-The call form above does the same job with \`MAP\` and a plugin call inside the lambda, and keeps the content cache-friendly; this section shows the keyword form, still supported.
-
-Enrich what you extracted by walking it, calling plugins as ordinary functions, and extracting again over what they returned:
-
-\`\`\`
-import { fetch_url, research } from plugins
-
-found = extract "careful" from [transcript] {
-  node entry: "each item" { name: "the company's name" website: "its website, if given" }
-}
-
-found-[e:entry]-> {
-  page   = fetch_url(url: e.website)
-  more   = research(name: e.name, website: e.website, questions: "what the company does")
-  detail = extract "careful" from [COALESCE(page, ""), COALESCE(more.dossier, "")] {
-    node d: "the company" { summary: "what the company does" }
-  }
-  detail-[x:d]-> { write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: e.name Description ?: x.summary } }
-}
-\`\`\`
-
-- Each plugin is an ordinary call, returning a value: \`fetch_url\` gives \`text | absent\`, and \`research\` gives a record read by name (\`more.summary\`, \`more.dossier\`) whose every field may be absent.
-- The second extraction reads only what the calls returned — not the original source.
-- A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before handing it to the next extraction.
-- Every plugin used this way is imported the same as any other — \`import { fetch_url, research } from plugins\` at the top of the file.
-- \`through [fetch_url(url: website), research(…)]\` after the sources is the short form of the same block, and still runs.
-- The short form follows a declared node the same way — \`node entry: <Entry> through [fetch_url(url: website)] { summary: "what the page says it does" }\` — and lists only the fields that stage adds or refines.
-
-### source-content-of-an-extracted-node
-
-\`\`\`
-c-[r:_resources WHERE type == "FILE"]-> {
-  write record-[:Files]-> { File: r.\`file\` }
-}
-\`\`\`
-
-Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A document a \`through [ … ]\` stage downloaded is a \`"FILE"\` too. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
+A document a plugin downloaded comes back on its result (\`vc_url_retrieval\`'s \`file\`), and is written the same way.
+`,
   engineClaims: [
     {
       construct: 'the extraction call — extract(content, Shape, settings), then a per-record extractOne in MAP',
@@ -390,7 +276,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'a <boolean> extraction field, guarded then branched on directly with if',
+      construct: 'a <boolean> extraction field on extractOne, guarded then branched on directly with if',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -398,83 +284,23 @@ import { acme } from credentials
 
 inbox = email()
 crm   = attio(credentials: acme)
+
+node Lead: "the company this email is about" {
+  name:      <text> "the company's name"
+  \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
+}
 
 function \`Triage\`(m: <inbox-[:Email]->>) {
-  found = extract from [m.\`Body\`] {
-    node company: "the company this email is about" {
-      name:      "the company's name"
-      \`Is Warm\`: <boolean> "true when the sender already knows us — a referral, a reply to outreach, or a repeat contact; false otherwise"
-    }
-  }
-
-  found-[c:company]-> {
-    if c.\`Is Warm\` == null { ERROR("couldn't tell whether this is a warm contact") }
-    if c.\`Is Warm\` {
-      write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description: "Warm Lead" }
-    }
+  lead = extractOne([m.\`Body\`], Lead)
+  if lead == null { ERROR("no company in this email") }
+  if lead.\`Is Warm\` {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: lead.name, Description: "Warm Lead" }
   }
 }
 `,
     },
     {
-      construct: 'extract tier — one tier for every stage of the extraction',
-      status: 'runs',
-      probe: `
-import { email, attio } from adapters
-import { acme } from credentials
-
-inbox = email()
-crm   = attio(credentials: acme)
-
-function \`Assess\`(m: <inbox-[:Email]->>) {
-  found = extract "thorough" from [m.\`Body\`] {
-    node company: "each company named in this message" {
-      name:   "the company's name"
-      thesis: "how this company fits the fund's thesis, argued in a sentence"
-    }
-  }
-  found-[c:company]-> {
-    write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:         c.name
-      Description ?: c.thesis
-    }
-  }
-}
-`,
-    },
-    {
-      construct: 'borrowed type annotations on extraction fields (enum binding)',
-      status: 'runs',
-      probe: `
-import { email, attio } from adapters
-import { acme } from credentials
-
-inbox = email()
-crm   = attio(credentials: acme)
-
-function \`Log Stage\`(m: <inbox-[:Email]->>) {
-  mentioned = extract from [m.\`Body\`] {
-    node company: "each company mentioned in this message" {
-      name:  "the company's name"
-      stage: <crm-[:\`VC Deal Flow\`]->.Stage> "how far along the pipeline this company is"
-    }
-  }
-  mentioned-[c:company]-> {
-    record = write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name: c.name
-    }
-    write record-[:Lists]-> {
-      listName: "VC Deal Flow"
-      Stage ?:  c.stage
-    }
-  }
-}
-`,
-    },
-    {
-      construct: 'author-declared refinements (`type X = <"A" | "B">`) as extraction field types',
+      construct: 'the extraction call over a body and its files — a borrowed option type, a written set of values, a nested node written along its parent, and the source files attached',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -485,52 +311,36 @@ crm   = attio(credentials: acme)
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
-function \`Log Thesis\`(m: <inbox-[:Email]->>) {
-  mentioned = extract from [m.\`Body\`] {
-    node company: "each company mentioned in this message" {
-      name:   "the company's name"
-      thesis: <Thesis> "which of our theses this company fits"
-    }
-  }
-  mentioned-[c:company]-> {
-    write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:        c.name
-      Description: "Thesis: \${c.thesis}"
-    }
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+  stage:   <crm-[:\`VC Deal Flow\`]->.Stage> "how far along the pipeline this company is"
+  thesis:  <Thesis> "which of our theses it fits"
+  node person: "each person at the company named in the message" {
+    name:  <text> "the person's full name"
+    email: <text | null> "their email address, if given"
   }
 }
-`,
-    },
-    {
-      construct: "'through'-staged extraction pipelines",
-      status: 'runs',
-      probe: `
-import { email, attio } from adapters
-import { acme } from credentials
-import { vc_url_retrieval } from plugins
-
-inbox = email()
-crm   = attio(credentials: acme)
 
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  mentions = extract from [m.\`Body\`] through [vc_url_retrieval] {
-    node company: "each company mentioned in this message" {
-      name: "the company's name"
-      website: "the company's official website"
+  content   = [m.\`Body\`, ...m-[a:Attachments]->.\`File\`]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  MAP(companies, (c) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: c.thesis }
+    write record-[:Lists]-> { listName: "VC Deal Flow", Stage ?: c.stage }
+    c-[p:person]-> {
+      write record-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name, Email ?: p.email }
     }
-  }
-  mentions-[c:company]-> {
-    write crm-[:Companies]-> {
-      unique by (\`Name\`)
-      Name: c.name
+    m-[a:Attachments]-> {
+      write record-[:Files]-> { File: a.\`File\` }
     }
-  }
+  })
 }
 `,
     },
     {
-      construct: 'enrichment as a block of plain plugin calls, then a second extraction',
+      construct: 'enrichment by composition — plugin calls inside MAP, extractOne over shared content plus what they returned, merged into graph<Shape> and written along its nested node',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -540,130 +350,82 @@ import { fetch_url, research } from plugins
 inbox = email()
 crm   = attio(credentials: acme)
 
-function \`Enrich\`(m: <inbox-[:Email]->>) {
-  found = extract "careful" from [m.\`Body\`] {
-    node entry: "each item" {
-      name:    "the company's name"
-      website: "its website, if given"
-    }
-  }
-
-  found-[e:entry]-> {
-    page   = fetch_url(url: e.website)
-    more   = research(name: e.name, website: e.website, questions: "what the company does")
-    detail = extract "careful" from [COALESCE(page, ""), COALESCE(more.dossier, "")] {
-      node d: "the company" { summary: "what the company does" }
-    }
-    detail-[x:d]-> {
-      write crm-[:Companies]-> {
-        unique by (FUZZY \`Name\`)
-        Name:      e.name
-        Description ?: x.summary
-      }
-    }
-  }
-}
-`,
-    },
-    {
-      construct:
-        "carrying an extracted node's source file forward via _resources (extract from explicit files → write the source file onto the record)",
-      status: 'runs',
-      probe: `
-import { manual, attio } from adapters
-import { acme } from credentials
-
-runs = manual()
-crm  = attio(credentials: acme)
-
-function \`Intake With Source\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-    node company: "each company named in the supplied text or files" {
-      name:    "the company's name"
-      website: "the company's official website, if given"
-
-      node person: "each person at this company named in the input" {
-        name:  "the person's full name"
-        email: "the person's email address, if given"
-      }
-    }
-  }
-
-  found-[c:company]-> {
-    record = write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:    c.name
-      Domains: c.website
-    }
-
-    c-[p:person]-> {
-      write record-[:Team]-> {
-        unique by (FUZZY \`Name\`)
-        Name:  p.name
-        Email: p.email
-      }
-    }
-
-    c-[r:_resources WHERE type == "FILE"]-> {
-      write record-[:Files]-> {
-        File: r.\`file\`
-      }
-    }
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+  node person: "each person at the company named in the message" {
+    name: <text> "the person's full name"
   }
 }
 
-listen to runs {} fire \`Intake With Source\`
-`,
-    },
-    {
-      construct:
-        'a long document READ, CHUNKS-cut, extracted per piece, deduplicated into a local node, then enriched by a plain plugin call',
-      status: 'runs',
-      probe: `
-import { manual, attio } from adapters
-import { acme } from credentials
-import { fetch_url } from plugins
+node CompanyDetail: "the company" {
+  summary: <text> "one line on what the company does"
+}
 
-runs = manual()
-crm  = attio(credentials: acme)
-
-node Company {
+node Detailed {
   name:    <text>
-  website: <text>
+  website: <text | null>
+  summary: <text | null>
+  node person { name: <text> }
+}
+
+function \`Enrich\`(m: <inbox-[:Email]->>) {
+  content   = [m.\`Body\`]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    page    = fetch_url(url: c.website)
+    more    = research(name: c.name, context: m.\`Subject\`, questions: "what the company does")
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, ""), COALESCE(more.dossier, "")], CompanyDetail, { tier: 'careful' })
+    return graph<Detailed> { ...c, ...details }
+  })
+
+  MAP(detailed, (d) => {
+    record = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: d.name, Description ?: d.summary }
+    d-[p:person]-> { write record-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name } }
+  })
+}
+`,
+    },
+    {
+      construct: 'a long document READ, CHUNKS-cut, extracted per piece in MAP, merged into a typed empty graph by unique by, then written',
+      status: 'runs',
+      probe: `
+import { manual, attio } from adapters
+import { acme } from credentials
+
+runs = manual()
+crm  = attio(credentials: acme)
+
+node Company: "each company named" {
+  name:    <text> "the company's name"
+  website: <text | null> "its website, if given"
+}
+
+node Found {
+  node companies {
+    name:    <text>
+    website: <text | null>
+  }
 }
 
 function \`Intake Documents\`(go: <runs-[:Invocation]->>) {
-  docs   = go-[:Files]->.\`File\`
-  pieces = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
+  docs    = go-[:Files]->.\`File\`
+  pieces  = CHUNKS(COALESCE(READ(FIRST(docs)), ""), { size: 40000, overlap: 2000 })
+  deduped = graph<Found> {}
 
-  found = MAP(pieces, (p) => {
-    return extract from [p] {
-      node company: "each company named" {
-        name:    "the company's name"
-        website: "its website, if given"
-      }
-    }
+  MAP(pieces, (p) => {
+    MAP(extract([p], Company, { tier: 'quick' }), (c) => {
+      write deduped-[:companies]-> { unique by (FUZZY name), name: c.name, website ?: c.website }
+    })
   })
 
-  deduped = node { companies: <Company> }
-
-  found-[c:company]-> {
-    write deduped-[:companies]-> {
-      unique by (FUZZY name)
-      name:      c.name
-      website ?: c.website
-    }
-  }
-
   deduped-[c:companies ORDER BY \`name\`]-> {
-    page = fetch_url(url: c.website)
-    write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:          c.name
-      Description ?: page
-    }
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name }
   }
 }
+
+listen to runs {} fire \`Intake Documents\`
 `,
     },
     {

@@ -106,7 +106,7 @@ import { whatsapp, ask } from adapters
 wa = whatsapp()
 questions = ask()
 
-movement confirm_send(msg: <wa-[:\`Message\`]->>) {
+function confirm_send(msg: <wa-[:\`Message\`]->>) {
   q = write questions-[:Check]-> {
     Prompt: "Send the update?"
     Detail: "\${msg.\`Body\`}"
@@ -142,7 +142,7 @@ import { whatsapp } from adapters
 
 wa = whatsapp()
 
-movement wait_for_go(msg: <wa-[:\`Message\`]->>) {
+function wait_for_go(msg: <wa-[:\`Message\`]->>) {
   go = callback()
 
   write msg-[:Replies]-> {

@@ -81,7 +81,8 @@ The two agree until a forward, relay, or service account sits between the origin
 n       = COUNT(co-[t:Team]->)
 owner   = ONLY(co-[t:Team WHERE \`Role\` == "Owner"]->)
 newest  = FIRST(crm-[c:Companies ORDER BY \`Created At\` DESC]->.\`Name\`)
-thread  = JOIN(ch-[m:Messages LIMIT 20]->.\`Text\`, "\n")
+thread  = JOIN(ch-[m:Messages LIMIT 20]->.\`Text\`, "
+")
 roster  = JOIN(SORT(co-[t:Team]->.\`Name\`), ", ")
 \`\`\`
 
@@ -108,9 +109,9 @@ A dict written in braces knows its keys, each with its own type. Looked up by a 
 
 \`\`\`
 lines    = ch-[m:Messages]-> { return m.\`Text\` }
-bulleted = MAP(lines, (t) => { return "• \${t}" })
-kept     = FILTER(lines, (t) => { return LENGTH(t) > 0 })
-total    = REDUCE(lines, 0, (carried, t) => { return carried + LENGTH(t) })
+bulleted = MAP(lines, (t) => "• \${t}")
+kept     = FILTER(lines, (t) => LENGTH(t) > 0)
+total    = REDUCE(lines, 0, (carried, t) => carried + LENGTH(t))
 \`\`\`
 
 Iterate a collection with these five, each given a function that runs once per member. A record is a value too, so a hop written on its own — \`ch-[m:Messages]->\` — is a collection of records, and these read it like any other.
@@ -118,7 +119,7 @@ Iterate a collection with these five, each given a function that runs once per m
 - \`MAP(list, f)\` answers what \`f\` returned, member by member. \`FILTER(list, f)\` keeps the members \`f\` answered \`TRUE\` for. Both hand back a list in the order they were given one.
 - \`REDUCE(list, <start>, f)\` carries a value forward — \`f\` is given what it has so far and the next member. It reads the members one after another, so it needs a list with an order, exactly as \`JOIN\` does.
 - \`GROUPBY(list, key)\` files each member under the key its function answers, and hands back a dict of **lists**. \`KEYBY(list, key)\` does the same where each key names one member, and hands back a dict of members — a repeated key fails the run, naming it.
-- \`rows = MAP(ch-[m:Messages]->, (t) => { return t })\` hands the records back as records, so a block head walks the answer: \`rows-[a:Author]-> { … }\`. Return a map instead — \`{ who: t }\` — and the answer is a list of maps, one key of each holding a record.
+- \`rows = MAP(ch-[m:Messages]->, (t) => t)\` hands the records back as records, so a block head walks the answer: \`rows-[a:Author]-> { … }\`. Return a map instead — \`{ who: t }\` — and the answer is a list of maps, one key of each holding a record.
 - A map written in braces keeps its keys through all five, so \`AT(r, "who")\` in a later function reads the key's own type, and a misspelt key is caught when you save.
 - Read a record's fields with \`.\`, walk it with a block, and test whether two are the same one with \`==\` — a record reached two ways is one record. Putting a record into a field or into text is refused where you write it: write a field off it, or connect the two records with a link.
 
@@ -191,7 +192,6 @@ inline  = [m.\`Body\`, ...m-[a:Attachments]->.\`File\`]
 - **Where a list is expected** (\`MAP\`, \`FILTER\`, \`JOIN\`, a list-typed field or parameter) a tuple reads as a list of the union of its members, as TypeScript reads \`[string, number]\` as \`(string | number)[]\`. \`JOIN([name, amount], " ")\` validates, and \`[name, amount]\` written into a list of numbers is refused.
 - A literal holding both records and plain values (\`[company, "label"]\`) is accepted as a tuple, but it is refused wherever it is read as a list, such as \`MAP(both, …)\` or a write into a list field.
 - **Unions follow the same way.** \`await parallel([…])\` and \`await race([…])\` with arms whose results differ read as a list of the union of those results, so each slot carries the type of any arm, and a \`race\` slot may still be absent.
-- An automation written in an older language version keeps the older list typing: a literal is the list its members share, and members that share nothing read as a list nothing checks.
 
 ### a-table-you-declare-once
 
@@ -202,26 +202,25 @@ roster = [
   { Name: "Alan",  Theme: "Health" },
 ]
 
-function \`Match Mentions\`(m: <inbox-[:Email]->>) {
-  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
-  themes = JOIN(lines, ", ")
-  byName = KEYBY(roster, (r) => { return r.Name })
+themes = JOIN(MAP(roster, (r) => "\${r.Name} (\${r.Theme})"), ", ")
 
-  found = extract from [m.\`Body\`] {
-    node company: "each company named, weighed against the team's own themes: \${themes}" {
-      name: "the company's name"
-    }
-  }
+node Mention: "each company named, weighed against the team's own themes: \${themes}" {
+  name: <text> "the company's name"
+}
+
+function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+  byName = KEYBY(roster, (r) => r.Name)
+  found  = extract([m.\`Body\`], Mention)
 
   owner = AT(byName, "Ada")
   if owner == null { ERROR("no such teammate on the roster") }
-  found-[c:company]-> {
+  MAP(found, (c) => {
     write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: "flagged by \${owner.Name}" }
-  }
+  })
 }
 \`\`\`
 
-A file-scope list of dict literals is a small table any function in the file can read, declared once rather than rebuilt per call. \`MAP\` turns each row into a line and \`JOIN\` turns the lines into one string — the same string that goes into a prompt (here, an extraction's own description) or into code: \`KEYBY\` turns the table into a dict keyed by one of its own fields, so a later lookup (\`AT(byName, "Ada")\`) is a plain read rather than a search — a computed key still needs the ordinary guard, since \`KEYBY\`'s keys are data, not a written literal.
+A file-scope list of dicts is a small table every function in the file reads. \`MAP\` and \`JOIN\` turn it into one string for a prompt — here, an extraction's description. \`KEYBY\` turns it into a dict keyed by one field, so a lookup is a plain read; a computed key still needs the guard, since \`KEYBY\`'s keys are data.
 
 ### spreading-maps-and-records
 
@@ -318,10 +317,10 @@ pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
 \`\`\`
 
 - \`READ\` answers \`text | absent\`, discharged like any other absence — \`COALESCE\`, a \`?:\` write field, an \`== null\` guard. Why a file gave nothing back is on the run's own record.
-- \`extract from [file]\` reads the file itself, so it already means \`extract from [READ(file)]\`. Reach for \`READ\` where you want the text in hand — to cut it, measure it, or pass it to a plugin.
+- An extraction reads a file in its content itself. Reach for \`READ\` where you want the text in hand — to cut it, measure it, or pass it to a plugin.
 - \`CHUNKS(text, { size, overlap })\` hands back a list of text pieces, each at most \`size\` characters and repeating \`overlap\` characters of the one before it. \`unit:\` takes \`"chars"\` and nothing else.
 - Say \`entities\` instead of \`size\` to cut by what a piece is expected to yield — \`CHUNKS(text, { entities: 20 })\` fills each piece with about twenty records' worth of lines, and never splits a line. One of the two is required, and \`overlap\` works with either.
-- \`extract from [pieces]\` is one extraction reading every piece as a segment; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is one extraction per piece. Reach for the second where each piece should be read on its own.`,
+- \`extract(pieces, Shape)\` is one extraction reading every piece; \`MAP(pieces, (p) => extract([p], Shape))\` is one per piece (extraction, *long-documents*).`,
   engineClaims: [
     {
       construct: 'a file-scope table of dict-literal rows, MAP+JOIN into an extraction description, KEYBY+AT as a lookup',
@@ -339,22 +338,21 @@ roster = [
   { Name: "Alan",  Theme: "Health" },
 ]
 
-function \`Match Mentions\`(m: <inbox-[:Email]->>) {
-  lines  = MAP(roster, (r) => { return "\${r.Name} (\${r.Theme})" })
-  themes = JOIN(lines, ", ")
-  byName = KEYBY(roster, (r) => { return r.Name })
+themes = JOIN(MAP(roster, (r) => "\${r.Name} (\${r.Theme})"), ", ")
 
-  found = extract from [m.\`Body\`] {
-    node company: "each company named, weighed against the team's own themes: \${themes}" {
-      name: "the company's name"
-    }
-  }
+node Mention: "each company named, weighed against the team's own themes: \${themes}" {
+  name: <text> "the company's name"
+}
+
+function \`Match Mentions\`(m: <inbox-[:Email]->>) {
+  byName = KEYBY(roster, (r) => r.Name)
+  found  = extract([m.\`Body\`], Mention)
 
   owner = AT(byName, "Ada")
   if owner == null { ERROR("no such teammate on the roster") }
-  found-[c:company]-> {
+  MAP(found, (c) => {
     write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Description ?: "flagged by \${owner.Name}" }
-  }
+  })
 }
 `,
     },
@@ -496,7 +494,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
     {
       construct: 'integration functions outside a write field (invalid everywhere)',
       status: 'pending',
-      flag: 'non-built-in function calls',
+      flag: "non-built-in function calls",
       probe: `
 import { email, attio } from adapters
 import { acme } from credentials
@@ -633,17 +631,13 @@ function \`Cut A Document\`(go: <runs-[:Invocation]->>) {
   go-[f:Files]-> {
     text   = READ(f.\`File\`)
     pieces = CHUNKS(COALESCE(text, ""), { size: 40000, overlap: 2000 })
-    found  = extract from [pieces] {
-      node company: "each company named in this piece of text" {
-        name: "the company's name"
-      }
-    }
-    found-[c:company]-> {
+    found  = extract(pieces, node Company: "each company named in this text" { name: <text> "the company's name" })
+    MAP(found, (c) => {
       write crm-[:Companies]-> {
         unique by (FUZZY \`Name\`)
         Name: c.name
       }
-    }
+    })
   }
 }
 `,

@@ -318,7 +318,7 @@ File: FILE(digest, "pdf")
 
 ### READ
 
-\`READ(file)\` → \`text | absent\` — the text in a file. \`extract from [file]\` already means \`extract from [READ(file)]\`; reach for \`READ\` when you want the text in hand to cut, measure, or pass to a plugin.
+\`READ(file)\` → \`text | absent\` — the text in a file. An extraction reads a file in its content itself; reach for \`READ\` when you want the text in hand to cut, measure, or pass to a plugin.
 
 \`\`\`
 text = READ(f.\`File\`)
@@ -689,8 +689,7 @@ listen to runs {} fire \`Cut A Document\`
 `,
     },
     {
-      construct:
-        'namespaced helper families: CURRENCY.*, DATE.*, DATETIME.AT, TEXT.*, URL.HOST, NUMBER.FORMAT',
+      construct: 'namespaced helper families: CURRENCY.*, DATE.*, DATETIME.AT, TEXT.*, URL.HOST, NUMBER.FORMAT',
       status: 'runs',
       probe: `
 import { email, attio } from adapters

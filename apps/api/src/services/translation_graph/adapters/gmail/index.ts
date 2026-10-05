@@ -96,7 +96,7 @@ A listener fires once per message that has arrived since the last look, a minute
 ### reading the message
 
 \`\`\`
-movement triage(msg: <gmail-[:Message]->>) {
+function triage(msg: <gmail-[:Message]->>) {
   who  = msg.\`From\`
   what = msg.\`Body\`
 }

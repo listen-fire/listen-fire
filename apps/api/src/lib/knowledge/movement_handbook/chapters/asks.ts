@@ -183,11 +183,11 @@ write \`Board Channel\`-[:Messages]-> { Message: "Approve this?", Blocks: [ … 
 r = await race([
   () => {
     tap = await FIRST(deals-[:Called]->)
-    return node { channel: "deals", at: tap.\`At\` }
+    return { channel: "deals", at: tap.\`At\` }
   },
   () => {
     tap = await FIRST(board-[:Called]->)
-    return node { channel: "board", at: tap.\`At\` }
+    return { channel: "board", at: tap.\`At\` }
   },
 ])
 
@@ -200,7 +200,7 @@ if first != null {
 \`\`\`
 
 - The slot already says which arm settled — \`AT(r, 0)\` is the first one written. Handing the identity back is for when it has to travel further: into a message, a write field, a comparison later on.
-- Return a \`node { … }\` literal to hand back more than one thing at once; its entries read by name afterwards (\`first.channel\`).
+- Return a dict to hand back more than one thing at once; its entries read by name afterwards (\`first.channel\`).
 
 Wait on **different** things at once by giving each its own arm, and take every answer rather than the first by reaching for \`parallel\`:
 
@@ -274,10 +274,10 @@ function \`Chase\`(c: <crm-[:Companies]->>) {
   write c-[:Notes]-> { Title: "Chased", Content: "Nudged again." }
 }
 
-again = callback(\`Chase\`(c: company), { once: FALSE })
+again = callback(\`Chase\`(company), { once: FALSE })
 \`\`\`
 
-\`function\` and \`movement\` are two spellings of one declaration — write whichever reads better. Arguments you supply are fixed when the control goes out; any parameter you leave unsupplied is what the acting side fills in.
+The arguments are fixed when the control goes out; a parameter left off the end is what the acting side fills in.
 
 ### when-a-question-and-when-a-callback
 
@@ -379,7 +379,7 @@ listen to runs {} fire \`First Approval Wins\`
 `,
     },
     {
-      construct: 'a race arm handing back WHICH place answered — a node literal built in the arm that knows it',
+      construct: 'a race arm handing back WHICH place answered — a dict built in the arm that knows it',
       status: 'runs',
       probe: `
 import { slack, manual } from adapters
@@ -419,11 +419,11 @@ function \`Which Place Answered\`(go: <runs-[:Invocation]->>) {
   r = await race([
     () => {
       tap = await FIRST(dealflow-[:Called]->)
-      return node { channel: "dealflow", at: tap.\`At\` }
+      return { channel: "dealflow", at: tap.\`At\` }
     },
     () => {
       tap = await FIRST(portfolio-[:Called]->)
-      return node { channel: "portfolio", at: tap.\`At\` }
+      return { channel: "portfolio", at: tap.\`At\` }
     },
   ])
 
@@ -822,7 +822,7 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
       Content: "Booked for \${day}."
     }
   })
-  again = callback(\`Chase\`(c: company), { once: FALSE })
+  again = callback(\`Chase\`(company), { once: FALSE })
 
   ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
   if ops == null { ERROR("no #ops channel") }
@@ -835,6 +835,30 @@ function \`Book The Follow Up\`(go: <runs-[:Invocation]->>) {
 }
 
 listen to runs {} fire \`Book The Follow Up\`
+`,
+    },
+    {
+      construct: 'a named function deferred positionally, its last parameter left for the acting side to fill',
+      status: 'runs',
+      probe: `
+import { slack, attio, manual } from adapters
+import { team_workspace, acme_main } from credentials
+
+team = slack(credentials: team_workspace)
+crm  = attio(credentials: acme_main)
+runs = manual()
+
+function \`Book\`(c: <crm-[:Companies]->>, day: <date>) {
+  write c-[:Notes]-> { Title: "Booked", Content: "Booked for \${day}." }
+}
+
+function \`Offer\`(go: <runs-[:Invocation]->>) {
+  company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: go.\`Text\` }
+  pick = callback(\`Book\`(company))
+  ops = ONLY(team-[ch:Channels WHERE \`Name\` == "ops"]->)
+  if ops == null { ERROR("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Pick a day: \${pick.url}" }
+}
 `,
     },
   ],

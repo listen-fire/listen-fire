@@ -59,7 +59,8 @@ crm-[p:People ORDER BY p-[:Company]->.\`Name\`]-> { … }
 \`\`\`
 # Some relationships are ordered by nature — a channel hands its messages back
 # oldest-first, an email its attachments in the order it carried them.
-Message: "\${JOIN(ch-[m:Messages LIMIT 20]->.\`Text\`, "\n")}"
+Message: "\${JOIN(ch-[m:Messages LIMIT 20]->.\`Text\`, "
+")}"
 
 # Everywhere else, say what you mean.
 Message: "\${JOIN(crm-[c:Companies ORDER BY \`Created At\` DESC LIMIT 5]->.\`Name\`, ", ")}"
@@ -76,18 +77,6 @@ A relationship either hands its records back in an order that means something or
 - \`LIMIT n\` with no \`ORDER BY\` means *some n of them*, and is refused for the same reason — except over a relationship ordered by nature, where "the latest twenty" is exactly what it says.
 
 Which relationships are ordered is the source's own fact, and each one says: chat messages and thread replies by time, a curated list's entries by when they were added, a document's sections and an email's attachments by their place in it, answers and callback fires by when they landed.
-
-### looking-up-one-record
-
-Look up a single record — a channel by name, a company by its exact name — with \`ONLY\`, and guard it:
-
-\`\`\`
-deals = ONLY(chat-[ch:Channels WHERE \`Name\` == "deals"]->)
-if deals == null { ERROR("no #deals channel") }
-write deals-[:Messages]-> { Message: "A new company just landed." }
-\`\`\`
-
-The guard ends the run with a reason when nothing matches, so every line after it uses \`deals\` directly. Keep a block for a path that yields many.
 
 ### what-a-source-can-filter
 
@@ -109,7 +98,7 @@ recent = lazy crm-[c:Companies ORDER BY \`Created At\` DESC LIMIT 5]->
 
 - Nothing about the result changes — same records, same filters, same types. What changes is *when* the source is read, and whether it is read at all: an edge nobody looks at is never walked.
 - Every read walks again, so what comes back is the source as it is now rather than as it was at the line where you wrote it. Two reads either side of a write see the write.
-- It earns its keep on a record you hand to something else: an entry of a \`node { … }\` (anatomy's records-you-build) can be \`lazy\`, so an attachment is fetched only if the reader actually opens it, and a large related set costs nothing when a branch skips it.
+- It earns its keep where a branch may never read it: a large related set costs nothing when the branch that reads it is skipped.
 - \`lazy\` and \`await\` are opposites in the same slot: \`await FIRST(…)\` waits for an edge to come into existence, \`lazy\` waits to look.
 
 ### what-a-block-hands-back
@@ -127,7 +116,7 @@ Message: "Logged \${JOIN(names, ", ")}"
 \`return\` runs once per position the head yields, so the binding is all of them together. What that collection is follows from what you returned:
 
 - a plain **value** — a name, a number, a composed line — gives a **list**, one entry per iteration, ready for \`JOIN\`, \`COUNT\`, or an options list;
-- a **record** — a write's handle, a traversed position, a \`node { … }\` literal — gives those records themselves, walked and read like any other position.
+- a **record** — a write's handle, a traversed position, a graph — gives those records themselves, walked and read like any other position.
 
 \`\`\`
 orgs = mentioned-[c:company]-> {
@@ -140,7 +129,7 @@ Message: "Logged \${COUNT(orgs)} companies"
 - \`return\` may sit anywhere in the body, including inside an \`if\` arm — that arm's \`return\` is the block's. Every iteration hands back the same kind of thing.
 - The list is in the head's order: order the head (or head it on a relationship ordered by nature) whenever you \`JOIN\` what comes back.
 - A block that ran zero times hands back an empty list, so \`COUNT(names)\` is \`0\` rather than an error.
-- To hand back several things at once, return a \`node { … }\` literal built from them; the entries then read by name.
+- To hand back several things at once, return a dict (\`{ name: c.name, size: c.size }\`) or a graph; the entries then read by name.
 - A body with no \`return\` hands nothing back: leave it unbound and it runs for its effects.
 
 ### Pitfalls
@@ -199,36 +188,27 @@ listen to runs {} fire \`By Company\`
 `,
     },
     {
-      construct: 'a lazy pass-through edge, walked by the callee that reads it',
+      construct: 'a lazy walk bound to a name, read only in the branch that needs it',
       status: 'runs',
       probe: `
-import { email, attio } from adapters
+import { manual, attio } from adapters
 import { acme } from credentials
 
-inbox = email()
-crm   = attio(credentials: acme)
+runs = manual()
+crm  = attio(credentials: acme)
 
-node Doc {
-  Title: <text>
-  node files {
-    Name: <text>
-  }
-}
-
-function \`Store\`(d: <Doc>) {
-  book = attio(credentials: acme)
-  d-[f:files]-> {
-    write book-[:Companies]-> {
+function \`Recent\`(go: <runs-[:Invocation]->>) {
+  recent = lazy crm-[c:Companies WHERE \`Categories\` == "Customer" ORDER BY \`Created At\` DESC LIMIT 5]->
+  if go.\`Text\` == "report" {
+    write crm-[:Companies]-> {
       unique by (\`Name\`)
-      Name:        f.\`Name\`
-      Description: d.Title
+      Name:        "Report"
+      Description: "\${COUNT(recent)} recent customers"
     }
   }
 }
 
-function \`Intake\`(m: <inbox-[:Email]->>) {
-  \`Store\`(d: node { Title: m.\`Subject\`, files: lazy m-[a:Attachments]-> })
-}
+listen to runs {} fire \`Recent\`
 `,
     },
     {
@@ -276,7 +256,8 @@ function \`Digest\`(m: <inbox-[:Email]->>) {
   if channel == null { ERROR("no #general") }
   files  = JOIN(m-[a:Attachments]->.\`Name\`, ", ")
   recent = JOIN(crm-[c:Companies ORDER BY \`Created At\` DESC LIMIT 5]->.\`Name\`, ", ")
-  said   = JOIN(channel-[msg:Messages LIMIT 20]->.\`Message\`, "\n")
+  said   = JOIN(channel-[msg:Messages LIMIT 20]->.\`Message\`, "
+")
   write channel-[:Messages]-> {
     Message: "\${files} / \${recent} / \${said}"
   }

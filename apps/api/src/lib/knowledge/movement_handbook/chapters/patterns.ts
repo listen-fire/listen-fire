@@ -90,18 +90,16 @@ A report whose sections come from a **type** rather than from a list written bes
 \`\`\`
 type Thesis = <"Consumer" | "Infra" | "Health">
 
-function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`] {
-    node finding: "each company mentioned" {
-      headline: <text> "one line about it"
-      thesis:   <Thesis> "which thesis it fits"
-    }
-  }
+node Finding: "each company mentioned" {
+  headline: <text> "one line about it"
+  thesis:   <Thesis> "which thesis it fits"
+}
 
-  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } }
-  by       = GROUPBY(rows, (r) => { return AT(r, "thesis") })
-  theses   = MEMBERS(<Thesis>)
-  sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
+function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
+  found    = extract([go.\`Text\`], Finding)
+  rows     = MAP(found, (f) => { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } })
+  by       = GROUPBY(rows, (r) => r.thesis)
+  sections = MAP(MEMBERS(<Thesis>), (th) => "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found")
 
   ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
   if ops == null { ERROR("no #ops channel") }
@@ -110,48 +108,39 @@ function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
 \`\`\`
 
 - Adding a thesis is one edit — the declaration — and the report grows a section on its own, in the place the declaration puts it. A thesis nothing matched is an ordinary missing lookup, so it still gets its line.
-- The rows are **dicts** rather than records because that is what a value collection holds: \`GROUPBY\`, \`MAP\` and the rest iterate values, while records keep the traversal-headed block.
-- A thesis the model could not settle on is defaulted on the way into the row. The headline needs no default — a text field it did not find is \`""\` — and neither does \`AT(r, "thesis")\`, because the row was written with that key.
+- A thesis the model could not settle on is defaulted on the way into the row. The headline needs no default — a text field it did not find is \`""\`.
 
 ### extract-and-connect
 
-Records pulled out of a message and written **with their relationships intact**: the people are declared inside the company, so each one lands attached to the right one. (This pattern is written with the \`extract … from … through\` keyword, which is supported but not recommended for new work; the extraction call in the extraction chapter, with plugin calls and a second \`extract\` inside a \`MAP\`, does the same job and is the form to write.)
+Records pulled out of a message and written **with their relationships intact**: the people are declared inside the company, so each one lands attached to the right one.
 
 \`\`\`
-extracted = extract from [msg.\`Body\`] through [vc_url_retrieval] {
-  node company: "…" {
-    name:    "the company's name"
-    website: "the company's official website"
+import { vc_url_retrieval } from plugins
 
-    node person: "each person at this company named in the message" {
-      name: "the person's full name"
-    } through [linkedin_enrichment] {
-      name:      "the person's full name"
-      job_title: "the person's job title, from their public profile"
-    }
+node Company: "each company this message is about" {
+  name:    <text> "the company's name"
+  website: <text> "the company's official website"
+  node person: "each person at this company named in the message" {
+    name:      <text> "the person's full name"
+    job_title: <text | null> "the person's job title, if given"
   }
 }
 
-extracted-[c:company]-> {
-  company = write crm-[:Companies]-> {
-    unique by (FUZZY \`Name\`)
-    Name:    c.name
-    Domains: c.website
-  }
+pages     = vc_url_retrieval(text: msg.\`Body\`)
+content   = [msg.\`Body\`, ...MAP(pages, (p) => COALESCE(p.text, ""))]
+companies = extract(content, Company, { tier: 'careful' })
 
+MAP(companies, (c) => {
+  company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Domains: c.website }
   c-[p:person]-> {
-    write company-[:Team]-> {
-      unique by (FUZZY \`Name\`)
-      Name:        p.name
-      \`Job Title\`: p.job_title
-    }
+    write company-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name, \`Job Title\` ?: p.job_title }
   }
-}
+})
 \`\`\`
 
 Two things here you cannot derive:
 
-- **Where a plugin sits decides when it runs.** \`through\` on the top-level \`from\` works over the whole body *before* extraction — it fetches the pages the message links to, so \`website\` comes from the page rather than a guess. \`through\` between a node's stages runs *after* that node is extracted, enriching what was just pulled out. The trap: a per-node plugin works out who to look up from the fields the earlier stage produced, so the first stage must extract an identifying field. Without one it quietly finds nothing.
+- **Linked pages go into the content.** \`vc_url_retrieval\` loads the pages and documents the message links to, so \`website\` comes from the page rather than a guess. Per-record enrichment — a lookup per company found — is a plugin call inside the \`MAP\` and a second extraction (extraction, *enrichment*).
 - **Which side declares the edge decides the shape of the write.** Where the parent declares it — as here — a linked write off the parent's handle is the one idiomatic form. Where only the child declares a reference back, write the child at the root and connect it with \`link\`. Read your catalog: that is the system's choice, not yours.
 
 ### declare-once
@@ -166,28 +155,26 @@ node Entry: "each company named in this text" {
 }
 
 function \`Intake\`(go: <runs-[:Invocation]->>) {
-  found = extract "careful" from [go.\`Text\`] { node entry: <Entry> }
-  found-[e:entry]-> {
+  found = extract([go.\`Text\`], Entry, { tier: 'careful' })
+  MAP(found, (e: <Entry>) => {
     company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), ?...e }
     e-[p:person]-> { write company-[:Team]-> { unique by (FUZZY \`Name\`), ?...p } }
-  }
+  })
 }
 \`\`\`
 
-- The declaration is the one place the record's fields and words live; every \`extract\` that names it reads it the same way.
+- The declaration is the one place the record's fields and words live; every extraction that names it reads it the same way.
 - A step that needs one field more extends the declaration rather than copying it: \`node <name> extends Entry { … }\` (anatomy chapter, *declared-structures*).
 - \`?...e\` writes each field set-if-empty, so the declaration's field names are the target's. It carries only fields — \`person\` is its own write — and a field the target lacks is flagged by name.
 - Identity needs no line of its own: \`unique by (FUZZY \`Name\`)\` matches on the \`Name\` the spread writes.
-- The same spread takes a parameter typed on a declaration (\`d: <Entry>\`) or a \`node { … }\` you built — any record whose fields the automation spells out. A record read from a system is written field by field.
+- The same spread takes a parameter typed on a declaration (\`d: <Entry>\`) or a graph you built — any record whose fields the automation spells out. A record read from a system is written field by field.
 
 ### human-reviewed-intake
 
 "Let me paste something in, but let me check it before it's saved."
 
 \`\`\`
-found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-  node company: "each company named in the supplied text or files" { … }
-}
+found = extract([go.\`Text\`, ...go-[:Files]->.\`File\`], Company)
 
 q = write asks-[:Check]-> {
   Prompt: "Save these companies and people?"
@@ -196,7 +183,7 @@ q = write asks-[:Check]-> {
 
 answer = await FIRST(q-[:Response]->)
 if answer.Answer {
-  found-[c:company]-> { … }
+  MAP(found, (c) => { … })
 }
 \`\`\`
 
@@ -225,11 +212,11 @@ node Entry: "each company named in this text" {
 }
 
 function \`Intake\`(go: <runs-[:Invocation]->>) {
-  found = extract "careful" from [go.\`Text\`] { node entry: <Entry> }
-  found-[e:entry]-> {
+  found = extract([go.\`Text\`], Entry, { tier: 'careful' })
+  MAP(found, (e: <Entry>) => {
     company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), ?...e }
     e-[p:person]-> { write company-[:Team]-> { unique by (FUZZY \`Name\`), ?...p } }
-  }
+  })
 }
 
 listen to runs {} fire \`Intake\`
@@ -247,18 +234,16 @@ chat = slack(credentials: team_workspace)
 
 type Thesis = <"Consumer" | "Infra" | "Health">
 
-function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`] {
-    node finding: "each company mentioned" {
-      headline: <text> "one line about it"
-      thesis:   <Thesis> "which thesis it fits"
-    }
-  }
+node Finding: "each company mentioned" {
+  headline: <text> "one line about it"
+  thesis:   <Thesis> "which thesis it fits"
+}
 
-  rows     = found-[f:finding]-> { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } }
-  by       = GROUPBY(rows, (r) => { return AT(r, "thesis") })
-  theses   = MEMBERS(<Thesis>)
-  sections = MAP(theses, (th) => { return "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found" })
+function \`Thesis Recap\`(go: <runs-[:Invocation]->>) {
+  found    = extract([go.\`Text\`], Finding)
+  rows     = MAP(found, (f) => { return { thesis: COALESCE(f.thesis, "Consumer"), line: f.headline } })
+  by       = GROUPBY(rows, (r) => r.thesis)
+  sections = MAP(MEMBERS(<Thesis>), (th) => "\${th}: \${COUNT(COALESCE(AT(by, th), []))} found")
 
   ops = ONLY(chat-[ch:Channels WHERE \`Name\` == "ops"]->)
   if ops == null { ERROR("no #ops channel") }
@@ -324,45 +309,36 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'extract-and-connect (extract a tree, whole-body + per-node plugins → linked writes → fuzzy identity)',
+      construct: 'extract-and-connect (linked pages loaded by a plain plugin call into the content, a tree extracted, linked writes along the nested node, fuzzy identity)',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
-import { vc_url_retrieval, linkedin_enrichment } from plugins
+import { vc_url_retrieval } from plugins
 import { acme } from credentials
 
 inbox = email()
 crm   = attio(credentials: acme)
 
-function \`Extract And Connect\`(m: <inbox-[:Email]->>) {
-  extracted = extract from [m.\`Body\`] through [vc_url_retrieval] {
-    node company: "each company mentioned" {
-      name:    "the company's name"
-      website: "the company's official website"
-
-      node person: "each person at this company mentioned" {
-        name: "the person's full name"
-      } through [linkedin_enrichment] {
-        name:      "the person's full name"
-        job_title: "the person's job title, from their public profile"
-      }
-    }
+node Company: "each company this message is about" {
+  name:    <text> "the company's name"
+  website: <text> "the company's official website"
+  node person: "each person at this company named in the message" {
+    name:      <text> "the person's full name"
+    job_title: <text | null> "the person's job title, if given"
   }
+}
 
-  extracted-[c:company]-> {
-    company = write crm-[:Companies]-> {
-      unique by (FUZZY \`Name\`)
-      Name:    c.name
-      Domains: c.website
-    }
+function \`Extract And Connect\`(msg: <inbox-[:Email]->>) {
+  pages     = vc_url_retrieval(text: msg.\`Body\`)
+  content   = [msg.\`Body\`, ...MAP(pages, (p) => COALESCE(p.text, ""))]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  MAP(companies, (c) => {
+    company = write crm-[:Companies]-> { unique by (FUZZY \`Name\`), Name: c.name, Domains: c.website }
     c-[p:person]-> {
-      write company-[:Team]-> {
-        unique by (FUZZY \`Name\`)
-        Name:        p.name
-        \`Job Title\`: p.job_title
-      }
+      write company-[:Team]-> { unique by (FUZZY \`Name\`), Name: p.name, \`Job Title\` ?: p.job_title }
     }
-  }
+  })
 }
 `,
     },
@@ -377,18 +353,17 @@ runs = manual()
 crm  = attio(credentials: acme)
 asks = ask()
 
-function \`Review And Import\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-    node company: "each company named in the supplied text or files" {
-      name:    "the company's name"
-      website: "the company's official website, if given"
-
-      node person: "each person at this company named in the input" {
-        name:  "the person's full name"
-        email: "the person's email address, if given"
-      }
-    }
+node Company: "each company named in the supplied text or files" {
+  name:    <text> "the company's name"
+  website: <text> "the company's official website, if given"
+  node person: "each person at this company named in the input" {
+    name:  <text> "the person's full name"
+    email: <text> "the person's email address, if given"
   }
+}
+
+function \`Review And Import\`(go: <runs-[:Invocation]->>) {
+  found = extract([go.\`Text\`, ...go-[:Files]->.\`File\`], Company)
 
   q = write asks-[:Check]-> {
     Prompt: "Save these companies and people?"
@@ -397,7 +372,7 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
 
   answer = await FIRST(q-[:Response]->)
   if answer.Answer {
-    found-[c:company]-> {
+    MAP(found, (c) => {
       company = write crm-[:Companies]-> {
         unique by (FUZZY \`Name\`)
         Name:    c.name
@@ -411,7 +386,7 @@ function \`Review And Import\`(go: <runs-[:Invocation]->>) {
           Email: p.email
         }
       }
-    }
+    })
   }
 }
 

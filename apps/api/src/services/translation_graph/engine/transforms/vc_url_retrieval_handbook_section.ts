@@ -11,70 +11,51 @@ export const VC_URL_RETRIEVAL_HANDBOOK_SECTION: HandbookSection = {
   title: 'URL retrieval — the links a message carries',
   content: `## URL retrieval — the links a message carries
 
-\`vc_url_retrieval\` reads a piece of text, finds every link in it, works out what each one is, and loads the ones worth loading. Run it as a stage inside an extract's \`through [ … ]\`, or call it on its own for a list of what it loaded.
-
-Inside a stage it takes the text it scans from the extraction itself, so a bare \`through [vc_url_retrieval]\` is the whole call. The page text reaches the extraction, and every document it downloads lands on the extracted records' \`_resources\`.
+\`vc_url_retrieval\` reads a piece of text, finds every link in it, works out what each one is, and loads the ones worth loading.
 
 ### where-to-put-it
 
 \`\`\`
-extract from [msg.\`Text\`] through [vc_url_retrieval] {
-  node company: "each company named in this message" {
-    name:    "the company's name"
-    summary: "what the company does, from anything the pages say"
-  }
-}
+import { vc_url_retrieval } from plugins
+
+pages     = vc_url_retrieval(text: msg.\`Body\`)
+content   = [msg.\`Body\`, ...MAP(pages, (p) => COALESCE(p.text, ""))]
+companies = extract(content, Company)
 \`\`\`
 
-At the top of an extract the stage runs ONCE, over the whole source text, and the pages it loads are shared by every record the extract produces. That is where it belongs: the links are in the message, not in any one record, so the message is what it should read.
+Call it once, over the message, before the extraction: the links are in the message, not in any one record, so every record the extraction produces may draw on every page. A slide deck link, a shared folder, a write-up someone linked to — all of them reach the extraction this way.
 
-A slide deck link, a shared folder, a write-up someone linked to — all of them reach the extraction this way, and any record may draw on any of them.
+The call returns a list with one record per link it loaded, in the order it found them. Each has \`name\`, \`url\`, \`file\` and \`text\`. \`file\` is there only when the link was a document, and \`text\` only when something could be read. No link worth loading gives an empty list.
 
 ### the-downloaded-files
 
 \`\`\`
-mentions-[c:company]-> {
-  record = write crm-[:Companies]-> { unique by (\`Name\`) Name: c.name }
-  c-[r:_resources WHERE type == "FILE"]-> {
-    write record-[:Files]-> { File: r.\`file\` }
-  }
-}
+docs = FILTER(pages, (p) => p.file != null)
+MAP(docs, (p) => { write record-[:Files]-> { File ?: p.file } })
 \`\`\`
 
-A slide deck behind a link arrives on \`_resources\` as a \`"FILE"\`, next to the files listed in \`from [ … ]\`. It has the same fields they have, plus \`url\`, the link it came from, so the same block attaches either kind to a record. A link that was a page rather than a document adds its text and no file.
-
-### called-on-its-own
-
-\`\`\`
-pages = vc_url_retrieval(text: m.\`Body\`)
-deck  = FIRST(pages)
-\`\`\`
-
-The call returns a list with one record per link it loaded, in the order it found them. Each has \`name\`, \`url\`, \`file\` and \`text\`. \`file\` is there only when the link was a document, and \`text\` only when something could be read. No link worth loading gives an empty list. Read one record with \`FIRST\`, or every one at once with \`pages.text\`.
+A slide deck behind a link comes back as a \`file\`, so the same write that attaches an email's own files attaches it to a record. A link that was a page rather than a document has text and no file.
 
 ### scan-or-load
 
-\`vc_url_retrieval\` decides for itself which links are worth loading. \`fetch_url\` loads exactly the one link you name, so a stage behind a record's fields loads that record's own page.
-
-Reach for this one when the links live in the message. Reach for \`fetch_url\` when the link is a field a record already carries — a company's web address, a document link extracted alongside it.
-
-Putting this one behind a record's stage is almost never right: it runs once per record and each record then loads every link in the whole message.
+\`vc_url_retrieval\` decides for itself which links are worth loading. \`fetch_url\` loads exactly the one link you name. Reach for this one when the links live in the message; reach for \`fetch_url\` when the link is a field a record already carries — a company's web address, a document link extracted alongside it. Calling this one once per record loads every link in the whole message for every record.
 
 ### gated-links
 
 \`\`\`
-through [vc_url_retrieval(email: @user_email)]
+pages = vc_url_retrieval(text: msg.\`Body\`, email: @user_email)
 \`\`\`
 
 \`email\` is typed into a link that demands one before it will show its content. A passcode written next to a link in the text is picked up from the text itself. Without an address, a gated link is skipped rather than guessed at.
 
 ### Common mistakes
 
-- **Extracting from the body alone when the content is behind a link.** Nothing reads the linked page unless the stage is there to load it.
-- **Putting it behind a record's stage to get a page per record.** It scans the whole message wherever it sits. Name the link with \`fetch_url\` instead.`,
+- **Extracting from the body alone when the content is behind a link.** Nothing reads the linked page unless this call loads it into the content.
+- **Calling it per record to get a page per record.** It scans the whole text it is given. Name the link with \`fetch_url\` instead.
+`,
   engineClaims: [
     {
-      construct: 'a scanning retrieval stage at the top of an extract',
+      construct: 'linked pages loaded once over the message into the content, and a downloaded document attached to the record',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -84,23 +65,19 @@ import { vc_url_retrieval } from plugins
 inbox = email()
 crm   = attio(credentials: acme)
 
+node Company: "each company named in this message" {
+  name:    <text> "the company's name"
+  summary: <text> "what the company does, from anything the pages say"
+}
+
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  mentions = extract from [m.\`Body\`] through [vc_url_retrieval(email: @user_email)] {
-    node company: "each company named in this message" {
-      name:    "the company's name"
-      summary: "what the company does, from anything the pages say"
-    }
-  }
-  mentions-[c:company]-> {
-    record = write crm-[:Companies]-> {
-      unique by (\`Name\`)
-      Name:        c.name
-      Description: c.summary
-    }
-    c-[r:_resources WHERE type == "FILE"]-> {
-      write record-[:Files]-> { File: r.\`file\` }
-    }
-  }
+  pages   = vc_url_retrieval(text: m.\`Body\`, email: @user_email)
+  content = [m.\`Body\`, ...MAP(pages, (p) => COALESCE(p.text, ""))]
+  MAP(extract(content, Company), (c) => {
+    record = write crm-[:Companies]-> { unique by (\`Name\`), Name: c.name, Description: c.summary }
+    docs = FILTER(pages, (p) => p.file != null)
+    MAP(docs, (p) => { write record-[:Files]-> { File ?: p.file } })
+  })
 }
 `,
     },
