@@ -532,3 +532,154 @@ describe('a reply the shape does not describe', () => {
     expect(result.trace.some((e) => e.kind === 'warning')).toBe(true);
   });
 });
+
+describe('extractOne(content, Shape) — the single record, or absent', () => {
+  const one = (summary: string) => ({ record: { summary: cite(summary, 0) } });
+  const WRITE_SUMMARY = '  write crm-[:companies]-> { name: COALESCE(d.summary, "none") }';
+  const single = (replies: Reply[]) =>
+    run(['  d = extractOne([msg.`text`], Detail)', WRITE_SUMMARY], replies);
+
+  it('asks for the single one the sources describe, in the shape\'s own words, and answers one record or null', async () => {
+    const { calls } = await single([one('Acme builds infra')]);
+    const ask = calls[0].blocks.at(-1)!.text;
+    expect(ask).toContain(
+      "Extract more about the company described last — the single one these sources describe, or nothing if they don't.",
+    );
+    expect(ask).toContain('**Detail**: more about the company described last — the one record, as the object under `record`');
+    expect(ask).toContain('whose value is the one record as a bare JSON object — or null when these sources describe none');
+    expect(ask).not.toContain('emit each one');
+    expect(ask).not.toContain('`records`');
+    // `extract` still asks for each one, as a list.
+    const each = await run(['  found = extract([msg.`text`], Detail)'], [detail('x')]);
+    const eachAsk = each.calls[0].blocks.at(-1)!.text;
+    expect(eachAsk).toContain('emit each one as an element of the `records` array');
+    expect(eachAsk).not.toContain('the single one');
+    // Only the last block differs: the system prompt and the content are the same.
+    expect(calls[0].system).toBe(each.calls[0].system);
+    expect(calls[0].blocks.slice(0, -1)).toEqual(each.calls[0].blocks.slice(0, -1));
+  });
+
+  it('a shape with no description is asked for by its name', async () => {
+    const { calls } = await run(
+      ['  d = extractOne([msg.`text`], node Note: "" {', '    summary: <text> "the note"', '  })'],
+      [{ record: null }],
+    );
+    expect(calls[0].blocks.at(-1)!.text).toContain(
+      "Extract the single **Note** these sources describe, or nothing if they don't.",
+    );
+  });
+
+  it('one record is the record', async () => {
+    const { writes, result } = await single([one('Acme builds infra')]);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme builds infra' }]);
+    expect(result.writes[0].provenance.name[0]).toMatchObject({ kind: 'extraction', field: 'summary', item: 0 });
+    expect(extractions(result.trace)[0]).toMatchObject({ emissions: { Detail: 1 } });
+  });
+
+  it('null — or an empty list — is absent', async () => {
+    const none = await single([{ record: null }]);
+    expect(none.writes.map((w) => w.fields)).toEqual([{ name: 'none' }]);
+    const [entry] = extractions(none.result.trace);
+    expect(entry.emissions).toEqual({ Detail: 0 });
+    expect(entry.reply?.why).toEqual(['no_entities']);
+    const empty = await single([{ record: [] }]);
+    expect(empty.writes.map((w) => w.fields)).toEqual([{ name: 'none' }]);
+  });
+
+  it('a list holding the one record is that record', async () => {
+    const { writes, calls } = await single([{ record: [{ summary: cite('listed', 0) }] }]);
+    expect(calls).toHaveLength(1);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'listed' }]);
+  });
+
+  it('a record with nothing in it is absent, and the trace keeps what the model said', async () => {
+    const { writes, result } = await single([{ record: { summary: cite(null, 0) } }]);
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'none' }]);
+    const [entry] = extractions(result.trace);
+    expect(entry.emissions).toEqual({ Detail: 1 });
+    expect(entry.dropped).toEqual({ Detail: 1 });
+    expect(entry.reply?.why).toEqual(['dropped_records']);
+    expect(entry.reply?.keys).toEqual(['record']);
+  });
+
+  it('several records is a malformed reply: asked once more, saying so', async () => {
+    const two = { record: [{ summary: cite('a', 0) }, { summary: cite('b', 0) }] };
+    const { calls, writes, result } = await single([two, one('the one')]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].blocks.slice(0, -1)).toEqual(calls[0].blocks.slice(0, -1));
+    const retry = calls[1].blocks.at(-1)!.text;
+    expect(retry).toContain('2 records were answered, and this asks for the single one');
+    expect(retry).toContain('with the one record (or null) under `record`');
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'the one' }]);
+    expect(extractions(result.trace)[0].retried).toBeDefined();
+  });
+
+  it('several records twice fails the run, and leaves the reply on the trace', async () => {
+    const two = { record: [{ summary: cite('a', 0) }, { summary: cite('b', 0) }] };
+    await expect(single([two, two])).rejects.toThrow(
+      /extraction of `Detail` was answered with something its shape does not describe, twice: record — 2 records were answered/,
+    );
+    const { result } = await run(
+      [
+        '  content = [msg.`text`]',
+        '  companies = extract(content, Company)',
+        "  details = MAP(companies, { onError: 'warn' }, (c) => {",
+        "    return extractOne([...content, TEXT.SERIALISE(c, 'JSON')], Detail)",
+        '  })',
+      ],
+      [COMPANIES, two, two, one('Beta does fintech')],
+    );
+    const failed = extractions(result.trace).find((e) => e.failed === 'invalid_reply');
+    expect(failed?.reply?.why).toEqual(['failed', 'retried']);
+    expect(failed?.reply?.keys).toEqual(['record']);
+  });
+
+  it('a reply without the record is malformed too', async () => {
+    await expect(single([{ records: [] }, { answer: null }])).rejects.toThrow(/answered with something its shape does not describe, twice/);
+  });
+
+  it('shares the cached content with the root extract, breakpoints as for extract', async () => {
+    const marks = (call: ExtractCallLlmInput) => call.blocks.flatMap((b, i) => (b.cacheBreakpoint ? [i] : []));
+    const FAN_OUT_ONE = [
+      '  content = [msg.`text`, msg.`deck`]',
+      "  companies = extract(content, Company, { tier: 'careful' })",
+      '  detailed = MAP(companies, (c) => {',
+      "    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], Detail, { tier: 'careful' })",
+      '    return { ...c, ...details }',
+      '  })',
+    ];
+    const enriched = await run(FAN_OUT_ONE, [COMPANIES, one('a'), one('b')]);
+    const listed = await run(FAN_OUT, [COMPANIES, detail('a'), detail('b')]);
+    expect(enriched.calls.map(marks)).toEqual([[1], [1, 2], [1, 2]]);
+    expect(enriched.calls.map(marks)).toEqual(listed.calls.map(marks));
+    // A per-entity call starts with the root call's content, byte for byte.
+    expect(enriched.calls[1].blocks.slice(0, 2)).toEqual(enriched.calls[0].blocks.slice(0, 2));
+    expect(enriched.calls.map((c) => c.blocks.slice(0, -1))).toEqual(listed.calls.map((c) => c.blocks.slice(0, -1)));
+    expect(extractions(enriched.result.trace).map((e) => e.cache)).toEqual(
+      extractions(listed.result.trace).map((e) => e.cache),
+    );
+  });
+
+  it('spreads into the record it enriches', async () => {
+    const { writes } = await run(
+      [
+        '  companies = extract([msg.`text`], Company)',
+        '  detailed = MAP(companies, (c) => {',
+        "    details = extractOne([msg.`text`, TEXT.SERIALISE(c, 'JSON')], Detail)",
+        '    return { ...c, ...details }',
+        '  })',
+        '  MAP(detailed, (d) => { write crm-[:companies]-> { name: "${d.name}: ${COALESCE(d.summary, \'?\')}" } })',
+      ],
+      [COMPANIES, one('infra'), { record: null }],
+    );
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'Acme: infra' }, { name: 'Beta: ?' }]);
+  });
+
+  it('nests inside an expression, and reads a field off the call', async () => {
+    const { writes } = await run(
+      ['  write crm-[:companies]-> { name: COALESCE(extractOne([msg.`text`], Detail).summary, "none") }'],
+      [one('nested')],
+    );
+    expect(writes.map((w) => w.fields)).toEqual([{ name: 'nested' }]);
+  });
+});

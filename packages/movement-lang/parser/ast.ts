@@ -1503,8 +1503,13 @@ export interface DeclaredExtractNode {
  *
  * Like `MAP` and `MEMBERS` it is read where a right-hand side is, because one
  * of its arguments — the shape — is a TYPE, which an expression cannot hold.
+ *
+ * `extractOne(content, Shape, …)` is the same call asking for the single
+ * record the content describes — `find` beside `filter` — so it gives back a
+ * `Shape | absent` rather than a list.
  */
 export interface ExtractCallExpression {
+  finds: ExtractCallFinds;
   /** The content list, as written — text, files, and records rendered as
    *  text (`TEXT.SERIALISE(r, 'JSON')`). Usually a list literal. */
   content: ExprSlot;
@@ -1514,6 +1519,10 @@ export interface ExtractCallExpression {
   config?: ExprSlot;
   span: Span;
 }
+
+/** What an extraction call asks for: `each` record the content names
+ *  (`extract`), or the `one` it describes (`extractOne`). */
+export type ExtractCallFinds = 'each' | 'one';
 
 /**
  * The shape argument. A NAME is a node declaration in scope (file level, a

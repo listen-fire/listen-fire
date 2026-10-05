@@ -226,7 +226,7 @@ await until(() => { refresh co; return co.Stage == "Won" }, every: 1h)   # re-ch
 
 \`\`\`
 companies = extract([msg.Body, ...msg-[a:Attachments]->.File], Company, { tier: 'careful' })   # the call: a list of Company records
-one       = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+details   = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })   # the single record, or absent
 \`\`\`
 
 Content is a list (shared content first, record-specific content last, so repeated calls hit the prompt cache); the shape is a declared \`node\` (or written in place); settings are \`tier\`, \`model\`, \`effort\`. \`MAP(…, { initialConcurrency: 1 }, …)\` warms the cache before the fan-out. The keyword form below is supported, not recommended:
