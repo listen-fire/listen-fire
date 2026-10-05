@@ -19,7 +19,7 @@ export type QueryNode =
 
 const FIELD_OPERATORS = new Set([
   'subject', 'from', 'to', 'cc', 'bcc', 'label', 'in', 'has', 'filename', 'is',
-  'after', 'before', 'newer_than', 'older_than',
+  'category', 'after', 'before', 'newer_than', 'older_than',
 ]);
 
 export function parseGmailQuery(query: string): QueryNode {
@@ -217,6 +217,13 @@ function evaluateTerm(field: string | null, value: string, target: QueryTarget, 
       }
       return target.labels.includes(label);
     }
+    case 'category':
+      if (!INBOX_CATEGORIES.has(value)) {
+        throw new GmailQueryError(
+          `Unsupported Gmail search: "category:${value}" (only ${[...INBOX_CATEGORIES].map((c) => `category:${c}`).join(', ')})`,
+        );
+      }
+      return categoryOf(target.labels) === value;
     case 'after':
     case 'before': {
       const bound = parseQueryDate(value);
@@ -237,6 +244,21 @@ function evaluateTerm(field: string | null, value: string, target: QueryTarget, 
     default:
       throw new GmailQueryError(`Unsupported Gmail search operator "${field}:"`);
   }
+}
+
+const INBOX_CATEGORIES = new Set(['primary', 'social', 'promotions', 'updates', 'forums']);
+
+/** A message's inbox tab, from its system label the way Gmail stores it
+ *  (`CATEGORY_PROMOTIONS`, …; Primary is `CATEGORY_PERSONAL`). A message with no
+ *  category label sits in Primary, which is where fixtures' mail belongs. */
+function categoryOf(labels: string[]): string {
+  for (const label of labels) {
+    if (!label.startsWith('CATEGORY_')) continue;
+    const name = label.slice('CATEGORY_'.length).toLowerCase();
+    if (name === 'personal') return 'primary';
+    if (INBOX_CATEGORIES.has(name)) return name;
+  }
+  return 'primary';
 }
 
 function parseQueryDate(value: string): number | null {

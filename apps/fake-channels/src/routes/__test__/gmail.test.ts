@@ -218,10 +218,10 @@ test('gmail send: a request with no message is refused', async () => {
 test("gmail list: an unsupported search is refused with a 400 naming it, not matched to nothing", async () => {
   const { baseUrl, close } = await bootApp();
   try {
-    const res = await fetch(`${baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent("category:primary")}`);
+    const res = await fetch(`${baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent("larger:5M")}`);
     assert.equal(res.status, 400);
     const body = (await res.json()) as { error: { message: string } };
-    assert.match(body.error.message, /unsupported operator "category:"/);
+    assert.match(body.error.message, /unsupported operator "larger:"/);
   } finally {
     await close();
   }

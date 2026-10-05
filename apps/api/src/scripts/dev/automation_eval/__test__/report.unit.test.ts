@@ -126,6 +126,7 @@ function trial(overrides: Partial<TrialRecord>): TrialRecord {
     costUsd: 1,
     wallMs: 1,
     transcript: [],
+    steps: [],
     toolCalls: [],
     ...overrides,
   };

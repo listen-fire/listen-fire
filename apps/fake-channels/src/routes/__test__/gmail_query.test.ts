@@ -92,9 +92,22 @@ test('an empty query matches everything', () => {
   assert.equal(matches('   '), true);
 });
 
+test('category: matches the inbox tab, with unlabelled mail in Primary', () => {
+  const q = '-category:promotions -category:social';
+  assert.equal(matches(q), true);
+  assert.equal(matches(q, target({ labels: ['INBOX', 'CATEGORY_PROMOTIONS'] })), false);
+  assert.equal(matches(q, target({ labels: ['INBOX', 'CATEGORY_SOCIAL'] })), false);
+  assert.equal(matches(q, target({ labels: ['INBOX', 'CATEGORY_UPDATES'] })), true);
+  assert.equal(matches('category:primary'), true);
+  assert.equal(matches('category:primary', target({ labels: ['INBOX', 'CATEGORY_PERSONAL'] })), true);
+  assert.equal(matches('category:primary', target({ labels: ['INBOX', 'CATEGORY_FORUMS'] })), false);
+  assert.equal(matches('CATEGORY:Forums', target({ labels: ['CATEGORY_FORUMS'] })), true);
+});
+
 test('what the parser cannot understand throws, naming the problem', () => {
   const refused: Array<[string, RegExp]> = [
-    ['category:primary', /unsupported operator "category:"/],
+    ['larger:5M', /unsupported operator "larger:"/],
+    ['category:spam', /category:spam/],
     ['subject:(a OR b', /missing "\)"/],
     ['a OR', /"OR" with nothing after it/],
     ['OR a', /"OR" with nothing before it/],

@@ -3,7 +3,7 @@
 // Pure: main.ts gathers the facts, this module turns them into scores.
 
 import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
-import type { BuildEndReason, ToolCallRecord, TranscriptEntry, Variant } from './builder';
+import type { BuildEndReason, BuilderStep, ToolCallRecord, TranscriptEntry, Variant } from './builder';
 import type { AssertionResult } from './end_state';
 import type { ClarityVerdict } from './judge';
 import type { DiagnosticBuckets } from '../lib/diagnostic_families';
@@ -77,6 +77,8 @@ interface TrialRecord {
   costUsd: number;
   wallMs: number;
   transcript: TranscriptEntry[];
+  /** The builder's reasoning, prose and tool calls interleaved in order. */
+  steps: BuilderStep[];
   toolCalls: ToolCallRecord[];
 }
 

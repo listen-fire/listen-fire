@@ -316,6 +316,7 @@ async function runTrial(input: {
     costUsd: trialCost(args, usage),
     wallMs: Date.now() - started,
     transcript: build.transcript,
+    steps: build.steps,
     toolCalls: build.toolCalls,
   };
 }
@@ -331,10 +332,11 @@ function writeReport(input: { outDir: string; startedAt: string; args: Args; tri
         rubric: RUBRIC,
         totals: totalsByVariant(trials),
         cells: summarize(trials),
-        trials: trials.map(({ toolCalls, transcript, ...rest }) => ({
+        trials: trials.map(({ toolCalls, transcript, steps, ...rest }) => ({
           ...rest,
           toolCalls: toolCalls.length,
           transcriptTurns: transcript.length,
+          steps: steps.length,
         })),
       },
       (_key, value: unknown) => (value instanceof RegExp ? value.toString() : value),

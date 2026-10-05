@@ -40,6 +40,16 @@ interface TranscriptEntry {
   text: string;
 }
 
+/** One thing the builder (or the simulated user) did, in the order it happened —
+ *  so a reviewer can read WHY the builder did what it did, not just what it
+ *  said. Thinking is the API's summary of the builder's reasoning; a tool step
+ *  points into `toolCalls` for its arguments and result rather than copying them. */
+type BuilderStep =
+  | { kind: 'thinking'; modelCall: number; text: string }
+  | { kind: 'text'; modelCall: number; text: string }
+  | { kind: 'tool'; modelCall: number; name: string; toolCallIndex: number }
+  | { kind: 'user'; text: string };
+
 type BuildEndReason =
   | 'done'
   | 'model-call-budget'
@@ -53,6 +63,7 @@ interface BuildOutcome {
   error: string | null;
   toolCalls: ToolCallRecord[];
   transcript: TranscriptEntry[];
+  steps: BuilderStep[];
   modelCalls: number;
   userTurns: number;
   builderUsage: TokenUsage;
@@ -222,6 +233,20 @@ async function callMcpTool(
 
 // ── The loop ───────────────────────────────────────────────────────────────
 
+/** The reasoning and prose of one response, in order. Tool calls are recorded
+ *  as they run, so they land after the prose that introduced them. */
+function proseSteps(content: Anthropic.ContentBlock[], modelCall: number): BuilderStep[] {
+  const steps: BuilderStep[] = [];
+  for (const block of content) {
+    if (block.type === 'thinking' && block.thinking.trim()) {
+      steps.push({ kind: 'thinking', modelCall, text: block.thinking.trim() });
+    } else if (block.type === 'text' && block.text.trim()) {
+      steps.push({ kind: 'text', modelCall, text: block.text.trim() });
+    }
+  }
+  return steps;
+}
+
 function textOf(content: Anthropic.ContentBlock[]): string {
   return content
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -237,6 +262,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
   const userUsage = emptyUsage();
   const toolCalls: ToolCallRecord[] = [];
   const transcript: TranscriptEntry[] = [{ role: 'user', text: options.task.request }];
+  const steps: BuilderStep[] = [{ kind: 'user', text: options.task.request }];
   let modelCalls = 0;
   let userTurns = 0;
   let lastCallCost = 0;
@@ -248,6 +274,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
     error,
     toolCalls,
     transcript,
+    steps,
     modelCalls,
     userTurns,
     builderUsage,
@@ -280,6 +307,10 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
           tools: mcp.tools,
           messages,
           cache_control: { type: 'ephemeral' },
+          // Summarized so the trial records why the builder acted; the setting is
+          // identical on every call, so it neither breaks the cache nor the
+          // append-only history.
+          thinking: { type: 'adaptive', display: 'summarized' },
           output_config: { effort: options.builderEffort },
         })
         .finalMessage();
@@ -289,6 +320,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
       lastCallCost = spent() - before;
       // Append-only: thinking blocks go back exactly as they came.
       messages.push({ role: 'assistant', content: response.content });
+      steps.push(...proseSteps(response.content, modelCalls));
 
       if (response.stop_reason === 'refusal') return finish('refusal', response.stop_details?.explanation ?? null);
       if (response.stop_reason === 'pause_turn') continue;
@@ -299,6 +331,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
         for (const block of toolUses) {
           const { record, result } = await callMcpTool(mcp, block, modelCalls);
           toolCalls.push(record);
+          steps.push({ kind: 'tool', modelCall: modelCalls, name: record.name, toolCallIndex: toolCalls.length - 1 });
           results.push(result);
           options.log(`    tool ${record.name}${record.isError ? ' (error)' : ''} ${record.ms}ms`);
         }
@@ -321,6 +354,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
       if (answer.done) return finish('done');
       userTurns += 1;
       transcript.push({ role: 'user', text: answer.reply });
+      steps.push({ kind: 'user', text: answer.reply });
       options.log(`    user: ${answer.reply.slice(0, 160)}`);
       messages.push({ role: 'user', content: answer.reply });
     }
@@ -331,5 +365,5 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
   }
 }
 
-export { mcpHeaders, readBuilderSkill, runBuilder };
-export type { BuildEndReason, BuildOutcome, Effort, ToolCallRecord, TranscriptEntry, Variant };
+export { mcpHeaders, proseSteps, readBuilderSkill, runBuilder };
+export type { BuildEndReason, BuildOutcome, BuilderStep, Effort, ToolCallRecord, TranscriptEntry, Variant };
