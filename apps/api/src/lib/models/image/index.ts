@@ -1,6 +1,7 @@
 // Image generation behind the model map: the caller names a registry model and
 // gpt-image-1's knobs, and the map decides which vendor draws it.
 
+import { assertRunSpendWithinCap } from '../../run_spend';
 import { neverAsAny } from '../../utils/types';
 import { assertCallable, resolveModel } from '../map';
 import type { ImageModelName } from '../registry';
@@ -30,6 +31,7 @@ export async function generateImage(
 ): Promise<GeneratedImage> {
   const resolved = resolveModel(name, env);
   assertCallable(resolved, env);
+  assertRunSpendWithinCap();
   const { provider, wireModel } = resolved;
   switch (provider) {
     case 'openai':

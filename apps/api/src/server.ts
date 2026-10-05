@@ -37,6 +37,7 @@ import { requireEnv } from './lib/utils/environment';
 import { assertModelMapConfigured, modelKeyWarning, providerCredentialsPresent, resolveModel } from './lib/models/map';
 import { assertKnowledgeLlmModelConfigured, isKnowledgeLlmConfigured, knowledgeLlmModel } from './lib/knowledge/llm';
 import { assertJevConfigured } from './lib/jev/client';
+import { assertRunCostCapConfigured } from './lib/run_spend';
 import { assertExtractionTiersConfigured } from './services/movement_engine/ai_tiers';
 import { healthCheck, workersHealthCheck } from './lib/middleware/health_check';
 import { rootHandler } from './lib/middleware/root_handler';
@@ -93,6 +94,10 @@ assertKnowledgeLlmModelConfigured();
 // judge without its key believes duplicate merges are getting a second
 // opinion when they are not.
 assertJevConfigured();
+
+// An optional cost cap set to something that is not a positive number of
+// dollars is a deployment that believes its runs are capped when they are not.
+assertRunCostCapConfigured();
 
 // A blocked event loop is the one failure this process cannot narrate: the
 // health check goes unanswered, the logs stop mid-sentence, and the platform

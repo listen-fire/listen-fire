@@ -140,6 +140,8 @@ COMPOSE_PROFILES=postgres,redis,minio,admin
 
 **A model key is what buys you agents**, and any one of `ANTHROPIC_API_KEY`, `KNOWLEDGE_LLM_API_KEY` or `OPENAI_API_KEY` is enough. Without one the stack starts and serves, and agents, extraction and the arbitration of conflicting facts fail at the moment they are asked for — `init` warns at every boot and so does the API. On `v0.1.0` it was a hard refusal: `init` exited 1 and nothing started at all, so a stack could not come up before you had a key.
 
+**Consider capping what one automation run may spend on models** with `MOVEMENT_MAX_RUN_COST_USD=<dollars>`. It is not mandatory, but it is encouraged: a looping automation is otherwise stopped by nothing. See "Automations" in [`SELF_HOSTING.md`](../SELF_HOSTING.md).
+
 **`LISTEN_FIRE_TEAM_NAME` and `LISTEN_FIRE_ADMIN_EMAIL` are read once, on the very first boot.** `init` copies them into the config volume as `LISTEN_FIRE_BOOTSTRAP_TEAM_NAME` and `LISTEN_FIRE_BOOTSTRAP_USER_EMAIL` and then never rewrites that file again — editing either line later changes nothing. Get them right before the first `up`, or the team is called `Acme` for the rest of its life.
 
 Then, from `deploy/`:

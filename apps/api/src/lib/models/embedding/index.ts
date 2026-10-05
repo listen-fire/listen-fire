@@ -1,6 +1,7 @@
 // Embeddings behind the model map: the caller names a registry model and a
 // width, and the map decides which vendor computes the vectors.
 
+import { assertRunSpendWithinCap } from '../../run_spend';
 import { neverAsAny } from '../../utils/types';
 import { assertCallable, resolveModel } from '../map';
 import type { Resolved } from '../map';
@@ -27,6 +28,7 @@ export async function embed(
   if (req.input.length === 0) return { embeddings: [] };
   const resolved = resolveModel(name, env);
   assertCallable(resolved, env);
+  assertRunSpendWithinCap();
   const { provider, wireModel } = resolved;
   const result = await embedOn(resolved, req, env);
   if (result.embeddings.length !== req.input.length) {

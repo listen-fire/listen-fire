@@ -13,6 +13,7 @@ import { z } from 'zod';
 
 import { SECOND } from '../../constants';
 import { recordLlmUsage } from '../llm_usage';
+import { assertRunSpendWithinCap } from '../run_spend';
 
 const JEV_API_URL = 'https://api.typesafe.ai/v1/systemone';
 const JEV_REQUEST_MODEL = 'jev-latest';
@@ -148,6 +149,8 @@ export async function askJev(
   if (!apiKey) {
     throw new JevConfigurationError('JEV_KEY is not set — Jev cannot be called.');
   }
+
+  assertRunSpendWithinCap();
 
   const body = JSON.stringify({
     model: JEV_REQUEST_MODEL,

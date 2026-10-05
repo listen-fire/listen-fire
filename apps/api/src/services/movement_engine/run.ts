@@ -341,6 +341,7 @@ import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
 import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
+import { currentRunSpendMicrodollars, isRunCostCapExceeded } from '../../lib/run_spend';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -581,6 +582,10 @@ export type MovementWriteRecord = WriteRecord;
 
 export interface MovementRunResult {
   movementName: string;
+  /** What this segment spent on priced calls (model calls, priced from the
+   *  same table as `llm_usage`), in microdollars — absent when it spent
+   *  nothing. The segment's own figure: a resumed run starts its count again. */
+  spentMicrodollars?: number;
   /** Writes in program order — the firing record's raw material. */
   writes: MovementWriteRecord[];
   /** The extraction call sites the writes' provenance references,
@@ -1451,6 +1456,13 @@ interface MemberFrame {
   holdsEffectQueue: boolean;
 }
 
+/** What this segment has spent on priced calls so far (`lib/run_spend.ts`),
+ *  when it spent anything — a run that made no priced call carries no field. */
+function spentMicrodollarsField(): { spentMicrodollars?: number } {
+  const spent = currentRunSpendMicrodollars();
+  return spent > 0 ? { spentMicrodollars: spent } : {};
+}
+
 /** One member's answer from a collection op's function — or that it has none,
  *  because the function failed and `onError` forgave it. */
 type MemberAnswer = { kept: true; value: unknown } | { kept: false };
@@ -1461,9 +1473,9 @@ const COLLECTION_MEMBER_FAILED = 'MOVENG_COLLECTION_MEMBER_FAILED';
 /**
  * Did a member's function FAIL, as opposed to the run's control flow passing
  * through it? Only a failure is the member's, and only a failure can be
- * forgiven by `onError`: a cancel, the call ceiling, a park and a quiet scope
- * end all mean something about the run, and swallowing one would leave the run
- * believing it had done something it had not.
+ * forgiven by `onError`: a cancel, the call ceiling, the cost cap, a park and a
+ * quiet scope end all mean something about the run, and swallowing one would
+ * leave the run believing it had done something it had not.
  */
 function isMemberFailure(error: unknown): boolean {
   return !(
@@ -1471,6 +1483,7 @@ function isMemberFailure(error: unknown): boolean {
     || error instanceof ScopeEndedQuietly
     || error instanceof RunCancelledSignal
     || isAdapterCallCeilingExceeded(error)
+    || isRunCostCapExceeded(error)
   );
 }
 
@@ -2807,6 +2820,7 @@ class Interpreter {
       ...(this.deferredRaceFrames.size > 0
         ? { deferredRaceFrames: [...this.deferredRaceFrames] }
         : {}),
+      ...spentMicrodollarsField(),
     };
   }
 
@@ -3949,8 +3963,8 @@ class Interpreter {
    * `onError` says what it does: `error` fails the run (as it always has),
    * `warn` and `ignore` leave the member out of the answer — `warn` putting a
    * warning in the trace where the member's entries are. Only a member's own
-   * failure is forgiven. A run being cancelled, the run's call ceiling, a
-   * member parking (which the checker refuses), and a `match` that found
+   * failure is forgiven. A run being cancelled, the run's call ceiling, its
+   * cost cap, a member parking (which the checker refuses), and a `match` that found
    * nothing ending the scope quietly are the RUN's control flow, not a member
    * failing, and pass through whatever `onError` says.
    *

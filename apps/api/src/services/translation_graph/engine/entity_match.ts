@@ -21,6 +21,7 @@ import {
   type JevAnswer,
   type JevNoulQuestion,
 } from '../../../lib/jev/client';
+import { isRunCostCapExceeded } from '../../../lib/run_spend';
 import { neverAsAny } from '../../../lib/utils/types';
 import { logger } from '../../logger';
 import type { ExternalRecordRef } from '../adapter';
@@ -167,6 +168,9 @@ async function judgeEntityMatchGenerative(input: {
   try {
     result = await judgeEntityMatchGenerativeRaw(input);
   } catch (err) {
+    // Out of money is not "no judge": declining here would create a duplicate
+    // record, so the run stops instead.
+    if (isRunCostCapExceeded(err)) throw err;
     const message = err instanceof Error ? err.message : String(err);
     logger.warn('[tg_entity_match] judge call failed; declining to merge', {
       recordType: input.recordType,
@@ -344,7 +348,7 @@ export async function judgeEntityMatch(input: {
       try {
         return await judgeEntityMatchViaJev(input);
       } catch (err) {
-        if (err instanceof JevConfigurationError) throw err;
+        if (err instanceof JevConfigurationError || isRunCostCapExceeded(err)) throw err;
         const message = err instanceof Error ? err.message : String(err);
         logger.warn('[tg_entity_match] jev judge failed; falling back to the generative judge', {
           recordType: input.recordType,

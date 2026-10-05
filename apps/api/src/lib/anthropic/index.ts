@@ -40,6 +40,7 @@ import { neverAsAny } from '../utils/types';
 import { logger } from '../../services/logger';
 import { SECOND } from '../../constants';
 import { recordLlmUsage, runFields } from '../llm_usage';
+import { assertRunSpendWithinCap } from '../run_spend';
 
 const rateLimitQueue = new Queue<any>({ concurrency: 8 });
 
@@ -49,6 +50,10 @@ const TIME_MULTIPLE = 4;
 const RATE_LIMIT_DELAY = 30 * SECOND;
 
 async function enqueueQuery<T>(fn: () => Promise<T>, signal?: AbortSignal) {
+  // Every request — each turn of a tool loop, each continuation — first asks
+  // whether its run has spent its cost cap. Here, in the caller's own async
+  // context: the queued job may be started from another job's.
+  assertRunSpendWithinCap();
   return rateLimitQueue.enqueue(async () => {
     return backOff(fn, {
       jitter: 'none',

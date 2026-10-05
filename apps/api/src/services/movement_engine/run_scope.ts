@@ -6,6 +6,10 @@
 // singletons shared by every run in the process, so a run's identity has to
 // arrive ambiently. One AsyncLocalStorage carries both.
 //
+// The segment also opens the run's model-spend account (`lib/run_spend.ts`),
+// which keeps its own storage because the model clients that charge it sit
+// below the engine and must not import it.
+//
 // ── The ceiling ─────────────────────────────────────────────────────────────
 //
 // A ceiling on how many network calls one run may make to a third-party
@@ -31,6 +35,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
+
+import { withRunSpendLedger } from '../../lib/run_spend';
 
 /** The systems that count against a ceiling. One entry per system that has its
  *  own env var below; a system not listed here is simply not capped. */
@@ -159,7 +165,8 @@ interface RunScope {
 
 const asyncLocalStorage = new AsyncLocalStorage<RunScope>();
 
-/** Run one interpreter segment under its own fresh count and its own memo. */
+/** Run one interpreter segment under its own fresh count, its own memo and
+ *  its own model-spend account. */
 export function withRunCallLedger<T>(
   fn: () => Promise<T>,
   options?: { languageVersion?: LanguageVersion },
@@ -170,7 +177,7 @@ export function withRunCallLedger<T>(
       memo: new RunReadMemo(),
       languageVersion: options?.languageVersion ?? CURRENT_LANGUAGE_VERSION,
     },
-    fn,
+    () => withRunSpendLedger(fn),
   );
 }
 

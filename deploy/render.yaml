@@ -276,6 +276,10 @@ services:
       # effort. Unset, claude-sonnet-5 at low, high and xhigh.
       - key: EXTRACTION_TIERS
         sync: false
+      # Optional, encouraged: the most one automation run may spend on model
+      # calls, in US dollars (e.g. 5). Unset (the dashboard owns it), no cap.
+      - key: MOVEMENT_MAX_RUN_COST_USD
+        sync: false
       # Transcription, embeddings and image generation go to OpenAI unless
       # MODEL_MAP sends their names elsewhere; unset, each fails naming the key.
       - key: OPENAI_API_KEY

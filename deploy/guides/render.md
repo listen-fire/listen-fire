@@ -138,6 +138,7 @@ The full variable reference, with what each one does when unset, is the environm
 | `MESSAGE_QUEUE_REDIS_HOSTNAME` / `_PORT` | the Key Value instance's internal host and port; there is no URL form |
 | `PORT` | leave it to Render |
 | `NODE_ENV` | `production`; the image already sets it |
+| `MOVEMENT_MAX_RUN_COST_USD` | optional but encouraged: the most one automation run may spend on model calls, in dollars |
 
 ## 7. Upgrading
 

@@ -14,6 +14,7 @@ import type { MovementRunResult } from '../../movement_engine/run';
 import { isWriteEffect, type MovementTraceEntry } from '../../movement_engine/expression';
 import { SECOND } from '../../../constants';
 import { getAutomationsQb, getQb } from '../../../lib/kysely';
+import { costMicrodollarsToUsd } from '../../../lib/llm_usage';
 import { mq } from '../../../lib/message_queue';
 import { logger } from '../../logger';
 import {
@@ -836,6 +837,9 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
 function movementStepDiagnostics(result: MovementRunResult): Record<string, unknown> {
   return {
     writes: result.writes.filter(isWriteEffect).length,
+    // What this segment spent, so a run's cost is on its own record whether or
+    // not a cost cap is set.
+    ...(result.spentMicrodollars !== undefined ? { costUsd: costMicrodollarsToUsd(result.spentMicrodollars) } : {}),
     ...(result.trace.length > 0 ? { trace: result.trace } : {}),
   };
 }
