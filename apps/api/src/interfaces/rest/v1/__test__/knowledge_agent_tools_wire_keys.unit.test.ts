@@ -103,14 +103,25 @@ function fakeRes() {
   const res: {
     statusCode?: number;
     body?: unknown;
+    contentType?: string;
     status: (n: number) => typeof res;
     json: (b: unknown) => typeof res;
+    type: (t: string) => typeof res;
+    send: (b: unknown) => typeof res;
   } = {
     status(n: number) {
       res.statusCode = n;
       return res;
     },
     json(b: unknown) {
+      res.body = b;
+      return res;
+    },
+    type(t: string) {
+      res.contentType = t;
+      return res;
+    },
+    send(b: unknown) {
       res.body = b;
       return res;
     },
@@ -173,9 +184,24 @@ describe('POST /handbook — wire key `handbook` reaches readBook as `bookId`', 
 });
 
 describe('POST /connections/describe — wire keys `system`/`connection`', () => {
+  it('answers compact markdown by default, describing the same instance', async () => {
+    const res = fakeRes();
+    await call(describeInstanceHandler, { system: 'attio', connection: 'my-attio', team: 'T1' }, res);
+
+    expect(describeMovementInstanceMock).toHaveBeenCalledWith({
+      teamId: 'T1',
+      adapter: 'attio',
+      forceRefresh: true,
+      credentialName: 'my-attio',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.contentType).toBe('text/markdown');
+    expect(res.body).toEqual(expect.stringContaining('### attio'));
+  });
+
   it('passes `system` as `adapter`', async () => {
     const res = fakeRes();
-    await call(describeInstanceHandler, { system: 'attio', team: 'T1' }, res);
+    await call(describeInstanceHandler, { system: 'attio', team: 'T1', detail: 'full' }, res);
 
     expect(resolveToolTeamMock).toHaveBeenCalledWith('T1');
     expect(describeMovementInstanceMock).toHaveBeenCalledWith({
@@ -189,7 +215,7 @@ describe('POST /connections/describe — wire keys `system`/`connection`', () =>
   it('passes `connection` as `credentialName`', async () => {
     const res = fakeRes();
     await describeInstanceHandler(
-      fakeReq({ system: 'attio', connection: 'my-attio', team: 'T1' }),
+      fakeReq({ system: 'attio', connection: 'my-attio', team: 'T1', detail: 'full' }),
       res as never,
       (() => {}) as never,
     );
@@ -205,7 +231,7 @@ describe('POST /connections/describe — wire keys `system`/`connection`', () =>
   it('batches an array of systems into one call, describing each and labelling by system', async () => {
     const res = fakeRes();
     await describeInstanceHandler(
-      fakeReq({ system: ['slack', 'attio'], team: 'T1' }),
+      fakeReq({ system: ['slack', 'attio'], team: 'T1', detail: 'full' }),
       res as never,
       (() => {}) as never,
     );

@@ -9,9 +9,11 @@ import type { WalkedEdge, WalkedNode, WalkedProperty } from '../walk';
 
 const snapshotMock = jest.fn();
 const describeMock = jest.fn();
+const landingsMock = jest.fn();
 jest.mock('../catalog', () => ({
   movementCatalogSnapshotForTeam: (...args: unknown[]) => snapshotMock(...args),
   describeMovementInstance: (...args: unknown[]) => describeMock(...args),
+  describeMovementLandings: (...args: unknown[]) => landingsMock(...args),
 }));
 
 import {
@@ -114,7 +116,7 @@ describe('the connections digest', () => {
   it('lists record types with fields, required and identifying ones first, marked', () => {
     const block = renderSystemDigest(ATTIO);
     expect(block).toContain(
-      '- Companies [rw]: Name text!, Domains text[]*, Description text, Stage enum(Lead|Qualified|Won|Lost|…), Record ID text~',
+      '- Companies [rw]: Name text!, Domains text[]*, Description text, Stage enum(Lead|Qualified|Won|Lost|…+1), `Record ID` text~',
     );
     expect(block).toContain('- People [rw]: Email text*, Name text');
     expect(block).toContain('- Deals [rw]: fields not loaded — describe it');
@@ -126,11 +128,35 @@ describe('the connections digest', () => {
     expect(block).toContain('- its records took too long to load — describeConnection("attio") for more');
   });
 
-  it('keeps every system under its cap, saying what it cut', () => {
+  it('keeps every system under its cap, cutting fields before types', () => {
     const block = renderSystemDigest(wideSystem('crm'));
     expect(block.length).toBeLessThanOrEqual(SYSTEM_DIGEST_CHAR_CAP);
-    expect(block).toMatch(/- … \d+ more — describeConnection\("crm"\) for more$/);
-    expect(block).toContain('+30 more');
+    expect(block).toContain('- `Object Type 29` [rw]: 40 fields');
+    expect(block).toContain('fields cut for space — describeConnection({ system: "crm", position: ');
+  });
+
+  it('over budget, keeps the fields of the types you write to, and cuts the read-only ones first', () => {
+    const fields = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`Field ${i}`, text()]));
+    const readOnly = Array.from({ length: 8 }, (_, i) => edge(`Lookup ${i}`, fields, { writable: false }));
+    const writable = [edge('Companies', fields), edge('People', fields)];
+    const block = renderSystemDigest({
+      system: 'crm',
+      spec: { constructionArgs: [credential] },
+      connections: ['crm'],
+      node: root([...readOnly, ...writable]),
+    });
+    expect(block.length).toBeLessThanOrEqual(SYSTEM_DIGEST_CHAR_CAP);
+    expect(block).toContain('- Companies [rw]: `Field 0` text,');
+    expect(block).toContain('- People [rw]: `Field 0` text,');
+    expect(block).toContain('- `Lookup 7` [r]: 10 fields');
+  });
+
+  it('marks a name that needs backticks, and a field that is written but never read back', () => {
+    const block = renderSystemDigest({
+      ...ATTIO,
+      node: root([edge('VC Deal Flow', { listName: text({ readable: false, required: true }), 'Team Size': text({ type: 'number' }) })]),
+    });
+    expect(block).toContain('- `VC Deal Flow` [rw]: listName text! (write-only), `Team Size` number');
   });
 
   it('keeps the whole digest under its cap however many systems are connected', () => {
@@ -144,6 +170,7 @@ describe('the connections digest', () => {
   it('spells types compactly', () => {
     expect(compactType({ kind: 'maybeAbsent', of: { kind: 'list', of: 'number' } })).toBe('number[]?');
     expect(compactType({ kind: 'enum', options: ['a'], open: {} })).toBe('enum(a|…)');
+    expect(compactType({ kind: 'enum', options: ['a', 'b', 'c', 'd', 'e', 'f'] })).toBe('enum(a|b|c|d|…+2)');
     expect(compactType('datetime')).toBe('datetime');
   });
 });
@@ -190,6 +217,59 @@ describe('getStarted', () => {
   beforeEach(() => {
     snapshotMock.mockReset();
     describeMock.mockReset();
+    landingsMock.mockReset();
+    landingsMock.mockResolvedValue({});
+  });
+
+  it("describes the record types a root stubbed, so Attio's main types arrive with their fields", async () => {
+    stubTeamCatalog();
+    const stub = (name: string): WalkedEdge =>
+      edge(name, {}, { target: { name, stub: true, hint: `describe this connection at "-[:${name}]->"` } });
+    describeMock.mockImplementation(async ({ adapter }: { adapter: string }) =>
+      adapter === 'attio'
+        ? {
+            node: root([
+              stub('Companies'),
+              stub('People'),
+              { ...stub('VC Deal Flow'), writable: false },
+              edge('Webhook Event', { action: text({ writable: false }) }, { writable: false, readable: false, fires: true }),
+            ]),
+            schema: null,
+            notes: [],
+          }
+        : { node: root([]), schema: null, notes: [] },
+    );
+    landingsMock.mockResolvedValue({
+      Companies: {
+        name: 'Companies',
+        properties: { Name: text({ required: true }), Domains: text({ type: { kind: 'list', of: 'text' } }) },
+        unique: [['Domains']],
+      },
+      People: { name: 'People', properties: { Name: text({ required: true }), Email: text() }, unique: [['Email']] },
+    });
+
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+
+    expect(landingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ adapter: 'attio', credentialName: 'acme', types: ['Companies', 'People', 'VC Deal Flow'] }),
+    );
+    expect(page).toContain('- Companies [rw]: Name text!, Domains text[]*');
+    expect(page).toContain('- People [rw]: Name text!, Email text*');
+    // Not described (the source had nothing for it): still named, one hop away.
+    expect(page).toContain('- `VC Deal Flow` [r]: fields not loaded — describe it');
+    expect(page).toContain('- `Webhook Event` [fires]: action text');
+  });
+
+  it('keeps the stubs, named, when describing them fails', async () => {
+    stubTeamCatalog();
+    describeMock.mockImplementation(async () => ({
+      node: root([edge('Deals', {}, { target: { name: 'Deals', stub: true, hint: 'describe it' } })]),
+      schema: null,
+      notes: [],
+    }));
+    landingsMock.mockRejectedValue(new Error('rate limited'));
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+    expect(page).toContain('- Deals [rw]: fields not loaded — describe it');
   });
 
   it('answers with the team, its systems — connected ones first — and the front page', async () => {

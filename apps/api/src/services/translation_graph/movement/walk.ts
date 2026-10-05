@@ -20,6 +20,7 @@ import type { FieldType } from 'movement-lang';
 import type { EdgesFromResult, EdgeTargetNode } from '../adapter';
 import type { SchemaFieldDescriptor, SchemaReferenceDescriptor, SchemaTypeDescriptor } from '../types';
 import { positionLabelEntry, referenceTargetTypeIds } from '../types';
+import type { UniquenessConstraints } from '../uniqueness';
 import { fieldTypeFromDescriptor } from './schema_projection';
 import { narrowByOf } from './narrowing';
 
@@ -52,6 +53,12 @@ export interface WalkedDescribedNode {
   name: string;
   description?: string;
   properties: Record<string, WalkedProperty>;
+  /** What identifies one of these records: each entry is a combination of
+   *  names (properties, or this node's own edges) that the source treats as
+   *  unique — a `unique by` candidate. Absent when the source declares none.
+   *  A rule naming anything this node cannot spell is left out rather than
+   *  half-stated. */
+  unique?: string[][];
   stub?: false;
 }
 
@@ -165,6 +172,43 @@ function propertiesOf(fields: SchemaFieldDescriptor[]): Record<string, WalkedPro
   return properties;
 }
 
+/**
+ * The source's own identity rules, renamed from its field ids to the names an
+ * author writes. The same mapping the schema projection makes for a write
+ * shape's `nativeUniqueness`, so the walk and the checker name the same keys.
+ */
+function uniqueOf(input: {
+  constraints: UniquenessConstraints | undefined;
+  fields: SchemaFieldDescriptor[];
+  references?: SchemaReferenceDescriptor[];
+}): string[][] {
+  const surface = new Map<string, string>([
+    ...input.fields.map((field) => [field.fieldId, field.displayName] as const),
+    ...(input.references ?? []).map((reference) => [reference.fieldId, edgeName(reference)] as const),
+  ]);
+  return (input.constraints?.any ?? []).flatMap((branch) => {
+    const names = branch.all.map((entry) => surface.get(entry.field));
+    if (names.length === 0 || names.some((name) => name === undefined)) return [];
+    return [names.filter((name): name is string => name !== undefined)];
+  });
+}
+
+function uniqueEntry(unique: string[][]): { unique?: string[][] } {
+  return unique.length > 0 ? { unique } : {};
+}
+
+/** A described type as an edge's landing: its fields and identity, no onward
+ *  edges — the shape `describeMovementLandings` hands back for a stub resolved
+ *  by name. */
+export function landingOf(node: SchemaTypeDescriptor): WalkedDescribedNode {
+  return {
+    name: node.displayName,
+    ...(node.description !== undefined ? { description: node.description } : {}),
+    properties: propertiesOf(node.fields),
+    ...uniqueEntry(uniqueOf({ constraints: node.uniquenessConstraints, fields: node.fields })),
+  };
+}
+
 function shapeOf(input: { node: EdgeTargetNode; at: string }): WalkedNodeShape {
   const { node } = input;
   const named = {
@@ -180,7 +224,11 @@ function shapeOf(input: { node: EdgeTargetNode; at: string }): WalkedNodeShape {
       hint: `describe this connection at ${JSON.stringify(input.at)} to see this node's fields`,
     };
   }
-  return { ...named, properties: propertiesOf(node.fields) };
+  return {
+    ...named,
+    properties: propertiesOf(node.fields),
+    ...uniqueEntry(uniqueOf({ constraints: node.uniquenessConstraints, fields: node.fields })),
+  };
 }
 
 /**
@@ -279,6 +327,13 @@ export function walkedNodeFrom(input: { hop: EdgesFromResult; at: string }): Wal
     name: descriptor.displayName,
     ...(descriptor.description !== undefined ? { description: descriptor.description } : {}),
     properties: propertiesOf(descriptor.fields),
+    ...uniqueEntry(
+      uniqueOf({
+        constraints: descriptor.uniquenessConstraints,
+        fields: descriptor.fields,
+        references: descriptor.references,
+      }),
+    ),
     edges,
   };
 }
