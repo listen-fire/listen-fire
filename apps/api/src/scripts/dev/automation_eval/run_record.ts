@@ -21,9 +21,26 @@ interface WriteSummary {
 
 interface ExtractionSummary {
   node: string | null;
+  /** `call` for `extract(…)` / `extractOne(…)`; absent for the `extract` keyword. */
+  form?: 'call';
+  model?: string;
+  /** Entities yielded, by node alias. */
+  emissions: Record<string, number>;
+  /** Per alias: emitted records whose declared fields all came back absent. */
+  empty?: Record<string, number>;
+  /** Per alias: how many of those empty records the engine dropped. */
+  dropped?: Record<string, number>;
   skipped?: string;
   failed?: string;
-  /** Per node alias, the extracted entities' fields (null = came back absent). */
+  /** Present only when the call was retried after the reply failed validation. */
+  retried?: string[];
+  /** The engine's digest of a misbehaving reply (it keeps none for a healthy one). */
+  reply?: { why: string[]; keys: string[]; sample: string; path?: string };
+  /**
+   * Per node alias, the extracted entities' fields (null = came back absent). The engine
+   * records these on the `extract` keyword's trace entries only; an `extract(…)` call leaves
+   * its values to the writes and the reply digest, so this is empty for call-form entries.
+   */
   entities: Record<string, Array<Record<string, string | null>>>;
 }
 
@@ -97,11 +114,36 @@ function summarizeExtraction(entry: Obj): ExtractionSummary {
         });
     }
   }
+  const empty = numberMap(entry.empty);
+  const dropped = numberMap(entry.dropped);
   return {
     node: typeof entry.node === 'string' ? entry.node : null,
+    ...(entry.form === 'call' ? { form: 'call' as const } : {}),
+    ...(typeof entry.model === 'string' ? { model: entry.model } : {}),
+    emissions: numberMap(entry.emissions) ?? {},
+    ...(empty ? { empty } : {}),
+    ...(dropped ? { dropped } : {}),
     ...(typeof entry.skipped === 'string' ? { skipped: entry.skipped } : {}),
     ...(typeof entry.failed === 'string' ? { failed: entry.failed } : {}),
+    ...(Array.isArray(entry.retried) ? { retried: entry.retried.slice(0, MAX_MESSAGES).map(clip) } : {}),
+    ...(isObj(entry.reply) ? { reply: summarizeReply(entry.reply) } : {}),
     entities,
+  };
+}
+
+function numberMap(value: unknown): Record<string, number> | undefined {
+  if (!isObj(value)) return undefined;
+  const entries = Object.entries(value).filter((e): e is [string, number] => typeof e[1] === 'number');
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function summarizeReply(reply: Obj): NonNullable<ExtractionSummary['reply']> {
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  return {
+    why: strings(reply.why),
+    keys: strings(reply.keys).slice(0, MAX_FIELDS),
+    sample: clip(reply.sample ?? ''),
+    ...(typeof reply.path === 'string' ? { path: reply.path } : {}),
   };
 }
 

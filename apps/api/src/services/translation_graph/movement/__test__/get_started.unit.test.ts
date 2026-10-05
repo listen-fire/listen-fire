@@ -22,6 +22,7 @@ import {
   renderSystemDigest,
   type SystemDigestInput,
 } from '../connection_digest';
+import { EXAMPLE_PROGRAMS, renderExamplesPage } from '../../../../lib/knowledge/movement_handbook/examples_page';
 import { renderGetStarted } from '../get_started';
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 
@@ -225,6 +226,15 @@ describe('getStarted', () => {
     const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'examples' });
     expect(page).toContain('## Writing automations, by example');
     expect(page).not.toContain('## Writing automations: it is TypeScript, except…');
+  });
+
+  it('serves every program of the examples page whole, not a budgeted slice of it', async () => {
+    stubTeamCatalog();
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'examples' });
+    const examples = renderExamplesPage();
+    expect(page).toContain(examples);
+    for (const program of EXAMPLE_PROGRAMS) expect(page).toContain(program.source);
+    for (const anchor of ['### intake — ', '### extraction — ', '### approval — ']) expect(page).toContain(anchor);
   });
 
   it('serves the foundations chapter as the first page of the full handbook', async () => {
