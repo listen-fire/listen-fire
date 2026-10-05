@@ -2919,12 +2919,21 @@ export function bareName(expr: Expression): string | undefined {
   return undefined;
 }
 
-/** The subject a condition tests for presence: `x.`F`` or a bare `x`. */
+/** The subject a condition tests for presence: `x.`F`` or a bare `x`. Inside
+ *  a hop's bracket WHERE every name arrives as an `edge_property` — the bare
+ *  one names the landed record's field (the walker narrows it there, by the
+ *  ambient position), and `e.`F`` off the hop's alias is the same read. */
 function presenceSubject(expr: Expression): PresenceProof | undefined {
-  const field = directFieldRead(expr);
+  const field = directFieldRead(expr) ?? whereFieldRead(expr);
   if (field !== undefined) return field;
-  const name = bareName(expr);
+  const name = expr.type === 'edge_property' ? expr.propertyTypeId : bareName(expr);
   return name !== undefined ? { kind: 'binding', root: name } : undefined;
+}
+
+function whereFieldRead(expr: Expression): Extract<PresenceProof, { kind: 'field' }> | undefined {
+  if (expr.type !== 'traverse' || expr.aliasRoot === undefined || expr.steps.length > 0) return undefined;
+  if (expr.expression.type !== 'edge_property') return undefined;
+  return { kind: 'field', root: expr.aliasRoot, propertyId: expr.expression.propertyTypeId };
 }
 
 /**
@@ -3345,6 +3354,16 @@ export class ExpressionTyping {
    *  statement `if` for a value the author is building inline. */
   private readonly narrowedScalars = new Map<string, FieldType>();
 
+  /** The arrow plane's half of the same: a record whose field a guard proved
+   *  present (`r.size != null AND r.size > 3`), or a maybe-empty landing
+   *  proved there. From version 3. */
+  private readonly narrowedRoots = new Map<string, PositionTypeRef>();
+
+  /** What each sub-expression read as, the last time it was walked — so a
+   *  guard's proofs can ask an operand's type without walking it again (a
+   *  second walk would report its diagnostics and record its effects twice). */
+  private readonly readTypes = new WeakMap<Expression, FieldType | undefined>();
+
   constructor(
     private readonly options: {
       /** The compile context's language version — what this walker's
@@ -3454,6 +3473,8 @@ export class ExpressionTyping {
   }
 
   private rootType(name: string): PositionTypeRef | undefined {
+    const narrowed = this.narrowedRoots.get(name);
+    if (narrowed !== undefined) return narrowed;
     if (this.locals.has(name)) return this.locals.get(name);
     return this.options.resolveRoot(name);
   }
@@ -3568,21 +3589,119 @@ export class ExpressionTyping {
   }
 
   /** Walk `body` with `proofs`' subjects read as PRESENT — the narrowing an
-   *  `IF <guard> THEN <body>` earns for its own THEN side. Restores whatever
-   *  was in force, so sibling branches never see it. */
-  private withPresence<T>(proofs: PresenceProof[], body: () => T): T {
-    const restore = new Map(this.narrowedScalars);
+   *  `IF <guard> THEN <body>` earns for its own THEN side, and the right side
+   *  of `a AND b` from `a`. Restores whatever was in force, so sibling
+   *  branches never see it.
+   *
+   *  Before version 3 only a bare scalar name narrows. From it, every proof
+   *  the statement-level guard honours does here too: a field read off a
+   *  record (`r.size`), a maybe-empty landing, and — where a bare name is the
+   *  ambient record's field, as in a hop's WHERE — that field, by narrowing
+   *  the `position` `body` reads rootless names against. */
+  private withPresence<T>(
+    proofs: PresenceProof[],
+    position: PositionTypeRef | undefined,
+    body: (position: PositionTypeRef | undefined) => T,
+  ): T {
+    const restoreScalars = new Map(this.narrowedScalars);
+    const restoreRoots = new Map(this.narrowedRoots);
+    const everyPlane = since(this.options.languageVersion, 3);
+    let narrowedPosition = position;
     for (const proof of proofs) {
-      if (proof.kind !== 'binding') continue;
-      const current = this.scalarType(proof.root);
-      if (current !== undefined) this.narrowedScalars.set(proof.root, stripAbsent(current));
+      switch (proof.kind) {
+        case 'binding': {
+          // Before version 3 a bare name read against an ambient record (a
+          // WHERE's field) proved nothing here.
+          if (!everyPlane && narrowedPosition !== undefined) continue;
+          const field = everyPlane && narrowedPosition !== undefined
+            ? narrowPresent(narrowedPosition, proof.root)
+            : undefined;
+          if (field !== undefined) {
+            narrowedPosition = field;
+            continue;
+          }
+          const current = this.scalarType(proof.root);
+          if (current !== undefined) {
+            this.narrowedScalars.set(proof.root, stripAbsent(current));
+            continue;
+          }
+          if (!everyPlane) continue;
+          const node = this.rootType(proof.root);
+          const present = node !== undefined ? narrowPresentNode(node) : undefined;
+          if (present !== undefined) this.narrowedRoots.set(proof.root, present);
+          continue;
+        }
+        case 'field': {
+          if (!everyPlane) continue;
+          const dict = this.dictWithKeyPresent(proof.root, proof.propertyId);
+          if (dict !== undefined) {
+            this.narrowedScalars.set(proof.root, dict);
+            continue;
+          }
+          const record = this.walkStart(proof.root);
+          const present = record !== undefined ? narrowPresent(record, proof.propertyId) : undefined;
+          if (present !== undefined) this.narrowedRoots.set(proof.root, present);
+          continue;
+        }
+        // Blankness decides only where a value becomes an identity key, a
+        // statement-level fact; nothing read inside an expression consults it.
+        case 'nonBlank':
+          continue;
+        default:
+          return neverAsAny(proof);
+      }
     }
     try {
-      return body();
+      return body(narrowedPosition);
     } finally {
       this.narrowedScalars.clear();
-      for (const [name, type] of restore) this.narrowedScalars.set(name, type);
+      for (const [name, type] of restoreScalars) this.narrowedScalars.set(name, type);
+      this.narrowedRoots.clear();
+      for (const [name, type] of restoreRoots) this.narrowedRoots.set(name, type);
     }
+  }
+
+  /** A dict written with `key` as one of its keys, that key's slot proved
+   *  present — the dict plane's `narrowPresent`. Undefined for anything else,
+   *  including a dict whose keys are data: its reads stay `T | absent`. */
+  private dictWithKeyPresent(name: string, key: string): FieldType | undefined {
+    if (this.rootType(name) !== undefined) return undefined;
+    const held = this.scalarType(name);
+    if (held === undefined || isMaybeAbsent(held)) return undefined;
+    if (!isDictType(held) || held.shape === undefined || !Object.hasOwn(held.shape, key)) return undefined;
+    const slot = held.shape[key] ?? undefined;
+    if (slot === undefined || !isMaybeAbsent(slot)) return undefined;
+    return { ...held, shape: { ...held.shape, [key]: stripAbsent(slot) } };
+  }
+
+  /**
+   * `a AND b AND …` / `a OR b OR …`, each operand read where the run reaches
+   * it. Both operators short-circuit (the engine stops at the first operand
+   * that settles the answer), so from version 3 an operand is typed knowing
+   * every operand before it went the way that lets the run get there: TRUE
+   * past an `AND`, FALSE past an `OR` — TypeScript's `x != null && x > 3` and
+   * `x == null || x > 3`. The proofs are the guard clause's own
+   * (`presenceProofs` / `negativePresenceProofs`), so `NOT`, `EXISTS`,
+   * `ISNULL` and nesting compose exactly as they do on a statement's `if`.
+   */
+  private inferLogical(
+    expr: Extract<Expression, { type: 'logical' }>,
+    position: PositionTypeRef | undefined,
+  ): void {
+    if (before(this.options.languageVersion, 3)) {
+      expr.operands.forEach(o => this.inferAt(o, position));
+      return;
+    }
+    const proofsOf = expr.op === 'and' ? presenceProofs : negativePresenceProofs;
+    const walk = (index: number, at: PositionTypeRef | undefined): void => {
+      const operand = expr.operands[index];
+      if (operand === undefined) return;
+      this.inferAt(operand, at);
+      if (index === expr.operands.length - 1) return;
+      const proofs = proofsOf(operand, o => (this.readTypes.has(o) ? this.readTypes.get(o) : this.inferAt(o, at)));
+      this.withPresence(proofs, at, narrowed => walk(index + 1, narrowed));
+    };
+    walk(0, position);
   }
 
   /**
@@ -3630,7 +3749,9 @@ export class ExpressionTyping {
    *  (`AT`, a list literal's own members and spreads, an object literal's
    *  keys) ask `inferExactAt` instead. */
   private inferAt(expr: Expression, position: PositionTypeRef | undefined): FieldType | undefined {
-    return this.widen(this.inferExactAt(expr, position));
+    const type = this.widen(this.inferExactAt(expr, position));
+    this.readTypes.set(expr, type);
+    return type;
   }
 
   /** `position` is the ambient position for rootless reads (a traversal's destination). */
@@ -3715,7 +3836,7 @@ export class ExpressionTyping {
         return 'boolean';
       }
       case 'logical':
-        expr.operands.forEach(o => this.inferAt(o, position));
+        this.inferLogical(expr, position);
         return 'boolean';
       case 'not':
         this.inferAt(expr.expression, position);
@@ -3732,7 +3853,7 @@ export class ExpressionTyping {
         // The condition guards its own THEN — `IF EXISTS(x) THEN "…${x}…"` is
         // the value-level guard clause, and TS narrows inside a ternary too.
         const proofs = presenceProofs(expr.condition, o => this.inferAt(o, position));
-        const thenType = this.withPresence(proofs, () => this.inferAt(expr.then, position));
+        const thenType = this.withPresence(proofs, position, narrowed => this.inferAt(expr.then, narrowed));
         const elseType = this.inferAt(expr.else, position);
         if (thenType !== undefined && elseType !== undefined && fieldTypeEquals(thenType, elseType)) {
           return thenType;

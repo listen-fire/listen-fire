@@ -121,7 +121,7 @@ function \`File Intros\`(msg: <inbox-[:Email]->>) {
 
   MAP(found, (f) => {
     # IF … THEN … ELSE … END replaces ? :, and logic is AND, OR, NOT
-    stage = IF COALESCE(f.Headcount, 0) > 50 AND f.Website != null THEN "scale-up" ELSE "early" END
+    stage = IF f.Headcount != null AND f.Headcount > 50 THEN "scale-up" ELSE "early" END
     write crm-[:Companies]-> {
       unique by (Name)
       Name: f.Name

@@ -87,3 +87,32 @@ describe.each(ABSENT)('an absent field in an in-app WHERE (%s)', (_label, absent
     expect(evaluatePredicate(parseMovementExpression(raw), scope)).toBe(expected);
   });
 });
+
+// From version 3 the checker types the right side of `a AND b` knowing `a`
+// held, and of `a OR b` knowing `a` failed. That is sound only because the
+// right side never runs otherwise: here it is an `AI()` with no client wired,
+// which fails the evaluation if it is ever reached.
+describe.each(ABSENT)('AND / OR short-circuit past a guard on an absent value (%s)', (_label, absent) => {
+  async function evaluateV3(raw: string, bindings: Record<string, unknown>): Promise<unknown> {
+    const env = new Environment();
+    for (const [name, value] of Object.entries(bindings)) env.declare(name, { kind: 'value', value });
+    return (await evalMovementExpr(parseMovementExpression(raw), { env, languageVersion: 3 })).value;
+  }
+
+  const UNREACHABLE = 'AI("never asked") == "yes"';
+  const guarded: ReadonlyArray<[string, boolean]> = [
+    [`x != null AND ${UNREACHABLE}`, false],
+    [`EXISTS(x) AND ${UNREACHABLE}`, false],
+    [`x == null OR ${UNREACHABLE}`, true],
+    [`ISNULL(x) OR ${UNREACHABLE}`, true],
+    [`NOT (x == null OR ${UNREACHABLE})`, false],
+  ];
+
+  it.each(guarded)('%s → %s, the right side never evaluated', async (raw, expected) => {
+    await expect(evaluateV3(raw, { x: absent })).resolves.toBe(expected);
+  });
+
+  it('…and the right side does fail the evaluation when the guard lets the run reach it', async () => {
+    await expect(evaluateV3(`x != null AND ${UNREACHABLE}`, { x: 4 })).rejects.toThrow('AI()');
+  });
+});
