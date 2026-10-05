@@ -5555,7 +5555,7 @@ class Checker {
    * landed node(s) — `r.answer` reads a field, `r-[x:E]->` traverses — and an
    * empty resolution binds an empty match (downstream runs zero times; the
    * `T | absent` typing that difference wants is chunk C). `await sleep(…)`
-   * binds nothing (the branch waits, then continues).
+   * binds `true` once woken (typed boolean since language version 3).
    */
   private checkAwait(
     awaitExpr: AwaitExpression,
@@ -5585,7 +5585,9 @@ class Checker {
           source.duration.span,
         );
       }
-      return {};
+      // A woken sleep binds `true` (the engine's contract), so v3 types it; v1
+      // and v2 left it untyped and a comparison against it is unchanged there.
+      return since(this.languageVersion, 3) ? { fieldType: 'boolean' } : {};
     }
     if (source.kind === 'until') {
       record({ kind: 'until', ...(source.every !== undefined ? { every: source.every.raw } : {}) });

@@ -109,22 +109,24 @@ function \`File Intros\`(msg: <inbox-[:Email]->>) {
   content   = [msg.Body, msg.Subject]
   companies = extract(content, Company, { tier: 'careful' })
 
-  # no for or while: MAP calls the function per item, collecting the results
+  # no for or while: MAP calls the function per item
   found = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
     # what may be missing is absent: no undefined, ?? or ?.
     page = IF c.Website == null THEN "" ELSE COALESCE(fetch_url(url: c.Website), "") END
-    # shared content first: repeat readings of it cost less
     profile = extractOne([...content, c.Name, page], Profile)
-    # a later field wins; profile may be absent, so its fields may be too
+    # a later field wins; an absent profile has absent fields
     return { ...c, ...profile }
   })
 
   MAP(found, (f) => {
-    # IF … THEN … ELSE … END replaces ? :, and logic is AND, OR, NOT
+    # IF … THEN … ELSE … END replaces ? :
     stage = IF f.Headcount != null AND f.Headcount > 50 THEN "scale-up" ELSE "early" END
     write crm-[:Companies]-> {
-      unique by (Name)
+      # a strong key first, then a fuzzy name (lines are OR); a line with no key is skipped
+      unique by (Domains)
+      unique by (FUZZY Name)
       Name: f.Name
+      Domains ?: f.Website
       Description: "\${stage}: \${COALESCE(f.Summary, 'no summary')}"
       # Field ?: value writes the field only when the value is there
       \`Team Size\` ?: f.Headcount

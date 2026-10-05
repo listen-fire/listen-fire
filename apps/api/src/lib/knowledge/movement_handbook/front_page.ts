@@ -59,7 +59,6 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
     anchor: 'operators',
     title: 'Operators',
     text: '`==` and `!=` compare (no `===`). Logic is `AND`, `OR`, `NOT` (no `&&`, `||`). `IF c THEN a ELSE b END` replaces `? :`; statements branch with `if c { … } else { … }`.',
-    example: { body: 'label = IF m.Subject != "" AND NOT (m.From == "") THEN "ok" ELSE "skip" END' },
   },
   {
     anchor: 'strings-and-names',
@@ -82,7 +81,6 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
     anchor: 'calls',
     title: 'Calls',
     text: 'Arguments go data first, then one settings record, then a function. Write your own functions the same way.',
-    example: { body: 'tidied = MAP(["a ", " b"], { concurrency: 4 }, (s) => TRIM(s))' },
   },
   {
     anchor: 'no-loops',
@@ -136,9 +134,9 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'identity',
     title: 'A write creates or updates, by identity',
-    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Write related records off the parent\'s handle.',
+    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Match a strong key first, then a fuzzy name as a second `unique by` line (lines are OR). A line whose key is absent is skipped: never skip a record for a missing key. Write related records off the parent\'s handle.',
     example: {
-      body: 'co = write crm-[:Companies]-> { unique by (Name), Name: m.Subject }\nwrite co-[:Team]-> { unique by (Email), Email: m.From, Name: m.From }',
+      body: 'co = write crm-[:Companies]-> { unique by (Name), Name: m.Subject }\nwrite co-[:Team]-> {\n  unique by (Email)\n  unique by (FUZZY Name)\n  Email: m.From\n  Name: m.From\n}',
     },
   },
   {
@@ -181,7 +179,7 @@ function renderConcept(entry: FrontEntry): string {
 export function renderFrontPage(): string {
   return [
     '## Writing automations: it is TypeScript, except…',
-    'An automation is a small program run when an event arrives. Write it as TypeScript, except where this page says otherwise.',
+    'An automation is a program run when an event arrives. Write it as TypeScript, except where this page says otherwise.',
     '### ts-except',
     TS_EXCEPT.map(renderBullet).join('\n'),
     ...CONCEPTS.map(renderConcept),

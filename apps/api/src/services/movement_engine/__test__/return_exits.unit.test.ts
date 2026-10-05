@@ -298,7 +298,7 @@ describe('a woken sleep binds true', () => {
       [
         'movement intake(m: <inbox-[:message]->>) {',
         '  x = await sleep(1h)',
-        '  if x { write crm-[:companies]-> { name: "x is true" } }',
+        '  if x == true { write crm-[:companies]-> { name: "x is true" } }',
         '}',
       ].join('\n'),
     );
@@ -339,7 +339,7 @@ describe('a woken sleep binds true', () => {
         '  }',
         '  d-[e:entries]-> {',
         '    x = await sleep(1h)',
-        '    if x { write crm-[:companies]-> { name: e.`name` } }',
+        '    if x == true { write crm-[:companies]-> { name: e.`name` } }',
         '  }',
         '}',
       ].join('\n'),
