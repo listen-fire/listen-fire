@@ -136,7 +136,6 @@ msg-[a:Attachments]-> { … }                       # block; a names this item's
 msg-[f:Attachments WHERE type == "application/pdf"]-> { … }   # hop filter
 msg-[:Sender]->.Name                              # terminal read off a hop
 alias-[:edge]->-[:edge]->                          # chained hops
-lazy msg-[a:Attachments]->                        # defer the walk to the first read (re-walks each read)
 crm-[c:Companies WHERE Stage == "Open" ORDER BY \`Created At\` DESC LIMIT 10]-> { … }   # query
 \`\`\`
 

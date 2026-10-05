@@ -2678,10 +2678,11 @@ async function readLandings(
     throw unsupported(`this read shape on ${options.what} ('${options.name}')`);
   }
   if (field === POSITION_SENTINEL) {
+    // The landed RECORDS, in the currency the adapter walk hands back — a
+    // source record stays the binding it is, read seam and all, so `MAP` over
+    // a local edge holding references reads them as it reads any walk's.
     return {
-      value: landed.map((b) =>
-        b.kind === 'value' ? b.value : b.kind === 'sourcePosition' ? b.position : b,
-      ),
+      value: landed.map((b) => (b.kind === 'value' ? b.value : b)),
       provenance: { origins: landed.flatMap(bindingEntityOrigins) },
     };
   }

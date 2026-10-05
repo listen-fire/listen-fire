@@ -88,19 +88,6 @@ Expect the filter surface to differ per source. A CRM might filter companies by 
 
 What you can write against a source is the overlap of the language and that source's own abilities; you learn where that overlap ends while authoring, not in production.
 
-### deferring-a-walk
-
-Put \`lazy\` in front of a traversal and the walk waits until something reads it:
-
-\`\`\`
-recent = lazy crm-[c:Companies ORDER BY \`Created At\` DESC LIMIT 5]->
-\`\`\`
-
-- Nothing about the result changes — same records, same filters, same types. What changes is *when* the source is read, and whether it is read at all: an edge nobody looks at is never walked.
-- Every read walks again, so what comes back is the source as it is now rather than as it was at the line where you wrote it. Two reads either side of a write see the write.
-- It earns its keep where a branch may never read it: a large related set costs nothing when the branch that reads it is skipped.
-- \`lazy\` and \`await\` are opposites in the same slot: \`await FIRST(…)\` waits for an edge to come into existence, \`lazy\` waits to look.
-
 ### what-a-block-hands-back
 
 Hand a value out of a block with \`return\`, and bind the block to collect what its iterations returned:
@@ -188,7 +175,7 @@ listen to runs {} fire \`By Company\`
 `,
     },
     {
-      construct: 'a lazy walk bound to a name, read only in the branch that needs it',
+      construct: 'a walk wrapped in a closure, called only in the branch that needs it',
       status: 'runs',
       probe: `
 import { manual, attio } from adapters
@@ -198,12 +185,12 @@ runs = manual()
 crm  = attio(credentials: acme)
 
 function \`Recent\`(go: <runs-[:Invocation]->>) {
-  recent = lazy crm-[c:Companies WHERE \`Categories\` == "Customer" ORDER BY \`Created At\` DESC LIMIT 5]->
+  customers = () => crm-[c:Companies WHERE \`Categories\` == "Customer" ORDER BY \`Created At\` DESC LIMIT 5]->
   if go.\`Text\` == "report" {
     write crm-[:Companies]-> {
       unique by (\`Name\`)
       Name:        "Report"
-      Description: "\${COUNT(recent)} recent customers"
+      Description: "\${COUNT(customers())} recent customers"
     }
   }
 }

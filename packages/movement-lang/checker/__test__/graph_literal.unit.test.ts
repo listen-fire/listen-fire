@@ -6,7 +6,6 @@
 // is then OF the shape. Without a shape its own structure is its type.
 
 import { parseProgram } from '../../parser/parse';
-import type { NodeLiteral, Statement } from '../../parser/ast';
 import { checkProgram, Diagnostic, DiagnosticCodes as C } from '../check';
 import { InstanceSchema, mockCatalog } from '../catalog';
 
@@ -192,41 +191,20 @@ describe('graph<Shape> {} — the typed empty graph', () => {
   });
 });
 
-describe('a bare walk copies the records', () => {
-  function copyPlan(body: string): NodeLiteral['entries'] {
-    const program = parseProgram(`${PRELUDE}\nmovement under_test(e: <inbox-[:message]->>) {\n${body}\n}`);
-    expect(checkProgram(program, catalog).filter((d) => (d.severity ?? 'error') === 'error')).toEqual([]);
-    const movement = program.statements.find(
-      (s): s is Extract<Statement, { kind: 'movement' }> => s.kind === 'movement' && s.name === 'under_test',
-    );
-    const [assign] = movement?.body ?? [];
-    if (assign?.kind !== 'assign' || assign.value.kind !== 'node') throw new Error('expected a literal');
-    return assign.value.node.entries;
-  }
-
-  it('with a shape, the shape decides the fields and follows the edge of the same name', () => {
-    const [, attachments] = copyPlan('  g = graph<Archived> { subject: e.Subject, Attachments: e-[:Attachments]-> }');
-    expect(attachments.kind === 'traversal' && attachments.copy).toEqual({
-      fields: ['Name', 'File'],
-      edges: { Versions: { fields: ['Label'], edges: {} } },
-    });
+// A bare walk holds REFERENCES (graph_literal_references.unit.test.ts covers
+// them in full); these pin how it sits beside the shape and the field body.
+describe('a bare walk holds references', () => {
+  it('with a shape, the records fit the child node structurally', () => {
+    expect(codes('  g = graph<Archived> { subject: e.Subject, Attachments: e-[:Attachments]-> }')).toEqual([]);
   });
 
-  it('without a shape, the records\' own fields are copied and no edge is followed', () => {
-    const [files] = copyPlan('  g = graph { files: e-[:Attachments]-> }');
-    expect(files.kind === 'traversal' && files.copy).toEqual({
-      fields: ['Name', 'Type', 'File', 'Pages'],
-      edges: {},
-    });
-  });
-
-  it('the copy reads by the source\'s names', () => {
+  it('without a shape, the edge reads by the source\'s names', () => {
     expect(codes('  g = graph { files: e-[:Attachments]-> }\n  g-[f:files]-> {\n    n = f.Type\n  }')).toEqual([]);
   });
 
-  it('refuses a copy whose records lack a field the shape requires', () => {
+  it('refuses a reference whose records lack a field the shape requires', () => {
     expect(codes('  g = graph<Message> { text: e.Body, attachment: e-[:Attachments]-> }')).toEqual([
-      C.GRAPH_COPY_SHAPE,
+      C.GRAPH_REFERENCE_SHAPE,
     ]);
   });
 });

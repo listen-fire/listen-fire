@@ -1,10 +1,11 @@
 // Engine coverage for graph literals — `graph<Shape> { … }` / `graph { … }`.
 //
 // A graph literal builds a LOCAL GRAPH: the same run-local node a node literal
-// makes, so paths, WHERE, writes and links on it are the local graph's own. A
-// walk inside it is a SNAPSHOT — a walk with a field body builds one child per
-// record, a bare walk copies each record — and a file is copied as the lazy
-// handle it is. Mirrors the harness of node_synthesis.unit.test.ts.
+// makes, so paths, WHERE, writes and links on it are the local graph's own.
+// Its entries follow TypeScript's object semantics: a bare walk or a record
+// holds REFERENCES (reads live, writes reach the real record), while a walk
+// with a field body or a record spread is a SNAPSHOT — and a file is copied as
+// the handle it is. Mirrors the harness of node_synthesis.unit.test.ts.
 
 // ── Jest module workarounds (mirrors run.unit.test.ts) ──────────────────────
 
@@ -97,7 +98,7 @@ import {
 import type { FileRef } from '../../translation_graph/adapter';
 import { containerAssociation } from '../../translation_graph/adapter';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
-import { makeUnstablePosition, positionData } from '../../translation_graph/types';
+import { makeStablePosition, makeUnstablePosition, positionData } from '../../translation_graph/types';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000020' as TeamId;
@@ -218,7 +219,8 @@ function webhookEvent(adapterType: string, payload: Record<string, unknown>): Tr
 // ── Catalog / fixtures ───────────────────────────────────────────────────────
 
 // The inbox is TYPED here (the thin fixture leaves email untyped), so a graph
-// literal's copy has a field list to copy and its shape check has teeth.
+// literal's shape check has teeth — and its attachments are updatable in
+// place, so a write through a reference has a real record to reach.
 const catalog = staticCatalogFromManifests({
   credentials: {
     dealflow_inbox: { adapters: ['email'] },
@@ -239,7 +241,13 @@ const catalog = staticCatalogFromManifests({
         version: { properties: { label: 'text' }, edges: {} },
       },
       collections: { message: { target: 'message' } },
-      writableRoots: {},
+      supportsInPlaceUpdate: true,
+      writableRoots: {
+        attachment: {
+          fields: { filename: 'text', contentType: 'text' },
+          resultShape: { externalId: 'text', filename: 'text', contentType: 'text' },
+        },
+      },
     },
   },
 });
@@ -440,21 +448,94 @@ describe('graph<Shape> — the worked example', () => {
   });
 });
 
-describe('a bare walk copies the records — a snapshot, never a reference', () => {
-  const ARCHIVE = [
-    'node Archive {',
-    '  subject: <text>',
-    '  node files {',
-    '    filename: <text>',
-    '    data: <file>',
-    '  }',
-    '}',
-    '',
-  ].join('\n');
+// ── References: TypeScript's object semantics ──────────────────────────────
+//
+// A bare walk or a record written as an entry's value holds the RECORDS
+// THEMSELVES, as `{ items: obj }` holds `obj`: reads through the graph are
+// live, and a write through it reaches the real record. A walk with a field
+// body and a record spread copy, as `{ ...obj }` does.
 
-  it('copies the shape\'s fields once; later reads never reach the source again', async () => {
-    const email = makeFakeAdapter('email', { related: { files: [attachment('x.pdf', 'application/pdf')] } });
-    const attio = makeFakeAdapter('attio');
+/** A source whose attachments are real records — stable ids, fields read live
+ *  from a store the test can change under the run, and updatable in place. */
+function makeLiveInbox(files: Record<string, Record<string, unknown>>): {
+  adapter: Adapter;
+  store: Record<string, Record<string, unknown>>;
+  updates: RecordedWrite[];
+  creates: RecordedWrite[];
+} {
+  const store = files;
+  const updates: RecordedWrite[] = [];
+  const creates: RecordedWrite[] = [];
+  const adapter: Adapter = {
+    adapterType: 'email',
+    supportedTriggers: [] as never[],
+    runtimeCapabilities: () => permissiveCaps(),
+    async listEntryPoints() {
+      return [];
+    },
+    async describe() {
+      return null;
+    },
+    async resolveEntity() {
+      return { candidates: [] };
+    },
+    async getFieldValue({ position, fieldId }) {
+      if (position.identity.kind === 'stable') return store[position.identity.recordId]?.[fieldId];
+      return (positionData(position) as Record<string, unknown> | undefined)?.[fieldId];
+    },
+    async getRelated({ fieldId }) {
+      if (fieldId !== 'files') return [];
+      return Object.keys(store).map((recordId) => ({
+        position: makeStablePosition({ adapterType: 'email', recordType: 'attachment', recordId }),
+      }));
+    },
+    async readRecord({ externalId }) {
+      return store[externalId] ?? null;
+    },
+    async createRecord(input) {
+      creates.push({ recordType: input.recordType, fields: input.fields });
+      return { adapterType: 'email', externalId: `new-${creates.length}`, data: {} };
+    },
+    async updateRecord(input) {
+      updates.push({ recordType: input.recordType, externalId: input.externalId, fields: input.fields });
+      Object.assign(store[input.externalId] ?? {}, input.fields);
+      return { adapterType: 'email', externalId: input.externalId, data: {}, association: containerAssociation(input) };
+    },
+    async deleteRecord() {
+      return {};
+    },
+  };
+  return { adapter, store, updates, creates };
+}
+
+/** An attio fake whose every create first runs `before` — how "the source
+ *  changed after the graph was built" is spelled inside one run. */
+function attioThatTouches(before: () => void) {
+  const attio = makeFakeAdapter('attio');
+  const create = attio.adapter.createRecord.bind(attio.adapter);
+  attio.adapter.createRecord = async (input) => {
+    before();
+    return create(input);
+  };
+  return attio;
+}
+
+const ARCHIVE = [
+  'node Archive {',
+  '  subject: <text>',
+  '  node files {',
+  '    filename: <text>',
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+describe('a bare walk holds references — the records themselves', () => {
+  it('reads are live: a change to the source after the graph was built shows through it', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
+    const attio = attioThatTouches(() => {
+      inbox.store.a1.filename = 'renamed.pdf';
+    });
 
     await run(
       ARCHIVE +
@@ -462,25 +543,21 @@ describe('a bare walk copies the records — a snapshot, never a reference', () 
           'movement intake(msg: <inbox-[:message]->>) {',
           '  crm = attio(credentials: acme_main)',
           '  g = graph<Archive> { subject: msg.subject, files: msg-[:files]-> }',
-          '  g-[f:files]-> {',
-          '    write crm-[:companies]-> { name: f.filename }',
-          '  }',
+          '  write crm-[:companies]-> { name: "between" }',
           '  g-[f:files]-> {',
           '    write crm-[:companies]-> { name: f.filename }',
           '  }',
           '}',
         ].join('\n'),
       { subject: 's' },
-      { email: email.adapter, attio: attio.adapter },
+      { email: inbox.adapter, attio: attio.adapter },
     );
 
-    expect(attio.creates.map((c) => c.fields.name)).toEqual(['x.pdf', 'x.pdf']);
-    // ONE hop to the source: the copy is read from the local graph after that.
-    expect(email.relatedCalls.count).toBe(1);
+    expect(attio.creates.map((c) => c.fields.name)).toEqual(['between', 'renamed.pdf']);
   });
 
-  it('a write into the local graph stays in the run — the source sees nothing', async () => {
-    const email = makeFakeAdapter('email', { related: { files: [attachment('x.pdf', 'application/pdf')] } });
+  it('a write to a record reached through the graph updates the real record', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
     const attio = makeFakeAdapter('attio');
 
     const result = await run(
@@ -489,23 +566,255 @@ describe('a bare walk copies the records — a snapshot, never a reference', () 
           'movement intake(msg: <inbox-[:message]->>) {',
           '  crm = attio(credentials: acme_main)',
           '  g = graph<Archive> { subject: msg.subject, files: msg-[:files]-> }',
-          '  write g-[:files]-> { unique by (filename), filename: "y.pdf", data: msg-[:files]->.data }',
+          '  g-[f:files]-> {',
+          '    write f { filename: "renamed.pdf" }',
+          '  }',
           '  g-[f:files]-> {',
           '    write crm-[:companies]-> { name: f.filename }',
           '  }',
           '}',
         ].join('\n'),
       { subject: 's' },
-      { email: email.adapter, attio: attio.adapter },
+      { email: inbox.adapter, attio: attio.adapter },
     );
 
-    expect(email.creates).toEqual([]);
-    expect(email.updates).toEqual([]);
-    expect(attio.creates.map((c) => c.fields.name).sort()).toEqual(['x.pdf', 'y.pdf']);
+    expect(inbox.updates).toEqual([
+      { recordType: 'attachment', externalId: 'a1', fields: { filename: 'renamed.pdf' } },
+    ]);
+    expect(attio.creates.map((c) => c.fields.name)).toEqual(['renamed.pdf']);
+    expect(result.writes[0]).toMatchObject({ adapterType: 'email', externalId: 'a1', committed: true });
+  });
+
+  it('a write into the edge that matches a referenced record updates it; a new one stays local', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
+    const attio = makeFakeAdapter('attio');
+
+    const result = await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  g = graph { files: msg-[:files]-> }',
+        '  write g-[:files]-> { unique by (filename), filename: "x.pdf", contentType: "application/x-pdf" }',
+        '  write g-[:files]-> { unique by (filename), filename: "new.pdf", contentType: "text/plain" }',
+        '  g-[f:files]-> {',
+        '    write crm-[:companies]-> { name: f.filename, summary: f.contentType }',
+        '  }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter, attio: attio.adapter },
+    );
+
+    // The match was the real record: only the changed field went to its system.
+    expect(inbox.updates).toEqual([
+      { recordType: 'attachment', externalId: 'a1', fields: { contentType: 'application/x-pdf' } },
+    ]);
+    // The new child is the graph's own: nothing was created in the source.
+    expect(inbox.creates).toEqual([]);
+    expect(attio.creates.map((c) => c.fields)).toEqual([
+      { name: 'x.pdf', summary: 'application/x-pdf' },
+      { name: 'new.pdf', summary: 'text/plain' },
+    ]);
+    expect(result.writes.slice(0, 2)).toMatchObject([
+      { adapterType: 'email', recordType: 'attachment', externalId: 'a1', committed: true },
+      { adapterType: 'local', committed: false, local: { edge: 'files' } },
+    ]);
+  });
+
+  it('WHERE and MAP over the reference edge read the real records', async () => {
+    const inbox = makeLiveInbox({
+      a1: { filename: 'x.pdf', contentType: 'application/pdf' },
+      a2: { filename: 'y.png', contentType: 'image/png' },
+    });
+    const attio = makeFakeAdapter('attio');
+
+    await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  g = graph { files: msg-[:files]-> }',
+        '  names = MAP(g-[f:files]->, (f) => f.filename)',
+        '  pdf = ONLY(g-[f:files WHERE f.contentType = "application/pdf"]->.filename)',
+        '  write crm-[:companies]-> { name: COALESCE(pdf, "none"), summary: JOIN(names, ", ") }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((c) => c.fields)).toEqual([{ name: 'x.pdf', summary: 'x.pdf, y.png' }]);
+  });
+
+  it('a record written as an entry value is held the same way', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
+    const attio = attioThatTouches(() => {
+      inbox.store.a1.filename = 'renamed.pdf';
+    });
+
+    await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  g = graph { owner: ONLY(msg-[:files]->) }',
+        '  write crm-[:companies]-> { name: "between" }',
+        '  g-[o:owner]-> {',
+        '    write crm-[:companies]-> { name: o.filename }',
+        '    write o { contentType: "seen" }',
+        '  }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((c) => c.fields.name)).toEqual(['between', 'renamed.pdf']);
+    expect(inbox.updates).toEqual([{ recordType: 'attachment', externalId: 'a1', fields: { contentType: 'seen' } }]);
   });
 });
 
-describe('copy depth, the bare copy without a shape, and the typed empty graph', () => {
+describe('a field body and a record spread copy — snapshots', () => {
+  it('a later change to the source does not show through either copy', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
+    const attio = attioThatTouches(() => {
+      inbox.store.a1.filename = 'renamed.pdf';
+    });
+
+    await run(
+      [
+        'node Snap {',
+        '  filename: <text | null>',
+        '}',
+        '',
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  first = ONLY(msg-[:files]->)',
+        '  bodied = graph { files: msg-[a:files]-> { filename: a.filename } }',
+        '  spread = graph<Snap> { ...first }',
+        '  write crm-[:companies]-> { name: "between" }',
+        '  bodied-[f:files]-> {',
+        '    write crm-[:companies]-> { name: f.filename }',
+        '  }',
+        '  write crm-[:companies]-> { name: COALESCE(spread.filename, "none") }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((c) => c.fields.name)).toEqual(['between', 'x.pdf', 'x.pdf']);
+  });
+});
+
+describe('the collector — records the run wrote, grouped under a local record', () => {
+  it('a MAP of writes held under a named edge: filtered, written through, linked onto and reported', async () => {
+    const email = makeFakeAdapter('email', {
+      related: { files: [attachment('x.pdf', 'application/pdf'), attachment('y.png', 'image/png')] },
+    });
+    const attio = makeFakeAdapter('attio');
+
+    await run(
+      [
+        'node Batch {',
+        '  node companies {',
+        '    name: <text>',
+        '  }',
+        '}',
+        '',
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  written = MAP(msg-[a:files]->, (a) => {',
+        '    return write crm-[:companies]-> { name: a.filename }',
+        '  })',
+        '  batch = graph<Batch> { companies: written }',
+        '  late = write crm-[:companies]-> { name: "late" }',
+        '  link batch -[:companies]-> late',
+        '  batch-[c:companies WHERE c.name = "x.pdf"]-> {',
+        '    write c-[:investments]-> { amount: 1 }',
+        '  }',
+        '  names = MAP(batch-[c:companies]->, (c) => c.name)',
+        '  write crm-[:companies]-> { name: "report", summary: JOIN(names, ", ") }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: email.adapter, attio: attio.adapter },
+    );
+
+    expect(attio.creates.map((c) => [c.recordType, c.fields])).toEqual([
+      ['company', { name: 'x.pdf' }],
+      ['company', { name: 'y.png' }],
+      ['company', { name: 'late' }],
+      // Written THROUGH the grouped reference: a child of the real record.
+      ['investment', { amount: 1 }],
+      ['company', { name: 'report', summary: 'x.pdf, y.png, late' }],
+    ]);
+  });
+});
+
+describe('a park carries references as handles, and the resumed run reads them live', () => {
+  const SOURCE =
+    ARCHIVE +
+    [
+      'movement intake(msg: <inbox-[:message]->>) {',
+      '  crm = attio(credentials: acme_main)',
+      '  g = graph<Archive> { subject: msg.subject, files: msg-[:files]-> }',
+      '  await sleep(30d)',
+      '  g-[f:files]-> {',
+      '    write crm-[:companies]-> { name: f.filename }',
+      '  }',
+      '}',
+    ].join('\n');
+
+  it('parks the record handle, not a copy of its fields', async () => {
+    const { sink, timerParks } = makeFakeParkSink();
+    const inbox0 = makeLiveInbox({ a1: { filename: 'x.pdf' } });
+    const parked = await run(SOURCE, { subject: 's' }, {
+      email: inbox0.adapter,
+      attio: makeFakeAdapter('attio').adapter,
+      parkSink: sink,
+    });
+    expect(parked.parked).toBe(true);
+
+    const state = JSON.parse(JSON.stringify(timerParks[0].state)) as ParkedScopeState;
+    const g = state.scopeChain.flatMap((scope) => Object.entries(scope.bindings)).find(([name]) => name === 'g')?.[1];
+    if (g?.kind !== 'nodePosition') throw new Error('expected the graph to survive the park');
+    const files = g.edges.files;
+    if (files.kind !== 'landed') throw new Error('expected a landed edge');
+    expect(files.landings).toHaveLength(1);
+    const [held] = files.landings;
+    if (held.kind !== 'sourcePosition') throw new Error(`expected a record handle, got ${held.kind}`);
+    expect(held.position.identity).toMatchObject({ kind: 'stable', recordId: 'a1' });
+
+    // Resume against a source that has moved on: the handle reads it NOW.
+    const inbox1 = makeLiveInbox({ a1: { filename: 'renamed.pdf' } });
+    const attio1 = makeFakeAdapter('attio');
+    const result = await resume(SOURCE, { subject: 's' }, { email: inbox1.adapter, attio: attio1.adapter }, state);
+    expect(result.parked).toBeUndefined();
+    expect(attio1.creates.map((c) => c.fields.name)).toEqual(['renamed.pdf']);
+  });
+});
+
+describe('TEXT.SERIALISE through a reference', () => {
+  it('is refused before the run: the graph holds records read live from a system', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf' } });
+    const attio = makeFakeAdapter('attio');
+    await expect(
+      run(
+        [
+          'movement intake(msg: <inbox-[:message]->>) {',
+          '  crm = attio(credentials: acme_main)',
+          '  g = graph { files: msg-[:files]-> }',
+          "  write crm-[:companies]-> { name: TEXT.SERIALISE(g, 'JSON') }",
+          '}',
+        ].join('\n'),
+        {},
+        { email: inbox.adapter, attio: attio.adapter },
+      ),
+    ).rejects.toThrow(/MOV_STDLIB_ARG_NOT_RECORD|read live from a system/);
+    expect(attio.creates).toEqual([]);
+  });
+});
+
+describe('walking on past a reference, the bare walk without a shape, and the typed empty graph', () => {
   it('a nested node in the shape is followed through the source\'s edge of the same name', async () => {
     const email = makeFakeAdapter('email', {
       related: { files: [attachment('x.pdf', 'application/pdf')], versions: [{ label: 'v1' }, { label: 'v2' }] },
@@ -540,11 +849,11 @@ describe('copy depth, the bare copy without a shape, and the typed empty graph',
       { name: 'x.pdf', summary: 'v1' },
       { name: 'x.pdf', summary: 'v2' },
     ]);
-    // Two hops to the source — files, then versions — both at the literal.
+    // Two hops to the source — files at the literal, versions past the reference.
     expect(email.relatedCalls.count).toBe(2);
   });
 
-  it('without a shape, a bare walk copies the records\' own fields', async () => {
+  it('without a shape, a bare walk holds the records, read by their own names', async () => {
     const deck = attachment('deck.pdf', 'application/pdf');
     const email = makeFakeAdapter('email', { related: { files: [deck] } });
     const dropbox = makeFakeAdapter('dropbox');

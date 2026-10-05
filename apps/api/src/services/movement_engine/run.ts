@@ -9149,7 +9149,25 @@ class Interpreter {
         `${at}: '${pathRootName(target.path)}' has no appendable edge '${edgeName}' — the checker should have caught this`,
       );
     }
-    const store = localEdgeAdapter({ edge, edgeName });
+    // A landing that is a reference is the real record: matching it compares
+    // its live values, and merging into it updates it through its own system.
+    const updatedReferences = new Map<Binding, { target: ResolvedWriteTarget; externalId: string }>();
+    const store = localEdgeAdapter({
+      edge,
+      edgeName,
+      references: {
+        read: (landing, fieldIds) => this.readReferenceFields(landing, fieldIds, env),
+        update: async (landing, update) => {
+          const real = await this.resolvePositionWriteTarget(`${edgeName} landing`, landing, env);
+          updatedReferences.set(landing, real);
+          return real.target.adapter.updateRecord({
+            ...update,
+            recordType: real.target.recordType,
+            externalId: real.externalId,
+          });
+        },
+      },
+    });
     // The edge name IS the written type here: the landing type is a
     // checker-side fact and the run holds values whatever typed them, so the
     // edge is the only name the interpreter has for what it wrote.
@@ -9182,6 +9200,29 @@ class Interpreter {
         `${at}: the write produced no landing on '${edgeName}'`,
       );
     }
+    if (landing.kind !== 'nodePosition') {
+      // It matched a REFERENCE, so the write was to the real record: logged as
+      // one, against the system it reached.
+      const real =
+        updatedReferences.get(landing)
+        ?? (await this.resolvePositionWriteTarget(`${edgeName} landing`, landing, env));
+      const { externalId: _local, local: _edge, ...row } = record;
+      this.recordWrite({
+        write: {
+          ...row,
+          adapterType: real.target.adapter.adapterType,
+          recordType: real.target.recordType,
+          externalId: real.externalId,
+          committed: this.committedThrough(real.target.adapter),
+        },
+        bindingName: undefined,
+        env,
+        target: real.target,
+        fieldProvenance,
+      });
+      if (bindingName !== undefined) env.declare(bindingName, landing);
+      return landing;
+    }
     // The trail of each value that was actually SENT — the fill / append / no-op
     // gates already decided which those are. A field the write suppressed keeps
     // the trail the earlier landing had.
@@ -9200,6 +9241,22 @@ class Interpreter {
     });
     if (bindingName !== undefined) env.declare(bindingName, landing);
     return landing;
+  }
+
+  /** A referenced record's current values for these fields, read live — the
+   *  same read a field expression off it makes. An absent field is left out. */
+  private async readReferenceFields(
+    landing: Binding,
+    fieldIds: readonly string[],
+    env: Environment,
+  ): Promise<Record<string, unknown>> {
+    const ctx = this.exprContext(env);
+    const values: Record<string, unknown> = {};
+    for (const field of fieldIds) {
+      const { value } = await readLandingField(landing, field, field, ctx);
+      if (value !== undefined && value !== null) values[field] = value;
+    }
+    return values;
   }
 
   /** The firing-log half of `recordWrite`, for a write with no graph behind it
@@ -9362,11 +9419,13 @@ class Interpreter {
    * `nodePosition` a node literal makes, so a path, a WHERE, a write, a link or
    * a delete reads and changes it the way it does any run-local node.
    *
-   * What differs from a node literal is that a walk is a SNAPSHOT. A walk with
-   * a field body builds one child per record; a bare walk copies each record
-   * by the plan the checker resolved. Either way the child is this graph's
-   * own — no landing is a system's record, so nothing done to the graph can
-   * reach the source. A file field is copied as the handle it is: nothing
+   * Entries follow TypeScript's object semantics. A bare walk, or a record
+   * written as an entry's value, holds REFERENCES — the records themselves,
+   * as a node literal's pass-through edge does — so a read through the graph
+   * is live and a write, link or delete through it acts on the real record.
+   * A walk with a field body builds one child per record and a record spread
+   * copies one by the plan the checker resolved: those are snapshots, the
+   * graph's own. A file field is copied as the handle it is: nothing
    * downloads.
    *
    * With a shape, each child edge the shape declares exists (empty when the
@@ -9439,6 +9498,10 @@ class Interpreter {
       const child = shape?.children.find((c) => c.name === entry.name);
       switch (entry.kind) {
         case 'value': {
+          if (entry.reference === true) {
+            setGraphEdge(node, entry.name, this.referencedRecords(entry.name, await this.bindSlotValue(entry.value, env)), child);
+            break;
+          }
           const { value, provenance } = await this.evaluateSlot(entry.value, { env });
           delete node.edges[entry.name];
           noteGraphField(node, entry.name);
@@ -9468,18 +9531,7 @@ class Interpreter {
             setGraphEdge(node, entry.name, landings, child);
             break;
           }
-          const plan = entry.copy;
-          if (plan === undefined) {
-            throw new MovementEngineError(
-              'MOVENG_RUNTIME',
-              `'${entry.name}' copies the records it walks to, and has no copy plan — the program was not checked`,
-            );
-          }
-          const copies: Binding[] = [];
-          for (const landing of await this.walkLandings(entry.head, env)) {
-            copies.push(await this.snapshotRecord(landing, plan, env));
-          }
-          setGraphEdge(node, entry.name, copies, child);
+          setGraphEdge(node, entry.name, await this.walkLandings(entry.head, env), child);
           break;
         }
         case 'declared':
@@ -9499,6 +9551,66 @@ class Interpreter {
       node.fieldOrder = [...declared, ...node.fieldOrder.filter((f) => !declared.includes(f))];
     }
     return node;
+  }
+
+  /**
+   * The records a reference entry (`owner: r`, `owner: ONLY(m-[:Owner]->)`)
+   * holds: the record itself, never a copy, so a read through the graph is
+   * live and a write through it reaches the real record. The trigger's own
+   * record is held as the source position it is; a selection that found
+   * nothing holds nothing.
+   */
+  private referencedRecords(name: string, bound: Binding): Binding[] {
+    switch (bound.kind) {
+      case 'value': {
+        // A record held as a value, or a list of them (what a MAP of writes
+        // hands back) — each one held as itself.
+        const held = Array.isArray(bound.value) ? bound.value : [bound.value];
+        const records: Binding[] = [];
+        for (const member of held) {
+          if (member === null || member === undefined) continue;
+          const record = bindingOf(member);
+          if (record === undefined) {
+            throw new MovementEngineError(
+              'MOVENG_RUNTIME',
+              `'${name}' holds records, and one of them is a ${typeof member} — the program was not checked`,
+            );
+          }
+          records.push(...this.referencedRecords(name, record));
+        }
+        return records;
+      }
+      case 'positions':
+        return bound.landings;
+      case 'event':
+        if (this.source !== undefined) return [{ kind: 'sourcePosition', position: this.source.position }];
+        break;
+      case 'sourcePosition':
+      case 'handle':
+      case 'nodePosition':
+      case 'shapePosition':
+      case 'extractPosition':
+      case 'extractRoot':
+      case 'resource':
+        return [bound];
+      case 'tuple':
+      case 'lazyWalk':
+      case 'closure':
+      case 'callback':
+      case 'blockMeta':
+      case 'instance':
+      case 'shape':
+      case 'movement':
+      case 'plugin':
+      case 'opaque':
+        break;
+      default:
+        neverAsAny(bound);
+    }
+    throw new MovementEngineError(
+      'MOVENG_RUNTIME',
+      `'${name}' holds a record, and the value is ${describeBinding[bound.kind]} — the program was not checked`,
+    );
   }
 
   /** The map a `...v` spreads, as it is at run time — undefined when it is
@@ -10077,7 +10189,11 @@ class Interpreter {
         `${at}: '${pathRootName(input.target.path)}' has no appendable edge '${edgeName}' — the checker should have caught this`,
       );
     }
-    const store = localEdgeAdapter({ edge, edgeName });
+    const store = localEdgeAdapter({
+      edge,
+      edgeName,
+      references: { read: (landing, fieldIds) => this.readReferenceFields(landing, fieldIds, env) },
+    });
     const destination: WriteDestination = { adapter: store.adapter, recordType: edgeName, parents: [] };
     const { fields } = await this.evaluateWriteFields({ write: match, target: destination, env });
     const identity = this.uniqueByIdentity(match, destination);

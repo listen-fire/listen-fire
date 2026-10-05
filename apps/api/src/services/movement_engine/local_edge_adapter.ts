@@ -200,14 +200,29 @@ function landingBlocks(
   );
 }
 
+/**
+ * The engine's reach into a landing that is a REFERENCE — a record in a system
+ * a graph literal holds (or a `link` appended), not one the run synthesised.
+ * Reading it is a live read through its own system, and changing it is a
+ * write to the real record, exactly as through any other name holding it.
+ */
+export interface LocalEdgeReferences {
+  /** The referenced record's current values for these fields, read live. */
+  read(landing: Binding, fieldIds: readonly string[]): Promise<Record<string, unknown>>;
+  /** Update the real record behind the reference. Absent for a store that
+   *  only finds (a `match`). */
+  update?(landing: Binding, write: UpdateInput): Promise<UpdateResult>;
+}
+
 /** The adapter over one local edge, plus the two things the engine needs back
  *  that no adapter interface carries: which landing a write touched, and
  *  whether the candidate block was cut short. */
 export interface LocalEdgeStore {
   adapter: Adapter;
   /** The landing behind a write result's id — how the engine reaches the
-   *  position it just created or merged into. */
-  landingOf(externalId: string | undefined): LocalLanding | undefined;
+   *  position it just created or merged into, or the referenced record it
+   *  updated. */
+  landingOf(externalId: string | undefined): Binding | undefined;
   /** Whether a candidate search stopped at `LOCAL_CANDIDATE_CAP`, leaving
    *  landings unexamined. A METHOD rather than a property: it is answered by
    *  the search, which runs after the store is built, and a snapshot taken
@@ -223,35 +238,56 @@ export interface LocalEdgeStore {
  * and a match therefore never moves a record, which is the property the whole
  * merge depends on.
  *
- * Only landings the RUN SYNTHESISED are candidates. A `link`ed handle or a
- * traversed source position is a record in a system: comparing it would need
- * that system's adapter, and MERGING into it would mean mutating a local copy
- * of a record that lives elsewhere — a write that claims to have changed
- * something it never touched. Those landings stay on the edge, untouched and
- * unconsidered.
+ * A landing the run SYNTHESISED is this store's own: compared by its fields
+ * and merged into in place. Any other landing — a graph literal's reference, a
+ * `link`ed handle — is a record in a system, held as itself (TypeScript's
+ * object reference). With `references` it is a candidate like any other,
+ * compared by its live values, and a merge into it is an update of the real
+ * record through its own system — never of a local copy, which would be a
+ * write claiming to change something it never touched. Without `references`
+ * such landings stay on the edge, untouched and unconsidered.
  */
 export function localEdgeAdapter(input: {
   edge: Extract<NodeEdge, { kind: 'landed' }>;
   /** The edge's authored name — diagnostics only. */
   edgeName: string;
+  references?: LocalEdgeReferences;
 }): LocalEdgeStore {
   const { landings } = input.edge;
+  const { references } = input;
   let capped = false;
 
-  const landingAt = (externalId: string | undefined): LocalLanding | undefined => {
+  const anyLandingAt = (externalId: string | undefined): Binding | undefined => {
     if (externalId === undefined) return undefined;
     const index = Number(externalId);
     if (!Number.isInteger(index)) return undefined;
-    const landing = landings[index];
-    return landing !== undefined && landing.kind === 'nodePosition' ? landing : undefined;
+    return landings[index];
+  };
+  const landingAt = (externalId: string | undefined): LocalLanding | undefined => {
+    const landing = anyLandingAt(externalId);
+    return landing?.kind === 'nodePosition' ? landing : undefined;
+  };
+  /** A landing that is a reference, where this store may reach one. */
+  const referenceAt = (externalId: string | undefined): Binding | undefined => {
+    const landing = anyLandingAt(externalId);
+    return references !== undefined && landing !== undefined && landing.kind !== 'nodePosition' ? landing : undefined;
   };
 
-  const refFor = (index: number, landing: LocalLanding, recordType: string): ExternalRecordRef => ({
+  const refFor = (index: number, data: Record<string, unknown>, recordType: string): ExternalRecordRef => ({
     adapterType: LOCAL_ADAPTER_TYPE,
     externalId: String(index),
     recordType,
-    data: landing.fields,
+    data,
   });
+
+  /** The fields a candidate is compared and merged by: what the write asserts,
+   *  and every field its identity names. */
+  const fieldsOf = (resolve: ResolveEntityInput): string[] => [
+    ...new Set([
+      ...Object.keys(resolve.record),
+      ...resolve.constraints.any.flatMap((branch) => branch.all.map((entry) => entry.field)),
+    ]),
+  ];
 
   const notASource = (what: string): Error =>
     new Error(
@@ -278,9 +314,13 @@ export function localEdgeAdapter(input: {
       const candidates: ExternalRecordRef[] = [];
       for (let index = 0; index < landings.length; index++) {
         const landing = landings[index];
-        if (landing === undefined || landing.kind !== 'nodePosition') continue;
-        if (!landingBlocks(resolve.constraints, resolve.record, landing.fields)) continue;
-        candidates.push(refFor(index, landing, resolve.recordType));
+        if (landing === undefined) continue;
+        let data: Record<string, unknown>;
+        if (landing.kind === 'nodePosition') data = landing.fields;
+        else if (references !== undefined) data = await references.read(landing, fieldsOf(resolve));
+        else continue;
+        if (!landingBlocks(resolve.constraints, resolve.record, data)) continue;
+        candidates.push(refFor(index, data, resolve.recordType));
         if (candidates.length >= LOCAL_CANDIDATE_CAP) {
           capped = index < landings.length - 1;
           break;
@@ -298,10 +338,18 @@ export function localEdgeAdapter(input: {
         edges: landingEdges(input.edge.landingShape),
       };
       landings.push(landing);
-      return refFor(landings.length - 1, landing, write.recordType);
+      return refFor(landings.length - 1, landing.fields, write.recordType);
     },
 
     async updateRecord(write: UpdateInput): Promise<UpdateResult> {
+      const reference = referenceAt(write.externalId);
+      if (reference !== undefined) {
+        if (references?.update === undefined) throw notASource('updating a referenced record');
+        const updated = await references.update(reference, write);
+        if ('notFound' in updated) return updated;
+        // The id stays this store's, so the engine finds the landing it hit.
+        return { ...updated, adapterType: LOCAL_ADAPTER_TYPE, externalId: write.externalId, recordType: write.recordType };
+      }
       const landing = landingAt(write.externalId);
       if (landing === undefined) return { notFound: true };
       // In place: the landing object IS the binding every earlier read of it
@@ -310,12 +358,16 @@ export function localEdgeAdapter(input: {
       Object.assign(landing.fields, write.fields);
       landing.fieldOrder = landingFieldOrder(landing.fieldOrder, write.fields);
       return {
-        ...refFor(Number(write.externalId), landing, write.recordType),
+        ...refFor(Number(write.externalId), landing.fields, write.recordType),
         association: unsupportedAssociation(write),
       };
     },
 
     async readRecord(read: ReadInput): Promise<Record<string, unknown> | null> {
+      const reference = referenceAt(read.externalId);
+      if (reference !== undefined && references !== undefined) {
+        return references.read(reference, read.fieldIds ?? []);
+      }
       return landingAt(read.externalId)?.fields ?? null;
     },
 
@@ -332,7 +384,7 @@ export function localEdgeAdapter(input: {
 
   return {
     adapter,
-    landingOf: landingAt,
+    landingOf: (externalId) => landingAt(externalId) ?? referenceAt(externalId),
     capped: () => capped,
   };
 }

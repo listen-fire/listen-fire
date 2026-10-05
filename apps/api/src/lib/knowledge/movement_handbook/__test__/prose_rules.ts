@@ -47,6 +47,10 @@ const NOT_RECOMMENDED: Array<{ pattern: RegExp; label: string }> = [
     label: 'the `extract … from` keyword — write `extract(content, Shape, settings)`',
   },
   {
+    pattern: /\blazy\b/i,
+    label: 'the `lazy` keyword — wrap the walk in a closure (`files = () => m-[:Attachments]->`, called as `files()`) or write it inline where it is read',
+  },
+  {
     pattern: /\bthrough\s*\[/,
     label: 'a `through [ … ]` extraction stage — call the plugin, then extract again',
   },

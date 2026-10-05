@@ -88,7 +88,7 @@ function \`Snapshot\`(m: <inbox-[:Email]->>) {
       \`Content Type\`: a.\`Content Type\`
     }
   }
-  copy = graph<Message> {
+  held = graph<Message> {
     Body: m.\`Body\`
     Attachments: m-[:Attachments]->
   }
@@ -97,8 +97,9 @@ function \`Snapshot\`(m: <inbox-[:Email]->>) {
 
 - **With a shape** the literal is checked as TypeScript's \`satisfies\` checks one, and the value is then of that shape. A misspelt or mistyped field is refused, naming the closest; so is a field where the shape has a nested node (or the reverse), and a required field never written. A \`<text | null>\` field may be left out.
 - **Without a shape** — \`graph { … }\` — the type comes from the literal. \`graph<Shape> {}\` is the typed empty graph, valid when the shape requires no field; its nested nodes start empty.
-- **The body uses a write body's syntax.** \`{ … }\` is one nested record and \`[{ … }, { … }]\` several. A path followed by a field body builds one nested record per record on the path, under the names you choose. A bare path **copies** each record: the shape says which fields to take and follows the source's edge of the same name into every nested node.
-- **Copies are snapshots.** Nothing in the graph points back into the system it was read from, so writing to the graph never reaches the source. A file is copied as a handle; nothing downloads.
+- **The body uses a write body's syntax.** \`{ … }\` is one nested record and \`[{ … }, { … }]\` several. A path followed by a field body builds one nested record per record on the path, under the names you choose. A bare path or a record as an entry value **holds references** to the real records, as TypeScript's \`{ items: obj }\` holds \`obj\`; the shape checks them structurally, so each must have the fields its nested node needs (otherwise write the fields with a body).
+- **References are live.** Reading through one sees the real record as it is now, and a write through it (a write into an edge that matches an existing child, \`write child { … }\`, \`link\`, \`unlink\`, \`delete\`) acts on that real record, exactly as through any other name holding it. New children created under the local graph's nested node stay local to the run. This lets you group records you wrote under a named nested node (\`graph<Batch> {}\`) and link or report them later.
+- **Copies are snapshots.** A spread (\`graph<S> { ...r }\`) and a path followed by a field body (\`Attachments: m-[a:Attachments]-> { Name: a.Name }\`) copy, so nothing in the result points back at the source and writing to it never reaches the source. A file is held as a handle; nothing downloads.
 - **\`...v\` spreads a map** (plugin output, JSON, a \`{ … }\` dict, one record) into the body. With a shape, the shape decides whether a nested map is a nested record or a value, and a map that doesn't fit fails the run naming the field. Members take effect in the order written, so a later field or spread wins; a key written before a spread that always has it is refused when you save.
 - The result reads by path, \`WHERE\` and dot, takes \`write\`, \`link\` and \`delete\` like any record the run built, fits a parameter of its shape, and can be returned.
 - \`both = [one, two]\` gathers records you already hold into one list, and a block head walks them in the order written: \`both-[c:company]-> { … }\`.
@@ -611,7 +612,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 `,
     },
     {
-      construct: 'graph literals — graph<Shape> with path-with-field-body children, a bare-path copy, and a spread of a map',
+      construct: 'graph literals — graph<Shape> with path-with-field-body children, a bare-path reference, and a spread of a map',
       status: 'runs',
       probe: `
 import { email, attio } from adapters

@@ -514,21 +514,24 @@ export interface NodeLiteral {
  *     refused, a required field may not be missing), and the value is then of
  *     that shape. Only the outermost body carries it; a nested body takes the
  *     child node of the same name from its parent's shape.
- *   - a walk is a SNAPSHOT, never a reference. A bare walk copies each record
- *     it lands on (see `CopyPlan`), and a walk followed by a field body builds
- *     one child per record. A local graph never holds an edge into a system.
+ *   - entries follow TypeScript's object semantics. A bare walk
+ *     (`attachment: m-[:Attachments]->`) or a record (`owner: r`) holds
+ *     REFERENCES to the records, as `{ items: obj }` does: reads are live, and
+ *     a write, link or delete through one acts on the real record. A walk
+ *     followed by a field body builds one child per record and a record spread
+ *     copies one (see `CopyPlan`) — those are the snapshots, as `{ ...obj }` is.
  */
 export interface GraphForm {
   shape?: { name: string; span: Span };
 }
 
 /**
- * What a bare walk in a graph literal copies from each record it lands on:
+ * What a record spread in a graph literal (`...r`) copies from the record:
  * these fields, and through each named edge, the records there — copied by the
  * nested plan. The CHECKER resolves it (from the shape when there is one, from
- * the walked records' own fields otherwise) and records it on the entry; the
- * engine copies exactly this and refuses an entry nobody resolved, because a
- * system's record has no field list in hand at run time.
+ * the record's own fields otherwise) and records it on the spread; the engine
+ * copies exactly this and refuses a spread nobody resolved, because a system's
+ * record has no field list in hand at run time.
  */
 export interface CopyPlan {
   fields: readonly string[];
@@ -544,7 +547,17 @@ export interface CopyPlan {
  */
 export type NodeEntry =
   /** `title: m.`Subject`` — a field. */
-  | { kind: 'value'; name: string; value: ExprSlot; span: Span }
+  | {
+      kind: 'value';
+      name: string;
+      value: ExprSlot;
+      /** In a graph literal, the value is a RECORD (`owner: r`,
+       *  `owner: ONLY(m-[:Owner]->)`), so the entry is an edge holding a
+       *  reference to it rather than a field. Set by the checker, which is
+       *  the one place that knows what the name is bound to. */
+      reference?: true;
+      span: Span;
+    }
   /** `company: node { … }` / `files: [node { … }, node { … }]` — an edge whose
    *  landings are synthesised here. `nodes` holds them in source order; one
    *  entry is the single-landing form. */
@@ -582,10 +595,6 @@ export type NodeEntry =
       head: PathHead;
       lazy: boolean;
       mapping?: NodeLiteral;
-      /** A bare walk in a graph literal: what each landing's snapshot copies,
-       *  as the checker resolved it. Absent until checked, and on every walk
-       *  outside a graph literal. */
-      copy?: CopyPlan;
       span: Span;
     };
 
@@ -599,8 +608,8 @@ export type NodeEntry =
  * it is refused. Before version 3 a written entry won over a spread's key
  * wherever it stood, and a later spread over an earlier one.
  *
- * `v` may instead be ONE RECORD, whose fields are copied as a snapshot by the
- * rule a bare walk copies by (`CopyPlan`). A value that is absent copies
+ * `v` may instead be ONE RECORD, whose fields are copied as a snapshot by
+ * its `CopyPlan` — TypeScript's `{ ...obj }`. A value that is absent copies
  * nothing.
  */
 export interface MapSpread {

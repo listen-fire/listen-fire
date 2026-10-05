@@ -100,7 +100,6 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Walk a tree or chain by a function calling itself', chapter: 'anatomy', section: 'recursion' },
   { intent: 'Build a record in memory to pass along', chapter: 'anatomy', section: 'records-you-build' },
   { intent: 'Act on everything the run wrote', chapter: 'anatomy', section: 'collect-what-you-wrote' },
-  { intent: 'Defer a walk until read', chapter: 'traversal', section: 'deferring-a-walk' },
   { intent: 'Run ad hoc: pasted text, files, backfills', chapter: 'system:manual' },
   { intent: 'Run on a schedule', chapter: 'system:cron' },
   { intent: 'Run when another automation fails', chapter: 'system:system' },

@@ -669,6 +669,39 @@ export interface LocalEdge {
    *  so there is no array for a `link` to append to — appending to one would be
    *  a landing that vanishes at the next read. */
   deferred?: true;
+  /** A graph literal's edge holding REFERENCES to records (a bare walk, or a
+   *  record written as an entry's value) — the real records, read live, as
+   *  `{ items: obj }` holds `obj` in TypeScript. */
+  references?: true;
+}
+
+/**
+ * The first reference edge, at any depth inside a checker-local node, that
+ * holds records read live from a system — a record whose fields the program
+ * does not hold, so a value holding one cannot be written out.
+ */
+function liveReferenceWithin(
+  position: PositionTypeRef,
+  isDeclaredGraphToken: ((token: object) => boolean) | undefined,
+  seen = new Set<PositionTypeRef>(),
+): string | undefined {
+  if (seen.has(position)) return undefined;
+  seen.add(position);
+  if (position.kind === 'maybeEmpty') return liveReferenceWithin(position.of, isDeclaredGraphToken, seen);
+  if (position.kind !== 'local') return undefined;
+  for (const [name, edge] of Object.entries(position.edges ?? {})) {
+    const target = edge.target?.kind === 'maybeEmpty' ? edge.target.of : edge.target;
+    if (
+      edge.references === true
+      && (target?.kind === 'position' || target?.kind === 'union' || target?.kind === 'meta')
+      && isDeclaredGraphToken?.(target.instance.token) !== true
+    ) {
+      return name;
+    }
+    const nested = edge.target === undefined ? undefined : liveReferenceWithin(edge.target, isDeclaredGraphToken, seen);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
 }
 
 /** The name of a `lazy` edge anywhere inside a checker-local node (its own
@@ -2286,7 +2319,7 @@ export function recordOf(position: PositionTypeRef | undefined): FieldType {
  * A DICT is deliberately not one: a dict is looked up, never folded, so the
  * record comes out of it through `AT(m, "k")` and the walk starts there.
  */
-function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'record' }> | undefined {
+export function recordIn(type: FieldType | undefined): Extract<FieldType, { kind: 'record' }> | undefined {
   if (type === undefined) return undefined;
   const variant = variantOf(stripAbsent(type));
   switch (variant.kind) {
@@ -4936,6 +4969,17 @@ export class ExpressionTyping {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
         `\`${spec.namespace}.${spec.name}\` writes out a record whose fields the program spells out — a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
+      );
+      return;
+    }
+    // A graph holding references holds the real records, so one read live
+    // from a system is refused through the graph as it is on its own.
+    const liveEdge =
+      position === undefined ? undefined : liveReferenceWithin(position, this.options.isDeclaredGraphToken);
+    if (liveEdge !== undefined) {
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+        `\`${spec.namespace}.${spec.name}\` writes out a record whose '${liveEdge}' edge holds records read live from a system, one field at a time — copy the fields you want into the graph with a body ('${liveEdge}: … -> { field: x.Field }') and write out that`,
       );
       return;
     }

@@ -102,7 +102,7 @@ describe('graph literals — entries', () => {
     expect(attachment.mapping?.entries.map((e) => e.name)).toEqual(['name', 'type', 'file']);
   });
 
-  it('a bare walk is a copy (no body)', () => {
+  it('a bare walk holds references (no body)', () => {
     const attachment = entry(literal('g = graph { files: e-[:Attachments]->\n}'), 'files');
     expect(attachment.kind === 'traversal' && attachment.mapping).toBeUndefined();
   });
@@ -131,7 +131,7 @@ describe('graph literals — refusals', () => {
   it("refuses the node literal's spellings, with the graph literal's own", () => {
     expectParseError('g = graph { part: node { label: "a" } }', /'part: \{ … \}'/);
     expectParseError('g = graph { parts: <Part> }', /every child node it declares starts empty/);
-    expectParseError('g = graph { files: lazy e-[:Attachments]-> }', /snapshot/);
+    expectParseError('g = graph { files: lazy e-[:Attachments]-> }', /already holds references/);
   });
 
   it('refuses effects in an entry', () => {

@@ -188,6 +188,7 @@ import {
   type PluginSpec,
   pluginOutputUnder,
   type PositionSchema,
+  type EdgeSchema,
   SUPPRESS_SELF_KEY,
   surfaceNotEnumerated,
   unionKey,
@@ -254,6 +255,7 @@ import {
   checkEnumLiteral,
   aggregatedBarePath,
   bareName,
+  recordIn,
   checkEnumDomain,
   describePosition,
   checkJsonOpaque,
@@ -453,11 +455,12 @@ export const DiagnosticCodes = {
   /** A value where the shape has a child node, or a body/walk where it has a
    *  field. */
   GRAPH_ENTRY_KIND: 'MOV_GRAPH_ENTRY_KIND',
-  /** A bare walk whose records don't carry what the shape's child node needs. */
+  /** A record spread whose record doesn't carry what the shape's child node
+   *  needs. */
   GRAPH_COPY_SHAPE: 'MOV_GRAPH_COPY_SHAPE',
-  /** A bare walk, without a shape, over records nothing describes — there is
-   *  no field list to copy. */
-  GRAPH_COPY_UNKNOWN: 'MOV_GRAPH_COPY_UNKNOWN',
+  /** A reference entry — a bare walk or a record — whose records don't carry
+   *  what the shape's child node needs. */
+  GRAPH_REFERENCE_SHAPE: 'MOV_GRAPH_REFERENCE_SHAPE',
   /** `...v` where `v` is not a map. */
   GRAPH_SPREAD_NOT_MAP: 'MOV_GRAPH_SPREAD_NOT_MAP',
   /** `...v`, without a shape, where nothing says which keys `v` holds (or
@@ -2292,6 +2295,20 @@ function declaredLocalGraph(
     label: `a ${describeShapeNode(position)} graph`,
     reads: { ...declared?.properties },
     edges,
+  };
+}
+
+/** A graph literal's edge holding REFERENCES to records of `records` (unknown
+ *  when undefined) — readable, as every run-local edge is. */
+function referenceEdge(
+  name: string,
+  records: PositionTypeRef | undefined,
+  sequenced: EdgeSchema['sequenced'],
+): LocalEdge {
+  return {
+    schema: { target: name, readable: true, ...(sequenced !== undefined ? { sequenced } : {}) },
+    ...(records !== undefined ? { target: records } : {}),
+    references: true,
   };
 }
 
@@ -9118,7 +9135,15 @@ class Checker {
     entry: Extract<NodeEntry, { kind: 'value' }>,
     scope: Scope,
   ): FieldType | undefined {
-    const { valueType, parsed } = this.checkExprSlot(entry.value, scope);
+    return this.nodeValueEntryType(entry, this.checkExprSlot(entry.value, scope), scope);
+  }
+
+  /** The type of a field entry whose slot `checkExprSlot` has typed. */
+  private nodeValueEntryType(
+    entry: Extract<NodeEntry, { kind: 'value' }>,
+    { valueType, parsed }: { valueType?: FieldType; parsed?: Expression },
+    scope: Scope,
+  ): FieldType | undefined {
     // A NODE in a field slot is an error, not a silent untyped read — the
     // value plane is scalar, and the author meant an edge. Two discernible
     // shapes: a bare name bound on the node plane, and ONLY/FIRST/LAST over a
@@ -9171,8 +9196,20 @@ class Checker {
     const root = symbol?.kind === 'shape' ? declaredRootPosition(symbol) : undefined;
     if (root?.kind !== 'position') return this.checkGraphBody(literal, scope, undefined);
     const required = { schema: root.instance.schema, position: root.position };
-    this.checkGraphBody(literal, scope, required);
-    return declaredLocalGraph(root.instance, root.position);
+    const body = this.checkGraphBody(literal, scope, required);
+    // The value is OF the shape — except where an entry holds references: that
+    // edge is typed as the records it holds (which the shape checked fit), so a
+    // write or a walk through it is checked against what it really reaches.
+    const declared = declaredLocalGraph(root.instance, root.position);
+    for (const [name, edge] of Object.entries(body.edges ?? {})) {
+      const shaped = declared.edges?.[name];
+      if (edge.references !== true || shaped === undefined || edge.target === undefined) continue;
+      declared.edges = {
+        ...declared.edges,
+        [name]: { ...shaped, schema: { ...shaped.schema, ...edge.schema }, target: edge.target, references: true },
+      };
+    }
+    return declared;
   }
 
   /**
@@ -9237,7 +9274,20 @@ class Checker {
       this.noteEntryName(entry, seen);
       switch (entry.kind) {
         case 'value': {
-          const valueType = this.checkNodeValueEntry(entry, scope);
+          const typed = this.checkExprSlot(entry.value, scope);
+          const reference = this.graphReference(entry, typed, scope);
+          if (reference !== undefined) {
+            entry.reference = true;
+            const child = this.graphChild(entry.name, required, entry.span);
+            if (child !== undefined) {
+              this.checkGraphReferenceFits(entry.name, reference.position, { required: child, span: entry.span });
+            }
+            delete reads[entry.name];
+            edges[entry.name] = referenceEdge(entry.name, reference.position, reference.sequenced);
+            break;
+          }
+          delete entry.reference;
+          const valueType = this.nodeValueEntryType(entry, typed, scope);
           delete edges[entry.name];
           reads[entry.name] = valueType;
           if (required !== undefined) this.checkGraphField(entry.name, valueType, { required, span: entry.span });
@@ -9255,12 +9305,8 @@ class Checker {
         }
         case 'traversal': {
           const child = this.graphChild(entry.name, required, entry.span);
-          const target = this.checkGraphWalk(entry, scope, child);
           delete reads[entry.name];
-          edges[entry.name] = {
-            schema: { target: entry.name, readable: true },
-            ...(target !== undefined ? { target } : {}),
-          };
+          edges[entry.name] = this.checkGraphWalk(entry, scope, child);
           break;
         }
         case 'declared':
@@ -9390,21 +9436,18 @@ class Checker {
   }
 
   /**
-   * A walk in a graph body — a SNAPSHOT of the records it lands on. Followed by
-   * a field body, each record builds one child from that body, written in the
-   * landing's scope (the hop's alias names the record there and nowhere else).
-   * Bare, each record is copied: the shape's child node says which fields, and
-   * which of the source's edges of the same name are followed; without a shape
-   * the records' own fields are copied and no edge is followed.
-   *
-   * The copy plan is recorded on the entry for the engine — a system's record
-   * has no field list in hand at run time, so the checker's is the one list.
+   * A walk in a graph body. Followed by a field body, each record builds one
+   * child from that body — a copy, written in the landing's scope (the hop's
+   * alias names the record there and nowhere else). Bare, the edge holds
+   * REFERENCES to the records, as `{ items: obj }` holds `obj` in TypeScript:
+   * the edge is typed as the records it walks to, and a shape's child node
+   * checks them structurally, as it would an argument.
    */
   private checkGraphWalk(
     entry: Extract<NodeEntry, { kind: 'traversal' }>,
     scope: Scope,
     required: RequiredPosition | undefined,
-  ): PositionTypeRef | undefined {
+  ): LocalEdge {
     const head = this.checkPathHead(entry.head, scope);
     const typing = this.slotTyping(scope, entry.head.span);
     const landed =
@@ -9418,33 +9461,70 @@ class Checker {
         typing,
         scope,
       );
-      return { ...this.checkGraphBody(entry.mapping, landing, required), label: `a '${entry.name}' landing` };
+      return {
+        schema: { target: entry.name, readable: true },
+        target: { ...this.checkGraphBody(entry.mapping, landing, required), label: `a '${entry.name}' landing` },
+      };
     }
-    const supplied = landed !== undefined ? recordSurface(landed) : undefined;
-    if (required !== undefined) {
-      const misfit = surfaceMisfit(supplied, required, { absentMayBeMissing: true });
-      if (misfit !== undefined) {
-        this.report(
-          DiagnosticCodes.GRAPH_COPY_SHAPE,
-          `'${entry.name}' copies the records it walks to, and ${describeShapeNode(required.position)} doesn't fit them: ${misfit} — write the fields it needs with a body ('${entry.name}: … -> { field: x.Field }')`,
-          entry.span,
-        );
-      }
-      entry.copy = copyPlanOf(required);
-      return undefined;
+    if (required !== undefined) this.checkGraphReferenceFits(entry.name, landed, { required, span: entry.span });
+    // The edge keeps the walk's order, where the walk has one.
+    const last = head.steps?.at(-1);
+    const sequenced =
+      typing.lastEdgeSchema?.sequenced
+      ?? (last?.type === 'edge' && last.cardinality?.orderBy !== undefined ? 'arrival' : undefined);
+    return referenceEdge(entry.name, landed, sequenced);
+  }
+
+  /**
+   * A graph entry whose value is a RECORD — a name bound on the node plane,
+   * ONLY/FIRST/LAST over a bare walk, or any value holding records (one, or a
+   * list of them, such as what a `MAP` of writes hands back) — and so an edge
+   * holding references to them, as `{ owner: r }` holds `r` in TypeScript.
+   * Undefined for a value (and for a node-plane name that is no record, which
+   * the field rule then refuses as it does in a node literal).
+   */
+  private graphReference(
+    entry: Extract<NodeEntry, { kind: 'value' }>,
+    { valueType, parsed }: { valueType?: FieldType; parsed?: Expression },
+    scope: Scope,
+  ): { position: PositionTypeRef | undefined; sequenced: EdgeSchema['sequenced'] } | undefined {
+    // One record, or a list that keeps its order, is held in the order it
+    // was handed over — the order the edge's landings were appended in.
+    const named = this.bareNodeSymbol(entry.value.raw, parsed, scope);
+    if (named !== undefined) {
+      if (named.kind === 'shape' || named.kind === 'instance' || named.kind === 'movement') return undefined;
+      const position = this.symbolPositionType(named);
+      if (position?.kind === 'closure' || position?.kind === 'meta') return undefined;
+      return { position, sequenced: named.plural === true ? undefined : 'arrival' };
     }
-    if (supplied === undefined) {
-      if (landed !== undefined) {
-        this.report(
-          DiagnosticCodes.GRAPH_COPY_UNKNOWN,
-          `'${entry.name}' copies the records it walks to, and nothing says which fields they have — write the fields with a body ('${entry.name}: … -> { field: x.Field }'), or give the graph a shape ('graph<Shape> { … }')`,
-          entry.span,
-        );
-      }
-      return undefined;
+    if (parsed !== undefined && aggregatedBarePath(parsed) !== undefined) {
+      const selected = this.landedAggregatePosition(parsed, scope, entry.value.span);
+      return { position: selected?.kind === 'maybeEmpty' ? selected.of : selected, sequenced: 'arrival' };
     }
-    entry.copy = { fields: Object.keys(supplied.properties), edges: {} };
-    return { kind: 'local', label: `a '${entry.name}' copy`, reads: { ...supplied.properties } };
+    const held = recordIn(valueType);
+    if (held === undefined) return undefined;
+    const list = valueType !== undefined ? variantOf(stripAbsent(valueType)) : undefined;
+    const unordered = list?.kind === 'list' && list.unordered === true;
+    return { position: held.position, sequenced: unordered ? undefined : 'arrival' };
+  }
+
+  /** Do the records a reference entry holds carry what the shape's child node
+   *  needs? Checked structurally, as an argument reaching a `<Shape>`
+   *  parameter is. */
+  private checkGraphReferenceFits(
+    name: string,
+    records: PositionTypeRef | undefined,
+    { required, span }: { required: RequiredPosition; span: Span },
+  ): void {
+    const misfit = surfaceMisfit(records !== undefined ? recordSurface(records) : undefined, required, {
+      absentMayBeMissing: true,
+    });
+    if (misfit === undefined) return;
+    this.report(
+      DiagnosticCodes.GRAPH_REFERENCE_SHAPE,
+      `'${name}' holds the records themselves, and ${describeShapeNode(required.position)} doesn't fit them: ${misfit} — copy the fields it needs with a body ('${name}: … -> { field: x.Field }')`,
+      span,
+    );
   }
 
   /**

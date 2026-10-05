@@ -2335,9 +2335,10 @@ class Parser {
 
   /**
    * `name: <value>` in a graph body. A brace (or a list of braces) is a child
-   * node; a walk is a snapshot of the records it lands on — followed by a
-   * field body, one child per record built from that body; bare, a copy of
-   * each record. Anything else is a field value.
+   * node; a walk followed by a field body builds one child per record from
+   * that body; a bare walk holds references to the records it lands on.
+   * Anything else is a value — a field, or (the checker decides, by what the
+   * name is bound to) a reference to one record.
    */
   private parseGraphEntry(): NodeEntry {
     const entryStart = this.pos;
@@ -2436,7 +2437,7 @@ class Parser {
     }
     if (this.atLazy()) {
       this.error(
-        `a graph literal is a snapshot, and 'lazy' would re-walk the source at every read — drop 'lazy' to copy the records now, or use a node literal ('node { ${name}: lazy … }') to keep the walk`,
+        `a graph literal's bare walk already holds references to the records, so their fields read live — drop 'lazy'; to put off the walk itself, make it a function ('${name} = () => …') and call it where it is needed`,
       );
     }
   }
