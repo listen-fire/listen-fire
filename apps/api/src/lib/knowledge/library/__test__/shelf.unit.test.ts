@@ -30,6 +30,12 @@ describe('library shelf', () => {
     expect(automations?.status).toBe('available');
   });
 
+  it('the automations book opens with the front page, ahead of foundations', () => {
+    const ids = shelf.find((b) => b.bookId === 'automations')?.chapters.map((c) => c.id);
+    expect(ids?.slice(0, 2)).toEqual(['front', 'foundations']);
+    expect(shelf.find((b) => b.bookId === 'automations')?.chapters[0]?.content).toContain('### ts-except');
+  });
+
   it('the build-on-listen-fire stub links to its public repository', () => {
     const book = shelf.find((b) => b.bookId === 'build-on-listen-fire');
     expect(book?.link?.url).toBe('https://github.com/listen-fire/build-on-listen-fire');

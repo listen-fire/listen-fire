@@ -221,6 +221,16 @@ function isTeachingChapter(id: string): boolean {
   return !id.startsWith('system:') && !id.startsWith('plugin:');
 }
 
+/** The front page is the automations book's first chapter for everyone — the
+ *  Library and full-mode agents read it as a chapter, and the anchors
+ *  diagnostics hand out (`front#maybe-absent`) land in a chapter a person can open. */
+function withFrontPage(book: LibraryBook): LibraryBook {
+  return {
+    ...book,
+    chapters: [{ id: FRONT_PAGE_ID, title: FRONT_PAGE_TITLE, content: renderFrontPage() }, ...book.chapters],
+  };
+}
+
 export function getLibraryShelf(): LibraryBook[] {
   return [
     bookFrom(getUsingListenFireHandbook(), {
@@ -230,13 +240,15 @@ export function getLibraryShelf(): LibraryBook[] {
         'Finding your way around the product: what each page is for, how to connect an integration, and how connecting, building automations, and automating fit together.',
       status: 'available',
     }),
-    bookFrom(getMovementHandbook(), {
-      bookId: 'automations',
-      title: 'Writing automations',
-      description:
-        'Automations are small programs that move data when something happens — an email arrives, a record changes. How to write them: sources and targets, writes, extraction, branching, and going live.',
-      status: 'available',
-    }),
+    withFrontPage(
+      bookFrom(getMovementHandbook(), {
+        bookId: AUTOMATIONS_BOOK,
+        title: 'Writing automations',
+        description:
+          'Automations are small programs that move data when something happens — an email arrives, a record changes. How to write them: sources and targets, writes, extraction, branching, and going live.',
+        status: 'available',
+      }),
+    ),
     bookFrom(modelHandbook, {
       bookId: 'knowledge-model',
       title: 'Knowledge model design & editing',
