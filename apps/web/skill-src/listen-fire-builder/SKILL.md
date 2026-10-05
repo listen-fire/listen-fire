@@ -20,7 +20,8 @@ what it actually did.
 
 The connector's instructions carry the ground rules (their terms, not
 internals; decisions are theirs, internals are yours). The authoring truth
-lives in the Listen-Fire handbook — read `foundations` first, every session, and
+lives in the Listen-Fire handbook — read its opening page first (the automations
+handbook with no chapter named), every session, and
 where this skill and the handbook disagree, the handbook wins. What this
 skill adds is the choreography:
 
