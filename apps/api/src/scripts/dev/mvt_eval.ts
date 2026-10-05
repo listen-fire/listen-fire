@@ -46,6 +46,7 @@ import { validateMovementForTeam } from '../../services/translation_graph/moveme
 import type { TeamId } from '../../generated/kysely/core/Team';
 import { ensureDevLoopTeam, buildAgentContext } from './_lib';
 import { LlmUsageContext } from '../../lib/llm_usage';
+import { bucketDiagnostics, type ValidationLike } from './lib/diagnostic_families';
 
 // ---------------------------------------------------------------------------
 // Prompts — the eval pins its OWN A/B prompts so the measurement doesn't
@@ -135,56 +136,6 @@ const BRIEFS: Brief[] = [
       'When a dealflow email arrives, do two things: create the company in Attio (name, domain, summary), and in the knowledge graph create the Organisation and a Deal for that organisation with status Sourced and source type inbound. Connect the Deal to the Organisation.',
   },
 ];
-
-// ---------------------------------------------------------------------------
-// Diagnostic families — the failure classes the plan names. Codes from
-// packages/movement-lang/checker/check.ts.
-// ---------------------------------------------------------------------------
-
-const INVENTED_NAME_CODES = new Set([
-  'MOV_IMPORT_UNKNOWN',
-  'MOV_NAME_UNRESOLVED',
-  'MOV_WRITE_UNKNOWN_ROOT',
-  'MOV_WRITE_UNKNOWN_FIELD',
-  'MOV_UNIQUE_UNKNOWN_FIELD',
-  'MOV_TRAVERSE_UNKNOWN_EDGE',
-  'MOV_LINKED_UNKNOWN_EDGE',
-  'MOV_BORROW_UNKNOWN_GRAPH',
-  'MOV_BORROW_UNKNOWN_ROOT',
-  'MOV_BORROW_UNKNOWN_FIELD',
-  'MOV_UNKNOWN_POSITION',
-  'MOV_UNKNOWN_PROPERTY',
-  'MOV_EXTRACT_UNKNOWN_FIELD',
-]);
-const MISSING_REQUIRED_CODES = new Set([
-  'MOV_WRITE_MISSING_REQUIRED_FIELD',
-  'MOV_WRITE_MISSING_REQUIRED_EDGE',
-]);
-const TYPE_ERROR_CODES = new Set([
-  'MOV_WRITE_FIELD_TYPE',
-  'MOV_WRITE_TUPLE_MISMATCH',
-  'MOV_LINKED_TYPE_MISMATCH',
-  'MOV_EXTRACT_TYPE_CONFLICT',
-  'MOV_CALL_ARG_TYPE',
-]);
-const ENGINE_UNSUPPORTED_CODES = new Set(['MOV_ENGINE_UNSUPPORTED']);
-
-interface ValidationLike {
-  ok: boolean;
-  diagnostics: Array<{ code: string; severity: 'error' | 'warning' | 'info' }>;
-}
-
-function bucketDiagnostics(v: ValidationLike) {
-  const errors = v.diagnostics.filter((d) => d.severity === 'error');
-  const inFamily = (set: Set<string>) => errors.filter((d) => set.has(d.code)).length;
-  return {
-    errorCount: errors.length,
-    invented: inFamily(INVENTED_NAME_CODES),
-    missingRequired: inFamily(MISSING_REQUIRED_CODES),
-    typeErrors: inFamily(TYPE_ERROR_CODES),
-    engineUnsupported: inFamily(ENGINE_UNSUPPORTED_CODES),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // One run: drive the agent on a brief in one mode, recording every tool call.
