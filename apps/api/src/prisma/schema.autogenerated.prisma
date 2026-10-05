@@ -587,34 +587,36 @@ model TriggerEvent {
 }
 
 model TriggerRun {
-  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  teamId            String             @map("team_id") @db.Uuid
-  triggerId         String             @map("trigger_id")
-  triggerType       String             @map("trigger_type")
-  status            String
-  recordId          String?            @map("record_id")
-  movementVersionId String?            @map("movement_version_id") @db.Uuid
-  triggerPayload    Json?              @map("trigger_payload")
-  changedFields     String[]           @map("changed_fields")
-  steps             Json               @default("[]")
-  diagnostics       Json               @default("{}")
-  errors            Json               @default("[]")
-  nodesWritten      Int                @default(0) @map("nodes_written")
-  dryRun            Boolean            @default(false) @map("dry_run")
-  startedAt         DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
-  completedAt       DateTime?          @map("completed_at") @db.Timestamptz(3)
-  failedAt          DateTime?          @map("failed_at") @db.Timestamptz(3)
-  failureReason     String?            @map("failure_reason")
-  cancelRequestedAt DateTime?          @map("cancel_requested_at") @db.Timestamptz(6)
-  cancelReason      String?            @map("cancel_reason")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  opsRunId          String?            @map("ops_run_id") @db.Uuid
-  adapterAwaits     AdapterAwait[]
-  callbacks         Callback[]
-  joinBranchExports JoinBranchExport[]
-  joinPendings      JoinPending[]
-  parkedRuns        ParkedRun[]
-  movementVersion   MovementVersion?   @relation(fields: [movementVersionId], references: [id])
+  id                          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  teamId                      String             @map("team_id") @db.Uuid
+  triggerId                   String             @map("trigger_id")
+  triggerType                 String             @map("trigger_type")
+  status                      String
+  recordId                    String?            @map("record_id")
+  movementVersionId           String?            @map("movement_version_id") @db.Uuid
+  triggerPayload              Json?              @map("trigger_payload")
+  changedFields               String[]           @map("changed_fields")
+  steps                       Json               @default("[]")
+  diagnostics                 Json               @default("{}")
+  errors                      Json               @default("[]")
+  nodesWritten                Int                @default(0) @map("nodes_written")
+  dryRun                      Boolean            @default(false) @map("dry_run")
+  startedAt                   DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt                 DateTime?          @map("completed_at") @db.Timestamptz(3)
+  failedAt                    DateTime?          @map("failed_at") @db.Timestamptz(3)
+  failureReason               String?            @map("failure_reason")
+  cancelRequestedAt           DateTime?          @map("cancel_requested_at") @db.Timestamptz(6)
+  cancelReason                String?            @map("cancel_reason")
+  createdAt                   DateTime           @default(now()) @map("created_at")
+  opsRunId                    String?            @map("ops_run_id") @db.Uuid
+  limitPause                  Json?              @map("limit_pause")
+  costCapBaselineMicrodollars BigInt             @default(0) @map("cost_cap_baseline_microdollars")
+  adapterAwaits               AdapterAwait[]
+  callbacks                   Callback[]
+  joinBranchExports           JoinBranchExport[]
+  joinPendings                JoinPending[]
+  parkedRuns                  ParkedRun[]
+  movementVersion             MovementVersion?   @relation(fields: [movementVersionId], references: [id])
 
   @@index([createdAt])
   @@index([teamId])
