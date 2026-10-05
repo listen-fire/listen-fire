@@ -3,7 +3,7 @@
 // Pure: main.ts gathers the facts, this module turns them into scores.
 
 import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
-import type { BuildEndReason, BuilderStep, ToolCallRecord, TranscriptEntry, Variant } from './builder';
+import type { BuildEndReason, BuildTiming, BuilderStep, ToolCallRecord, TranscriptEntry, Variant } from './builder';
 import type { AssertionResult } from './end_state';
 import type { ClarityVerdict } from './judge';
 import type { DiagnosticBuckets } from '../lib/diagnostic_families';
@@ -24,7 +24,30 @@ interface FixtureRecord {
   sendsBeforeApproval: number;
 }
 
+/** What the builder took in from the reading tools, roughly: each result's
+ *  characters / 4. The whole first read is `getStarted`; the rest is what a
+ *  build still had to look up. */
+interface ReadTokens {
+  getStarted: number;
+  /** readHandbook. */
+  handbook: number;
+  /** searchLanguage. */
+  search: number;
+  /** listTeams, listConnections and describeConnection. */
+  connections: number;
+  total: number;
+}
+
 interface Efficiency {
+  /** The build, end to end — the user's wait. */
+  buildWallMs: number;
+  /** The builder's model calls, added up. */
+  modelMs: number;
+  /** The tool calls, each turn's batch counted once (they run together). */
+  toolMs: number;
+  /** The simulated user's answers — the eval's own time, not the builder's. */
+  userMs: number;
+  readTokens: ReadTokens;
   toolCalls: number;
   toolCallsByName: Record<string, number>;
   modelCalls: number;
@@ -38,10 +61,6 @@ interface Efficiency {
   handbookReads: number;
   handbookTargets: string[];
   languageSearches: number;
-  /** What the builder took in from the handbook and the language search
-   *  together — approximate: the results' characters / 4. */
-  handbookTokens: number;
-  buildWallMs: number;
 }
 
 interface Safety {
@@ -100,8 +119,15 @@ function handbookTarget(args: Record<string, unknown>): string[] {
   return ['(shelf)'];
 }
 
-/** The tools whose results are reading the language, for the handbook tally. */
-const HANDBOOK_TOOLS = new Set(['readHandbook', 'searchLanguage']);
+/** Which reading each tool's result counts towards. */
+const READ_KIND: Record<string, Exclude<keyof ReadTokens, 'total'>> = {
+  getStarted: 'getStarted',
+  readHandbook: 'handbook',
+  searchLanguage: 'search',
+  listTeams: 'connections',
+  listConnections: 'connections',
+  describeConnection: 'connections',
+};
 
 /** Tokens a tool result cost the builder, roughly: four characters a token. */
 const approxTokens = (text: string) => Math.ceil(text.length / 4);
@@ -113,11 +139,24 @@ function savedLive(call: ToolCallRecord): boolean {
   return body?.ok === true && body.needsConfirmation !== true;
 }
 
+function measureReadTokens(toolCalls: ToolCallRecord[]): ReadTokens {
+  const read: ReadTokens = { getStarted: 0, handbook: 0, search: 0, connections: 0, total: 0 };
+  for (const call of toolCalls) {
+    const kind = READ_KIND[call.name];
+    if (kind === undefined) continue;
+    const tokens = approxTokens(call.resultText);
+    read[kind] += tokens;
+    read.total += tokens;
+  }
+  return read;
+}
+
 function measureEfficiency(input: {
   toolCalls: ToolCallRecord[];
   modelCalls: number;
   userTurns: number;
   buildWallMs: number;
+  timing: BuildTiming;
 }): Efficiency {
   const { toolCalls } = input;
   const byName: Record<string, number> = {};
@@ -132,6 +171,11 @@ function measureEfficiency(input: {
   const handbookCalls = toolCalls.filter((c) => c.name === 'readHandbook');
 
   return {
+    buildWallMs: input.buildWallMs,
+    modelMs: input.timing.modelCallMs.reduce((a, b) => a + b, 0),
+    toolMs: input.timing.toolMs,
+    userMs: input.timing.userMs,
+    readTokens: measureReadTokens(toolCalls),
     toolCalls: toolCalls.length,
     toolCallsByName: byName,
     modelCalls: input.modelCalls,
@@ -144,10 +188,6 @@ function measureEfficiency(input: {
     handbookReads: handbookCalls.length,
     handbookTargets: handbookCalls.flatMap((c) => handbookTarget(c.args)),
     languageSearches: byName.searchLanguage ?? 0,
-    handbookTokens: toolCalls
-      .filter((c) => HANDBOOK_TOOLS.has(c.name))
-      .reduce((n, c) => n + approxTokens(c.resultText), 0),
-    buildWallMs: input.buildWallMs,
   };
 }
 
@@ -206,13 +246,16 @@ interface CellSummary {
   fixturePassRate: Record<string, number | null>;
   safeRate: number | null;
   budgetExceeded: number;
-  meanCostUsd: number | null;
+  meanBuildWallMs: number | null;
+  meanModelMs: number | null;
+  meanToolMs: number | null;
+  meanModelCalls: number | null;
   meanToolCalls: number | null;
+  meanReadTokens: number | null;
+  meanCostUsd: number | null;
   meanValidateCalls: number | null;
   meanRoundsToFirstSave: number | null;
   meanHandbookReads: number | null;
-  meanHandbookTokens: number | null;
-  meanBuildWallMs: number | null;
   meanClarity: number | null;
   askedClarifyingRate: number | null;
 }
@@ -234,13 +277,16 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
     ),
     safeRate: rate(trials.map((t) => t.safety.pass)),
     budgetExceeded: trials.filter((t) => t.outcome === 'budget-exceeded').length,
-    meanCostUsd: nums((t) => t.costUsd),
+    meanBuildWallMs: nums((t) => t.efficiency.buildWallMs),
+    meanModelMs: nums((t) => t.efficiency.modelMs),
+    meanToolMs: nums((t) => t.efficiency.toolMs),
+    meanModelCalls: nums((t) => t.efficiency.modelCalls),
     meanToolCalls: nums((t) => t.efficiency.toolCalls),
+    meanReadTokens: nums((t) => t.efficiency.readTokens.total),
+    meanCostUsd: nums((t) => t.costUsd),
     meanValidateCalls: nums((t) => t.efficiency.validateCalls),
     meanRoundsToFirstSave: nums((t) => t.efficiency.roundsToFirstSave),
     meanHandbookReads: nums((t) => t.efficiency.handbookReads),
-    meanHandbookTokens: nums((t) => t.efficiency.handbookTokens),
-    meanBuildWallMs: nums((t) => t.efficiency.buildWallMs),
     meanClarity: nums((t) => t.clarity?.overall),
     askedClarifyingRate: rate(
       trials.filter((t) => t.clarity !== null).map((t) => t.clarity?.askedClarifyingQuestion === true),
@@ -262,12 +308,17 @@ interface VariantTotals {
   variant: Variant;
   handbook: HandbookMode;
   trials: number;
+  meanBuildWallMs: number | null;
+  meanModelMs: number | null;
+  meanToolMs: number | null;
+  meanModelCalls: number | null;
+  meanToolCalls: number | null;
+  meanReadTokens: number | null;
   correctRate: number | null;
   safeRate: number | null;
   totalCostUsd: number;
   meanCostUsd: number | null;
   meanClarity: number | null;
-  meanHandbookTokens: number | null;
 }
 
 /** One total per (variant, handbook) pairing that ran, in the order first seen. */
@@ -275,16 +326,22 @@ function totalsByVariant(trials: TrialRecord[]): VariantTotals[] {
   const pairings = [...new Map(trials.map((t) => [`${t.variant}\u0000${t.handbook}`, t])).values()];
   return pairings.map(({ variant, handbook }) => {
     const mine = trials.filter((t) => t.variant === variant && t.handbook === handbook);
+    const meanOf = (pick: (e: Efficiency) => number) => mean(mine.map((t) => pick(t.efficiency)));
     return {
       variant,
       handbook,
       trials: mine.length,
+      meanBuildWallMs: meanOf((e) => e.buildWallMs),
+      meanModelMs: meanOf((e) => e.modelMs),
+      meanToolMs: meanOf((e) => e.toolMs),
+      meanModelCalls: meanOf((e) => e.modelCalls),
+      meanToolCalls: meanOf((e) => e.toolCalls),
+      meanReadTokens: meanOf((e) => e.readTokens.total),
       correctRate: rate(mine.map((t) => t.correct)),
       safeRate: rate(mine.map((t) => t.safety.pass)),
       totalCostUsd: mine.reduce((n, t) => n + t.costUsd, 0),
       meanCostUsd: mean(mine.map((t) => t.costUsd)),
       meanClarity: mean(mine.map((t) => t.clarity?.overall).filter((x): x is number => typeof x === 'number')),
-      meanHandbookTokens: mean(mine.map((t) => t.efficiency.handbookTokens)),
     };
   });
 }
@@ -294,6 +351,7 @@ function totalsByVariant(trials: TrialRecord[]): VariantTotals[] {
 const pct = (x: number | null) => (x === null ? '–' : `${Math.round(x * 100)}%`);
 const num = (x: number | null, digits = 1) => (x === null ? '–' : x.toFixed(digits));
 const usd = (x: number | null) => (x === null ? '–' : `$${x.toFixed(2)}`);
+const secs = (ms: number | null) => (ms === null ? '–' : `${(ms / 1000).toFixed(1)}s`);
 
 function renderSummary(input: {
   startedAt: string;
@@ -307,23 +365,34 @@ function renderSummary(input: {
     '',
     `Args: \`${JSON.stringify(input.args)}\``,
     '',
+    'Time and tokens first: build time is the user\'s wait; model and tool time are where it went (the rest is the simulated user and overhead). Tokens read are the reading tools\' results, characters / 4.',
+    '',
     '## Totals',
     '',
-    '| variant | handbook | trials | correct | safe | clarity (1–5) | handbook tokens | cost total | cost / trial |',
-    '|---|---|---|---|---|---|---|---|---|',
+    '| variant | handbook | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity (1–5) | cost total | cost / trial |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...totals.map(
       (t) =>
-        `| ${t.variant} | ${t.handbook} | ${t.trials} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${num(t.meanHandbookTokens, 0)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
+        `| ${t.variant} | ${t.handbook} | ${t.trials} | ${secs(t.meanBuildWallMs)} | ${secs(t.meanModelMs)} | ${secs(t.meanToolMs)} | ${num(t.meanModelCalls)} | ${num(t.meanToolCalls)} | ${num(t.meanReadTokens, 0)} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
     ),
     '',
     '## Per task',
     '',
-    '| task | variant | handbook | n | correct | safe | clarity | asked? | tool calls | validates | rounds→save | handbook reads | handbook tokens | build time | cost |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| task | variant | handbook | n | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity | asked? | validates | rounds→save | handbook reads | cost |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...cells.map(
       (c) =>
-        `| ${c.taskId} | ${c.variant} | ${c.handbook} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanToolCalls)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${num(c.meanHandbookTokens, 0)} | ${c.meanBuildWallMs === null ? '–' : `${Math.round(c.meanBuildWallMs / 1000)}s`} | ${usd(c.meanCostUsd)} |`,
+        `| ${c.taskId} | ${c.variant} | ${c.handbook} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${secs(c.meanBuildWallMs)} | ${secs(c.meanModelMs)} | ${secs(c.meanToolMs)} | ${num(c.meanModelCalls)} | ${num(c.meanToolCalls)} | ${num(c.meanReadTokens, 0)} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${usd(c.meanCostUsd)} |`,
     ),
+    '',
+    '## Per trial',
+    '',
+    '| task | variant | handbook | trial | build time | model time | tool time | user time | model calls | tool calls | getStarted tokens | handbook tokens | search tokens | connection tokens | correct |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...input.trials.map((t) => {
+      const e = t.efficiency;
+      return `| ${t.taskId} | ${t.variant} | ${t.handbook} | ${t.rep + 1} | ${secs(e.buildWallMs)} | ${secs(e.modelMs)} | ${secs(e.toolMs)} | ${secs(e.userMs)} | ${e.modelCalls} | ${e.toolCalls} | ${e.readTokens.getStarted} | ${e.readTokens.handbook} | ${e.readTokens.search} | ${e.readTokens.connections} | ${t.correct ? 'yes' : 'no'} |`;
+    }),
     '',
     '## Fixtures',
     '',
@@ -355,4 +424,4 @@ export {
   summarizeCell,
   totalsByVariant,
 };
-export type { CellSummary, Efficiency, FixtureRecord, Safety, TrialOutcome, TrialRecord, VariantTotals };
+export type { CellSummary, Efficiency, FixtureRecord, ReadTokens, Safety, TrialOutcome, TrialRecord, VariantTotals };

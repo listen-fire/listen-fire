@@ -19,7 +19,7 @@ things only — your understanding of what they want, the few decisions that
 are theirs, and proof of what it actually did.
 
 The authoring truth lives in the Listen-Fire handbook — read its opening page
-first (the automations handbook with no chapter named), every session, and
+first (getStarted serves it, with what is connected), every session, and
 where this skill and the handbook disagree on how to write an automation, the
 handbook wins. What this skill adds is the choreography:
 

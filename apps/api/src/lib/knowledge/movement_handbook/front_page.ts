@@ -162,7 +162,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
 /** Agent-facing, so it names the tools — the one part of the page that does. */
 export const BUILD_LOOP = `### build-loop
 
-listConnections → describeConnection (exact names) → write → validateAutomation → saveAutomation → runAutomation → checkRun. Look up a built-in, a system or a recipe with searchLanguage.`;
+getStarted → write → saveAutomation (checks first; saves nothing with errors) → runAutomation → checkRun. No chapters: searchLanguage answers lookups, describeConnection details one system. Batch independent calls in one turn.`;
 
 function renderExample(example: FrontExample): string {
   return `\n\`\`\`\n${exampleText(example)}\n\`\`\``;

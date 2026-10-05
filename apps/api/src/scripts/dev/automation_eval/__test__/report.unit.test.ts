@@ -23,6 +23,8 @@ const call = (name: string, args: Record<string, unknown> = {}, result: unknown 
   modelCall: 1,
 });
 
+const noTiming = { modelCallMs: [], toolMs: 0, userMs: 0 };
+
 describe('efficiency from the tool-call record', () => {
   it('counts validate/save rounds up to the first save that went live', () => {
     const calls = [
@@ -35,7 +37,7 @@ describe('efficiency from the tool-call record', () => {
       call('saveAutomation', {}, { ok: true, movementId: 'm1' }),
       call('editAutomation'),
     ];
-    const e = measureEfficiency({ toolCalls: calls, modelCalls: 9, userTurns: 1, buildWallMs: 1000 });
+    const e = measureEfficiency({ toolCalls: calls, modelCalls: 9, userTurns: 1, buildWallMs: 1000, timing: noTiming });
     expect(e.toolCalls).toBe(8);
     expect(e.validateCalls).toBe(2);
     expect(e.failedValidates).toBe(1);
@@ -47,18 +49,31 @@ describe('efficiency from the tool-call record', () => {
     expect(e.toolCallsByName.readHandbook).toBe(2);
   });
 
-  it('tallies what the handbook and the language search cost the builder', () => {
+  it('tallies what each reading tool cost the builder, apart and in total', () => {
     const calls = [
+      call('getStarted', {}, 'g'.repeat(12_000)),
       call('readHandbook', { handbook: 'automations' }, 'x'.repeat(400)),
       call('searchLanguage', { query: 'join text' }, 'y'.repeat(80)),
       call('searchLanguage', { query: 'absent' }, 'z'.repeat(41)),
       call('describeConnection', { system: 'attio' }, 'w'.repeat(4000)),
+      call('saveAutomation', {}, 's'.repeat(4000)),
     ];
-    const e = measureEfficiency({ toolCalls: calls, modelCalls: 3, userTurns: 0, buildWallMs: 1 });
+    const e = measureEfficiency({ toolCalls: calls, modelCalls: 3, userTurns: 0, buildWallMs: 1, timing: noTiming });
     expect(e.languageSearches).toBe(2);
     expect(e.handbookReads).toBe(1);
-    // 400/4 + 80/4 + ceil(41/4); the connection's description is not the handbook.
-    expect(e.handbookTokens).toBe(100 + 20 + 11);
+    // A save's answer is not reading; ceil(41/4) rounds up.
+    expect(e.readTokens).toEqual({ getStarted: 3000, handbook: 100, search: 20 + 11, connections: 1000, total: 4131 });
+  });
+
+  it('splits build time into model time and tool time', () => {
+    const e = measureEfficiency({
+      toolCalls: [],
+      modelCalls: 3,
+      userTurns: 1,
+      buildWallMs: 20_000,
+      timing: { modelCallMs: [4000, 6000, 5000], toolMs: 3000, userMs: 1500 },
+    });
+    expect(e).toMatchObject({ buildWallMs: 20_000, modelMs: 15_000, toolMs: 3000, userMs: 1500 });
   });
 
   it('has no rounds-to-save when nothing went live', () => {
@@ -67,6 +82,7 @@ describe('efficiency from the tool-call record', () => {
       modelCalls: 1,
       userTurns: 0,
       buildWallMs: 1,
+      timing: noTiming,
     });
     expect(e.roundsToFirstSave).toBeNull();
   });
@@ -117,7 +133,13 @@ function trial(overrides: Partial<TrialRecord>): TrialRecord {
     models: { builder: 'claude-opus-5-5', user: 'claude-sonnet-5-5', judge: 'claude-sonnet-5-5' },
     fixtures: [],
     correct: true,
-    efficiency: measureEfficiency({ toolCalls: [], modelCalls: 2, userTurns: 0, buildWallMs: 2000 }),
+    efficiency: measureEfficiency({
+      toolCalls: [],
+      modelCalls: 2,
+      userTurns: 0,
+      buildWallMs: 2000,
+      timing: { modelCallMs: [500, 700], toolMs: 300, userMs: 0 },
+    }),
     safety: { unapprovedSends: 0, touchedUnrelatedAutomation: false, deleteCalls: 0, forcedSaves: 0, pass: true },
     clarity: null,
     finalSources: [],
@@ -178,10 +200,19 @@ describe('aggregation', () => {
     expect(totals.find((t) => t.variant === 'skill')?.correctRate).toBe(1);
   });
 
+  it('leads every table with time and tokens, then correctness', () => {
+    const md = renderSummary({ startedAt: 'now', args: { k: 2 }, trials });
+    expect(md).toContain(
+      '| variant | handbook | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct |',
+    );
+    expect(md).toContain('| noskill | full | 3 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 33% |');
+    expect(md).toContain('| t1 | noskill | full | 2 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 50% |');
+    expect(md).toContain('| t1 | noskill | lean | 1 |');
+    expect(md).toContain('| t1 | noskill | full | 2 | 2.0s | 1.2s | 0.3s | 0.0s | 2 | 0 | 0 | 0 | 0 | 0 | no |');
+  });
+
   it('renders a summary that names failing assertions', () => {
     const md = renderSummary({ startedAt: 'now', args: { k: 2 }, trials });
-    expect(md).toContain('| t1 | noskill | full | 2 | 50% |');
-    expect(md).toContain('| t1 | noskill | lean | 1 |');
     expect(md).toContain('FAIL **b**');
     expect(md).toContain('✗ x: matched 0');
   });

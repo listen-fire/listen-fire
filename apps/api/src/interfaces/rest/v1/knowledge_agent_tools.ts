@@ -66,9 +66,13 @@ import {
 import { mergeNodes } from '../../../lib/knowledge/merge';
 import { createOntologyAgentTools } from '../../../lib/knowledge/ontology_agent';
 import {
+  assessMovementValidity,
   validateMovementForTeam,
   formatMovementDiagnostics,
+  type AuthoringDiagnostic,
+  type TeamMovementValidation,
 } from '../../../services/translation_graph/movement/authoring';
+import { renderGetStarted } from '../../../services/translation_graph/movement/get_started';
 import {
   describeMovementInstance,
   movementCatalogSnapshotForTeam,
@@ -707,6 +711,36 @@ const listTeamsHandler: RequestHandler = async (_req, res) => {
 };
 
 // ---------------------------------------------------------------------------
+// getStarted — the first read of a build, in one call
+// ---------------------------------------------------------------------------
+
+const getStartedSchema = z.object({ team: z.string().optional() });
+
+// Markdown, not JSON: the answer is prose and a digest, and escaping it into a
+// JSON string costs the reader tokens for nothing.
+const getStartedHandler: RequestHandler = async (req, res) => {
+  const mode = requestHandbookMode(req);
+  if (!mode.ok) return res.status(400).json({ error: mode.error });
+  const parsed = getStartedSchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
+  }
+  try {
+    const teams = await listAccessibleTeams();
+    // Several teams and none named: list them rather than refuse, so the agent
+    // learns them here instead of from a separate listTeams.
+    const teamId =
+      parsed.data.team === undefined && teams.length > 1
+        ? null
+        : ((await resolveToolTeam(parsed.data.team)) as TeamId);
+    const text = await renderGetStarted({ teams, teamId, mode: mode.mode });
+    return res.status(200).type('text/markdown').send(text);
+  } catch (err) {
+    return internalError(res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // movements.read / movements.author
 // ---------------------------------------------------------------------------
 
@@ -806,34 +840,88 @@ const validateMovementSchema = z.object({
   languageVersion: z.number().int().optional(),
 });
 
+type AutomationValidation = TeamMovementValidation & { validatedUnder: LanguageVersionView };
+
+/**
+ * Check text the way a save would: an explicit version wins; else a saved
+ * automation validates under its pin; else new text validates under the
+ * current version. A saved automation checked under a version newer than its
+ * pin is a check for the move, and hears what changed meaning on the way.
+ */
+async function validateAutomationText(input: {
+  teamId: string;
+  source: string;
+  automation?: string;
+  languageVersion?: LanguageVersion;
+}): Promise<AutomationValidation | { error: string }> {
+  let languageVersion = input.languageVersion;
+  let upgradingFrom: LanguageVersion | undefined;
+  if (input.automation !== undefined) {
+    const row = await getMovementRow({ teamId: input.teamId, id: input.automation }).catch(() => null);
+    if (!row) return { error: `No automation '${input.automation}' in this team.` };
+    if (languageVersion === undefined) languageVersion = row.languageVersion;
+    else if (before(row.languageVersion, languageVersion)) upgradingFrom = row.languageVersion;
+  }
+  const validation = await validateMovementForTeam({
+    teamId: input.teamId,
+    source: input.source,
+    ...(languageVersion !== undefined ? { languageVersion } : {}),
+    ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
+  });
+  return {
+    ...validation,
+    validatedUnder: languageVersionView(languageVersion ?? CURRENT_LANGUAGE_VERSION),
+  };
+}
+
+/**
+ * What an agent's save answers when the text would not go live: nothing is
+ * saved, and the diagnostics come back as validateAutomation returns them, so
+ * the save is itself the check and the fix starts from its answer. Null when
+ * the text is clean and the save may go ahead.
+ */
+function unsavedRefusal(validation: AutomationValidation) {
+  const validity = assessMovementValidity({ diagnostics: validation.diagnostics, gaps: validation.gaps });
+  switch (validity.status) {
+    case 'valid':
+      return null;
+    case 'invalid':
+      return {
+        ok: false as const,
+        saved: false as const,
+        message: 'Not saved: the program has errors (diagnostics). Fix them and save again.',
+        diagnostics: validation.diagnostics,
+        validatedUnder: validation.validatedUnder,
+      };
+    case 'unverified':
+      return {
+        ok: false as const,
+        saved: false as const,
+        message:
+          "Not saved: a system it uses could not be checked (errors). Save again once the connection works, or pass acknowledgeErrors: true — with the user's consent — to save it unchecked.",
+        errors: validation.gaps.map((g) => `couldn't check this automation against "${g.adapter}" (${g.detail})`),
+        diagnostics: validation.diagnostics,
+        validatedUnder: validation.validatedUnder,
+      };
+    default:
+      return neverAsAny(validity.status);
+  }
+}
+
+/** The warnings a clean check still carries, for a save to pass along. */
+const remainingDiagnostics = (diagnostics: AuthoringDiagnostic[]) =>
+  diagnostics.length > 0 ? { diagnostics } : {};
+
 const validateMovementHandler: RequestHandler = jsonHandler(
   validateMovementSchema,
   'body',
-  async (input) => {
-    const teamId = await resolveToolTeam(input.team);
-    // An explicit version wins; else a saved automation validates under its
-    // pin; else new text validates under the current version. A saved
-    // automation checked under a version newer than its pin is a check for
-    // the move, and hears what changed meaning on the way.
-    let languageVersion = input.languageVersion;
-    let upgradingFrom: LanguageVersion | undefined;
-    if (input.automation !== undefined) {
-      const row = await getMovementRow({ teamId, id: input.automation }).catch(() => null);
-      if (!row) return { error: `No automation '${input.automation}' in this team.` };
-      if (languageVersion === undefined) languageVersion = row.languageVersion;
-      else if (before(row.languageVersion, languageVersion)) upgradingFrom = row.languageVersion;
-    }
-    const validation = await validateMovementForTeam({
-      teamId,
+  async (input) =>
+    validateAutomationText({
+      teamId: await resolveToolTeam(input.team),
       source: input.source,
-      ...(languageVersion !== undefined ? { languageVersion } : {}),
-      ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
-    });
-    return {
-      ...validation,
-      validatedUnder: languageVersionView(languageVersion ?? CURRENT_LANGUAGE_VERSION),
-    };
-  },
+      ...(input.automation !== undefined ? { automation: input.automation } : {}),
+      ...(input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : {}),
+    }),
 );
 
 const upgradeMovementSchema = z.object({
@@ -911,8 +999,8 @@ const saveMovementSchema = z.object({
   id: z.string().optional(),
   team: z.string().optional(),
   /** Consent to save a broken automation live anyway. Without it, a save that
-   *  can't be verified or has errors comes back as needsConfirmation so you can
-   *  fix it or check with the user first. */
+   *  can't be verified or has errors is refused with its diagnostics and
+   *  nothing is saved, so you can fix it or check with the user first. */
   acknowledgeErrors: z.boolean().optional(),
   /** Optimistic-concurrency precondition: the `revision` a prior getAutomation
    *  call returned for this automation. When set on a re-save (an `id`) and
@@ -925,6 +1013,21 @@ const saveMovementSchema = z.object({
 
 const saveMovementHandler: RequestHandler = jsonHandler(saveMovementSchema, 'body', async (input) => {
   const teamId = await resolveToolTeam(input.team);
+  // Validate first, and save nothing that would not go live: an agent's save is
+  // its check, so text it got wrong never becomes the stored automation.
+  // Consent (acknowledgeErrors) skips the refusal and ships the text as it is.
+  let checked: AuthoringDiagnostic[] = [];
+  if (input.acknowledgeErrors !== true) {
+    const validation = await validateAutomationText({
+      teamId,
+      source: input.source,
+      ...(input.id !== undefined ? { automation: input.id } : {}),
+    });
+    if ('error' in validation) return validation;
+    const refusal = unsavedRefusal(validation);
+    if (refusal) return refusal;
+    checked = validation.diagnostics;
+  }
   const result = await saveMovement({
     teamId,
     source: input.source,
@@ -966,6 +1069,7 @@ const saveMovementHandler: RequestHandler = jsonHandler(saveMovementSchema, 'bod
       runnable,
       storyUrl: storyUrl(token),
       warnings,
+      ...remainingDiagnostics(checked),
     };
   }
   return {
@@ -1063,6 +1167,20 @@ const editAutomationHandler: RequestHandler = async (req, res) => {
       return res.status(400).json({ error: spliced.error });
     }
 
+    // An edit is a save, and refuses what would not go live just as one does.
+    let checked: AuthoringDiagnostic[] = [];
+    if (input.acknowledgeErrors !== true) {
+      const validation = await validateAutomationText({
+        teamId: ref.teamId,
+        source: spliced.source,
+        automation: ref.movementId,
+      });
+      if ('error' in validation) return res.status(404).json(validation);
+      const refusal = unsavedRefusal(validation);
+      if (refusal) return res.status(200).json(refusal);
+      checked = validation.diagnostics;
+    }
+
     // Delegate to saveMovement for everything past the splice: the
     // expectedRevision precondition (a conflict here is refused exactly like a
     // stale saveAutomation, current source included, so the caller can re-read
@@ -1077,7 +1195,9 @@ const editAutomationHandler: RequestHandler = async (req, res) => {
     });
 
     if (result.ok) {
-      return res.status(200).json({ ...result, revision: movementSourceHash(spliced.source) });
+      return res
+        .status(200)
+        .json({ ...result, revision: movementSourceHash(spliced.source), ...remainingDiagnostics(checked) });
     }
     return res.status(200).json({
       ...result,
@@ -1379,6 +1499,9 @@ function mountAutomationToolRoutes(router: ReturnType<typeof Router>): void {
   // teams (shared with the knowledge connector)
   router.get('/teams', listTeamsHandler);
 
+  // the first read of a build: the handbook's first page, the team, its systems
+  router.get('/get-started', getStartedHandler);
+
   // library.read — the authoring handbook
   router.post('/handbook', readBookHandler);
   router.post('/language/search', searchLanguageHandler);
@@ -1476,6 +1599,12 @@ function registerAutomationToolRoutes(): void {
     'List the teams this connection can act in: each one\'s teamId, name, access, and isPersonal (true marks the user\'s personal workspace vs a shared team). Pass a teamId as `team` to tools that read or change a specific team. Also the top-level "listTeams" tool.',
     { readOnly: true, latency: 'fast' },
   );
+  reg(
+    'GET',
+    '/get-started',
+    'The first read of a build, as markdown: the automations handbook\'s first page (the front page, or the foundations chapter in the full handbook), the team (every team, with ids, when the connection spans several and no `team` is named), and that team\'s systems — how to construct each, its record types with their fields, and what a listen on it may say. Query: team?. Also the top-level "getStarted" tool.',
+    { inputSchema: getStartedSchema, readOnly: true, latency: 'medium' },
+  );
 
   // library
   reg(
@@ -1505,12 +1634,12 @@ function registerAutomationToolRoutes(): void {
   reg('GET', '/automations', 'List saved automations: id, name, status, listeners. Spans every team the connection covers; each item is tagged with its teamId + teamName.', { readOnly: true, latency: 'fast' });
   reg('GET', '/automations/:idOrName', 'Get one saved automation by id or name (across the teams the connection covers): its program, status, listeners, `revision` — a fingerprint of its current source — and `storyUrl`, a link to a picture of what it does that anyone can open (hand it to the user as a labelled link, e.g. [See what this does](url); it needs no login and always shows the current version). Re-read this (don\'t reuse an old copy) before editing an automation you already have, then pass its `revision` back as `expectedRevision` when you save.', { readOnly: true, latency: 'fast' });
   reg('GET', '/automations/:idOrName/source', 'Read an automation\'s program text a window at a time, by id or name — cheaper than getAutomation when you only need to see (or re-check) part of a long file. Pass ?offset= (1-based line number, default 1) and ?limit= (line count, default the rest of the file). Returns { id, name, revision, totalLines, offset, lines: [{ n, text }] }. Line numbers are only valid against THIS read — anything else that edits the file moves them, so anchor an edit on the text itself (editAutomation), not on `n`.', { readOnly: true, latency: 'fast' });
-  reg('POST', '/automations/:idOrName/edit', 'Change one saved automation by splicing a snippet, without resending the whole program: pass the automation\'s id or name and { oldString, newString, replaceAll?, expectedRevision?, acknowledgeErrors? }. oldString must appear in the CURRENT source exactly once (read it first — readAutomation or getAutomation — and quote enough surrounding text to pin one spot), or the edit is refused with a 400 explaining why: not found, or found more than once (pass replaceAll: true to change every match instead of widening the anchor). Once the anchor resolves, this is exactly saveAutomation with the spliced result as the new source — same expectedRevision conflict check, same validity gate, same acknowledgeErrors consent, and the edit ships (or is held back) on identical terms. Returns save\'s result plus the new `revision`.', { latency: 'medium' });
+  reg('POST', '/automations/:idOrName/edit', 'Change one saved automation by splicing a snippet, without resending the whole program: pass the automation\'s id or name and { oldString, newString, replaceAll?, expectedRevision?, acknowledgeErrors? }. oldString must appear in the CURRENT source exactly once (read it first — readAutomation or getAutomation — and quote enough surrounding text to pin one spot), or the edit is refused with a 400 explaining why: not found, or found more than once (pass replaceAll: true to change every match instead of widening the anchor). Once the anchor resolves, this is exactly saveAutomation with the spliced result as the new source — same expectedRevision conflict check, same check first (an edit with errors is not saved; the diagnostics come back), same acknowledgeErrors consent. Returns save\'s result plus the new `revision`.', { latency: 'medium' });
   reg('GET', '/automations/grep', 'Search across a team\'s automations for a literal snippet (or, with isRegex: true, a regular expression) and get back every matching line: { matches: [{ id, name, teamId, line, text, before, after }], truncated }. Query: pattern, isRegex?, contextLines? (lines of surrounding context per match, default 0), team? (default: every team the connection covers). Capped at 200 matches. Use it to find where something is defined or imported before editing it.', { inputSchema: grepAutomationsSchema, readOnly: true, latency: 'fast' });
-  reg('POST', '/automations/validate', 'Typecheck an automation program against the live connected systems WITHOUT saving. Returns diagnostics (code, message, severity, line/col). A clean validation predicts a live save. Acts in your default team unless you pass `team`. Also the top-level "validateAutomation" tool.', { inputSchema: validateMovementSchema, latency: 'medium' });
+  reg('POST', '/automations/validate', 'Typecheck an automation program against the live connected systems WITHOUT saving. Returns diagnostics (code, message, severity, line/col). A clean validation predicts a live save; saving runs the same check first, so this is for exploring. Acts in your default team unless you pass `team`. Also the top-level "validateAutomation" tool.', { inputSchema: validateMovementSchema, latency: 'medium' });
   reg('POST', '/automations/upgrade', 'Move a saved automation onto the current language version. Body: { automation, acknowledge?, team? }. Validates it under the current version and returns { status, from, to, diagnostics, message }: `blocked` (diagnostics to repair), `needs_acknowledgement` (clean — call again with acknowledge: true to move it), `upgraded`, `already_current`, or `unverified`. Without acknowledge nothing changes. Also the top-level "upgradeAutomation" tool.', { inputSchema: upgradeMovementSchema, latency: 'medium' });
   reg('POST', '/automations/completions', 'Given an automation program with a `<|>` cursor marker, return the valid next tokens at that point (writable fields, edges, enum options). Body: { source, team? }.', { inputSchema: completionsAtSchema, latency: 'medium' });
-  reg('POST', '/automations/save', 'Save an automation program and provision its listeners (authoring → live). A valid save goes live; one that has errors or can\'t be verified saves the text but goes live only once you confirm — it comes back as needsConfirmation, and acknowledgeErrors: true ships it anyway (replacing whatever ran, even broken). No "draft" quietly keeps the last good version running. Returns needsConfirmation/diagnostics, per-listener details, runnable, `warnings` (saved fine, but would surprise the user — a movement name another automation already fires, or listeners retired because the saved source could not be read; always relay these), and `storyUrl` — a login-free link to a picture of what the automation does, worth offering as a labelled link once a save goes live. Body: { source, name?, description?, id?, acknowledgeErrors?, expectedRevision?, team? } — pass id to re-save, expectedRevision (the `revision` from your last getAutomation read) when updating an EXISTING automation so a concurrent edit can\'t be silently clobbered — a stale expectedRevision is rejected with { ok: false, conflict } instead of overwriting; call getAutomation again, merge, and re-save with the new revision. Omit expectedRevision for today\'s behaviour (no precondition — last write wins); it\'s ignored when creating a new automation. `team` files it in a specific team. Also the top-level "saveAutomation" tool.', { inputSchema: saveMovementSchema, latency: 'medium' });
+  reg('POST', '/automations/save', 'Save an automation program and provision its listeners (authoring → live). It validates first: text with errors, or that can\'t be verified, is NOT saved — the answer is { ok: false, saved: false, diagnostics } — and acknowledgeErrors: true ships it anyway (replacing whatever ran, even broken). A clean save goes live. No "draft" quietly keeps the last good version running. Returns diagnostics, per-listener details, runnable, `warnings` (saved fine, but would surprise the user — a movement name another automation already fires, or listeners retired because the saved source could not be read; always relay these), and `storyUrl` — a login-free link to a picture of what the automation does, worth offering as a labelled link once a save goes live. Body: { source, name?, description?, id?, acknowledgeErrors?, expectedRevision?, team? } — pass id to re-save, expectedRevision (the `revision` from your last getAutomation read) when updating an EXISTING automation so a concurrent edit can\'t be silently clobbered — a stale expectedRevision is rejected with { ok: false, conflict } instead of overwriting; call getAutomation again, merge, and re-save with the new revision. Omit expectedRevision for today\'s behaviour (no precondition — last write wins); it\'s ignored when creating a new automation. `team` files it in a specific team. Also the top-level "saveAutomation" tool.', { inputSchema: saveMovementSchema, latency: 'medium' });
   reg('POST', '/automations/delete', 'Permanently delete a saved automation and every listener it derives (a hard delete — the automation and its run triggers are gone, and any now-orphaned external subscriptions are torn down). Body: { automation, team? } — the automation id (from listAutomations); pass `team` when you belong to more than one. Returns { deleted } — false if no automation with that id lives in the resolved team. Also the top-level "deleteAutomation" tool.', { inputSchema: deleteMovementSchema, latency: 'fast' });
   reg('POST', '/automations/run', 'Dispatch a saved automation on its manual channel and return IMMEDIATELY with { runId, status: "running" } — the run executes asynchronously (it can take a while). Optionally pass text and/or files as its input. Body: { automation, text?, files?, team? }. Poll /automations/run-status (the "checkRun" tool) with the runId for the outcome. Also the top-level "runAutomation" tool.', { inputSchema: runMovementSchema, latency: 'fast' });
   reg('POST', '/automations/run-status', 'Read one automation run\'s status by id — the poll target for runAutomation. Body: { runId, team? }. Returns { status (running | parked | success | partial | failed), recordCount, errors, startedAt, finishedAt, failedAt, failureReason, costUsd, modelCalls } — costUsd/modelCalls are the run\'s model-call spend and call count. Poll until status leaves "running" ("parked" means paused, waiting for your review — see listReviews). Also the top-level "checkRun" tool.', { inputSchema: getMovementRunSchema, readOnly: true, latency: 'fast' });
@@ -1563,6 +1692,7 @@ export {
   registerAutomationToolRoutes,
   registerKnowledgeAgentToolRoutes,
   // exported for unit tests
+  getStartedHandler,
   readBookHandler,
   getNodeDetailHandler,
   listCatalogHandler,

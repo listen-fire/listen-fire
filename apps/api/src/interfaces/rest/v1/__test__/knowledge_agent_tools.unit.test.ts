@@ -69,6 +69,7 @@ describe('registry (describe_api)', () => {
 
   it('lists the automation ops under the automation domain + /v1/automation', () => {
     expect(has('GET', '/v1/automation/teams', 'automation')).toBe(true);
+    expect(has('GET', '/v1/automation/get-started', 'automation')).toBe(true);
     expect(has('POST', '/v1/automation/handbook', 'automation')).toBe(true);
     expect(has('GET', '/v1/automation/connections', 'automation')).toBe(true);
     expect(has('POST', '/v1/automation/connections/describe', 'automation')).toBe(true);
@@ -118,6 +119,7 @@ describe('router mounting', () => {
     expect(() => mountAutomationToolRoutes(router)).not.toThrow();
     const mounted = mountedPaths(router);
     expect(mounted).toContain('GET /teams');
+    expect(mounted).toContain('GET /get-started');
     expect(mounted).toContain('POST /handbook');
     expect(mounted).toContain('GET /connections');
     expect(mounted).toContain('POST /connections/connect');
