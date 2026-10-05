@@ -593,9 +593,11 @@ export type NodeEntry =
  * `...v` in a graph literal — a computed MAP (plugin output, JSON, a dict)
  * converted into the graph: each key a field, and a nested map (or a list of
  * them) a child node. With a shape, the shape decides which keys are children;
- * without one, every nested map is. As in a write body, an entry written in
- * the body wins over a spread's key wherever it stands, and a later spread
- * over an earlier one — so the spreads keep their own order and nothing else.
+ * without one, every nested map is. From language version 3 it is
+ * TypeScript's object spread: members take effect in the order written, a
+ * later one winning, and a key written before a spread that always supplies
+ * it is refused. Before version 3 a written entry won over a spread's key
+ * wherever it stood, and a later spread over an earlier one.
  *
  * `v` may instead be ONE RECORD, whose fields are copied as a snapshot by the
  * rule a bare walk copies by (`CopyPlan`). A value that is absent copies
@@ -604,6 +606,8 @@ export type NodeEntry =
 export interface MapSpread {
   /** The map's (or the record's) bound name. */
   source: string;
+  /** How many entries were written before this spread — where among them it stands. */
+  after: number;
   /** A record spread: what the snapshot copies, as the checker resolved it.
    *  Absent until checked, and on every map spread. */
   copy?: CopyPlan;

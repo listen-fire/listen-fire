@@ -298,6 +298,7 @@ import {
   readsAsPresentText,
   stripAbsent,
   TypedDiagnosticCodes,
+  valueUnion,
   mixedTupleMessage,
   widenTuples,
   unifyValueTypes,
@@ -2287,6 +2288,8 @@ function declaredLocalGraph(
 interface SpreadKeys {
   reads: Record<string, FieldType | undefined>;
   edges: Record<string, LocalEdge>;
+  /** The spread's source may not be there, so it may supply none of these. */
+  mayBeAbsent?: boolean;
 }
 
 /** A declared node as the author reads it: `<Message>`, or a nested node by
@@ -8988,31 +8991,62 @@ class Checker {
     const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
     const reads: Record<string, FieldType | undefined> = {};
     const edges: Record<string, LocalEdge> = {};
-    const spread: SpreadKeys = { reads: {}, edges: {} };
     // A spread whose keys nobody can name: what it supplies is checked when
     // the graph is built, so no field can be called missing here.
     let opaqueSpread = false;
-    // A written entry wins over a spread's key wherever it stands, so the
-    // spread's value for it is never what the field holds.
-    const written = new Set(literal.entries.map(entry => entry.name));
-    for (const source of literal.spreads ?? []) {
-      const keys = this.checkGraphSpread(source, { scope, required, written });
-      if (keys === undefined) {
-        opaqueSpread = true;
-        continue;
+    // From version 3 a graph body is TypeScript's object literal: members take
+    // effect in the order written, so a later one wins and a key written
+    // before a spread that always supplies it is overwritten (error 2783).
+    // Before it, a written entry won over every spread wherever it stood, so
+    // the spreads all apply first.
+    const ordered = since(this.languageVersion, 3);
+    const spreads = (literal.spreads ?? []).map(source => ({ source, at: ordered ? source.after : 0 }));
+    const writtenFrom = (index: number): Set<string> =>
+      new Set(literal.entries.slice(ordered ? index : 0).map(entry => entry.name));
+    const writtenBefore = (index: number): Set<string> =>
+      new Set(ordered ? literal.entries.slice(0, index).map(entry => entry.name) : []);
+    const applySpreads = (index: number): void => {
+      for (const { source } of spreads.filter(s => s.at === index)) {
+        const earlier = writtenBefore(index);
+        const keys = this.checkGraphSpread(source, { scope, required, written: writtenFrom(index), earlier });
+        if (keys === undefined) {
+          opaqueSpread = true;
+          continue;
+        }
+        const mayBeAbsent = keys.mayBeAbsent === true;
+        for (const name of [...Object.keys(keys.reads), ...Object.keys(keys.edges)]) {
+          if (!mayBeAbsent && earlier.has(name)) {
+            this.report(
+              DiagnosticCodes.MAP_KEY_OVERWRITTEN,
+              `'${name}' is written before '...${source.source}', which always has '${name}', so the spread overwrites it — move '${name}: …' after the spread to override it, or drop it`,
+              source.span,
+            );
+          }
+          const held = Object.hasOwn(reads, name) || Object.hasOwn(edges, name);
+          if (mayBeAbsent && held) {
+            // Absent, the spread copies nothing and the earlier member stays.
+            const before = reads[name];
+            const type = keys.reads[name];
+            if (before !== undefined && type !== undefined) {
+              reads[name] = valueUnion([before, stripAbsent(type)]) ?? undefined;
+            }
+            continue;
+          }
+          delete reads[name];
+          delete edges[name];
+          if (Object.hasOwn(keys.reads, name)) reads[name] = keys.reads[name];
+          else edges[name] = keys.edges[name];
+        }
       }
-      // A later spread wins over an earlier one, key by key.
-      for (const name of Object.keys(keys.reads)) delete spread.edges[name];
-      for (const name of Object.keys(keys.edges)) delete spread.reads[name];
-      Object.assign(spread.reads, keys.reads);
-      Object.assign(spread.edges, keys.edges);
-    }
+    };
     const seen = new Set<string>();
-    for (const entry of literal.entries) {
+    for (const [index, entry] of literal.entries.entries()) {
+      applySpreads(index);
       this.noteEntryName(entry, seen);
       switch (entry.kind) {
         case 'value': {
           const valueType = this.checkNodeValueEntry(entry, scope);
+          delete edges[entry.name];
           reads[entry.name] = valueType;
           if (required !== undefined) this.checkGraphField(entry.name, valueType, { required, span: entry.span });
           break;
@@ -9020,6 +9054,7 @@ class Checker {
         case 'nodes': {
           const child = this.graphChild(entry.name, required, entry.span);
           const landings = entry.nodes.map(node => this.checkGraphBody(node, scope, child));
+          delete reads[entry.name];
           edges[entry.name] = {
             schema: { target: entry.name, readable: true },
             target: this.mergeLandings(landings, entry),
@@ -9029,6 +9064,7 @@ class Checker {
         case 'traversal': {
           const child = this.graphChild(entry.name, required, entry.span);
           const target = this.checkGraphWalk(entry, scope, child);
+          delete reads[entry.name];
           edges[entry.name] = {
             schema: { target: entry.name, readable: true },
             ...(target !== undefined ? { target } : {}),
@@ -9042,21 +9078,11 @@ class Checker {
           neverAsAny(entry);
       }
     }
-    // A written entry wins over a spread's key of the same name.
-    for (const name of [...Object.keys(reads), ...Object.keys(edges)]) {
-      delete spread.reads[name];
-      delete spread.edges[name];
-    }
-    const allReads = { ...spread.reads, ...reads };
+    applySpreads(literal.entries.length);
     if (required !== undefined && !opaqueSpread) {
-      this.reportMissingGraphFields(required, allReads, literal.span);
+      this.reportMissingGraphFields(required, reads, literal.span);
     }
-    return {
-      kind: 'local',
-      label: 'a graph',
-      reads: allReads,
-      edges: { ...spread.edges, ...edges },
-    };
+    return { kind: 'local', label: 'a graph', reads, edges };
   }
 
   /** Every field `required` declares that nothing supplied — refused unless it
@@ -9240,12 +9266,27 @@ class Checker {
    */
   private checkGraphSpread(
     entry: MapSpread,
-    { scope, required, written }: { scope: Scope; required: RequiredPosition | undefined; written: ReadonlySet<string> },
+    {
+      scope,
+      required,
+      written,
+      earlier,
+    }: {
+      scope: Scope;
+      required: RequiredPosition | undefined;
+      /** Keys a later entry writes: it wins, so the spread's value for one is never what the field holds. */
+      written: ReadonlySet<string>;
+      /** Keys an earlier entry wrote: a spread that may be absent leaves them as they are. */
+      earlier: ReadonlySet<string>;
+    },
   ): SpreadKeys | undefined {
     const symbol = this.resolveName(entry.source, entry.span, scope);
     if (symbol === undefined) return undefined;
     const record = spreadRecordOf(symbol);
-    if (record !== undefined) return this.checkGraphRecordSpread(entry, { record, required, written });
+    if (record !== undefined) {
+      const keys = this.checkGraphRecordSpread(entry, { record, required, written, earlier });
+      return keys !== undefined ? { ...keys, mayBeAbsent: record.mayBeAbsent } : undefined;
+    }
     const valueType = symbol.posType === undefined ? symbol.fieldType : undefined;
     const map = valueType !== undefined ? stripAbsent(valueType) : undefined;
     if (map === undefined || (map !== 'json' && (typeof map !== 'object' || map.kind !== 'dict'))) {
@@ -9268,7 +9309,7 @@ class Checker {
       }
       return undefined;
     }
-    return this.checkSpreadKeys(keys, { required, entry, written });
+    return { ...this.checkSpreadKeys(keys, { required, entry, written, earlier }), mayBeAbsent };
   }
 
   /**
@@ -9289,10 +9330,12 @@ class Checker {
       record,
       required,
       written,
+      earlier,
     }: {
       record: { position: PositionTypeRef | undefined; mayBeAbsent: boolean };
       required: RequiredPosition | undefined;
       written: ReadonlySet<string>;
+      earlier: ReadonlySet<string>;
     },
   ): SpreadKeys | undefined {
     const supplied = record.position !== undefined ? recordSurface(record.position) : undefined;
@@ -9324,7 +9367,10 @@ class Checker {
     for (const name of Object.keys(declared?.properties ?? {})) {
       if (!Object.hasOwn(supplied.properties, name)) continue;
       const type = absent(supplied.properties[name]);
-      if (!written.has(name)) this.checkGraphField(name, type, { required, span: entry.span, via: entry.source });
+      if (!written.has(name)) {
+        const held = earlier.has(name) && type !== undefined ? stripAbsent(type) : type;
+        this.checkGraphField(name, held, { required, span: entry.span, via: entry.source });
+      }
       reads[name] = type;
       plan.fields.push(name);
     }
@@ -9354,7 +9400,13 @@ class Checker {
       required,
       entry,
       written = new Set(),
-    }: { required: RequiredPosition | undefined; entry: MapSpread; written?: ReadonlySet<string> },
+      earlier = new Set(),
+    }: {
+      required: RequiredPosition | undefined;
+      entry: MapSpread;
+      written?: ReadonlySet<string>;
+      earlier?: ReadonlySet<string>;
+    },
   ): SpreadKeys {
     const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
     const reads: Record<string, FieldType | undefined> = {};
@@ -9372,7 +9424,8 @@ class Checker {
           );
         }
         if (required !== undefined && declared?.properties[key] !== undefined && valueType !== null && !written.has(key)) {
-          this.checkGraphField(key, valueType, { required, span: entry.span, via: entry.source });
+          const held = earlier.has(key) ? stripAbsent(valueType) : valueType;
+          this.checkGraphField(key, held, { required, span: entry.span, via: entry.source });
         }
         reads[key] = valueType ?? undefined;
         continue;

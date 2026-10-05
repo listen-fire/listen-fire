@@ -297,3 +297,44 @@ describe('a value that may be absent fills no required graph field (version 3)',
     ).toEqual([C.ABSENT_REQUIRED]);
   });
 });
+
+describe('a graph literal takes members in the order written, as a map literal does (version 3)', () => {
+  const ordered = (members: string, version?: LanguageVersion) =>
+    codes(`  v = { label: "a" }\n  g = graph<Note> { ${members} }`, version);
+
+  it('a key written after the spread overrides it, and a key written before is overwritten', () => {
+    expect(ordered('...v, label: "mine"')).toEqual([]);
+    expect(ordered('label: "mine", ...v')).toEqual([C.MAP_KEY_OVERWRITTEN]);
+  });
+
+  it('the type of a field is the last member that wrote it', () => {
+    expect(ordered('...v, label: 3')).toEqual([C.GRAPH_FIELD_TYPE]);
+    expect(codes('  v = { label: 3 }\n  g = graph<Note> { label: "x", ...v }').sort()).toEqual(
+      [C.GRAPH_FIELD_TYPE, C.MAP_KEY_OVERWRITTEN].sort(),
+    );
+  });
+
+  it('a record spread follows the same order', () => {
+    expect(codes(perCompany('graph<Merged> { name: "x", ...c, summary: "s" }'))).toEqual([C.MAP_KEY_OVERWRITTEN]);
+    expect(codes(perCompany('graph<Merged> { ...c, name: "x", summary: "s" }'))).toEqual([]);
+  });
+
+  it('a spread that may be absent overwrites nothing when it is, so an earlier key is no error', () => {
+    expect(codes(perCompany('graph<Merged> { name: "x", summary: "s", ...c, ...details }'))).toEqual([
+      C.MAP_KEY_OVERWRITTEN,
+    ]);
+    expect(codes(perCompany('graph<Merged> { name: "x", website: "w", summary: "s", ...details }'))).toEqual([]);
+  });
+
+  it('a child node written before a spread that supplies it is overwritten too', () => {
+    expect(
+      codes(
+        '  v = { name: "a", website: "w", round: [{ stage: "a" }] }\n  g = graph<Company> { round: [{ stage: "mine" }], ...v }',
+      ),
+    ).toEqual([C.MAP_KEY_OVERWRITTEN]);
+  });
+
+  it('before version 3 a written entry wins wherever it stands, and nothing is overwritten', () => {
+    expect(ordered('label: "mine", ...v', 2)).toEqual([]);
+  });
+});

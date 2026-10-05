@@ -233,6 +233,7 @@ merged = { ...c, ...details }
 - \`...m\` copies a dict's keys into the literal, and \`...r\` copies a record's fields (its values, not its nested nodes), as TypeScript's object spread does. A later key wins over an earlier one, in the order written: \`row.stage\` is \`"Series A"\`.
 - A key written before a spread that always has it is refused when you save, since the spread overwrites it. Move it after the spread to override.
 - A spread of something that may not be there copies nothing when it isn't, so its keys may be absent: with \`details = ONLY(extract(…))\`, \`merged.summary\` is \`text | absent\`. \`COALESCE\` it before a field that needs a value.
+- A graph literal orders its members the same way: \`graph<Note> { ...v, text: "mine" }\` keeps \`"mine"\`, and \`graph<Note> { text: "mine", ...v }\` is refused when \`v\` always has \`text\`.
 - The result is a dict. Read it with a dot or with \`AT\`; a misspelt key is caught when you save.
 - A record read live from a system has no field list in hand, so spreading one into a dict is refused: build the dict from the fields you want. To walk the result, write into it, or check it against a declaration, build a graph instead — \`graph<Detailed> { ...c, ...details }\` copies the record's fields as a snapshot, the declaration deciding which (see *the extraction call* in the extraction chapter).
 - A spread of text, a number or a list is refused. A settings record (\`MAP\`'s, \`extract\`'s, a built-in's options) is written out key by key, so a spread is refused there.

@@ -652,25 +652,49 @@ describe('graph { … } and spreads', () => {
     ]);
   });
 
-  it('a written entry wins over the spread\'s key', async () => {
+  async function created(graph: string, payload: unknown): Promise<unknown[]> {
     const email = makeFakeAdapter('email');
     const attio = makeFakeAdapter('attio');
-
     await run(
       NOTE +
         [
           'movement intake(msg: <inbox-[:message]->>) {',
           '  crm = attio(credentials: acme_main)',
-          '  v = { text: "spread" }',
-          '  g = graph<Note> { text: "written", ...v }',
+          '  v = msg.payload',
+          `  g = ${graph}`,
           '  write crm-[:companies]-> { name: g.text }',
+          '  g-[t:tag]-> {',
+          '    write crm-[:companies]-> { name: t.label }',
+          '  }',
           '}',
         ].join('\n'),
-      {},
+      { payload },
       { email: email.adapter, attio: attio.adapter },
     );
+    return attio.creates.map((c) => c.fields.name);
+  }
 
-    expect(attio.creates.map((c) => c.fields.name)).toEqual(['written']);
+  const spread = { text: 'spread', tag: [{ label: 'spread' }] };
+
+  it('members take effect in the order written: an entry after the spread overrides its key', async () => {
+    expect(
+      await created('graph<Note> { ...v, text: "written", tag: [{ label: "written" }] }', spread),
+    ).toEqual(['written', 'written']);
+  });
+
+  it('a spread after an entry overrides it, a field and a child node alike', async () => {
+    // The spread's keys are unnamed here, so the checker cannot call the entries overwritten.
+    expect(
+      await created('graph<Note> { text: "written", tag: [{ label: "written" }], ...v }', spread),
+    ).toEqual(['spread', 'spread']);
+  });
+
+  it('a spread that supplies only some keys leaves the others as written', async () => {
+    expect(
+      await created('graph<Note> { text: "written", tag: [{ label: "written" }], ...v }', {
+        text: 'spread',
+      }),
+    ).toEqual(['spread', 'written']);
   });
 
   it('a map nobody could type is checked against the shape when the graph is built', async () => {

@@ -8202,17 +8202,25 @@ class Interpreter {
       fieldProvenance: {},
       edges: {},
     };
-    // Spreads first, in order, so a later one overwrites an earlier one and
-    // every written entry overwrites them all — wherever it stands.
-    for (const spread of literal.spreads ?? []) {
-      if (spread.copy !== undefined) {
-        await this.spreadRecordIntoGraph(node, { spread, plan: spread.copy, env, shape });
-        continue;
+    // From version 3 members take effect in the order written, as in a map
+    // literal: a later one overwrites an earlier one, a spread's keys included.
+    // Before it every spread applied first, so a written entry won wherever it
+    // stood.
+    const ordered = since(this.languageVersion, 3);
+    const spreadsAt = (index: number): MapSpread[] =>
+      (literal.spreads ?? []).filter((spread) => (ordered ? spread.after : 0) === index);
+    const applySpreads = async (index: number): Promise<void> => {
+      for (const spread of spreadsAt(index)) {
+        if (spread.copy !== undefined) {
+          await this.spreadRecordIntoGraph(node, { spread, plan: spread.copy, env, shape });
+          continue;
+        }
+        const map = this.spreadMap(spread, env);
+        if (map !== undefined) this.spreadIntoGraph(node, map, shape);
       }
-      const map = this.spreadMap(spread, env);
-      if (map !== undefined) this.spreadIntoGraph(node, map, shape);
-    }
-    for (const entry of literal.entries) {
+    };
+    for (const [index, entry] of literal.entries.entries()) {
+      await applySpreads(index);
       const child = shape?.children.find((c) => c.name === entry.name);
       switch (entry.kind) {
         case 'value': {
@@ -8266,6 +8274,7 @@ class Interpreter {
           neverAsAny(entry);
       }
     }
+    await applySpreads(literal.entries.length);
     if (shape !== undefined) {
       for (const child of shape.children) {
         if (node.edges[child.name] === undefined) setGraphEdge(node, child.name, [], child);

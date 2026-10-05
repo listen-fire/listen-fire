@@ -2310,7 +2310,7 @@ class Parser {
             spreadStart,
           );
         }
-        spreads.push({ source: spread.source, span: spread.span });
+        spreads.push({ source: spread.source, after: entries.length, span: spread.span });
         this.finishNodeEntry(spread.source);
         continue;
       }
