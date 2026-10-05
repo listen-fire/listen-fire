@@ -306,6 +306,71 @@ describe('EmailAdapter — getFieldValue', () => {
     expect(content as string).toContain('only html');
   });
 
+  // A real stored event: a mail-merge forwarder put the whole HTML document
+  // in the message's TEXT part. `bodyText` was markup beside a present,
+  // independent `bodyHtml` — plain-text preference alone let markup through
+  // to `Body`. `Body` must strip it like the HTML-only path does; the raw
+  // `Plain Body` / `HTML Body` fields stay exactly as delivered.
+  it('derives `content` by stripping markup when bodyText is itself HTML', async () => {
+    const adapter = new EmailAdapter(TEAM_ID);
+    const markupText = '<div style="font-size: 15px;"><div class="preheader">Hi there</div></div>';
+    const pos = makeEmailPosition({
+      messageId: 'm', subject: 's', sender: 'a@x', recipient: 'b@x',
+      bodyText: markupText,
+      bodyHtml: '<html><body><div>Hi there</div></body></html>',
+      attachments: [],
+    });
+    const content = await adapter.getFieldValue({ position: pos, fieldId: 'Body' });
+    expect(content as string).not.toContain('<div');
+    expect(content as string).toContain('Hi there');
+    // Raw fields are untouched — nothing is lost.
+    expect(await adapter.getFieldValue({ position: pos, fieldId: 'Plain Body' })).toBe(markupText);
+    expect(await adapter.getFieldValue({ position: pos, fieldId: 'HTML Body' })).toBe(
+      '<html><body><div>Hi there</div></body></html>',
+    );
+  });
+
+  // Ordinary prose that happens to contain an angle bracket must never be
+  // mistaken for markup and run through the HTML stripper.
+  it.each([
+    'a <3 b',
+    'x < y',
+    '<name> was here',
+  ])('leaves genuine plain-text bodyText %j unchanged', async (bodyText) => {
+    const adapter = new EmailAdapter(TEAM_ID);
+    const pos = makeEmailPosition({
+      messageId: 'm', subject: 's', sender: 'a@x', recipient: 'b@x',
+      bodyText,
+      attachments: [],
+    });
+    expect(await adapter.getFieldValue({ position: pos, fieldId: 'Body' })).toBe(bodyText);
+  });
+
+  // The markup predicate's documented boundary cases.
+  it.each([
+    ['<br>line', true],
+    ['<div>text</div>', true],
+    ['<p>text</p>', true],
+    ['plain text <html> mid-string', true],
+    ['plain text <!DOCTYPE html> mid-string', true],
+    ['<span>inline</span>', true],
+    ['<table><tr><td>cell</td></tr></table>', true],
+    ['some text </div> closing only, no leading <', false],
+  ])('treats %j as markup=%s for the Body derivation', async (bodyText, expectMarkup) => {
+    const adapter = new EmailAdapter(TEAM_ID);
+    const pos = makeEmailPosition({
+      messageId: 'm', subject: 's', sender: 'a@x', recipient: 'b@x',
+      bodyText,
+      attachments: [],
+    });
+    const content = (await adapter.getFieldValue({ position: pos, fieldId: 'Body' })) as string;
+    if (expectMarkup) {
+      expect(content).not.toBe(bodyText);
+    } else {
+      expect(content).toBe(bodyText);
+    }
+  });
+
   it('aliases attachment.name to filename', async () => {
     const adapter = new EmailAdapter(TEAM_ID);
     const attPos: SourcePosition = makeStablePosition({
