@@ -18,6 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { z } from 'zod';
 
 import { AUTOMATION_MCP_PATH } from '../../../interfaces/mcp/paths';
+import { HANDBOOK_MODE_HEADER, type HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import type { Task } from './task';
 import { addMessageUsage, costUsd, emptyUsage, type TokenUsage } from './usage';
 
@@ -62,6 +63,9 @@ interface BuildOutcome {
 interface BuildOptions {
   task: Task;
   variant: Variant;
+  /** Which handbook the API serves this builder — asked for per connection, so
+   *  one running stack serves both modes. */
+  handbook: HandbookMode;
   apiBaseUrl: string;
   apiKey: string;
   builderModel: string;
@@ -165,10 +169,16 @@ interface McpConnection {
   instructions: string;
 }
 
-async function connectMcp(input: { apiBaseUrl: string; apiKey: string }): Promise<McpConnection> {
+/** What every request to the connector carries: the team's key, and the handbook
+ *  this trial is to be served (honoured by any non-production API). */
+function mcpHeaders(input: { apiKey: string; handbook: HandbookMode }): Record<string, string> {
+  return { Authorization: `Bearer ${input.apiKey}`, [HANDBOOK_MODE_HEADER]: input.handbook };
+}
+
+async function connectMcp(input: { apiBaseUrl: string; apiKey: string; handbook: HandbookMode }): Promise<McpConnection> {
   const client = new Client({ name: 'automation-eval', version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${input.apiBaseUrl}${AUTOMATION_MCP_PATH}`), {
-    requestInit: { headers: { Authorization: `Bearer ${input.apiKey}` } },
+    requestInit: { headers: mcpHeaders(input) },
   });
   await client.connect(transport);
   const listed = await client.listTools();
@@ -247,7 +257,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
 
   let mcp: McpConnection;
   try {
-    mcp = await connectMcp({ apiBaseUrl: options.apiBaseUrl, apiKey: options.apiKey });
+    mcp = await connectMcp({ apiBaseUrl: options.apiBaseUrl, apiKey: options.apiKey, handbook: options.handbook });
   } catch (err) {
     return finish('error', `could not connect to the automations MCP endpoint: ${err instanceof Error ? err.message : err}`);
   }
@@ -321,5 +331,5 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
   }
 }
 
-export { readBuilderSkill, runBuilder };
+export { mcpHeaders, readBuilderSkill, runBuilder };
 export type { BuildEndReason, BuildOutcome, Effort, ToolCallRecord, TranscriptEntry, Variant };

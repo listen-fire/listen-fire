@@ -23,6 +23,7 @@ const AUTHORING_TOOL_NAMES = [
   'checkRun',
   'listReviews',
   'submitReview',
+  'searchLanguage',
 ];
 
 /** Retired constructs from earlier syntax rounds — none may be taught. */
@@ -99,8 +100,12 @@ function proseOnly(text: string): string {
 
 /**
  * Every way `chapter` breaks the contract, named. Empty means it holds.
+ *
+ * `agentFacing` is for the one page that is served only to an authoring agent
+ * (the lean handbook's front page): it may name the tools of that agent's
+ * loop, and is held to everything else.
  */
-export function proseViolations(chapter: Chapter): string[] {
+export function proseViolations(chapter: Chapter, options: { agentFacing?: boolean } = {}): string[] {
   const violations: string[] = [];
   const body = `${chapter.title}\n${chapter.content}`;
 
@@ -114,7 +119,7 @@ export function proseViolations(chapter: Chapter): string[] {
   for (const call of namedArgumentCalls(chapter.content)) {
     violations.push(`calls a function with a named argument — pass it positionally: "${call}"`);
   }
-  for (const tool of AUTHORING_TOOL_NAMES) {
+  for (const tool of options.agentFacing ? [] : AUTHORING_TOOL_NAMES) {
     if (chapter.content.includes(tool)) violations.push(`leaks the tool name \`${tool}\``);
   }
   for (const { pattern, label } of INTERNAL_JARGON) {

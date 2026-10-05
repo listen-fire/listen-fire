@@ -23,6 +23,8 @@ import { registeredPluginSpecs } from '../../../../services/translation_graph/mo
 import { proseViolations } from './prose_rules';
 import { chapterRoute } from '../../../handbook_section';
 import type { ChapterId, EngineClaim } from '../types';
+import { frontPageClaims } from '../front_page';
+import { controlFormClaims } from '../language_search';
 import {
   renderMovementIndex,
   getMovementChapter,
@@ -560,8 +562,13 @@ const CHECKER_EXEMPT: Array<{ match: string; why: string }> = [
 
 const allClaims: Array<EngineClaim & { chapter: string }> = Object.values(
   movementHandbook.chapters,
-).flatMap((chapter) =>
+).flatMap((chapter): Array<EngineClaim & { chapter: string }> =>
   (chapter.engineClaims ?? []).map((claim) => ({ ...claim, chapter: chapter.id })),
+).concat(
+  // The lean handbook's front page and the language search's control forms
+  // show examples too, outside any chapter; they are held the same way.
+  frontPageClaims().map((claim) => ({ ...claim, chapter: 'front' })),
+  controlFormClaims().map((claim) => ({ ...claim, chapter: 'language-search' })),
 );
 
 const exemptFor = (construct: string) =>

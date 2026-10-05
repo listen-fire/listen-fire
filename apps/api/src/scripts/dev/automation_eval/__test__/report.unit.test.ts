@@ -47,6 +47,20 @@ describe('efficiency from the tool-call record', () => {
     expect(e.toolCallsByName.readHandbook).toBe(2);
   });
 
+  it('tallies what the handbook and the language search cost the builder', () => {
+    const calls = [
+      call('readHandbook', { handbook: 'automations' }, 'x'.repeat(400)),
+      call('searchLanguage', { query: 'join text' }, 'y'.repeat(80)),
+      call('searchLanguage', { query: 'absent' }, 'z'.repeat(41)),
+      call('describeConnection', { system: 'attio' }, 'w'.repeat(4000)),
+    ];
+    const e = measureEfficiency({ toolCalls: calls, modelCalls: 3, userTurns: 0, buildWallMs: 1 });
+    expect(e.languageSearches).toBe(2);
+    expect(e.handbookReads).toBe(1);
+    // 400/4 + 80/4 + ceil(41/4); the connection's description is not the handbook.
+    expect(e.handbookTokens).toBe(100 + 20 + 11);
+  });
+
   it('has no rounds-to-save when nothing went live', () => {
     const e = measureEfficiency({
       toolCalls: [call('saveAutomation', {}, 'not json', true)],
@@ -95,6 +109,7 @@ function trial(overrides: Partial<TrialRecord>): TrialRecord {
   return {
     taskId: 't1',
     variant: 'noskill',
+    handbook: 'full',
     rep: 0,
     outcome: 'scored',
     buildEndReason: 'done',
@@ -135,11 +150,17 @@ describe('aggregation', () => {
     trial({ rep: 1, correct: false, fixtures: [fixtureRecord('a', true), fixtureRecord('b', false)], costUsd: 2 }),
     trial({ taskId: 't2', outcome: 'budget-exceeded', correct: false, costUsd: 2 }),
     trial({ variant: 'skill', costUsd: 0.5 }),
+    trial({ handbook: 'lean', costUsd: 0.25 }),
   ];
 
   it('summarizes per task and variant, with per-fixture pass rates', () => {
     const cells = summarize(trials);
-    expect(cells.map((c) => `${c.taskId}/${c.variant}`)).toEqual(['t1/noskill', 't2/noskill', 't1/skill']);
+    expect(cells.map((c) => `${c.taskId}/${c.variant}/${c.handbook}`)).toEqual([
+      't1/noskill/full',
+      't2/noskill/full',
+      't1/skill/full',
+      't1/noskill/lean',
+    ]);
     const [t1] = cells;
     expect(t1?.trials).toBe(2);
     expect(t1?.correctRate).toBe(0.5);
@@ -148,15 +169,18 @@ describe('aggregation', () => {
     expect(cells[1]?.budgetExceeded).toBe(1);
   });
 
-  it('totals each variant', () => {
+  it('totals each variant and handbook pairing apart', () => {
     const totals = totalsByVariant(trials);
-    expect(totals.find((t) => t.variant === 'noskill')).toMatchObject({ trials: 3, totalCostUsd: 5 });
+    expect(totals.map((t) => `${t.variant}/${t.handbook}`)).toEqual(['noskill/full', 'skill/full', 'noskill/lean']);
+    expect(totals.find((t) => t.variant === 'noskill' && t.handbook === 'full')).toMatchObject({ trials: 3, totalCostUsd: 5 });
+    expect(totals.find((t) => t.handbook === 'lean')).toMatchObject({ trials: 1, totalCostUsd: 0.25 });
     expect(totals.find((t) => t.variant === 'skill')?.correctRate).toBe(1);
   });
 
   it('renders a summary that names failing assertions', () => {
     const md = renderSummary({ startedAt: 'now', args: { k: 2 }, trials });
-    expect(md).toContain('| t1 | noskill | 2 | 50% |');
+    expect(md).toContain('| t1 | noskill | full | 2 | 50% |');
+    expect(md).toContain('| t1 | noskill | lean | 1 |');
     expect(md).toContain('FAIL **b**');
     expect(md).toContain('✗ x: matched 0');
   });

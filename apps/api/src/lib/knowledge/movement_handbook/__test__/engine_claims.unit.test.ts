@@ -20,11 +20,18 @@ import { parseProgram } from 'movement-lang';
 import { listUnsupportedConstructs } from '../../../../services/movement_engine/interpretable';
 import { getMovementHandbook } from '../index';
 import type { EngineClaim } from '../types';
+import { frontPageClaims } from '../front_page';
+import { controlFormClaims } from '../language_search';
 
 const claims: Array<EngineClaim & { chapter: string }> = Object.values(
   getMovementHandbook().chapters,
-).flatMap((chapter) =>
+).flatMap((chapter): Array<EngineClaim & { chapter: string }> =>
   (chapter.engineClaims ?? []).map((claim) => ({ ...claim, chapter: chapter.id })),
+).concat(
+  // The lean handbook's front page and the language search's control forms
+  // show examples too, outside any chapter; they are held the same way.
+  frontPageClaims().map((claim) => ({ ...claim, chapter: 'front' })),
+  controlFormClaims().map((claim) => ({ ...claim, chapter: 'language-search' })),
 );
 
 describe('movement_handbook engine claims — lockstep with interpretable.ts', () => {

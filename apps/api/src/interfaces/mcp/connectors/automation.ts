@@ -2,7 +2,7 @@
 // Moved here so a deployment that does not run automations does not serve it
 // (D30(d)); the definition itself is unchanged.
 
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 
 import { createMcpRouter } from '../server';
@@ -12,6 +12,13 @@ import {
   whatsappLinkVerification,
   type WhatsappLinkVerification,
 } from '../../../services/whatsapp/phone_verification/link_verification';
+import {
+  HANDBOOK_MODE_HEADER,
+  handbookModeFor,
+  handbookModeFromEnv,
+  type HandbookMode,
+} from '../../../lib/knowledge/movement_handbook/handbook_mode';
+import { LANGUAGE_SEARCH_KINDS } from '../../../lib/knowledge/movement_handbook/language_search';
 
 // The two WhatsApp linking tools describe the flow THIS deployment runs, so an
 // agent on a trusting deployment is never told to ask the user for a code.
@@ -27,14 +34,43 @@ const WHATSAPP_CONFIRM_DESCRIPTION: Record<WhatsappLinkVerification, string> = {
     'Not needed on this deployment: linkWhatsappNumber links a number straight away without a code. Calling this returns a reason saying no code is needed.',
 };
 
+// What the connector tells a client on `initialize`. Reference material only:
+// how to talk to the user lives in the builder skill, never here. The one part
+// that differs by handbook mode is how the handbook is to be read.
+const INSTRUCTIONS_BEFORE_LOOP =
+  "To automate anything for the user — react to events, move data between their systems, push into their CRM or chat — build an \"automation\" here: a small program over their real connected systems. This connector is how you make Listen-Fire DO things.\n\nThe relationship. The user owns the outcome, like a product owner; the how is yours, handled quietly. Speak in their business terms — a contact added to their CRM, a deal posted to their channel — never in authoring vocabulary (nodes, edges, writes, listeners) and never narrating tool calls. Surface only the decisions that change what happens in the world: what triggers it, what gets created where, how duplicates are treated, when it goes live. When you hand over a link — to connect a system, grant access, subscribe — make it a labelled, tappable markdown link, never a bare URL.\n\n";
+
+const INSTRUCTIONS_AFTER_LOOP =
+  "Call listConnections early and reconcile it against the task — mint any missing connection first via connectSystem. Author against describeConnection's real record and field names, never from memory. Then validateAutomation, saveAutomation, run it on the user's real input, and show them what happened, in their terms. Once something is saved, prefer a small edit over resending the whole program: readAutomation (or getAutomation, which also carries its metadata) to see the current text, grepAutomations to find where something is defined or used, and editAutomation to change it — anchored on a unique snippet plus the revision you just read, so a concurrent edit is caught instead of clobbered. Reach for saveAutomation itself only for a brand-new automation or a genuine rewrite. A write a third party sees (an email, a message to someone else) gets an approval step inside the automation — a question a person acts on — rather than a preview in chat. The user's knowledge graph is reachable as the `kg` system in listConnections.\n\nTeams. This connection spans the user's teams (listTeams). Creating or changing anything in a team needs its id as `team`; with exactly one team you may omit it.";
+
+const HANDBOOK_LOOP: Record<HandbookMode, string> = {
+  full: "The loop. Read the automations handbook's `foundations` chapter first (one readHandbook call — it carries the model, the conventions, and the map of what to read next; a later read can name a single section, \"writes#identity\", rather than pay for a whole chapter; where anything else disagrees with the handbook, the handbook wins). ",
+  lean: "The loop. Read the automations handbook's front page first (readHandbook with handbook \"automations\" and no chapter): where this language differs from TypeScript, the few ideas it adds, and the build loop. Look up anything else — a built-in's signature, a system's behaviour, a recipe — with searchLanguage, and read the anchor a result or a diagnostic names with readHandbook (\"front#maybe-absent\", \"writes#identity\"); where anything else disagrees with the handbook, the handbook wins. ",
+};
+
+function automationInstructions(mode: HandbookMode): string {
+  return `${INSTRUCTIONS_BEFORE_LOOP}${HANDBOOK_LOOP[mode]}${INSTRUCTIONS_AFTER_LOOP}`;
+}
+
+/** The mode a client is served in. A header the handbook route would refuse
+ *  leaves the instructions on the deployment's own mode; the route says why. */
+function instructionsMode(req: Parameters<RequestHandler>[0]): HandbookMode {
+  try {
+    return handbookModeFor(req.headers[HANDBOOK_MODE_HEADER]);
+  } catch {
+    return handbookModeFromEnv();
+  }
+}
+
 function createAutomationMcpRouter(): ReturnType<typeof Router> {
   const linkVerification = whatsappLinkVerification();
+  // An unknown AUTOMATION_HANDBOOK fails the boot, not the first request.
+  handbookModeFromEnv();
   return createMcpRouter({
     name: 'listen-fire-automation',
     domain: 'automation',
     genericApiTools: false,
-    instructions:
-      "To automate anything for the user — react to events, move data between their systems, push into their CRM or chat — build an \"automation\" here: a small program over their real connected systems. This connector is how you make Listen-Fire DO things.\n\nThe relationship. The user owns the outcome, like a product owner; the how is yours, handled quietly. Speak in their business terms — a contact added to their CRM, a deal posted to their channel — never in authoring vocabulary (nodes, edges, writes, listeners) and never narrating tool calls. Surface only the decisions that change what happens in the world: what triggers it, what gets created where, how duplicates are treated, when it goes live. When you hand over a link — to connect a system, grant access, subscribe — make it a labelled, tappable markdown link, never a bare URL.\n\nThe loop. Read the automations handbook's `foundations` chapter first (one readHandbook call — it carries the model, the conventions, and the map of what to read next; a later read can name a single section, \"writes#identity\", rather than pay for a whole chapter; where anything else disagrees with the handbook, the handbook wins). Call listConnections early and reconcile it against the task — mint any missing connection first via connectSystem. Author against describeConnection's real record and field names, never from memory. Then validateAutomation, saveAutomation, run it on the user's real input, and show them what happened, in their terms. Once something is saved, prefer a small edit over resending the whole program: readAutomation (or getAutomation, which also carries its metadata) to see the current text, grepAutomations to find where something is defined or used, and editAutomation to change it — anchored on a unique snippet plus the revision you just read, so a concurrent edit is caught instead of clobbered. Reach for saveAutomation itself only for a brand-new automation or a genuine rewrite. A write a third party sees (an email, a message to someone else) gets an approval step inside the automation — a question a person acts on — rather than a preview in chat. The user's knowledge graph is reachable as the `kg` system in listConnections.\n\nTeams. This connection spans the user's teams (listTeams). Creating or changing anything in a team needs its id as `team`; with exactly one team you may omit it.",
+    instructions: (req) => automationInstructions(instructionsMode(req)),
     tools: {
       listTeams: {
         description:
@@ -129,6 +165,20 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         },
         title: 'Read the Listen-Fire handbook',
         endpoint: { method: 'POST', path: '/v1/automation/handbook' },
+      },
+      searchLanguage: {
+        description:
+          'Look up the automation language: a built-in function (its signature, generated from the language itself), a concept, a recipe, or what a system or plugin documents. Ask in words ("join text", "update or create a record", "wait for an approval") or by name ("COALESCE"). Returns a few entries, each with its purpose, signature or short text, an example, and an anchor to read in full with readHandbook.',
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          query: z.string().describe('What you need, in words or by name.'),
+          kind: z
+            .enum(LANGUAGE_SEARCH_KINDS)
+            .optional()
+            .describe('Only this kind: "function", "concept" or "recipe".'),
+        },
+        title: 'Search the automation language',
+        endpoint: { method: 'POST', path: '/v1/automation/language/search' },
       },
       listConnections: {
         description:

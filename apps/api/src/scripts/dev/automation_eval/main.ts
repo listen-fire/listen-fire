@@ -11,6 +11,7 @@
 //   pnpm dev:seed                                         # once
 //   pnpm dev:automation-eval --tasks inbound-intake --k 1 # a smoke
 //   pnpm dev:automation-eval --variants noskill,skill --k 3   # the baseline
+//   pnpm dev:automation-eval --handbook full,lean --k 3       # the two handbooks, one stack
 //
 // Output: .dev-loop/evals/<timestamp>/{report.json, summary.md, trials/*.json}.
 // Real Anthropic calls; each trial is capped by --max-trial-cost (default $2).
@@ -24,6 +25,7 @@ import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 
 import { bucketDiagnostics } from '../lib/diagnostic_families';
+import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import { runBuilder, type BuildOutcome, type Effort, type Variant } from './builder';
 import { judgeFixture, sentEmailCount } from './end_state';
 import { judgeClarity, RUBRIC, type ClarityVerdict } from './judge';
@@ -58,11 +60,13 @@ import {
 import type { Task } from './task';
 import { TASKS } from './tasks';
 import { costUsd, emptyUsage } from './usage';
+import { parseHandbookModes, parseVariants, trialFileName } from './variants';
 
 interface Args {
   taskIds: string[];
   k: number;
   variants: Variant[];
+  handbooks: HandbookMode[];
   builderModel: string;
   builderEffort: Effort;
   userModel: string;
@@ -76,7 +80,6 @@ interface Args {
 /** Held back from the builder's share of a trial's budget so the judge can still run. */
 const JUDGE_RESERVE_USD = 0.15;
 
-const VARIANTS: readonly Variant[] = ['noskill', 'skill'];
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 function parseArgs(argv: string[]): Args {
@@ -96,12 +99,8 @@ function parseArgs(argv: string[]): Args {
     return n;
   };
 
-  const variantNames = argv.includes('--skill') ? ['skill'] : (list(get('--variants')) ?? ['noskill']);
-  const variants = variantNames.map((v) => {
-    const found = VARIANTS.find((known) => known === v);
-    if (!found) throw new Error(`unknown variant "${v}" (expected ${VARIANTS.join(', ')})`);
-    return found;
-  });
+  const variants = parseVariants({ variants: get('--variants'), skill: argv.includes('--skill') });
+  const handbooks = parseHandbookModes(get('--handbook'));
   const effortName = get('--effort') ?? 'high';
   const builderEffort = EFFORTS.find((e) => e === effortName);
   if (!builderEffort) throw new Error(`unknown --effort "${effortName}" (expected ${EFFORTS.join(', ')})`);
@@ -110,6 +109,7 @@ function parseArgs(argv: string[]): Args {
     taskIds: list(get('--tasks')) ?? TASKS.map((t) => t.id),
     k: positive('--k', 1),
     variants,
+    handbooks,
     builderModel: get('--model') ?? 'claude-sonnet-5-5',
     builderEffort,
     userModel: get('--user-model') ?? 'claude-sonnet-5-5',
@@ -201,10 +201,11 @@ async function runTrial(input: {
   stack: Stack;
   task: Task;
   variant: Variant;
+  handbook: HandbookMode;
   rep: number;
   workDir: string;
 }): Promise<TrialRecord> {
-  const { args, stack, task, variant, rep } = input;
+  const { args, stack, task, variant, handbook, rep } = input;
   const started = Date.now();
   const models = { builder: args.builderModel, user: args.userModel, judge: args.judgeModel };
   const judgeUsage = emptyUsage();
@@ -219,6 +220,7 @@ async function runTrial(input: {
   const build = await runBuilder({
     task,
     variant,
+    handbook,
     apiBaseUrl: stack.apiBaseUrl,
     apiKey: stack.apiKey,
     builderModel: args.builderModel,
@@ -286,6 +288,7 @@ async function runTrial(input: {
   return {
     taskId: task.id,
     variant,
+    handbook,
     rep,
     outcome,
     buildEndReason: build.endReason,
@@ -357,7 +360,7 @@ async function main(): Promise<void> {
   mkdirSync(path.join(outDir, 'trials'), { recursive: true });
 
   const stack = await connectStack();
-  const plan = tasks.length * args.variants.length * args.k;
+  const plan = tasks.length * args.variants.length * args.handbooks.length * args.k;
   log(
     `team=${stack.teamId} api=${stack.apiBaseUrl} builder=${args.builderModel}/${args.builderEffort} user=${args.userModel} judge=${args.judgeModel} → ${plan} trial(s), ≤ $${args.maxTrialCostUsd} each`,
   );
@@ -366,25 +369,28 @@ async function main(): Promise<void> {
   const trials: TrialRecord[] = [];
   for (const task of tasks) {
     for (const variant of args.variants) {
-      for (let rep = 0; rep < args.k; rep++) {
-        log(`${task.id} · ${variant} · trial ${rep + 1}/${args.k}`);
-        const trial = await runTrial({
-          args,
-          stack,
-          task,
-          variant,
-          rep,
-          workDir: path.join(outDir, 'work'),
-        });
-        trials.push(trial);
-        writeFileSync(
-          path.join(outDir, 'trials', `${task.id}.${variant}.${rep + 1}.json`),
-          JSON.stringify(trial, (_key, value: unknown) => (value instanceof RegExp ? value.toString() : value), 2),
-        );
-        writeReport({ outDir, startedAt, args, trials });
-        log(
-          `  → ${trial.outcome}, correct=${trial.correct}, safe=${trial.safety.pass}, clarity=${trial.clarity?.overall.toFixed(1) ?? '–'}, $${trial.costUsd.toFixed(2)}, ${Math.round(trial.wallMs / 1000)}s`,
-        );
+      for (const handbook of args.handbooks) {
+        for (let rep = 0; rep < args.k; rep++) {
+          log(`${task.id} · ${variant} · ${handbook} handbook · trial ${rep + 1}/${args.k}`);
+          const trial = await runTrial({
+            args,
+            stack,
+            task,
+            variant,
+            handbook,
+            rep,
+            workDir: path.join(outDir, 'work'),
+          });
+          trials.push(trial);
+          writeFileSync(
+            path.join(outDir, 'trials', trialFileName({ taskId: task.id, variant, handbook, rep })),
+            JSON.stringify(trial, (_key, value: unknown) => (value instanceof RegExp ? value.toString() : value), 2),
+          );
+          writeReport({ outDir, startedAt, args, trials });
+          log(
+            `  → ${trial.outcome}, correct=${trial.correct}, safe=${trial.safety.pass}, clarity=${trial.clarity?.overall.toFixed(1) ?? '–'}, handbook ≈${trial.efficiency.handbookTokens} tokens, $${trial.costUsd.toFixed(2)}, ${Math.round(trial.wallMs / 1000)}s`,
+          );
+        }
       }
     }
   }

@@ -13,6 +13,7 @@ export * from './checker/meta';
 export * from './checker/generics';
 export * from './checker/effects';
 export * from './checker/standard_library';
+export * from './checker/handbook_pointers';
 export * from './checker/calls';
 export * from './checker/nested_calls';
 export type { MExpr } from './parser/expression/tree';

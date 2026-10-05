@@ -168,6 +168,7 @@ import {
   type CallScope,
 } from './calls';
 import { builtinArity, describeBuiltin, flatBuiltinNames, lookupBuiltin } from './standard_library';
+import { withHandbookPointer } from './handbook_pointers';
 import {
   borrowableFieldsOf,
   borrowedTypeSegments,
@@ -1210,14 +1211,15 @@ export function checkProgramWithLink(
   checker.run(program);
   const versionDiagnostic = languageVersionDiagnostic(languageVersion);
   const versionDiagnostics = versionDiagnostic ? [versionDiagnostic] : [];
+  const found = checker.diagnostics.map(withHandbookPointer);
   if (!link) {
     return {
-      diagnostics: [...versionDiagnostics, ...checker.diagnostics],
+      diagnostics: [...versionDiagnostics, ...found],
       ...(recording ? { recording } : {}),
     };
   }
   return {
-    diagnostics: [...versionDiagnostics, ...link.problems, ...checker.diagnostics],
+    diagnostics: [...versionDiagnostics, ...link.problems, ...found],
     link,
     ...(recording ? { recording } : {}),
   };

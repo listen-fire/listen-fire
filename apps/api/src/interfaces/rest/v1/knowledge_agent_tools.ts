@@ -40,6 +40,15 @@ import {
 import { WHATSAPP_MOVEMENTS_WA_ME_LINK } from '../../../services/translation_graph/adapters/whatsapp';
 
 import { readBook } from '../../../lib/knowledge/library';
+import {
+  HANDBOOK_MODE_HEADER,
+  handbookModeFor,
+  type HandbookMode,
+} from '../../../lib/knowledge/movement_handbook/handbook_mode';
+import {
+  LANGUAGE_SEARCH_KINDS,
+  searchLanguage,
+} from '../../../lib/knowledge/movement_handbook/language_search';
 import { getNodeDetail } from '../../../lib/knowledge/knowledge_query';
 import {
   createEntity,
@@ -205,13 +214,42 @@ const readBookSchema = z.object({
   section: z.string().optional(),
 });
 
-const readBookHandler: RequestHandler = jsonHandler(readBookSchema, 'body', async (input) =>
-  readBook({
-    bookId: input.handbook,
-    chapter: input.chapter,
-    chapters: input.chapters,
-    section: input.section,
-  }),
+/** The handbook mode a request is served in, or a 400 naming the bad header. */
+function requestHandbookMode(
+  req: Parameters<RequestHandler>[0],
+): { ok: true; mode: HandbookMode } | { ok: false; error: string } {
+  try {
+    return { ok: true, mode: handbookModeFor(req.headers?.[HANDBOOK_MODE_HEADER]) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const readBookHandler: RequestHandler = async (req, res, next) => {
+  const mode = requestHandbookMode(req);
+  if (!mode.ok) return res.status(400).json({ error: mode.error });
+  return await jsonHandler(readBookSchema, 'body', async (input) =>
+    readBook({
+      bookId: input.handbook,
+      chapter: input.chapter,
+      chapters: input.chapters,
+      section: input.section,
+      mode: mode.mode,
+    }),
+  )(req, res, next);
+};
+
+// ---------------------------------------------------------------------------
+// library.read — searchLanguage
+// ---------------------------------------------------------------------------
+
+const searchLanguageSchema = z.object({
+  query: z.string().min(1),
+  kind: z.enum(LANGUAGE_SEARCH_KINDS).optional(),
+});
+
+const searchLanguageHandler: RequestHandler = jsonHandler(searchLanguageSchema, 'body', async (input) =>
+  searchLanguage({ query: input.query, ...(input.kind ? { kind: input.kind } : {}) }),
 );
 
 // ---------------------------------------------------------------------------
@@ -1343,6 +1381,7 @@ function mountAutomationToolRoutes(router: ReturnType<typeof Router>): void {
 
   // library.read — the authoring handbook
   router.post('/handbook', readBookHandler);
+  router.post('/language/search', searchLanguageHandler);
 
   // catalog.read
   router.get('/connections', listCatalogHandler);
@@ -1448,6 +1487,12 @@ function registerAutomationToolRoutes(): void {
       readOnly: true,
       latency: 'fast',
     },
+  );
+  reg(
+    'POST',
+    '/language/search',
+    'Search the automation language: built-in functions (generated signatures), the front page\'s concepts, recipes, and what each system and plugin documents. Body: { query, kind?: "function" | "concept" | "recipe" }. Returns at most a few entries, each with its purpose, signature or short text, an example, and an anchor readHandbook serves. Also the top-level "searchLanguage" tool.',
+    { inputSchema: searchLanguageSchema, readOnly: true, latency: 'fast' },
   );
 
   // connected systems

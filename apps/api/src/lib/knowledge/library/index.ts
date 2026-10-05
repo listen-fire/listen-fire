@@ -8,6 +8,8 @@
 import { chapterRoute, sliceChapterSection, splitChapterRoute } from '../../handbook_section';
 import { adapterHandbook } from '../adapter_handbook';
 import { getMovementHandbook } from '../movement_handbook';
+import { frontSection, renderFrontPage } from '../movement_handbook/front_page';
+import type { HandbookMode } from '../movement_handbook/handbook_mode';
 import { modelHandbook } from '../model_handbook';
 import { queryHandbook } from '../query_handbook';
 import { getUsingListenFireHandbook } from '../using_listen_fire_handbook';
@@ -77,14 +79,24 @@ function stub(meta: Omit<LibraryBook, 'chapters' | 'intentIndex'>): LibraryBook 
  * chapter may also take a separate `section` argument. Section addressing works
  * for any book whose chapters use `###` headings; one whose chapters don't says
  * so rather than failing obscurely.
+ *
+ * `mode` is which automations handbook an authoring agent is served
+ * (handbook_mode.ts). In `lean` the automations book IS its front page: the
+ * book's index is the page, and a whole hand-written chapter answers with a
+ * pointer to the language search instead of its body. A section
+ * (`writes#identity`), a system's or plugin's chapter, and the front page's own
+ * sections (`front#maybe-absent`) are still served in either mode — they are
+ * the anchors search results and diagnostics hand out, so they must resolve.
  */
 export function readBook(args: {
   bookId?: string;
   chapter?: string;
   chapters?: string[];
   section?: string;
+  mode?: HandbookMode;
 }) {
   const shelf = getLibraryShelf();
+  const lean = args.mode === 'lean';
   if (!args.bookId) {
     return {
       shelf: shelf.map((b) => ({
@@ -92,7 +104,10 @@ export function readBook(args: {
         title: b.title,
         status: b.status,
         description: b.description,
-        chapters: b.chapters.map((c) => ({ id: c.id, title: c.title })),
+        chapters:
+          lean && b.bookId === AUTOMATIONS_BOOK
+            ? [{ id: FRONT_PAGE_ID, title: FRONT_PAGE_TITLE }]
+            : b.chapters.map((c) => ({ id: c.id, title: c.title })),
       })),
     };
   }
@@ -118,6 +133,14 @@ export function readBook(args: {
       : args.chapter
         ? [args.chapter]
         : [];
+  if (requested.length === 0 && lean && book.bookId === AUTOMATIONS_BOOK) {
+    return {
+      bookId: book.bookId,
+      chapter: FRONT_PAGE_ID,
+      title: FRONT_PAGE_TITLE,
+      content: renderFrontPage(),
+    };
+  }
   if (requested.length === 0) {
     return {
       bookId: book.bookId,
@@ -140,7 +163,17 @@ export function readBook(args: {
     const route = splitChapterRoute(requestedId);
     const section = route.section ?? (requested.length === 1 ? args.section : undefined);
     const id = route.chapter;
+    if (id === FRONT_PAGE_ID && book.bookId === AUTOMATIONS_BOOK) {
+      if (section === undefined) return { id, title: FRONT_PAGE_TITLE, content: renderFrontPage() };
+      const entry = frontSection(section);
+      return entry.ok
+        ? { id, section, title: FRONT_PAGE_TITLE, content: entry.content }
+        : { id, error: entry.error };
+    }
     const ch = book.chapters.find((c) => c.id === id);
+    if (ch && lean && book.bookId === AUTOMATIONS_BOOK && section === undefined && isTeachingChapter(id)) {
+      return { id, note: LEAN_CHAPTER_POINTER };
+    }
     if (!ch) return { id, error: `No chapter '${id}' in '${book.bookId}'. ${known}` };
     if (section === undefined) return { id: ch.id, title: ch.title, content: ch.content };
     const slice = sliceChapterSection(ch.content, section);
@@ -149,6 +182,9 @@ export function readBook(args: {
       : { id: ch.id, error: `${slice.error} (chapter '${ch.id}' in '${book.bookId}')` };
   });
   const only = read.length === 1 ? read[0] : undefined;
+  if (only && only.note !== undefined) {
+    return { bookId: book.bookId, chapter: only.id, note: only.note };
+  }
   if (only && only.content !== undefined) {
     return {
       bookId: book.bookId,
@@ -161,13 +197,28 @@ export function readBook(args: {
   return { bookId: book.bookId, title: book.title, chapters: read };
 }
 
-/** One requested chapter (or section of one): its body, or why not. */
+/** One requested chapter (or section of one): its body, why not, or — in the
+ *  lean handbook — where to look instead. */
 interface ChapterRead {
   id: string;
   section?: string;
   title?: string;
   content?: string;
   error?: string;
+  note?: string;
+}
+
+const AUTOMATIONS_BOOK = 'automations';
+const FRONT_PAGE_ID = 'front';
+const FRONT_PAGE_TITLE = 'Front page: where TypeScript habits mislead, and what the language adds';
+
+const LEAN_CHAPTER_POINTER =
+  'This handbook is the front page plus lookups: call searchLanguage with what you need (a built-in, a system, a recipe, a concept) and read the anchor a result names, or read the front page (no chapter).';
+
+/** A hand-written chapter — the teaching the lean handbook replaces with the
+ *  front page and search. A system's or plugin's chapter is reference, and stays. */
+function isTeachingChapter(id: string): boolean {
+  return !id.startsWith('system:') && !id.startsWith('plugin:');
 }
 
 export function getLibraryShelf(): LibraryBook[] {

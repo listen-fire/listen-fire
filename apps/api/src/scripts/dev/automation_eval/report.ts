@@ -2,6 +2,7 @@
 // and the roll-up across trials into the JSON report and the markdown summary.
 // Pure: main.ts gathers the facts, this module turns them into scores.
 
+import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import type { BuildEndReason, ToolCallRecord, TranscriptEntry, Variant } from './builder';
 import type { AssertionResult } from './end_state';
 import type { ClarityVerdict } from './judge';
@@ -36,6 +37,10 @@ interface Efficiency {
   roundsToFirstSave: number | null;
   handbookReads: number;
   handbookTargets: string[];
+  languageSearches: number;
+  /** What the builder took in from the handbook and the language search
+   *  together — approximate: the results' characters / 4. */
+  handbookTokens: number;
   buildWallMs: number;
 }
 
@@ -55,6 +60,7 @@ type TrialOutcome = 'scored' | 'budget-exceeded' | 'build-failed' | 'setup-faile
 interface TrialRecord {
   taskId: string;
   variant: Variant;
+  handbook: HandbookMode;
   rep: number;
   outcome: TrialOutcome;
   buildEndReason: BuildEndReason | null;
@@ -91,6 +97,12 @@ function handbookTarget(args: Record<string, unknown>): string[] {
   if (typeof args.handbook === 'string') return [`${args.handbook} (index)`];
   return ['(shelf)'];
 }
+
+/** The tools whose results are reading the language, for the handbook tally. */
+const HANDBOOK_TOOLS = new Set(['readHandbook', 'searchLanguage']);
+
+/** Tokens a tool result cost the builder, roughly: four characters a token. */
+const approxTokens = (text: string) => Math.ceil(text.length / 4);
 
 /** A save that went live: ok, and not held back for confirmation. */
 function savedLive(call: ToolCallRecord): boolean {
@@ -129,6 +141,10 @@ function measureEfficiency(input: {
     roundsToFirstSave,
     handbookReads: handbookCalls.length,
     handbookTargets: handbookCalls.flatMap((c) => handbookTarget(c.args)),
+    languageSearches: byName.searchLanguage ?? 0,
+    handbookTokens: toolCalls
+      .filter((c) => HANDBOOK_TOOLS.has(c.name))
+      .reduce((n, c) => n + approxTokens(c.resultText), 0),
     buildWallMs: input.buildWallMs,
   };
 }
@@ -180,6 +196,7 @@ const rate = (xs: boolean[]) => mean(xs.map((x) => (x ? 1 : 0)));
 interface CellSummary {
   taskId: string;
   variant: Variant;
+  handbook: HandbookMode;
   trials: number;
   /** Share of trials where every fixture passed. */
   correctRate: number | null;
@@ -192,6 +209,7 @@ interface CellSummary {
   meanValidateCalls: number | null;
   meanRoundsToFirstSave: number | null;
   meanHandbookReads: number | null;
+  meanHandbookTokens: number | null;
   meanBuildWallMs: number | null;
   meanClarity: number | null;
   askedClarifyingRate: number | null;
@@ -206,6 +224,7 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
   return {
     taskId: first.taskId,
     variant: first.variant,
+    handbook: first.handbook,
     trials: trials.length,
     correctRate: rate(trials.map((t) => t.correct)),
     fixturePassRate: Object.fromEntries(
@@ -218,6 +237,7 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
     meanValidateCalls: nums((t) => t.efficiency.validateCalls),
     meanRoundsToFirstSave: nums((t) => t.efficiency.roundsToFirstSave),
     meanHandbookReads: nums((t) => t.efficiency.handbookReads),
+    meanHandbookTokens: nums((t) => t.efficiency.handbookTokens),
     meanBuildWallMs: nums((t) => t.efficiency.buildWallMs),
     meanClarity: nums((t) => t.clarity?.overall),
     askedClarifyingRate: rate(
@@ -226,11 +246,11 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
   };
 }
 
-/** One summary per (task, variant), in the order trials first appear. */
+/** One summary per (task, variant, handbook), in the order trials first appear. */
 function summarize(trials: TrialRecord[]): CellSummary[] {
   const cells = new Map<string, TrialRecord[]>();
   for (const t of trials) {
-    const key = `${t.taskId}\u0000${t.variant}`;
+    const key = `${t.taskId}\u0000${t.variant}\u0000${t.handbook}`;
     cells.set(key, [...(cells.get(key) ?? []), t]);
   }
   return [...cells.values()].map(summarizeCell);
@@ -238,26 +258,31 @@ function summarize(trials: TrialRecord[]): CellSummary[] {
 
 interface VariantTotals {
   variant: Variant;
+  handbook: HandbookMode;
   trials: number;
   correctRate: number | null;
   safeRate: number | null;
   totalCostUsd: number;
   meanCostUsd: number | null;
   meanClarity: number | null;
+  meanHandbookTokens: number | null;
 }
 
+/** One total per (variant, handbook) pairing that ran, in the order first seen. */
 function totalsByVariant(trials: TrialRecord[]): VariantTotals[] {
-  const variants = [...new Set(trials.map((t) => t.variant))];
-  return variants.map((variant) => {
-    const mine = trials.filter((t) => t.variant === variant);
+  const pairings = [...new Map(trials.map((t) => [`${t.variant}\u0000${t.handbook}`, t])).values()];
+  return pairings.map(({ variant, handbook }) => {
+    const mine = trials.filter((t) => t.variant === variant && t.handbook === handbook);
     return {
       variant,
+      handbook,
       trials: mine.length,
       correctRate: rate(mine.map((t) => t.correct)),
       safeRate: rate(mine.map((t) => t.safety.pass)),
       totalCostUsd: mine.reduce((n, t) => n + t.costUsd, 0),
       meanCostUsd: mean(mine.map((t) => t.costUsd)),
       meanClarity: mean(mine.map((t) => t.clarity?.overall).filter((x): x is number => typeof x === 'number')),
+      meanHandbookTokens: mean(mine.map((t) => t.efficiency.handbookTokens)),
     };
   });
 }
@@ -282,27 +307,27 @@ function renderSummary(input: {
     '',
     '## Totals',
     '',
-    '| variant | trials | correct | safe | clarity (1–5) | cost total | cost / trial |',
-    '|---|---|---|---|---|---|---|',
+    '| variant | handbook | trials | correct | safe | clarity (1–5) | handbook tokens | cost total | cost / trial |',
+    '|---|---|---|---|---|---|---|---|---|',
     ...totals.map(
       (t) =>
-        `| ${t.variant} | ${t.trials} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
+        `| ${t.variant} | ${t.handbook} | ${t.trials} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${num(t.meanHandbookTokens, 0)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
     ),
     '',
     '## Per task',
     '',
-    '| task | variant | n | correct | safe | clarity | asked? | tool calls | validates | rounds→save | handbook reads | build time | cost |',
-    '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    '| task | variant | handbook | n | correct | safe | clarity | asked? | tool calls | validates | rounds→save | handbook reads | handbook tokens | build time | cost |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...cells.map(
       (c) =>
-        `| ${c.taskId} | ${c.variant} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanToolCalls)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${c.meanBuildWallMs === null ? '–' : `${Math.round(c.meanBuildWallMs / 1000)}s`} | ${usd(c.meanCostUsd)} |`,
+        `| ${c.taskId} | ${c.variant} | ${c.handbook} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanToolCalls)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${num(c.meanHandbookTokens, 0)} | ${c.meanBuildWallMs === null ? '–' : `${Math.round(c.meanBuildWallMs / 1000)}s`} | ${usd(c.meanCostUsd)} |`,
     ),
     '',
     '## Fixtures',
     '',
   ];
   for (const t of input.trials) {
-    lines.push(`### ${t.taskId} · ${t.variant} · trial ${t.rep + 1} — ${t.outcome}${t.error ? ` (${t.error})` : ''}`);
+    lines.push(`### ${t.taskId} · ${t.variant} · ${t.handbook} handbook · trial ${t.rep + 1} — ${t.outcome}${t.error ? ` (${t.error})` : ''}`);
     lines.push('');
     for (const f of t.fixtures) {
       lines.push(`- ${f.pass ? 'PASS' : 'FAIL'} **${f.id}** — ${f.description}${f.fireNote ? ` _(${f.fireNote})_` : ''}`);
