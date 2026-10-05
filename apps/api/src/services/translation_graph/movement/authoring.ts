@@ -49,6 +49,17 @@ export interface AuthoringDiagnostic {
   /** Marks a construct whose meaning changed between the pin and the version
    *  checked, on an upgrade check (the checker's `Diagnostic.upgrade`). */
   upgrade?: true;
+  /** The exact rewrite that resolves it (also spelled out in `message`):
+   *  replace each 1-based range with `text`; an empty range inserts. */
+  fix?: { edits: AuthoringEdit[] };
+}
+
+export interface AuthoringEdit {
+  line: number;
+  col: number;
+  endLine: number;
+  endCol: number;
+  text: string;
 }
 
 export interface MovementValidation {
@@ -76,6 +87,19 @@ function toAuthoringDiagnostic(
     endCol: span.end.col,
     sourceLine: lines[span.start.line - 1] ?? '',
     ...(diagnostic.upgrade === true ? { upgrade: true } : {}),
+    ...(diagnostic.fix !== undefined
+      ? {
+          fix: {
+            edits: diagnostic.fix.edits.map((edit) => ({
+              line: edit.span.start.line,
+              col: edit.span.start.col,
+              endLine: edit.span.end.line,
+              endCol: edit.span.end.col,
+              text: edit.text,
+            })),
+          },
+        }
+      : {}),
   };
 }
 

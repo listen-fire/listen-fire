@@ -513,6 +513,9 @@ export function staticCatalogFromManifests(
     credential(name): CredentialSpec | undefined {
       return options.credentials?.[name];
     },
+    credentialNames(): string[] {
+      return Object.keys(options.credentials ?? {});
+    },
     plugin(name): PluginSpec | undefined {
       // Movement identifiers can't contain dashes; registered transform
       // names do (`vc-url-retrieval`). Accept the underscore spelling.
@@ -1353,6 +1356,9 @@ export async function movementCatalogForTeam(
     credential(name): CredentialSpec | undefined {
       const row = credentialsByName[name];
       return row ? { adapters: row.adapters } : undefined;
+    },
+    credentialNames(): string[] {
+      return Object.keys(credentialsByName);
     },
     plugin(name): PluginSpec | undefined {
       const impl = getTransform(name) ?? getTransform(name.replace(/_/g, '-'));

@@ -1584,6 +1584,12 @@ export function unionVariants(members: readonly string[]): string[] {
 export interface Catalog {
   adapter(name: string): AdapterSpec | undefined;
   credential(name: string): CredentialSpec | undefined;
+  /**
+   * Every credential import name this workspace has — what a diagnostic's fix
+   * draws on to name the ONE connection an adapter can be constructed with.
+   * Undefined ⇒ the catalog cannot list them, and no such fix is offered.
+   */
+  credentialNames?(): readonly string[];
   plugin(name: string): PluginSpec | undefined;
   /**
    * Resolve a constructed instance's schema. An instance's full type exists
@@ -1653,6 +1659,7 @@ export function mockCatalog(spec: {
       if (!c) return undefined;
       return { adapters: 'adapters' in c ? c.adapters : [c.adapter] };
     },
+    credentialNames: () => Object.keys(spec.credentials ?? {}),
     plugin: name => spec.plugins?.[name],
     instantiate: spec.instantiate ?? (adapter => spec.adapters?.[adapter]?.schema),
     ...(spec.constructionArgOptions !== undefined

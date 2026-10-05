@@ -54,6 +54,7 @@ import {
   expandWriteSpreads,
   pathRootName,
   probePathHead,
+  spellName,
   spellPathHead,
   spellPathRoot,
 } from '../parser/ast';
@@ -169,6 +170,7 @@ import {
 } from './calls';
 import { builtinArity, describeBuiltin, flatBuiltinNames, lookupBuiltin } from './standard_library';
 import { HANDBOOK_POINTERS, seeHandbook, withHandbookPointer } from './handbook_pointers';
+import { importLine, insertLineAtTop, type DiagnosticFix, type SourceEdit } from './fixes';
 import {
   borrowableFieldsOf,
   borrowedTypeSegments,
@@ -325,6 +327,9 @@ export interface Diagnostic {
    *  alongside errors — every other warning (a cost note, say) reads the same
    *  under either version and says nothing about the move. */
   upgrade?: true;
+  /** The exact rewrite that resolves it, built from the author's own source —
+   *  also spelled out in `message`, which is all a text reader sees. */
+  fix?: DiagnosticFix;
 }
 
 export function diagnosticSeverity(diagnostic: Diagnostic): DiagnosticSeverity {
@@ -1263,6 +1268,18 @@ interface ArgValueOptions {
   span: Span;
   literal?: boolean;
   parsed?: Expression;
+  /** The argument as written, where it is an expression — what a fix rewrites. */
+  slot?: ExprSlot;
+}
+
+/**
+ * A value handed where a LIST of its type is expected, rewritten as that list:
+ * a walk's values spliced in (`[...m-[a:Attachments]->.File]`), anything else
+ * as its one member.
+ */
+function listArgumentRewrite(slot: ExprSlot): string {
+  const raw = slot.raw.trim();
+  return raw.includes('->') ? `[...${raw}]` : `[${raw}]`;
 }
 
 /** The text of a string LITERAL expression. */
@@ -1368,14 +1385,54 @@ function typeNamesInScope(scope: Scope): string[] {
 
 /** An unknown callee, with the closest function in scope or built-in.
  *  Compared with case folded, as function names are. */
-function unknownFunctionMessage(name: string, scope: Scope): string {
+/** The function or built-in `name` most likely meant, by edit distance. */
+function closestFunctionName(name: string, scope: Scope): string | undefined {
   const folded = new Map<string, string>();
   for (const candidate of [...scope.functionNames(), ...flatBuiltinNames()]) {
     if (!folded.has(candidate.toLowerCase())) folded.set(candidate.toLowerCase(), candidate);
   }
   const closest = closestByEditDistance(name.toLowerCase(), [...folded.keys()]);
-  const hint = closest !== undefined ? ` — did you mean '${folded.get(closest)}'?` : '';
+  return closest !== undefined ? folded.get(closest) : undefined;
+}
+
+/** `corrected`: the author's whole call with the name swapped for the one
+ *  meant — the line to paste, where the call's text is known. */
+function unknownFunctionMessage(name: string, scope: Scope, corrected?: string): string {
+  const closest = closestFunctionName(name, scope);
+  const hint =
+    closest === undefined ? ''
+    : corrected !== undefined ? ` — did you mean '${closest}'? Write '${corrected}'`
+    : ` — did you mean '${closest}'?`;
   return `Unknown function '${name}'${hint} — a call names a movement or function declared or imported here, or a built-in`;
+}
+
+/** A literal of `type` to fall back to where a value may be absent — one
+ *  that reads as "not known" — or undefined where no literal says that. */
+function fallbackLiteral(type: FieldType): string | undefined {
+  if (type === 'text') return '"unknown"';
+  if (type === 'number') return '0';
+  if (type === 'boolean') return 'false';
+  if (isListType(type)) return '[]';
+  return undefined;
+}
+
+/** `lenght(xs)` → `LENGTH(xs)`: the call as written, its callee renamed. */
+function renamedCallFix(input: {
+  slot: ExprSlot;
+  call: Extract<MExpr, { kind: 'call' }>;
+  to: string | undefined;
+}): { corrected: string; edit: SourceEdit } | undefined {
+  const { slot, call, to } = input;
+  if (to === undefined) return undefined;
+  // A built-in's dotted name (`DATE.PARSE`) is written bare; a movement's
+  // name with a space in it wears backticks.
+  const spelled = /\s/.test(to) ? `\`${to}\`` : to;
+  const raw = slot.raw;
+  const callee = call.callee.at;
+  return {
+    corrected: `${raw.slice(call.at.start, callee.start)}${spelled}${raw.slice(callee.end, call.at.end)}`,
+    edit: { span: spanOfExtent(slot, callee), text: spelled },
+  };
 }
 
 /** Every movement name visible from `scope`, innermost first — the candidate
@@ -3060,6 +3117,12 @@ class Checker {
   private report(code: string, message: string, span: Span): void {
     if (this.typeOnly) return;
     this.diagnostics.push({ code, message, span });
+  }
+
+  /** An error that carries its exact rewrite. */
+  private reportWithFix(diagnostic: { code: string; message: string; span: Span; fix?: DiagnosticFix }): void {
+    if (this.typeOnly) return;
+    this.diagnostics.push(diagnostic);
   }
 
   private reportInfo(code: string, message: string, span: Span): void {
@@ -4986,7 +5049,7 @@ class Checker {
     } catch {
       return; // the syntax error is reported where the slot is read
     }
-    this.checkExpressionTree(tree, { spanOf: (at) => spanWithin(slot, at.start), scope, writeField: options?.writeField === true });
+    this.checkExpressionTree(tree, { spanOf: (at) => spanWithin(slot, at.start), slot, scope, writeField: options?.writeField === true });
   }
 
   /** `checkSlotExpression` over a tree that is not a slot's — a block head's
@@ -4994,7 +5057,7 @@ class Checker {
    *  head IS, as opposed to a walk written inside one of its hops). */
   private checkExpressionTree(
     tree: MExpr,
-    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean; head?: MExpr },
+    at: { spanOf: (at: At) => Span; slot?: ExprSlot; scope: Scope; writeField: boolean; head?: MExpr },
   ): void {
     const visit = (expr: MExpr, perMember: boolean): void => {
       if (expr.kind === 'path') this.checkWalkKeepsWhatIsWritten(expr, at.spanOf(expr.at), expr === at.head);
@@ -5079,7 +5142,7 @@ class Checker {
   private checkCallInExpression(
     call: Extract<MExpr, { kind: 'call' }>,
     written: string,
-    at: { spanOf: (at: At) => Span; scope: Scope; writeField: boolean },
+    at: { spanOf: (at: At) => Span; slot?: ExprSlot; scope: Scope; writeField: boolean },
   ): void {
     const span = at.spanOf(call.at);
     const resolution = resolveCallee(written, this.callScope(at.scope), this.languageVersion);
@@ -5128,10 +5191,17 @@ class Checker {
         );
         return;
       }
-      case 'unknown':
+      case 'unknown': {
         if (at.writeField) return;
-        this.report(DiagnosticCodes.FUNCTION_UNKNOWN, unknownFunctionMessage(written, at.scope), span);
+        const fix = at.slot !== undefined ? renamedCallFix({ slot: at.slot, call, to: closestFunctionName(written, at.scope) }) : undefined;
+        this.reportWithFix({
+          code: DiagnosticCodes.FUNCTION_UNKNOWN,
+          message: unknownFunctionMessage(written, at.scope, fix?.corrected),
+          span,
+          ...(fix !== undefined ? { fix: { edits: [fix.edit] } } : {}),
+        });
         return;
+      }
       default:
         neverAsAny(resolution);
     }
@@ -6494,6 +6564,10 @@ class Checker {
   ): { adapter?: string; credential?: string; schema?: InstanceSchema } {
     const resolution = scope.resolve(construct.callee);
     if (resolution.kind !== 'found') {
+      if (resolution.kind === 'unknown' && this.catalog.adapter(construct.callee) !== undefined) {
+        this.reportUnimportedAdapterConstruction(construct, scope);
+        return {};
+      }
       this.reportResolutionFailure(construct.callee, construct.span, resolution);
       return {};
     }
@@ -6609,11 +6683,13 @@ class Checker {
     const raw = slot.raw.trim();
     const name = unwrapCredentialArg(raw);
     if (name === null) {
-      this.report(
-        DiagnosticCodes.CRED_WRONG_ADAPTER,
-        `The credential argument must be an imported credential name, not an expression`,
-        slot.span,
-      );
+      const repair = this.credentialArgRepair(slot, scope);
+      this.reportWithFix({
+        code: DiagnosticCodes.CRED_WRONG_ADAPTER,
+        message: `The credential argument must be an imported credential name, not an expression${repair !== undefined ? ` — ${repair.instruction}` : ''}`,
+        span: slot.span,
+        ...(repair !== undefined ? { fix: { edits: repair.edits } } : {}),
+      });
       return;
     }
     const resolution = scope.resolve(name);
@@ -7194,13 +7270,23 @@ class Checker {
       // A field that may itself be absent (a declaration's `<T | null>`) takes
       // one as-is — TS's `x: T | undefined` accepting `T | undefined`.
       if (isMaybeAbsent(valueType) && field.semantics !== 'fill' && !isMaybeAbsent(targetType)) {
-        this.report(
-          DiagnosticCodes.ABSENT_REQUIRED,
-          field.spread !== undefined
-            ? `'${field.name}' on ${rootDescription} needs a value, but '...${field.spread}' writes '${field.spread}.${field.name}', which may be absent (${describeFieldType(valueType!)}). Spread it set-if-empty ('?...${field.spread}'), or write '${field.name}' on its own line with a value that is always there`
-            : `'${field.name}' on ${rootDescription} needs a value, but this expression may be absent (${describeFieldType(valueType!)}) — it comes from a branch that might not have run, or an answer that might not be there. Discharge it: test it with '==' and write inside that branch, gate on it first ('r-[x:…]-> { write … }'), default it with '?:', or fall back to something that always answers ('COALESCE(…, "unknown")')`,
-          field.value.span,
-        );
+        if (field.spread !== undefined) {
+          this.report(
+            DiagnosticCodes.ABSENT_REQUIRED,
+            `'${field.name}' on ${rootDescription} needs a value, but '...${field.spread}' writes '${field.spread}.${field.name}', which may be absent (${describeFieldType(valueType!)}). Spread it set-if-empty ('?...${field.spread}'), or write '${field.name}' on its own line with a value that is always there`,
+            field.value.span,
+          );
+        } else {
+          this.reportAbsentWriteField({
+            field,
+            valueType: valueType!,
+            rootDescription,
+            // An update leaves an unset field as it was; a create must fill the
+            // fields the target requires.
+            mayLeaveUnset: write.target.kind === 'position' || root?.requiredFields?.includes(field.name) !== true,
+            identifies: write.uniqueBy.some(clause => uniqueClauseRefs(clause)?.includes(field.name) === true),
+          });
+        }
       }
       if (field.semantics === 'fill' && isMaybeAbsent(valueType)) omittableFields += 1;
       this.reportBlankableIdentityKey({ uniqueBy: write.uniqueBy, field, valueType, rootDescription, scope });
@@ -7409,6 +7495,51 @@ class Checker {
    * that was not found is no key under either version (absent before, `""`
    * now). A value the checker could not type says nothing.
    */
+  /**
+   * A maybe-absent value in a plain write field, with the line to write
+   * instead — the author's own expression, falling back to a value of its own
+   * type. Not for a field that IDENTIFIES the record: one fallback value
+   * there would merge every record written without it into one, so that
+   * write is gated instead, which only the author can place.
+   */
+  private reportAbsentWriteField(input: {
+    field: FieldEntry;
+    valueType: FieldType;
+    rootDescription: string;
+    mayLeaveUnset: boolean;
+    identifies: boolean;
+  }): void {
+    const { field, valueType, rootDescription } = input;
+    const raw = field.value.raw.trim();
+    const label = spellName(field.name);
+    const fallback = input.identifies ? undefined : fallbackLiteral(stripAbsent(valueType));
+    const lead = `'${field.name}' on ${rootDescription} needs a value, but '${raw}' may be absent (${describeFieldType(valueType)})`;
+    if (input.identifies) {
+      this.report(
+        DiagnosticCodes.ABSENT_REQUIRED,
+        `${lead}, and it identifies the record, so a fallback would merge every record written without it into one — write only when it is there: put the write inside 'if ${raw} != null { … }'`,
+        field.value.span,
+      );
+      return;
+    }
+    const unset = input.mayLeaveUnset ? `'${label} ?: ${raw}' to leave it unset when absent` : undefined;
+    if (fallback === undefined) {
+      this.report(
+        DiagnosticCodes.ABSENT_REQUIRED,
+        `${lead} — it comes from a branch that might not have run, or an answer that might not be there. ${unset !== undefined ? `Write ${unset}, or` : 'Either'} test it with '==' and write inside that branch, or gate on it first ('r-[x:…]-> { write … }')`,
+        field.value.span,
+      );
+      return;
+    }
+    const coalesced = `COALESCE(${raw}, ${fallback})`;
+    this.reportWithFix({
+      code: DiagnosticCodes.ABSENT_REQUIRED,
+      message: `${lead} — write '${label}: ${coalesced}' to fall back to a value that is always there${unset !== undefined ? `, or ${unset}` : ''}`,
+      span: field.value.span,
+      fix: { edits: [{ span: field.value.span, text: coalesced }] },
+    });
+  }
+
   private reportBlankableIdentityKey(input: {
     uniqueBy: UniqueClause[];
     field: FieldEntry;
@@ -8801,6 +8932,7 @@ class Checker {
             span: arg.expr.span,
             literal: isRecordLiteralSlot(arg.expr),
             ...(parsed !== undefined ? { parsed } : {}),
+            slot: arg.expr,
           });
           return;
         }
@@ -8925,7 +9057,17 @@ class Checker {
       return;
     }
     if (!fieldAssignable(arg, param)) {
-      this.report(DiagnosticCodes.CALL_ARG_TYPE, `${expected}, but this argument is ${describeFieldType(arg)}`, span);
+      const { slot } = options;
+      const asList =
+        slot !== undefined && isListType(param) && fieldAssignable(arg, param.of)
+          ? { span: slot.span, text: listArgumentRewrite(slot) }
+          : undefined;
+      this.reportWithFix({
+        code: DiagnosticCodes.CALL_ARG_TYPE,
+        message: `${expected}, but this argument is ${describeFieldType(arg)}${asList !== undefined ? ` — pass it as a list: '${asList.text}'` : ''}`,
+        span,
+        ...(asList !== undefined ? { fix: { edits: [asList] } } : {}),
+      });
     }
   }
 
@@ -10424,11 +10566,18 @@ class Checker {
         : required === 'key' ? `"${suggestedListenKey(statement.movement)}"`
         : '"…"';
       const why = spec?.triggerConfigRequiredWhy?.[required];
-      this.report(
-        DiagnosticCodes.LISTEN_BAD_CONFIG,
-        `a '${adapterName}' listener requires a '${required}' config${why !== undefined ? ` (${why})` : ''} — e.g. listen to ${statement.instance} { ${required}: ${example} } fire ${BARE_IDENT.test(statement.movement) ? statement.movement : `\`${statement.movement}\``}`,
-        statement.span,
-      );
+      const rewritten = `listen to ${spellName(statement.instance)} { ${required}: ${example} } fire ${spellName(statement.movement)}`;
+      // A fix only for the routing key, whose value is derived (a schedule is
+      // the author's to choose), and only when nothing else was written in the
+      // statement — rewriting it would otherwise drop the author's own config.
+      const exact =
+        required === 'key' && statement.config.length === 0 && statement.alias === undefined && statement.construct === undefined;
+      this.reportWithFix({
+        code: DiagnosticCodes.LISTEN_BAD_CONFIG,
+        message: `a '${adapterName}' listener requires a '${required}' config${why !== undefined ? ` (${why})` : ''} — e.g. ${rewritten}`,
+        span: statement.span,
+        ...(exact ? { fix: { edits: [{ span: statement.span, text: rewritten }] } } : {}),
+      });
     }
     for (const arg of statement.config) {
       if (arg.name === SUPPRESS_SELF_KEY) continue; // universal key, validated above
@@ -10832,6 +10981,83 @@ class Checker {
     const args = this.catalog.adapter(adapterName)?.constructionArgs ?? [];
     const required = args.filter((a) => a.required).map((a) => `${a.name}: …`);
     return `${adapterName}(${required.join(', ')})`;
+  }
+
+  /**
+   * The one connection that can construct `adapter`, when the workspace has
+   * exactly one — the only case where naming it is certain to be right.
+   */
+  private soleCredentialFor(adapter: string): string | undefined {
+    const serving = (this.catalog.credentialNames?.() ?? []).filter(
+      (name) => this.catalog.credential(name)?.adapters.includes(adapter) === true,
+    );
+    return serving.length === 1 ? serving[0] : undefined;
+  }
+
+  /** `import { attio } from adapters, then '<name> = attio(credentials: …)'` —
+   *  then, when the workspace has just one connection for it, the same two
+   *  lines naming that connection. Appended rather than substituted: the
+   *  general form is what earlier versions' corpora read. */
+  private importAndConstructLines(adapter: string): string {
+    const adapterImport = importLine(adapter, 'adapters');
+    const general = `${adapterImport}, then '<name> = ${this.constructionCall(adapter)}'`;
+    const args = this.catalog.adapter(adapter)?.constructionArgs ?? [];
+    const credentialArg = credentialArgOf({ constructionArgs: args });
+    const credential = credentialArg?.required === true ? this.soleCredentialFor(adapter) : undefined;
+    if (credentialArg === undefined || credential === undefined) return general;
+    const call = args
+      .filter((a) => a.required)
+      .map((a) => `${a.name}: ${a.name === credentialArg.name ? spellName(credential) : '…'}`)
+      .join(', ');
+    return `${general} — with the one ${adapter} connection here: '${importLine(credential, 'credentials')}' and '<name> = ${adapter}(${call})'`;
+  }
+
+  /**
+   * `crm = attio(credentials: …)` written whole, but `attio` never imported —
+   * one line short of working, so that line is the fix. The construction's
+   * credential is repaired in the same breath (the check that would find it
+   * wrong never runs while the callee is unresolved), so one round suffices.
+   */
+  private reportUnimportedAdapterConstruction(construct: ConstructionCall, scope: Scope): void {
+    const adapterImport = importLine(construct.callee, 'adapters');
+    const credentialArg = credentialArgOf(this.catalog.adapter(construct.callee) ?? { constructionArgs: [] });
+    const credentialSlot = construct.args.find((a) => a.name === credentialArg?.name)?.value;
+    const repair = credentialSlot !== undefined ? this.credentialArgRepair(credentialSlot, scope) : undefined;
+    this.reportWithFix({
+      code: DiagnosticCodes.NAME_UNRESOLVED,
+      message: `'${construct.callee}' is not in scope — import it: add '${adapterImport}' at the top of the file${repair !== undefined ? `, and ${repair.instruction}` : ''}`,
+      span: construct.span,
+      fix: { edits: [insertLineAtTop(adapterImport), ...(repair?.edits ?? [])] },
+    });
+  }
+
+  /**
+   * A credential argument naming a connection the workspace HAS, but written
+   * as a string (`"Acme CRM"`) or never imported: the exact repair. Undefined
+   * when the argument names no known connection, or is already right.
+   */
+  private credentialArgRepair(
+    slot: ExprSlot,
+    scope: Scope,
+  ): { instruction: string; edits: SourceEdit[] } | undefined {
+    const raw = slot.raw.trim();
+    const quoted = /^"([^"\\]*)"$/.exec(raw);
+    const name = quoted !== null ? quoted[1] : unwrapCredentialArg(raw);
+    if (name === null || this.catalog.credential(name) === undefined) return undefined;
+    const imported = scope.resolve(name).kind === 'found';
+    if (quoted === null && imported) return undefined;
+    const line = importLine(name, 'credentials');
+    const steps = [
+      ...(quoted !== null ? [`write the credential as a name, not a string: 'credentials: ${spellName(name)}'`] : []),
+      ...(imported ? [] : [`add '${line}' at the top of the file`]),
+    ];
+    return {
+      instruction: steps.join(', and '),
+      edits: [
+        ...(imported ? [] : [insertLineAtTop(line)]),
+        ...(quoted !== null ? [{ span: slot.span, text: spellName(name) }] : []),
+      ],
+    };
   }
 
   /**
@@ -12230,10 +12456,22 @@ class Checker {
           this.report(
             DiagnosticCodes.NAME_UNRESOLVED,
             `'${name}' is not in scope — import it and construct an instance first: `
-              + `import { ${name} } from adapters, then '<name> = ${this.constructionCall(name)}'`
+              + this.importAndConstructLines(name)
               + seeHandbook(HANDBOOK_POINTERS.systems),
             span,
           );
+          return;
+        }
+        // A connection the workspace has, named but never imported — the
+        // credentials namespace is no more ambient than the adapters one.
+        if (this.catalog.credential(name) !== undefined) {
+          const line = importLine(name, 'credentials');
+          this.reportWithFix({
+            code: DiagnosticCodes.NAME_UNRESOLVED,
+            message: `'${name}' is a credential — import it: add '${line}' at the top of the file`,
+            span,
+            fix: { edits: [insertLineAtTop(line)] },
+          });
           return;
         }
         // Same story one namespace over: the plugin exists, the import line
