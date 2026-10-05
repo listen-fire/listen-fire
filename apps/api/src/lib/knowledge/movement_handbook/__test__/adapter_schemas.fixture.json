@@ -10,7 +10,13 @@
       "canFire": true,
       "triggerConfig": [
         "key"
-      ]
+      ],
+      "triggerConfigRequired": [
+        "key"
+      ],
+      "triggerConfigRequiredWhy": {
+        "key": "the key is this listener's address, inbox+<key>@example.com; without one nothing can be sent to it and it never fires"
+      }
     },
     "attio": {
       "constructionArgs": [

@@ -168,7 +168,7 @@ import {
   type CallScope,
 } from './calls';
 import { builtinArity, describeBuiltin, flatBuiltinNames, lookupBuiltin } from './standard_library';
-import { withHandbookPointer } from './handbook_pointers';
+import { HANDBOOK_POINTERS, seeHandbook, withHandbookPointer } from './handbook_pointers';
 import {
   borrowableFieldsOf,
   borrowedTypeSegments,
@@ -1398,6 +1398,12 @@ function movementNamesInScope(scope: Scope): string[] {
  */
 export const DRY_RUN_ARG = 'dry_run';
 const BOOLEAN_LITERAL = /^(true|false)$/i;
+
+/** A listen `key` a fix-it can offer for a movement: its name as a slug, the
+ *  shape an address's plus-suffix takes (`Log Sender` → `log-sender`). */
+function suggestedListenKey(movement: string): string {
+  return movement.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'intake';
+}
 
 const SYNTHETIC_SPAN: Span = { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } };
 
@@ -2969,10 +2975,12 @@ class Checker {
               .map(key =>
                 key === addressTail && d.position !== undefined
                   ? `${key}: "${d.position}"`
-                  : `${key}: "…"`,
+                  : key === 'key'
+                    ? `key: "${suggestedListenKey(d.movement)}"`
+                    : `${key}: "…"`,
               )
               .join(', ')} }`
-        : vocabulary?.includes('key') ? ` { key: "${d.movement.replace(/_/g, '-')}" }`
+        : vocabulary?.includes('key') ? ` { key: "${suggestedListenKey(d.movement)}" }`
         : '';
       this.reportInfo(
         DiagnosticCodes.LISTEN_MISSING,
@@ -10307,10 +10315,13 @@ class Checker {
         && instanceSymbol.constructionArgs[required].trim() !== '';
       if (positionSupplies) continue;
       const example =
-        spec?.triggerConfigFormats?.[required] === 'cron' ? '"0 9 * * 1"' : '"…"';
+        spec?.triggerConfigFormats?.[required] === 'cron' ? '"0 9 * * 1"'
+        : required === 'key' ? `"${suggestedListenKey(statement.movement)}"`
+        : '"…"';
+      const why = spec?.triggerConfigRequiredWhy?.[required];
       this.report(
         DiagnosticCodes.LISTEN_BAD_CONFIG,
-        `a '${adapterName}' listener requires a '${required}' config — e.g. listen to ${statement.instance} { ${required}: ${example} } fire ${statement.movement}`,
+        `a '${adapterName}' listener requires a '${required}' config${why !== undefined ? ` (${why})` : ''} — e.g. listen to ${statement.instance} { ${required}: ${example} } fire ${BARE_IDENT.test(statement.movement) ? statement.movement : `\`${statement.movement}\``}`,
         statement.span,
       );
     }
@@ -12114,7 +12125,8 @@ class Checker {
           this.report(
             DiagnosticCodes.NAME_UNRESOLVED,
             `'${name}' is not in scope — import it and construct an instance first: `
-              + `import { ${name} } from adapters, then '<name> = ${this.constructionCall(name)}'`,
+              + `import { ${name} } from adapters, then '<name> = ${this.constructionCall(name)}'`
+              + seeHandbook(HANDBOOK_POINTERS.systems),
             span,
           );
           return;

@@ -109,6 +109,13 @@ export interface AdapterSpec {
    */
   triggerConfigRequired?: string[];
   /**
+   * Why a required key is required, by key, said after the refusal — the
+   * host's words, because only the host knows what the value does (email's
+   * routing `key` IS the inbound address; without it no mail can reach the
+   * listener). Keys without an entry are refused with the bare fix-it.
+   */
+  triggerConfigRequiredWhy?: Record<string, string>;
+  /**
    * Per-key value FORMATS the checker validates statically. `'cron'`
    * validates the value as a five-field cron expression; `'timezone'`
    * validates it as an IANA time-zone id (@listen-fire/shared/cron — the same

@@ -27,7 +27,9 @@ skill adds is the choreography:
 
 **1. Understand the intent.** Use active listening to ensure you understand
 the user's intent. Cross-reference against the handbook to check what's
-possible.
+possible. Before building anything that adds records or posts messages,
+settle with them what happens when the same thing arrives again — skip it,
+update what's there, or post again — unless they've already said.
 
 **2. Connect before you author.** A system that isn't connected has
 unknowable names — get the connection made first, framed as the natural
