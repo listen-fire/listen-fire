@@ -119,6 +119,9 @@ function teamSection(input: { teams: TeamRef[]; teamId: string | null }): string
   ].join('\n\n');
 }
 
+const EXTRACT_CACHE_TIP =
+  'When `extract(...)` or `extractOne(...)` takes several content arguments, put content shared across calls (a fixed instructions or reference document) first and the per-call content (the email body) after it: the prompt is cached on the longest shared prefix.';
+
 /**
  * The whole first read, as markdown. `teamId` is null when the connection spans
  * several teams and none was named: the systems then wait for one.
@@ -131,7 +134,7 @@ export async function renderGetStarted(input: {
   const systems = input.teamId === null ? null : await connectedSystemsDigest(input.teamId);
   return [
     teamSection(input),
-    ...(systems !== null ? ['## Systems', systems] : []),
+    ...(systems !== null ? ['## Systems', systems, EXTRACT_CACHE_TIP] : []),
     firstHandbookPage(input.mode),
   ].join('\n\n');
 }
