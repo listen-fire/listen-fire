@@ -275,7 +275,6 @@ import {
   type MovementMetaContext,
   type MovementTraceEntry,
   type SourceRead,
-  type TracedEntity,
   type WriteRecord,
 } from './expression';
 import {
@@ -305,6 +304,7 @@ import {
   buildExtractSpec,
   makeAnthropicLlmClient,
   materializeExtract,
+  recordExtractedEntities,
   registryTransformInvoker,
   invokePricedTransform,
   tracedUrl,
@@ -2259,85 +2259,6 @@ function untilConditionMet(value: unknown): boolean {
 /** The block head as the author wrote it — `mentions-[c:company]->`. */
 function blockRootLabel(block: TraversalBlock): string {
   return spellPathHead(block.head);
-}
-
-/** How much of an extract's output a run keeps for inspection. The trace
- *  rides `trigger_run.steps` (jsonb), so the sample is bounded per alias
- *  and per value — and whatever the cap drops is counted, never dropped
- *  silently. */
-const TRACE_ENTITY_CAP = 20;
-const TRACE_VALUE_CHARS = 200;
-
-/**
- * Hang the extract's emitted entities off the trace, so a reader can open
- * "3 companies" and see WHICH three — and, the case this exists for, that
- * one of them came back with a null name. Attaches the whole tree (the
- * root's own fields plus every child alias) to the LAST extraction entry
- * of this extract: an extract reads as one step, and only after its final
- * region has run is the tree complete.
- */
-function recordExtractedEntities(
-  trace: MovementTraceEntry[],
-  from: number,
-  root: ExtractEmission,
-): void {
-  let target: Extract<MovementTraceEntry, { kind: 'extraction' }> | undefined;
-  for (let i = trace.length - 1; i >= from; i--) {
-    const entry = trace[i];
-    // A per-entity stage skipped for want of anything new to read describes a
-    // call that never happened — often the LAST entry of a staged extract. The
-    // tree belongs to the last call that did happen.
-    if (entry.kind === 'extraction' && entry.skipped !== 'no_enrichment') {
-      target = entry;
-      break;
-    }
-  }
-  // A skipped extract never called out — its "root" is the engine's
-  // synthetic all-null stand-in, not something that was read.
-  if (!target || target.skipped) return;
-  const entities: Record<string, TracedEntity[]> = {};
-  const truncatedCount: Record<string, number> = {};
-  collectTracedEntities(root, entities, truncatedCount);
-  if (Object.keys(entities).length > 0) target.entities = entities;
-  if (Object.keys(truncatedCount).length > 0) target.truncatedCount = truncatedCount;
-}
-
-/** Depth-first over the emission tree, bucketing entities by node alias.
- *  A fieldless node (a pure container) contributes nothing to show. */
-function collectTracedEntities(
-  emission: ExtractEmission,
-  into: Record<string, TracedEntity[]>,
-  truncated: Record<string, number>,
-): void {
-  const fields = Object.entries(emission.fields);
-  if (fields.length > 0) {
-    const alias = emission.nodeName;
-    const bucket = (into[alias] ??= []);
-    if (bucket.length < TRACE_ENTITY_CAP) {
-      bucket.push({
-        fields: Object.fromEntries(fields.map(([name, value]) => [name, tracedValue(value)])),
-      });
-    } else {
-      truncated[alias] = (truncated[alias] ?? 0) + 1;
-    }
-  }
-  for (const children of emission.children.values()) {
-    for (const child of children) collectTracedEntities(child, into, truncated);
-  }
-}
-
-/** An extracted value as the trace shows it — absent stays `null` (an
- *  unfilled field must read as unfilled), everything else becomes a
- *  bounded string. */
-function tracedValue(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  const text =
-    typeof value === 'string'
-      ? value
-      : typeof value === 'object'
-        ? JSON.stringify(value)
-        : String(value);
-  return text.length > TRACE_VALUE_CHARS ? `${text.slice(0, TRACE_VALUE_CHARS)}…` : text;
 }
 
 /** Whether an instance was constructed with the universal `dry_run: true`

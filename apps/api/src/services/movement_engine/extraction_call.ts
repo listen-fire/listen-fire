@@ -52,12 +52,14 @@ import {
   extractionMaxTokens,
   extractionOutputBudgetEnabled,
   logTruncatedExtraction,
+  recordExtractedEntities,
   replyDigest,
   throwIfCancelled,
   TRACE_REPLY_DIGESTS,
   zodForFieldType,
   type ExtractFieldSpec,
   type ExtractNodeSpec,
+  type TracedTree,
 } from './extraction';
 import {
   bindingOf,
@@ -510,6 +512,18 @@ function isEmptyRecord(record: NodePosition, spec: ExtractNodeSpec): boolean {
   return fieldsBlank && edgesEmpty;
 }
 
+/** A record and its nested records as the trace's entity sample reads them. */
+function treeOf(record: NodePosition, spec: ExtractNodeSpec): TracedTree {
+  const children = new Map<string, TracedTree[]>();
+  for (const child of spec.stages[0]?.children ?? []) {
+    const edge = record.edges[child.name];
+    if (edge?.kind !== 'landed') continue;
+    const landed = edge.landings.filter((l): l is NodePosition => l.kind === 'nodePosition');
+    children.set(child.name, landed.map((l) => treeOf(l, child)));
+  }
+  return { nodeName: spec.name, fields: record.fields, children };
+}
+
 function buildRecords(
   raw: unknown,
   spec: ExtractNodeSpec,
@@ -824,6 +838,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
   if (answered === 0) why.push('no_entities');
   if (Object.keys(tallies.dropped).length > 0) why.push('dropped_records');
   if (retried !== undefined) why.push('retried');
+  const traceMark = runtime.trace?.length ?? 0;
   runtime.trace?.push({
     kind: 'extraction',
     ...shape,
@@ -835,6 +850,14 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     ...(coerced ? { coerced } : {}),
     ...telemetry(),
   });
+  if (runtime.trace !== undefined) {
+    // The keyword's tree has an unnamed root over its top-level records.
+    recordExtractedEntities(runtime.trace, traceMark, {
+      nodeName: 'extract result',
+      fields: {},
+      children: new Map([[spec.name, landings.map((record) => treeOf(record, spec))]]),
+    });
+  }
   return answerOf(landings, finds);
 }
 

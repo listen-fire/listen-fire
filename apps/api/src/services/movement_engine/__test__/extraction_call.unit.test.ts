@@ -709,3 +709,39 @@ describe('extractOne(content, Shape) — the single record, or absent', () => {
     expect(writes.map((w) => w.fields)).toEqual([{ name: 'nested' }]);
   });
 });
+
+describe('what a call extracted is on its trace entry', () => {
+  const find = (finds: 'extract' | 'extractOne', shape: string, reply: unknown) =>
+    run([`  found = ${finds}([msg.\`text\`], ${shape}, { tier: 'careful' })`], [reply]);
+
+  it('a list: every record by node name, nested records under their own name', async () => {
+    const { result } = await find('extract', 'Company', COMPANIES);
+    const [entry] = extractions(result.trace);
+    expect(entry.entities).toEqual({
+      Company: [
+        { fields: { name: 'Acme', employees: '40', site: null } },
+        { fields: { name: 'Beta', employees: null, site: 'beta.dev' } },
+      ],
+      round: [{ fields: { stage: 'Seed' } }, { fields: { stage: 'Series A' } }],
+    });
+    expect(entry.truncatedCount).toBeUndefined();
+  });
+
+  it('a single record', async () => {
+    const { result } = await find('extractOne', 'Detail', { record: { summary: cite('Acme builds infra', 0) } });
+    expect(extractions(result.trace)[0].entities).toEqual({ Detail: [{ fields: { summary: 'Acme builds infra' } }] });
+  });
+
+  it('absent: no entities on the entry', async () => {
+    const { result } = await find('extractOne', 'Detail', { record: null });
+    expect(extractions(result.trace)[0].entities).toBeUndefined();
+  });
+
+  it('the cap counts what it leaves out', async () => {
+    const many = { records: Array.from({ length: 22 }, (_, i) => ({ summary: cite(`s${i}`, 0) })) };
+    const { result } = await find('extract', 'Detail', many);
+    const [entry] = extractions(result.trace);
+    expect(entry.entities?.Detail).toHaveLength(20);
+    expect(entry.truncatedCount).toEqual({ Detail: 2 });
+  });
+});
