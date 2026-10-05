@@ -397,10 +397,11 @@ export class EmailAdapter extends BaseAdapter implements Adapter {
           { fieldId: 'bodyHtml', displayName: 'HTML Body', kind: 'string', writable: false, required: false, description: 'The HTML body, when present.' },
           { fieldId: 'bodyText', displayName: 'Plain Body', kind: 'string', writable: false, required: false, description: 'The plain-text body, when present.' },
           // `content` is a derived field — the canonical normalised body
-          // (text fallback derived from HTML when only HTML is present).
+          // (text fallback derived from HTML when only HTML is present, or
+          // when the plain part is itself markup — see `isMarkupText`).
           // Authors use this when they want "the body" without caring
           // about which mime alternative arrived.
-          { fieldId: 'content', displayName: 'Body', kind: 'string', writable: false, required: false, description: 'The normalised body — plain text, derived from HTML when only HTML arrived. Use this for "the body" regardless of format.' },
+          { fieldId: 'content', displayName: 'Body', kind: 'string', writable: false, required: false, description: 'The normalised body — plain text, derived from HTML when only HTML arrived, or when the plain part is itself markup. Use this for "the body" regardless of format.' },
         ],
         references: [
           {
@@ -684,20 +685,50 @@ export function normaliseInboundEmailPayload(
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+// A closing tag or self-closing structural tag, anchored to the start of a
+// (trimmed) string that opens with `<` — conservative on purpose, so prose
+// with a stray angle bracket ("a <3 b", "x < y", "<name> was here") is never
+// mistaken for markup.
+const STRUCTURAL_TAG = /<\/[a-z]|<(?:br|div|p|html|body|table|span)\b/i;
+// `<html` / `<!DOCTYPE` are unambiguous even mid-string (a MIME preamble can
+// precede them), so these are checked without the leading-`<` requirement.
+const DOCTYPE_OR_HTML_TAG = /<!DOCTYPE|<html\b/i;
+
+/**
+ * Whether a "plain text" body part is actually markup. Observed on a real
+ * stored event: a mail-merge forwarder put the whole HTML document in the
+ * message's text part (`bodyText`) — Resend still delivered a separate,
+ * genuine `bodyHtml` alongside it — so plain-text preference alone let
+ * markup through to the derived `Body`.
+ */
+function isMarkupText(text: string): boolean {
+  const trimmed = text.trim();
+  if (DOCTYPE_OR_HTML_TAG.test(trimmed)) return true;
+  return trimmed.startsWith('<') && STRUCTURAL_TAG.test(trimmed);
+}
+
+function stripHtml(html: string): string {
+  try {
+    return htmlToText(html);
+  } catch {
+    return html;
+  }
+}
+
 /**
  * Build the canonical normalised body string for an email payload.
- * Preference: plain text when present, otherwise HTML-converted-to-text.
- * Returns `''` when neither is set (treated as an empty body, not null,
- * so downstream string operators don't break).
+ * Preference: plain text when present, otherwise HTML-converted-to-text —
+ * except when the "plain text" part is itself markup (see `isMarkupText`),
+ * in which case it's stripped exactly like the HTML-only path. Returns `''`
+ * when neither is set (treated as an empty body, not null, so downstream
+ * string operators don't break).
  */
 function normalisedBody(payload: Partial<EmailPayload>): string {
-  if (payload.bodyText && payload.bodyText.length > 0) return payload.bodyText;
+  if (payload.bodyText && payload.bodyText.length > 0) {
+    return isMarkupText(payload.bodyText) ? stripHtml(payload.bodyText) : payload.bodyText;
+  }
   if (payload.bodyHtml && payload.bodyHtml.length > 0) {
-    try {
-      return htmlToText(payload.bodyHtml);
-    } catch {
-      return payload.bodyHtml;
-    }
+    return stripHtml(payload.bodyHtml);
   }
   return '';
 }
