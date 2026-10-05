@@ -20,27 +20,44 @@ function wrapValue(key: string, v: unknown): { [k: string]: unknown } {
 
 /**
  * Minimal Attio-shaped filter matcher. Supports the shapes the TG Attio
- * adapter sends via `queryRecordsWithFilter`:
+ * adapter sends via `queryRecordsWithFilter`, plus the comparators an author's
+ * WHERE can reach through it:
  *   - `{ slug: { $eq: value } }`         — equality
+ *   - `{ slug: { $in: [values] } }`      — membership
  *   - `{ slug: { $contains: substr } }`  — case-insensitive substring
  *   - `{ slug: scalar }`                  — shorthand for $eq
- *   - `{ $or: [...] }`                    — disjunction across sub-filters
+ *   - `{ $or: [...] }` / `{ $and: [...] }` / `{ $not: {...} }`
  *   - multiple slug keys in one object    — implicit AND
  *
  * Attio's actual filter API supports a richer grammar (range comparators,
- * `$and`/`$not`, parent_record_id, etc.) — extend this when tests need it.
+ * parent_record_id, etc.) — extend this when tests need it.
  */
 function matchesAttioFilter(record: unknown, filter: unknown): boolean {
   if (!filter || typeof filter !== 'object') return true;
   const f = filter as Record<string, unknown>;
-  if (Array.isArray(f.$or)) {
-    return f.$or.some((sub) => matchesAttioFilter(record, sub));
-  }
+  if (Array.isArray(f.$or) && !f.$or.some((sub) => matchesAttioFilter(record, sub))) return false;
+  if (Array.isArray(f.$and) && !f.$and.every((sub) => matchesAttioFilter(record, sub))) return false;
+  if (f.$not !== undefined && matchesAttioFilter(record, f.$not)) return false;
   for (const [slug, predicate] of Object.entries(f)) {
     if (slug.startsWith('$')) continue; // already handled
     if (!matchesValuePredicate(record, slug, predicate)) return false;
   }
   return true;
+}
+
+/** The strings one stored value compares as. Real Attio filters a status or
+ *  select by its title, so `{ status: { title: 'Passed' } }` and
+ *  `{ option: { title: 'Passed' } }` compare as "Passed"; scalar-wrapped
+ *  values (`{ value }`, `{ domain }`, …) compare as their scalar. */
+function comparableStrings(item: unknown): string[] {
+  if (item == null) return [];
+  if (typeof item !== 'object') return [String(item)];
+  return Object.values(item as Record<string, unknown>).flatMap((c) => {
+    if (c == null) return [];
+    if (typeof c !== 'object') return [String(c)];
+    const title = (c as Record<string, unknown>).title;
+    return typeof title === 'string' ? [title] : [];
+  });
 }
 
 function matchesValuePredicate(
@@ -51,37 +68,23 @@ function matchesValuePredicate(
   const values =
     (record as { values?: Record<string, unknown> } | null)?.values?.[slug];
   const items: unknown[] = Array.isArray(values) ? values : [values];
+  const candidates = items.flatMap(comparableStrings).map((s) => s.toLowerCase());
 
-  // Predicate normalisation.
-  let op: '$eq' | '$contains' = '$eq';
-  let target: unknown;
-  if (predicate && typeof predicate === 'object' && !Array.isArray(predicate)) {
-    const p = predicate as Record<string, unknown>;
-    if ('$eq' in p) {
-      target = p.$eq;
-    } else if ('$contains' in p) {
-      op = '$contains';
-      target = p.$contains;
-    } else {
-      target = predicate; // unknown wrapper — fall through to shorthand
-    }
-  } else {
-    target = predicate;
+  const p =
+    predicate && typeof predicate === 'object' && !Array.isArray(predicate)
+      ? (predicate as Record<string, unknown>)
+      : { $eq: predicate };
+  if ('$in' in p) {
+    const targets = (Array.isArray(p.$in) ? p.$in : [p.$in]).map((t) => String(t ?? '').toLowerCase());
+    return candidates.some((c) => targets.includes(c));
   }
-  const targetStr = String(target ?? '').toLowerCase();
-
-  for (const item of items) {
-    if (item == null) continue;
-    const candidates =
-      typeof item === 'object'
-        ? Object.values(item as Record<string, unknown>)
-        : [item];
-    for (const c of candidates) {
-      const s = String(c ?? '').toLowerCase();
-      if (op === '$eq' ? s === targetStr : s.includes(targetStr)) return true;
-    }
+  if ('$contains' in p) {
+    const target = String(p.$contains ?? '').toLowerCase();
+    return candidates.some((c) => c.includes(target));
   }
-  return false;
+  // `$eq`, or an unknown wrapper treated as the shorthand's value.
+  const target = String(('$eq' in p ? p.$eq : predicate) ?? '').toLowerCase();
+  return candidates.some((c) => c === target);
 }
 
 function normalizeValues(values: Record<string, unknown>): Record<string, unknown[]> {
