@@ -656,3 +656,75 @@ describe('a value that holds records', () => {
     expect(await roundTrip(binding)).toEqual(binding);
   });
 });
+
+describe('a value that holds files', () => {
+  const attachment = (): FileRef => ({
+    __brand: 'FileRef',
+    name: 'memo.pdf',
+    contentType: 'application/pdf',
+    retrieve: async () => ({ stream: Readable.from(Buffer.from('original')) }),
+    source: { ownerAdapterType: 'email', handle: 'att-key-1' },
+  });
+
+  async function bytesOf(ref: unknown): Promise<string> {
+    if (typeof ref !== 'object' || ref === null || !('retrieve' in ref) || typeof ref.retrieve !== 'function') {
+      throw new Error('test: not a readable file');
+    }
+    const { stream } = await (ref as Required<Pick<FileRef, 'retrieve'>>).retrieve();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk as Buffer));
+    return Buffer.concat(chunks).toString('utf8');
+  }
+
+  it('parks each file in its wire form — handle, no channel — and gives the channel back on resume', async () => {
+    const binding: Binding = { kind: 'value', value: ['the body', attachment()] };
+    const descriptor = serializeBinding(binding);
+    expect(descriptor).toEqual({
+      kind: 'value',
+      value: [
+        'the body',
+        {
+          __brand: 'FileRef',
+          name: 'memo.pdf',
+          contentType: 'application/pdf',
+          source: { ownerAdapterType: 'email', handle: 'att-key-1' },
+        },
+      ],
+    });
+    const wired = JSON.parse(JSON.stringify(descriptor)) as BindingDescriptor;
+    const out = await rehydrateBinding(wired, makeCtx());
+    if (out.kind !== 'value' || !Array.isArray(out.value)) throw new Error('unreachable');
+    expect(out.value[0]).toBe('the body');
+    expect(await bytesOf(out.value[1])).toBe('revived');
+  });
+
+  it('a file beside records, and a file in a synthesised record, both come back readable', async () => {
+    const binding: Binding = {
+      kind: 'value',
+      value: [
+        { kind: 'extractRoot', emission: { nodeName: 'x', fields: {}, provenance: {}, resources: [], children: new Map() } },
+        attachment(),
+      ],
+    };
+    expect(serializeBinding(binding).kind).toBe('recordValue');
+    const out = await roundTrip(binding);
+    if (out.kind !== 'value' || !Array.isArray(out.value)) throw new Error('unreachable');
+    expect(await bytesOf(out.value[1])).toBe('revived');
+
+    const node: Binding = {
+      kind: 'nodePosition',
+      fields: { name: 'Acme', deck: attachment() },
+      fieldOrder: ['name', 'deck'],
+      fieldProvenance: {},
+      edges: {},
+    };
+    const back = await roundTrip(node);
+    if (back.kind !== 'nodePosition') throw new Error('unreachable');
+    expect(await bytesOf(back.fields.deck)).toBe('revived');
+  });
+
+  it('any other closure inside a value is refused at park, not dropped in silence', () => {
+    const binding: Binding = { kind: 'value', value: { name: 'x', compute: () => 1 } };
+    expect(() => serializeBinding(binding)).toThrow(/'compute' is a function/);
+  });
+});

@@ -11,6 +11,7 @@ import {
   assertRunCostCapConfigured,
   costEnvelopeMicrodollars,
   currentRunSpend,
+  formatUsd,
   isRunCostCapExceeded,
   parseRunCostCap,
   reportRunCost,
@@ -288,5 +289,23 @@ describe('what a model call charges', () => {
       expect(segmentSpend()).toBe(DOLLAR);
     });
     expect(insertInto).not.toHaveBeenCalled();
+  });
+});
+
+describe('formatUsd — the dollars an author reads about the cap', () => {
+  it('keeps cents, and the further decimals a small amount has', () => {
+    expect(formatUsd(3 * DOLLAR)).toBe('$3.00');
+    expect(formatUsd(1.5 * DOLLAR)).toBe('$1.50');
+    expect(formatUsd(16_000)).toBe('$0.016');
+    expect(formatUsd(16_300)).toBe('$0.0163');
+    expect(formatUsd(20_000)).toBe('$0.02');
+  });
+
+  it('a $0.016 cap no longer reads as a higher figure than a $0.03 spend rounds from', async () => {
+    process.env[ENV_VAR] = '0.016';
+    await withRunSpendLedger(async () => {
+      reportRunCost({ source: { kind: 'model', name: 'm' }, microdollars: 25_400 });
+      expect(() => assertRunBudget()).toThrow(/has spent \$0\.0254 .* is \$0\.016\./);
+    });
   });
 });

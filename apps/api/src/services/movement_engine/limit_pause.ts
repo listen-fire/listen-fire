@@ -30,7 +30,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 
 import { getAutomationsQb } from '../../lib/kysely';
-import { RUN_COST_CAP_ENV_VAR } from '../../lib/run_spend';
+import { formatUsd, RUN_COST_CAP_ENV_VAR } from '../../lib/run_spend';
 import { logger } from '../logger';
 import type { TriggerRunId } from '../../generated/kysely/automations/TriggerRun';
 import type { MovementId } from '../../generated/kysely/automations/Movement';
@@ -70,15 +70,11 @@ export function readLimitPause(value: unknown): StoredLimitPause | null {
   return parsed.data;
 }
 
-function usd(microdollars: number): string {
-  return `$${(microdollars / 1_000_000).toFixed(2)}`;
-}
-
 /** The pause in an author's words — the run's status and the event's reason. */
 export function describeLimitPause(pause: Pick<StoredLimitPause, 'capMicrodollars' | 'spentMicrodollars'>): string {
   return (
-    `Paused: cost limit reached. This run has spent ${usd(pause.spentMicrodollars)} on model calls and paid services ` +
-    `since it started (or was last resumed), and the limit set by ${RUN_COST_CAP_ENV_VAR} is ${usd(pause.capMicrodollars)}. ` +
+    `Paused: cost limit reached. This run has spent ${formatUsd(pause.spentMicrodollars)} on model calls and paid services ` +
+    `since it started (or was last resumed), and the limit set by ${RUN_COST_CAP_ENV_VAR} is ${formatUsd(pause.capMicrodollars)}. ` +
     'Every branch stopped before its next statement. Resume the run to carry on from there; resuming resets its usage, ' +
     'so the limit applies afresh.'
   );

@@ -24,3 +24,29 @@ export function isFileRef(value: unknown): value is FileRef {
     (value as { __brand?: unknown }).__brand === 'FileRef'
   );
 }
+
+/**
+ * Give back the byte channel to every FileRef inside a value that crossed a
+ * JSON-only boundary — the remote adapter's wire, or a parked run's stored
+ * state. Such a FileRef keeps its metadata and its producer's durable handle
+ * (`source`) and loses `retrieve()`, which is a closure; `revive` rebinds it
+ * through whatever can redeem the handle. A FileRef that still has its channel
+ * is left as it is. Deep, because a file can sit anywhere in a list or a
+ * record; a copy, so the stored form is never changed under its reader.
+ */
+export function reviveFileRefs(value: unknown, revive: (ref: FileRef) => FileRef): unknown {
+  if (Array.isArray(value)) return value.map((item) => reviveFileRefs(item, revive));
+  if (isFileRef(value)) return typeof value.retrieve === 'function' ? value : revive(value);
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = reviveFileRefs(entry, revive);
+    return out;
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}

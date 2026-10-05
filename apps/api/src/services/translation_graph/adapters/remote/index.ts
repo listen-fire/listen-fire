@@ -55,7 +55,7 @@ import type {
   SourcePosition,
 } from '../../types';
 import { exposeFile } from '../../engine/files/expose';
-import { streamFileRef, isFileRef } from '../../engine/files/retrieve';
+import { streamFileRef, isFileRef, reviveFileRefs } from '../../engine/files/retrieve';
 import type { TriggerEvent, TriggerType } from '../../triggers/types';
 import type { Expression } from '#shared/expression/types';
 
@@ -363,35 +363,25 @@ export class RemoteAdapter implements Adapter {
    * is plain JSON (`{ __brand, name, contentType, source }`) — closures don't
    * serialize — so a consumer's `streamFileRef` would have no byte channel.
    * Bind it back to the remote's own `resolveFileRef` (a wire call), so the
-   * FileRef is self-contained again on this side. Deep-walks the value because a
-   * file-typed field may return a FileRef nested in an array/object.
-   *
+   * FileRef is self-contained again on this side. A parked run's state is the
+   * same boundary and revives its files through the same walk.
    */
   private reviveFileRefs(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      for (const item of value) this.reviveFileRefs(item);
-      return value;
-    }
-    if (value && typeof value === 'object') {
-      const obj = value as Record<string, unknown>;
-      if (obj.__brand === 'FileRef' && typeof obj.retrieve !== 'function') {
-        const ref = obj as unknown as FileRef;
-        obj.retrieve = () => {
+    return reviveFileRefs(value, (ref) => {
+      const revived: FileRef = {
+        ...ref,
+        retrieve: () => {
           if (!this.resolveFileRef) {
             throw new Error(
               `RemoteAdapter(${this.adapterType}): emitted a FileRef but does not ` +
                 'advertise resolveFileRef, so its bytes cannot be retrieved.',
             );
           }
-          return this.resolveFileRef({ ref });
-        };
-      }
-      for (const key of Object.keys(obj)) {
-        if (key !== 'retrieve') this.reviveFileRefs(obj[key]);
-      }
-      return value;
-    }
-    return value;
+          return this.resolveFileRef({ ref: revived });
+        },
+      };
+      return revived;
+    });
   }
 
   async getRelated(input: GetRelatedInput): Promise<RelatedResult[]> {

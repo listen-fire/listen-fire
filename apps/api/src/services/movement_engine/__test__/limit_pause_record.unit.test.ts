@@ -88,6 +88,12 @@ describe("a paused run's row", () => {
     expect(describeLimitPause(stored)).toContain('Resume the run to carry on');
   });
 
+  it('says a small cap as it was set, not rounded to cents', () => {
+    const text = describeLimitPause({ capMicrodollars: 16_000, spentMicrodollars: 25_400 });
+    expect(text).toContain('has spent $0.0254 on model calls');
+    expect(text).toContain('MOVEMENT_MAX_RUN_COST_USD is $0.016.');
+  });
+
   it('reads as not paused when empty or unreadable', () => {
     expect(readLimitPause(null)).toBeNull();
     expect(readLimitPause({ limit: 'calls' })).toBeNull();

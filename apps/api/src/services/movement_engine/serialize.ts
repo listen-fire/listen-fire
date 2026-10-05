@@ -55,6 +55,7 @@ import type {
   WriteRecord,
 } from './expression';
 import { bindingOf, isDictValue } from './expression';
+import { isFileRef, reviveFileRefs } from '../translation_graph/engine/files/retrieve';
 import type { Provenance } from './provenance';
 import { MovementEngineError } from './errors';
 
@@ -80,13 +81,15 @@ export interface SourceReadDescriptor {
   instanceName: string;
 }
 
-/** A wire FileRef: metadata + the owner-resolvable `source` handle, no closure.
- *  Rehydrate rebinds `retrieve()` from `source` (the FileRef-revive pattern). */
+/** A wire FileRef — the remote adapter's wire form: metadata + the
+ *  owner-resolvable `source` handle, no closure. Rehydrate rebinds `retrieve()`
+ *  from `source` (the FileRef-revive pattern). */
 export interface FileRefDescriptor {
   name?: string;
   contentType?: string;
   size?: number;
   source?: { ownerAdapterType: string; handle: string };
+  url?: string | null;
 }
 
 /** A serialised `ExtractEmission` — its `children` Map flattened to a record of
@@ -307,11 +310,20 @@ export interface RehydrationContext {
  * would silently corrupt the parked scope — so we fail LOUD at park instead.
  * Returns the round-tripped value (so the descriptor holds exactly what will
  * come back, not a richer in-memory form that drifts on rehydrate).
+ *
+ * A file inside the value travels in its wire form, exactly as it crosses to
+ * a remote adapter: its byte channel is a closure and stays behind, its
+ * durable handle (`source`) goes, and rehydrate rebinds the channel from it.
+ * Any OTHER closure is an error — `JSON.stringify` would drop it in silence.
  */
 export function assertJsonSerializable(value: unknown, where: string): unknown {
   let json: string;
   try {
-    json = JSON.stringify(value);
+    json = JSON.stringify(value, function keepNoClosure(this: unknown, key: string, entry: unknown) {
+      if (typeof entry !== 'function') return entry;
+      if (key === 'retrieve' && isFileRef(this)) return undefined;
+      throw new Error(`'${key}' is a function`);
+    });
   } catch (e) {
     throw new MovementEngineError(
       'MOVENG_PARK_NONSERIALIZABLE',
@@ -370,6 +382,7 @@ function serializeFileRef(ref: FileRef): FileRefDescriptor {
     ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
     ...(ref.size !== undefined ? { size: ref.size } : {}),
     ...(ref.source !== undefined ? { source: ref.source } : {}),
+    ...(ref.url !== undefined ? { url: ref.url } : {}),
   };
 }
 
@@ -527,7 +540,7 @@ function rehydrateEmission(
   }
   return {
     nodeName: descriptor.nodeName,
-    fields: inOrder(descriptor.fields, descriptor.fieldOrder),
+    fields: withFiles(inOrder(descriptor.fields, descriptor.fieldOrder), ctx),
     provenance: descriptor.provenance,
     ...(descriptor.origin !== undefined ? { origin: descriptor.origin } : {}),
     resources: (descriptor.resources ?? []).map((r) => rehydrateResource(r, ctx)),
@@ -548,6 +561,16 @@ function rehydrateResource(descriptor: ResourceDescriptor, ctx: RehydrationConte
     ...rest,
     ...(fileRef !== undefined ? { fileRef: ctx.reviveFileRef(fileRef) } : {}),
   };
+}
+
+/** Stored fields with every file in them given its byte channel back — a
+ *  record's field can hold a file, and it parked in its wire form. */
+function withFiles(fields: Record<string, unknown>, ctx: RehydrationContext): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = reviveFileRefs(value, (ref) => ctx.reviveFileRef(ref));
+  }
+  return out;
 }
 
 function serializeDeferredWalk(walk: DeferredWalk): DeferredWalkDescriptor {
@@ -613,7 +636,7 @@ export async function rehydrateBinding(
         kind: 'shapePosition',
         shape: descriptor.shape,
         node: descriptor.node,
-        fields: descriptor.fields,
+        fields: withFiles(descriptor.fields, ctx),
         fieldProvenance: descriptor.fieldProvenance,
       };
     case 'nodePosition': {
@@ -630,7 +653,7 @@ export async function rehydrateBinding(
       }
       return {
         kind: 'nodePosition',
-        fields: inOrder(descriptor.fields, descriptor.fieldOrder),
+        fields: withFiles(inOrder(descriptor.fields, descriptor.fieldOrder), ctx),
         fieldOrder: descriptor.fieldOrder ?? Object.keys(descriptor.fields),
         fieldProvenance: descriptor.fieldProvenance,
         edges,
@@ -641,7 +664,7 @@ export async function rehydrateBinding(
     case 'value':
       return {
         kind: 'value',
-        value: descriptor.value,
+        value: reviveFileRefs(descriptor.value, (ref) => ctx.reviveFileRef(ref)),
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
         ...(descriptor.many === true ? { many: true } : {}),
       };
@@ -876,6 +899,8 @@ function holdsRecords(value: unknown): boolean {
 function serializeValue(value: unknown): ValueDescriptor {
   const record = bindingOf(value);
   if (record !== undefined) return { kind: 'record', binding: serializeBinding(record) };
+  // A file is a leaf: its wire form is data, and rehydrate revives it.
+  if (isFileRef(value)) return { kind: 'data', value: assertJsonSerializable(value, 'value binding') };
   if (Array.isArray(value)) return { kind: 'list', of: value.map(serializeValue) };
   if (isDictValue(value)) {
     const of: Record<string, ValueDescriptor> = {};
@@ -891,7 +916,7 @@ async function rehydrateValue(
 ): Promise<unknown> {
   switch (descriptor.kind) {
     case 'data':
-      return descriptor.value;
+      return reviveFileRefs(descriptor.value, (ref) => ctx.reviveFileRef(ref));
     case 'record':
       return rehydrateBinding(descriptor.binding, ctx);
     case 'list':
