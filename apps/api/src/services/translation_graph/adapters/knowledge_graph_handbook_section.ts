@@ -116,31 +116,30 @@ import { kg, email } from adapters
 inbox = email()
 graph = kg()
 
+node Company: "the company this message is about" {
+  name:   <text> "the company's name"
+  domain: <text> "the company's web domain, if given"
+  node person: "each person named for that company" {
+    name:  <text> "their full name"
+    email: <text> "their email address, if given"
+  }
+}
+
 function \`Record The Company\`(msg: <inbox-[:Email]->>) {
-  found = extract from [msg.\`Body\`] {
-    node company: "the company this message is about" {
-      name:   "the company's name"
-      domain: "the company's web domain, if given"
-      node person: "each person named for that company" {
-        name:  "their full name"
-        email: "their email address, if given"
-      }
-    }
+  c = extractOne([msg.\`Body\`], Company)
+  if c == null { ERROR("no company in this message") }
+
+  co = write graph-[:Company]-> {
+    unique by (FUZZY \`Name\`)
+    Name:    c.name
+    Domains: c.domain
   }
 
-  found-[c:company]-> {
-    co = write graph-[:Company]-> {
-      unique by (FUZZY \`Name\`)
-      Name:    c.name
-      Domains: c.domain
-    }
-
-    c-[p:person]-> {
-      write co-[:Team]-> {
-        unique by (co, \`Name\`)
-        Name:  p.name
-        Email: p.email
-      }
+  c-[p:person]-> {
+    write co-[:Team]-> {
+      unique by (co, \`Name\`)
+      Name:  p.name
+      Email: p.email
     }
   }
 }

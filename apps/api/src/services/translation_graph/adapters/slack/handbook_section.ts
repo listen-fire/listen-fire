@@ -132,7 +132,7 @@ import { team_workspace } from credentials
 team = slack(credentials: team_workspace)
 questions = ask()
 
-movement sign_off(msg: <team-[:Message]->>) {
+function sign_off(msg: <team-[:Message]->>) {
   a = write questions-[:Check]-> {
     Prompt: "Ship the release?"
     Detail: "\${msg.\`Message\`}"
@@ -173,7 +173,7 @@ import { team_workspace } from credentials
 
 team = slack(credentials: team_workspace)
 
-movement book_it(msg: <team-[:Message]->>) {
+function book_it(msg: <team-[:Message]->>) {
   booked = callback((day: <date>) => {
     write msg-[:Replies]-> { Message: "Booked for \${day}." }
   })
@@ -207,7 +207,7 @@ function announce(m: <team-[:Message]->>) {
   write m-[:Replies]-> { Message: "On it." }
 }
 
-movement wait_for_go(msg: <team-[:Message]->>) {
+function wait_for_go(msg: <team-[:Message]->>) {
   go = callback()
   again = callback(announce(m: msg), { once: FALSE, ttl: 2d })
 

@@ -28,7 +28,6 @@ import { WebSearchService, resolveWebSearchProvider } from '../../../web_search'
 import { resolvePersonContext } from './extracted_fields';
 import type { PersonContext, ResolvedField } from './extracted_fields';
 import { importIdentifier } from '../../movement/schema_projection';
-import { LINKEDIN_ENRICHMENT_HANDBOOK_SECTION } from './linkedin_enrichment_handbook_section';
 import type { TransformImpl, TransformOutput } from './registry';
 import type { PluginManifest } from './registry';
 import type { TransformSignature } from '../../types';
@@ -82,7 +81,9 @@ export const LINKEDIN_ENRICHMENT_PLUGIN_MANIFEST: PluginManifest = {
     'it found, and the text of that profile page (both left empty when no ' +
     'confident match exists).',
   additions: LINKEDIN_ENRICHMENT_SIGNATURE.additions,
-  handbookSection: LINKEDIN_ENRICHMENT_HANDBOOK_SECTION,
+  // No handbook section: it declares no output, so it runs only as a `through`
+  // stage of the extraction keyword, and the handbook documents only the forms
+  // to write. `research` resolves a person's profile address from a name.
 };
 
 // ── Internals ─────────────────────────────────────────────────────────────

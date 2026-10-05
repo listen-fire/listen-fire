@@ -32,6 +32,56 @@ const RETIRED_SURFACE: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bfor each\b/, label: 'for each' },
 ];
 
+/**
+ * Forms that still run but are not the ones to write. The handbook documents
+ * only what is recommended — every word is read on every build — so none of
+ * these may appear anywhere in a chapter, code fences included. Each pattern
+ * is anchored on the form's own syntax, so the modern spelling beside it never
+ * trips it: `node Company {` declares (only `node {` builds), `extract(` is the
+ * call (only `extract … from` is the keyword).
+ */
+const NOT_RECOMMENDED: Array<{ pattern: RegExp; label: string }> = [
+  {
+    pattern: /\bextract\s+(?:"\w+"\s+|'\w+'\s+)?from\b/,
+    label: 'the `extract … from` keyword — write `extract(content, Shape, settings)`',
+  },
+  {
+    pattern: /\bthrough\s*\[/,
+    label: 'a `through [ … ]` extraction stage — call the plugin, then extract again',
+  },
+  {
+    pattern: /\bnode\s*\{/,
+    label: 'the anonymous `node { … }` literal — build with `graph<Shape> { … }`',
+  },
+  {
+    pattern: /\bmovement\s+(?:`[^`\n]+`|[A-Za-z_]\w*)\s*\(/,
+    label: 'a `movement` declaration — declare with `function`',
+  },
+  { pattern: /\bONLY\(\s*extract\(/i, label: '`ONLY(extract(…))` — write `extractOne(…)`' },
+  { pattern: /\b(?:parallel|race)\s*\{/, label: 'a `parallel { … }` / `race { … }` block — write `await parallel([…])`' },
+  { pattern: /\b(?:mailgun|resend)\(\)/, label: 'a mail carrier alias — construct `email()`' },
+  {
+    pattern: /\b(?:not recommended|supported,? but|older (?:form|spelling|literal|keyword|syntax)s?|still supported|legacy)\b/i,
+    label: 'a passage about a non-recommended form',
+  },
+];
+
+/** A call that names its argument (`f(x: …)`) where positional is the form:
+ *  a backticked function name, or a bare one this chapter declares with
+ *  `function`. A parameter list is not a call (its colon is followed by a
+ *  type, `<…>`), and adapter constructions and plugins — whose arguments are
+ *  named by design — are neither backticked nor declared in a chapter. */
+function namedArgumentCalls(content: string): string[] {
+  const named = /\(\s*[A-Za-z_]\w*\s*:(?!\s*<)/.source;
+  const found = [...content.matchAll(new RegExp(`\`[^\`\\n]+\`${named}`, 'g'))].map((m) => m[0]);
+  const declared = [...content.matchAll(/\bfunction\s+([A-Za-z_]\w*)\s*\(/g)].map((m) => m[1]);
+  for (const name of new Set(declared)) {
+    const call = new RegExp(`(?<!function\\s+)\\b${name}${named}`, 'gi');
+    found.push(...[...content.matchAll(call)].map((m) => m[0]));
+  }
+  return found;
+}
+
 const VC_TUNING =
   /\b(founders?|investors?|dealflow|deal ?flow|pre-seed|seed round|funding round|series [abc]\b|term sheets?|cap tables?|portfolio compan|fundrais|venture capital)\b/i;
 
@@ -56,6 +106,13 @@ export function proseViolations(chapter: Chapter): string[] {
 
   for (const { pattern, label } of RETIRED_SURFACE) {
     if (pattern.test(chapter.content)) violations.push(`teaches the retired \`${label}\``);
+  }
+  for (const { pattern, label } of NOT_RECOMMENDED) {
+    const hit = pattern.exec(chapter.content);
+    if (hit) violations.push(`teaches ${label}: "${hit[0]}"`);
+  }
+  for (const call of namedArgumentCalls(chapter.content)) {
+    violations.push(`calls a function with a named argument — pass it positionally: "${call}"`);
   }
   for (const tool of AUTHORING_TOOL_NAMES) {
     if (chapter.content.includes(tool)) violations.push(`leaks the tool name \`${tool}\``);

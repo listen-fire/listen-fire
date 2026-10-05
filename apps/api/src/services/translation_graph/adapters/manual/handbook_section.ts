@@ -14,27 +14,27 @@ Use \`manual()\` to let a person — or an agent — start a run by hand. "Run n
 runs = manual()
 crm  = attio(credentials: acme_main)
 
-function \`Import Companies\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-    node company: "each company named in the supplied text or files" {
-      name:   "the company's name"
-      domain: "the company's web domain, if given"
-    }
-  }
+node Company: "each company named in the supplied text or files" {
+  name:   <text> "the company's name"
+  domain: <text> "the company's web domain, if given"
+}
 
-  found-[c:company]-> {
+function \`Import Companies\`(go: <runs-[:Invocation]->>) {
+  found = extract([go.\`Text\`, ...go-[:Files]->.\`File\`], Company)
+
+  MAP(found, (c) => {
     write crm-[:Companies]-> {
       unique by (FUZZY \`Name\`)
       Name:    c.name
       Domains: c.domain
     }
-  }
+  })
 }
 
 listen as "Import companies" to runs {} fire \`Import Companies\`
 \`\`\`
 
-- The example is the whole pattern: whatever the person supplied — \`go.\`Text\`\`, uploaded \`Files\` — goes into the extraction's \`from [ … ]\`, and the writes fan out from what was found.
+- The example is the whole pattern: whatever the person supplied — \`go.\`Text\`\`, uploaded \`Files\` — goes into the extraction's content, and the writes fan out from what was found.
 - Only \`Fired at\` is always present; \`Text\`, \`Run by (email)\` / \`(name)\`, and the \`Files\` edge are optional — a bare run has empty text and zero files. A \`File\` position carries \`Name\`, \`Content Type\`, \`Size\`, and the file itself.
 - A backfill is this same channel with the source read in the body: \`crm-[c:Companies]-> { … }\` runs the block once per existing record. The parameter stays the \`Invocation\`.`,
   engineClaims: [
@@ -67,21 +67,21 @@ import { acme } from credentials
 runs = manual()
 crm  = attio(credentials: acme)
 
-function \`Import Companies\`(go: <runs-[:Invocation]->>) {
-  found = extract from [go.\`Text\`, go-[:Files]->.\`File\`] {
-    node company: "each company named in the supplied text or files" {
-      name:   "the company's name"
-      domain: "the company's web domain, if given"
-    }
-  }
+node Company: "each company named in the supplied text or files" {
+  name:   <text> "the company's name"
+  domain: <text> "the company's web domain, if given"
+}
 
-  found-[c:company]-> {
+function \`Import Companies\`(go: <runs-[:Invocation]->>) {
+  found = extract([go.\`Text\`, ...go-[:Files]->.\`File\`], Company)
+
+  MAP(found, (c) => {
     write crm-[:Companies]-> {
       unique by (FUZZY \`Name\`)
       Name:    c.name
       Domains: c.domain
     }
-  }
+  })
 }
 
 listen to runs {} fire \`Import Companies\`

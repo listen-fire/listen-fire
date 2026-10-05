@@ -10,54 +10,50 @@ export const WEB_RESEARCH_HANDBOOK_SECTION: HandbookSection = {
   title: 'Find the website — the record that arrived with no link',
   content: `## Find the website — the record that arrived with no link
 
-\`web_research\` works out a company's own website from its name and what the message said about it, checks the site really is that company, and loads it. It is a stage: it runs inside an extract's \`through [ … ]\` and nowhere else.
-
-Reach for it when a message names companies and only some of them come with a link.
+\`web_research\` works out a company's own website from its name and what the message said about it, checks the site really is that company, and loads it. Reach for it when a message names companies and only some of them come with a link.
 
 ### the-shape
 
 \`\`\`
-extract from [msg.\`Text\`] {
-  node company: "each company named in this message" {
-    name:        "the company's name"
-    description: "what the message says about it"
-    website:     "the company's web address, if the message gives one"
-    linkedin:    "the company's LinkedIn address, if the message gives one"
-  } through [
-    fetch_url(url: website, email: @user_email),
-    web_research(name: name, context: description, website: website, linkedin: linkedin)
-  ] {
-    website:  "the company's web address — the one the research resolved, verbatim, otherwise keep the value already here"
-    summary:  "what the company does, in a sentence"
-    location: "where the company is based"
-  }
+import { web_research } from plugins
+
+node Company: "each company named in this message" {
+  name:        <text> "the company's name"
+  description: <text> "what the message says about it"
+  website:     <text> "the company's web address, if the message gives one"
+  linkedin:    <text> "the company's LinkedIn address, if the message gives one"
 }
+
+MAP(extract(content, Company), (c) => {
+  site = web_research(name: c.name, context: c.description, website: c.website, linkedin: c.linkedin)
+  write crm-[:Companies]-> {
+    unique by (FUZZY \`Name\`)
+    Name:       c.name
+    Domains ?:  COALESCE(site.website, c.website)
+  }
+})
 \`\`\`
 
-Both stages run once per company. A company that came with an address is loaded by \`fetch_url\`; one that came with nothing but a name is researched by this, and the stage after them reads whichever page arrived. Re-declaring \`website\` in that stage is how the resolved address becomes the record's own.
+It returns a record: \`website\`, the address it settled on, and \`text\`, the page it loaded from there. Either may be absent. Put \`site.text\` into a second extraction to read the page.
 
 ### passing-the-links
 
-Pass the record's \`website\` and \`linkedin\` and the research stands down for any record that has one — no search, no page, nothing spent. Leave them out and it researches every record, including the ones another stage already covered.
+Pass the record's \`website\` and \`linkedin\` and the research stands down for any record that has one — no search, no page, nothing spent. Leave them out and it researches every record, including the ones that already have a link (load those with \`fetch_url\`).
 
 ### the-context-is-what-makes-it-work
 
-\`context\` is the line the message wrote about the company: what it does, where it is, who is behind it. That is what tells this company apart from every other business trading under the same word, and the research will not search without it. A record whose message said nothing beyond a name comes back with nothing, deliberately: a name alone returns the world, and the wrong website is worse than none — it colours every field extracted after it and lands in whatever the run writes.
+\`context\` is the line the message wrote about the company: what it does, where it is, who is behind it. That is what tells this company apart from every other business trading under the same word, and the research will not search without it. A record whose message said nothing beyond a name comes back with nothing, deliberately: a name alone returns the world, and the wrong website is worse than none.
 
 Give it a real sentence and it resolves; give it a bare name and it declines. Both are correct answers, and the run record says which one happened.
 
-### what-lands
-
-A record it resolved carries the address it found, plus the page, which the stage behind it reads like any other fetched page. A record it declined carries nothing at all, and the fields after the stage are extracted from what the record already had.
-
 ### Common mistakes
 
-- **Putting the stage at the top of the extract.** Nothing has produced a name yet, and the stage would run once for the whole message rather than once per record.
-- **Leaving \`context\` out.** Without it every record declines, and the stage costs nothing because it does nothing.
-- **Not re-declaring \`website\` in the stage behind it.** The address is resolved but never becomes the record's, so nothing downstream can read it.`,
+- **Leaving \`context\` out.** Without it every record declines, and the call costs nothing because it does nothing.
+- **Dropping the resolved address.** Write \`site.website\`, or nothing downstream has it.
+`,
   engineClaims: [
     {
-      construct: 'a fallback research stage beside a targeted fetch in one pipeline',
+      construct: 'web_research called per record beside a targeted fetch, the resolved address written and the page read by a second extraction',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -67,29 +63,30 @@ import { fetch_url, web_research } from plugins
 inbox = email()
 crm   = attio(credentials: acme)
 
+node Company: "each company named in this message" {
+  name:        <text> "the company's name"
+  description: <text> "what the message says about it"
+  website:     <text> "the company's web address, if the message gives one"
+  linkedin:    <text> "the company's LinkedIn address, if the message gives one"
+}
+
+node Profile: "the company" {
+  summary: <text> "what the company does, in a sentence"
+}
+
 function \`Intake\`(m: <inbox-[:Email]->>) {
-  mentions = extract from [m.\`Body\`] {
-    node company: "each company named in this message" {
-      name:        "the company's name"
-      description: "what the message says about it"
-      website:     "the company's web address, if the message gives one"
-      linkedin:    "the company's LinkedIn address, if the message gives one"
-    } through [
-      fetch_url(url: website, email: @user_email),
-      web_research(name: name, context: description, website: website, linkedin: linkedin)
-    ] {
-      website: "the company's web address — the one the research resolved, verbatim, otherwise keep the value already here"
-      summary: "what the company does, in a sentence"
-    }
-  }
-  mentions-[c:company]-> {
+  content = [m.\`Body\`]
+  MAP(extract(content, Company), (c) => {
+    page    = fetch_url(url: c.website, email: @user_email)
+    site    = web_research(name: c.name, context: c.description, website: c.website, linkedin: c.linkedin)
+    profile = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, site.text, "")], Profile)
     write crm-[:Companies]-> {
-      unique by (\`Name\`)
-      Name:        c.name
-      Domains:     c.website
-      Description: c.summary
+      unique by (FUZZY \`Name\`)
+      Name:          c.name
+      Domains ?:     COALESCE(site.website, c.website)
+      Description ?: profile.summary
     }
-  }
+  })
 }
 `,
     },

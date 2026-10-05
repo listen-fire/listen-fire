@@ -12,7 +12,7 @@ A terse lookup, not a lesson. The teaching chapters explain *why*; this one is f
 \`\`\`
 import { email, attio } from adapters         # adapter types
 import { acme_main } from credentials          # stored connections, by saved name
-import { vc_url_retrieval } from plugins       # extraction transforms
+import { fetch_url } from plugins              # functions the platform ships, called with named arguments
 import { \`Log Lead\`, Lead } from "lib/intake"  # exported declarations, by file path
 import { \`Files Out\` as send } from "lib/out"  # rename on import with: as
 
@@ -23,25 +23,23 @@ crm   = attio(credentials: acme_main, dry_run: true)   # dry_run is universal
 prompt = "the company this email is about"     # file-scope binding
 
 function \`Intake\`(m: <inbox-[:Email]->>) { … }  # declaration; one typed parameter — the email ITSELF (read \`m.\`Subject\`\` straight off it)
-movement \`Intake\`(m: <inbox-[:Email]->>) { … } # the same declaration, spelled the other way — \`function\` and \`movement\` are interchangeable (prefer \`function\`)
 export function \`Log Lead\`(l: <Lead>) { … }    # shared across files
 export node Lead { Name: <text> }              # a named structure; nest \`node <edge> { … }\` for related records
-node Lead: "each lead" { Name: <text> "their name" }   # described: \`extract … { node lead: <Lead> }\` reuses its fields and words
+node Lead: "each lead" { Name: <text> "their name" }   # described: \`extract(content, Lead)\` uses its fields and words
 node Contact extends Lead { Email: <text> }    # Lead's fields and nested nodes, then its own; redefining one is refused
 type Thesis = <"Consumer" | "Infra">           # a written set of values: an annotation, and an extract constraint
 
 listen to inbox { key: "intake" } fire intake  # the ONLY way an automation runs
-\`Log Lead\`(msg.Subject)                        # call another declaration, args positional (the named form \`Log Lead\`(l: msg) still works)
+\`Log Lead\`(graph<Lead> { Name: msg.Subject })  # call a function; arguments are positional
 doc = \`Email To Doc\`(msg)                      # a call's value: what the callee returned; names are case-insensitive
 function \`Label\`(name: <text>, tags: <text[]>, cfg: <{ prefix: text, suffix?: text }>) { … }   # value parameters; convention: name(data…, config record, lambda)
-msg = graph<Message> { Body: m.Body, Files: m-[a:Attachments]-> { Name: a.Name } }   # a record built in memory, checked against a declared shape (the older node { … } literal still works)
-return node { title: msg.Subject }             # hand a value out of a body — several results in one \`node { … }\`
-deal = node { Title: msg.Subject, company: node { Name: msg.From } }  # the older anonymous literal: values are fields, nested literals are edges
+msg = graph<Message> { Body: m.Body, Files: m-[a:Attachments]-> { Name: a.Name } }   # a record built in memory, checked against a declared shape
+return { title: msg.Subject, n: 2 }            # hand a value out of a body — several results in one dict or graph
 f = (day: <date>) => { … }                     # a closure: a body run later, holding what was in scope here
 inc = (v: <number>) => v + 1                   # an expression body; a closure bound to a name is called like any function: inc(2)
 \`\`\`
 
-\`=\` binds a name (instance, handle, extract graph, a bound block, a call's value, a closure, a plain value). Statements run top-to-bottom; a handle must be written before it is read. An automation may not call itself. A listened automation takes exactly one parameter; a library automation takes any number.
+\`=\` binds a name (instance, handle, extract graph, a bound block, a call's value, a closure, a plain value). Statements run top-to-bottom; a handle must be written before it is read. A function may call itself, declaring what it returns (\`f(n: <number>): <number>\`). A listened automation takes exactly one parameter; a library automation takes any number.
 
 \`return\` is the one way a value leaves a body — an automation's, a block's, or a closure's — and a \`return\` inside an \`if\` arm belongs to the body around it. A body with no \`return\` hands nothing back, so it runs as a statement and cannot be bound. A closure is a value: hand it to \`callback\` or \`until\`.
 
@@ -102,7 +100,7 @@ company = write crm-[:Companies]-> {
   Owner   ?: @user_email      # set-if-empty — leaves an existing value alone
   Tags    +: ["inbound"]      # append to a multi-value field (duplicates allowed)
   Sources +?:["email"]        # append only what's missing (set-union)
-  ?...e                       # every field of e (extracted, <Decl>-typed, or node {…}), set-if-empty; \`...e\`: plain
+  ?...e                       # every field of e (extracted, <Decl>-typed, or a graph), set-if-empty; \`...e\`: plain
   unique by (Domain)          # identity — repeats update instead of duplicate
 }
 \`\`\`
@@ -139,7 +137,6 @@ msg-[f:Attachments WHERE type == "application/pdf"]-> { … }   # hop filter
 msg-[:Sender]->.Name                              # terminal read off a hop
 alias-[:edge]->-[:edge]->                          # chained hops
 lazy msg-[a:Attachments]->                        # defer the walk to the first read (re-walks each read)
-msg-[a:Attachments]-> node { Blob: a.File }       # rename every landing, one at a time
 crm-[c:Companies WHERE Stage == "Open" ORDER BY \`Created At\` DESC LIMIT 10]-> { … }   # query
 \`\`\`
 
@@ -214,35 +211,24 @@ The answer is readable only **after** \`await FIRST(q-[:Response]->)\`. Duration
 cb = callback({ … })                      # id + url; one use, dies with the run
 cb = callback({ … }, { once: FALSE, ttl: 2d })          # repeatable / time-bounded
 cb = callback((day: <date>) => { … })     # a value supplied when someone acts
-cb = callback(\`Chase\`(c: company))          # defer a named declaration, args fixed now
+cb = callback(\`Chase\`(company))             # defer a named function, args fixed now
 await FIRST(cb-[:Called]->)               # wait for it (landing: At + one field per parameter)
 
 await until(() => { refresh co; return co.Stage == "Won" }, every: 1h)   # re-check a condition on a cadence
 \`\`\`
 
-\`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). A declaration is spelled \`movement\` or \`function\` — same thing. \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now. Neither a callback's body nor an \`until\` condition may wait, directly or through a function it calls: a run cannot be resumed there (\`MOV_WAIT_NOT_RESUMABLE\`). Do the waiting in the automation itself, outside both.
+\`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now. Neither a callback's body nor an \`until\` condition may wait, directly or through a function it calls: a run cannot be resumed there (\`MOV_WAIT_NOT_RESUMABLE\`). Do the waiting in the automation itself, outside both.
 
 ### extraction
 
 \`\`\`
-companies = extract([msg.Body, ...msg-[a:Attachments]->.File], Company, { tier: 'careful' })   # the call: a list of Company records
+companies = extract([msg.Body, ...msg-[a:Attachments]->.File], Company, { tier: 'careful' })   # a list of Company records
 details   = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })   # the single record, or absent
+people    = extract(content, node Person: "each person named" { name: <text> "their name" })   # a shape written in place
+page      = fetch_url(url: c.website)                                                         # a plugin: named arguments, absent when it finds nothing
 \`\`\`
 
-Content is a list (shared content first, record-specific content last, so repeated calls hit the prompt cache); the shape is a declared \`node\` (or written in place); settings are \`tier\`, \`model\`, \`effort\`. \`MAP(…, { initialConcurrency: 1 }, …)\` warms the cache before the fan-out. The keyword form below is supported, not recommended:
-
-\`\`\`
-mentions = extract from [msg.\`Body\`] through [vc_url_retrieval] {
-  node company: "each company mentioned" {
-    name:   "the company's name"
-    amount: <number> "the order's total value"
-    node person: "each person named" { name: "their full name" }
-  }
-}
-mentions-[c:company]-> { co = write crm-[:Companies]-> { Name: c.name } }
-\`\`\`
-
-The description carries cardinality ("the company" = one; "each company" = all). \`extract\` has no effects — writes are a separate traversal pass. \`through [...]\` runs plugins over the context. Read provenance off an **extracted** node — \`company-[r:_resources WHERE type == "FILE"]->\` — never off the input (input files go in the \`from [...]\` list).
+Content is a list (shared content first, record-specific content last, so repeated calls hit the prompt cache); the shape is a declared \`node\`; settings are \`tier\` (\`'quick'\` / \`'careful'\` / \`'thorough'\`), \`model\`, \`effort\`. The description carries cardinality ("the company" = one; "each company" = all). \`MAP(…, { initialConcurrency: 1 }, …)\` warms the cache before the fan-out. An extraction writes nothing — writes are separate statements.
 
 ### pitfalls
 
@@ -257,7 +243,7 @@ The description carries cardinality ("the company" = one; "each company" = all).
 - **Forgetting \`unique by\` on entity targets.** Anything a later event can mention again needs identity, or you mint duplicates.
 - **\`:\` where you meant \`?:\`.** Plain \`:\` overwrites every run; owner-style fields want set-if-empty.
 - **Assigning handles to reference fields.** \`Partner: pa\` is rejected — use a linked / tuple target or \`link\`.
-- **Writing into a declared \`node\`.** A declaration names a structure, not a system that stores anything — build the record with \`node { … }\` and pass that.
+- **Writing into a declared \`node\`.** A declaration names a structure, not a system that stores anything — build the record with \`graph<Shape> { … }\` and pass that.
 - **Leaving related records unconnected.** The most common and costly miss: after the run, every related record should end up attached, not standalone.
 - **Writing fields in a \`match\` body.** A match finds; it never writes. To update, use \`write … unique by\`.
 - **Reaching for a loop.** Enumeration is a traversal-headed block, not a loop.
@@ -268,8 +254,7 @@ The description carries cardinality ("the company" = one; "each company" = all).
 - **Writing \`race([…])\` or \`parallel([…])\` with no \`await\`.** They compose what is being waited on; \`await\` is what waits. \`await race([…])\`.
 - **Handing a combinator anything but functions.** An arm is \`() => { … }\` or the name of a declaration; a plain value or a bare block is refused when you save.
 - **Leaving an unattended review with no timeout.** An \`await\` on its own waits forever; race it against \`() => { await sleep(2d) }\` so a default takes over when time runs out.
-- **Reading \`_resources\` off the input.** Provenance lives on extracted nodes, not on the input position.
-- **Expecting one extraction per piece from a list.** \`extract from [pieces]\` reads them all as a single job; \`MAP(pieces, (p) => { return extract from [p] { … } })\` is the per-piece form.
+- **Expecting one extraction per piece from a list.** \`extract(pieces, Shape)\` reads them all as a single job; \`MAP(pieces, (p) => extract([p], Shape))\` is the per-piece form.
 - **Verifying from the target system only.** The run record shows what was sent and why; read provenance before editing the automation.
 - **Using a maybe-absent value unguarded.** A write/traversal target, a dot-plane field read, or an ordered comparison off a \`FIRST\`/\`LAST\`/\`MIN\`/\`MAX\`/\`at\` result is refused until narrowed — guard with \`if x == null { ERROR(…) }\`, \`EXISTS(x)\`, or \`?:\` on the write field.
 - **Binding a field just to test it.** \`EXISTS(x.\`Field\`)\` and \`ISNULL(x.\`Field\`)\` read the field directly; no intermediate binding.
