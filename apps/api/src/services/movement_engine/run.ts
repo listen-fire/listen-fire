@@ -303,6 +303,7 @@ import {
   makeAnthropicLlmClient,
   materializeExtract,
   registryTransformInvoker,
+  invokePricedTransform,
   tracedUrl,
   type DeclaredNodeShape,
   type ExtractNodeSpec,
@@ -341,7 +342,7 @@ import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
 import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
-import { currentRunSpendMicrodollars, isRunCostCapExceeded } from '../../lib/run_spend';
+import { currentRunSpend, isRunCostCapExceeded } from '../../lib/run_spend';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -376,6 +377,13 @@ export interface RunMovementInput {
    * that can park supplies it.
    */
   firedAt?: Date;
+  /**
+   * What this run spent in its EARLIER segments, in microdollars — the host
+   * reads it back off the run's record when it resumes a parked run, so the
+   * cost cap (`lib/run_spend.ts`) holds across every park. Absent ⇒ a fresh
+   * run, which has spent nothing.
+   */
+  priorSpentMicrodollars?: number;
   /** The checker's catalog (adapters / credentials / instance schemas). */
   catalog: Catalog;
   /**
@@ -582,10 +590,19 @@ export type MovementWriteRecord = WriteRecord;
 
 export interface MovementRunResult {
   movementName: string;
-  /** What this segment spent on priced calls (model calls, priced from the
-   *  same table as `llm_usage`), in microdollars — absent when it spent
-   *  nothing. The segment's own figure: a resumed run starts its count again. */
+  /** What this SEGMENT spent on priced work (model calls, paid services,
+   *  priced plugins), in microdollars — absent when it spent nothing. A
+   *  resumed segment counts only its own spend here; the run's figure is
+   *  `runSpentMicrodollars`. */
   spentMicrodollars?: number;
+  /** What the whole RUN has spent, every segment up to and including this
+   *  one — what the cost cap reads. Present whenever the run has spent
+   *  anything, even if this segment did not. */
+  runSpentMicrodollars?: number;
+  /** This segment's spend by where it went (`costSourceKey`: `model:<model>`,
+   *  `service:<vendor.product>`, `plugin:<name>`, …) — absent when it spent
+   *  nothing. Segments add up to the run's breakdown. */
+  spentBySource?: Record<string, number>;
   /** Writes in program order — the firing record's raw material. */
   writes: MovementWriteRecord[];
   /** The extraction call sites the writes' provenance references,
@@ -687,8 +704,14 @@ export async function runMovement(input: RunMovementInput): Promise<MovementRunR
 }
 
 /** The run context every entry point opens its segment under. */
-function runScopeOf(input: RunMovementInput): { languageVersion: LanguageVersion } {
-  return { languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION };
+function runScopeOf(input: RunMovementInput): {
+  languageVersion: LanguageVersion;
+  priorSpentMicrodollars: number;
+} {
+  return {
+    languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
+    priorSpentMicrodollars: input.priorSpentMicrodollars ?? 0,
+  };
 }
 
 /**
@@ -1456,11 +1479,19 @@ interface MemberFrame {
   holdsEffectQueue: boolean;
 }
 
-/** What this segment has spent on priced calls so far (`lib/run_spend.ts`),
- *  when it spent anything — a run that made no priced call carries no field. */
-function spentMicrodollarsField(): { spentMicrodollars?: number } {
-  const spent = currentRunSpendMicrodollars();
-  return spent > 0 ? { spentMicrodollars: spent } : {};
+/** What this segment and the run have spent so far (`lib/run_spend.ts`) —
+ *  a run that has made no priced call carries no fields. */
+function spendFields(): Pick<
+  MovementRunResult,
+  'spentMicrodollars' | 'runSpentMicrodollars' | 'spentBySource'
+> {
+  const spend = currentRunSpend();
+  return {
+    ...(spend.segmentMicrodollars > 0
+      ? { spentMicrodollars: spend.segmentMicrodollars, spentBySource: spend.bySource }
+      : {}),
+    ...(spend.runMicrodollars > 0 ? { runSpentMicrodollars: spend.runMicrodollars } : {}),
+  };
 }
 
 /** One member's answer from a collection op's function — or that it has none,
@@ -2820,7 +2851,7 @@ class Interpreter {
       ...(this.deferredRaceFrames.size > 0
         ? { deferredRaceFrames: [...this.deferredRaceFrames] }
         : {}),
-      ...spentMicrodollarsField(),
+      ...spendFields(),
     };
   }
 
@@ -4771,7 +4802,7 @@ class Interpreter {
       trails.push(provenance);
     }
     const started = Date.now();
-    const result = await invoker.invoke({ plugin, config, extractedContext: {} });
+    const result = await invokePricedTransform(invoker, { plugin, config, extractedContext: {} });
     // What the plugin brought back is no longer justified by the quote that
     // pointed at it, so the origins survive and the direct citation does not.
     // The shape the movement's pin gets — a plugin whose output changed keeps

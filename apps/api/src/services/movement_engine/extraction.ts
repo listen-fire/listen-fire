@@ -66,6 +66,13 @@ import type {
 import { neverAsAny } from '../../lib/utils/types';
 import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS, type ChatReply } from '../../lib/anthropic';
 import { currentLlmUsageContext, runFields } from '../../lib/llm_usage';
+import {
+  assertRunBudget,
+  costEnvelopeMicrodollars,
+  isRunCostCapExceeded,
+  reportRunCost,
+  type CostEnvelope,
+} from '../../lib/run_spend';
 import { RunCancelledSignal } from './cancel_gate';
 import { currentLanguageVersion } from './run_scope';
 import { parseJsonReply } from '../../lib/prompts/execute';
@@ -441,6 +448,10 @@ export interface TransformInvocationResult {
    *  to the trace and nowhere else — an outcome is not enrichment, so a
    *  plugin that reports one and attaches nothing still counts as empty. */
   outcome?: string;
+  /** What the invocation cost, when the plugin prices its own work — the one
+   *  cost envelope (`lib/run_spend.ts`). The engine charges it to the run
+   *  (`invokePricedTransform`); nothing else reads it. */
+  cost?: CostEnvelope;
 }
 
 /** A plugin by either spelling: movement identifiers can't carry dashes, so a
@@ -470,6 +481,35 @@ export interface MovementTransformInvoker {
    * than guessing. A `through [ … ]` stage never asks.
    */
   declaredOutput?(plugin: string): TransformOutputShape | undefined;
+  /**
+   * Whether invoking this plugin may cost money (a paid scrape, a paid search,
+   * its own priced work). A priced plugin is not started once the run has
+   * spent its cost cap. Absent ⇒ unpriced.
+   */
+  isPriced?(plugin: string): boolean;
+}
+
+/**
+ * Invoke a plugin the way every engine call site must: a priced plugin is
+ * refused before it starts if the run has spent its cap, and a cost the plugin
+ * reports on its result is charged to the run under the plugin's name. Spend
+ * the plugin's own model calls and service clients report themselves is
+ * charged where it happens, under THEIR names — a plugin's envelope is for
+ * what nothing else priced.
+ */
+export async function invokePricedTransform(
+  invoker: MovementTransformInvoker,
+  input: Parameters<MovementTransformInvoker['invoke']>[0],
+): Promise<TransformInvocationResult> {
+  if (invoker.isPriced?.(input.plugin) === true) assertRunBudget();
+  const result = await invoker.invoke(input);
+  if (result.cost !== undefined) {
+    reportRunCost({
+      source: { kind: 'plugin', name: input.plugin },
+      microdollars: costEnvelopeMicrodollars(result.cost),
+    });
+  }
+  return result;
 }
 
 /**
@@ -482,6 +522,9 @@ export interface MovementTransformInvoker {
 export const registryTransformInvoker: MovementTransformInvoker = {
   declaredOutput(plugin): TransformOutputShape | undefined {
     return transformFor(plugin)?.signature.output;
+  },
+  isPriced(plugin): boolean {
+    return transformFor(plugin)?.priced === true;
   },
   async invoke({ plugin, config, extractedContext }): Promise<TransformInvocationResult> {
     const impl = transformFor(plugin);
@@ -513,6 +556,9 @@ export const registryTransformInvoker: MovementTransformInvoker = {
     try {
       result = await impl.run(input);
     } catch (error) {
+      // Out of money is not "no enrichment": the run stops, as it would at a
+      // model call made outside a plugin.
+      if (isRunCostCapExceeded(error)) throw error;
       logger.warn('[movement:transform] plugin threw — no enrichment', {
         plugin,
         error,
@@ -534,6 +580,7 @@ export const registryTransformInvoker: MovementTransformInvoker = {
     if (Object.keys(data).length > 0) out.data = data;
     if (records.length > 0) out.records = records;
     if (result.outcome) out.outcome = result.outcome;
+    if (result.cost !== undefined) out.cost = result.cost;
 
     logger.info('[movement:transform] ran', {
       plugin,
@@ -2072,7 +2119,7 @@ class Materializer {
       return SKIPPED;
     }
 
-    const result = await this.runtime.transformInvoker.invoke({
+    const result = await invokePricedTransform(this.runtime.transformInvoker, {
       plugin: plugin.plugin,
       config,
       extractedContext: { ...context },

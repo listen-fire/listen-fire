@@ -215,6 +215,8 @@ function text(value: unknown): string {
 
 export const webResearchImpl: TransformImpl = {
   signature: WEB_RESEARCH_SIGNATURE,
+  // Every fetch, search and model call it makes is paid for.
+  priced: true,
   run: async (input): Promise<TransformOutput> => {
     if (input.kind !== 'context-dependent') {
       throw new Error(`web-research: expected context-dependent input, got ${input.kind}`);

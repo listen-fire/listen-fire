@@ -7,7 +7,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 
-import { assertRunSpendWithinCap } from '../run_spend';
+import { assertRunBudget } from '../run_spend';
 import { neverAsAny } from '../utils/types';
 import { assertCallable, resolveModel } from './map';
 import type { Provider, Resolved } from './map';
@@ -57,6 +57,6 @@ export function chatCallFor(name: ChatModelName, env: NodeJS.ProcessEnv = proces
   // A run that has spent its cost cap gets no further model call. Checked here
   // for the callers that make one request per call; the Anthropic seam's queue
   // checks again per request, for the ones that loop.
-  assertRunSpendWithinCap();
+  assertRunBudget();
   return { client: chatProviderFor(resolved.provider, env), wireModel: resolved.wireModel, resolved };
 }

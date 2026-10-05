@@ -143,6 +143,9 @@ export class TriggerRunRecorder {
   /** How much of the live trace is already on the row — skips a write when the
    *  run has thought about nothing since the last tick. */
   private flushedLiveTrace = 0;
+  /** What the run spent before this segment — read back off the row by
+   *  `adoptOpsRun()` on a resume, zero for a fresh firing. */
+  private priorSpent = 0;
 
   constructor(private readonly firing: TriggerRunFiring) {
     // Adopt the parked run's id on resume; otherwise mint a fresh one.
@@ -185,6 +188,16 @@ export class TriggerRunRecorder {
    */
   get firedAt(): Date {
     return this.startedAt;
+  }
+
+  /**
+   * What this run spent on priced work in its earlier segments, in
+   * microdollars — the seed of the resumed segment's spend account, so the cost
+   * cap holds across every park. Zero for a fresh firing. On a resume it is
+   * read back off the row by `adoptOpsRun()`; call that first.
+   */
+  get priorSpentMicrodollars(): number {
+    return this.priorSpent;
   }
 
   /**
@@ -312,7 +325,7 @@ export class TriggerRunRecorder {
     try {
       const row = await getAutomationsQb(['trigger_run'])
         .selectFrom('trigger_run')
-        .select(['ops_run_id', 'started_at'])
+        .select(['ops_run_id', 'started_at', 'diagnostics'])
         .where('id', '=', this.id)
         .executeTakeFirst();
       this.opsRunId = row?.ops_run_id ?? null;
@@ -320,6 +333,8 @@ export class TriggerRunRecorder {
       // the run FIRED at, not the instant the answer arrived, so a movement that
       // asks what day it is gets one answer across the whole run.
       if (row?.started_at !== undefined) this.startedAt = new Date(row.started_at);
+      // And so does its spend: the account belongs to the run, not the segment.
+      this.priorSpent = runSpentMicrodollars(row?.diagnostics);
       // The answer arrived, so it is working again rather than waiting.
       if (this.opsRunId) await unparkOpsRun(this.opsRunId).catch(() => {});
     } catch (readErr) {
@@ -832,16 +847,38 @@ function movementWritePlans(writes: MovementRunResult['writes']): unknown[] {
 
 /** A movement step's diagnostics: the write count `finish()` sums into
  *  `nodes_written` (effects only — a record a `match` found was not
- *  written), plus the run's decision-point trace — what the firing decided
- *  and why ("no records written" gets an explanation in the UI). */
+ *  written), what the run spent, plus the run's decision-point trace — what
+ *  the firing decided and why ("no records written" gets an explanation in the
+ *  UI). */
 function movementStepDiagnostics(result: MovementRunResult): Record<string, unknown> {
   return {
     writes: result.writes.filter(isWriteEffect).length,
-    // What this segment spent, so a run's cost is on its own record whether or
-    // not a cost cap is set.
-    ...(result.spentMicrodollars !== undefined ? { costUsd: costMicrodollarsToUsd(result.spentMicrodollars) } : {}),
+    // What the run spent, on its own record whether or not a cost cap is set.
+    // `costUsd`, `costMicrodollars` and `costBySource` are THIS segment's and
+    // add up across segments into the run row's totals; `runCostUsd` is the
+    // whole run's as of this segment (a snapshot, never summed).
+    ...(result.spentMicrodollars !== undefined
+      ? {
+          costUsd: costMicrodollarsToUsd(result.spentMicrodollars),
+          costMicrodollars: result.spentMicrodollars,
+          costBySource: result.spentBySource ?? {},
+        }
+      : {}),
+    ...(result.runSpentMicrodollars !== undefined
+      ? { runCostUsd: costMicrodollarsToUsd(result.runSpentMicrodollars) }
+      : {}),
     ...(result.trace.length > 0 ? { trace: result.trace } : {}),
   };
+}
+
+/** What a run spent before now, off its row's summed diagnostics. A row
+ *  written before `costMicrodollars` was recorded has only the dollar sum. */
+function runSpentMicrodollars(diagnostics: unknown): number {
+  const counters = persistedDiagnostics(diagnostics);
+  const exact = counters.costMicrodollars;
+  if (typeof exact === 'number') return exact;
+  const dollars = counters.costUsd;
+  return typeof dollars === 'number' ? Math.round(dollars * 1_000_000) : 0;
 }
 
 function aggregateStatus(steps: StepRow[]): StepStatus {
@@ -865,35 +902,60 @@ function persistedArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** The numeric counters of an already-persisted `diagnostics` aggregate. */
-function persistedDiagnostics(value: unknown): Record<string, number> {
+/** A run's aggregate diagnostics: counters, and breakdowns of counters by key
+ *  (`costBySource`). Everything else a step reports stays on the step. */
+type DiagnosticCounters = Record<string, number | Record<string, number>>;
+
+/** Keys whose value is a breakdown — counters by part, each part summed. */
+const BREAKDOWN_KEYS = new Set(['costBySource']);
+
+/** Keys a step reports as the whole RUN's figure rather than its own — summing
+ *  them would count earlier segments again, so the run keeps the highest. */
+const RUN_SNAPSHOT_KEYS = new Set(['runCostUsd']);
+
+/** The counters of a diagnostics object: its numbers, and its breakdowns. */
+function persistedDiagnostics(value: unknown): DiagnosticCounters {
   if (typeof value !== 'object' || value === null) return {};
-  const counters: Record<string, number> = {};
+  const counters: DiagnosticCounters = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === 'number') counters[key] = entry;
+    else if (BREAKDOWN_KEYS.has(key) && typeof entry === 'object' && entry !== null) {
+      const breakdown: Record<string, number> = {};
+      for (const [part, amount] of Object.entries(entry)) {
+        if (typeof amount === 'number') breakdown[part] = amount;
+      }
+      counters[key] = breakdown;
+    }
   }
   return counters;
 }
 
-/** Diagnostics are per-key additive, so earlier segments' counters carry
- *  forward across a park exactly as the step list does. */
-function sumDiagnostics(
-  base: Record<string, number>,
-  delta: Record<string, number>,
-): Record<string, number> {
+/** Diagnostics are per-key additive (a breakdown per part), so earlier
+ *  segments' counters carry forward across a park exactly as the step list
+ *  does. */
+function sumDiagnostics(base: DiagnosticCounters, delta: DiagnosticCounters): DiagnosticCounters {
   const merged = { ...base };
-  for (const [key, value] of Object.entries(delta)) merged[key] = (merged[key] ?? 0) + value;
-  return merged;
-}
-
-function mergeDiagnostics(steps: StepRow[]): Record<string, number> {
-  const merged: Record<string, number> = {};
-  for (const step of steps) {
-    for (const [key, value] of Object.entries(step.diagnostics)) {
-      if (typeof value === 'number') merged[key] = (merged[key] ?? 0) + value;
+  for (const [key, value] of Object.entries(delta)) {
+    const prior = merged[key];
+    if (typeof value === 'number') {
+      const before = typeof prior === 'number' ? prior : 0;
+      merged[key] = RUN_SNAPSHOT_KEYS.has(key) ? Math.max(before, value) : before + value;
+    } else {
+      const breakdown = typeof prior === 'object' ? { ...prior } : {};
+      for (const [part, amount] of Object.entries(value)) {
+        breakdown[part] = (breakdown[part] ?? 0) + amount;
+      }
+      merged[key] = breakdown;
     }
   }
   return merged;
+}
+
+function mergeDiagnostics(steps: StepRow[]): DiagnosticCounters {
+  return steps.reduce<DiagnosticCounters>(
+    (merged, step) => sumDiagnostics(merged, persistedDiagnostics(step.diagnostics)),
+    {},
+  );
 }
 
 function serializeTriggerEvent(event: TriggerEvent): Record<string, unknown> {

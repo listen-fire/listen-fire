@@ -308,6 +308,8 @@ async function discoverUrls(text: string): Promise<DiscoveredUrl[]> {
 
 export const vcUrlRetrievalImpl: TransformImpl = {
   signature: VC_URL_RETRIEVAL_SIGNATURE,
+  // Every fetch, search and model call it makes is paid for.
+  priced: true,
   run: async (input): Promise<TransformOutput> => {
     if (input.kind !== 'pre-extraction') {
       // Defensive: dataDependency: 'none' should always be invoked with

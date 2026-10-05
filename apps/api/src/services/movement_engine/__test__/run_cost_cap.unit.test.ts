@@ -84,7 +84,7 @@ import { runFailureCause, runMovement, MovementRunFailed } from '../run';
 import type { MovementTransformInvoker } from '../extraction';
 import type { MovementTraceEntry } from '../expression';
 import { recordLlmUsage } from '../../../lib/llm_usage';
-import { assertRunSpendWithinCap, RunCostCapExceeded } from '../../../lib/run_spend';
+import { assertRunBudget, RunCostCapExceeded } from '../../../lib/run_spend';
 
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { type Adapter, type RuntimeCapabilities } from '../../translation_graph/adapter';
@@ -174,7 +174,7 @@ function pricedInvoker() {
     declaredOutput: (plugin) => realOutput(plugin),
     async invoke({ config }) {
       const url = String(config.url);
-      assertRunSpendWithinCap();
+      assertRunBudget();
       await sleep(DELAY_MS[url] ?? 0);
       await recordLlmUsage({
         resolved: { preferred: 'claude-sonnet-5', provider: 'anthropic', wireModel: 'claude-sonnet-5' },
@@ -203,7 +203,11 @@ function webhookEvent(): TriggerEvent {
   };
 }
 
-async function run(source: string, invoker: MovementTransformInvoker) {
+async function run(
+  source: string,
+  invoker: MovementTransformInvoker,
+  options: { priorSpentMicrodollars?: number } = {},
+) {
   const email = makeFakeAdapter('email');
   const attio = makeFakeAdapter('attio');
   const result = await runMovement({
@@ -216,6 +220,7 @@ async function run(source: string, invoker: MovementTransformInvoker) {
     resolveAdapter: ({ adapterType }: { adapterType: string }) =>
       adapterType === 'email' ? email.adapter : attio.adapter,
     transformInvoker: invoker,
+    ...options,
   });
   return { result, attio };
 }
@@ -279,7 +284,7 @@ describe('with a cap set', () => {
     expect(plugin.charged).toEqual(['a', 'b', 'c']);
     const cause = runFailureCause(failure);
     expect(cause).toBeInstanceOf(RunCostCapExceeded);
-    expect(failure.message).toMatch(/^Run cost cap reached: this run has spent \$3\.00 on model calls/);
+    expect(failure.message).toMatch(/^Run cost cap reached: this run has spent \$3\.00 on model calls and paid services/);
     expect(failure.message).toContain('MOVEMENT_MAX_RUN_COST_USD is $2.50');
     // What it spent is on what the failed run hands back.
     expect(failure.partial.spentMicrodollars).toBe(3 * DOLLAR);
@@ -324,5 +329,92 @@ describe('with a cap set', () => {
     const plugin = pricedInvoker();
     const { result } = await run(mapMovement('{ concurrency: 2 }'), plugin.invoker);
     expect(result.spentMicrodollars).toBe(5 * DOLLAR);
+  });
+});
+
+// ── The account belongs to the run ─────────────────────────────────────────
+
+const ONE_FETCH = [
+  'movement intake(m: <inbox-[:message]->>) {',
+  '  page = fetch_url(url: "a")',
+  '  write crm-[:companies]-> { name: m.`subject`, summary: COALESCE(page, "none") }',
+  '}',
+].join('\n');
+
+describe('a resumed segment', () => {
+  beforeEach(() => {
+    process.env[ENV_VAR] = '2.5';
+  });
+
+  it("carries what the run spent before it parked: its result shows both the segment's and the run's spend", async () => {
+    const plugin = pricedInvoker();
+    const { result } = await run(ONE_FETCH, plugin.invoker, { priorSpentMicrodollars: DOLLAR });
+    expect(result.spentMicrodollars).toBe(DOLLAR);
+    expect(result.runSpentMicrodollars).toBe(2 * DOLLAR);
+    expect(result.spentBySource).toEqual({ 'model:claude-sonnet-5': DOLLAR });
+  });
+
+  it('meets the cap the run reached in earlier segments: a run cannot escape it by parking', async () => {
+    const plugin = pricedInvoker();
+    const failure = await failureOf(run(ONE_FETCH, plugin.invoker, { priorSpentMicrodollars: 3 * DOLLAR }));
+    expect(runFailureCause(failure)).toBeInstanceOf(RunCostCapExceeded);
+    expect(failure.message).toContain('this run has spent $3.00');
+    expect(plugin.charged).toEqual([]);
+    // Nothing spent in this segment, but the run's figure is still on it.
+    expect(failure.partial.spentMicrodollars).toBeUndefined();
+    expect(failure.partial.runSpentMicrodollars).toBe(3 * DOLLAR);
+  });
+});
+
+// ── Plugins that price their own work ───────────────────────────────────────
+
+describe('a plugin that prices its own work', () => {
+  function selfPricedInvoker(options: { priced: boolean }) {
+    const invoked: string[] = [];
+    const invoker: MovementTransformInvoker = {
+      declaredOutput: (plugin) => realOutput(plugin),
+      isPriced: () => options.priced,
+      async invoke({ config }) {
+        invoked.push(String(config.url));
+        return {
+          text: `got-${String(config.url)}`,
+          cost: { quantity: 2, unit: 'request', unitPriceMicrodollars: 1_500 },
+        };
+      },
+    };
+    return { invoker, invoked };
+  }
+
+  it('is charged what its result reports, under its own name', async () => {
+    const plugin = selfPricedInvoker({ priced: true });
+    const { result } = await run(ONE_FETCH, plugin.invoker);
+    expect(result.spentMicrodollars).toBe(3_000);
+    expect(result.spentBySource).toEqual({ 'plugin:fetch_url': 3_000 });
+  });
+
+  it('a priced plugin is not started once the run has spent its cap', async () => {
+    process.env[ENV_VAR] = '1';
+    const plugin = selfPricedInvoker({ priced: true });
+    const failure = await failureOf(run(ONE_FETCH, plugin.invoker, { priorSpentMicrodollars: DOLLAR }));
+    expect(runFailureCause(failure)).toBeInstanceOf(RunCostCapExceeded);
+    expect(plugin.invoked).toEqual([]);
+  });
+
+  it('an unpriced plugin is not asked first', async () => {
+    process.env[ENV_VAR] = '1';
+    const plugin = selfPricedInvoker({ priced: false });
+    await run(ONE_FETCH, plugin.invoker, { priorSpentMicrodollars: DOLLAR });
+    expect(plugin.invoked).toEqual(['a']);
+  });
+
+  it('a malformed cost report fails the run rather than charging nothing', async () => {
+    const invoker: MovementTransformInvoker = {
+      declaredOutput: (plugin) => realOutput(plugin),
+      async invoke() {
+        return { text: 'x', cost: { microdollars: -5 } };
+      },
+    };
+    const failure = await failureOf(run(ONE_FETCH, invoker));
+    expect(failure.message).toMatch(/a cost report must be/);
   });
 });
