@@ -14,6 +14,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - A payout to a fund that holds a company both directly and through an SPV now reaches the cheque it was paid on: a payment is attributed to the holdings whose asset the paying entity issued, so the SPV's payout goes to the SPV cheque. Before, the SPV cheque valued on its own received nothing, and the fund's cheques valued one at a time added up to less than the fund's position valued whole. A payout on holdings that share no unit (fund-of-funds interests, capital calls) is split by the cash each cheque invested instead of being lost; one nothing held can explain is attributed the same way and logged at `warn`.
 - A connector client closing its event stream no longer logs an unhandled rejection on the API; the session is released quietly.
+- An inbound email's `Body` strips HTML even when the markup arrived in the message's plain-text part rather than its HTML part (seen from a mail-merge forwarder); genuine plain text with a stray angle bracket is left unchanged, and `Plain Body` / `HTML Body` still carry the raw parts exactly as delivered.
 
 ### Added
 
