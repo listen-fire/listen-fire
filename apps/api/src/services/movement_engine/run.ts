@@ -1030,6 +1030,30 @@ const FELL_THROUGH: BodyOutcome = { returned: false };
  */
 const RETURN_SLOT = '#return';
 
+/**
+ * Where a statement's right-hand side lands: an assignment's name, or a
+ * `return`'s slot. The two share a grammar and an evaluation, so a resume that
+ * rebuilds a parked right-hand side's value rebuilds it for either.
+ */
+function boundRValueOf(statement: Statement): { name: string; value: RValue } | undefined {
+  if (statement.kind === 'assign') return { name: statement.name, value: statement.value };
+  if (statement.kind === 'return') return { name: RETURN_SLOT, value: statement.value };
+  return undefined;
+}
+
+/**
+ * A `return` whose value is bound: the body returns, always — whatever the
+ * value turned out to be (TS's `return undefined` still returns). The checker
+ * narrows the rest of a body on that promise, so the fact is the statement's
+ * kind, never the value's presence. An absent value fills the slot as absent,
+ * so a park above still carries it.
+ */
+function returnFrom(env: Environment): BodyOutcome {
+  const value = env.resolveOwn(RETURN_SLOT) ?? NULL_SLOT;
+  env.declare(RETURN_SLOT, value);
+  return { returned: true, value };
+}
+
 /** A statement's finished calls, as a park keeps them. */
 function serializeCallRecords(records: ReadonlyMap<number, CallRecord>, park: ParkWriter): SerializedCallEvent[] {
   return [...records.entries()]
@@ -1471,16 +1495,22 @@ function metaEdgeBindings(binding: Binding, edge: string): Binding[] {
  */
 function combinatorOf(container: Statement): CombinatorExpression | undefined {
   if (container.kind === 'combinator') return container.combinator;
-  if (container.kind === 'assign' && container.value.kind === 'combinator') {
-    return container.value.combinator;
-  }
+  const bound = boundRValueOf(container)?.value;
+  if (bound?.kind === 'combinator') return bound.combinator;
   const source =
     container.kind === 'await'
       ? container.await.source
-      : container.kind === 'assign' && container.value.kind === 'await'
-        ? container.value.await.source
+      : bound?.kind === 'await'
+        ? bound.await.source
         : undefined;
   return source?.kind === 'combinator' ? source.combinator : undefined;
+}
+
+/** The traversal block a fan-out container runs — bare, bound, or returned. */
+function fanOutBlockOf(container: Statement): TraversalBlock | undefined {
+  if (container.kind === 'block') return container.block;
+  const bound = boundRValueOf(container)?.value;
+  return bound?.kind === 'block' ? bound.block : undefined;
 }
 
 /** The literal arms a combinator was written with — the resume descent's
@@ -2788,7 +2818,8 @@ class Interpreter {
       loserSubtrees.push(encodeAddress(childBranch(frameAddr, j)));
     }
     await this.input.parkSink!.cancelSubtrees({ subtreeAddresses: loserSubtrees });
-    if (input.statement.kind === 'assign') input.env.declare(input.statement.name, receipt);
+    const bound = boundRValueOf(input.statement);
+    if (bound !== undefined) input.env.declare(bound.name, receipt);
   }
 
   /**
@@ -3073,7 +3104,7 @@ class Interpreter {
             frameAddress: leaf.frameAddress,
             env: leafEnv,
           });
-          return this.interpretBody(leafStatements, leafEnv, leafBody, { at: leafIndex + 1 });
+          return this.continueAfter(leafStatements, leafIndex, leafEnv, leafBody);
         });
         return;
       case 'continue': {
@@ -3093,16 +3124,33 @@ class Interpreter {
           leafEnv.declare(state.bindingName, { kind: 'value', value: true, provenance: NO_PROVENANCE });
         }
         await this.completeSpine(spine, 0, state.address, () =>
-          this.interpretBody(leafStatements, leafEnv, leafBody, {
-            at: leaf.reenter ? leafIndex : leafIndex + 1,
-            ...(replay !== undefined ? { replay } : {}),
-          }),
+          leaf.reenter
+            ? this.interpretBody(leafStatements, leafEnv, leafBody, {
+                at: leafIndex,
+                ...(replay !== undefined ? { replay } : {}),
+              })
+            : this.continueAfter(leafStatements, leafIndex, leafEnv, leafBody),
         );
         return;
       }
       default:
         neverAsAny(leaf);
     }
+  }
+
+  /**
+   * The rest of a body once its statement `index` finished on resume, its value
+   * bound by the park's own rule. A `return` there has nothing after it: it
+   * returns, exactly as it would have had the run never parked.
+   */
+  private continueAfter(
+    statements: Statement[],
+    index: number,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<BodyOutcome> {
+    if (statements[index]?.kind === 'return') return Promise.resolve(returnFrom(env));
+    return this.interpretBody(statements, env, body, { at: index + 1 });
   }
 
   /** Run `fn` inside every boundary on the spine — what a leaf that does not
@@ -3170,16 +3218,11 @@ class Interpreter {
     if (this.input.parkSink === undefined) return STOPPED;
     const continuation = async (): Promise<SpineCompletion> => ({
       done: true,
-      outcome: await this.interpretBody(
-        frame.parentStatements,
-        frame.parentEnv,
-        {
-          atAnchor: frame.parentAtAnchor,
-          ...(frame.parentPosition !== undefined ? { position: frame.parentPosition } : {}),
-          address: frame.parentFrameAddress,
-        },
-        { at: frame.containerIndex + 1 },
-      ),
+      outcome: await this.continueAfter(frame.parentStatements, frame.containerIndex, frame.parentEnv, {
+        atAnchor: frame.parentAtAnchor,
+        ...(frame.parentPosition !== undefined ? { position: frame.parentPosition } : {}),
+        address: frame.parentFrameAddress,
+      }),
     });
 
     // A combinator ARM is a `branch k` frame. `race` settles on the first
@@ -3430,7 +3473,7 @@ class Interpreter {
     // run that did not read identically.
     const combinator = combinatorOf(frame.container);
     if (combinator !== undefined) {
-      const bindingName = frame.container.kind === 'assign' ? frame.container.name : undefined;
+      const bindingName = boundRValueOf(frame.container)?.name;
       if (bindingName === undefined) return;
       frame.parentEnv.declare(
         bindingName,
@@ -3444,7 +3487,7 @@ class Interpreter {
     // iteration as the reserved slot in its export, which is the whole reason
     // it is bound into the scope rather than only carried as an outcome. A bare
     // (unbound) fan-out declares nothing.
-    const bindingName = frame.container.kind === 'assign' ? frame.container.name : undefined;
+    const bindingName = boundRValueOf(frame.container)?.name;
     if (bindingName === undefined) return;
     const returned: Binding[] = [];
     for (const row of rows) {
@@ -3482,7 +3525,7 @@ class Interpreter {
       });
     }
 
-    const bindingName = frame.container.kind === 'assign' ? frame.container.name : undefined;
+    const bindingName = boundRValueOf(frame.container)?.name;
     if (bindingName === undefined) return;
     frame.parentEnv.declare(
       bindingName,
@@ -3534,12 +3577,7 @@ class Interpreter {
    *  exactly the alias slots `resolveBlockIterations` binds per iteration. Parsed
    *  from the head text (no I/O), matching the runtime `iteration.bindings` keys. */
   private hopAliasNamesOf(container: Statement): Set<string> {
-    const block =
-      container.kind === 'block'
-        ? container.block
-        : container.kind === 'assign' && container.value.kind === 'block'
-          ? container.value.block
-          : undefined;
+    const block = fanOutBlockOf(container);
     const names = new Set<string>();
     if (!block) return names;
     const resourceAlias = RESOURCES_HEAD_ALIAS.exec(block.head.hopsRaw)?.[1];
@@ -3572,12 +3610,7 @@ class Interpreter {
   } {
     const { container, step, stmtAddress, state } = input;
     if (step.kind === 'iter') {
-      const block =
-        container.kind === 'block'
-          ? container.block
-          : container.kind === 'assign' && container.value.kind === 'block'
-            ? container.value.block
-            : undefined;
+      const block = fanOutBlockOf(container);
       if (!block) {
         throw new MovementEngineError(
           'MOVENG_RUNTIME',
@@ -4445,8 +4478,7 @@ class Interpreter {
       // cannot spell — which is what carries it across a park.
       case 'return': {
         await this.declareAssign(RETURN_SLOT, statement.value, env, body, stmtAddress);
-        const value = env.resolveOwn(RETURN_SLOT);
-        return value !== undefined ? { returned: true, value } : FELL_THROUGH;
+        return returnFrom(env);
       }
       case 'write':
         await this.executeWrite(statement.write, undefined, env, body);
