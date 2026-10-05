@@ -19,14 +19,13 @@ class WithPageTimeoutError extends Error {
   }
 }
 
-// Derived from the launched browser so the claimed Chrome version can never go
-// stale: sites like Notion reject outdated versions. Chrome's reduced UA format
-// keeps only the major version, and the default headless UA says
-// "HeadlessChrome", which we deliberately don't send.
-function desktopChromeUserAgent(browserVersion: string): string {
-  const major = browserVersion.split('.')[0];
-  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
-}
+// Sites like Notion turn away a Chrome version they consider outdated, judging
+// by this string alone. It is not derived from the launched browser because
+// the Chromium bundled with our pinned Playwright is itself outdated (129,
+// which Notion rejects). Bump it to the current stable major when a site
+// starts refusing it, as Notion did with 116.
+const DESKTOP_CHROME_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
 
 class Playwright {
   async instance() {
@@ -69,7 +68,7 @@ class Playwright {
             browser = await this.getBrowser();
             const context = await browser.newContext({
               acceptDownloads: true,
-              userAgent: desktopChromeUserAgent(browser.version()),
+              userAgent: DESKTOP_CHROME_USER_AGENT,
               ...options,
             });
             const page = await context.newPage();

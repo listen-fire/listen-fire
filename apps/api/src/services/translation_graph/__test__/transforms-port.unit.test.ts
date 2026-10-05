@@ -904,6 +904,19 @@ describe('_extractCandidateUrls — bare domains', () => {
     expect(_extractCandidateUrls('slides at acme.com/deck.')).toEqual(['https://acme.com/deck']);
   });
 
+  it('drops the comma or semicolon that ends a clause after a link', () => {
+    expect(_extractCandidateUrls('deck: https://x.notion.site/abc, thanks')).toEqual([
+      'https://x.notion.site/abc',
+    ]);
+    expect(_extractCandidateUrls('see acme.com/deck; and the memo')).toEqual([
+      'https://acme.com/deck',
+    ]);
+  });
+
+  it('keeps commas inside a link', () => {
+    expect(_extractCandidateUrls('https://acme.com/a,b;c.')).toEqual(['https://acme.com/a,b;c']);
+  });
+
   it('keeps dots inside a link', () => {
     expect(_extractCandidateUrls('https://acme.com/deck.pdf.')).toEqual([
       'https://acme.com/deck.pdf',
