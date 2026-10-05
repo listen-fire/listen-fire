@@ -244,6 +244,7 @@ import {
   matchesResourceFilter,
   resolvePositionResources,
 } from '../translation_graph/engine/files/resources';
+import { DOCUMENT_STORE_OWNER, documentStoreFileRef } from '../translation_graph/engine/files/document_store';
 import {
   Environment,
   MovementEngineError,
@@ -257,6 +258,7 @@ import {
   hopFilterKeeps,
   isCallableBinding,
   isDictValue,
+  isFileUnreadable,
   hopMemberGate,
   hopOrderKeyReader,
   nodeEdgeLandings,
@@ -350,6 +352,7 @@ import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
 import { CallDepthExceeded, isCallDepthExceeded, maxCallDepth } from './call_depth';
 import {
   currentRunSpend,
+  formatUsd,
   isRunCostCapExceeded,
   RUN_COST_CAP_ENV_VAR,
   type RunCostCapExceeded,
@@ -1698,6 +1701,8 @@ type MemberAnswer = { kept: true; value: unknown } | { kept: false };
 
 /** The trace warning `onError: "warn"` leaves for a member it left out. */
 const COLLECTION_MEMBER_FAILED = 'MOVENG_COLLECTION_MEMBER_FAILED';
+/** A file the run could not fetch the bytes of — warned once per file. */
+const FILE_BYTES_UNAVAILABLE = 'MOVENG_FILE_BYTES_UNAVAILABLE';
 
 function memberLeftOut(
   spelling: string,
@@ -1897,10 +1902,9 @@ function isMemberFailure(error: unknown): boolean {
 
 /** What a run paused at its cost cap says on its trace. */
 function runPausedMessage(error: RunCostCapExceeded): string {
-  const usd = (micro: number): string => `$${(micro / 1_000_000).toFixed(2)}`;
   return (
-    `Paused: cost limit reached. The run has spent ${usd(error.spentMicrodollars)} against a limit of ` +
-    `${usd(error.capMicrodollars)} (${RUN_COST_CAP_ENV_VAR}). Every branch stopped before its next statement; ` +
+    `Paused: cost limit reached. The run has spent ${formatUsd(error.spentMicrodollars)} against a limit of ` +
+    `${formatUsd(error.capMicrodollars)} (${RUN_COST_CAP_ENV_VAR}). Every branch stopped before its next statement; ` +
     'resume the run to carry on from there, with its usage reset.'
   );
 }
@@ -2462,7 +2466,7 @@ class Interpreter {
    *  (where the cache breakpoints go) and the files already read. */
   private readonly extractCalls = new ExtractCallRunState();
   private extractCallCount = 0;
-  private defaultFileTextResolver?: (ref: FileRef) => Promise<FileTextResolution>;
+  private fileTextSeam?: (ref: FileRef) => Promise<FileTextResolution>;
   /** Run-wide caches for `@user_*` / `@actor_*` resolution (mutated in
    *  place by the evaluator's meta resolvers — one chain per run). */
   private readonly actingUserCache: MovementMetaContext['actingUserCache'] = {};
@@ -3701,10 +3705,14 @@ class Interpreter {
   /**
    * Rebind a parked FileRef's `retrieve()` from its `source` handle — the owner
    * adapter's `resolveFileRef`, re-resolved live via `resolveAdapter` (the same
-   * cross-wire revive pattern, §4.1). A FileRef with no `source` (a local
-   * producer's self-contained closure that didn't survive the wire) can't be
-   * re-bound; it returns sans `retrieve()` and `streamFileRef` fails loud if a
-   * consumer reaches for the bytes.
+   * cross-wire revive pattern, §4.1), or the document store for a file that
+   * lives in our own storage (`FILE()` artifacts, manual uploads' store).
+   *
+   * A FileRef with no `source` has no way back to its bytes. Every producer
+   * sets one, so only a state parked by an older writer can carry such a ref;
+   * its channel still exists, and says exactly why it cannot fetch — the read
+   * that reaches for it then lands on the run as a warning
+   * (`MOVENG_FILE_BYTES_UNAVAILABLE`), never as a silently thinner input.
    */
   private reviveResumedFileRef(descriptor: FileRefDescriptor): FileRef {
     const ref: FileRef = {
@@ -3713,9 +3721,24 @@ class Interpreter {
       ...(descriptor.contentType !== undefined ? { contentType: descriptor.contentType } : {}),
       ...(descriptor.size !== undefined ? { size: descriptor.size } : {}),
       ...(descriptor.source !== undefined ? { source: descriptor.source } : {}),
+      ...(descriptor.url !== undefined ? { url: descriptor.url } : {}),
     };
     const source = descriptor.source;
-    if (source) {
+    if (!source) {
+      ref.retrieve = async () => {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          'it was parked without a durable handle, so its bytes cannot be fetched after the run resumed',
+        );
+      };
+    } else if (source.ownerAdapterType === DOCUMENT_STORE_OWNER) {
+      ref.retrieve = documentStoreFileRef({
+        objectUri: source.handle,
+        ...(ref.name !== undefined ? { name: ref.name } : {}),
+        ...(ref.contentType !== undefined ? { contentType: ref.contentType } : {}),
+        ...(ref.size !== undefined ? { size: ref.size } : {}),
+      }).retrieve;
+    } else {
       ref.retrieve = async () => {
         const owner = await this.resolveAdapterFn({
           adapterType: source.ownerAdapterType,
@@ -7430,9 +7453,43 @@ class Interpreter {
   /** The one file→text seam for the whole run — an `extract from [ … ]` file
    *  source and a `READ(file)` in an expression read a file the same way. */
   private fileTextResolver(): (ref: FileRef) => Promise<FileTextResolution> {
-    if (this.input.resolveFileText) return this.input.resolveFileText;
-    this.defaultFileTextResolver ??= makeFileTextResolver();
-    return this.defaultFileTextResolver;
+    this.fileTextSeam ??= this.warnWhenBytesUnavailable(
+      this.input.resolveFileText ?? makeFileTextResolver(),
+    );
+    return this.fileTextSeam;
+  }
+
+  /**
+   * A file that was THERE and whose bytes could not be fetched is a failure of
+   * the run, not a fact about the file — so it goes on the run as a warning,
+   * once per file, as well as on the trace entry of whatever read it. The read
+   * itself carries on: an extraction's other sources still stand, and its
+   * prompt says the file could not be read. A file that is legitimately
+   * unreadable (an unsupported type, no text in it) stays on the read's own
+   * trace entry only.
+   */
+  private warnWhenBytesUnavailable(
+    resolve: (ref: FileRef) => Promise<FileTextResolution>,
+  ): (ref: FileRef) => Promise<FileTextResolution> {
+    const warned = new Set<string>();
+    return async (ref) => {
+      const result = await resolve(ref);
+      if (!isFileUnreadable(result) || result.unreadable !== 'bytes_unavailable') return result;
+      const key = ref.source?.handle ?? ref.name ?? '';
+      if (!warned.has(key)) {
+        warned.add(key);
+        const name = ref.name !== undefined ? `'${ref.name}'` : 'a file';
+        this.trace.push({
+          kind: 'warning',
+          code: FILE_BYTES_UNAVAILABLE,
+          message:
+            `The run could not fetch ${name}` +
+            (result.detail !== undefined ? `: ${result.detail}` : '') +
+            '. Whatever read it went on without its contents.',
+        });
+      }
+      return result;
+    };
   }
 
   // ── Traversal-headed blocks ──

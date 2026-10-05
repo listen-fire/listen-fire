@@ -77,9 +77,14 @@ function capMicrodollars(): number | undefined {
   return parseRunCostCap(process.env[RUN_COST_CAP_ENV_VAR]);
 }
 
-function usd(microdollars: number): string {
-  const dollars = microdollars / 1_000_000;
-  return `$${dollars.toFixed(dollars < 1 ? 4 : 2)}`;
+/**
+ * Dollars as an author reads them about the cap: cents always, and up to four
+ * decimals where the amount has them — a $0.016 cap must not read as $0.02, nor
+ * a spend just past it as the same figure as the cap.
+ */
+export function formatUsd(microdollars: number): string {
+  const fixed = (microdollars / 1_000_000).toFixed(4);
+  return `$${fixed.replace(/0{1,2}$/, '')}`;
 }
 
 /** Thrown at the priced call AFTER the one that took the run to its cap. A
@@ -94,8 +99,8 @@ export class RunCostCapExceeded extends Error {
     readonly spentMicrodollars: number,
   ) {
     super(
-      `Run cost cap reached: this run has spent ${usd(spentMicrodollars)} on model calls and paid services, ` +
-        `and the limit set by ${RUN_COST_CAP_ENV_VAR} is ${usd(capMicrodollars)}. ` +
+      `Run cost cap reached: this run has spent ${formatUsd(spentMicrodollars)} on model calls and paid services, ` +
+        `and the limit set by ${RUN_COST_CAP_ENV_VAR} is ${formatUsd(capMicrodollars)}. ` +
         'The run was stopped before its next priced call in case something was looping. ' +
         `If this run legitimately needs more, raise ${RUN_COST_CAP_ENV_VAR} in the server's environment ` +
         '(or unset it to remove the cap).',
