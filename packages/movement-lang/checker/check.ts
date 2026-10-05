@@ -8988,23 +8988,19 @@ class Checker {
     scope: Scope,
     required: RequiredPosition | undefined,
   ): Extract<PositionTypeRef, { kind: 'local' }> {
-    const declared = required !== undefined ? required.schema.positions[required.position] : undefined;
     const reads: Record<string, FieldType | undefined> = {};
     const edges: Record<string, LocalEdge> = {};
     // A spread whose keys nobody can name: what it supplies is checked when
     // the graph is built, so no field can be called missing here.
     let opaqueSpread = false;
-    // From version 3 a graph body is TypeScript's object literal: members take
-    // effect in the order written, so a later one wins and a key written
-    // before a spread that always supplies it is overwritten (error 2783).
-    // Before it, a written entry won over every spread wherever it stood, so
-    // the spreads all apply first.
-    const ordered = since(this.languageVersion, 3);
-    const spreads = (literal.spreads ?? []).map(source => ({ source, at: ordered ? source.after : 0 }));
+    // A graph body is TypeScript's object literal: members take effect in the
+    // order written, so a later one wins and a key written before a spread
+    // that always supplies it is overwritten (error 2783).
+    const spreads = (literal.spreads ?? []).map(source => ({ source, at: source.after }));
     const writtenFrom = (index: number): Set<string> =>
-      new Set(literal.entries.slice(ordered ? index : 0).map(entry => entry.name));
+      new Set(literal.entries.slice(index).map(entry => entry.name));
     const writtenBefore = (index: number): Set<string> =>
-      new Set(ordered ? literal.entries.slice(0, index).map(entry => entry.name) : []);
+      new Set(literal.entries.slice(0, index).map(entry => entry.name));
     const applySpreads = (index: number): void => {
       for (const { source } of spreads.filter(s => s.at === index)) {
         const earlier = writtenBefore(index);

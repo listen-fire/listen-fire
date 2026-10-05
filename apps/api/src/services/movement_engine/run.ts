@@ -8202,13 +8202,10 @@ class Interpreter {
       fieldProvenance: {},
       edges: {},
     };
-    // From version 3 members take effect in the order written, as in a map
-    // literal: a later one overwrites an earlier one, a spread's keys included.
-    // Before it every spread applied first, so a written entry won wherever it
-    // stood.
-    const ordered = since(this.languageVersion, 3);
+    // Members take effect in the order written, as in a map literal: a later
+    // one overwrites an earlier one, a spread's keys included.
     const spreadsAt = (index: number): MapSpread[] =>
-      (literal.spreads ?? []).filter((spread) => (ordered ? spread.after : 0) === index);
+      (literal.spreads ?? []).filter((spread) => spread.after === index);
     const applySpreads = async (index: number): Promise<void> => {
       for (const spread of spreadsAt(index)) {
         if (spread.copy !== undefined) {

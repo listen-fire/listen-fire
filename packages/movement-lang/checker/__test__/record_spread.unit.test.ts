@@ -298,7 +298,7 @@ describe('a value that may be absent fills no required graph field (version 3)',
   });
 });
 
-describe('a graph literal takes members in the order written, as a map literal does (version 3)', () => {
+describe('a graph literal takes members in the order written, as a map literal does', () => {
   const ordered = (members: string, version?: LanguageVersion) =>
     codes(`  v = { label: "a" }\n  g = graph<Note> { ${members} }`, version);
 
@@ -334,7 +334,7 @@ describe('a graph literal takes members in the order written, as a map literal d
     ).toEqual([C.MAP_KEY_OVERWRITTEN]);
   });
 
-  it('before version 3 a written entry wins wherever it stands, and nothing is overwritten', () => {
-    expect(ordered('label: "mine", ...v', 2)).toEqual([]);
+  it('holds under an older language version too: graph literals never had another order', () => {
+    expect(ordered('label: "mine", ...v', 2)).toEqual([C.MAP_KEY_OVERWRITTEN]);
   });
 });
