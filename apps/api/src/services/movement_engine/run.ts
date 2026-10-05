@@ -332,7 +332,7 @@ import {
   type Address,
   type AddressStep,
 } from './address';
-import { EffectLocks, bindLock, edgeLock, identityLocks, recordLock } from './effect_locks';
+import { EffectLocks, bindLock, edgeLock, identityLocks, recordLock, type LockRequest } from './effect_locks';
 import {
   rehydrateBinding,
   serializeBinding,
@@ -2147,6 +2147,10 @@ interface UpdateInput {
    *  updated record (`WriteInput.resources`). Empty for non-extract writes. */
   resources?: Resource[];
   parentLinks: ParentLink[];
+  /** What the update holds while it reads and merges. Absent ⇒ the record
+   *  itself (`recordLock`); a write whose adapter stands in for another
+   *  system's record names that record's locks instead. */
+  locks?: LockRequest[];
 }
 
 /** What the identity-resolve write path (`executeResolvedWrite`) is handed. */
@@ -2171,6 +2175,8 @@ interface ResolvedWriteInput {
   resources: Resource[];
   parentLinks: ParentLink[];
   body: BodyContext;
+  /** The locks an update of the matched record holds — see `UpdateInput.locks`. */
+  updateLocks?: (externalId: string) => Promise<LockRequest[]>;
 }
 
 /** A standalone link statement's resolved shape (see `resolveLinkStatement`)
@@ -8582,6 +8588,7 @@ class Interpreter {
         fieldEvidence: input.fieldEvidence,
         resources: input.resources,
         parentLinks: input.parentLinks,
+        ...(input.updateLocks !== undefined ? { locks: await input.updateLocks(matchedExternalId) } : {}),
       });
       // A record resolved by identity moments ago is essentially never gone;
       // if the adapter nonetheless reports not-found, fall through to create.
@@ -9151,15 +9158,21 @@ class Interpreter {
     }
     // A landing that is a reference is the real record: matching it compares
     // its live values, and merging into it updates it through its own system.
-    const updatedReferences = new Map<Binding, { target: ResolvedWriteTarget; externalId: string }>();
+    const realRecords = new Map<Binding, { target: ResolvedWriteTarget; externalId: string }>();
+    const realRecordOf = async (landing: Binding) => {
+      const known = realRecords.get(landing);
+      if (known !== undefined) return known;
+      const real = await this.resolvePositionWriteTarget(`${edgeName} landing`, landing, env);
+      realRecords.set(landing, real);
+      return real;
+    };
     const store = localEdgeAdapter({
       edge,
       edgeName,
       references: {
         read: (landing, fieldIds) => this.readReferenceFields(landing, fieldIds, env),
         update: async (landing, update) => {
-          const real = await this.resolvePositionWriteTarget(`${edgeName} landing`, landing, env);
-          updatedReferences.set(landing, real);
+          const real = await realRecordOf(landing);
           return real.target.adapter.updateRecord({
             ...update,
             recordType: real.target.recordType,
@@ -9179,11 +9192,12 @@ class Interpreter {
     const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources, descriptor } =
       await this.evaluateWriteFields({ write, target: destination, env });
     const identity = this.uniqueByIdentity(write, destination);
+    const resolveRecord = { ...fields, ...identity.valueOverlay };
     const record = await this.executeResolvedWrite({
       target: destination,
       adapter: store.adapter,
       descriptor,
-      resolveRecord: { ...fields, ...identity.valueOverlay },
+      resolveRecord,
       constraints: identity.constraints,
       identityNarrowings: identity.narrowings,
       fields,
@@ -9192,6 +9206,28 @@ class Interpreter {
       resources,
       parentLinks: [],
       body,
+      // Merging into a reference changes the real record, so it holds what a
+      // write straight to that record would: the record, and the identity
+      // keys a direct write by the same `unique by` takes in its system. The
+      // edge's own locks name only this run's landings, which a flow
+      // reaching the record any other way never asks for.
+      updateLocks: async (externalId) => {
+        const landing = store.landingOf(externalId);
+        if (landing === undefined || landing.kind === 'nodePosition') {
+          return [recordLock(store.adapter, externalId)];
+        }
+        const real = await realRecordOf(landing);
+        return [
+          recordLock(real.target.adapter, real.externalId),
+          ...identityLocks({
+            system: real.target.adapter,
+            recordType: real.target.recordType,
+            constraints: identity.constraints,
+            resolveRecord,
+            fields,
+          }),
+        ];
+      },
     });
     const landing = store.landingOf(record.externalId);
     if (landing === undefined) {
@@ -9203,9 +9239,7 @@ class Interpreter {
     if (landing.kind !== 'nodePosition') {
       // It matched a REFERENCE, so the write was to the real record: logged as
       // one, against the system it reached.
-      const real =
-        updatedReferences.get(landing)
-        ?? (await this.resolvePositionWriteTarget(`${edgeName} landing`, landing, env));
+      const real = await realRecordOf(landing);
       const { externalId: _local, local: _edge, ...row } = record;
       this.recordWrite({
         write: {
@@ -11095,7 +11129,7 @@ class Interpreter {
   /** An update by id. It reads the record's current values and merges into
    *  them, so it holds the record while it does (`recordLock`). */
   private async applyUpdate(input: UpdateInput): Promise<WriteRecord | { notFound: true }> {
-    return this.effectLocks.withLocks([recordLock(input.adapter, input.externalId)], () =>
+    return this.effectLocks.withLocks(input.locks ?? [recordLock(input.adapter, input.externalId)], () =>
       this.mergeIntoRecord(input),
     );
   }

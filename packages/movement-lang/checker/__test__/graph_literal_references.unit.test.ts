@@ -75,6 +75,19 @@ node Batch {
     Text: <text>
   }
 }
+
+node Thread {
+  title: <text>
+  node attachment {
+    label: <text>
+    node owner {
+      Text: <text>
+    }
+    node source {
+      Subject: <text>
+    }
+  }
+}
 `;
 
 function check(body: string): Diagnostic[] {
@@ -168,6 +181,36 @@ describe('a record written as an entry value holds a reference', () => {
   it('a scalar stays a field', () => {
     const [title] = entries('  g = graph { title: e.Subject }');
     expect(title.kind === 'value' && title.reference).toBeFalsy();
+  });
+});
+
+describe('a reference nested inside a child body of a shaped graph', () => {
+  const NESTED = [
+    '  ch = write sl-[:Channels]-> { Name: "general" }',
+    '  m = write ch-[:Messages]-> { Text: "hi" }',
+    '  g = graph<Thread> { title: e.Subject, attachment: { label: "x", owner: m } }',
+  ].join('\n');
+
+  it('is typed as the records it holds, not as the shape\'s child', () => {
+    // `Replies` is the chat message's own edge: the shape's `owner` never declares it.
+    expect(
+      codes(`${NESTED}\n  g-[a:attachment]-> {\n    a-[o:owner]-> {\n      write o-[:Replies]-> { Text: "re" }\n    }\n  }`),
+    ).toEqual([]);
+  });
+
+  it('still fits the shape\'s child structurally, and the rest of the child keeps the shape', () => {
+    expect(codes('  g = graph<Thread> { title: e.Subject, attachment: { label: "x", owner: e } }')).toEqual([
+      C.GRAPH_REFERENCE_SHAPE,
+    ]);
+    expect(
+      codes(`${NESTED}\n  g-[a:attachment]-> {\n    l = a.label\n    n = a.nope\n  }`),
+    ).toEqual([C.UNKNOWN_PROPERTY]);
+  });
+
+  it('makes the graph unserialisable, as a top-level reference does', () => {
+    const body = `  g = graph<Thread> { title: e.Subject, attachment: { label: "x", source: e } }\n  t = TEXT.SERIALISE(g, 'JSON')`;
+    expect(codes(body)).toEqual([C.STDLIB_ARG_NOT_RECORD]);
+    expect(messages(body)).toMatch(/'source'/);
   });
 });
 

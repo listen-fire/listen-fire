@@ -670,6 +670,108 @@ describe('a bare walk holds references — the records themselves', () => {
     expect(attio.creates.map((c) => c.fields.name)).toEqual(['between', 'renamed.pdf']);
     expect(inbox.updates).toEqual([{ recordType: 'attachment', externalId: 'a1', fields: { contentType: 'seen' } }]);
   });
+
+  it('concurrent members merging into one referenced record wait for each other: no lost update', async () => {
+    // A write to the real record is slow, so a member that does not hold the
+    // record's lock reads it while another member's write is still in flight.
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: null } });
+    const update = inbox.adapter.updateRecord.bind(inbox.adapter);
+    inbox.adapter.updateRecord = async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return update(input);
+    };
+
+    // Half the members fill the field through the graph (a match in the
+    // edge), half straight on the record. A fill is a read-then-write, so
+    // only the first of the four may send anything.
+    await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  g = graph { files: msg-[:files]-> }',
+        '  done = MAP(["a", "b", "c", "d"], { concurrency: 4 }, (i) => {',
+        '    if i == "a" OR i == "c" {',
+        '      write g-[:files]-> { unique by (filename), filename: "x.pdf", contentType ?: i }',
+        '    }',
+        '    if i == "b" OR i == "d" {',
+        '      msg-[f:files]-> {',
+        '        write f { contentType ?: i }',
+        '      }',
+        '    }',
+        '    return i',
+        '  })',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter },
+    );
+
+    expect(inbox.updates).toHaveLength(1);
+    expect(inbox.updates[0]).toMatchObject({ recordType: 'attachment', externalId: 'a1' });
+  });
+});
+
+describe('unlink and delete through a reference act on the real record', () => {
+  it('delete of a record reached through the graph deletes it in its system', async () => {
+    const inbox = makeLiveInbox({ a1: { filename: 'x.pdf', contentType: 'application/pdf' } });
+    const deletes: Array<{ recordType: string; externalId: string }> = [];
+    inbox.adapter.deleteRecord = async ({ recordType, externalId }) => {
+      deletes.push({ recordType, externalId });
+      return {};
+    };
+
+    const result = await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  g = graph { files: msg-[:files]-> }',
+        '  g-[f:files]-> {',
+        '    delete f',
+        '  }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter },
+    );
+
+    expect(deletes).toEqual([{ recordType: 'attachment', externalId: 'a1' }]);
+    expect(result.writes).toMatchObject([{ kind: 'delete', adapterType: 'email', externalId: 'a1', committed: true }]);
+  });
+
+  it('unlink between two records reached through the graph severs their edge in their system', async () => {
+    const inbox = makeLiveInbox({});
+    const attio = makeFakeAdapter('attio');
+    const unlinks: Array<Parameters<NonNullable<Adapter['unlinkRecords']>>[0]> = [];
+    attio.adapter.unlinkRecords = async (input) => {
+      unlinks.push(input);
+      return { removed: true };
+    };
+
+    const result = await run(
+      [
+        'movement intake(msg: <inbox-[:message]->>) {',
+        '  crm = attio(credentials: acme_main)',
+        '  p = write crm-[:people]-> { unique by (`email`), name: "Ada", email: "ada@acme.test" }',
+        '  co = write crm-[:companies]-> { unique by (`name`), name: "Acme" }',
+        '  g = graph { person: p, company: co }',
+        '  g-[q:person]-> {',
+        '    g-[c:company]-> {',
+        '      unlink q -[:company]-> c',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'),
+      {},
+      { email: inbox.adapter, attio: attio.adapter },
+    );
+
+    expect(unlinks).toEqual([
+      expect.objectContaining({
+        from: { recordType: 'person', externalId: 'ext-attio-1' },
+        edgeName: 'company',
+        to: { recordType: 'company', externalId: 'ext-attio-2' },
+      }),
+    ]);
+    expect(result.writes[2]).toMatchObject({ kind: 'unlink', adapterType: 'attio', externalId: 'ext-attio-1', created: true });
+  });
 });
 
 describe('a field body and a record spread copy — snapshots', () => {

@@ -2304,6 +2304,43 @@ function declaredLocalGraph(
   };
 }
 
+/**
+ * A shaped graph's type: the value is OF the shape — except where an entry
+ * holds references, at any depth (`attachment: { owner: r }`): that edge is
+ * typed as the records it holds (which the shape checked fit), so a write or
+ * a walk through it is checked against what it really reaches.
+ */
+function shapedWithReferences(
+  declared: Extract<PositionTypeRef, { kind: 'local' }>,
+  body: Extract<PositionTypeRef, { kind: 'local' }>,
+): Extract<PositionTypeRef, { kind: 'local' }> {
+  const edges = { ...declared.edges };
+  for (const [name, edge] of Object.entries(body.edges ?? {})) {
+    const shaped = edges[name];
+    if (shaped === undefined || edge.target === undefined) continue;
+    if (edge.references === true) {
+      edges[name] = { ...shaped, schema: { ...shaped.schema, ...edge.schema }, target: edge.target, references: true };
+      continue;
+    }
+    // A child body: the shape's child node, retyped where it holds references.
+    const child = edge.target;
+    const shapedChild = shaped.target;
+    if (child.kind !== 'local' || shapedChild?.kind !== 'position' || !holdsReferences(child)) continue;
+    edges[name] = {
+      ...shaped,
+      target: shapedWithReferences(declaredLocalGraph(shapedChild.instance, shapedChild.position), child),
+    };
+  }
+  return { ...declared, edges };
+}
+
+/** Whether a graph body holds references on any edge, at any depth. */
+function holdsReferences(body: Extract<PositionTypeRef, { kind: 'local' }>): boolean {
+  return Object.values(body.edges ?? {}).some(
+    edge => edge.references === true || (edge.target?.kind === 'local' && holdsReferences(edge.target)),
+  );
+}
+
 /** A graph literal's edge holding REFERENCES to records of `records` (unknown
  *  when undefined) — readable, as every run-local edge is. */
 function referenceEdge(
@@ -9205,19 +9242,7 @@ class Checker {
     if (root?.kind !== 'position') return this.checkGraphBody(literal, scope, undefined);
     const required = { schema: root.instance.schema, position: root.position };
     const body = this.checkGraphBody(literal, scope, required);
-    // The value is OF the shape — except where an entry holds references: that
-    // edge is typed as the records it holds (which the shape checked fit), so a
-    // write or a walk through it is checked against what it really reaches.
-    const declared = declaredLocalGraph(root.instance, root.position);
-    for (const [name, edge] of Object.entries(body.edges ?? {})) {
-      const shaped = declared.edges?.[name];
-      if (edge.references !== true || shaped === undefined || edge.target === undefined) continue;
-      declared.edges = {
-        ...declared.edges,
-        [name]: { ...shaped, schema: { ...shaped.schema, ...edge.schema }, target: edge.target, references: true },
-      };
-    }
-    return declared;
+    return shapedWithReferences(declaredLocalGraph(root.instance, root.position), body);
   }
 
   /**
