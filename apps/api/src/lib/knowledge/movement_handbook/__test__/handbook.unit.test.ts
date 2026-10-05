@@ -24,7 +24,6 @@ import { proseViolations } from './prose_rules';
 import { chapterRoute } from '../../../handbook_section';
 import type { ChapterId, EngineClaim } from '../types';
 import { frontPageClaims } from '../front_page';
-import { examplesPageClaims } from '../examples_page';
 import { controlFormClaims } from '../language_search';
 import {
   renderMovementIndex,
@@ -566,11 +565,10 @@ const allClaims: Array<EngineClaim & { chapter: string }> = Object.values(
 ).flatMap((chapter): Array<EngineClaim & { chapter: string }> =>
   (chapter.engineClaims ?? []).map((claim) => ({ ...claim, chapter: chapter.id })),
 ).concat(
-  // The lean handbook's front page, the examples handbook's programs and the
-  // language search's control forms show examples too, outside any chapter;
-  // they are held the same way.
+  // The lean handbook's front page and the language search's
+  // control forms show examples too, outside any chapter; they are held the
+  // same way.
   frontPageClaims().map((claim) => ({ ...claim, chapter: 'front' })),
-  examplesPageClaims().map((claim) => ({ ...claim, chapter: 'examples' })),
   controlFormClaims().map((claim) => ({ ...claim, chapter: 'language-search' })),
 );
 

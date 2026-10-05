@@ -11,7 +11,7 @@
 //   pnpm dev:seed                                         # once
 //   pnpm dev:automation-eval --tasks inbound-intake --k 1 # a smoke
 //   pnpm dev:automation-eval --variants noskill,skill --k 3   # the baseline
-//   pnpm dev:automation-eval --handbook full,lean,examples --k 3   # the three handbooks, one stack
+//   pnpm dev:automation-eval --handbook full,lean --k 3   # both handbooks, one stack
 //
 // Output: .dev-loop/evals/<timestamp>/{report.json, summary.md, trials/*.json}.
 // Real Anthropic calls; each trial is capped by --max-trial-cost (default $2).

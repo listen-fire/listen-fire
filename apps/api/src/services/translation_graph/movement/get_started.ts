@@ -21,12 +21,10 @@ const DESCRIBE_TIMEOUT_MS = 8_000;
  *  this; record types not described by then stay named, without fields. */
 const SYSTEM_TIMEOUT_MS = 12_000;
 
-/** The page the handbook mode starts an agent on: the front page (lean), the
- *  annotated programs (examples), or the foundations chapter (full). */
+/** The page the handbook mode starts an agent on: the front page (lean) or the foundations chapter (full). */
 export function firstHandbookPage(mode: HandbookMode): string {
   switch (mode) {
-    case 'lean':
-    case 'examples': {
+    case 'lean': {
       const read = readBook({ bookId: 'automations', mode });
       return 'content' in read && typeof read.content === 'string' ? read.content : '';
     }

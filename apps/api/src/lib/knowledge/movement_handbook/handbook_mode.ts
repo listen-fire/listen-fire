@@ -6,15 +6,13 @@
 //          lacks, the build loop); everything else is looked up through the
 //          language search, and a request for a whole chapter is answered
 //          with a pointer to it.
-//   examples — lean, with its front page replaced by a few annotated programs
-//          whose comments carry the rules (examples_page.ts). Show, not tell.
 //
 // The deployment chooses with AUTOMATION_HANDBOOK (unset: full). Outside
 // production a request may choose for itself with the X-Handbook-Mode header,
 // which is how the eval runs every mode against one running stack without a
 // restart between trials.
 
-export const HANDBOOK_MODES = ['full', 'lean', 'examples'] as const;
+export const HANDBOOK_MODES = ['full', 'lean'] as const;
 export type HandbookMode = (typeof HANDBOOK_MODES)[number];
 
 export const HANDBOOK_MODE_VAR = 'AUTOMATION_HANDBOOK';
