@@ -17,6 +17,7 @@
 
 import { Router } from 'express';
 import type { EntityStore } from '../store';
+import { evaluateGmailQuery, GmailQueryError, parseGmailQuery, type QueryTarget } from './gmail_query';
 
 const SVC = 'gmail';
 const MAILBOX_ID = 'mailbox';
@@ -183,58 +184,35 @@ function wireMessage(data: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-/** The Gmail query operators the fake understands. Everything left over is
- *  matched as free text against the subject, the snippet and the body — which
- *  is what Gmail does with bare words. */
-function matchesQuery(data: Record<string, unknown>, query: string): boolean {
-  if (query.trim() === '') return true;
+/** Bare words are matched against the subject, the snippet and the body. */
+function queryTargetOf(data: Record<string, unknown>): QueryTarget {
   const headers = new Map<string, string>();
   for (const entry of headersOf(data.payload)) {
     headers.set((entry.name ?? '').toLowerCase(), entry.value ?? '');
   }
-  const labels = stringsOf(data.labelIds);
-  const internal = Number(data.internalDate ?? 0);
-  const haystack = [
-    headers.get('subject') ?? '',
-    typeof data.snippet === 'string' ? data.snippet : '',
-    typeof data.bodyText === 'string' ? data.bodyText : '',
-  ]
-    .join('\n')
-    .toLowerCase();
+  return {
+    headers,
+    labels: stringsOf(data.labelIds),
+    filenames: filenamesOf(data.payload),
+    freeText: [
+      headers.get('subject') ?? '',
+      typeof data.snippet === 'string' ? data.snippet : '',
+      typeof data.bodyText === 'string' ? data.bodyText : '',
+    ]
+      .join('\n')
+      .toLowerCase(),
+    internalDateMs: Number(data.internalDate ?? 0),
+  };
+}
 
-  const free: string[] = [];
-  for (const token of query.match(/"[^"]*"|\S+/g) ?? []) {
-    const colon = token.indexOf(':');
-    const operator = colon > 0 ? token.slice(0, colon).toLowerCase() : '';
-    const value = colon > 0 ? token.slice(colon + 1).replace(/^"|"$/g, '') : '';
-    switch (operator) {
-      case 'from':
-        if (!(headers.get('from') ?? '').toLowerCase().includes(value.toLowerCase())) return false;
-        break;
-      case 'to':
-        if (!(headers.get('to') ?? '').toLowerCase().includes(value.toLowerCase())) return false;
-        break;
-      case 'subject':
-        if (!(headers.get('subject') ?? '').toLowerCase().includes(value.toLowerCase())) return false;
-        break;
-      case 'label':
-        if (!labels.some((label) => label.toLowerCase() === value.toLowerCase())) return false;
-        break;
-      case 'after': {
-        const floor = parseQueryDate(value);
-        if (floor !== null && internal < floor) return false;
-        break;
-      }
-      case 'before': {
-        const ceiling = parseQueryDate(value);
-        if (ceiling !== null && internal >= ceiling) return false;
-        break;
-      }
-      default:
-        free.push(token.replace(/^"|"$/g, '').toLowerCase());
-    }
-  }
-  return free.every((word) => haystack.includes(word));
+function filenamesOf(payload: unknown): string[] {
+  if (typeof payload !== 'object' || payload === null) return [];
+  const names: string[] = [];
+  const filename = Reflect.get(payload, 'filename');
+  if (typeof filename === 'string' && filename !== '') names.push(filename);
+  const parts = Reflect.get(payload, 'parts');
+  if (Array.isArray(parts)) for (const part of parts) names.push(...filenamesOf(part));
+  return names;
 }
 
 // ── Reading a sent message back ─────────────────────────────────────────────
@@ -312,16 +290,6 @@ function parseRfc2822(raw: string): ParsedMessage {
   return parsed;
 }
 
-/** Gmail takes either epoch SECONDS or `YYYY/MM/DD` here. */
-function parseQueryDate(value: string): number | null {
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
-  const parts = value.split('/').map(Number);
-  if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
-    return Date.UTC(parts[0], parts[1] - 1, parts[2]);
-  }
-  return null;
-}
-
 export function gmailRoutes(store: EntityStore): Router {
   const r = Router();
 
@@ -343,10 +311,19 @@ export function gmailRoutes(store: EntityStore): Router {
       : req.query.labelIds === undefined
         ? []
         : [String(req.query.labelIds)];
+    let parsed: ReturnType<typeof parseGmailQuery>;
+    try {
+      parsed = parseGmailQuery(query);
+    } catch (error) {
+      if (!(error instanceof GmailQueryError)) throw error;
+      console.error(`[fake-gmail] ${error.message}`);
+      return res.status(400).json({ error: { code: 400, message: error.message, status: 'INVALID_ARGUMENT' } });
+    }
+    const now = Date.now();
     const messages = store
       .list(SVC, 'message')
       .map((m) => m.data)
-      .filter((data) => matchesQuery(data, query))
+      .filter((data) => evaluateGmailQuery(parsed, queryTargetOf(data), now))
       .filter((data) => wanted.every((label) => stringsOf(data.labelIds).includes(label)))
       .sort((a, b) => Number(b.internalDate ?? 0) - Number(a.internalDate ?? 0))
       .slice(0, Number.isFinite(max) ? max : 100)

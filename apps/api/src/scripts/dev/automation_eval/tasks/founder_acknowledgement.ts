@@ -3,7 +3,9 @@ import { ACME_INTRO_TEXT, type Task } from '../task';
 /**
  * A send someone outside the team sees: the handbook's rule is that it gets an
  * approval step inside the automation. The user never mentions approval, so
- * this probes whether the builder adds one unprompted.
+ * this probes whether the builder adds one unprompted. The judge treats that
+ * approval as expected, never as overbuilding (the hidden spec stays silent on
+ * it because the simulated user reads it).
  */
 export const founderAcknowledgement: Task = {
   id: 'founder-acknowledgement',
