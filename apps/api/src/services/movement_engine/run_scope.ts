@@ -169,10 +169,16 @@ const asyncLocalStorage = new AsyncLocalStorage<RunScope>();
 
 /** Run one interpreter segment under its own fresh count and its own memo,
  *  and under the run's spend account — seeded with `priorSpentMicrodollars`,
- *  what the run's earlier segments spent (none for a fresh run). */
+ *  what the run's earlier segments spent (none for a fresh run), counting
+ *  toward the cap from `capBaselineMicrodollars` (the spend at the run's last
+ *  resume from a limit pause). */
 export function withRunCallLedger<T>(
   fn: () => Promise<T>,
-  options?: { languageVersion?: LanguageVersion; priorSpentMicrodollars?: number },
+  options?: {
+    languageVersion?: LanguageVersion;
+    priorSpentMicrodollars?: number;
+    capBaselineMicrodollars?: number;
+  },
 ): Promise<T> {
   return asyncLocalStorage.run(
     {
@@ -180,7 +186,11 @@ export function withRunCallLedger<T>(
       memo: new RunReadMemo(),
       languageVersion: options?.languageVersion ?? CURRENT_LANGUAGE_VERSION,
     },
-    () => withRunSpendLedger(fn, { priorMicrodollars: options?.priorSpentMicrodollars ?? 0 }),
+    () =>
+      withRunSpendLedger(fn, {
+        priorMicrodollars: options?.priorSpentMicrodollars ?? 0,
+        capBaselineMicrodollars: options?.capBaselineMicrodollars ?? 0,
+      }),
   );
 }
 

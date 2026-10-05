@@ -34,6 +34,7 @@ import { MovementParseError, parseProgram } from 'movement-lang';
 import { services } from '../../../adapters/registry';
 import { getQb, getAutomationsQb } from '../../../lib/kysely';
 import { costMicrodollarsToUsd, runCostSummaries } from '../../../lib/llm_usage';
+import { describeLimitPause, readLimitPause } from '../../movement_engine/limit_pause';
 import { handleError } from '../../../lib/errors';
 import { logger } from '../../logger';
 import type { TeamId } from '../../../generated/kysely/core/Team';
@@ -348,6 +349,10 @@ export interface MovementRunStatus {
   costUsd: number;
   /** How many model calls this run made. */
   modelCalls: number;
+  /** Present while the run is PAUSED at its cost limit (status stays
+   *  'parked'): why, what it spent against the limit, and the limit. Resume it
+   *  with `resumeRun`. */
+  paused?: { reason: string; spentUsd: number; capUsd: number; pausedAt: string };
 }
 
 /**
@@ -372,9 +377,11 @@ export async function getMovementRunStatus(input: {
       'completed_at',
       'failed_at',
       'failure_reason',
+      'limit_pause',
     ])
     .executeTakeFirst();
   if (!row) return { error: `run ${input.runId} not found` };
+  const pause = readLimitPause(row.limit_pause);
 
   const errors = Array.isArray(row.errors)
     ? (row.errors as Array<Record<string, unknown>>).map((e) => ({
@@ -399,6 +406,16 @@ export async function getMovementRunStatus(input: {
     failureReason: row.failure_reason,
     costUsd: costMicrodollarsToUsd(cost?.costMicrodollars ?? 0),
     modelCalls: cost?.calls ?? 0,
+    ...(pause !== null
+      ? {
+          paused: {
+            reason: describeLimitPause(pause),
+            spentUsd: costMicrodollarsToUsd(pause.spentMicrodollars),
+            capUsd: costMicrodollarsToUsd(pause.capMicrodollars),
+            pausedAt: pause.pausedAt,
+          },
+        }
+      : {}),
   };
 }
 

@@ -26,7 +26,7 @@ import {
   type ParkedRunSummary,
   type TeamRunSummary,
 } from '../../../services/interaction/observability';
-import { abortRun } from '../../../services/interaction/operator';
+import { abortRun, resumeRun } from '../../../services/interaction/operator';
 import {
   listAskRecordsForTeam,
   answerAskRecordForTeam,
@@ -79,6 +79,15 @@ const controlTowerRouter = (procedure: typeof trpc.procedure) => {
           teamId: ctx.user.teamId as TeamId,
           abortedBy: user.username ?? user.email ?? undefined,
         });
+      }),
+
+    /** Resume a run paused at its cost limit: every branch it suspended carries
+     *  on, with the run's usage reset. */
+    resumeRun: userProcedure
+      .input(z.object({ runId: z.string().min(1) }))
+      .mutation(async ({ input }): Promise<{ runId: string; resumed: number }> => {
+        const ctx = currentContext();
+        return resumeRun({ runId: input.runId, teamId: ctx.user.teamId as TeamId });
       }),
 
     /** Every running/parked run for the team, newest first — the runs view

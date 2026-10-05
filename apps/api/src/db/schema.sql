@@ -3638,13 +3638,14 @@ CREATE INDEX movement_issue_team_state_idx ON automations.movement_issue USING b
 
 -- system_event — the platform's own events that no other table already
 -- records, for the `system` adapter's poll source to deliver (`Validation
--- Issue`, `Deprecated Version`, `Release Applied`; `Run Failed` is read from
--- trigger_run). Append-only; written by the deploy check. `payload` is the
+-- Issue`, `Deprecated Version`, `Release Applied`, `Run Paused`; `Run Failed` is
+-- read from trigger_run). Append-only; written by the deploy check and by a run
+-- pausing at a limit. `payload` is the
 -- adapter's one record shape (SystemEventPayload).
 CREATE TABLE automations.system_event (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     team_id uuid NOT NULL,
-    kind text NOT NULL,                          -- the kind's type id: 'validation_issue' | 'deprecated_version' | 'release_applied'
+    kind text NOT NULL,                          -- the kind's type id: 'validation_issue' | 'deprecated_version' | 'release_applied' | 'run_paused'
     payload jsonb NOT NULL,
     occurred_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
@@ -3742,7 +3743,15 @@ CREATE TABLE automations.trigger_run (
     -- (cancel-vs-park race: a stamped run is settled, never resumed).
     cancel_requested_at timestamptz,
     cancel_reason text,
-    -- Cost-park columns (billing spec §2.4): the run-level flag the cost-resume driver gates on
+    -- A run PAUSED at a limit (today: the per-run cost cap, MOVEMENT_MAX_RUN_COST_USD).
+    -- Non-null while paused: { limit, capMicrodollars, spentMicrodollars, pausedAt }.
+    -- The run's status stays 'parked'; its limit-suspended branches are the
+    -- parked_run rows with park_reason='limit', and only an explicit resume
+    -- (services/movement_engine/limit_pause.ts) clears this and resumes them all.
+    limit_pause jsonb,
+    -- What the run had spent when it was last resumed from a limit pause. The cap
+    -- reads spend SINCE this point: resuming a run paused at its cap resets its usage.
+    cost_cap_baseline_microdollars bigint NOT NULL DEFAULT 0,
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     ops_run_id uuid
 );
@@ -3900,8 +3909,10 @@ CREATE TABLE automations.parked_run (
     status text NOT NULL DEFAULT 'parked', -- parked | completed (§5.2)
     state jsonb,                           -- the branch's serialized frame + local scope (parked); null when completed
     result jsonb,                          -- the branch's bindings (completed, awaiting its join); null when parked
-    -- Discriminates a cost-park leaf from an ask leaf so the two resume drivers don't cross-drain (billing spec §2.4)
-    park_reason text NOT NULL DEFAULT 'ask' CONSTRAINT parked_run_park_reason_check CHECK (park_reason IN ('ask', 'timer', 'await')),
+    -- Which resume driver owns the leaf, so drivers don't cross-drain. 'limit' = an
+    -- engine suspension at a run limit (the cost cap): resumed only by an explicit
+    -- resume of the whole run, never by a worker.
+    park_reason text NOT NULL DEFAULT 'ask' CONSTRAINT parked_run_park_reason_check CHECK (park_reason IN ('ask', 'timer', 'await', 'limit')),
     wake_at timestamptz NULL,              -- absolute wake instant for timer parks; null for all other park_reason values
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,

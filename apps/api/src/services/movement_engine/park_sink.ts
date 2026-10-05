@@ -1,9 +1,10 @@
 // The durable-park sink — the production implementation of the engine's
 // `ParkSink` seam (run.ts). When a movement reaches a timer / await
-// park, the interpreter hands this the leaf's address + serialized scope; the
-// sink ensures the run row exists as `running` (lazy — via the firing's
-// TriggerRunRecorder), records the `parked_run` leaf, and flips the run to
-// `parked`. An await park also registers the awaitable adapter's correlation.
+// park, or the engine suspends a flow at a limit, the interpreter hands this
+// the leaf's address + serialized scope; the sink ensures the run row exists as
+// `running` (lazy — via the firing's TriggerRunRecorder), records the
+// `parked_run` leaf, and flips the run to `parked`. An await park also
+// registers the awaitable adapter's correlation.
 //
 // This keeps every DB concern OUT of the pure interpreter (which takes the sink
 // as an injected dependency, exactly like `resolveAdapter`/`writeSink`).
@@ -14,7 +15,8 @@ import { logger } from '../logger';
 import { settleCancelledRun } from '../interaction/run_failure';
 import type { TriggerRunId } from '../../generated/kysely/automations/TriggerRun';
 import type { TriggerRunRecorder } from '../translation_graph/runs/trigger_run';
-import type { ParkSink } from './run';
+import type { ParkSink, RunLimitPause } from './run';
+import { markRunLimitPaused } from './limit_pause';
 import {
   collectBranchExports,
   decrementJoinClose,
@@ -93,6 +95,48 @@ export function makeRecorderParkSink(recorder: TriggerRunRecorder): ParkSink {
           oc.columns(['run_id', 'address']).doUpdateSet({
             state: jsonb(input.state),
             park_reason: 'await',
+          }),
+        )
+        .execute();
+      await recorder.markParked();
+      await settleIfCancelledDuringPark(runId);
+    },
+
+    async commitLimitPause(pause: RunLimitPause): Promise<void> {
+      await recorder.ensureStarted();
+      await markRunLimitPaused({ runId, teamId: recorder.teamId, triggerId: recorder.triggerId, pause });
+    },
+
+    async commitSuspension(input: { address: string; state: unknown }): Promise<void> {
+      // A flow suspended at a limit (`park_reason='limit'`): no correlation, no
+      // wake time — only resuming the run resumes it (limit_pause.ts). UPSERT on
+      // (run_id, address): a branch that was waiting on something ordinary and
+      // took its event while the run was paused re-parks here as a limit leaf,
+      // and a suspended flow that meets the limit again at once rewrites its own
+      // row (`updated_at` is what tells the resume driver it was rewritten).
+      await recorder.ensureStarted();
+      // An await that took the pause before re-checking drops its correlation:
+      // resuming the run re-enters the await, which re-checks live and
+      // re-registers if it is still waiting. Left in place, every poll would
+      // wake it into the pause again.
+      await dropAwaitCorrelation({ runId, address: input.address });
+      await getAutomationsQb(['parked_run'])
+        .insertInto('parked_run')
+        .values({
+          run_id: runId,
+          address: input.address,
+          status: 'parked',
+          park_reason: 'limit',
+          wake_at: null,
+          state: jsonb(input.state),
+        })
+        .onConflict((oc) =>
+          oc.columns(['run_id', 'address']).doUpdateSet({
+            state: jsonb(input.state),
+            status: 'parked',
+            park_reason: 'limit',
+            wake_at: null,
+            updated_at: sql`now()`,
           }),
         )
         .execute();

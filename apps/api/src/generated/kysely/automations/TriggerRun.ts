@@ -49,6 +49,10 @@ export default interface TriggerRunTable {
 
   cancel_reason: ColumnType<string | null, string | null, string | null>;
 
+  limit_pause: ColumnType<unknown | null, unknown | null, unknown | null>;
+
+  cost_cap_baseline_microdollars: ColumnType<string, string | undefined, string>;
+
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
 
   ops_run_id: ColumnType<string | null, string | null, string | null>;

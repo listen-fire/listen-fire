@@ -506,8 +506,13 @@ async function resumeMovementFiringInContext(
       // computes the window it started with.
       firedAt: recorder.firedAt,
       // What the run spent before it parked, read back with its clock: the
-      // cost cap is the run's, not the segment's.
+      // cost cap is the run's, not the segment's — counted from the run's last
+      // resume from a limit pause, which reset its usage.
       priorSpentMicrodollars: recorder.priorSpentMicrodollars,
+      capBaselineMicrodollars: recorder.capBaselineMicrodollars,
+      // A run paused at its cost limit stays paused: a branch woken by its own
+      // event takes it, then suspends before its next statement.
+      limitPaused: recorder.limitPaused,
       catalog: teamCatalog.catalog,
       resolveCredentialId: teamCatalog.resolveCredentialId,
       resolveFile: teamCatalog.resolveFile,
@@ -714,6 +719,7 @@ async function fireCallbackFiringInContext(
         // body belongs to the run that minted it, clock included.
         firedAt: recorder.firedAt,
         priorSpentMicrodollars: recorder.priorSpentMicrodollars,
+        capBaselineMicrodollars: recorder.capBaselineMicrodollars,
         catalog: teamCatalog.catalog,
         resolveCredentialId: teamCatalog.resolveCredentialId,
         resolveFile: teamCatalog.resolveFile,

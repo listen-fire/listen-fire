@@ -5,6 +5,9 @@
 //                         rows cleared, await correlations dropped). The §5.7
 //                         must-have: an indefinitely-parked run stays visible AND
 //                         manually abortable.
+//   • resumeRun         → resumeLimitPausedRun: a run paused at its cost limit
+//                         resumes every branch it suspended, with its usage
+//                         reset (movement_engine/limit_pause.ts).
 //
 // (Ask answering / re-delivery are NOT operator run-actions any more — an ask is
 // an adapter record answered through the ONE answer door; see ask_records.ts.)
@@ -18,6 +21,33 @@ import { MovementEngineError } from '../movement_engine/errors';
 import type { TeamId } from '../../generated/kysely/core/Team';
 import type { TriggerRunId } from '../../generated/kysely/automations/TriggerRun';
 import { failRunAndCancelRequests } from './run_failure';
+import { resumeLimitPausedRun } from '../movement_engine/limit_pause';
+import { runResumeSlot } from '../movement_engine/await_resume';
+
+/**
+ * Resume a run paused at its cost limit — every branch it suspended carries on
+ * from the statement it stopped before, and the limit applies afresh (the run's
+ * usage resets). Team-scoped like `abortRun`. Throws when the run is not paused
+ * at a limit. Serialised with the run's other resumes (its awaits, its fired
+ * callbacks) so two never step the same run at once.
+ */
+export async function resumeRun(input: {
+  runId: string;
+  teamId: TeamId;
+}): Promise<{ runId: string; resumed: number }> {
+  const runId = await assertOwnedRun(input.runId, input.teamId);
+  let resumed = 0;
+  let failure: unknown;
+  await runResumeSlot.exclusive(runId as unknown as string, async () => {
+    try {
+      resumed = (await resumeLimitPausedRun(runId)).resumed;
+    } catch (err) {
+      failure = err;
+    }
+  });
+  if (failure !== undefined) throw failure;
+  return { runId: runId as unknown as string, resumed };
+}
 
 /**
  * Abort a parked/running run — cancel it and all its open asks. Team-scopes the

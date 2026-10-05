@@ -347,7 +347,12 @@ import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
 import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
-import { currentRunSpend, isRunCostCapExceeded } from '../../lib/run_spend';
+import {
+  currentRunSpend,
+  isRunCostCapExceeded,
+  RUN_COST_CAP_ENV_VAR,
+  type RunCostCapExceeded,
+} from '../../lib/run_spend';
 
 /** The in-memory graph a `Called` landing belongs to. A callback belongs to no
  *  SYSTEM, so this names the construct, never an adapter — it is what an `IS`
@@ -389,6 +394,21 @@ export interface RunMovementInput {
    * run, which has spent nothing.
    */
   priorSpentMicrodollars?: number;
+  /**
+   * What the run had spent when it was last resumed from a limit pause — the
+   * cost cap counts only what it spent after this (resuming a run paused at
+   * its cap resets its usage). Absent ⇒ never resumed from one: the cap
+   * counts everything.
+   */
+  capBaselineMicrodollars?: number;
+  /**
+   * The run is PAUSED at a limit (its cost cap) and this segment was woken by
+   * an ordinary event for one of its branches — an answer, a reply, a timer.
+   * The pause holds: the woken branch takes its event (binds the answer, steps
+   * past the sleep) and then suspends before its next statement, like every
+   * other branch of a paused run, until the run itself is resumed.
+   */
+  limitPaused?: boolean;
   /** The checker's catalog (adapters / credentials / instance schemas). */
   catalog: Catalog;
   /**
@@ -488,6 +508,14 @@ export interface RunMovementInput {
   trace?: MovementTraceEntry[];
 }
 
+/** Why a run paused: the limit it met, with what it had spent against it and
+ *  the cap (in microdollars). Today the only limit is the cost cap. */
+export interface RunLimitPause {
+  limit: 'cost';
+  capMicrodollars: number;
+  spentMicrodollars: number;
+}
+
 /** A place the engine may suspend a flow (`RunMovementInput.suspendWhen`):
  *  just before a statement, or just before the k-th call a statement makes
  *  (`address` ends in that call's `c k` step). Either way the flow parks at the
@@ -571,11 +599,18 @@ export interface ParkSink {
    * Record an ENGINE-INITIATED suspension (`suspendFlow`): a `parked_run` row
    * whose state says `suspended` — resume re-enters AT the statement
    * (`reenter`) and replays the calls it had finished. No correlation and no
-   * wake time: what resumes it is the operator (or whatever lifted the limit).
-   * Optional until a production reason exists for it; a run asked to suspend
-   * with no such sink fails loudly rather than carrying on past the limit.
+   * wake time: what resumes it is resuming the run (`limit_pause.ts`).
+   * Optional: a sink without it (a rehearsal) cannot suspend, so a run that
+   * meets its cost cap there fails on the cap instead.
    */
   commitSuspension?(input: { address: string; state: unknown }): Promise<void>;
+  /**
+   * The run has just met a limit and is PAUSING: mark the run paused (with
+   * the limit, what it spent and the cap — what its status shows) and say so
+   * (the `Run Paused` system event). Called once, by the first flow to meet
+   * the limit, before any flow's `commitSuspension`.
+   */
+  commitLimitPause?(pause: RunLimitPause): Promise<void>;
 }
 
 /**
@@ -740,10 +775,12 @@ export async function runMovement(input: RunMovementInput): Promise<MovementRunR
 function runScopeOf(input: RunMovementInput): {
   languageVersion: LanguageVersion;
   priorSpentMicrodollars: number;
+  capBaselineMicrodollars: number;
 } {
   return {
     languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
     priorSpentMicrodollars: input.priorSpentMicrodollars ?? 0,
+    capBaselineMicrodollars: input.capBaselineMicrodollars ?? 0,
   };
 }
 
@@ -1842,6 +1879,16 @@ function isMemberFailure(error: unknown): boolean {
   );
 }
 
+/** What a run paused at its cost cap says on its trace. */
+function runPausedMessage(error: RunCostCapExceeded): string {
+  const usd = (micro: number): string => `$${(micro / 1_000_000).toFixed(2)}`;
+  return (
+    `Paused: cost limit reached. The run has spent ${usd(error.spentMicrodollars)} against a limit of ` +
+    `${usd(error.capMicrodollars)} (${RUN_COST_CAP_ENV_VAR}). Every branch stopped before its next statement; ` +
+    'resume the run to carry on from there, with its usage reset.'
+  );
+}
+
 /** One traversal-block iteration: the hop aliases' bindings, plus the
  *  yielded record itself when the head walked ADAPTER edges (the
  *  iteration's write-bridge currency — extract/resource iterations have
@@ -2373,6 +2420,15 @@ class Interpreter {
   /** What keeps concurrent flows' effects on the world from racing — see
    *  `effect_locks.ts`. */
   private readonly effectLocks = new EffectLocks();
+  /** The run is PAUSED at a limit: every flow suspends at its next statement
+   *  boundary, and no collection op starts another member. Set by the first
+   *  flow to meet the cost cap (`suspendAtLimit`), or from the start when an
+   *  ordinary event woke a branch of an already-paused run
+   *  (`RunMovementInput.limitPaused`). Never cleared within a segment: only
+   *  resuming the run lifts a pause, and that is a new segment. */
+  private limitPaused: boolean;
+  /** This segment runs a fired callback's body, which cannot suspend. */
+  private firingCallback = false;
   /** The running movement's body — the extraction module's backward
    *  type adoption scans it for writes the extracted fields flow into. */
   private movementBody: Statement[] = [];
@@ -2431,6 +2487,7 @@ class Interpreter {
     private readonly link?: ProgramLink,
   ) {
     this.runTrace = input.trace ?? [];
+    this.limitPaused = input.limitPaused === true;
     // A deprecated pin runs, and says so on the run's own record. (An
     // unsupported one never gets this far — parseAndCheck refused it.)
     const versionWarning = languageVersionDiagnostic(this.languageVersion);
@@ -2601,6 +2658,10 @@ class Interpreter {
     const { movement, movementEnv } = await this.prepareMovement(input.program);
     this.movementBody = movement.body;
     this.callStack.push(movement);
+    // A resume cannot get back inside a callback body (its frame is not a
+    // step the resume descent knows), so nothing here may suspend: a body
+    // that meets the cost cap fails this fire, as it always has.
+    this.firingCallback = true;
     try {
       await this.resumeAlongAddress({
         body: movement.body,
@@ -4272,10 +4333,20 @@ class Interpreter {
         calls: { next: 0, completed: new Map(), ...(replay !== undefined ? { replay } : {}) },
       };
       const outcome = await this.statementSites.run(site, async () => {
+        // A paused run (a limit met here or in another flow) stops each flow
+        // between statements: the one it was running finished, the next waits.
+        if (this.limitPaused && this.canSuspend()) await this.suspendFlow();
         if (this.input.suspendWhen?.({ kind: 'statement', address: encodeAddress(stmtAddress) })) {
           await this.suspendFlow();
         }
-        return this.interpretStatement(statement, env, body, stmtAddress);
+        try {
+          return await this.interpretStatement(statement, env, body, stmtAddress);
+        } catch (error) {
+          // The cost cap is checked before every priced call, so meeting it
+          // here means this statement was about to spend: suspend just before it.
+          if (isRunCostCapExceeded(error) && this.canSuspend()) await this.suspendAtLimit(error);
+          throw error;
+        }
       });
       if (outcome !== undefined) return outcome;
     }
@@ -4834,7 +4905,11 @@ class Interpreter {
     // member has failed the op, or its own member parked.
     const runBatch = async (end: number, width: number): Promise<void> => {
       const slot = async (): Promise<void> => {
-        while (failure === undefined && next < end) {
+        // A paused run starts no further member once one of this op's has
+        // suspended: the rest are never started, and the op's resume runs them.
+        // Until one has, a member started now suspends at its first statement,
+        // so the op still parks as a join rather than answering short.
+        while (failure === undefined && next < end && !(this.limitPaused && parked.length > 0)) {
           const position = next;
           next += 1;
           if (await runOne(position)) return;
@@ -5281,12 +5356,48 @@ class Interpreter {
       address,
       bindingName: null,
       suspended: true,
-      journal: serializeCallRecords(site.calls.completed),
+      // Every call the statement has handed back, including those a re-run had
+      // yet to replay — a statement suspended again on re-entry keeps them all.
+      journal: serializeCallRecords(new Map([...(site.calls.replay ?? []), ...site.calls.completed])),
       scopeChain: serializeScopeChain(site.env.chainFromRoot()),
     });
     await commit({ address, state });
     this.trace.push({ kind: 'gate', outcome: false });
     throw new RunParked(address);
+  }
+
+  /** Whether this flow can suspend here: inside a statement, with somewhere
+   *  durable to park, and somewhere a resume can get back to. A rehearsal has
+   *  no park sink and a callback body no way back: both meet the cap as a
+   *  failure. */
+  private canSuspend(): boolean {
+    return (
+      !this.firingCallback
+      && this.statementSites.getStore() !== undefined
+      && this.input.parkSink?.commitSuspension !== undefined
+    );
+  }
+
+  /**
+   * The run met its cost cap in this flow, at the statement about to spend.
+   * Pause the whole run — every other flow stops at its next statement boundary
+   * (`limitPaused`) — and suspend this one before the statement. The first flow
+   * to meet the cap marks the run paused and says so; resuming the run resumes
+   * every suspended flow together, with its usage reset (`limit_pause.ts`).
+   * `onError` never sees the cap: it suspends before any member could fail.
+   */
+  private async suspendAtLimit(error: RunCostCapExceeded): Promise<never> {
+    if (!this.limitPaused) {
+      // Set before the await, so flows meeting the cap together pause it once.
+      this.limitPaused = true;
+      await this.input.parkSink?.commitLimitPause?.({
+        limit: 'cost',
+        capMicrodollars: error.capMicrodollars,
+        spentMicrodollars: error.spentMicrodollars,
+      });
+      this.trace.push({ kind: 'warning', code: 'RUN_PAUSED_COST_CAP', message: runPausedMessage(error) });
+    }
+    return this.suspendFlow();
   }
 
   /** Whether a call in an expression is one this engine runs. */

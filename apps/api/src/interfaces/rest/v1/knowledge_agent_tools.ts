@@ -93,7 +93,7 @@ import {
   listMovementRuns,
   inspectMovementRun,
 } from '../../../services/translation_graph/movement/run_now';
-import { abortRun } from '../../../services/interaction/operator';
+import { abortRun, resumeRun } from '../../../services/interaction/operator';
 import { MovementEngineError } from '../../../services/movement_engine/errors';
 import { UserService } from '../../../services/user';
 import {
@@ -1305,6 +1305,25 @@ const cancelRunHandler: RequestHandler = jsonHandler(cancelRunSchema, 'body', as
   return { error: `run ${input.runId} not found` };
 });
 
+const resumeRunSchema = z.object({ runId: z.string(), team: z.string().optional() });
+
+// Resume a run paused at its cost limit (the REST/MCP half of tRPC's resumeRun).
+// Same search-across-teams as cancel: "not found" means try the next team; a
+// run that is found but not paused at a limit is reported as such.
+const resumeRunHandler: RequestHandler = jsonHandler(resumeRunSchema, 'body', async (input) => {
+  const teams = await teamSetForReads();
+  for (const team of teams) {
+    try {
+      return await resumeRun({ runId: input.runId, teamId: team as TeamId });
+    } catch (err) {
+      if (err instanceof MovementEngineError && /not found/i.test(err.message)) continue;
+      if (err instanceof MovementEngineError) return { error: err.message.replace(/^MOVENG_RUNTIME: /, '') };
+      throw err;
+    }
+  }
+  return { error: `run ${input.runId} not found` };
+});
+
 // ---------------------------------------------------------------------------
 // Mount + register
 // ---------------------------------------------------------------------------
@@ -1353,6 +1372,7 @@ function mountAutomationToolRoutes(router: ReturnType<typeof Router>): void {
   router.post('/automations/run-status', getMovementRunHandler);
   router.post('/automations/inspect-run', inspectRunHandler);
   router.post('/automations/cancel-run', cancelRunHandler);
+  router.post('/automations/resume-run', resumeRunHandler);
 }
 
 /** Knowledge connector routes: KG read + validated edits, ontology, recipes, teams. */
@@ -1451,6 +1471,7 @@ function registerAutomationToolRoutes(): void {
   reg('POST', '/automations/run-status', 'Read one automation run\'s status by id — the poll target for runAutomation. Body: { runId, team? }. Returns { status (running | parked | success | partial | failed), recordCount, errors, startedAt, finishedAt, failedAt, failureReason, costUsd, modelCalls } — costUsd/modelCalls are the run\'s model-call spend and call count. Poll until status leaves "running" ("parked" means paused, waiting for your review — see listReviews). Also the top-level "checkRun" tool.', { inputSchema: getMovementRunSchema, readOnly: true, latency: 'fast' });
   reg('GET', '/automations/:idOrName/runs', 'List an automation\'s recent runs (every listener / "Run now" firing), newest first. Returns each run\'s { runId, lane, triggerType, status, committed, captured, recordCount, timestamps, costUsd, modelCalls } — `committed` = writes that landed, `captured` = writes rehearsed (a `dry_run` target, or a whole-run rehearsal), `costUsd`/`modelCalls` = the run\'s model-call spend and call count. Use a runId with inspectRun to see what the run actually captured and wrote. Query: ?limit= (default 20), ?team=. Also the top-level "listRuns" tool.', { readOnly: true, latency: 'fast' });
   reg('POST', '/automations/inspect-run', 'Read one run\'s full captured detail by id: the source event that fired it, the resolved write-plan (every target record + the FINAL field values it wrote, with every `?:` and enum coercion applied, each write flagged `committed` or captured), the decision trace (gate/branch outcomes, extraction emissions), errors, and the run\'s `committed`/`captured` counts plus its `costUsd`/`modelCalls` model-call spend. The "did it actually do what I meant" surface — including exactly which writes a rehearsal captured versus committed. Body: { runId, team? }. Get runIds from listRuns. Also the top-level "inspectRun" tool.', { inputSchema: inspectRunSchema, readOnly: true, latency: 'fast' });
+  reg('POST', '/automations/resume-run', 'Resume a run that paused because it reached its cost limit (checkRun shows it as status "parked" with `paused` set). Every part of the run that stopped carries on from where it stopped, and its usage resets, so the limit applies afresh. Body: { runId, team? }. Also the top-level "resumeRun" tool.', { inputSchema: resumeRunSchema, latency: 'fast' });
   reg('POST', '/automations/cancel-run', 'Stop a run by id — one that\'s executing or one that\'s paused waiting on something. Everything the run already did stays done; it just won\'t do anything more. An executing run stops at its next safe point (usually within seconds). Body: { runId, team? }. Also the top-level "cancelRun" tool.', { inputSchema: cancelRunSchema, latency: 'fast' });
 }
 

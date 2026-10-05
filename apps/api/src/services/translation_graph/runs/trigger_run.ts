@@ -146,6 +146,13 @@ export class TriggerRunRecorder {
   /** What the run spent before this segment — read back off the row by
    *  `adoptOpsRun()` on a resume, zero for a fresh firing. */
   private priorSpent = 0;
+  /** What the run had spent when last resumed from a limit pause — the cost
+   *  cap counts from here. Read back by `adoptOpsRun()`; zero when fresh. */
+  private capBaseline = 0;
+  /** Whether the run is paused at a limit (`trigger_run.limit_pause`), read
+   *  back by `adoptOpsRun()`: a branch woken by an ordinary event then holds
+   *  the pause rather than running past it. */
+  private pausedAtLimit = false;
 
   constructor(private readonly firing: TriggerRunFiring) {
     // Adopt the parked run's id on resume; otherwise mint a fresh one.
@@ -198,6 +205,22 @@ export class TriggerRunRecorder {
    */
   get priorSpentMicrodollars(): number {
     return this.priorSpent;
+  }
+
+  /** What the run had spent when it was last resumed from a limit pause —
+   *  the point the cost cap counts from. Call `adoptOpsRun()` first. */
+  get capBaselineMicrodollars(): number {
+    return this.capBaseline;
+  }
+
+  /** Whether the run is paused at a limit right now. Call `adoptOpsRun()` first. */
+  get limitPaused(): boolean {
+    return this.pausedAtLimit;
+  }
+
+  /** The trigger that fired this run. */
+  get triggerId(): string {
+    return this.firing.triggerId;
   }
 
   /**
@@ -269,9 +292,21 @@ export class TriggerRunRecorder {
         // (P22, chunk F) — reads the just-written park rows via the one shared
         // describer rather than inventing a second copy of the wording.
         const awaiting = await describeRunAwaits(this.id).catch(() => []);
+        // A run paused at its cost limit is held by the engine, not by any
+        // one wait — say that first.
+        const pausedRow = await getAutomationsQb(['trigger_run'])
+          .selectFrom('trigger_run')
+          .select('limit_pause')
+          .where('id', '=', this.id)
+          .executeTakeFirst()
+          .catch(() => undefined);
+        const holds = [
+          ...(pausedRow?.limit_pause != null ? ['paused: cost limit reached'] : []),
+          ...awaiting,
+        ];
         const summary =
-          awaiting.length > 0
-            ? `${this.firing.triggerName ?? 'Automation'} — ${awaiting.join('; ')}`
+          holds.length > 0
+            ? `${this.firing.triggerName ?? 'Automation'} — ${holds.join('; ')}`
             : `${this.firing.triggerName ?? 'Automation'} — waiting for a person`;
         await parkOpsRun(this.opsRunId, { summary }).catch(() => {});
       }
@@ -325,7 +360,7 @@ export class TriggerRunRecorder {
     try {
       const row = await getAutomationsQb(['trigger_run'])
         .selectFrom('trigger_run')
-        .select(['ops_run_id', 'started_at', 'diagnostics'])
+        .select(['ops_run_id', 'started_at', 'diagnostics', 'limit_pause', 'cost_cap_baseline_microdollars'])
         .where('id', '=', this.id)
         .executeTakeFirst();
       this.opsRunId = row?.ops_run_id ?? null;
@@ -335,6 +370,10 @@ export class TriggerRunRecorder {
       if (row?.started_at !== undefined) this.startedAt = new Date(row.started_at);
       // And so does its spend: the account belongs to the run, not the segment.
       this.priorSpent = runSpentMicrodollars(row?.diagnostics);
+      // Usage resets when a run is resumed from a limit pause; the cap counts
+      // from what it had spent then.
+      this.capBaseline = Number(row?.cost_cap_baseline_microdollars ?? 0);
+      this.pausedAtLimit = row?.limit_pause !== null && row?.limit_pause !== undefined;
       // The answer arrived, so it is working again rather than waiting.
       if (this.opsRunId) await unparkOpsRun(this.opsRunId).catch(() => {});
     } catch (readErr) {
@@ -873,7 +912,7 @@ function movementStepDiagnostics(result: MovementRunResult): Record<string, unkn
 
 /** What a run spent before now, off its row's summed diagnostics. A row
  *  written before `costMicrodollars` was recorded has only the dollar sum. */
-function runSpentMicrodollars(diagnostics: unknown): number {
+export function runSpentMicrodollars(diagnostics: unknown): number {
   const counters = persistedDiagnostics(diagnostics);
   const exact = counters.costMicrodollars;
   if (typeof exact === 'number') return exact;

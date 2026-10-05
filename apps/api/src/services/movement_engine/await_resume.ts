@@ -323,13 +323,17 @@ async function settleBranchComplete(
   return { runComplete: otherParked === undefined };
 }
 
-/** Drop one resolved await leaf: its correlation entry + its parked row. */
+/** Drop one resolved await leaf: its correlation entry + its parked row —
+ *  while that row is still an await's. An await woken while its run was paused
+ *  at a limit suspended at this same address instead of re-checking, and the
+ *  row is then the run's to resume (limit_pause.ts). */
 async function resolveAwaitLeaf(runId: TriggerRunId, address: string): Promise<void> {
   await dropAwaitCorrelation({ runId, address });
   await getAutomationsQb(['parked_run'])
     .deleteFrom('parked_run')
     .where('run_id', '=', runId)
     .where('address', '=', address)
+    .where('park_reason', '=', 'await')
     .execute();
 }
 

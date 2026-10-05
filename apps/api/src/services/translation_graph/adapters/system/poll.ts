@@ -32,6 +32,7 @@ import {
 } from './events';
 import {
   RUN_FAILED,
+  RUN_PAUSED,
   SYSTEM_EVENT_KINDS,
   type SystemEventKind,
   type SystemEventPayload,
@@ -182,7 +183,12 @@ export class SystemPollSource implements PollSource {
     const storedKinds = kinds.filter((kind) => kind !== RUN_FAILED);
     const stored =
       storedKinds.length > 0
-        ? await this.pollStored({ kinds: storedKinds, mark: storedMark(input.checkpoint), until })
+        ? await this.pollStored({
+            kinds: storedKinds,
+            mark: storedMark(input.checkpoint),
+            until,
+            movementId: input.movementId,
+          })
         : { events: [], mark: previous.stored };
 
     return {
@@ -229,13 +235,16 @@ export class SystemPollSource implements PollSource {
     kinds: readonly SystemEventKind[];
     mark: StoredEventMark | undefined;
     until: Date;
+    movementId: string | undefined;
   }): Promise<{ events: DiscriminableEvent[]; mark: StoredEventMark }> {
     // First poll: set the mark and emit nothing, as for failed runs.
     if (input.mark === undefined) {
       return { events: [], mark: { occurredAt: input.until.toISOString(), id: NIL_RUN_ID } };
     }
     // An automation IS told about its own validation issue: unlike a failure,
-    // hearing about it cannot produce another one.
+    // hearing about it cannot produce another one. A pause is like a failure:
+    // a handler that paused while reporting a pause would report itself, so an
+    // automation is never told about its own runs pausing.
     const events = await this.readStoredEvents({
       teamId: this.teamId,
       kinds: input.kinds.map((kind) => kind.typeId),
@@ -246,6 +255,7 @@ export class SystemPollSource implements PollSource {
     const last = events[events.length - 1];
     return {
       events: events.flatMap((event) => {
+        if (event.kind === RUN_PAUSED.typeId && event.payload.automationId === input.movementId) return [];
         const discriminable = storedSystemEvent(event);
         return discriminable === null ? [] : [discriminable];
       }),

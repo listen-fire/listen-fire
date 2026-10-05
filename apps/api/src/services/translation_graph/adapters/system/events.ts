@@ -1,9 +1,10 @@
 // The platform events that no other table records — written here by whatever
-// produces them (today: the deploy check), read back by the system poll source.
+// produces them (the deploy check; a run pausing at its cost limit), read back
+// by the system poll source.
 //
 // `Run Failed` is not stored here: the run table already records every failure
-// from every writer, so the poll reads that. The other three kinds happen once,
-// in one place, and leave nothing else behind to read.
+// from every writer, so the poll reads that. The other kinds happen once, in
+// one place, and leave nothing else behind to read.
 
 import type { TeamId } from '../../../../generated/kysely/core/Team';
 import type { SystemEventId } from '../../../../generated/kysely/automations/SystemEvent';

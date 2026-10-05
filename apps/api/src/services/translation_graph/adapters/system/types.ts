@@ -1,9 +1,9 @@
 // The platform's own events — the vocabulary the `system` adapter, its poll
 // source and its handbook chapter all share.
 //
-// Four kinds, one record shape. Each kind is its own fires edge landing on its
-// own node (a listen's parameter is addressed by the node it lands on, so four
-// kinds sharing one node would be four listens nobody could tell apart), and
+// Five kinds, one record shape. Each kind is its own fires edge landing on its
+// own node (a listen's parameter is addressed by the node it lands on, so five
+// kinds sharing one node would be five listens nobody could tell apart), and
 // every node carries the same fields, so a handler written for one reads the
 // same way as a handler written for another.
 
@@ -28,6 +28,17 @@ export const RUN_FAILED: SystemEventKind = {
     'An automation run ended failed. Delivered within a couple of minutes of ' +
     'the run settling; an automation is never told about its own failures, ' +
     'and a rehearsal (dry run) failing is not reported.',
+};
+
+export const RUN_PAUSED: SystemEventKind = {
+  typeId: 'run_paused',
+  displayName: 'Run Paused',
+  tag: 'system:run_paused',
+  description:
+    'An automation run paused because it reached its cost limit (the per-run cap on model calls and ' +
+    'paid services this deployment sets). Every branch of the run stopped before its next statement, ' +
+    'and it stays paused until someone resumes it; resuming resets its usage. `Reason` says what it ' +
+    'spent and the limit. Delivered within a couple of minutes of the pause.',
 };
 
 /** The deploy check's three kinds: emitted once per release, as it runs. */
@@ -63,6 +74,7 @@ export const RELEASE_APPLIED: SystemEventKind = {
 
 export const SYSTEM_EVENT_KINDS: readonly SystemEventKind[] = [
   RUN_FAILED,
+  RUN_PAUSED,
   VALIDATION_ISSUE,
   DEPRECATED_VERSION,
   RELEASE_APPLIED,

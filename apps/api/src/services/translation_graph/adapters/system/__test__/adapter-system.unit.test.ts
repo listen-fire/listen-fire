@@ -23,6 +23,7 @@ import type { StoredSystemEvent, StoredSystemEventReader } from '../events';
 import {
   RELEASE_APPLIED,
   RUN_FAILED,
+  RUN_PAUSED,
   SYSTEM_EVENT_KINDS,
   VALIDATION_ISSUE,
   type SystemEventPayload,
@@ -32,7 +33,7 @@ const TEAM = 'team-1' as TeamId;
 const NOW = new Date('2026-09-29T12:00:00.000Z');
 const MARK = { failedAt: '2026-09-29T11:50:00.000Z', runId: '00000000-0000-0000-0000-000000000000' };
 
-const NAMES = ['Run Failed', 'Validation Issue', 'Deprecated Version', 'Release Applied'];
+const NAMES = ['Run Failed', 'Run Paused', 'Validation Issue', 'Deprecated Version', 'Release Applied'];
 const FIELDS = ['Automation', 'Automation Id', 'Run Id', 'Version', 'Reason', 'Url', 'At'];
 
 function failedRun(over: Partial<FailedRun> = {}): FailedRun {
@@ -55,7 +56,7 @@ function source(runs: FailedRun[]): { poll: SystemPollSource; reader: jest.Mock 
 describe('SystemAdapter surface', () => {
   const adapter = new SystemAdapter(TEAM);
 
-  it('declares four fires edges, each selected by its own natural name', async () => {
+  it('declares five fires edges, each selected by its own natural name', async () => {
     const entries = await adapter.listEntryPoints();
     expect(entries.map((e) => e.displayName)).toEqual(NAMES);
     for (const entry of entries) {
@@ -92,7 +93,7 @@ describe('SystemAdapter surface', () => {
   });
 
   it('says in the schema that three kinds come from the deploy check', async () => {
-    for (const kind of SYSTEM_EVENT_KINDS.filter((k) => k !== RUN_FAILED)) {
+    for (const kind of SYSTEM_EVENT_KINDS.filter((k) => k !== RUN_FAILED && k !== RUN_PAUSED)) {
       expect((await adapter.describe(kind.typeId))?.description).toContain(
         'Emitted by the check that runs as a new release is deployed',
       );
@@ -273,6 +274,26 @@ describe('deploy check kinds emission', () => {
       occurredAt: '2026-09-29T11:55:00.000Z',
       id: 'evt-1',
     });
+  });
+
+  it('delivers a stored Run Paused — but never to the automation whose run paused', async () => {
+    const other = storedEvent({ id: 'evt-3', kind: RUN_PAUSED.typeId });
+    const own = storedEvent({
+      id: 'evt-4',
+      kind: RUN_PAUSED.typeId,
+      payload: { ...other.payload, automationId: 'mov-alerts' },
+    });
+    const { poll, stored } = storedSource([other, own]);
+    const result = await poll.getEvents({
+      config: { events: ['Run Paused'] },
+      checkpoint: { stored: STORED_MARK },
+      movementId: 'mov-alerts',
+    });
+    expect(stored).toHaveBeenCalledWith(expect.objectContaining({ kinds: [RUN_PAUSED.typeId] }));
+    expect(result.events.map((e) => e.externalId)).toEqual(['evt-3']);
+    expect(result.events[0]?.tag).toBe(RUN_PAUSED.tag);
+    // The mark still passes the skipped one.
+    expect((result.checkpoint as SystemCheckpoint).stored?.id).toBe('evt-4');
   });
 
   it('reads both sources for a listen on Run Failed and a deploy kind, keeping each mark', async () => {

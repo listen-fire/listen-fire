@@ -10,7 +10,7 @@
 // Copy is deliberately plain — no "parked" / "TG" / "cost_exhausted".
 
 import Link from "next/link";
-import { Activity, X } from "lucide-react";
+import { Activity, Play, X } from "lucide-react";
 
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { usePageTitle } from "@/components/page-title";
@@ -37,6 +37,7 @@ function sinceLabel(date: string | Date): string {
 }
 
 const WAITING_ON_LABEL: Record<NonNullable<Run["waitingOn"]>, string> = {
+  limit: "reached its cost limit",
   ask: "waiting for an answer",
   timer: "waiting (scheduled pause)",
 };
@@ -91,10 +92,12 @@ function RunningRow({
 function ParkedRow({
   run,
   onCancel,
+  onResume,
   busy,
 }: {
   run: Run;
   onCancel: () => void;
+  onResume: () => void;
   busy: boolean;
 }) {
   return (
@@ -116,6 +119,17 @@ function ParkedRow({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        {run.waitingOn === "limit" && (
+          <button
+            type="button"
+            onClick={onResume}
+            disabled={busy || run.cancelRequested}
+            title="Carry on from where it stopped. Its cost limit applies afresh."
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-primary transition-colors hover:bg-gray-50 disabled:opacity-50"
+          >
+            <Play size={12} /> Resume
+          </button>
+        )}
         <button
           type="button"
           onClick={onCancel}
@@ -152,7 +166,10 @@ export default function RunsPage() {
   const cancelMut = trpc.views.controlTower.abortRun.useMutation({
     onSettled: refresh,
   });
-  const busy = cancelMut.isLoading;
+  const resumeMut = trpc.views.controlTower.resumeRun.useMutation({
+    onSettled: refresh,
+  });
+  const busy = cancelMut.isLoading || resumeMut.isLoading;
 
   const running = (runs ?? []).filter((run) => run.status === "running");
   const parked = (runs ?? []).filter((run) => run.status === "parked");
@@ -210,6 +227,7 @@ export default function RunsPage() {
                       run={run}
                       busy={busy}
                       onCancel={() => cancelMut.mutate({ runId: run.runId })}
+                      onResume={() => resumeMut.mutate({ runId: run.runId })}
                     />
                   ))}
                 </div>

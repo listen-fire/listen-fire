@@ -220,7 +220,7 @@ await FIRST(cb-[:Called]->)               # wait for it (landing: At + one field
 await until(() => { refresh co; return co.Stage == "Won" }, every: 1h)   # re-check a condition on a cadence
 \`\`\`
 
-\`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). A declaration is spelled \`movement\` or \`function\` — same thing. \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now.
+\`cb.id\` goes in a control's payload; \`cb.url\` is the link form (its page confirms before it acts). A declaration is spelled \`movement\` or \`function\` — same thing. \`until\` re-checks its condition every \`every:\` (1m floor) and resumes when it holds; the condition is a closure or a plain boolean expression, reads only, and takes no parameters. \`refresh <handle>\` re-reads a written record so the next check sees it as it is now. Neither a callback's body nor an \`until\` condition may wait, directly or through a function it calls: a run cannot be resumed there (\`MOV_WAIT_NOT_RESUMABLE\`). Do the waiting in the automation itself, outside both.
 
 ### extraction
 

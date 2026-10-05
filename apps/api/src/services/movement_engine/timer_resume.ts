@@ -230,10 +230,13 @@ async function resumeTimerParkedRun(run: TimerParkedRunRow, now: Date): Promise<
         continue;
       }
       // Re-parked deeper (a met `until`'s continuation hit a later await/sleep, a
-      // slept branch parked again, or a cost gate). The new park rows were written
-      // by the resumed interpreter; drop THIS leaf's superseded timer row. No join
-      // decrement (the branch did not complete). The run stays parked.
-      await deleteLeaf(runId, leaf.address);
+      // slept branch parked again, or the run's cost limit). The new park rows
+      // were written by the resumed interpreter; drop THIS leaf's superseded
+      // timer row. Only while it is still a timer row: an `until` woken while its
+      // run was paused at a limit suspended AT this same address, and its row is
+      // now the run's to resume. No join decrement (the branch did not
+      // complete). The run stays parked.
+      await deleteTimerLeaf(runId, leaf.address);
       continue;
     }
 
@@ -311,6 +314,15 @@ async function deleteLeaf(runId: TriggerRunId, address: string): Promise<void> {
     .deleteFrom('parked_run')
     .where('run_id', '=', runId)
     .where('address', '=', address)
+    .execute();
+}
+
+async function deleteTimerLeaf(runId: TriggerRunId, address: string): Promise<void> {
+  await getAutomationsQb(['parked_run'])
+    .deleteFrom('parked_run')
+    .where('run_id', '=', runId)
+    .where('address', '=', address)
+    .where('park_reason', '=', 'timer')
     .execute();
 }
 

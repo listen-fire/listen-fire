@@ -162,6 +162,24 @@ describe('a call that may wait', () => {
   it('before version 3 the call is not refused — unchanged', () => {
     expect(codes('  waits(m: c)', { languageVersion: 2 })).toEqual([]);
   });
+
+  it('inside a callback body it is refused — a run cannot be resumed inside a fired callback', () => {
+    expect(codes('  cb = callback((note: <text>) => {\n    y = waits(c.Size)\n  })')).toEqual([C.WAIT_NOT_RESUMABLE]);
+    // Nor can a wait written there directly, nor a movement run as the callback.
+    expect(codes('  cb = callback((note: <text>) => {\n    await sleep(1h)\n  })')).toEqual([C.WAIT_NOT_RESUMABLE]);
+    expect(codes('  cb = callback(waits)')).toEqual([C.WAIT_NOT_RESUMABLE]);
+    expect(messages('  cb = callback((note: <text>) => {\n    waits(c.Size)\n  })')).toContain('cannot be resumed there');
+    // A callback body that does not wait is untouched.
+    expect(codes('  cb = callback((note: <text>) => {\n    y = double(c.Size)\n  })')).toEqual([]);
+  });
+
+  it("inside an 'until' condition it is refused — a condition is re-run by the clock, never resumed", () => {
+    const until = (body: string) => `  r = await until(() => {\n${body}\n  }, every: 5m)`;
+    // Nested it is refused twice over: no expression can hold a wait either.
+    expect(codes(until('    return waits(c.Size) > 0'))).toEqual([C.NESTED_CALL_SUSPENDS, C.WAIT_NOT_RESUMABLE]);
+    expect(codes(until('    return waits(c.Size)'))).toEqual([C.WAIT_NOT_RESUMABLE]);
+    expect(codes(until('    return double(c.Size) > 0'))).toEqual([]);
+  });
 });
 
 describe('a call in a walk is read per landing, so it is still refused there', () => {

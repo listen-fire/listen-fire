@@ -1687,8 +1687,9 @@ export interface TeamRunSummary {
     automationName: string;
     status: 'running' | 'parked';
     startedAt: Date;
-    /** Why it's waiting, when parked. 'ask' | 'timer' | null (running). */
-    waitingOn: 'ask' | 'timer' | null;
+    /** Why it's waiting, when parked. 'limit' (paused at its cost limit — the
+     *  operator can resume it) | 'ask' | 'timer' | null (running). */
+    waitingOn: 'limit' | 'ask' | 'timer' | null;
     openAskCount: number;
     cancelRequested: boolean;
 }
@@ -4928,6 +4929,8 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 failed_at: Date | null;
                 cancel_requested_at: Date | null;
                 cancel_reason: string | null;
+                limit_pause: unknown;
+                cost_cap_baseline_microdollars: string;
                 ops_run_id: string | null;
             }>;
         }>;
@@ -5045,6 +5048,35 @@ declare const trpcRouter: _trpc_server.CreateRouterInner<_trpc_server.RootConfig
                 _output_out: typeof _trpc_server.unsetMarker;
             }, {
                 runId: string;
+            }>;
+            resumeRun: _trpc_server.BuildProcedure<"mutation", {
+                _config: _trpc_server.RootConfig<{
+                    ctx: {
+                        authorise: () => Promise<void>;
+                    };
+                    meta: object;
+                    errorShape: {
+                        message: string;
+                        code: _trpc_server_rpc.TRPC_ERROR_CODE_NUMBER;
+                        data: _trpc_server_dist_error_formatter.DefaultErrorData;
+                    };
+                    transformer: _trpc_server.DefaultDataTransformer;
+                }>;
+                _meta: object;
+                _ctx_out: {
+                    authorise: () => Promise<void>;
+                };
+                _input_in: {
+                    runId: string;
+                };
+                _input_out: {
+                    runId: string;
+                };
+                _output_in: typeof _trpc_server.unsetMarker;
+                _output_out: typeof _trpc_server.unsetMarker;
+            }, {
+                runId: string;
+                resumed: number;
             }>;
             listRuns: _trpc_server.BuildProcedure<"query", {
                 _config: _trpc_server.RootConfig<{

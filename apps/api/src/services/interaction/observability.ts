@@ -46,8 +46,9 @@ export interface TeamRunSummary {
   automationName: string;
   status: 'running' | 'parked';
   startedAt: Date;
-  /** Why it's waiting, when parked. 'ask' | 'timer' | null (running). */
-  waitingOn: 'ask' | 'timer' | null;
+  /** Why it's waiting, when parked. 'limit' (paused at its cost limit — the
+   *  operator can resume it) | 'ask' | 'timer' | null (running). */
+  waitingOn: 'limit' | 'ask' | 'timer' | null;
   openAskCount: number;
   cancelRequested: boolean;
 }
@@ -61,6 +62,9 @@ const WAITING_ON_PRIORITY: readonly {
   reason: string;
   label: NonNullable<TeamRunSummary['waitingOn']>;
 }[] = [
+  // Paused at its cost limit: nothing moves until an operator resumes it, so
+  // it outranks every wait that would resolve on its own.
+  { reason: 'limit', label: 'limit' },
   // An `await` park (an ask's Response, a Slack reply) — user-facing label 'ask'.
   { reason: 'await', label: 'ask' },
   { reason: 'timer', label: 'timer' },

@@ -399,6 +399,13 @@ export const DiagnosticCodes = {
    *  one — so a call that can park is a whole statement, or the whole
    *  right-hand side of a binding (language version 3). */
   NESTED_CALL_SUSPENDS: 'MOV_NESTED_CALL_SUSPENDS',
+  /** A wait where the run cannot be resumed (language version 3): inside a
+   *  callback's body — directly, or through a function it calls — or in an
+   *  `await until` condition, through a function it calls. A run resumes by
+   *  walking back to the statement it parked at, and neither has one it can
+   *  walk to: a fired callback body is a side entry, and a condition is
+   *  re-evaluated by the clock rather than resumed. */
+  WAIT_NOT_RESUMABLE: 'MOV_WAIT_NOT_RESUMABLE',
   // Named-argument matching (calls and `run` both: parens = callable
   // arguments, always named; the checker matches arguments to parameters
   // by name, so order carries no meaning).
@@ -5411,9 +5418,14 @@ class Checker {
         closure.params[0].span,
       );
     }
-    this.checkUntilPurity(closure.body);
+    const impure = this.checkUntilPurity(closure.body);
     const condition = this.checkClosure(closure, scope, { label: "this 'until' condition" });
     this.effects?.absorb(condition.effects);
+    // A wait written in the condition is already refused as impure; one reached
+    // through a function it calls (`return check()`) is caught here.
+    if (condition.effects.suspend && !impure) {
+      this.refuseUnresumableWait("this 'until' condition", closure.span);
+    }
     return condition.returns;
   }
 
@@ -5423,9 +5435,10 @@ class Checker {
    * value reads (`ok = …`), `refresh` (a read that moves a snapshot to now), and
    * `if` over the same (recursed). Refused: any effect — a write, an ask, a
    * nested await/race, a link/unlink/delete. Each offending statement is flagged
-   * where it sits.
+   * where it sits. Answers whether it flagged anything.
    */
-  private checkUntilPurity(body: Statement[]): void {
+  private checkUntilPurity(body: Statement[]): boolean {
+    let impure = false;
     for (const statement of body) {
       switch (statement.kind) {
         case 'refresh':
@@ -5439,16 +5452,35 @@ class Checker {
           // effectful RValue is not.
           if (statement.value.kind !== 'expr' && statement.value.kind !== 'inlineBlock') {
             this.reportImpureCondition(statement.value.kind, statement.span);
+            impure = true;
           }
           break;
         case 'if':
-          statement.arms.forEach((arm) => this.checkUntilPurity(arm.body));
-          if (statement.elseArm) this.checkUntilPurity(statement.elseArm.body);
+          for (const arm of statement.arms) impure = this.checkUntilPurity(arm.body) || impure;
+          if (statement.elseArm) impure = this.checkUntilPurity(statement.elseArm.body) || impure;
           break;
         default:
           this.reportImpureCondition(statement.kind, statement.span);
+          impure = true;
       }
     }
+    return impure;
+  }
+
+  /**
+   * A wait where the run cannot come back to it (`WAIT_NOT_RESUMABLE`). Before
+   * language version 3 such a program was accepted and failed when it parked;
+   * the refusal is version 3's, so a saved movement never sees it.
+   */
+  private refuseUnresumableWait(where: string, span: Span): void {
+    if (before(this.languageVersion, 3)) return;
+    this.report(
+      DiagnosticCodes.WAIT_NOT_RESUMABLE,
+      `${where} may wait ('await', or a call to a function that awaits), and a run cannot be resumed there — ` +
+        "it would park and never come back. Do the waiting in the movement itself, before or after this, " +
+        "and keep the callback body or condition to work that finishes without waiting.",
+      span,
+    );
   }
 
   private reportImpureCondition(what: string, span: Span): void {
@@ -6009,6 +6041,7 @@ class Checker {
       label: 'a callback body',
       valueParamsOnly: true,
     });
+    if (effects.suspend) this.refuseUnresumableWait('a callback body', subject.closure.span);
     // Minting a callback SCHEDULES the body — the platform calls it, but this
     // movement is what causes the call, so the body's effects are the
     // movement's. A row that said "writes nothing" for a movement whose
@@ -6044,7 +6077,11 @@ class Checker {
     }
     // Deferring a movement by name schedules the same run a call would — same
     // reasoning as the inline body above.
-    if (callee?.kind === 'movement') this.effects?.absorb(this.movementEffects(callee));
+    if (callee?.kind === 'movement') {
+      const effects = this.movementEffects(callee);
+      this.effects?.absorb(effects);
+      if (effects.suspend) this.refuseUnresumableWait(`'${subject.movement}', run as a callback`, subject.nameSpan);
+    }
     else if (callee?.kind === 'fileImport') this.effects?.markPartial();
     const declared = callee?.kind === 'movement' ? this.movementParams(callee) : undefined;
     const bound = this.checkArgumentBindings({

@@ -433,7 +433,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       checkRun: {
         description:
-          'Read one automation run\'s status by id — the poll target for runAutomation\'s async dispatch. Pass the runId returned by runAutomation. Returns { status, recordCount, errors, startedAt, finishedAt, failedAt, failureReason, costUsd, modelCalls }. status is "running" while it executes, then settles to "success" / "partial" / "failed" (or "parked" — paused, waiting for your review — see listReviews). Poll every few seconds until status leaves "running". costUsd is the run\'s model-call spend in dollars (0 if it made none); modelCalls is how many calls it made. To see WHAT the run captured and wrote (source event + resolved field values), call inspectRun.',
+          'Read one automation run\'s status by id — the poll target for runAutomation\'s async dispatch. Pass the runId returned by runAutomation. Returns { status, recordCount, errors, startedAt, finishedAt, failedAt, failureReason, costUsd, modelCalls, paused? }. status is "running" while it executes, then settles to "success" / "partial" / "failed" (or "parked" — paused, waiting for your review — see listReviews). A parked run that carries `paused` stopped because it reached its cost limit: `paused` says what it spent and the limit, and resumeRun carries it on (with its usage reset). Poll every few seconds until status leaves "running". costUsd is the run\'s model-call spend in dollars (0 if it made none); modelCalls is how many calls it made. To see WHAT the run captured and wrote (source event + resolved field values), call inspectRun.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           runId: z.string().describe('The run id returned by runAutomation.'),
@@ -491,6 +491,22 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         },
         title: 'Cancel a run',
         endpoint: { method: 'POST', path: '/v1/automation/automations/cancel-run' },
+      },
+      resumeRun: {
+        description:
+          'Resume a run that paused because it reached its cost limit — checkRun shows such a run with status "parked" and a `paused` object saying what it spent and the limit. Every part of the run that stopped carries on from exactly where it stopped (nothing it already did is done again), and its usage resets, so the limit applies afresh. Confirm with the user first: resuming lets it spend up to the limit again. Pass the runId from listRuns / checkRun.',
+        annotations: { destructiveHint: true },
+        inputSchema: {
+          runId: z
+            .string()
+            .describe('The paused run to resume (from listRuns or checkRun).'),
+          team: z
+            .string()
+            .optional()
+            .describe('Team id (see instructions); omit to search across your teams.'),
+        },
+        title: 'Resume a paused run',
+        endpoint: { method: 'POST', path: '/v1/automation/automations/resume-run' },
       },
     },
   });

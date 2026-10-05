@@ -31,6 +31,17 @@
 // loop would never meet the cap. A run dispatched inline by another run is a
 // different run: it opens its own account, seeded with its own history (none).
 //
+// ── Hitting the cap PAUSES the run ──────────────────────────────────────────
+//
+// The check throws `RunCostCapExceeded`, but inside a movement run the engine
+// catches it at the statement that was about to spend and SUSPENDS the run
+// there (movement_engine/run.ts, `suspendAtLimit`) rather than failing it: a run
+// that met its cap may hold a lot of valuable state. Resuming it (an explicit
+// operator action) RESETS its usage — the cap applies afresh from that point,
+// which is what `capBaselineMicrodollars` carries: what the run had spent when
+// it was last resumed from a limit. Only work done with nowhere durable to
+// suspend (a rehearsal with no park sink) still fails on the error.
+//
 // OPTIONAL, unlike the call ceiling: unset means no cap. When set, it must be
 // a positive number of US dollars, and boot refuses anything else.
 
@@ -71,13 +82,15 @@ function usd(microdollars: number): string {
   return `$${dollars.toFixed(dollars < 1 ? 4 : 2)}`;
 }
 
-/** Thrown at the priced call AFTER the one that took the run to its cap. Its
- *  message is the whole failure surface an author sees (it lands verbatim in
- *  the run's failure reason), so it says the cap, the spend, and the knob. */
+/** Thrown at the priced call AFTER the one that took the run to its cap. A
+ *  movement run suspends on it (see the header); where the run cannot suspend,
+ *  its message is the whole failure surface an author sees, so it says the cap,
+ *  the spend, and the knob. */
 export class RunCostCapExceeded extends Error {
   constructor(
     readonly capMicrodollars: number,
-    /** The whole run's spend, every segment of it. */
+    /** What the run has spent against the cap: every segment since it was
+     *  last resumed from a limit pause (its whole spend if it never was). */
     readonly spentMicrodollars: number,
   ) {
     super(
@@ -200,7 +213,12 @@ class RunSpendLedger {
   private segment = 0;
   private readonly bySource = new Map<string, number>();
 
-  constructor(private readonly prior: number) {}
+  constructor(
+    private readonly prior: number,
+    /** The run's spend when it was last resumed from a limit pause; the cap
+     *  counts only what was spent after it. */
+    private readonly capBaseline: number,
+  ) {}
 
   charge(report: RunCostReport): void {
     const key = costSourceKey(report.source);
@@ -210,8 +228,8 @@ class RunSpendLedger {
 
   check(): void {
     const cap = capMicrodollars();
-    const run = this.prior + this.segment;
-    if (cap !== undefined && run >= cap) throw new RunCostCapExceeded(cap, run);
+    const sinceReset = this.prior + this.segment - this.capBaseline;
+    if (cap !== undefined && sinceReset >= cap) throw new RunCostCapExceeded(cap, sinceReset);
   }
 
   get spend(): RunSpend {
@@ -226,12 +244,16 @@ class RunSpendLedger {
 const asyncLocalStorage = new AsyncLocalStorage<RunSpendLedger>();
 
 /** Run one interpreter segment under the run's account, seeded with what the
- *  run spent in its earlier segments. */
+ *  run spent in its earlier segments, and with what it had spent when it was
+ *  last resumed from a limit pause (the cap counts from there). */
 export function withRunSpendLedger<T>(
   fn: () => Promise<T>,
-  options?: { priorMicrodollars?: number },
+  options?: { priorMicrodollars?: number; capBaselineMicrodollars?: number },
 ): Promise<T> {
-  return asyncLocalStorage.run(new RunSpendLedger(options?.priorMicrodollars ?? 0), fn);
+  return asyncLocalStorage.run(
+    new RunSpendLedger(options?.priorMicrodollars ?? 0, options?.capBaselineMicrodollars ?? 0),
+    fn,
+  );
 }
 
 /** Charge priced work to the current run. No-op outside a run. */
