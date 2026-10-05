@@ -28,6 +28,7 @@
 import { Loc, MovementDeclaration, ShapeDeclaration, Span } from '../parser/ast';
 import { FieldType, InstanceSchema } from './catalog';
 import type { EffectRow } from './effects';
+import type { CallCycle } from './call_cycles';
 import { PlaneType, PositionTypeRef, ReturnShape } from './typing';
 
 export type SymbolKind =
@@ -153,6 +154,14 @@ export interface ScopeSymbol {
      * `ScopeSymbol` they already hold.
      */
     effects?: EffectRow;
+    /** The type the declaration SAYS a call returns (`): <R>`, language
+     *  version 3), resolved in the declaring scope. Cached like `returnType`. */
+    declaredReturn?: ReturnShape;
+    /** The stack depth this body's inference walk is at, while it runs. */
+    walking?: number;
+    /** The call cycle (strongly connected component) this function is in,
+     *  when it is in one — `checker/call_cycles.ts`. */
+    cycle?: CallCycle;
   };
 }
 

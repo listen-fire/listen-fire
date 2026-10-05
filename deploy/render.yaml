@@ -280,6 +280,10 @@ services:
       # calls, in US dollars (e.g. 5). Unset (the dashboard owns it), no cap.
       - key: MOVEMENT_MAX_RUN_COST_USD
         sync: false
+      # Optional: how many calls deep one automation run may nest — what stops
+      # a recursion that never ends. Unset, 32.
+      - key: MOVEMENT_MAX_CALL_DEPTH
+        sync: false
       # Transcription, embeddings and image generation go to OpenAI unless
       # MODEL_MAP sends their names elsewhere; unset, each fails naming the key.
       - key: OPENAI_API_KEY

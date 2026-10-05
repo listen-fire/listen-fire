@@ -128,7 +128,13 @@ export type BindingDescriptor =
    * other side, and re-deriving it from a name would need the closure to have
    * one. Its capture serialises by the ordinary rules.
    */
-  | { kind: 'closure'; closure: ClosureExpression; captured: Record<string, BindingDescriptor> }
+  | {
+      kind: 'closure';
+      closure: ClosureExpression;
+      captured: Record<string, BindingDescriptor>;
+      /** The name its body calls itself by (`Binding` closure's `self`). */
+      self?: string;
+    }
   | { kind: 'value'; value: unknown; provenance?: Provenance; many?: true }
   /**
    * Bucket 3 (recursive) — a VALUE that holds records: a `MAP` answer whose
@@ -500,7 +506,12 @@ export function serializeBinding(binding: Binding): BindingDescriptor {
         const descriptor = serializeBinding(entry);
         captured[name] = descriptor.kind === 'opaque' ? { ...descriptor, name } : descriptor;
       }
-      return { kind: 'closure', closure: binding.closure, captured };
+      return {
+        kind: 'closure',
+        closure: binding.closure,
+        captured,
+        ...(binding.self !== undefined ? { self: binding.self } : {}),
+      };
     }
     // ── Bucket 3 (recursive) — block meta-node ──
     case 'blockMeta': {
@@ -690,7 +701,12 @@ export async function rehydrateBinding(
       for (const [name, entry] of Object.entries(descriptor.captured)) {
         captured.set(name, await rehydrateBinding(entry, ctx));
       }
-      return { kind: 'closure', closure: descriptor.closure, captured };
+      return {
+        kind: 'closure',
+        closure: descriptor.closure,
+        captured,
+        ...(descriptor.self !== undefined ? { self: descriptor.self } : {}),
+      };
     }
     // ── Bucket 3 (recursive) ──
     case 'blockMeta': {

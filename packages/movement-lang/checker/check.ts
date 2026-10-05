@@ -227,6 +227,7 @@ import {
   UNKNOWN_ROW,
   type EffectRow,
 } from './effects';
+import { InferenceStack } from './call_cycles';
 import { neverAsAny } from '../never';
 import {
   before,
@@ -803,6 +804,14 @@ export const DiagnosticCodes = {
   /** Two `return`s in one body hand back different KINDS of thing — one a
    *  record position, one a value. A body has one value type. */
   RETURN_PLANE_MISMATCH: 'MOV_RETURN_PLANE_MISMATCH',
+  /** A function in a call cycle — it calls itself, directly or through others
+   *  — with no declared return type (language version 3). What it returns
+   *  cannot be inferred from a body that needs its own answer, so it is
+   *  written, as TypeScript requires. */
+  RECURSIVE_RETURN_TYPE: 'MOV_RECURSIVE_RETURN_TYPE',
+  /** A `return` that does not fit the declared return type (`): <R>`), or a
+   *  body that declares one and never returns. */
+  RETURN_TYPE: 'MOV_RETURN_TYPE',
   /** A `return` of something that is not a value — a constructed instance.
    *  An instance stands for a live system and its schema is per-credential, so
    *  it cannot travel; the movement that needs one constructs it. */
@@ -2728,6 +2737,41 @@ interface ReturnCollector {
  *  it, which is what makes those slots uncollidable. */
 const RESERVED_NAME_PREFIX = '#';
 
+/** A function in a call cycle with no declared return type. `chain` is the
+ *  loop as seen from `name`; `example` is the declaration with the type added. */
+function recursiveReturnTypeMessage(name: string, chain: readonly string[], example: string): string {
+  const loop = chain.length <= 2 ? 'calls itself' : `calls itself through ${chain.slice(1, -1).map(n => `'${n}'`).join(', ')}`;
+  return `'${name}' ${loop} (${chain.join(' → ')}), so it declares what it returns, as TypeScript requires — what its body returns cannot be worked out from a body that needs its own answer. Write the type after the parameters: '${example}'`;
+}
+
+/** Why a returned value does not fit a declared record type, or undefined
+ *  when it does: every required key present, each one assignable. */
+function recordReturnMisfit(keys: Record<string, FieldType | null>, source: FieldType): string | undefined {
+  if (!isDictType(source)) return `this returns ${describeFieldType(source)}`;
+  const supplied = source.shape;
+  const required = Object.entries(keys)
+    .filter(([, type]) => type !== null && !isMaybeAbsent(type))
+    .map(([key]) => key);
+  if (supplied === undefined) {
+    return required.length > 0
+      ? `this returns ${describeFieldType(source)}, whose keys are data — nothing says it has ${required.map(k => `'${k}'`).join(', ')}`
+      : undefined;
+  }
+  const missing = required.filter(key => !Object.hasOwn(supplied, key));
+  if (missing.length > 0) {
+    return `this is missing ${missing.length === 1 ? 'the key' : 'the keys'} ${missing.map(k => `'${k}'`).join(', ')}`;
+  }
+  for (const [key, keyType] of Object.entries(keys)) {
+    const given = supplied[key];
+    if (keyType === null || given === undefined || given === null) continue;
+    if (isMaybeAbsent(given) && !isMaybeAbsent(keyType)) return `its key '${key}' is required, but the value given for it may be absent`;
+    if (!fieldAssignable(given, keyType)) {
+      return `its key '${key}' takes ${describeFieldType(stripAbsent(keyType))}, but the value given for it is ${describeFieldType(stripAbsent(given))}`;
+    }
+  }
+  return undefined;
+}
+
 /** A body with no `return` at all. */
 const NO_RETURN: ReturnShape = { returns: false };
 
@@ -3306,21 +3350,26 @@ class Checker {
     const info = symbol.movement;
     if (!info) return undefined;
     if (!info.paramTypes) {
-      info.paramTypes = info.decl.params.map(param => {
-        // An unannotated parameter is refused where it is DECLARED; here it
-        // simply has no type to offer.
-        if (param.type === undefined) return {};
-        const value = this.movementParamValueType(param.type, info.declScope, false);
-        if (value !== undefined) return value.type !== undefined ? { fieldType: value.type } : {};
-        const paramType = typeNameOf(param.type);
-        if (paramType === undefined) return {};
-        const resolution = info.declScope.resolve(paramType.graph);
-        if (resolution.kind !== 'found') return {};
-        const posType = this.positionFromTypeRef(resolution.symbol, paramType);
-        return posType !== undefined ? { posType } : {};
-      });
+      // An unannotated parameter is refused where it is DECLARED; here it
+      // simply has no type to offer.
+      info.paramTypes = info.decl.params.map(param =>
+        param.type === undefined ? {} : this.planeTypeOf(param.type, info.declScope),
+      );
     }
     return info.paramTypes;
+  }
+
+  /** A written parameter (or return) type on its plane — a value type, or a
+   *  position — resolved in `scope` without reporting. */
+  private planeTypeOf(type: ParamTypeRef, scope: Scope): PlaneType {
+    const value = this.movementParamValueType(type, scope, false);
+    if (value !== undefined) return value.type !== undefined ? { fieldType: value.type } : {};
+    const paramType = typeNameOf(type);
+    if (paramType === undefined) return {};
+    const resolution = scope.resolve(paramType.graph);
+    if (resolution.kind !== 'found') return {};
+    const posType = this.positionFromTypeRef(resolution.symbol, paramType);
+    return posType !== undefined ? { posType } : {};
   }
 
   /**
@@ -3477,27 +3526,42 @@ class Checker {
    * What calling `symbol` may do. Computed from the body exactly as
    * `movementReturnType` computes what it hands back — bottom-up over the call
    * graph, and with the same laziness, because a call site may sit above the
-   * declaration. There is no recursion in the language, so there is no fixpoint
-   * to iterate: a movement whose row is asked for while its own body is being
-   * walked answers "unknown" rather than looping.
+   * declaration.
+   *
+   * Before version 3 there is no recursion, so there is no fixpoint to
+   * iterate: a movement whose row is asked for while its own body is being
+   * walked answers "unknown" rather than looping. From version 3 that call
+   * closes a cycle, and every function in the cycle shares one row
+   * (`call_cycles.ts`); the call itself adds nothing here, because the shared
+   * row will hold it.
    */
   private movementEffects(symbol: ScopeSymbol): EffectRow {
     const info = symbol.movement;
     if (info === undefined) return UNKNOWN_ROW;
+    if (since(this.languageVersion, 3) && this.inference.reaches(info)) return EMPTY_ROW;
     if (info.effects !== undefined) return info.effects;
-    // Fills `info.effects` as a side effect of walking the body; a cycle leaves
-    // it unset, and unknown is the honest answer there.
-    this.movementReturnType(symbol);
+    // Fills `info.effects` as a side effect of walking the body; before version
+    // 3 a cycle leaves it unset, and unknown is the honest answer there.
+    if (info.returnType === undefined) this.inferMovement(symbol);
+    // Walked, and found to be in a cycle that is still being worked out: its
+    // row arrives with the cycle's, which this caller is part of.
+    if (since(this.languageVersion, 3) && this.inference.reaches(info)) return EMPTY_ROW;
     return info.effects ?? UNKNOWN_ROW;
   }
 
   /** Walks `symbol`'s body as one function's, and files the row on the
-   *  declaration so every call site reads the same answer. */
+   *  declaration so every call site reads the same answer — unless the
+   *  function is in a call cycle, whose members share the row the cycle
+   *  worked out. */
   private recordMovementRow(symbol: ScopeSymbol | undefined, walk: () => ReturnShape): ReturnShape {
     const { value, row } = this.withEffectFrame(walk);
-    if (symbol?.movement !== undefined) symbol.movement.effects = row;
+    if (symbol?.movement !== undefined && symbol.movement.cycle === undefined) symbol.movement.effects = row;
     return value;
   }
+
+  /** The bodies being walked to infer what a function returns and does — where
+   *  a call cycle is found. */
+  private readonly inference = new InferenceStack();
 
   /** Walks `statements` as ONE body and returns what it hands back. */
   private checkBody(
@@ -3581,10 +3645,36 @@ class Checker {
   private movementReturnType(symbol: ScopeSymbol): ReturnShape {
     const info = symbol.movement;
     if (!info) return UNKNOWN_RETURN;
-    // A cycle in TYPE space (a call whose value's type needs its own) has no
-    // fixed point to find; recursion is refused anyway, so answering "unknown"
-    // here is the same answer arrived at earlier.
-    if (info.returnType) return info.returnType.done ? info.returnType.shape : UNKNOWN_RETURN;
+    // What the declaration SAYS it returns is what a call is (version 3) — the
+    // body is checked against it at the declaration, not consulted here.
+    return this.declaredReturn(info) ?? this.inferMovement(symbol);
+  }
+
+  /**
+   * `): <R>` resolved in the declaring scope, silently — the declaration's own
+   * check reports a type that names nothing. Undefined when none is written
+   * (and always before version 3, which has no such syntax).
+   */
+  private declaredReturn(info: NonNullable<ScopeSymbol['movement']>): ReturnShape | undefined {
+    if (info.decl.returnType === undefined || !since(this.languageVersion, 3)) return undefined;
+    info.declaredReturn ??= { returns: true, ...this.planeTypeOf(info.decl.returnType, info.declScope) };
+    return info.declaredReturn;
+  }
+
+  /** What the body of `symbol` hands back, learned by walking it TYPE-ONLY —
+   *  and, on the same walk, what it may do (its effect row). */
+  private inferMovement(symbol: ScopeSymbol): ReturnShape {
+    const info = symbol.movement;
+    if (!info) return UNKNOWN_RETURN;
+    if (info.returnType) {
+      if (info.returnType.done) return info.returnType.shape;
+      // A body that needs its own answer. Before version 3 recursion is refused
+      // at run time, so "unknown" is the same answer arrived at earlier; from
+      // version 3 this closes a call cycle, whose members must declare what
+      // they return (reported at each declaration).
+      if (since(this.languageVersion, 3)) this.inference.reaches(info);
+      return UNKNOWN_RETURN;
+    }
     info.returnType = { done: false, shape: UNKNOWN_RETURN };
     const bodyScope = new Scope('movement', info.declScope);
     for (const param of info.decl.params) {
@@ -3621,12 +3711,26 @@ class Checker {
       // The row is collected on this walk too — it is the same body, and the
       // type-only pass is what a call ABOVE the declaration has to go through.
       // Silence is about reporting, not about inference.
-      shape = this.recordMovementRow(symbol, () =>
+      const walk = (): ReturnShape =>
         this.checkBody(info.decl.body, bodyScope, {
           what: `'${info.decl.name}'`,
           returns: [],
-        }),
-      );
+        });
+      if (since(this.languageVersion, 3)) {
+        // On the inference stack, so a call back into this body is seen as
+        // the cycle it is; the stack files the row (shared, in a cycle).
+        this.inference.enter(info);
+        let row: EffectRow = UNKNOWN_ROW;
+        try {
+          const walked = this.withEffectFrame(walk);
+          shape = walked.value;
+          row = walked.row;
+        } finally {
+          this.inference.leave(info, row);
+        }
+      } else {
+        shape = this.recordMovementRow(symbol, walk);
+      }
     } finally {
       this.typeOnlyDepth--;
     }
@@ -4427,6 +4531,7 @@ class Checker {
       case 'closure': {
         const { params, returns, effects } = this.checkClosure(value.closure, scope, {
           label: name !== undefined ? `the closure '${name}'` : 'this closure',
+          ...(name !== undefined ? { self: name } : {}),
         });
         symbol = {
           ...symbol,
@@ -4979,6 +5084,8 @@ class Checker {
     options: {
       label: string;
       valueParamsOnly?: boolean;
+      /** The name the closure is bound to — by which its body may call it. */
+      self?: string;
       /**
        * The types the CALLER supplies, by position — a collection op knows
        * what it hands its function. An annotation still wins where one is
@@ -5021,13 +5128,80 @@ class Checker {
         this.report(DiagnosticCodes.DUPLICATE_DECL, `Duplicate parameter '${param.name}'`, param.span);
       }
     }
+    // What it SAYS it returns (version 3) is its type, as in TypeScript.
+    const declared = closure.returnType !== undefined && since(this.languageVersion, 3)
+      ? this.closureParamShape({ name: 'return', type: closure.returnType, span: closure.returnType.span }, scope)
+      : undefined;
+    const self = options.self !== undefined
+      ? this.declareClosureSelf(options.self, closure, params, declared, bodyScope)
+      : undefined;
     // The body is its OWN function: what it does belongs to the closure's type,
     // not to whoever wrote it down. Writing a closure has no effects; calling
     // one has the closure's.
-    const { value: returns, row: effects } = this.withEffectFrame(() =>
-      this.checkBody(closure.body, bodyScope, { what: options.label, returns: [] }),
+    const collector: ReturnCollector = { what: options.label, returns: [] };
+    const { value: inferred, row: effects } = this.withEffectFrame(() =>
+      this.checkBody(closure.body, bodyScope, collector),
     );
+    // Reported once, where it is written: a type-only walk sees the same body.
+    if (declared !== undefined && closure.returnType !== undefined) {
+      this.checkDeclaredReturn(closure.returnType, collector, scope, closure.span);
+    }
+    // A self-call needs the type being worked out — unless the body hands
+    // nothing back, when there is nothing to declare (TypeScript's `void`).
+    const selfCall = self !== undefined ? this.undeclaredSelfCalls.get(self) : undefined;
+    if (self !== undefined && selfCall !== undefined && collector.returns.length > 0) {
+      this.report(
+        DiagnosticCodes.RECURSIVE_RETURN_TYPE,
+        recursiveReturnTypeMessage(self.name, [self.name, self.name], `${self.name} = (…): <number> => …`),
+        selfCall,
+      );
+    }
+    const returns = declared !== undefined ? { returns: true, ...declared } : inferred;
     return { params, returns, effects };
+  }
+
+  /**
+   * A closure bound to a name may call itself by that name, as a TypeScript
+   * `const f = (n: number): number => … f(n - 1) …` does (version 3). The name
+   * is declared inside its own body — a parameter of the same name shadows it
+   * — typed by what the closure declares it returns. A self-call adds nothing
+   * to the closure's row: its effects are the body's own, which the row holds.
+   *
+   * Undeclared, the type a self-call would have is the one being worked out,
+   * so the first such call is refused (`MOV_RECURSIVE_RETURN_TYPE`) — when the
+   * body returns a value at all.
+   */
+  private declareClosureSelf(
+    name: string,
+    closure: ClosureExpression,
+    params: ClosureParam[],
+    declared: PlaneType | undefined,
+    bodyScope: Scope,
+  ): ScopeSymbol | undefined {
+    if (!since(this.languageVersion, 3) || params.some(param => param.name === name)) return undefined;
+    const self: ScopeSymbol = {
+      name,
+      kind: 'binding',
+      span: closure.span,
+      posType: closureType(params, declared !== undefined ? { returns: true, ...declared } : UNKNOWN_RETURN, EMPTY_ROW),
+      bindingPlane: 'node',
+    };
+    if (declared === undefined) this.undeclaredSelves.add(self);
+    bodyScope.declare(self);
+    return self;
+  }
+
+  /** Self-names of closures that declared no return type. */
+  private readonly undeclaredSelves = new WeakSet<ScopeSymbol>();
+
+  /** Where each such closure first called itself. */
+  private readonly undeclaredSelfCalls = new WeakMap<ScopeSymbol, Span>();
+
+  /** A call through a closure's own name, when that closure declared nothing. */
+  private noteUndeclaredSelfCall(callee: ScopeSymbol, span: Span): void {
+    if (this.undeclaredSelves.has(callee) && !this.undeclaredSelfCalls.has(callee)) {
+      this.undeclaredSelfCalls.set(callee, span);
+    }
   }
 
   /** Drops the undefined halves of a shape, so an absent type never reaches a
@@ -8478,6 +8652,7 @@ class Checker {
         // what its body does.
         value = closure.returns;
         this.effects?.absorb(closure.effects);
+        this.noteUndeclaredSelfCall(callee, statement.span);
         if (statement.args.length !== closure.params.length) {
           this.report(
             DiagnosticCodes.CALL_ARITY,
@@ -9863,12 +10038,108 @@ class Checker {
         );
       }
     }
-    this.recordMovementRow(scope.symbols.get(statement.name), () =>
-      this.checkBody(statement.body, movementScope, {
-        what: `'${statement.name}'`,
-        returns: [],
-      }),
-    );
+    const symbol = scope.symbols.get(statement.name);
+    const collector: ReturnCollector = { what: `'${statement.name}'`, returns: [] };
+    this.recordMovementRow(symbol, () => this.checkBody(statement.body, movementScope, collector));
+    this.checkDeclaredReturn(statement.returnType, collector, scope, statement.span);
+    // Every member of a cycle is known by now: this body's own calls were
+    // inferred while it was walked, and a cycle through it comes back here. A
+    // body that returns no value has nothing to declare (TypeScript's `void`).
+    const cycle = symbol?.movement?.cycle;
+    if (
+      cycle !== undefined
+      && statement.returnType === undefined
+      && collector.returns.length > 0
+      && since(this.languageVersion, 3)
+    ) {
+      this.report(
+        DiagnosticCodes.RECURSIVE_RETURN_TYPE,
+        recursiveReturnTypeMessage(statement.name, cycle.chainFrom(statement.name), `function ${statement.name}(…): <number> { … }`),
+        { start: statement.span.start, end: statement.span.start },
+      );
+    }
+  }
+
+  /**
+   * `): <R>` against what the body hands back — TypeScript's rule: every
+   * `return` is assignable to the declared type, and a body that declares one
+   * returns something. The declaration's own type is resolved here with
+   * reporting, as a parameter's is, so a type that names nothing is said once,
+   * where it is written.
+   */
+  private checkDeclaredReturn(
+    written: ParamTypeRef | undefined,
+    collector: ReturnCollector,
+    scope: Scope,
+    span: Span,
+  ): PlaneType | undefined {
+    if (written === undefined || !since(this.languageVersion, 3)) return undefined;
+    const declared = this.closureParamShape({ name: 'return', type: written, span: written.span }, scope);
+    const expected = `${collector.what} declares it returns <${spellParamType(written)}>`;
+    if (collector.returns.length === 0) {
+      this.report(
+        DiagnosticCodes.RETURN_TYPE,
+        `${expected}, but its body never returns a value — add a 'return', or drop the return type`,
+        { start: span.start, end: span.start },
+      );
+      return declared;
+    }
+    for (const returned of collector.returns) this.checkReturnFit(expected, declared, returned);
+    return declared;
+  }
+
+  /** One `return` against a declared return type. */
+  private checkReturnFit(expected: string, declared: PlaneType, returned: ReturnShape & { span: Span }): void {
+    const { span } = returned;
+    if (declared.fieldType !== undefined) {
+      const got = returned.fieldType ?? (returned.posType !== undefined ? recordOf(returned.posType) : undefined);
+      if (got === undefined) return;
+      if (isMaybeAbsent(got) && !isMaybeAbsent(declared.fieldType)) {
+        this.report(
+          DiagnosticCodes.RETURN_TYPE,
+          `${expected}, but this value may be absent — fill it first ('COALESCE(x, …)'), or declare the return type as one that may be absent`,
+          span,
+        );
+        return;
+      }
+      const target = stripAbsent(declared.fieldType);
+      const source = stripAbsent(got);
+      const misfit = isDictType(target) && target.shape !== undefined
+        ? recordReturnMisfit(target.shape, source)
+        : fieldAssignable(source, target)
+        ? undefined
+        : `this returns ${describeFieldType(source)}`;
+      if (misfit !== undefined) this.report(DiagnosticCodes.RETURN_TYPE, `${expected}, but ${misfit}`, span);
+      return;
+    }
+    const target = declared.posType;
+    if (target === undefined) return;
+    const source = returned.posType;
+    if (source === undefined) {
+      if (returned.fieldType !== undefined) {
+        this.report(
+          DiagnosticCodes.RETURN_TYPE,
+          `${expected}, a record, but this returns ${describeFieldType(returned.fieldType)}`,
+          span,
+        );
+      }
+      return;
+    }
+    // The structural judgements are the ones an argument meets at a call: a
+    // returned value is handed to the caller exactly as an argument is handed
+    // to a parameter.
+    const structural =
+      source.kind === 'local'
+        ? structuralMisfit(source, target)
+        : target.kind === 'position' && isDeclaredNode(target.instance)
+        ? declaredParamMisfit(source, target)
+        : undefined;
+    if (structural !== undefined) {
+      this.report(DiagnosticCodes.RETURN_TYPE, `${expected}, and ${structural}`, span);
+    } else if (source.kind !== 'local' && !(target.kind === 'position' && isDeclaredNode(target.instance))
+      && positionsMatch(source, target) === false) {
+      this.report(DiagnosticCodes.RETURN_TYPE, `${expected}, but this returns ${describePosition(source)}`, span);
+    }
   }
 
   // ── Listeners ──

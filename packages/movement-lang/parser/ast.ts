@@ -971,6 +971,9 @@ export interface CollectionStatement {
  */
 export interface ClosureExpression {
   params: MovementParam[];
+  /** `(n: <number>): <number> => …` — what it declares it returns (language
+   *  version 3). Required when the closure calls itself by its own name. */
+  returnType?: ParamTypeRef;
   body: Statement[];
   span: Span;
 }
@@ -1319,6 +1322,15 @@ export interface MovementDeclaration {
   kind: 'movement';
   name: string;
   params: MovementParam[];
+  /**
+   * `movement f(n: <number>): <number> { … }` — the type the body declares it
+   * returns, as TypeScript writes it (language version 3). Optional, except on
+   * a function in a call cycle (one that calls itself, directly or through
+   * others): there what the body returns cannot be inferred from a body that
+   * needs its own answer, so it is written. Where it is written, every
+   * `return` is checked against it and a call is typed by it.
+   */
+  returnType?: ParamTypeRef;
   body: Statement[];
   /** Declared with the `export` prefix — offered to other files. A file
    *  with at least one export is a LIBRARY. */

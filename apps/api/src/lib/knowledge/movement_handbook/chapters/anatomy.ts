@@ -300,7 +300,7 @@ function \`Intake\`(msg: <inbox-[:Email]->>) {
 - Related records travel as **edges of that literal**, so a whole small graph goes down in one argument: \`node { Name: …, files: msg-[a:Attachments]-> }\`. A call that needs two unrelated things takes two parameters instead, one per thing.
 - The callee sees only its parameters and ITS OWN file's top-level names — caller locals are invisible. An imported automation runs against its own file's imports and constructions, which is why a reusable automation constructs the instances it writes to.
 - A callee's effects are its writes, recorded on the caller's run.
-- An automation may not call itself, directly or through a cycle.
+- A function may call itself, directly or through others (see *recursion*).
 
 Mark a declaration \`export\` to share it — an exported automation, or an exported \`node\` structure. Unmarked declarations are private to their file; a file with at least one export is a **library**, and can still be an automation with listeners of its own.
 
@@ -334,10 +334,59 @@ function \`Intake\`(msg: <inbox-[:Email]->>) {
 - A body with no \`return\` hands nothing back. Call it on its own line and it runs for its effects; try to bind it and you are told there is nothing to bind.
 - A value goes straight on as an argument, so shape-then-consume needs no name in between: pass the call itself where the argument goes, rather than binding it to a name first.
 
+### recursion
+
+A function may call itself, directly or through other functions — to walk a tree, an org chart, or a chain of records until it reaches the end:
+
+\`\`\`
+function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <number> {
+  reports = FILTER(people, (p) => p.manager == name)
+  return 1 + SUM(MAP(reports, (r) => team_size(r.name, people)))
+}
+\`\`\`
+
+- **A function that calls itself declares what it returns**, after its parameters: \`): <number>\`, written as a parameter's type is, as TypeScript requires. Leaving it out is refused when you save, naming the loop (\`team_size → team_size\`). A function that returns no value has nothing to declare.
+- Any function may declare what it returns. Every \`return\` is then checked against it, and a call is typed by it.
+- Two functions that call each other share what they do: a write or a model call in one counts for both.
+- A closure bound to a name calls itself by that name: \`sum_to = (n: <number>): <number> => IF n <= 0 THEN 0 ELSE n + sum_to(n - 1) END\`.
+- **Calls nest at most 32 deep** unless the installation sets otherwise. A run that would go deeper fails, naming the chain of calls, so a recursion that never reaches the case that ends it stops instead of running on. A \`MAP\` set to ignore or warn about failing items does not swallow it. Items of one \`MAP\` run side by side, so each counts its own depth.
+- Every level runs inside the same run. It spends against the same cost cap, and a wait or a pause deep inside a recursion resumes exactly there.
+- An automation written in an older language version may not call itself.
+
 ### Pitfalls
 
 - **An automation with no effects.** A body with no \`write\`, \`link\`/\`unlink\`, or \`delete\` provisions nothing — there is nothing to run.`,
   engineClaims: [
+    {
+      construct: 'recursion: a function calling itself from inside a MAP, with a declared return type',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+function team_size(name: <text>, people: <{ name: text, manager: text }[]>): <number> {
+  reports = FILTER(people, (p) => p.manager == name)
+  return 1 + SUM(MAP(reports, (r) => team_size(r.name, people)))
+}
+
+function \`Intake\`(m: <inbox-[:Email]->>) {
+  people = [
+    { name: "Ada",   manager: "" },
+    { name: "Grace", manager: "Ada" },
+    { name: "Alan",  manager: "Grace" },
+  ]
+  n = team_size("Ada", people)
+  write crm-[:Companies]-> {
+    unique by (\`Name\`)
+    Name:        m.\`Subject\`
+    Description: "a team of \${n}"
+  }
+}
+`,
+    },
     {
       construct: 'movement calls (composition) with a synthesised node argument',
       status: 'runs',

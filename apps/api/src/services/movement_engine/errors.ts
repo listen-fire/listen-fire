@@ -13,6 +13,10 @@ export type MovementEngineErrorCode =
   | 'MOVENG_NOT_FOUND'
   | 'MOVENG_UNSUPPORTED'
   | 'MOVENG_RUNTIME'
+  // Calls nested deeper than MOVEMENT_MAX_CALL_DEPTH (language version 3) —
+  // a recursion that may never end. Never forgiven by a collection op's
+  // `onError` (`call_depth.ts`).
+  | 'MOVENG_CALL_DEPTH'
   // A parked scope held a non-JSON-serialisable value (a closure / Map / a
   // value that stringifies to undefined). Fails LOUD at park rather than
   // corrupting the durable scope (async user interaction §4.1).

@@ -505,7 +505,16 @@ export type Binding =
    * rides across as itself (like a `lazy` walk's head), the capture as ordinary
    * serialised bindings.
    */
-  | { kind: 'closure'; closure: ClosureExpression; captured: Map<string, Binding> }
+  | {
+      kind: 'closure';
+      closure: ClosureExpression;
+      captured: Map<string, Binding>;
+      /** The name it was bound to (`f = (n) => …`, language version 3), by
+       *  which its own body may call it: the capture is a snapshot taken
+       *  before the name was bound, so the name is handed to each call
+       *  instead (`invokeClosure`). */
+      self?: string;
+    }
   /** `prompt = "…"` — a plain runtime value, carrying the trail of the
    *  expression that produced it so later reads keep propagating. `many`
    *  marks a walk read for a field (`pdfs = m-[a:Attachments]->.\`File\``):

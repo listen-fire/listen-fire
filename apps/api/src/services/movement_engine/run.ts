@@ -347,6 +347,7 @@ import type { CallbackSink } from './callback_sink';
 import type { CallbackCall, CallbackParamSpec } from './callback_store';
 import { isCallbackParamType } from './callback_store';
 import { isAdapterCallCeilingExceeded, withRunCallLedger } from './run_scope';
+import { CallDepthExceeded, isCallDepthExceeded, maxCallDepth } from './call_depth';
 import {
   currentRunSpend,
   isRunCostCapExceeded,
@@ -1318,6 +1319,9 @@ const APPENDABLE_LANDING_KINDS: ReadonlySet<Binding['kind']> = new Set([
  *  the arm frame is a child of, which is where it was written. */
 interface ArmInvocation {
   body: Statement[];
+  /** The function's name, when the arm names one — a call by name, counted
+   *  towards the call depth. */
+  name?: string;
   captured?: Map<string, Binding>;
   /** An arm built at run time: its closure, which has no place in the source
    *  for a resume to find it at, so a park inside it carries it. */
@@ -1651,15 +1655,26 @@ function bindingPresent(binding: Binding): boolean {
  * run's effect locks instead — `EffectLocks`.)
  */
 interface FlowFrame {
-  /** The movements this flow is inside: the enclosing call stack, copied, so
+  /** The functions this flow is inside: the enclosing call stack, copied, so
    *  a call one flow makes is not on another's. */
-  callStack: MovementDeclaration[];
+  callStack: CallFrame[];
   /** This flow's trace entries, spliced into the enclosing trace in the
    *  flows' own order (member order, arm order) — so the trace reads as it
    *  would had they run one after another, and an extraction's entries stay
    *  next to each other (`recordExtractedEntities` finds its own by
    *  position). */
   trace: MovementTraceEntry[];
+}
+
+/**
+ * One function a flow is inside, called by name: a movement (its declaration,
+ * whose identity is what versions 1 and 2 refuse recursion by — names may
+ * repeat across library files) or a closure bound to a name. Its `name` is what
+ * the call-depth message spells the chain with.
+ */
+interface CallFrame {
+  name: string;
+  declaration?: MovementDeclaration;
 }
 
 /** What this segment and the run have spent so far (`lib/run_spend.ts`) —
@@ -1865,8 +1880,8 @@ function collectionAnswer(run: CollectionRun, answers: readonly MemberAnswer[]):
 /**
  * Did a member's function FAIL, as opposed to the run's control flow passing
  * through it? Only a failure is the member's, and only a failure can be
- * forgiven by `onError`: a cancel, the call ceiling, the cost cap, a park and a
- * quiet scope end all mean something about the run, and swallowing one would
+ * forgiven by `onError`: a cancel, the call ceiling, the cost cap, the call
+ * depth limit, a park and a quiet scope end all mean something about the run, and swallowing one would
  * leave the run believing it had done something it had not.
  */
 function isMemberFailure(error: unknown): boolean {
@@ -1876,6 +1891,7 @@ function isMemberFailure(error: unknown): boolean {
     || error instanceof RunCancelledSignal
     || isAdapterCallCeilingExceeded(error)
     || isRunCostCapExceeded(error)
+    || isCallDepthExceeded(error)
   );
 }
 
@@ -2400,11 +2416,11 @@ class Interpreter {
   /** File scope — callee environments fork from HERE, not from the
    *  caller's locals (lexical scoping, §G). */
   private fileEnv?: Environment;
-  /** Movement declarations currently executing (object identity — names
-   *  may repeat across library files) — a call cycle would otherwise
-   *  loop forever. Read it through `callStack`, which hands a collection op's
-   *  member its own copy instead. */
-  private readonly runCallStack: MovementDeclaration[] = [];
+  /** The functions currently executing, the run's movement first — what
+   *  refuses recursion before version 3 and bounds the call depth from it.
+   *  Read it through `callStack`, which hands a collection op's member its
+   *  own copy instead. */
+  private readonly runCallStack: CallFrame[] = [];
   /** The concurrent flow (collection-op member, combinator arm) this async
    *  flow is running, when it is one. Flows may run at once, and the
    *  interpreter's dynamic state — the call stack, the trace being appended
@@ -2478,7 +2494,7 @@ class Interpreter {
   /** The movements this flow is inside — its own copy inside a collection-op
    *  member or a combinator arm, so flows calling the same movement at once
    *  are not mistaken for a recursion. */
-  private get callStack(): MovementDeclaration[] {
+  private get callStack(): CallFrame[] {
     return this.flowFrames.getStore()?.callStack ?? this.runCallStack;
   }
 
@@ -2527,7 +2543,7 @@ class Interpreter {
   async run(program: Program): Promise<MovementRunResult> {
     const { movement, movementEnv } = await this.prepareMovement(program);
     this.movementBody = movement.body;
-    this.callStack.push(movement);
+    this.callStack.push({ name: movement.name, declaration: movement });
     try {
       await this.interpretBody(movement.body, movementEnv, {
         atAnchor: true,
@@ -2609,7 +2625,7 @@ class Interpreter {
     this.deferRaceSettlement = input.deferRaceSettlement ?? false;
     const { movement, movementEnv } = await this.prepareMovement(input.program);
     this.movementBody = movement.body;
-    this.callStack.push(movement);
+    this.callStack.push({ name: movement.name, declaration: movement });
 
     const address = parseAddress(input.state.address);
     try {
@@ -2657,7 +2673,7 @@ class Interpreter {
   }): Promise<MovementRunResult> {
     const { movement, movementEnv } = await this.prepareMovement(input.program);
     this.movementBody = movement.body;
-    this.callStack.push(movement);
+    this.callStack.push({ name: movement.name, declaration: movement });
     // A resume cannot get back inside a callback body (its frame is not a
     // step the resume descent knows), so nothing here may suspend: a body
     // that meets the cost cap fails this fire, as it always has.
@@ -2699,7 +2715,7 @@ class Interpreter {
   }): Promise<MovementRunResult> {
     const { movement, movementEnv } = await this.prepareMovement(input.program);
     this.movementBody = movement.body;
-    this.callStack.push(movement);
+    this.callStack.push({ name: movement.name, declaration: movement });
     try {
       await this.resumeAlongAddress({
         body: movement.body,
@@ -3215,10 +3231,10 @@ class Interpreter {
   ): Promise<SpineCompletion> {
     const { declaration } = frame;
     const callerBody = this.movementBody;
-    if (declaration !== undefined) {
-      this.callStack.push(declaration);
-      this.movementBody = declaration.body;
-    }
+    // The frame the call had before it parked: a movement, or a closure called
+    // by name — so the depth below it is counted from where it really is.
+    this.callStack.push({ name: frame.boundary.callee, ...(declaration !== undefined ? { declaration } : {}) });
+    if (declaration !== undefined) this.movementBody = declaration.body;
     let completed: SpineCompletion;
     try {
       completed = await this.withinBoundary(frame.boundary, inner);
@@ -3226,10 +3242,8 @@ class Interpreter {
       if (!(e instanceof ScopeEndedQuietly)) throw e;
       completed = { done: true, outcome: FELL_THROUGH };
     } finally {
-      if (declaration !== undefined) {
-        this.movementBody = callerBody;
-        this.callStack.pop();
-      }
+      if (declaration !== undefined) this.movementBody = callerBody;
+      this.callStack.pop();
     }
     if (!completed.done) return completed;
     const value = completed.outcome.returned ? completed.outcome.value : undefined;
@@ -4551,6 +4565,8 @@ class Interpreter {
           kind: 'closure',
           closure: value.closure,
           captured: captureScope(env),
+          // From version 3 its body may call it by this name (recursion).
+          ...(since(this.languageVersion, 3) ? { self: name } : {}),
         });
         break;
       case 'callback':
@@ -4704,6 +4720,8 @@ class Interpreter {
     answers: MemberAnswer[],
   ): Promise<Binding> {
     const params = run.fn.closure.params.map((p) => p.name);
+    // A function handed over by name is called by name, once per member.
+    const named = run.expr.fn.kind === 'ref' ? run.expr.fn.name : undefined;
     const member = async (index: number): Promise<unknown> => {
       const values = run.expr.op === 'reduce'
         ? [carriedBefore(answers, index, run.init), run.members[index]]
@@ -4713,7 +4731,9 @@ class Interpreter {
         args[name] = values[position] ?? null;
       });
       const outcome = await this.enterMember(run, index, () =>
-        this.invokeClosure(run.fn, args, { ...run.body, address: childIter(run.address, index) }),
+        this.withinNamedCall(named, () =>
+          this.invokeClosure(run.fn, args, { ...run.body, address: childIter(run.address, index) }),
+        ),
       );
       return memberValue(run, outcome);
     };
@@ -5180,7 +5200,7 @@ class Interpreter {
     }
     const binding = env.resolve(arm.name);
     if (binding?.kind === 'closure') {
-      return { body: binding.closure.body, captured: binding.captured };
+      return { body: binding.closure.body, captured: binding.captured, name: arm.name };
     }
     if (binding?.kind === 'movement') {
       if (binding.declaration.params.length > 0) {
@@ -5194,6 +5214,7 @@ class Interpreter {
       const fileEnv = binding.fileEnv ?? this.fileEnv;
       return {
         body: binding.declaration.body,
+        name: arm.name,
         ...(fileEnv !== undefined ? { captured: captureScope(fileEnv) } : {}),
       };
     }
@@ -5214,7 +5235,31 @@ class Interpreter {
     if (arm.captured !== undefined) {
       for (const [name, binding] of arm.captured) armEnv.declare(name, binding);
     }
-    return this.interpretBody(arm.body, armEnv, { ...body, address });
+    return this.withinNamedCall(arm.name, () => this.interpretBody(arm.body, armEnv, { ...body, address }));
+  }
+
+  /**
+   * From version 3, refuse a call by name that would nest deeper than the
+   * deployment's limit, naming the chain (`call_depth.ts`). The run's own
+   * movement is not a call, so the depth is the frames above it.
+   */
+  private assertCallDepth(callee: string): void {
+    const limit = maxCallDepth();
+    if (this.callStack.length - 1 < limit) return;
+    throw new CallDepthExceeded(limit, [...this.callStack.map((frame) => frame.name), callee]);
+  }
+
+  /** Run `fn` as a call of the function named `name` (when there is one, from
+   *  version 3): counted towards the call depth, on this flow's stack. */
+  private async withinNamedCall<T>(name: string | undefined, fn: () => Promise<T>): Promise<T> {
+    if (name === undefined || before(this.languageVersion, 3)) return fn();
+    this.assertCallDepth(name);
+    this.callStack.push({ name });
+    try {
+      return await fn();
+    } finally {
+      this.callStack.pop();
+    }
   }
 
   /**
@@ -5662,10 +5707,16 @@ class Interpreter {
       );
     }
     const declaration = callee.declaration;
-    if (this.callStack.includes(declaration)) {
-      throw unsupported(
-        `recursive movement calls ('${[...this.callStack.map((d) => d.name), declaration.name].join(' → ')}')`,
-      );
+    // Before version 3 a call to a movement already running is refused; from
+    // it, recursion is allowed and bounded by the call depth (`call_depth.ts`).
+    if (before(this.languageVersion, 3)) {
+      if (this.callStack.some((frame) => frame.declaration === declaration)) {
+        throw unsupported(
+          `recursive movement calls ('${[...this.callStack.map((d) => d.name), declaration.name].join(' → ')}')`,
+        );
+      }
+    } else {
+      this.assertCallDepth(declaration.name);
     }
     if (statement.args.length !== declaration.params.length) {
       throw new MovementEngineError(
@@ -5710,7 +5761,7 @@ class Interpreter {
       }
       calleeEnv.declare(param.name, binding);
     }
-    this.callStack.push(declaration);
+    this.callStack.push({ name: declaration.name, declaration });
     const callerBody = this.movementBody;
     this.movementBody = declaration.body;
     let outcome: BodyOutcome = FELL_THROUGH;
@@ -5772,9 +5823,12 @@ class Interpreter {
       values[param] = await this.evaluateCallArg(arg, env, body, { takesValue: isValueParam(declared, types) });
     }
     let outcome: BodyOutcome = FELL_THROUGH;
+    const calleeName = this.calleeName(statement.callee, env);
     try {
-      outcome = await this.enterCallee(event, this.calleeName(statement.callee, env), () =>
-        this.invokeClosure(closure, values, { ...body, address: this.callAddress(event, body) }),
+      outcome = await this.enterCallee(event, calleeName, () =>
+        this.withinNamedCall(calleeName, () =>
+          this.invokeClosure(closure, values, { ...body, address: this.callAddress(event, body) }),
+        ),
       );
     } catch (e) {
       // Find-on-missing inside the closure ends the closure's scope, as it
@@ -6657,6 +6711,8 @@ class Interpreter {
     body: BodyContext,
   ): Promise<BodyOutcome> {
     const child = closureScope(binding).child();
+    // Its own name first, so a parameter of the same name shadows it.
+    if (binding.self !== undefined) child.declare(binding.self, binding);
     for (const param of binding.closure.params) {
       const supplied = values[param.name] ?? null;
       // A RECORD arrives as the record it is. A collection op hands each member

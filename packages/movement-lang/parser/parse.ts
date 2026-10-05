@@ -3392,6 +3392,7 @@ class Parser {
       this.pos++;
       this.scanBalanced({ stops: ')', context: "a closure's parameter list" });
       this.pos++; // the ')'
+      this.parseReturnAnnotation();
       this.skipAllWs();
       return this.peekCh() === '=' && this.peekCh(1) === '>';
     } catch {
@@ -3412,6 +3413,8 @@ class Parser {
   private parseClosure(start: number, stops = '\n}'): ClosureExpression {
     this.expect('(', 'to open the closure parameter list');
     const params = this.parseParamList();
+    const returnType = this.parseReturnAnnotation();
+    const returns = returnType !== undefined ? { returnType } : {};
     this.skipAllWs();
     this.expect('=>', "between a closure's parameters and its body");
     this.skipAllWs();
@@ -3422,12 +3425,13 @@ class Parser {
       const { slot } = this.readExprSlot({ stops, context: 'for the closure body' });
       return {
         params,
+        ...returns,
         body: [{ kind: 'return', value: { kind: 'expr', expr: slot }, span: slot.span }],
         span: this.spanFrom(start),
       };
     }
     const body = this.parseBlockBody('a closure body');
-    return { params, body, span: this.spanFrom(start) };
+    return { params, ...returns, body, span: this.spanFrom(start) };
   }
 
   /**
@@ -3767,8 +3771,16 @@ class Parser {
     this.skipInlineWs();
     this.expect('(', `after the ${keyword} name '${name}'`);
     const params = this.parseParamList();
+    const returnType = this.parseReturnAnnotation();
     const body = this.parseBlockBody(`the ${keyword} '${name}'`);
-    return { kind: 'movement', name, params, body, span: this.spanFrom(start) };
+    return {
+      kind: 'movement',
+      name,
+      params,
+      ...(returnType !== undefined ? { returnType } : {}),
+      body,
+      span: this.spanFrom(start),
+    };
   }
 
   /**
@@ -3806,12 +3818,7 @@ class Parser {
       // (`<inbox>`), a scalar, or an ADDRESS (`<at-[:\`Record Change\`
       // WHERE …]->>`): the surface a listen is checked against — or spells a
       // value type out in full (`<text[]>`, `<{ mode: text, owner?: text }>`).
-      const valueType = this.tryReadValueTypeMarker(paramName);
-      const type: ParamTypeRef = valueType ?? this.typeRefFromMarker(
-        this.readTypeMarker(`for the parameter '${paramName}' (e.g. <inbox-[:message]->>)`, {
-          allowHops: true,
-        }),
-      );
+      const type = this.readParamType(paramName);
       params.push({ name: paramName, type, span: this.spanFrom(paramStart) });
       this.skipAllWs();
       if (this.peekCh() === ',') {
@@ -3823,6 +3830,39 @@ class Parser {
       }
     }
     return params;
+  }
+
+  /** A parameter's (or a return's) written type, the opening `<` next. */
+  private readParamType(
+    paramName: string,
+    context = `for the parameter '${paramName}' (e.g. <inbox-[:message]->>)`,
+  ): ParamTypeRef {
+    const valueType = this.tryReadValueTypeMarker(paramName);
+    return valueType ?? this.typeRefFromMarker(this.readTypeMarker(context, { allowHops: true }));
+  }
+
+  /**
+   * `): <number>` — the type a function declares it RETURNS, written after its
+   * parameter list as TypeScript writes it (language version 3). Optional
+   * everywhere except on a function that calls itself, directly or through
+   * others — there the checker requires it, as TypeScript does, because what
+   * the body returns cannot be worked out from a body that needs its own
+   * answer. Its grammar is a parameter's.
+   */
+  private parseReturnAnnotation(): ParamTypeRef | undefined {
+    if (!since(this.languageVersion, 3)) return undefined;
+    const save = this.pos;
+    this.skipInlineWs();
+    if (this.peekCh() !== ':') {
+      this.pos = save;
+      return undefined;
+    }
+    this.pos++;
+    this.skipInlineWs();
+    if (this.peekCh() !== '<') {
+      this.error(`Expected a return type after ':' — written as a parameter's is, e.g. ': <number>'`);
+    }
+    return this.readParamType('return', 'for the return type (e.g. <number>)');
   }
 
   /**

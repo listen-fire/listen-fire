@@ -97,6 +97,7 @@ const INTENT_INDEX: IntentEntry[] = [
   { intent: 'Look a value up by name; build named values', chapter: 'expressions', section: 'keyed-values' },
   { intent: 'Give a report a section per value of a type', chapter: 'patterns', section: 'sections-from-a-type' },
   { intent: 'Reuse one automation from another; return a result from it', chapter: 'anatomy', section: 'composition' },
+  { intent: 'Walk a tree or a chain by having a function call itself', chapter: 'anatomy', section: 'recursion' },
   { intent: 'Build a record in memory to pass along', chapter: 'anatomy', section: 'records-you-build' },
   { intent: 'Act on everything the run wrote', chapter: 'anatomy', section: 'collect-what-you-wrote' },
   { intent: 'Defer a walk until it is read', chapter: 'traversal', section: 'deferring-a-walk' },

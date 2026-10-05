@@ -614,7 +614,9 @@ describe('guards', () => {
     await expect(promise).rejects.toThrow(pattern);
   }
 
-  it('recursion fails loud instead of looping', async () => {
+  // From version 3 recursion is allowed and bounded by the call depth
+  // (`recursion.unit.test.ts`); one that never ends still fails loud.
+  it('recursion that never ends fails loud instead of looping', async () => {
     await expectError(
       [
         GUARD_PRELUDE,
@@ -623,7 +625,7 @@ describe('guards', () => {
         '  intake(msg: msg)',
         '}',
       ].join('\n'),
-      /MOVENG_UNSUPPORTED: recursive movement calls \('intake → intake'\)/,
+      /MOVENG_CALL_DEPTH: call depth limit reached: 'intake → intake → intake → intake → … 24 more … → intake/,
     );
   });
 

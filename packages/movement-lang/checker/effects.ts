@@ -23,9 +23,11 @@
 //     unresolved call would read as "does nothing", which is a claim the
 //     checker has no business making.
 //
-// Inference is bottom-up over the call graph. There is no recursion in the
-// language, so there is no fixpoint to find: a function's row is the union of
-// its body's primitive effects and the rows of what it calls.
+// Inference is bottom-up over the call graph: a function's row is the union of
+// its body's primitive effects and the rows of what it calls. Before language
+// version 3 there is no recursion, so there is no fixpoint to find. From
+// version 3 functions may call each other in a cycle, and every function in
+// one shares a single row — the union of all their bodies' (`call_cycles.ts`).
 
 import type { ScopeSymbol } from './scopes';
 import type { InstanceRef } from './typing';
@@ -136,6 +138,13 @@ export const EMPTY_ROW: EffectRow = {
 /** The row of a function nobody could look inside: no effect is claimed, and
  *  the row says so. */
 export const UNKNOWN_ROW: EffectRow = { ...EMPTY_ROW, partial: true };
+
+/** Everything any of `rows` may do — the row of running any one of them. */
+export function unionRows(rows: Iterable<EffectRow>): EffectRow {
+  const frame = new EffectFrame();
+  for (const row of rows) frame.absorb(row);
+  return frame.close();
+}
 
 /** Purity, derived: an empty row that is not a lower bound. */
 export function isPureRow(row: EffectRow): boolean {
