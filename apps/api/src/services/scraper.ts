@@ -7,6 +7,7 @@ import { sendSlackNotification } from '../lib/slack';
 import { Queue } from '../lib/utils/queue';
 import { getEnvVar } from '../lib/utils/environment';
 import { looksLikeNonHtmlAddress } from '../lib/utils/url';
+import { assertRunBudget, reportRunCost, type CostSource } from '../lib/run_spend';
 
 // Web Unlocker uses a dedicated zone, distinct from the LinkedIn Dataset API zone.
 // The zone must be provisioned in the Bright Data dashboard under Web Unlocker.
@@ -56,6 +57,20 @@ const NON_HTML_CONTENT_TYPE_PATTERN =
 // sub-processor (ScraperAPI) into a movement's compliance-clean surface.
 type ScrapeProvider = 'scraperapi' | 'brightdata';
 
+// What a movement run is charged for Web Unlocker (`lib/run_spend.ts`). Bright
+// Data bills it pay-as-you-go, per successful request, and a JS-rendered
+// retry is a request of its own; a failed request is not billed. The figure is
+// the pay-as-you-go list price of $1.50 per 1,000 requests — the response
+// carries no price, so when the contract price changes, change it here.
+const WEB_UNLOCKER_COST_SOURCE: CostSource = { kind: 'service', name: 'brightdata.web_unlocker' };
+const WEB_UNLOCKER_MICRODOLLARS_PER_REQUEST = 1_500;
+
+/** How many billable Web Unlocker requests one scrape made — counted where the
+ *  request is answered, charged once the scrape returns to its caller. */
+interface BilledRequests {
+  count: number;
+}
+
 /** What one request came back with. `html` is empty when the body was not a
  *  page at all, and `truncated` says the download was stopped at the cap
  *  rather than ending — which is why a short text is not evidence of a page
@@ -67,8 +82,10 @@ interface FetchedBody {
   nonHtml: string | null;
 }
 
-async function fetchHtml(url: string, provider: ScrapeProvider): Promise<FetchedBody> {
-  return provider === 'scraperapi' ? fetchHtmlScraperApi(url) : fetchHtmlBrightData(url, { render: false });
+async function fetchHtml(url: string, provider: ScrapeProvider, billed: BilledRequests): Promise<FetchedBody> {
+  return provider === 'scraperapi'
+    ? fetchHtmlScraperApi(url)
+    : fetchHtmlBrightData(url, { render: false, billed });
 }
 
 // ScraperAPI (legacy pipelines). Key read lazily so importing this module never
@@ -91,7 +108,10 @@ async function fetchHtmlScraperApi(url: string): Promise<FetchedBody> {
 // POST https://api.brightdata.com/request
 // Body: { zone, url, format: "raw" }
 // Response body contains an HTML string (synchronous).
-async function fetchHtmlBrightData(url: string, { render }: { render: boolean }): Promise<FetchedBody> {
+async function fetchHtmlBrightData(
+  url: string,
+  { render, billed }: { render: boolean; billed: BilledRequests },
+): Promise<FetchedBody> {
   // Read Bright Data config lazily so importing this module never requires the
   // Web Unlocker zone to be provisioned — keeps tests and zone-less environments
   // loadable. A scrape only fails if the zone is genuinely missing at call time.
@@ -119,6 +139,7 @@ async function fetchHtmlBrightData(url: string, { render }: { render: boolean })
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 200)}`);
   }
 
+  billed.count += 1;
   return readCappedBody(response);
 }
 
@@ -357,8 +378,25 @@ class Scraper {
     }
 
     logger.info('Scraping URL', { url, provider });
+    // Asked and charged here, in the caller's own async context — the queued
+    // job may be started from another job's, and so from another run's.
+    if (provider === 'brightdata') assertRunBudget();
+    const billed: BilledRequests = { count: 0 };
+    try {
+      return await this.scrape(url, provider, billed);
+    } finally {
+      if (billed.count > 0) {
+        reportRunCost({
+          source: WEB_UNLOCKER_COST_SOURCE,
+          microdollars: billed.count * WEB_UNLOCKER_MICRODOLLARS_PER_REQUEST,
+        });
+      }
+    }
+  }
+
+  private scrape(url: string, provider: ScrapeProvider, billed: BilledRequests): Promise<string> {
     return enqueueQuery(async () => {
-      const body = await fetchHtml(url, provider);
+      const body = await fetchHtml(url, provider, billed);
       if (body.nonHtml) {
         logger.info('Scrape returned a body that is not a page', { url, reason: body.nonHtml });
         return '';
@@ -378,7 +416,7 @@ class Scraper {
         const decision = jsRenderDecision({ text, html: scrapeResponse, truncated: body.truncated });
         if (decision.retry) {
           logger.info('Retrying with JavaScript rendering', { url, reason: decision.reason });
-          const rendered = await fetchHtmlBrightData(url, { render: true });
+          const rendered = await fetchHtmlBrightData(url, { render: true, billed });
           const renderedText = rendered.nonHtml ? '' : htmlToText(rendered.html);
           if (renderedText.trim().length > text.trim().length) {
             text = renderedText;

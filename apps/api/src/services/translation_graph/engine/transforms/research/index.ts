@@ -253,6 +253,8 @@ function toOutput(result: ResearchResult): TransformOutput {
 
 export const researchImpl: TransformImpl = {
   signature: RESEARCH_SIGNATURE,
+  // Every fetch, search and model call it makes is paid for.
+  priced: true,
   run: async (input): Promise<TransformOutput> => {
     if (input.kind !== 'context-dependent') {
       throw new Error(`research: expected context-dependent input, got ${input.kind}`);

@@ -116,6 +116,8 @@ export const FETCH_URL_PLUGIN_MANIFEST: PluginManifest = {
 
 export const fetchUrlImpl: TransformImpl = {
   signature: FETCH_URL_SIGNATURE,
+  // Every fetch, search and model call it makes is paid for.
+  priced: true,
   run: async (input): Promise<TransformOutput> => {
     if (input.kind !== 'context-dependent') {
       throw new Error(`fetch-url: expected context-dependent input, got ${input.kind}`);

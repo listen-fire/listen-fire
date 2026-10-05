@@ -22,6 +22,7 @@ const sendSlackNotification = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../lib/slack', () => ({ sendSlackNotification }));
 
 import { ScraperService, looksLikeSpaShell } from '../scraper';
+import { currentRunSpend, RunCostCapExceeded, withRunSpendLedger } from '../../lib/run_spend';
 import { logger } from '../logger';
 
 const fetchMock = jest.fn();
@@ -214,5 +215,44 @@ describe('looksLikeSpaShell', () => {
   it('does not flag a mount point that already has content', () => {
     const html = '<html><body><div id="root"><p>Server-rendered content here.</p></div></body></html>';
     expect(looksLikeSpaShell(html)).toBe(false);
+  });
+});
+
+describe('ScraperService.getWebsite — what a run is charged', () => {
+  const COST_CAP = 'MOVEMENT_MAX_RUN_COST_USD';
+  afterEach(() => {
+    delete process.env[COST_CAP];
+  });
+
+  it('charges the run per Web Unlocker request, a rendered retry included', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse('<html><body></body></html>'));
+    const renderedHtml = `<html><body><p>${'Rendered content once JS ran. '.repeat(10)}</p></body></html>`;
+    fetchMock.mockResolvedValueOnce(okResponse(renderedHtml));
+
+    await withRunSpendLedger(async () => {
+      await ScraperService.getWebsite('https://example.com', { provider: 'brightdata' });
+      expect(currentRunSpend().bySource).toEqual({ 'service:brightdata.web_unlocker': 3_000 });
+    });
+  });
+
+  it('a failed request is not charged', async () => {
+    fetchMock.mockResolvedValue(new Response('nope', { status: 401, statusText: 'Unauthorized' }));
+    await withRunSpendLedger(async () => {
+      await expect(ScraperService.getWebsite('https://example.com', { provider: 'brightdata' })).rejects.toThrow();
+      expect(currentRunSpend().segmentMicrodollars).toBe(0);
+    });
+  });
+
+  it('is not started once the run has spent its cap', async () => {
+    process.env[COST_CAP] = '1';
+    await withRunSpendLedger(
+      async () => {
+        await expect(ScraperService.getWebsite('https://example.com', { provider: 'brightdata' })).rejects.toThrow(
+          RunCostCapExceeded,
+        );
+      },
+      { priorMicrodollars: 1_000_000 },
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

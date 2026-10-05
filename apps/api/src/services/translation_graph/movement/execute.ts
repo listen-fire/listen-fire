@@ -505,6 +505,9 @@ async function resumeMovementFiringInContext(
       // `adoptOpsRun()` above: a run that waited a day on an answer still
       // computes the window it started with.
       firedAt: recorder.firedAt,
+      // What the run spent before it parked, read back with its clock: the
+      // cost cap is the run's, not the segment's.
+      priorSpentMicrodollars: recorder.priorSpentMicrodollars,
       catalog: teamCatalog.catalog,
       resolveCredentialId: teamCatalog.resolveCredentialId,
       resolveFile: teamCatalog.resolveFile,
@@ -710,6 +713,7 @@ async function fireCallbackFiringInContext(
         // The run's original firing instant (see the resume path) — a callback
         // body belongs to the run that minted it, clock included.
         firedAt: recorder.firedAt,
+        priorSpentMicrodollars: recorder.priorSpentMicrodollars,
         catalog: teamCatalog.catalog,
         resolveCredentialId: teamCatalog.resolveCredentialId,
         resolveFile: teamCatalog.resolveFile,

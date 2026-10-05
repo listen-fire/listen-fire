@@ -25,6 +25,7 @@
 //   (#transform — transforms add ephemeral nodes to the source graph)
 
 import type { HandbookSection } from '../../../../lib/handbook_section';
+import type { CostEnvelope } from '../../../../lib/run_spend';
 import type {
   EphemeralOriginRef,
   SourcePosition,
@@ -101,6 +102,15 @@ export type TransformOutput = {
    * why. A plugin that has nothing to report leaves it unset.
    */
   outcome?: string;
+  /**
+   * What this invocation cost, when the plugin prices its own work — the cost
+   * envelope documented in `lib/run_spend.ts`, the same one an external
+   * function returns. The engine charges it to the run under the plugin's
+   * name. Leave it unset for work already priced where it happens (a model
+   * call, a paid service client that reports its own cost) — reporting it here
+   * as well would charge it twice.
+   */
+  cost?: CostEnvelope;
 };
 
 /**
@@ -135,6 +145,12 @@ export type EphemeralEmission = {
 export type TransformImpl = {
   signature: TransformSignature;
   run: (input: TransformInput) => Promise<TransformOutput>;
+  /**
+   * The plugin may cost money to run — a paid scrape or search, model calls,
+   * or a price of its own on `TransformOutput.cost`. A priced plugin is not
+   * started once its run has spent the cost cap (`MOVEMENT_MAX_RUN_COST_USD`).
+   */
+  priced?: true;
 };
 
 // ── PluginManifest ─────────────────────────────────────────────────────────

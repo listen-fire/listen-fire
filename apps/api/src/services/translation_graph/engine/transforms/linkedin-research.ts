@@ -277,6 +277,8 @@ A bracketed number is a position in the "sources" list YOU build, counting from 
 
 export const linkedinResearchImpl: TransformImpl = {
   signature: LINKEDIN_RESEARCH_SIGNATURE,
+  // Every fetch, search and model call it makes is paid for.
+  priced: true,
   run: async (input): Promise<TransformOutput> => {
     if (input.kind !== 'context-dependent') {
       throw new Error(`linkedin-research: expected context-dependent input, got ${input.kind}`);

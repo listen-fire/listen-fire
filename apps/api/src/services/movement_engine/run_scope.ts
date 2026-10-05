@@ -6,9 +6,11 @@
 // singletons shared by every run in the process, so a run's identity has to
 // arrive ambiently. One AsyncLocalStorage carries both.
 //
-// The segment also opens the run's model-spend account (`lib/run_spend.ts`),
-// which keeps its own storage because the model clients that charge it sit
-// below the engine and must not import it.
+// The segment also opens the run's spend account (`lib/run_spend.ts`), which
+// keeps its own storage because the model and service clients that charge it
+// sit below the engine and must not import it. Unlike the count and the memo,
+// the account spans segments: the segment is seeded with what the run spent
+// before it parked.
 //
 // ── The ceiling ─────────────────────────────────────────────────────────────
 //
@@ -165,11 +167,12 @@ interface RunScope {
 
 const asyncLocalStorage = new AsyncLocalStorage<RunScope>();
 
-/** Run one interpreter segment under its own fresh count, its own memo and
- *  its own model-spend account. */
+/** Run one interpreter segment under its own fresh count and its own memo,
+ *  and under the run's spend account — seeded with `priorSpentMicrodollars`,
+ *  what the run's earlier segments spent (none for a fresh run). */
 export function withRunCallLedger<T>(
   fn: () => Promise<T>,
-  options?: { languageVersion?: LanguageVersion },
+  options?: { languageVersion?: LanguageVersion; priorSpentMicrodollars?: number },
 ): Promise<T> {
   return asyncLocalStorage.run(
     {
@@ -177,7 +180,7 @@ export function withRunCallLedger<T>(
       memo: new RunReadMemo(),
       languageVersion: options?.languageVersion ?? CURRENT_LANGUAGE_VERSION,
     },
-    () => withRunSpendLedger(fn),
+    () => withRunSpendLedger(fn, { priorMicrodollars: options?.priorSpentMicrodollars ?? 0 }),
   );
 }
 

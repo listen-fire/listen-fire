@@ -6,7 +6,7 @@ import { getQb } from './kysely';
 import { logger } from '../services/logger';
 import type { Resolved } from './models/map';
 import { models } from './models/registry';
-import { chargeRunSpend, isInsideRunSpendAccount } from './run_spend';
+import { isInsideRunSpendAccount, reportRunCost } from './run_spend';
 import type { TeamId } from '../generated/kysely/core/Team';
 import type { DealflowPipelineId } from '../generated/kysely/public/DealflowPipeline';
 import type { AgentConversationId } from '../generated/kysely/public/AgentConversation';
@@ -244,7 +244,7 @@ async function recordLlmUsage(options: RecordUsageOptions): Promise<void> {
   });
   // Charged before the first await: most callers do not await this, and the
   // run's next priced call must already see what this one cost.
-  chargeRunSpend(costMicrodollars);
+  reportRunCost({ source: { kind: 'model', name: resolved.wireModel }, microdollars: costMicrodollars });
 
   if (!teamId) return;
 

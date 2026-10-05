@@ -1,7 +1,7 @@
 // Speech to text behind the model map: the caller names a registry model, and
 // the map decides which vendor hears the audio.
 
-import { assertRunSpendWithinCap } from '../../run_spend';
+import { assertRunBudget } from '../../run_spend';
 import { neverAsAny } from '../../utils/types';
 import { assertCallable, resolveModel } from '../map';
 import type { TranscriptionModelName } from '../registry';
@@ -34,7 +34,7 @@ export async function transcribe(
 ): Promise<TranscriptionResult> {
   const resolved = resolveModel(name, env);
   assertCallable(resolved, env);
-  assertRunSpendWithinCap();
+  assertRunBudget();
   const { provider, wireModel } = resolved;
   switch (provider) {
     case 'openai':
