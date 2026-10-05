@@ -339,3 +339,123 @@ movement under_test(e: <inbox-[:message]->>) {
     expect(codes(body)).toEqual([C.EXTRACT_FIELD_DUPLICATE]);
   });
 });
+
+describe('extractOne(content, Shape) — the single record, or absent', () => {
+  // `extractOne(…)` is `ONLY(extract(…))` asked of the model: the same shape,
+  // the same content rules, and the same `Shape | absent` to handle.
+  const sameAsOnly = (lines: (call: string) => string[], shape = 'CompanyDetail'): void => {
+    const one = codes(lines(`extractOne([e.Body], ${shape})`).join('\n'));
+    const only = codes(lines(`ONLY(extract([e.Body], ${shape}))`).join('\n'));
+    expect(one).toEqual(only);
+  };
+
+  it('is typed Shape | absent: what it may not have has to be handled', () => {
+    const bare = ['  c = extractOne([e.Body], Company)', '  big = c.employees > 10'].join('\n');
+    expect(codes(bare)).toEqual([TypedDiagnosticCodes.ABSENT_REQUIRED]);
+    sameAsOnly((call) => [`  c = ${call}`, '  big = c.employees > 10'], 'Company');
+    const handled = ['  c = extractOne([e.Body], Company)', '  big = COALESCE(c.employees, 0) > 10'].join('\n');
+    expect(codes(handled)).toEqual([]);
+    sameAsOnly((call) => [`  c = ${call}`, '  big = COALESCE(c.employees, 0) > 10'], 'Company');
+    // A record, not a value — and one record, not a collection.
+    sameAsOnly((call) => [`  c = ${call}`, '  n = UPPER(c)'], 'Company');
+    expect(codes('  c = extractOne([e.Body], Company)\n  n = UPPER(c)')).toEqual([TypedDiagnosticCodes.RECORD_NOT_A_VALUE]);
+    sameAsOnly((call) => [`  c = ${call}`, '  n = UPPER(c.name)'], 'Company');
+  });
+
+  it("reads the shape's fields, and nothing else", () => {
+    expect(codes('  details = extractOne([e.Body], CompanyDetail)\n  x = COALESCE(details.sumary, "")')).toEqual([
+      TypedDiagnosticCodes.UNKNOWN_PROPERTY,
+    ]);
+  });
+
+  it('enriches a record inside a MAP — the handbook example', () => {
+    expect(
+      codes(
+        [
+          `  ${CONTENT}`,
+          "  companies = extract(content, Company, { tier: 'careful' })",
+          "  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {",
+          "    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })",
+          '    return { ...c, ...details }',
+          '  })',
+        ].join('\n'),
+      ),
+    ).toEqual([]);
+    sameAsOnly((call) => [
+      '  companies = extract([e.Body], Company)',
+      '  detailed = MAP(companies, (c) => {',
+      `    details = ${call}`,
+      '    return { ...c, ...details }',
+      '  })',
+    ]);
+  });
+
+  it('nests inside another expression', () => {
+    expect(codes('  big = COALESCE(extractOne([e.Body], Company).employees, 0) > 10')).toEqual([]);
+    expect(codes('  big = extractOne([e.Body], Company).employees > 10')).toEqual([TypedDiagnosticCodes.ABSENT_REQUIRED]);
+    sameAsOnly((call) => [`  s = COALESCE(${call}, "none")`]);
+    expect(codes('  return extractOne([e.Body], CompanyDetail)')).toEqual([]);
+  });
+
+  it("is a function name, so its letter case is the author's", () => {
+    expect(codes('  d = ExtractOne([e.Body], CompanyDetail)\n  s = COALESCE(d.summary, "")')).toEqual([]);
+    expect(codes('  d = EXTRACTONE([e.Body], CompanyDetail)\n  s = COALESCE(d.summary, "")')).toEqual([]);
+  });
+
+  it('takes the same shapes, content and settings as extract', () => {
+    expect(codes('  d = extractOne([e.Body], node Person: "the sender" { name: <text> "their name" })')).toEqual([]);
+    expect(codes('  d = extractOne([e.Body], COALESCE(e.Subject, "x"))')).toEqual([C.EXTRACT_SHAPE_COMPUTED]);
+    expect(codes('  d = extractOne(e.Body, CompanyDetail)')).toEqual([C.EXTRACT_CONTENT]);
+    expect(codes('  d = extractOne([e], CompanyDetail)')).toEqual([C.EXTRACT_CONTENT]);
+    expect(codes("  d = extractOne([e.Body], CompanyDetail, { teir: 'quick' })")).toEqual([C.EXTRACT_CONFIG]);
+    expect(
+      codes("  d = extractOne([e.Body], CompanyDetail, { tier: 'thorough', effort: 'medium', model: 'claude-opus-5' })"),
+    ).toEqual([]);
+  });
+
+  it("is refused bare, and inside a walk's WHERE", () => {
+    const bare = `${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  extractOne([e.Body], CompanyDetail)
+}`;
+    expect(() => parseProgram(bare)).toThrow(/found = extractOne\(content, Shape\)/);
+    expect(
+      messages('  n = COUNT(e-[a:Attachments WHERE a.Name = COALESCE(extractOne([a.Name], CompanyDetail), "x")]->)'),
+    ).toContain("'extractOne(…)' runs a model over its content");
+  });
+
+  it('is language version 3: under version 2, extractOne( is the name it always was', () => {
+    const source = `${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  found = extractOne([e.Body], CompanyDetail)
+}`;
+    const v2 = parseProgram(source, { languageVersion: 2 });
+    const movement = v2.statements.find((s) => s.kind === 'movement');
+    expect(movement?.kind === 'movement' && movement.body[0]).toMatchObject({ kind: 'assign', value: { kind: 'expr' } });
+    const catalog = mockCatalog({ adapters: { email: { constructionArgs: [], schema: inboxSchema } } });
+    expect(
+      checkProgram(v2, catalog, { languageVersion: 2 }).filter((d) => (d.severity ?? 'error') === 'error'),
+    ).toEqual([]);
+    const v3 = parseProgram(source, { languageVersion: 3 });
+    const current = v3.statements.find((s) => s.kind === 'movement');
+    expect(current?.kind === 'movement' && current.body[0]).toMatchObject({
+      kind: 'assign',
+      value: { kind: 'extractCall', extractCall: { finds: 'one' } },
+    });
+  });
+
+  it('leaves extract as it was: each record, a list', () => {
+    const program = parseProgram(`${PRELUDE}
+movement under_test(e: <inbox-[:message]->>) {
+  found = extract([e.Body], Company)
+}`);
+    const movement = program.statements.find((s) => s.kind === 'movement');
+    expect(movement?.kind === 'movement' && movement.body[0]).toMatchObject({
+      value: { kind: 'extractCall', extractCall: { finds: 'each' } },
+    });
+    expect(codes('  found = extract([e.Body], Company)\n  n = MAP(found, (c) => c.name)')).toEqual([]);
+    expect(codes('  found = extractOne([e.Body], Company)\n  n = MAP(found, (c) => c.name)')).toEqual([
+      C.COLLECTION_OP_NOT_A_COLLECTION,
+    ]);
+  });
+});

@@ -43,7 +43,7 @@ export type BuiltinReturn = FieldType | 'derived';
  *   - `value`      — an expression: the call computes a value from its arguments;
  *   - `collection` — iteration over a collection with a function (`MAP` and its siblings);
  *   - `members`    — a closed type's values (`MEMBERS`);
- *   - `extract`    — the extraction call, read on its own line by its own grammar.
+ *   - `extract`    — an extraction call (`extract`, `extractOne`), read by its own grammar.
  *
  * Only a `value` built-in can sit inside another expression; the others take a
  * function or a type, which an expression cannot hold yet.
@@ -152,6 +152,7 @@ const COLLECTION_OPS: Builtin[] = [
 const STATEMENT_FORMS: Builtin[] = [
   builtin('MEMBERS', [p('type', 'type')], 'derived', "a closed type's values, in declaration order", { form: { kind: 'members' } }),
   builtin('EXTRACT', [p('content', 'any'), p('shape', 'shape'), p('settings', 'options', { optional: true })], 'derived', 'the records a model finds in content, of a declared shape', { effects: AI_ROW, form: { kind: 'extract' } }),
+  builtin('EXTRACTONE', [p('content', 'any'), p('shape', 'shape'), p('settings', 'options', { optional: true })], 'derived', 'the single record content describes, of a declared shape, or absent', { effects: AI_ROW, form: { kind: 'extract' } }),
 ];
 
 /** A namespaced member's entry — its signature is declared beside its

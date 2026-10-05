@@ -92,8 +92,9 @@ export type CallRefusal = {
 
 /** The extraction call written inside a walk's `WHERE` or a `SORT` key, where
  *  it would run once per landing or per member. */
-export const EXTRACT_CALL_NESTED_MESSAGE =
-  "'extract(…)' runs a model over its content, and a walk's WHERE is read once per landing (a SORT key once per member) — bind it first, then use the name: `found = extract(content, Shape)`";
+export function extractCallNestedMessage(spelled: 'extract' | 'extractOne'): string {
+  return `'${spelled}(…)' runs a model over its content, and a walk's WHERE is read once per landing (a SORT key once per member) — bind it first, then use the name: \`found = ${spelled}(content, Shape)\``;
+}
 
 export type CallReading =
   /** Run the function the program declares (or report its name unknown). */

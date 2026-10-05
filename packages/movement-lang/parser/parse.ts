@@ -20,6 +20,7 @@ import {
   ErrorStatement,
   ExprSlot,
   ExtractCallExpression,
+  ExtractCallFinds,
   ExtractCallShape,
   ExtractExpression,
   ExtractField,
@@ -859,6 +860,12 @@ class Parser {
     if (!word) {
       this.error(`Unexpected ${this.describeHere()} — expected a statement`);
     }
+    if (this.atExtractCall()) {
+      this.error(
+        `An extraction hands back what it found, so it is bound to a name (or returned) — write \`found = ${word}(content, Shape)\``,
+        start,
+      );
+    }
     switch (word) {
       case 'import':
         return this.parseImport();
@@ -955,12 +962,6 @@ class Parser {
       case 'ERROR':
         return this.parseErrorStatement();
       case 'extract':
-        if (this.atExtractCall()) {
-          this.error(
-            "An extraction hands back what it found, so it is bound to a name (or returned) — write `found = extract(content, Shape)`",
-            start,
-          );
-        }
         this.error(
           "An 'extract' must be bound to a name — write `name = extract from […] { … }`",
           start,
@@ -1197,10 +1198,19 @@ class Parser {
       }
       return { kind: 'link', link: { ...link, to: link.to } };
     }
-    if (word === 'extract' && this.atExtractCall()) {
-      return { kind: 'extractCall', extractCall: this.parseExtractCall(start) };
-    }
-    if (word === 'extract') {
+    if (this.atExtractCall()) {
+      const extractCall = this.parseExtractCall(start);
+      const end = this.pos;
+      this.skipInlineWs();
+      const next = this.peekCh();
+      if (next === undefined || this.eof() || '\n};'.includes(next)) {
+        this.pos = end;
+        return { kind: 'extractCall', extractCall };
+      }
+      // More follows the call (`extractOne(…).name`): the value is an
+      // expression with the call nested in it, read as the slot below reads it.
+      this.pos = start;
+    } else if (word === 'extract') {
       this.pos += word.length;
       return { kind: 'extract', extract: this.parseExtract(start) };
     }
@@ -4037,33 +4047,45 @@ class Parser {
     };
   }
 
-  // ── extract(content, Shape, config) ──
+  // ── extract(content, Shape, config) and extractOne(content, Shape, config) ──
 
   /**
-   * Is `extract(` next — the extraction CALL rather than the keyword? From
-   * language version 3. Before it the call was never valid (the keyword wants
-   * `from` or a tier after the word), so no saved program changes meaning:
-   * under an earlier version `extract(` stays the parse error it always was.
+   * The extraction call next, if one is — `extract(` (each record the content
+   * names) or `extractOne(` (the single one it describes) — rather than the
+   * keyword. From language version 3. Before it neither was an extraction
+   * (the keyword wants `from` or a tier after `extract`, and `extractOne` was
+   * a name like any other), so no saved program changes meaning.
+   *
+   * `extractOne` is a function name, so its letter case is the author's, as
+   * every function's is from version 3; `extract` keeps its one spelling.
    */
-  private atExtractCall(): boolean {
-    return (
-      since(this.languageVersion, 3)
-      && this.peekIdent() === 'extract'
-      && this.followedByCall('extract')
-    );
+  private extractCallAhead(): { word: string; finds: ExtractCallFinds } | undefined {
+    if (before(this.languageVersion, 3)) return undefined;
+    const word = this.peekIdent();
+    if (word === undefined || !this.followedByCall(word)) return undefined;
+    if (word === 'extract') return { word, finds: 'each' };
+    if (word.toLowerCase() === 'extractone') return { word, finds: 'one' };
+    return undefined;
   }
 
-  /** `extract(content, Shape[, { … }])` with `extract` at the cursor. */
+  private atExtractCall(): boolean {
+    return this.extractCallAhead() !== undefined;
+  }
+
+  /** `extract(content, Shape[, { … }])` or `extractOne(…)`, its name at the cursor. */
   private parseExtractCall(start: number): ExtractCallExpression {
-    this.pos += 'extract'.length;
+    const ahead = this.extractCallAhead();
+    if (ahead === undefined) this.error(`Expected 'extract(…)' or 'extractOne(…)', found ${this.describeHere()}`);
+    const { word, finds } = ahead;
+    this.pos += word.length;
     this.skipInlineWs();
-    this.expect('(', "to open 'extract(…)'");
-    const usage = "extract(<content>, <Shape>) or extract(<content>, <Shape>, { tier: 'careful' })";
+    this.expect('(', `to open '${word}(…)'`);
+    const usage = `${word}(<content>, <Shape>) or ${word}(<content>, <Shape>, { tier: 'careful' })`;
     const { slot: content, stop } = this.readExprSlot({
       stops: ',)',
-      context: "for the content 'extract' reads",
+      context: `for the content '${word}' reads`,
     });
-    if (stop !== ',') this.error(`'extract' takes ${usage} — the shape is missing`);
+    if (stop !== ',') this.error(`'${word}' takes ${usage} — the shape is missing`);
     this.pos++; // ','
     this.skipAllWs();
     const shape = this.parseExtractCallShape();
@@ -4073,16 +4095,17 @@ class Parser {
       this.pos++;
       config = this.readExprSlot({
         stops: ',)',
-        context: "for the settings 'extract' runs with",
+        context: `for the settings '${word}' runs with`,
       }).slot;
       this.skipAllWs();
       if (this.peekCh() === ',') {
-        this.error(`'extract' takes ${usage} — nothing follows the settings`);
+        this.error(`'${word}' takes ${usage} — nothing follows the settings`);
       }
     }
     this.skipAllWs();
-    this.expect(')', "to close 'extract(…)'");
+    this.expect(')', `to close '${word}(…)'`);
     return {
+      finds,
       content,
       shape,
       ...(config !== undefined ? { config } : {}),

@@ -7264,7 +7264,8 @@ class Interpreter {
   }
 
   /**
-   * `found = extract(content, Shape, { … })` — the extraction CALL. The shape
+   * `found = extract(content, Shape, { … })` — the extraction CALL, or
+   * `extractOne(…)` for the single record (or absent). The shape
    * is a node declaration in scope, or the one written in the argument (bound
    * for this call only, as the checker scoped it); its spec is the one the
    * keyword builds for `node x: <Shape>`, and the call itself is
@@ -7306,6 +7307,7 @@ class Interpreter {
       content: value,
       contentProvenance: provenance,
       spec,
+      finds: call.finds,
       settings,
       siteId: `xc:${declaredName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}#${++this.extractCallCount}`,
       runtime: {

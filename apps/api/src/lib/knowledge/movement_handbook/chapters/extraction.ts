@@ -11,7 +11,7 @@ There are two spellings. **The extraction call, \`extract(content, Shape, settin
 
 ### the extraction call
 
-\`extract(content, Shape, settings)\` is extraction as a function: a list of text and files in, a list of \`Shape\` records out.
+\`extract(content, Shape, settings)\` is extraction as a function: a list of text and files in, a list of \`Shape\` records out. \`extractOne(content, Shape, settings)\` is the same call asking for the single \`Shape\` the content describes, as TypeScript's \`find\` sits beside \`filter\`.
 
 \`\`\`
 node Company: "each company named in this message" {
@@ -22,7 +22,7 @@ node Company: "each company named in this message" {
   }
 }
 
-node Profile: "more about the company described last" {
+node CompanyDetail: "the company" {
   summary: <text> "one line on what the company does"
 }
 
@@ -31,8 +31,9 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   content   = [m.\`Body\`, ...files]
   companies = extract(content, Company, { tier: 'careful' })
 
-  profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
+    return { ...c, ...details }
   })
 
   MAP(companies, (c) => {
@@ -46,8 +47,9 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 
 - **Content** is a list, read in the order you write it: text, files (read as text, as \`from [ … ]\` reads them), and records rendered as text with \`TEXT.SERIALISE(record, 'JSON')\`. A record put in raw is refused when you save — the rendering is part of what the model reads, so you choose it. Spread a list of files in with \`...\`.
 - **The shape** is a node declaration: at the top of the file, inside the function or lambda that uses it, or written in place with its header — \`extract(content, node Person: "each person named" { name: <text> "their name" })\`. A declaration's name bound to another name (\`S = Company\`) is the same shape. The anonymous \`node { … }\` builds a value, so it is not a shape, and neither is a shape worked out at run time.
-- **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), take the single one with \`ONLY\`, write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
-- **It is a value like any other**: use it where you need the records — \`ONLY(extract(…))\` for the single one, \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once. It may sit inside a lambda or another call. It is refused inside a walk's \`WHERE\` (read once per landing) and as a statement on its own line.
+- **The result** is a list of records, zero or more as the description says. Read it with \`MAP\`, walk a record's nested nodes (\`c-[p:person WHERE …]->\`), write and link into it as into any record the run built. Fields read as they do under the \`extract … from\` form below: text is \`""\` when nothing was found, a \`<text | null>\` field is null, and a typed field is \`T | absent\`. Each field's evidence names the content item it came from.
+- **It is a value like any other**: use it where you need the records — \`MAP(extract(…), f)\`, \`return extract(…)\` — or bind it first, \`found = extract(…)\`, when you read it more than once. It may sit inside a lambda or another call. It is refused inside a walk's \`WHERE\` (read once per landing) and as a statement on its own line.
+- **\`extractOne\` gives the one record, or absent.** The model is asked for the single \`Shape\` the content describes, or nothing if it describes none, so write the description as that one thing: \`"the company"\`, not \`"each company…"\`. The result is \`Shape | absent\`, handled as any maybe-absent value is (\`COALESCE(d.summary, "")\`, a guard). A reply naming several is a reply that does not fit, so it is tried once more and then the call fails. A record with nothing in it is absent. Content, settings, evidence and cost are as for \`extract\`, and the content it shares with an \`extract\` is read from the same cache. Its letter case is yours, as every function name's is.
 - **Settings**, each written as a quoted word: \`tier\` (\`'quick'\`, \`'careful'\`, \`'thorough'\` — see *how hard it works*), \`model\` (a model this installation can reach, by name), \`effort\` (\`'low'\`, \`'medium'\`, \`'high'\`, \`'xhigh'\`). A model or effort you name wins over the tier's. An unknown setting, or a model this installation cannot reach, is refused when you save.
 - A reply that does not fit the shape is tried once more, then the call fails. Inside \`MAP\`, \`onError: 'warn'\` leaves that record out and carries on.
 
@@ -71,14 +73,14 @@ people = extract(content, node Person: "each person named in the message" { name
 \`\`\`
 detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
   page    = fetch_url(url: c.website)
-  details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful' }))
+  details = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], CompanyDetail, { tier: 'careful' })
   return { ...c, ...details }
 })
 \`\`\`
 
 A plugin that finds nothing yields \`absent\`, so \`COALESCE\` it before it goes into the content. A plugin's arguments stay named.
 
-**Merging a record with its detail.** \`{ ...c, ...details }\` is a dict holding the company's fields and then the detail's, a later key winning, as TypeScript's object spread does. \`ONLY\` may have found nothing, and a spread of nothing copies nothing, so a key only the detail has is \`T | absent\`: \`COALESCE(d.summary, "")\` before a field that needs a value. Read the dict with a dot, \`d.name\`.
+**Merging a record with its detail.** \`{ ...c, ...details }\` is a dict holding the company's fields and then the detail's, a later key winning, as TypeScript's object spread does. \`extractOne\` may have found nothing, and a spread of nothing copies nothing, so a key only the detail has is \`T | absent\`: \`COALESCE(d.summary, "")\` before a field that needs a value. Read the dict with a dot, \`d.name\`.
 
 To walk the result, write or link into it, or have it checked against a declaration, build a graph instead:
 
@@ -93,7 +95,7 @@ node Detailed {
 }
 
 detailed = MAP(companies, (c) => {
-  details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+  details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
   return graph<Detailed> { ...c, ...details }
 })
 \`\`\`
@@ -291,7 +293,7 @@ c-[r:_resources WHERE type == "FILE"]-> {
 Every record \`extract\` produces carries what it was extracted from on its \`_resources\` edge — read off the extracted record, never off the input (the input's files are the ones you listed in \`from [ … ]\`). Filter by \`type\`: \`"TEXT"\` for the text segments the extraction read, \`"FILE"\` for the source files, which are there whether or not any text could be read out of them. A document a \`through [ … ]\` stage downloaded is a \`"FILE"\` too. A file resource carries the real bytes on its \`file\` field, so a write can attach the very document a record came from to that record. The sources fed the whole extraction, so every record in the tree carries the same ones — a nested record's \`_resources\` is its parent's.`,
   engineClaims: [
     {
-      construct: 'the extraction call — extract(content, Shape, settings), then a per-record extraction in MAP',
+      construct: 'the extraction call — extract(content, Shape, settings), then a per-record extractOne in MAP',
       status: 'runs',
       probe: `
 import { email, attio } from adapters
@@ -308,7 +310,7 @@ node Company: "each company named in this message" {
   }
 }
 
-node Profile: "more about the company described last" {
+node CompanyDetail: "the company" {
   summary: <text> "one line on what the company does"
 }
 
@@ -317,8 +319,9 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   content   = [m.\`Body\`, ...files]
   companies = extract(content, Company, { tier: 'careful' })
 
-  profiles = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    return ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
+    return { ...c, ...details }
   })
 
   MAP(companies, (c) => {
@@ -348,7 +351,7 @@ node Company: "each company named in this message" {
   }
 }
 
-node Profile: "more about the company described last" {
+node CompanyDetail: "the company" {
   summary: <text> "one line on what the company does"
 }
 
@@ -366,7 +369,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   companies = extract(content, Company, { tier: 'careful' })
 
   merged = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
-    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
     return { ...c, ...details }
   })
   MAP(merged, (d) => {
@@ -374,7 +377,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   })
 
   detailed = MAP(companies, (c) => {
-    details = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON')], Profile, { tier: 'careful' }))
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
     return graph<Detailed> { ...c, ...details }
   })
   MAP(detailed, (d) => {
@@ -723,6 +726,44 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
   })
 }
 
+`,
+    },
+    {
+      construct: 'extractOne(content, Shape, settings) — the single record or absent, handled, nested, and enriching each record in MAP',
+      status: 'runs',
+      probe: `
+import { email, attio } from adapters
+import { acme } from credentials
+
+inbox = email()
+crm   = attio(credentials: acme)
+
+node Company: "each company named in this message" {
+  name:      <text> "the company's name"
+  employees: <number> "its headcount"
+}
+
+node CompanyDetail: "the company" {
+  summary:   <text> "one line on what the company does"
+  employees: <number> "its headcount"
+}
+
+function \`Enrich\`(m: <inbox-[:Email]->>) {
+  content   = [m.\`Body\`]
+  companies = extract(content, Company, { tier: 'careful' })
+
+  detailed = MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
+    details = extractOne([...content, TEXT.SERIALISE(c, 'JSON')], CompanyDetail, { tier: 'careful' })
+    return { ...c, ...details }
+  })
+  MAP(detailed, (d) => {
+    write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: d.name, Description: COALESCE(d.summary, "") }
+  })
+
+  sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
+  big    = COALESCE(extractOne(content, CompanyDetail).employees, 0) > 50
+  write crm-[:Companies]-> { unique by (FUZZY \`Name\`) Name: COALESCE(sender.name, "unknown"), Description: IF big THEN "large" ELSE "small" END }
+}
 `,
     },
   ],

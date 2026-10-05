@@ -4349,8 +4349,9 @@ class Checker {
         break;
       }
       case 'extractCall': {
-        // A list of records, on the value plane — the currency a plugin's
-        // records and a MAP's answers already travel in.
+        // A list of records (or, for `extractOne`, one that may be absent), on
+        // the value plane — the currency a plugin's records and a MAP's
+        // answers already travel in.
         const records = this.checkExtractCall(value.extractCall, scope, name);
         symbol = {
           ...symbol,
@@ -10791,7 +10792,17 @@ class Checker {
       ...(binding !== undefined ? { binding } : {}),
       node,
     });
-    return listOf(recordOf(extractedRecordType(node)), 'ordered');
+    const record = recordOf(extractedRecordType(node));
+    switch (call.finds) {
+      case 'each':
+        return listOf(record, 'ordered');
+      // The content may describe none — absence the reader has to handle, as
+      // `ONLY(extract(…))`'s is.
+      case 'one':
+        return maybeAbsent(record);
+      default:
+        return neverAsAny(call.finds);
+    }
   }
 
   /** The declaration the shape argument names or writes in place — refused,

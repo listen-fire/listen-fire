@@ -5,6 +5,12 @@
 // an edge of records of its own. One model call per extraction, however deep
 // the shape.
 //
+// `extractOne(content, Shape, config)` is the same call asking for the single
+// record the content describes: the record, or absent when there is none. Only
+// the last block (what to extract, how to answer) and the reply's packaging
+// differ, so it shares the cached content with an `extract` over the same
+// content.
+//
 // This is a SECOND engine path beside the keyword's (`extraction.ts`), and the
 // keyword's is untouched by it. What the two share is single-call machinery
 // only — the declaration's spec builder, the field validators, the file-text
@@ -24,9 +30,11 @@
 
 import { createHash } from 'node:crypto';
 
+import type { ExtractCallFinds } from 'movement-lang';
 import { z } from 'zod';
 
 import { anthropicChatDetailed, MAX_CHAT_CONTINUATIONS } from '../../lib/anthropic';
+import { neverAsAny } from '../../lib/utils/types';
 import { parseJsonReply } from '../../lib/prompts/execute';
 import type { LlmCallResult } from '../translation_graph/engine/batched_extraction';
 import type { FileRef } from '../translation_graph/adapter';
@@ -61,7 +69,7 @@ import {
   type LocalLandingShape,
   type MovementTraceEntry,
 } from './expression';
-import { fromOrigin, type ExtractSiteRef, type Provenance, type ProvenanceOrigin } from './provenance';
+import { fromOrigin, NO_PROVENANCE, type ExtractSiteRef, type Provenance, type ProvenanceOrigin } from './provenance';
 
 // ── The model seam ──────────────────────────────────────────────────────────
 
@@ -230,14 +238,26 @@ export const EXTRACT_CALL_SYSTEM_PROMPT = [
   'Read every content item. Extract only what the content supports, and cite the item each value came from.',
 ].join('\n');
 
-/** The answer key — fixed, because the shape block is the only thing that
- *  should differ between two calls over the same content. */
-const ANSWER_KEY = 'records';
+/** The answer key for each call — fixed per call, because the shape block is
+ *  the only thing that should differ between two calls over the same
+ *  content. `extract` answers a list of records; `extractOne` one record, or
+ *  null. */
+const ANSWER_KEY: Record<ExtractCallFinds, string> = { each: 'records', one: 'record' };
 
-function guideLines(spec: ExtractNodeSpec, parent: string | undefined, depth: number): string[] {
+function guideLines(spec: ExtractNodeSpec, parent: string | undefined, depth: number, finds: ExtractCallFinds): string[] {
   const indent = '  '.repeat(depth);
+  const root = (): string => {
+    switch (finds) {
+      case 'each':
+        return `${indent}**${spec.name}**${described(spec.description)} — emit each one as an element of the \`${ANSWER_KEY.each}\` array (zero, one, or many, as the description says)`;
+      case 'one':
+        return `${indent}**${spec.name}**${described(spec.description)} — the one record, as the object under \`${ANSWER_KEY.one}\``;
+      default:
+        return neverAsAny(finds);
+    }
+  };
   const head = parent === undefined
-    ? `${indent}**${spec.name}**${described(spec.description)} — emit each one as an element of the \`${ANSWER_KEY}\` array (zero, one, or many, as the description says)`
+    ? root()
     : `${indent}**${spec.name}** (an array under the key \`${spec.name}\` inside each **${parent}**)${described(spec.description)}`;
   const stage = spec.stages[0];
   const fields = (stage?.fields ?? []).map(
@@ -246,20 +266,52 @@ function guideLines(spec: ExtractNodeSpec, parent: string | undefined, depth: nu
   return [
     head,
     ...(fields.length > 0 ? fields : [`${indent}    (no fields — structural only)`]),
-    ...(stage?.children ?? []).flatMap((child) => guideLines(child, spec.name, depth + 1)),
+    ...(stage?.children ?? []).flatMap((child) => guideLines(child, spec.name, depth + 1, finds)),
   ];
 }
 
+/** What the call asks for, said before the shape: `extractOne` asks for the
+ *  single thing the content describes — in the shape's own words when it has
+ *  them — and says that nothing is an answer. */
+function askLines(spec: ExtractNodeSpec, finds: ExtractCallFinds): string[] {
+  switch (finds) {
+    case 'each':
+      return [];
+    case 'one': {
+      const description = spec.description.trim();
+      const ask = description === ''
+        ? `Extract the single **${spec.name}** these sources describe, or nothing if they don't.`
+        : `Extract ${description} — the single one these sources describe, or nothing if they don't.`;
+      return [ask, ''];
+    }
+    default:
+      return neverAsAny(finds);
+  }
+}
+
+/** How the answer is packaged, for each call. */
+function answerLine(finds: ExtractCallFinds): string {
+  switch (finds) {
+    case 'each':
+      return `Return a JSON object with one key, \`${ANSWER_KEY.each}\`, whose value is a bare JSON array of records. A nested node is a bare array of its own records under its key inside its parent record.`;
+    case 'one':
+      return `Return a JSON object with one key, \`${ANSWER_KEY.one}\`, whose value is the one record as a bare JSON object — or null when these sources describe none. Never an array: this asks for one record. A nested node is a bare array of its own records under its key inside the record.`;
+    default:
+      return neverAsAny(finds);
+  }
+}
+
 /** The last block: the shape, then the instructions. */
-function shapeBlock(spec: ExtractNodeSpec, items: readonly number[]): string {
+function shapeBlock(spec: ExtractNodeSpec, items: readonly number[], finds: ExtractCallFinds): string {
   return [
     '## What to extract',
     '',
-    guideLines(spec, undefined, 0).join('\n'),
+    ...askLines(spec, finds),
+    guideLines(spec, undefined, 0, finds).join('\n'),
     '',
     '## How to answer',
     '',
-    `Return a JSON object with one key, \`${ANSWER_KEY}\`, whose value is a bare JSON array of records. A nested node is a bare array of its own records under its key inside its parent record.`,
+    answerLine(finds),
     '',
     'Every field is answered as `{ "value": …, "evidence": { "item": <n>, "quote": "…" } }` — the typed value, the number of the content item it came from, and a quote of the passage that supports it. Use null for a value the content does not give.',
     '',
@@ -269,8 +321,31 @@ function shapeBlock(spec: ExtractNodeSpec, items: readonly number[]): string {
     '- Every key inside a record is a field or nested node the guide declares for it. Do not rename a field or answer under a key of your own.',
     "- A field's description is authoritative. When it asks you to compose, normalise or reformat a value, produce that value and quote the passage(s) it was built from.",
     '- Use null only when the content genuinely lacks the information. Never stand a missing value in with an empty string or a placeholder like "none", "N/A" or "unknown".',
-    '- Records of the same kind must be distinct. Omit a record entirely rather than emitting one with every field null.',
+    emptyRecordRule(finds),
   ].join('\n');
+}
+
+/** Where the retry is told the corrected answer goes. */
+function correctionLine(finds: ExtractCallFinds): string {
+  switch (finds) {
+    case 'each':
+      return `with every record under \`${ANSWER_KEY.each}\``;
+    case 'one':
+      return `with the one record (or null) under \`${ANSWER_KEY.one}\``;
+    default:
+      return neverAsAny(finds);
+  }
+}
+
+function emptyRecordRule(finds: ExtractCallFinds): string {
+  switch (finds) {
+    case 'each':
+      return '- Records of the same kind must be distinct. Omit a record entirely rather than emitting one with every field null.';
+    case 'one':
+      return `- Answer \`${ANSWER_KEY.one}\` as null rather than a record with every field null. Records of the same nested kind must be distinct; omit a nested record rather than emitting one with every field null.`;
+    default:
+      return neverAsAny(finds);
+  }
 }
 
 // ── The answer ──────────────────────────────────────────────────────────────
@@ -347,10 +422,39 @@ function recordSchema(spec: ExtractNodeSpec, sink: CoercionTracker): z.ZodTypeAn
   });
 }
 
-function responseSchema(spec: ExtractNodeSpec, sink: CoercionTracker): z.ZodTypeAny {
-  return z
-    .object({ [ANSWER_KEY]: z.preprocess(recordList, z.array(recordSchema(spec, sink))) })
-    .passthrough();
+/** `extractOne`'s record as the model may have packaged it: the object asked
+ *  for, or a list holding one (or none). A list of several stays a list, for
+ *  the schema to refuse. */
+function singleRecord(value: unknown): unknown {
+  if (!Array.isArray(value) || value.length > 1) return value;
+  return value.length === 0 ? null : value[0];
+}
+
+function responseSchema(spec: ExtractNodeSpec, sink: CoercionTracker, finds: ExtractCallFinds): z.ZodTypeAny {
+  switch (finds) {
+    case 'each':
+      return z
+        .object({ [ANSWER_KEY.each]: z.preprocess(recordList, z.array(recordSchema(spec, sink))) })
+        .passthrough();
+    case 'one': {
+      // Several records where one was asked for is a malformed reply — the
+      // author's claim that there is one is the model's to meet, not the
+      // engine's to settle by picking — so it takes the retry, then fails.
+      const one = z
+        .unknown()
+        .superRefine((value, ctx) => {
+          if (!Array.isArray(value)) return;
+          ctx.addIssue({
+            code: 'custom',
+            message: `${value.length} records were answered, and this asks for the single one — answer one object, or null`,
+          });
+        })
+        .pipe(recordSchema(spec, sink).nullable());
+      return z.object({ [ANSWER_KEY.one]: z.preprocess(singleRecord, one) }).passthrough();
+    }
+    default:
+      return neverAsAny(finds);
+  }
 }
 
 // ── The records ─────────────────────────────────────────────────────────────
@@ -565,17 +669,34 @@ export interface ExtractCallInput {
   contentProvenance: Provenance;
   /** The shape, as the spec its declaration builds. */
   spec: ExtractNodeSpec;
+  /** `each` record the content names (`extract`), or the `one` it describes
+   *  (`extractOne`). */
+  finds: ExtractCallFinds;
   settings: ExtractionCallSettings;
   /** Unique within the run — the provenance site's id. */
   siteId: string;
   runtime: ExtractCallRuntime;
 }
 
-/** Run one extraction call: the records found, as a list of records. A reply
- *  that answers some other question is asked once more, then raised — what a
- *  caller does with a failure is the caller's (`MAP`'s `onError`). */
+/** What the call hands back: the list of records for `extract`; for
+ *  `extractOne` the record, or absent when there is none. */
+function answerOf(landings: NodePosition[], finds: ExtractCallFinds): Binding {
+  switch (finds) {
+    case 'each':
+      return { kind: 'positions', landings };
+    case 'one':
+      return landings[0] ?? { kind: 'value', value: null, provenance: NO_PROVENANCE };
+    default:
+      return neverAsAny(finds);
+  }
+}
+
+/** Run one extraction call: the records found — a list of records, or the
+ *  one record or absent. A reply that answers some other question is asked
+ *  once more, then raised — what a caller does with a failure is the
+ *  caller's (`MAP`'s `onError`). */
 export async function runExtractCall(input: ExtractCallInput): Promise<Binding> {
-  const { spec, settings, runtime } = input;
+  const { spec, settings, runtime, finds } = input;
   const items = await contentItems(input.content, runtime);
   const files = items.flatMap((item) => (item.file !== undefined ? [item.file] : []));
   const parts = items.map((item) => ({ classification: item.classification, chars: item.block.length }));
@@ -592,7 +713,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     // Nothing to read is nothing found — said on the run, not left to look
     // like a model that found nothing.
     runtime.trace?.push({ kind: 'extraction', ...shape, skipped: 'empty_source', emissions: { [spec.name]: 0 } });
-    return { kind: 'positions', landings: [] };
+    return answerOf([], finds);
   }
 
   const cacheKey = `${settings.model}|${settings.effort}`;
@@ -603,7 +724,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     ...(breakpointAt.has(position) ? { cacheBreakpoint: true as const } : {}),
   }));
   const shown = new Set(items.map((item) => item.index));
-  const guide = shapeBlock(spec, items.map((item) => item.index));
+  const guide = shapeBlock(spec, items.map((item) => item.index), finds);
   const site: ExtractSiteRef = {
     siteId: input.siteId,
     node: spec.name,
@@ -616,7 +737,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
   };
 
   const sink = new CoercionTracker();
-  const schema = responseSchema(spec, sink);
+  const schema = responseSchema(spec, sink, finds);
   const usage: ExtractCallUsage[] = [];
   let lastReply: ExtractCallLlmResult | undefined;
   const started = Date.now();
@@ -668,7 +789,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     // The content blocks are the same blocks, so the retry reads them from the
     // cache the first attempt wrote; only the last block says what was wrong.
     const retry = await ask(
-      `${guide}\n\n---\n\nYour previous response had validation errors:\n${lines.join('\n')}\n\nReturn the complete corrected JSON, with every record under \`${ANSWER_KEY}\`.`,
+      `${guide}\n\n---\n\nYour previous response had validation errors:\n${lines.join('\n')}\n\nReturn the complete corrected JSON, ${correctionLine(finds)}.`,
       'movement_extract_call_retry',
     );
     sink.reset();
@@ -691,9 +812,13 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     }
   }
   const tallies: RecordTallies = { empty: {}, dropped: {} };
-  const answer = parsed.data as Record<string, unknown>;
-  const answered = Array.isArray(answer[ANSWER_KEY]) ? (answer[ANSWER_KEY] as unknown[]).filter(isPlainRecord).length : 0;
-  const landings = buildRecords(answer[ANSWER_KEY], spec, site, shown, tallies);
+  // `extractOne`'s one record (or none) is a list of at most one from here
+  // on, so a record with nothing in it drops by the same rule — and leaves
+  // the reply on the trace — as one of `extract`'s does.
+  const reply = (parsed.data as Record<string, unknown>)[ANSWER_KEY[finds]];
+  const records = Array.isArray(reply) ? reply : reply == null ? [] : [reply];
+  const answered = records.filter(isPlainRecord).length;
+  const landings = buildRecords(records, spec, site, shown, tallies);
   const coerced = sink.snapshot();
   const why: Array<'no_entities' | 'dropped_records' | 'retried'> = [];
   if (answered === 0) why.push('no_entities');
@@ -710,7 +835,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
     ...(coerced ? { coerced } : {}),
     ...telemetry(),
   });
-  return { kind: 'positions', landings };
+  return answerOf(landings, finds);
 }
 
 /** How many nodes a shape has — the density heuristic's input when no tier is

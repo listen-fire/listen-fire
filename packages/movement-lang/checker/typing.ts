@@ -47,7 +47,7 @@ import {
   type StdlibFunctionSpec,
 } from '../expression/stdlib';
 import { builtinParamAt, describeBuiltin, lookupBuiltin, type Builtin } from './standard_library';
-import { EXTRACT_CALL_NESTED_MESSAGE } from './calls';
+import { extractCallNestedMessage } from './calls';
 import { neverAsAny } from '../never';
 import { before, since, type LanguageVersion } from '../language_version';
 import { Span } from '../parser/ast';
@@ -1015,6 +1015,9 @@ function describeParamType(param: BuiltinParamType): string {
 /** The flat built-in `COALESCE(a, b, …)`. The grammar lowercases every function
  *  name, so this is the id that reaches the checker. */
 const COALESCE_FUNCTION_ID = 'coalesce';
+
+/** `extractOne(…)`, as the grammar's lowercasing hands it over. */
+const EXTRACT_ONE_FUNCTION_ID = 'extractone';
 
 /** Wrap `T` as `T | absent`, flattening (`maybeAbsent(maybeAbsent(T))` is one
  *  level) so callers never nest. `undefined` (untyped) stays untyped — an
@@ -3849,18 +3852,23 @@ export class ExpressionTyping {
         }
         // Before version 3 there is no extraction call, and the name means
         // what any unknown function does.
-        if (expr.fn === 'extract' && since(this.options.languageVersion, 3)) {
+        const isExtractCall = expr.fn === 'extract' || expr.fn === EXTRACT_ONE_FUNCTION_ID;
+        if (isExtractCall && since(this.options.languageVersion, 3)) {
           this.report(
             TypedDiagnosticCodes.EXTRACT_CALL_NESTED,
-            EXTRACT_CALL_NESTED_MESSAGE,
+            extractCallNestedMessage(expr.fn === 'extract' ? 'extract' : 'extractOne'),
           );
         }
         // The call's entry in the standard-library scope: its effects (the
         // clock `DATE.TODAY` reads, the file `READ` fetches) are its declared
         // row, and from version 3 its arguments are checked against its
         // signature. A name it does not list is resolution's to report (the
-        // checker's call walk), or a write field's own function.
-        const builtin = lookupBuiltin(expr.fn);
+        // checker's call walk), or a write field's own function. `extractOne`
+        // was a name like any other before version 3, so it has no entry there.
+        const builtin =
+          expr.fn === EXTRACT_ONE_FUNCTION_ID && before(this.options.languageVersion, 3)
+            ? undefined
+            : lookupBuiltin(expr.fn);
         if (builtin !== undefined) {
           this.absorbBuiltinEffects(builtin);
           this.checkBuiltinArgs(builtin, args);
