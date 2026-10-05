@@ -24,6 +24,7 @@ import { proseViolations } from './prose_rules';
 import { chapterRoute } from '../../../handbook_section';
 import type { ChapterId, EngineClaim } from '../types';
 import { frontPageClaims } from '../front_page';
+import { examplesPageClaims } from '../examples_page';
 import { controlFormClaims } from '../language_search';
 import {
   renderMovementIndex,
@@ -565,9 +566,11 @@ const allClaims: Array<EngineClaim & { chapter: string }> = Object.values(
 ).flatMap((chapter): Array<EngineClaim & { chapter: string }> =>
   (chapter.engineClaims ?? []).map((claim) => ({ ...claim, chapter: chapter.id })),
 ).concat(
-  // The lean handbook's front page and the language search's control forms
-  // show examples too, outside any chapter; they are held the same way.
+  // The lean handbook's front page, the examples handbook's programs and the
+  // language search's control forms show examples too, outside any chapter;
+  // they are held the same way.
   frontPageClaims().map((claim) => ({ ...claim, chapter: 'front' })),
+  examplesPageClaims().map((claim) => ({ ...claim, chapter: 'examples' })),
   controlFormClaims().map((claim) => ({ ...claim, chapter: 'language-search' })),
 );
 
@@ -608,7 +611,11 @@ describe('movement_handbook runnable examples check clean against the real check
     '%s — "%s" checks clean',
     (_chapter, _construct, claim) => {
       const program = parseProgram(claim.probe);
-      const errors = checkProgram(program, catalogFor(claim.probe)).filter(
+      const files = claim.status === 'runs' ? claim.files : undefined;
+      const resolveFile = files
+        ? (path: string) => (files[path] !== undefined ? { source: files[path] } : undefined)
+        : undefined;
+      const errors = checkProgram(program, catalogFor(claim.probe), resolveFile ? { resolveFile } : undefined).filter(
         (d) => (d.severity ?? 'error') === 'error',
       );
       expect(errors.map((d) => `${d.code}: ${d.message}`)).toEqual([]);

@@ -220,6 +220,13 @@ describe('getStarted', () => {
     expect(snapshotMock).not.toHaveBeenCalled();
   });
 
+  it('serves the annotated programs as the first page of the examples handbook', async () => {
+    stubTeamCatalog();
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'examples' });
+    expect(page).toContain('## Writing automations, by example');
+    expect(page).not.toContain('## Writing automations: it is TypeScript, except…');
+  });
+
   it('serves the foundations chapter as the first page of the full handbook', async () => {
     stubTeamCatalog();
     const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'full' });

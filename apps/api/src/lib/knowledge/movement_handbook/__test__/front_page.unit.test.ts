@@ -5,6 +5,7 @@
 
 import { HANDBOOK_POINTERS, HANDBOOK_POINTER_BY_CODE } from 'movement-lang';
 import { readBook } from '../../library';
+import { HANDBOOK_MODES } from '../handbook_mode';
 import { CONCEPTS, TS_EXCEPT, exampleProgram, frontPageClaims, frontSection, renderFrontPage } from '../front_page';
 import { proseViolations } from './prose_rules';
 
@@ -57,7 +58,7 @@ describe('the front page', () => {
 describe('diagnostics point at a section that exists', () => {
   const anchors = [...new Set([...Object.values(HANDBOOK_POINTERS), ...Object.values(HANDBOOK_POINTER_BY_CODE)])];
 
-  it.each(anchors.flatMap((anchor) => (['full', 'lean'] as const).map((mode) => [anchor, mode] as const)))(
+  it.each(anchors.flatMap((anchor) => HANDBOOK_MODES.map((mode) => [anchor, mode] as const)))(
     '%s resolves through the handbook (%s)',
     (anchor, mode) => {
       const read = readBook({ bookId: 'automations', chapter: anchor, mode }) as { content?: string; error?: string };

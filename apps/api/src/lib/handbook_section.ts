@@ -21,7 +21,14 @@
  *                 gap-closure cannot forget the docs.
  */
 export type EngineClaim =
-  | { construct: string; status: 'runs'; probe: string }
+  | {
+      construct: string;
+      status: 'runs';
+      probe: string;
+      /** Library files the probe imports by path (`import { f } from "lib/x"`),
+       *  keyed by that path, so the checker can resolve them as a save would. */
+      files?: Readonly<Record<string, string>>;
+    }
   | {
       construct: string;
       status: 'pending';
