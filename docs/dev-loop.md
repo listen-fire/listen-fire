@@ -679,7 +679,7 @@ calls; stack up and seeded first. One stack at a time — runs are serial.
 pnpm dev:automation-eval --tasks inbound-intake --k 1      # smoke: one task, one trial
 pnpm dev:automation-eval --variants noskill,skill --k 3    # baseline, with and without the builder skill
 pnpm dev:automation-eval --skill --tasks ambiguous-channel # only the skill variant
-  # --model claude-opus-5-5 --effort high   the builder (default shown)
+  # --model claude-sonnet-5-5 --effort high   the builder (default shown)
   # --user-model / --judge-model            the simulated user and the judge (default claude-sonnet-5-5)
   # --max-trial-cost 2                      $ ceiling per trial (builder + user + judge); over it = "budget-exceeded"
   # --max-model-calls 60 --max-user-turns 8

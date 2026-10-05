@@ -110,7 +110,7 @@ function parseArgs(argv: string[]): Args {
     taskIds: list(get('--tasks')) ?? TASKS.map((t) => t.id),
     k: positive('--k', 1),
     variants,
-    builderModel: get('--model') ?? 'claude-opus-5-5',
+    builderModel: get('--model') ?? 'claude-sonnet-5-5',
     builderEffort,
     userModel: get('--user-model') ?? 'claude-sonnet-5-5',
     judgeModel: get('--judge-model') ?? 'claude-sonnet-5-5',
