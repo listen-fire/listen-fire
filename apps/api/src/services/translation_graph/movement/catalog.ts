@@ -391,16 +391,23 @@ function triggerConfigVocabulary(manifest: {
   | 'triggerConfig'
   | 'triggerConfigOptions'
   | 'triggerConfigRequired'
+  | 'triggerConfigRequiredWhy'
   | 'triggerConfigFormats'
   | 'defaultEvents'
 > {
   const keys: string[] = [];
   const options: Record<string, string[]> = {};
   const required: string[] = [];
+  const why: Record<string, string> = {};
   const formats: NonNullable<AdapterSpec['triggerConfigFormats']> = {};
   // An adapter's inbound routing-key block (email's `key`) becomes a listen
   // config key — routed generically off the block declaration, not a named
   // forwarding-address flag. Presentation/action blocks carry no key.
+  //
+  // It is also REQUIRED: a routing key is how an inbound event finds its
+  // listener (`findTriggerByInboundKey` matches on it and nothing else), so a
+  // listen without one provisions a listener no event can ever be addressed
+  // to. That saved clean, with no address, and stayed silent forever.
   for (const block of manifest.triggerConfig ?? []) {
     if (
       (block.kind === 'text' || block.kind === 'slug') &&
@@ -408,6 +415,11 @@ function triggerConfigVocabulary(manifest: {
       !keys.includes(block.key)
     ) {
       keys.push(block.key);
+      required.push(block.key);
+      why[block.key] =
+        block.prefix !== undefined || block.suffix !== undefined
+          ? `the ${block.key} is this listener's address, ${block.prefix ?? ''}<${block.key}>${block.suffix ?? ''}; without one nothing can be sent to it and it never fires`
+          : `inbound events find this listener by its ${block.key}; without one nothing can reach it and it never fires`;
     }
   }
   if (manifest.subscribableEvents !== undefined && manifest.subscribableEvents.length > 0) {
@@ -416,7 +428,7 @@ function triggerConfigVocabulary(manifest: {
   }
   for (const entry of manifest.listenConfig ?? []) {
     if (!keys.includes(entry.key)) keys.push(entry.key);
-    if (entry.required) required.push(entry.key);
+    if (entry.required && !required.includes(entry.key)) required.push(entry.key);
     if (entry.format !== undefined) formats[entry.key] = entry.format;
   }
   return {
@@ -427,6 +439,7 @@ function triggerConfigVocabulary(manifest: {
     ...(keys.length > 0 ? { triggerConfig: keys } : {}),
     ...(Object.keys(options).length > 0 ? { triggerConfigOptions: options } : {}),
     ...(required.length > 0 ? { triggerConfigRequired: required } : {}),
+    ...(Object.keys(why).length > 0 ? { triggerConfigRequiredWhy: why } : {}),
     ...(Object.keys(formats).length > 0 ? { triggerConfigFormats: formats } : {}),
     // The adapter's own no-selection dispatch default (whatsapp: messages
     // only) — the checker types a config-less listen with it.
@@ -1508,8 +1521,10 @@ export function toCatalogSnapshot(input: {
       triggerConfig?: string[];
       /** Per-key value vocabularies (the subscribable-event surface). */
       triggerConfigOptions?: Record<string, string[]>;
-      /** Keys a listen must carry (the cron `schedule`). */
+      /** Keys a listen must carry (the cron `schedule`, email's `key`). */
       triggerConfigRequired?: string[];
+      /** Why each required key is required (see `AdapterSpec`). */
+      triggerConfigRequiredWhy?: Record<string, string>;
       /** Per-key static value formats — DERIVED from movement-lang's own spec
        *  rather than re-spelled, because a hand-mirrored copy of a union is a
        *  copy that goes stale (this one did, the day `'fields'` was added). */
@@ -1551,6 +1566,9 @@ export function toCatalogSnapshot(input: {
         : {}),
       ...(spec.triggerConfigRequired !== undefined
         ? { triggerConfigRequired: spec.triggerConfigRequired }
+        : {}),
+      ...(spec.triggerConfigRequiredWhy !== undefined
+        ? { triggerConfigRequiredWhy: spec.triggerConfigRequiredWhy }
         : {}),
       ...(spec.triggerConfigFormats !== undefined
         ? { triggerConfigFormats: spec.triggerConfigFormats }

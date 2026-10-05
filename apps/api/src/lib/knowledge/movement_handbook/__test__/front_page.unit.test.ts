@@ -5,7 +5,7 @@
 
 import { HANDBOOK_POINTERS, HANDBOOK_POINTER_BY_CODE } from 'movement-lang';
 import { readBook } from '../../library';
-import { CONCEPTS, TS_EXCEPT, frontPageClaims, frontSection, renderFrontPage } from '../front_page';
+import { CONCEPTS, TS_EXCEPT, exampleProgram, frontPageClaims, frontSection, renderFrontPage } from '../front_page';
 import { proseViolations } from './prose_rules';
 
 /** The page is read on every build; past this it stops being a front page. */
@@ -28,11 +28,18 @@ describe('the front page', () => {
   it('only shows examples that are checked', () => {
     const shown = [...TS_EXCEPT, ...CONCEPTS].filter((e) => e.example !== undefined).length;
     expect(frontPageClaims()).toHaveLength(shown);
-    for (const claim of frontPageClaims()) expect(page).not.toContain(claim.probe);
+    // A whole-file example is shown exactly as checked; every other one is
+    // checked inside the prelude the page leaves unsaid.
+    for (const entry of [...TS_EXCEPT, ...CONCEPTS]) {
+      if (entry.example === undefined) continue;
+      const probe = exampleProgram(entry.example);
+      if ('file' in entry.example) expect(page).toContain(probe.trimEnd());
+      else expect(page).not.toContain(probe);
+    }
   });
 
   it('carries every concept with no TypeScript analogue', () => {
-    expect(CONCEPTS.map((c) => c.anchor)).toEqual(['graph-and-paths', 'identity', 'extraction', 'runs']);
+    expect(CONCEPTS.map((c) => c.anchor)).toEqual(['systems', 'graph-and-paths', 'identity', 'extraction', 'runs']);
   });
 
   it('answers each anchor alone, and names the real ones for an unknown one', () => {
