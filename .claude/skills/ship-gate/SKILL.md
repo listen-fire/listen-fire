@@ -24,10 +24,23 @@ Gates everything accumulated on local main since the last gate.
      A wide pattern (2+ big dirs, e.g. `movement|interfaces/rest`) exceeds the
      600s background-command ceiling at ~15-18s/suite — run each big dir as
      its own sequential leg instead (learned twice, 2026-08-03/04).
+     Add `--maxWorkers=4` on the command line: the unit config pins
+     `maxWorkers: 1` for interactive runs, and a gate leg of ~240 suites at
+     ~12s each takes ~50 min serially (seen 2026-10-05).
+   - Two tiers of test scope:
+     - **Chunk gate** (every gate): only the dirs the chunk touched, plus
+       the language-version conformance corpora when the chunk touched the
+       language (`test:conformance:v1` / `:v2` in packages/movement-lang and
+       apps/api). Target ~15–20 min wall time.
+     - **Wide sweep** (before a push only, once per push): the broad apps/api
+       pattern across every area the unpushed commits touched (adapters,
+       translation_graph, mcp, trpc, lib, …), with `--maxWorkers=4`, as
+       separate legs per big dir. Not repeated per chunk.
 2. If the chunk touched an integration or agent path, also verify end-to-end
    through the dev loop (boot `pnpm dev:loop:agent`, exercise the real flow,
    check the data roundtrip).
-3. **Green** → report gate-passed; push only if the user has asked for a push.
+3. **Green** → report gate-passed; push only if the user has asked for a push,
+   and only after the wide sweep has passed on the exact commit being pushed.
 4. **Red** → dispatch a fix-up agent (the `implementer` agent) carrying ONLY:
    the verbatim failure output, the suspect files, and the constraint "fix the
    gate failure, change nothing else". Re-run the failed leg (scoped to the
