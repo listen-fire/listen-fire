@@ -301,6 +301,7 @@ async function runTrial(input: {
       modelCalls: build.modelCalls,
       userTurns: build.userTurns,
       buildWallMs: build.wallMs,
+      timing: build.timing,
     }),
     safety: assessSafety({
       toolCalls: build.toolCalls,
@@ -390,7 +391,7 @@ async function main(): Promise<void> {
           );
           writeReport({ outDir, startedAt, args, trials });
           log(
-            `  → ${trial.outcome}, correct=${trial.correct}, safe=${trial.safety.pass}, clarity=${trial.clarity?.overall.toFixed(1) ?? '–'}, handbook ≈${trial.efficiency.handbookTokens} tokens, $${trial.costUsd.toFixed(2)}, ${Math.round(trial.wallMs / 1000)}s`,
+            `  → ${trial.outcome}, correct=${trial.correct}, safe=${trial.safety.pass}, clarity=${trial.clarity?.overall.toFixed(1) ?? '–'}, build ${Math.round(trial.efficiency.buildWallMs / 1000)}s (model ${Math.round(trial.efficiency.modelMs / 1000)}s, tools ${Math.round(trial.efficiency.toolMs / 1000)}s), ${trial.efficiency.toolCalls} tool calls, read ≈${trial.efficiency.readTokens.total} tokens, $${trial.costUsd.toFixed(2)}, ${Math.round(trial.wallMs / 1000)}s`,
           );
         }
       }

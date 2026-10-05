@@ -58,6 +58,17 @@ type BuildEndReason =
   | 'refusal'
   | 'error';
 
+/** Where a build's wall time went. Tool calls asked for in one turn run
+ *  together, as a real client runs them, so tool time is each turn's slowest
+ *  call, summed — not the calls' own durations added up. */
+interface BuildTiming {
+  /** Each builder model call, in order. */
+  modelCallMs: number[];
+  toolMs: number;
+  /** The simulated user answering. */
+  userMs: number;
+}
+
 interface BuildOutcome {
   endReason: BuildEndReason;
   error: string | null;
@@ -69,6 +80,7 @@ interface BuildOutcome {
   builderUsage: TokenUsage;
   userUsage: TokenUsage;
   wallMs: number;
+  timing: BuildTiming;
 }
 
 interface BuildOptions {
@@ -266,6 +278,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
   let modelCalls = 0;
   let userTurns = 0;
   let lastCallCost = 0;
+  const timing: BuildTiming = { modelCallMs: [], toolMs: 0, userMs: 0 };
 
   const spent = () =>
     (costUsd(options.builderModel, builderUsage) ?? 0) + (costUsd(options.userModel, userUsage) ?? 0);
@@ -280,6 +293,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
     builderUsage,
     userUsage,
     wallMs: Date.now() - started,
+    timing,
   });
 
   let mcp: McpConnection;
@@ -299,6 +313,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
       // next call costs at least what the last one did (the context only grows).
       if (spent() + lastCallCost * 1.5 >= options.maxCostUsd) return finish('cost-budget');
 
+      const callStarted = Date.now();
       const response = await client.messages
         .stream({
           model: options.builderModel,
@@ -314,6 +329,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
           output_config: { effort: options.builderEffort },
         })
         .finalMessage();
+      timing.modelCallMs.push(Date.now() - callStarted);
       modelCalls += 1;
       const before = spent();
       addMessageUsage(builderUsage, response.usage);
@@ -327,15 +343,15 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
 
       const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
       if (toolUses.length > 0 && response.stop_reason === 'tool_use') {
-        const results: Anthropic.ToolResultBlockParam[] = [];
-        for (const block of toolUses) {
-          const { record, result } = await callMcpTool(mcp, block, modelCalls);
+        const batchStarted = Date.now();
+        const called = await Promise.all(toolUses.map((block) => callMcpTool(mcp, block, modelCalls)));
+        timing.toolMs += Date.now() - batchStarted;
+        for (const { record } of called) {
           toolCalls.push(record);
           steps.push({ kind: 'tool', modelCall: modelCalls, name: record.name, toolCallIndex: toolCalls.length - 1 });
-          results.push(result);
           options.log(`    tool ${record.name}${record.isError ? ' (error)' : ''} ${record.ms}ms`);
         }
-        messages.push({ role: 'user', content: results });
+        messages.push({ role: 'user', content: called.map(({ result }) => result) });
         continue;
       }
 
@@ -344,6 +360,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
       options.log(`    builder: ${said.slice(0, 160).replace(/\n/g, ' ')}${said.length > 160 ? '…' : ''}`);
       if (userTurns >= options.maxUserTurns) return finish('user-turn-budget');
 
+      const userStarted = Date.now();
       const answer = await askSimulatedUser({
         client,
         model: options.userModel,
@@ -351,6 +368,7 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
         transcript,
         usage: userUsage,
       });
+      timing.userMs += Date.now() - userStarted;
       if (answer.done) return finish('done');
       userTurns += 1;
       transcript.push({ role: 'user', text: answer.reply });
@@ -366,4 +384,4 @@ async function runBuilder(options: BuildOptions): Promise<BuildOutcome> {
 }
 
 export { mcpHeaders, proseSteps, readBuilderSkill, runBuilder };
-export type { BuildEndReason, BuildOutcome, BuilderStep, Effort, ToolCallRecord, TranscriptEntry, Variant };
+export type { BuildEndReason, BuildOutcome, BuildTiming, BuilderStep, Effort, ToolCallRecord, TranscriptEntry, Variant };

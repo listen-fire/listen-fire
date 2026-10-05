@@ -9,6 +9,7 @@ import type { Chapter } from '../types';
 /** Names of the authoring affordances — mechanics of one consumer's loop, so
  *  never in prose two consumers read. */
 const AUTHORING_TOOL_NAMES = [
+  'getStarted',
   'readHandbook',
   'listConnections',
   'describeConnection',

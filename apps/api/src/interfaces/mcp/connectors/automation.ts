@@ -5,7 +5,7 @@
 import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 
-import { createMcpRouter } from '../server';
+import { createMcpRouter, type McpRouterOptions } from '../server';
 import { storyApp } from '../story_app';
 import { AUTOMATION_MCP_PATH } from '../paths';
 import {
@@ -43,11 +43,11 @@ const INSTRUCTIONS_BEFORE_LOOP =
   "To automate anything for the user — react to events, move data between their systems, push into their CRM or chat — build an \"automation\" here: a small program over their real connected systems. This connector is how you make Listen-Fire DO things.\n\n";
 
 const INSTRUCTIONS_AFTER_LOOP =
-  "Call listConnections early and reconcile it against the task — mint any missing connection first via connectSystem. Author against describeConnection's real record and field names, never from memory. Then validateAutomation, saveAutomation, and runAutomation on real input; checkRun and inspectRun show what a run did. Once something is saved, prefer a small edit over resending the whole program: readAutomation (or getAutomation, which also carries its metadata) to see the current text, grepAutomations to find where something is defined or used, and editAutomation to change it — anchored on a unique snippet plus the revision you just read, so a concurrent edit is caught instead of clobbered. Reach for saveAutomation itself only for a brand-new automation or a genuine rewrite. A write a third party sees (an email, a message to someone else) gets an approval step inside the automation — a question a person acts on. The user's knowledge graph is reachable as the `kg` system in listConnections.\n\nTeams. This connection spans the user's teams (listTeams). Creating or changing anything in a team needs its id as `team`; with exactly one team you may omit it.";
+  "Reconcile getStarted's systems against the task — mint any missing connection first via connectSystem. Author against the real record and field names (getStarted's digest; describeConnection for more of one system), never from memory. Then saveAutomation: it validates first and saves nothing while there are errors, handing back the diagnostics, so a separate validateAutomation is not needed. Then runAutomation on real input; checkRun and inspectRun show what a run did. Make independent tool calls together, in one turn. Once something is saved, prefer a small edit over resending the whole program: readAutomation (or getAutomation, which also carries its metadata) to see the current text, grepAutomations to find where something is defined or used, and editAutomation to change it — anchored on a unique snippet plus the revision you just read, so a concurrent edit is caught instead of clobbered. Reach for saveAutomation itself only for a brand-new automation or a genuine rewrite. A write a third party sees (an email, a message to someone else) gets an approval step inside the automation — a question a person acts on. The user's knowledge graph is reachable as the `kg` system in listConnections.\n\nTeams. This connection may span several teams; getStarted lists them with their ids. Creating or changing anything in a team needs its id as `team`; with exactly one team you may omit it.";
 
 const HANDBOOK_LOOP: Record<HandbookMode, string> = {
-  full: "The loop. Read the automations handbook's `foundations` chapter first (one readHandbook call — it carries the model, the conventions, and the map of what to read next; a later read can name a single section, \"writes#identity\", rather than pay for a whole chapter; where anything else disagrees with the handbook, the handbook wins). ",
-  lean: "The loop. Read the automations handbook's front page first (readHandbook with handbook \"automations\" and no chapter): where this language differs from TypeScript, the few ideas it adds, and the build loop. Look up anything else — a built-in's signature, a system's behaviour, a recipe — with searchLanguage, and read the anchor a result or a diagnostic names with readHandbook (\"front#maybe-absent\", \"writes#identity\"); where anything else disagrees with the handbook, the handbook wins. ",
+  full: "The loop. Call getStarted first: one call returns the automations handbook's `foundations` chapter (the model, the conventions, and the map of what to read next), your team, and its connected systems with their record types and fields. A later readHandbook can name a single section, \"writes#identity\", rather than pay for a whole chapter; where anything else disagrees with the handbook, the handbook wins. ",
+  lean: "The loop. Call getStarted first: one call returns the handbook's front page (where this language differs from TypeScript, the few ideas it adds, the build loop), your team, and its connected systems with their record types and fields. The handbook's chapters are not needed: look up anything else — a built-in's signature, a system's behaviour, a recipe — with searchLanguage, and read the anchor a result or a diagnostic names with readHandbook (\"front#maybe-absent\"); where anything else disagrees with the handbook, the handbook wins. ",
 };
 
 function automationInstructions(mode: HandbookMode): string {
@@ -64,16 +64,28 @@ function instructionsMode(req: Parameters<RequestHandler>[0]): HandbookMode {
   }
 }
 
-function createAutomationMcpRouter(): ReturnType<typeof Router> {
+/** The connector as served: what a client is told and the tools it is offered. */
+function automationConnectorOptions(): McpRouterOptions {
   const linkVerification = whatsappLinkVerification();
-  // An unknown AUTOMATION_HANDBOOK fails the boot, not the first request.
-  handbookModeFromEnv();
-  return createMcpRouter({
+  return {
     name: 'listen-fire-automation',
     domain: 'automation',
     genericApiTools: false,
     instructions: (req) => automationInstructions(instructionsMode(req)),
     tools: {
+      getStarted: {
+        description:
+          "START HERE, in one call: the automations handbook's first page, your team, and its connected systems — how to import and construct each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. When this connection spans several teams and you name none, it lists them with their ids instead of the systems; call again with `team`. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
+        annotations: { readOnlyHint: true },
+        inputSchema: {
+          team: z
+            .string()
+            .optional()
+            .describe('Team id; needed only when this connection spans several teams.'),
+        },
+        title: 'Get started',
+        endpoint: { method: 'GET', path: '/v1/automation/get-started' },
+      },
       listTeams: {
         description:
           "List the teams this connection can act in (teamId, name, access, isPersonal). `isPersonal: true` marks the user's personal workspace (their team-of-one) vs a shared team. Pass a team's id as `team` to tools that create or change things (saveAutomation, runAutomation, connectSystem, …). listAutomations and listReviews already tag their results with the team.",
@@ -145,7 +157,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       readHandbook: {
         description:
-          'START HERE to learn how to automate. The Listen-Fire handbooks teach every capability directly (setting up automations, the knowledge model, querying, connecting integrations) — read them, then do the work yourself. No args → every handbook + its chapters. handbook → that handbook\'s chapter index, whose "when to read what" routes each situation to a `chapter` or a `chapter#section`. handbook + chapter (or chapters[]) → the bodies — go straight there when you know what you need; you don\'t have to list the shelf first. A chapter id may name ONE SECTION of it — "writes#identity" — and that is what to fetch for a single rule, rather than paying for a whole chapter. Read the relevant chapters BEFORE setting up an automation; the automation model, the one cardinal rule, and the conventions are all in the automations handbook\'s `foundations` chapter.',
+          'getStarted already serves the automations handbook\'s first page; read here for an anchor a search result or a diagnostic names, or another handbook. The Listen-Fire handbooks teach every capability directly (setting up automations, the knowledge model, querying, connecting integrations) — read them, then do the work yourself. No args → every handbook + its chapters. handbook → that handbook\'s chapter index, whose "when to read what" routes each situation to a `chapter` or a `chapter#section`. handbook + chapter (or chapters[]) → the bodies — go straight there when you know what you need; you don\'t have to list the shelf first. A chapter id may name ONE SECTION of it — "writes#identity" — and that is what to fetch for a single rule, rather than paying for a whole chapter. Read the relevant chapters BEFORE setting up an automation; the automation model, the one cardinal rule, and the conventions are all in the automations handbook\'s `foundations` chapter.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           handbook: z
@@ -288,7 +300,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       validateAutomation: {
         description:
-          'Typecheck an automation program against the live connected systems WITHOUT saving: parse, check, and compile. Returns diagnostics (code, message, severity, line/col, offending line) and `validatedUnder` — the language version it was checked against. A clean validation predicts a live save — ALWAYS run this before saveAutomation. When changing a saved automation, pass its id as `automation` so the text is checked under the language version that automation is written in; new text is checked under the current version.',
+          'Typecheck an automation program against the live connected systems WITHOUT saving: parse, check, and compile. Returns diagnostics (code, message, severity, line/col, offending line) and `validatedUnder` — the language version it was checked against. A clean validation predicts a live save. saveAutomation runs this same check first and saves nothing on errors, so you need not call this before saving — use it to explore. When changing a saved automation, pass its id as `automation` so the text is checked under the language version that automation is written in; new text is checked under the current version.',
         inputSchema: {
           source: z.string().describe('The automation program text (.mvt).'),
           team: z.string().optional().describe('Team id (see instructions).'),
@@ -329,7 +341,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       saveAutomation: {
         description:
-          'Save an automation program and provision its listeners (authoring → live). If it is valid, it goes live. If it cannot be verified or has errors, your text is still saved but nothing new goes live — the result comes back as needsConfirmation so you can fix it, or check with the user, first. Pass acknowledgeErrors: true to ship it anyway: it then replaces whatever was running (even broken) and will run and fail visibly. There is no "draft" that quietly keeps the last good version running — what goes live is what you save and confirm. When updating an EXISTING automation, pass expectedRevision so a concurrent edit is caught rather than silently overwritten. Returns needsConfirmation/diagnostics, the provisioned listeners (each channel and the inbound address for email), whether an on-demand run is possible (runnable), storyUrl, and `warnings` — things that saved fine but would surprise the user (a movement name another automation already fires; listeners retired because the saved source could not be read). Always relay a warning to the user in your own words. storyUrl is a link to a picture of what the automation does — its triggers, steps, and the records it touches — for a person to look at, not something you can open yourself; hand it out as a labelled link once the save goes live. Anyone holding it can view with no login, until the automation is deleted. Pass id to re-save/rename. Run validateAutomation first. For a small, targeted change to an existing automation — one line, one field — editAutomation is cheaper: it anchors the change on a snippet instead of resending the whole program.',
+          'Save an automation program and provision its listeners (authoring → live). It validates first, exactly as validateAutomation does, so there is no need to call that before: with any error, or a system it could not check, NOTHING is saved and you get { ok: false, saved: false, diagnostics } — fix them and save again. A clean save goes live. Pass acknowledgeErrors: true to ship it despite errors: it then replaces whatever was running (even broken) and will run and fail visibly. There is no "draft" that quietly keeps the last good version running — what goes live is what you save and confirm. When updating an EXISTING automation, pass expectedRevision so a concurrent edit is caught rather than silently overwritten. Returns the provisioned listeners (each channel and the inbound address for email), whether an on-demand run is possible (runnable), storyUrl, `diagnostics` when a clean save still has warnings, and `warnings` — things that saved fine but would surprise the user (a movement name another automation already fires; listeners retired because the saved source could not be read). Always relay a warning to the user in your own words. storyUrl is a link to a picture of what the automation does — its triggers, steps, and the records it touches — for a person to look at, not something you can open yourself; hand it out as a labelled link once the save goes live. Anyone holding it can view with no login, until the automation is deleted. Pass id to re-save/rename. For a small, targeted change to an existing automation — one line, one field — editAutomation is cheaper: it anchors the change on a snippet instead of resending the whole program.',
         inputSchema: {
           source: z.string().describe('The automation program text (.mvt).'),
           name: z
@@ -345,7 +357,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
             .boolean()
             .optional()
             .describe(
-              'Consent to ship an automation that has errors or cannot be verified. Without it, such a save comes back as needsConfirmation and nothing new goes live. With it, the automation ships and replaces whatever was running (even broken), so it runs and fails visibly — only pass it once the user has agreed to that. If the source cannot even be READ (a syntax error), shipping it also retires every listener the automation had: it stops firing entirely until a readable source restores them, and the result says so in `warnings`.',
+              'Consent to ship an automation that has errors or cannot be verified. Without it, such a save is refused and nothing is saved. With it, the automation ships and replaces whatever was running (even broken), so it runs and fails visibly — only pass it once the user has agreed to that. If the source cannot even be READ (a syntax error), shipping it also retires every listener the automation had: it stops firing entirely until a readable source restores them, and the result says so in `warnings`.',
             ),
           expectedRevision: z
             .string()
@@ -412,7 +424,7 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
       },
       editAutomation: {
         description:
-          "Change one saved automation by splicing a snippet into it, without resending the whole program. Pass its id or exact name, oldString, and newString; oldString must appear in the CURRENT source exactly once — read it first (readAutomation or getAutomation) and quote enough surrounding text to pin one spot — or the edit is refused, telling you whether the anchor was not found or matched more than once (pass replaceAll: true to change every match instead of widening the anchor). Once the anchor resolves, this IS saveAutomation with the spliced result as the new source: pass expectedRevision (the revision you just read) so a concurrent edit is caught rather than clobbered, and the same validity gate applies — an edit that breaks the automation still saves the text but needs acknowledgeErrors to ship, exactly like save. There is no draft lane: an edit to a saved library is visible to every importer immediately. Returns save's result plus the new revision.",
+          "Change one saved automation by splicing a snippet into it, without resending the whole program. Pass its id or exact name, oldString, and newString; oldString must appear in the CURRENT source exactly once — read it first (readAutomation or getAutomation) and quote enough surrounding text to pin one spot — or the edit is refused, telling you whether the anchor was not found or matched more than once (pass replaceAll: true to change every match instead of widening the anchor). Once the anchor resolves, this IS saveAutomation with the spliced result as the new source: pass expectedRevision (the revision you just read) so a concurrent edit is caught rather than clobbered, and the same check runs first — an edit with errors is not saved and its diagnostics come back; acknowledgeErrors ships it anyway, exactly like save. There is no draft lane: an edit to a saved library is visible to every importer immediately. Returns save's result plus the new revision.",
         inputSchema: {
           idOrName: z
             .string()
@@ -561,7 +573,13 @@ function createAutomationMcpRouter(): ReturnType<typeof Router> {
         endpoint: { method: 'POST', path: '/v1/automation/automations/resume-run' },
       },
     },
-  });
+  };
 }
 
-export { AUTOMATION_MCP_PATH, createAutomationMcpRouter };
+function createAutomationMcpRouter(): ReturnType<typeof Router> {
+  // An unknown AUTOMATION_HANDBOOK fails the boot, not the first request.
+  handbookModeFromEnv();
+  return createMcpRouter(automationConnectorOptions());
+}
+
+export { AUTOMATION_MCP_PATH, automationConnectorOptions, automationInstructions, createAutomationMcpRouter };
