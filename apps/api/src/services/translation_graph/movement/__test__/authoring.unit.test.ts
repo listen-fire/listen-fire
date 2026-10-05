@@ -180,6 +180,21 @@ describe('diagnoseMovementSource', () => {
     expect(unsupported?.message).toMatch(/nested movement declarations/i);
   });
 
+  it('a diagnostic with an exact rewrite carries it as 1-based edits, and says it in the message', () => {
+    const source = CLEAN_SOURCE.replace('import { email, attio, slack } from adapters', 'import { email, slack } from adapters');
+    const result = diagnoseMovementSource(source, { catalog });
+    const unresolved = result.diagnostics.filter((d) => d.code === 'MOV_NAME_UNRESOLVED');
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0].message).toBe(
+      "'attio' is not in scope — import it: add 'import { attio } from adapters' at the top of the file",
+    );
+    expect(unresolved[0].fix).toEqual({
+      edits: [{ line: 1, col: 1, endLine: 1, endCol: 1, text: 'import { attio } from adapters\n' }],
+    });
+    const repaired = `import { attio } from adapters\n${source}`;
+    expect(diagnoseMovementSource(repaired, { catalog }).ok).toBe(true);
+  });
+
   it('a library file (no listens) reports zero listeners and validates ok', () => {
     const source = CLEAN_SOURCE.replace(/listen to inbox.*\n/, '');
     const result = diagnoseMovementSource(source, { catalog });

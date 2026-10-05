@@ -228,6 +228,9 @@ export function fromCatalogSnapshot(snapshot: CatalogSnapshot): Catalog {
       if (!c) return undefined;
       return { adapters: 'adapters' in c ? c.adapters : [c.adapter] };
     },
+    credentialNames(): string[] {
+      return Object.keys(snapshot.credentials);
+    },
     plugin(name): PluginSpec | undefined {
       return snapshot.plugins[name];
     },
