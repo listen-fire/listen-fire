@@ -382,7 +382,7 @@ Your job is to classify the page and identify actionable elements. The page is o
 - Identify UI elements that should be hidden before screenshotting (toolbars, floating buttons, watermarks, share overlays)
 
 **api_accessible** — The content is on a platform we have API access to (Notion, Google Drive, Google Slides).
-- Look for: notion.so in the URL, docs.google.com, drive.google.com
+- Look for: notion.so, notion.site or app.notion.com in the URL, docs.google.com, drive.google.com
 - Extract the resource ID from the URL
 
 **error_page** — Something went wrong (404, access denied, expired link, CAPTCHA).

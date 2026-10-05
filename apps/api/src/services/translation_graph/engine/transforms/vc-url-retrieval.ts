@@ -187,9 +187,17 @@ function extractBareDomains(text: string): string[] {
     .replace(/[^\s<>"')\]]+@[^\s<>"')\]]+/g, ' ');
   const out: string[] = [];
   for (const match of stripped.matchAll(BARE_DOMAIN_REGEX)) {
-    out.push(`https://${match[1].toLowerCase()}${match[2] ?? ''}`);
+    out.push(`https://${match[1].toLowerCase()}${stripSentenceFullStop(match[2] ?? '')}`);
   }
   return out;
+}
+
+/** A link at the end of a sentence ("see https://x.notion.site/abc.") picks up
+ *  the sentence's full stop. Stripped here, where links are found in prose,
+ *  rather than in the generic sanitizer, so a URL passed explicitly to
+ *  fetch-url that genuinely ends in "." is left alone. */
+function stripSentenceFullStop(url: string): string {
+  return url.replace(/\.+$/, '');
 }
 
 type UrlClassification =
@@ -226,7 +234,7 @@ interface DiscoveredUrl {
 
 export function _extractCandidateUrls(text: string): string[] {
   const cleaned = text.replace(/<(https?:\/\/[^>|]+)(?:\|[^>]*)?>/g, '$1');
-  const schemed = cleaned.match(URL_REGEX) ?? [];
+  const schemed = (cleaned.match(URL_REGEX) ?? []).map(stripSentenceFullStop);
   return [...new Set([...schemed, ...extractBareDomains(cleaned)])];
 }
 

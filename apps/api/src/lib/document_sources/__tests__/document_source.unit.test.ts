@@ -1,5 +1,6 @@
 import { DocumentSourceService } from '..';
 import { GoogleDocsService } from '../google_docs';
+import { NOTION_REGEX } from '#shared/constants/document_sources';
 
 describe('getGoogleFileId', () => {
   [
@@ -139,5 +140,25 @@ describe('sanitizeUrl', () => {
     it(title, () => {
       expect(DocumentSourceService.sanitizeUrl(url)).toEqual(expected);
     });
+  });
+});
+
+describe('NOTION_REGEX', () => {
+  it.each([
+    'https://www.notion.so/Deck-abc123',
+    'https://notion.so/Deck-abc123',
+    'https://acme.notion.site/Deck-abc123',
+    'https://app.notion.com/p/Deck-abc123',
+  ])('accepts %s', (url) => {
+    expect(NOTION_REGEX.test(url)).toBe(true);
+  });
+
+  it.each([
+    'https://evil.notion.com/p/abc',
+    'https://notion.com/p/abc',
+    'http://app.notion.com/p/abc',
+    'https://app.notion.com',
+  ])('rejects %s', (url) => {
+    expect(NOTION_REGEX.test(url)).toBe(false);
   });
 });

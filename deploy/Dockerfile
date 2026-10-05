@@ -35,6 +35,15 @@ COPY packages/movement-lang/package.json packages/movement-lang/
 COPY packages/story-view/package.json packages/story-view/
 RUN pnpm install --frozen-lockfile --filter api...
 
+# Chromium for the browser-rendered document fetches (DocSend, Papermark,
+# Notion). Installed through the api's own playwright so the browser build
+# matches the lockfile's version. The skip flag above only guards the install
+# step, so it is cleared for this one command. A fixed path keeps the browser
+# findable by whatever user the container runs as.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN cd apps/api && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 pnpm exec playwright install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 # Secrets live in the `listen-fire-config` volume, not in the image and not in an

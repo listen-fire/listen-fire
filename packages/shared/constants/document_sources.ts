@@ -13,7 +13,7 @@ export const BRIEFLINK_REGEX = /^https:\/\/brieflink\.com\/v\/\S+$/;
 export const TOME_REGEX = /^https:\/\/tome\.app\/\S+$/;
 export const CANVA_REGEX = /^https:\/\/www\.canva\.com\/design\/\S+\/view\S*$/;
 export const NOTION_REGEX =
-  /^https:\/\/(?:(?:www\.)?notion\.so|[a-zA-Z0-9-]+\.notion\.site)\/\S+$/;
+  /^https:\/\/(?:(?:www\.)?notion\.so|app\.notion\.com|[a-zA-Z0-9-]+\.notion\.site)\/\S+$/;
 export const PAPERMARK_REGEX =
   /^https:\/\/(www\.)?(papermark\.io|papermark\.com)\/view\/\S+$/;
 

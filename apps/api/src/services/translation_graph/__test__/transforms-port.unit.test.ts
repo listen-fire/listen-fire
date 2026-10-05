@@ -897,6 +897,19 @@ describe('_extractCandidateUrls — bare domains', () => {
     expect(_extractCandidateUrls('reach me at arsenii@gondor.fi')).toEqual([]);
   });
 
+  it('drops the full stop that ends a sentence after a link', () => {
+    expect(_extractCandidateUrls('see https://x.notion.site/abc. Thanks')).toEqual([
+      'https://x.notion.site/abc',
+    ]);
+    expect(_extractCandidateUrls('slides at acme.com/deck.')).toEqual(['https://acme.com/deck']);
+  });
+
+  it('keeps dots inside a link', () => {
+    expect(_extractCandidateUrls('https://acme.com/deck.pdf.')).toEqual([
+      'https://acme.com/deck.pdf',
+    ]);
+  });
+
   it('does not double-count a scheme-qualified host as a separate bare domain', () => {
     expect(_extractCandidateUrls('https://acme.com is the site')).toEqual(['https://acme.com']);
   });
