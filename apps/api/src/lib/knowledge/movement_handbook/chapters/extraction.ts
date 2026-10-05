@@ -717,7 +717,7 @@ function \`Intake\`(m: <inbox-[:Email]->>) {
 
   MAP(companies, { initialConcurrency: 1, concurrency: 4, onError: 'warn' }, (c) => {
     page   = fetch_url(url: c.website)
-    detail = ONLY(extract([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful', effort: 'medium' }))
+    detail = extractOne([...content, TEXT.SERIALISE(c, 'JSON'), COALESCE(page, "")], Profile, { tier: 'careful', effort: 'medium' })
     write crm-[:Companies]-> {
       unique by (FUZZY \`Name\`)
       Name:          c.name

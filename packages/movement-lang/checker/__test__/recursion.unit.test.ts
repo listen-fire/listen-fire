@@ -175,6 +175,46 @@ function pang(n: <number>) {
     expect(codes('', '  tick = (n: <number>) => {\n    if n > 0 {\n      tick(n - 1)\n    }\n  }\n  tick(2)')).toEqual([]);
   });
 
+  it('binding the call of a recursive function that returns no value is refused, as any such binding is', () => {
+    const drain = (bind: string) => `function drain(n: <number>) {
+  if n > 0 {
+    write chat-[:note]-> { Body: "tick" }
+    ${bind}
+  }
+}
+`;
+    expect(codes(drain('x = drain(n - 1)'), '  drain(3)')).toEqual([C.CALL_RETURNS_NOTHING]);
+    expect(codes(drain('x = 1 + drain(n - 1)'), '  drain(3)')).toEqual([C.CALL_RETURNS_NOTHING]);
+    expect(codes(drain('drain(n - 1)'), '  y = drain(3)')).toEqual([C.CALL_RETURNS_NOTHING]);
+    expect(
+      codes(`function ping(n: <number>) {
+  if n > 0 {
+    x = pong(n - 1)
+  }
+}
+function pong(n: <number>) {
+  if n > 0 {
+    ping(n - 1)
+  }
+}
+`, '  ping(3)'),
+    ).toEqual([C.CALL_RETURNS_NOTHING]);
+  });
+
+  it('binding the call of a closure that returns no value is refused, calling itself or not', () => {
+    const diagnostics = check('', '  tick = (n: <number>) => {\n    if n > 0 {\n      y = tick(n - 1)\n    }\n  }\n  tick(2)');
+    expect(diagnostics.map((d) => d.code)).toEqual([C.CALL_RETURNS_NOTHING]);
+    expect(diagnostics[0].message).toContain("'tick' returns nothing, so there is no value to bind");
+    expect(codes('', '  tick = (n: <number>) => {\n    if n > 0 {\n      y = 1 + tick(n - 1)\n    }\n  }\n  tick(2)')).toEqual([
+      C.CALL_RETURNS_NOTHING,
+    ]);
+    expect(codes('', '  f = (n: <number>) => {\n    write chat-[:note]-> { Body: "t" }\n  }\n  x = f(1)')).toEqual([
+      C.CALL_RETURNS_NOTHING,
+    ]);
+    // One that returns a value binds as it always did.
+    expect(codes('', '  g = (n: <number>) => {\n    return n + 1\n  }\n  x = g(1)')).toEqual([]);
+  });
+
   it('a function that is not in a cycle needs no annotation', () => {
     expect(codes('function double(n: <number>) {\n  return n * 2\n}\n', '  x = double(2) + 1')).toEqual([]);
   });

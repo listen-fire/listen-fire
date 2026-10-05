@@ -123,14 +123,24 @@ function pricedInvoker() {
   return { invoker, charged };
 }
 
-/** An in-memory park sink — the parts a single-flow suspension uses. */
+/** An in-memory park sink with the durable join semantics of the real one —
+ *  what a suspension inside a MAP member or a `parallel` arm needs to resume. */
 function makeParkSink() {
   const parks = new Map<string, { kind: 'timer' | 'await' | 'suspension'; state: ParkedScopeState }>();
+  const joins = new Map<string, { pending: number; closedBy: string | null; decremented: Set<string> }>();
+  const exports = new Map<string, Map<string, { branchIndex: number; exports: unknown }>>();
   const keep = (kind: 'timer' | 'await' | 'suspension', address: string, state: unknown): void => {
     parks.set(address, { kind, state: JSON.parse(JSON.stringify(state)) as ParkedScopeState });
   };
   const sink: ParkSink = {
-    async recordJoin() {},
+    async recordJoin(input) {
+      const existing = joins.get(input.frameAddress);
+      joins.set(input.frameAddress, {
+        pending: input.parkedChildren,
+        closedBy: existing?.closedBy ?? null,
+        decremented: existing?.decremented ?? new Set(),
+      });
+    },
     async commitTimerPark(input) {
       keep('timer', input.address, input.state);
     },
@@ -142,12 +152,29 @@ function makeParkSink() {
       keep('suspension', input.address, input.state);
     },
     async commitLimitPause() {},
-    async decrementJoin() {
+    async decrementJoin(input) {
+      const frame = joins.get(input.frameAddress);
+      if (frame === undefined) return { closed: true };
+      if (frame.decremented.has(input.branchAddress)) return { closed: frame.closedBy === input.leafAddress };
+      frame.decremented.add(input.branchAddress);
+      if (frame.pending === 0) return { closed: frame.closedBy === input.leafAddress };
+      frame.pending -= 1;
+      if (frame.pending > 0) return { closed: false };
+      frame.closedBy = input.leafAddress;
       return { closed: true };
     },
-    async persistBranchExport() {},
-    async collectBranchExports() {
-      return [];
+    async persistBranchExport(input) {
+      const byBranch = exports.get(input.frameAddress) ?? new Map();
+      byBranch.set(input.branchAddress, {
+        branchIndex: input.branchIndex,
+        exports: JSON.parse(JSON.stringify(input.exports)) as unknown,
+      });
+      exports.set(input.frameAddress, byBranch);
+    },
+    async collectBranchExports(input) {
+      return [...(exports.get(input.frameAddress) ?? new Map()).entries()]
+        .map(([branchAddress, row]) => ({ branchAddress, branchIndex: row.branchIndex, exports: row.exports }))
+        .sort((a, b) => a.branchIndex - b.branchIndex);
     },
     async cancelSubtrees() {},
   };
@@ -455,5 +482,88 @@ describe('the cost cap met deep inside a recursion', () => {
     expect(h.parks.parks.size).toBe(0);
     expect(h.plugin.charged).toEqual(['p4', 'p3', 'p2', 'p1']);
     expect(summaries(h.attio.creates)).toEqual({ done: 'got-p4,got-p3,got-p2,got-p1,end' });
+  });
+});
+
+describe('the call depth after a resume', () => {
+  // Each level fetches a page, then recurses. With the cap at $1.50 the third
+  // fetch pauses the run, and the levels below it run after the resume —
+  // counted from where they really are, the frames above them put back.
+  const CRAWL = [
+    'function crawl(n: <number>): <text> {',
+    '  if n <= 0 {',
+    '    return "end"',
+    '  }',
+    '  page = fetch_url(url: "p${n}")',
+    '  rest = crawl(n - 1)',
+    '  return CONCAT(COALESCE(page, "none"), ",", rest)',
+    '}',
+  ].join('\n');
+
+  /** Start, pause at the cap, resume: what the resumed segment failed of, if it did. */
+  async function pausedThenResumed(source: string, depth: number) {
+    process.env[COST_ENV] = '1.5';
+    process.env[DEPTH_ENV] = String(depth);
+    const h = harness(source);
+    const first = await h.start();
+    expect(first.parked).toBe(true);
+    try {
+      await h.resumeRun();
+      return { h, cause: undefined };
+    } catch (err) {
+      return { h, cause: runFailureCause(err) };
+    }
+  }
+
+  describe('inside a MAP member that is a function handed over by name', () => {
+    // The member is crawl(3), one call deep; crawl(0) is four deep.
+    const source = [
+      CRAWL,
+      'movement intake(m: <inbox-[:message]->>) {',
+      '  xs = MAP([3], crawl)',
+      '  write crm-[:companies]-> { name: "done", summary: JOIN(xs, ";") }',
+      '}',
+    ].join('\n');
+
+    it('counts the member as a call: four deep fits a limit of four', async () => {
+      const { h, cause } = await pausedThenResumed(source, 4);
+      expect(cause).toBeUndefined();
+      expect(summaries(h.attio.creates)).toEqual({ done: 'got-p3,got-p2,got-p1,end' });
+    });
+
+    it('counts the member as a call: four deep is refused at a limit of three', async () => {
+      const { h, cause } = await pausedThenResumed(source, 3);
+      expect(cause).toBeInstanceOf(CallDepthExceeded);
+      expect((cause as CallDepthExceeded).chain).toEqual(['intake', 'crawl', 'crawl', 'crawl', 'crawl']);
+      expect(h.attio.creates).toEqual([]);
+    });
+  });
+
+  describe('inside a parallel arm that names a function', () => {
+    // The arm is `deep`, one call deep; crawl(3) is two, crawl(0) five.
+    const source = [
+      CRAWL,
+      'function deep(): <text> {',
+      '  return crawl(3)',
+      '}',
+      'movement intake(m: <inbox-[:message]->>) {',
+      '  r = await parallel([deep])',
+      '  write crm-[:companies]-> { name: "done" }',
+      '}',
+    ].join('\n');
+
+    it('counts the arm as a call: five deep fits a limit of five', async () => {
+      const { h, cause } = await pausedThenResumed(source, 5);
+      expect(cause).toBeUndefined();
+      expect(h.plugin.charged).toEqual(['p3', 'p2', 'p1']);
+      expect(h.attio.creates.map((c) => c.name)).toEqual(['done']);
+    });
+
+    it('counts the arm as a call: five deep is refused at a limit of four', async () => {
+      const { h, cause } = await pausedThenResumed(source, 4);
+      expect(cause).toBeInstanceOf(CallDepthExceeded);
+      expect((cause as CallDepthExceeded).chain).toEqual(['intake', 'deep', 'crawl', 'crawl', 'crawl', 'crawl']);
+      expect(h.attio.creates).toEqual([]);
+    });
   });
 });
