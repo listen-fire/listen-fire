@@ -456,6 +456,49 @@ listen to runs {} fire pick
   });
 });
 
+describe('an early return stops the body, so the narrowed path never sees absence (v3)', () => {
+  // The checker narrows after `if co == null { return … }` (and after an
+  // `else { return … }`) because the run never reaches the rest of the body
+  // from the returning arm. These prove that half: with nothing matched the
+  // write below is never attempted, and with a match it runs on the value.
+  function guarded(guard: string): string {
+    return `import { manual, kg } from adapters
+import { kg_cred } from credentials
+runs = manual()
+graph = kg(credentials: kg_cred)
+movement pick(go: <runs-[:Invocation]->>) {
+  co = ONLY(graph-[c:company WHERE \`name\` == "Wonka"]->)
+  ${guard}
+  write graph-[:note]-> { text: co.\`name\` }
+  return "written"
+}
+listen to runs {} fire pick
+`;
+  }
+  const guards = [
+    'if co == null { return "none" }',
+    'if co != null { } else { return "none" }',
+    'if co == null { if 1 == 1 { return "none" } else { ERROR("unreachable") } }',
+  ];
+
+  it.each(guards)('nothing matched: `%s` returns before the write', async (guard) => {
+    const kg = makeGraphFake({ adapterType: KG, collections: { company: COMPANIES }, writable: true });
+    // A run that failed would reject; this one finishes having written nothing.
+    const { writes } = await run(guarded(guard), kg);
+    expect(writes).toEqual([]);
+  });
+
+  it.each(guards)('a match: `%s` falls through to the write, on the value', async (guard) => {
+    const kg = makeGraphFake({
+      adapterType: KG,
+      collections: { company: [...COMPANIES, { id: 'c-wonka', fields: { name: 'Wonka', stage: 'Seed' } }] },
+      writable: true,
+    });
+    const { writes } = await run(guarded(guard), kg);
+    expect(writes.map((w) => w.fields?.text)).toEqual(['Wonka']);
+  });
+});
+
 describe('instance-rooted query traversals share the same walk', () => {
   it('an attio-rooted expression read honours WHERE + ORDER BY ASC + LIMIT', async () => {
     // Fields the catalog's thin attio schema declares (name / summary).

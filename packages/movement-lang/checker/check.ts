@@ -243,7 +243,7 @@ import {
   languageVersionDiagnostic,
   type LanguageVersion,
 } from '../language_version';
-import { terminates } from './flow';
+import { bodyExits, terminates } from './flow';
 import { closestByEditDistance, didYouMean } from './meta';
 import { readCollectionConfig } from './collection_config';
 import { readExtractCallConfig } from './extract_config';
@@ -10074,12 +10074,15 @@ class Checker {
 
   private checkIf(statement: IfStatement, scope: Scope): void {
     // Reaching the statement AFTER the `if` means the arm that ran (if any)
-    // fell through. So an arm that always FAILS proves its condition false
+    // fell through. So an arm that always LEAVES (fails, or from version 3
+    // returns) proves its condition false
     // below — but only while every EARLIER arm fails too: otherwise the run
     // could have arrived here through one of those, with this arm's condition
     // never evaluated. That ordering is the whole subtlety, and it is why this
     // accumulates rather than testing each arm alone.
     let allPriorTerminate = true;
+    const exits = bodyExits(this.languageVersion);
+    const armTerminates: boolean[] = [];
     // Arriving at arm k — or at the `else` — already proves every EARLIER arm's
     // condition false, because one `if`'s arms are tried in order. So a bare
     // `IS` that failed rules its variant out of the subject's union, and the
@@ -10108,7 +10111,8 @@ class Checker {
       this.checkConditionSlot(arm.condition, armScope, armScope);
       this.checkStatementList(arm.body, armScope);
       this.collectIsElimination(arm.condition, scope, ruledOut);
-      const terminating = terminates(arm.body);
+      const terminating = terminates(arm.body, exits);
+      armTerminates.push(terminating);
       if (allPriorTerminate && terminating) {
         this.narrowConditionNegation(arm.condition, scope, statement.span.end);
       }
@@ -10120,6 +10124,19 @@ class Checker {
       if (recorded) recorded.otherwise = { span: statement.elseArm.span, scope: elseScope };
       this.declareEliminated(ruledOut, scope, elseScope);
       this.checkStatementList(statement.elseArm.body, elseScope);
+      // The other direction of the guard clause, TypeScript's
+      // `if (x != null) { … } else { return }`: when the `else` and every arm
+      // but one leave, reaching the statement after the `if` means THAT arm
+      // ran, so its condition holds below. (The arms above it are already
+      // negated by the loop: each of them leaves.) From version 3.
+      const fallsThrough = armTerminates.flatMap((leaves, index) => (leaves ? [] : [index]));
+      if (
+        since(this.languageVersion, 3)
+        && fallsThrough.length === 1
+        && terminates(statement.elseArm.body, exits)
+      ) {
+        this.narrowConditionHolds(statement.arms[fallsThrough[0]].condition, scope, statement.span.end);
+      }
     }
   }
 
@@ -10229,6 +10246,24 @@ class Checker {
     this.narrowNegatedPresence(condition.expr, scope, scope, slot.span, {
       visibleFrom: guardEnd,
     });
+  }
+
+  /** The guard clause's other direction: the condition of the one arm that
+   *  falls through, declared TRUE into the enclosing scope from `guardEnd`.
+   *  A conjunction proves each of its conjuncts, exactly as it does inside the
+   *  arm; an `IS` conjunct narrows the arm only, as before. */
+  private narrowConditionHolds(slot: ExprSlot, scope: Scope, guardEnd: Loc): void {
+    let condition: MovementCondition;
+    try {
+      condition = conditionOfSlot(slot);
+    } catch {
+      return; // the parse failure is reported by the arm's own check
+    }
+    const conjuncts = condition.kind === 'and' ? condition.conjuncts : [condition];
+    for (const conjunct of conjuncts) {
+      if (conjunct.kind !== 'expr') continue;
+      this.narrowPresence(conjunct.expr, scope, scope, slot.span, { visibleFrom: guardEnd });
+    }
   }
 
   // ── Movements ──
@@ -12319,9 +12354,10 @@ class Checker {
     scope: Scope,
     narrowInto: Scope,
     span: Span,
+    options: { visibleFrom?: Loc } = {},
   ): void {
     const typing = this.silentTyping(scope, span);
-    this.declarePresence(presenceProofs(expr, operand => typing.infer(operand)), scope, narrowInto);
+    this.declarePresence(presenceProofs(expr, operand => typing.infer(operand)), scope, narrowInto, options);
   }
 
   /**

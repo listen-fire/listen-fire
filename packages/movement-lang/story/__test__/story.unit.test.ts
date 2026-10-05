@@ -450,6 +450,36 @@ movement guarded(m: <inbox-[:message]->>) {
     expect(branches[0]!.otherwise!.terminates).toBe(false);
   });
 
+  it('an arm that RETURNS is `terminates: true` from version 3 — the lane does not come back', () => {
+    const source = `import { mail, crm_sys } from adapters
+import { inbox_creds, crm_creds } from credentials
+
+inbox = mail(credentials: inbox_creds)
+book = crm_sys(credentials: crm_creds)
+
+movement guarded(m: <inbox-[:message]->>) {
+  if m.\`subject\` == "bad" {
+    return "rejected"
+  }
+  write book-[:Companies]-> { Name: "ok" }
+  return "done"
+}
+`;
+    const movementOf = (languageVersion: 2 | 3) => {
+      const result = storyOf({ source, catalog, name: 'Guarded', languageVersion });
+      if (!result.ok) throw new Error(`expected a story, got ${result.reason}`);
+      const movement = result.story.flow.find((s) => s.kind === 'movement' && s.name === 'guarded');
+      if (movement === undefined || movement.kind !== 'movement') throw new Error('no guarded movement');
+      return movement;
+    };
+    const v3 = movementOf(3);
+    expect(stepsOfKind(v3.steps, 'branch')[0]!.arms[0]!.terminates).toBe(true);
+    // A `return` straight on the spine is a step, not a capped lane: the run's
+    // own ending is still drawn.
+    expect(v3.terminates).toBe(false);
+    expect(stepsOfKind(movementOf(2).steps, 'branch')[0]!.arms[0]!.terminates).toBe(false);
+  });
+
   it('an extraction carries its sources and its resolved tree', () => {
     const extracts = stepsOfKind(intakeSteps(story()), 'extract');
     expect(extracts).toHaveLength(1);

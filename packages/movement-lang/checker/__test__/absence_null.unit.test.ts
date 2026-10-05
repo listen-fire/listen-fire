@@ -14,6 +14,7 @@ import { parseProgram } from '../../parser/parse';
 import { checkProgram, Diagnostic, diagnosticSeverity } from '../check';
 import { mockCatalog, type SchemaFieldType, type InstanceSchema, type PositionSchema } from '../catalog';
 import { eventAddressDisplay, eventAddressKey } from '../event_address';
+import type { LanguageVersion } from '../../language_version';
 
 // ── The chat shape: a selectable collection with a writable child ────────────
 
@@ -124,7 +125,7 @@ const PRELUDE = [
   'board = trello(credentials: probe)',
 ].join('\n');
 
-const diagnosticsFor = (body: string): Diagnostic[] =>
+const diagnosticsFor = (body: string, languageVersion?: LanguageVersion): Diagnostic[] =>
   checkProgram(
     parseProgram(
       [
@@ -134,14 +135,17 @@ const diagnosticsFor = (body: string): Diagnostic[] =>
         '}',
         'listen to crm { events: ["record.created"] } fire main',
       ].join('\n'),
+      languageVersion !== undefined ? { languageVersion } : undefined,
     ),
     catalog,
+    languageVersion !== undefined ? { languageVersion } : undefined,
   );
 
-const errorsFor = (body: string): Diagnostic[] =>
-  diagnosticsFor(body).filter(d => diagnosticSeverity(d) === 'error');
+const errorsFor = (body: string, languageVersion?: LanguageVersion): Diagnostic[] =>
+  diagnosticsFor(body, languageVersion).filter(d => diagnosticSeverity(d) === 'error');
 
-const codesFor = (body: string): string[] => errorsFor(body).map(d => d.code);
+const codesFor = (body: string, languageVersion?: LanguageVersion): string[] =>
+  errorsFor(body, languageVersion).map(d => d.code);
 
 const infosFor = (body: string): string[] =>
   diagnosticsFor(body)
@@ -418,6 +422,98 @@ describe('the guard clause', () => {
         `${SELECT}\n`
         + '  if 1 == 1 { } else if channel == null { ERROR("no channel") }\n'
         + '  write channel-[:Messages]-> { Message: "hi" }',
+      ),
+    ).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+});
+
+// ── 5b. an early `return` narrows the continuation too (version 3) ──────────
+//
+// TypeScript's guard clause is `if (x == null) return …;` as often as it is
+// `throw`. From Steady Lynx a `return` leaves an arm as surely as `ERROR`
+// does; Bright Otter keeps the ERROR-only reading, proved alongside each form.
+
+describe('an early return narrows the rest of the body (v3)', () => {
+  const SELECT = '  channel = ONLY(chat-[c:Channels WHERE `Name` == "alerts"]->)';
+  const NAME = '  n = ONLY(chat-[c:Channels]->.`Name`)';
+  const WRITE = '  write channel-[:Messages]-> { Message: "hi" }';
+  const WRITE_N = '  write board-[:Lanes]-> { Title: n }';
+
+  const forms: Array<[string, string]> = [
+    ['`== null` then return', `${NAME}\n  if n == null { return "none" }\n${WRITE_N}`],
+    ['`ISNULL(x)` then return', `${NAME}\n  if ISNULL(n) { return "none" }\n${WRITE_N}`],
+    ['`NOT EXISTS(x)` then return', `${SELECT}\n  if NOT EXISTS(channel) { return "none" }\n${WRITE}`],
+    ['the node plane, `== null`', `${SELECT}\n  if channel == null { return "none" }\n${WRITE}`],
+    [
+      '`a == null OR b == null` proves both',
+      `${SELECT}\n${NAME}\n  if channel == null OR n == null { return "none" }\n${WRITE}\n${WRITE_N}`,
+    ],
+    ['`!= null` whose ELSE returns', `${NAME}\n  if n != null { } else { return "none" }\n${WRITE_N}`],
+    ['`EXISTS(x)` whose ELSE returns', `${SELECT}\n  if EXISTS(channel) { } else { return "none" }\n${WRITE}`],
+    [
+      '`a != null AND b != null` whose ELSE returns proves both',
+      `${SELECT}\n${NAME}\n  if channel != null AND n != null { } else { return "none" }\n${WRITE}\n${WRITE_N}`,
+    ],
+    [
+      'the one arm that falls through, the else and the others returning',
+      `${NAME}\n  if 1 == 2 { return "a" } else if n != null { } else { ERROR("no name") }\n${WRITE_N}`,
+    ],
+    [
+      'a nested if whose every arm returns',
+      `${NAME}\n  if n == null { if 1 == 1 { return "a" } else { ERROR("b") } }\n${WRITE_N}`,
+    ],
+  ];
+
+  it.each(forms)('%s: clean under v3', (_label, body) => {
+    expect(codesFor(body)).toEqual([]);
+  });
+
+  it.each(forms)('%s: still refused under v2 (only ERROR narrows there)', (_label, body) => {
+    expect(codesFor(body, 2)).toContain('MOV_ABSENT_REQUIRED');
+  });
+
+  it('`AND` false proves nothing, so a returning arm over a conjunction narrows neither', () => {
+    expect(
+      codesFor(`${SELECT}\n  if channel == null AND 1 == 1 { return "none" }\n${WRITE}`),
+    ).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('`OR` true proves nothing, so an else-return over a disjunction narrows neither', () => {
+    expect(
+      codesFor(`${SELECT}\n  if channel != null OR 1 == 1 { } else { return "none" }\n${WRITE}`),
+    ).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('an else-return with TWO arms falling through proves neither condition', () => {
+    expect(
+      codesFor(`${NAME}\n  if n != null { } else if 1 == 1 { } else { return "none" }\n${WRITE_N}`),
+    ).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('an else that falls through proves nothing about the arm', () => {
+    expect(codesFor(`${NAME}\n  if n != null { } else { }\n${WRITE_N}`)).toEqual(['MOV_ABSENT_REQUIRED']);
+  });
+
+  it('a return inside a block narrows the rest of THAT block body', () => {
+    expect(
+      codesFor(
+        '  chat-[c:Channels]-> {\n'
+        + '    n = ONLY(c-[m:Messages]->.`Message`)\n'
+        + '    if n == null { return "none" }\n'
+        + '    write board-[:Lanes]-> { Title: n }\n'
+        + '  }',
+      ),
+    ).toEqual([]);
+  });
+
+  it('…and not past it: the narrowing ends with the body that holds the if', () => {
+    expect(
+      codesFor(
+        `${NAME}\n`
+        + '  chat-[c:Channels]-> {\n'
+        + '    if n == null { return "none" }\n'
+        + '  }\n'
+        + WRITE_N,
       ),
     ).toEqual(['MOV_ABSENT_REQUIRED']);
   });
