@@ -243,7 +243,7 @@ export function linkImports(
       if (!(e instanceof MovementParseError)) throw e;
       report(
         LinkDiagnosticCodes.IMPORT_FILE_INVALID,
-        `"${path}" does not parse (line ${e.loc.line}: ${e.message}) — fix the library file before importing from it`,
+        `"${path}" does not parse — ${e.message} — fix the library file before importing from it`,
         statementSpan,
       );
       files.set(path, null);

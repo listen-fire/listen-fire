@@ -754,7 +754,7 @@ const TRACE_REPLY_CHARS = 1000;
 /** Reply digests kept per RUN. A fan-out extracts once per entity, so a
  *  systematically-confused model would otherwise attach one digest per
  *  entity; the first few say the same thing as the hundredth. */
-const TRACE_REPLY_DIGESTS = 5;
+export const TRACE_REPLY_DIGESTS = 5;
 /** Validation issues quoted when the retry fires. */
 const TRACE_ISSUE_LINES = 8;
 /** Matches `TRACE_VALUE_CHARS` — a traced URL is a traced value. */
@@ -774,7 +774,7 @@ const TRACE_URL_CHARS = 200;
  * at `entry.45.sourced_by` is unreadable from the head of a fifty-entity reply,
  * so the offending entity takes the sample's place (`focus`).
  */
-function replyDigest(
+export function replyDigest(
   reply: LlmCallResult | undefined,
   why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>,
   focus?: OffendingEntity,

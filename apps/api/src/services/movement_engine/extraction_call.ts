@@ -44,7 +44,9 @@ import {
   extractionMaxTokens,
   extractionOutputBudgetEnabled,
   logTruncatedExtraction,
+  replyDigest,
   throwIfCancelled,
+  TRACE_REPLY_DIGESTS,
   zodForFieldType,
   type ExtractFieldSpec,
   type ExtractNodeSpec,
@@ -372,6 +374,26 @@ function readsAsPresentText(field: ExtractFieldSpec): boolean {
 
 type NodePosition = Extract<Binding, { kind: 'nodePosition' }>;
 
+/** What the model answered with nothing in it, per node name, beside what the
+ *  engine then dropped — the keyword's `empty` and `dropped`, so the run UI's
+ *  tally reads the same on both paths. A fieldless-but-populated parent is
+ *  empty yet survives on its children, which is why the two differ. */
+interface RecordTallies {
+  empty: Record<string, number>;
+  dropped: Record<string, number>;
+}
+
+function isBlankFields(record: NodePosition, spec: ExtractNodeSpec): boolean {
+  const fields = spec.stages[0]?.fields ?? [];
+  return (
+    fields.length > 0 &&
+    fields.every((f) => {
+      const value = record.fields[f.name];
+      return value === null || value === undefined || value === '';
+    })
+  );
+}
+
 function isEmptyRecord(record: NodePosition, spec: ExtractNodeSpec): boolean {
   const stage = spec.stages[0];
   const fieldsBlank = (stage?.fields ?? []).every((f) => {
@@ -389,7 +411,7 @@ function buildRecords(
   spec: ExtractNodeSpec,
   site: ExtractSiteRef,
   items: ReadonlySet<number>,
-  dropped: Record<string, number>,
+  tallies: RecordTallies,
 ): NodePosition[] {
   const list = Array.isArray(raw) ? raw : [];
   const stage = spec.stages[0];
@@ -421,7 +443,7 @@ function buildRecords(
     for (const child of stage?.children ?? []) {
       edges[child.name] = {
         kind: 'landed',
-        landings: buildRecords(entry[child.name], child, site, items, dropped),
+        landings: buildRecords(entry[child.name], child, site, items, tallies),
         landingShape: landingShapeOf(child),
       };
     }
@@ -432,8 +454,9 @@ function buildRecords(
       fieldProvenance,
       edges,
     };
+    if (isBlankFields(record, spec)) tallies.empty[spec.name] = (tallies.empty[spec.name] ?? 0) + 1;
     if (isEmptyRecord(record, spec)) {
-      dropped[spec.name] = (dropped[spec.name] ?? 0) + 1;
+      tallies.dropped[spec.name] = (tallies.dropped[spec.name] ?? 0) + 1;
       continue;
     }
     records.push(record);
@@ -595,7 +618,16 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
   const sink = new CoercionTracker();
   const schema = responseSchema(spec, sink);
   const usage: ExtractCallUsage[] = [];
+  let lastReply: ExtractCallLlmResult | undefined;
   const started = Date.now();
+  // The reply is third-party content, so a run keeps only a few digests of it;
+  // the budget is counted off the entries already on the run's trace.
+  const digestOf = (why: Array<'no_entities' | 'dropped_records' | 'retried' | 'failed'>) => {
+    const kept = (runtime.trace ?? []).filter((e) => e.kind === 'extraction' && e.reply).length;
+    if (runtime.trace === undefined || kept >= TRACE_REPLY_DIGESTS) return {};
+    const reply = replyDigest(lastReply, why);
+    return reply ? { reply } : {};
+  };
   const ask = async (last: string, label: string): Promise<ExtractCallLlmResult> => {
     await throwIfCancelled();
     const reply = await runtime.llm.call({
@@ -607,6 +639,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
       ...(settings.maxTokens !== undefined ? { maxTokens: settings.maxTokens } : {}),
     });
     if (reply.usage !== undefined) usage.push(reply.usage);
+    lastReply = reply;
     return reply;
   };
   const telemetry = (): Pick<Extract<MovementTraceEntry, { kind: 'extraction' }>, 'model' | 'durationMs' | 'cache'> => ({
@@ -647,6 +680,7 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
         emissions: { [spec.name]: 0 },
         failed: 'invalid_reply',
         retried,
+        ...digestOf(['failed', 'retried']),
         ...telemetry(),
       });
       throw new MovementEngineError(
@@ -656,16 +690,23 @@ export async function runExtractCall(input: ExtractCallInput): Promise<Binding> 
       );
     }
   }
-  const dropped: Record<string, number> = {};
+  const tallies: RecordTallies = { empty: {}, dropped: {} };
   const answer = parsed.data as Record<string, unknown>;
-  const landings = buildRecords(answer[ANSWER_KEY], spec, site, shown, dropped);
+  const answered = Array.isArray(answer[ANSWER_KEY]) ? (answer[ANSWER_KEY] as unknown[]).filter(isPlainRecord).length : 0;
+  const landings = buildRecords(answer[ANSWER_KEY], spec, site, shown, tallies);
   const coerced = sink.snapshot();
+  const why: Array<'no_entities' | 'dropped_records' | 'retried'> = [];
+  if (answered === 0) why.push('no_entities');
+  if (Object.keys(tallies.dropped).length > 0) why.push('dropped_records');
+  if (retried !== undefined) why.push('retried');
   runtime.trace?.push({
     kind: 'extraction',
     ...shape,
-    emissions: { [spec.name]: landings.length },
+    emissions: { [spec.name]: answered },
     ...(retried !== undefined ? { retried } : {}),
-    ...(Object.keys(dropped).length > 0 ? { dropped } : {}),
+    ...digestOf(why),
+    ...(Object.keys(tallies.empty).length > 0 ? { empty: tallies.empty } : {}),
+    ...(Object.keys(tallies.dropped).length > 0 ? { dropped: tallies.dropped } : {}),
     ...(coerced ? { coerced } : {}),
     ...telemetry(),
   });

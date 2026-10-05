@@ -411,6 +411,33 @@ describe('the records', () => {
     expect(writes.map((w) => w.fields)).toEqual([{ name: '|-1|none' }]);
   });
 
+  it('a record answered with nothing in it is dropped, and the trace keeps what the model said', async () => {
+    const blank = { name: cite(null, 0), employees: cite(null, 0), site: cite(null, 0), round: [] };
+    const { result } = await run(
+      ['  companies = extract([msg.`text`], Company)'],
+      [{ records: [blank, COMPANIES.records[0]] }],
+    );
+    const [entry] = extractions(result.trace);
+    expect(entry.emissions).toEqual({ Company: 2 });
+    expect(entry.empty).toEqual({ Company: 1 });
+    expect(entry.dropped).toEqual({ Company: 1 });
+    expect(entry.reply?.why).toEqual(['dropped_records']);
+    expect(entry.reply?.keys).toEqual(['records']);
+    expect(entry.reply?.sample).toContain('Acme');
+  });
+
+  it('a reply with no records says so, with the reply beside it', async () => {
+    const { result } = await run(['  companies = extract([msg.`text`], Company)'], [{ records: [] }]);
+    const [entry] = extractions(result.trace);
+    expect(entry.emissions).toEqual({ Company: 0 });
+    expect(entry.reply?.why).toEqual(['no_entities']);
+  });
+
+  it('a healthy reply keeps no digest', async () => {
+    const { result } = await run(['  companies = extract([msg.`text`], Company)'], [COMPANIES]);
+    expect(extractions(result.trace)[0].reply).toBeUndefined();
+  });
+
   it('a citation of an item that was never shown is no citation', async () => {
     const { result } = await run(
       [
@@ -468,6 +495,23 @@ describe('a reply the shape does not describe', () => {
     await expect(run(['  found = extract([msg.`text`], Detail)'], [{ answer: [] }, { answer: [] }])).rejects.toThrow(
       /extraction of `Detail` was answered with something its shape does not describe, twice/,
     );
+  });
+
+  it('twice, leaves the reply it got on the trace', async () => {
+    const { result } = await run(
+      [
+        '  content = [msg.`text`]',
+        '  companies = extract(content, Company)',
+        "  details = MAP(companies, { onError: 'warn' }, (c) => {",
+        "    found = extract([...content, TEXT.SERIALISE(c, 'JSON')], Detail)",
+        '    return ONLY(found)',
+        '  })',
+      ],
+      [COMPANIES, { answer: [] }, { answer: [] }, { answer: [] }, { answer: [] }],
+    );
+    const failed = extractions(result.trace).find((e) => e.failed === 'invalid_reply');
+    expect(failed?.reply?.why).toEqual(['failed', 'retried']);
+    expect(failed?.reply?.keys).toEqual(['answer']);
   });
 
   it('twice inside a MAP with onError, leaves that member out and carries on', async () => {

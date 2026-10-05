@@ -324,6 +324,11 @@ describe('failure modes', () => {
     ).toContain(C.IMPORT_FILE_INVALID);
   });
 
+  it('a library parse error names its position once', () => {
+    const message = check(CONSUMER, resolverOver({ 'lib/file-routines': 'movement {{{{' })).find(d => d.code === C.IMPORT_FILE_INVALID)?.message ?? '';
+    expect(message.match(/\(line \d+/g)).toHaveLength(1);
+  });
+
   it('a file with its own listeners is importable — export is the gate', () => {
     const automation = [
       'import { email } from adapters',
