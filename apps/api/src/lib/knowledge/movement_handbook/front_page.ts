@@ -26,8 +26,17 @@ export interface FrontEntry {
  * How an example becomes a whole program: a `body` sits inside a function
  * that receives an email; a `program` stands at the top level (declarations,
  * listeners). Either way the shared prelude constructs the systems it names.
+ * A `file` is a whole program as shown, imports and all — the one way the page
+ * can show the lines every other example takes for granted.
  */
-export type FrontExample = { body: string } | { program: string };
+export type FrontExample = { body: string } | { program: string } | { file: string };
+
+/** The text an example shows. */
+export function exampleText(example: FrontExample): string {
+  if ('body' in example) return example.body;
+  if ('program' in example) return example.program;
+  return example.file;
+}
 
 const PRELUDE = `import { email, attio, slack, ask } from adapters
 import { acme, team_chat } from credentials
@@ -112,17 +121,22 @@ export const TS_EXCEPT: readonly FrontEntry[] = [
 /** The ideas with no TypeScript analogue — a few lines each, then search. */
 export const CONCEPTS: readonly FrontEntry[] = [
   {
+    anchor: 'systems',
+    title: 'Import, then construct',
+    text: 'Import a system from `adapters` and its connection from `credentials`, then construct it once. An email listen needs a `key`, the address mail is sent to.',
+    example: {
+      file: 'import { email, attio } from adapters\nimport { acme } from credentials\n\ninbox = email()\ncrm = attio(credentials: acme)\n\nfunction `Log Sender`(m: <inbox-[:Email]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox { key: "senders" } fire `Log Sender`',
+    },
+  },
+  {
     anchor: 'graph-and-paths',
     title: 'Systems are graphs; paths are values',
-    text: 'Construct each system once (`crm = attio(credentials: acme)`). `crm-[:Companies]->` is a path to its records, and `-[c:Companies WHERE …]->` filters the hop. A `listen` line fires a function with the event\'s record as its one parameter. Every record, field and edge name comes from the live connection.',
-    example: {
-      program: 'function `Log Sender`(m: <inbox-[:Email]->>) {\n  write crm-[:People]-> { unique by (Email), Email: m.From, Name: m.From }\n}\n\nlisten to inbox {} fire `Log Sender`',
-    },
+    text: '`crm-[:Companies]->` is a path to its records, and `-[c:Companies WHERE …]->` filters the hop. A `listen` line fires a function with the event\'s record as its one parameter.',
   },
   {
     anchor: 'identity',
     title: 'A write creates or updates, by identity',
-    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Related records are written off the parent\'s handle, or joined with `link`.',
+    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Write related records off the parent\'s handle.',
     example: {
       body: 'co = write crm-[:Companies]-> { unique by (Name), Name: m.Subject }\nwrite co-[:Team]-> { unique by (Email), Email: m.From, Name: m.From }',
     },
@@ -130,7 +144,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'extraction',
     title: 'Extraction is a function backed by a model',
-    text: 'A `node` declaration is a type and a schema; its descriptions are the model\'s instructions. `extract(content, Shape, settings)` returns a list, `extractOne` one record or absent. Shared content goes first in the list, for the cache.',
+    text: 'A `node` declaration is a type and a schema; its descriptions are the model\'s instructions. `extract(content, Shape, settings)` returns a list, `extractOne` one record or absent.',
     example: {
       program: 'node Company: "the company this email is about" {\n  Name: <text> "its name"\n}\nfunction `File Company`(m: <inbox-[:Email]->>) {\n  co = extractOne([m.Body, m.Subject], Company, { tier: \'careful\' })\n  if co == null { ERROR("no company") }\n  write crm-[:Companies]-> { unique by (Name), Name: co.Name }\n}',
     },
@@ -138,7 +152,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'runs',
     title: 'Runs: effects, waiting, cost',
-    text: 'Each event starts a run, recording every write and where its values came from. A run parks at an `await` (an approval, `sleep`) and resumes when it settles; `race` and `parallel` combine waits. Model work costs money, and a run pauses at its cost cap until resumed.',
+    text: 'A run parks at an `await` (an approval, `sleep`) and resumes when it settles; `race` and `parallel` combine waits. A run pauses at its cost cap until resumed.',
     example: {
       body: 'q = write asks-[:Check]-> { Prompt: "Log ${m.Subject}?" }\nr = await race([\n  () => {\n    a = await FIRST(q-[:Response]->)\n    return a.Answer\n  },\n  () => { await sleep(2d) },\n])\napproved = AT(r, 0) == TRUE',
     },
@@ -148,11 +162,10 @@ export const CONCEPTS: readonly FrontEntry[] = [
 /** Agent-facing, so it names the tools — the one part of the page that does. */
 export const BUILD_LOOP = `### build-loop
 
-listConnections → describeConnection (exact names) → write → validateAutomation (a diagnostic may name a section here) → saveAutomation → runAutomation → checkRun. Look up a built-in, a system or a recipe with searchLanguage.`;
+listConnections → describeConnection (exact names) → write → validateAutomation → saveAutomation → runAutomation → checkRun. Look up a built-in, a system or a recipe with searchLanguage.`;
 
 function renderExample(example: FrontExample): string {
-  const code = 'body' in example ? example.body : example.program;
-  return `\n\`\`\`\n${code}\n\`\`\``;
+  return `\n\`\`\`\n${exampleText(example)}\n\`\`\``;
 }
 
 function renderBullet(entry: FrontEntry): string {
@@ -200,6 +213,7 @@ export function frontSection(anchor: string): { ok: true; content: string } | { 
 
 /** The whole program an example stands for. */
 export function exampleProgram(example: FrontExample): string {
+  if ('file' in example) return `${example.file}\n`;
   if ('program' in example) return `${PRELUDE}\n${example.program}\n`;
   const body = example.body
     .split('\n')

@@ -22,7 +22,7 @@ import {
   type BuiltinParam,
 } from 'movement-lang';
 import { listChapterSections, sliceChapterSection } from '../../handbook_section';
-import { exampleProgram, frontEntries, type FrontExample } from './front_page';
+import { exampleProgram, exampleText, frontEntries, type FrontExample } from './front_page';
 import { getMovementHandbook } from './index';
 import type { Chapter, EngineClaim } from './types';
 
@@ -195,7 +195,7 @@ function controlFormEntries(): LanguageEntry[] {
     kind: 'function' as const,
     purpose: form.purpose,
     detail: form.signature,
-    example: 'body' in form.example ? form.example.body : form.example.program,
+    example: exampleText(form.example),
     anchor: form.anchor,
   }));
 }
@@ -207,7 +207,7 @@ function conceptEntries(): LanguageEntry[] {
     purpose: entry.title,
     detail: entry.text,
     ...(entry.example
-      ? { example: 'body' in entry.example ? entry.example.body : entry.example.program }
+      ? { example: exampleText(entry.example) }
       : {}),
     anchor: `front#${entry.anchor}`,
   }));

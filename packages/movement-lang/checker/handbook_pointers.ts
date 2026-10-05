@@ -14,6 +14,8 @@ export const HANDBOOK_POINTERS = {
   extraction: 'front#extraction',
   /** A write or find that cannot say which record it means. */
   identity: 'front#identity',
+  /** A system named before it is imported and constructed. */
+  systems: 'front#systems',
 } as const;
 
 export type HandbookPointer = (typeof HANDBOOK_POINTERS)[keyof typeof HANDBOOK_POINTERS];

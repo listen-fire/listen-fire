@@ -4,6 +4,7 @@
 
 import { standardLibrary } from 'movement-lang';
 import { readBook } from '../../library';
+import { exampleText } from '../front_page';
 import {
   CONTROL_FORMS,
   MAX_RESULTS,
@@ -97,7 +98,7 @@ describe('what the search hands out', () => {
       const asChapter = {
         id: 'reference' as const,
         title: form.name,
-        content: `${form.purpose}\n\n${form.signature}\n\n\`\`\`\n${'body' in form.example ? form.example.body : form.example.program}\n\`\`\``,
+        content: `${form.purpose}\n\n${form.signature}\n\n\`\`\`\n${exampleText(form.example)}\n\`\`\``,
       };
       expect(proseViolations(asChapter)).toEqual([]);
     }
