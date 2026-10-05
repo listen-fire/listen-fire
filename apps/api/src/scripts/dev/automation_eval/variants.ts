@@ -1,12 +1,12 @@
 // The dimensions a trial varies along, and how the command line names them.
 //
 //   --variants noskill,skill   whether the builder carries the builder skill
-//   --handbook full,lean       which automations handbook the API serves it
+//   --handbook full,lean,examples   which automations handbook the API serves it
 //
 // Every combination runs for every task. The handbook needs no restart of the
 // stack between trials: the builder asks for its mode on every request to the
 // connector (the X-Handbook-Mode header, honoured outside production), so one
-// running API serves both — see lib/knowledge/movement_handbook/handbook_mode.ts.
+// running API serves them all — see lib/knowledge/movement_handbook/handbook_mode.ts.
 
 import { HANDBOOK_MODES, isHandbookMode, type HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import type { Variant } from './builder';

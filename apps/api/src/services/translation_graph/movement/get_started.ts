@@ -17,11 +17,12 @@ import { renderConnectionsDigest, type SystemDigestInput } from './connection_di
  *  one slow connection cannot hold the whole first call up. */
 const DESCRIBE_TIMEOUT_MS = 8_000;
 
-/** The page the handbook mode starts an agent on: the front page (lean), or the
- *  foundations chapter (full). */
+/** The page the handbook mode starts an agent on: the front page (lean), the
+ *  annotated programs (examples), or the foundations chapter (full). */
 export function firstHandbookPage(mode: HandbookMode): string {
   switch (mode) {
-    case 'lean': {
+    case 'lean':
+    case 'examples': {
       const read = readBook({ bookId: 'automations', mode });
       return 'content' in read && typeof read.content === 'string' ? read.content : '';
     }
