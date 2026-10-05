@@ -242,7 +242,7 @@ upper    = MAP(lines, (t) => UPPER(t))
 MAP(ch-[m:Messages]->, (m) => { write graph-[:note]-> { text: m.\`Text\` } })
 \`\`\`
 
-\`settings\` is a record written in place: \`onError\` (\`'error'\`, the default, \`'warn'\` or \`'ignore'\`: what a member whose function fails does — the other two leave it out of the answer, \`'warn'\` with a warning on the trace), \`concurrency\` (members run at once) and \`initialConcurrency\` (a first batch of that size runs to the end before the rest start, so a prompt cache is warm before the fan-out). The answer stays in input order, and writes inside members happen one at a time. See *map-and-filter-settings* in the expressions chapter.
+\`settings\` is a record written in place: \`onError\` (\`'error'\`, the default, \`'warn'\` or \`'ignore'\`: what a member whose function fails does — the other two leave it out of the answer, \`'warn'\` with a warning on the trace), \`concurrency\` (members run at once) and \`initialConcurrency\` (a first batch of that size runs to the end before the rest start, so a prompt cache is warm before the fan-out). The answer stays in input order, and members writing the same \`unique by\` key take turns, so the record is made once. See *map-and-filter-settings* in the expressions chapter.
 
 ### FILTER
 
