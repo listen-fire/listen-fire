@@ -456,7 +456,9 @@ export function seedDefaults(store: EntityStore) {
     // real Attio deals object links to the company it belongs to.
     const dealAttrs: Parameters<typeof attioAttr>[1][] = [
       { api_slug: 'name', title: 'Name', type: 'text', is_required: true, is_unique: false },
-      { api_slug: 'stage', title: 'Stage', type: 'select', is_required: false, is_unique: false },
+      // A `status`, not a `select`: real Attio's deals object ships Stage as a
+      // status attribute, whose values come from the `/statuses` endpoint.
+      { api_slug: 'stage', title: 'Stage', type: 'status', is_required: false, is_unique: false },
       { api_slug: 'value', title: 'Value', type: 'number', is_required: false, is_unique: false },
       {
         api_slug: 'associated_company',
@@ -553,6 +555,42 @@ export function seedDefaults(store: EntityStore) {
     console.log('  Seeded attio: 4 Stage statuses for VC Deal Flow');
   }
 
+
+  // Deals `Stage` was seeded as an option-less `select`, which described as an
+  // enum with no values — builders read that (correctly) as "nothing can be
+  // filtered on Stage" and went looking elsewhere. Real Attio has it as a
+  // `status` with its stages served by `/statuses`; upgrade stores seeded
+  // before this correction in place, then give it its stages. Own top-level
+  // gates so an already-seeded shared dev-loop store heals on boot. Includes
+  // the stages the authoring eval seeds onto deals (Sourced/Diligence/Passed).
+  for (const a of store.list('attio', 'attribute:deals')) {
+    if (a.data.api_slug === 'stage' && a.data.type !== 'status') {
+      store.update('attio', 'attribute:deals', a.id, { ...a.data, type: 'status' });
+      console.log('  Seeded attio: deals.stage upgraded to status');
+    }
+  }
+  if (store.list('attio', 'status:deals:stage').length === 0) {
+    // Four, so the digest (which lists the first four options) shows them all.
+    for (const title of ['Sourced', 'Diligence', 'Term Sheet', 'Passed']) {
+      const statusId = title.toLowerCase().replace(/\s+/g, '_');
+      store.create(
+        'attio',
+        'status:deals:stage',
+        {
+          id: {
+            workspace_id: 'test',
+            object_id: 'deals',
+            attribute_id: 'stage',
+            status_id: statusId,
+          },
+          title,
+          is_archived: false,
+        },
+        statusId,
+      );
+    }
+    console.log('  Seeded attio: 4 Stage statuses for Deals');
+  }
 
   // `categories` is MULTI-select in real Attio (confirmed; the REST docs
   // pass two values). Stores seeded before this correction hold it as

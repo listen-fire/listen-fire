@@ -6,7 +6,7 @@ function attioDeal(id: string, name: string, stage: string): SeedRows['entities'
     id,
     data: {
       id: { workspace_id: 'test', object_id: 'deals', record_id: id },
-      values: { name: [{ value: name }], stage: [{ option: { title: stage } }] },
+      values: { name: [{ value: name }], stage: [{ status: { title: stage } }] },
     },
   };
 }
