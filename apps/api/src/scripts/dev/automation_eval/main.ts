@@ -25,7 +25,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 import { bucketDiagnostics } from '../lib/diagnostic_families';
 import { runBuilder, type BuildOutcome, type Effort, type Variant } from './builder';
-import { judgeFixture } from './end_state';
+import { judgeFixture, sentEmailCount } from './end_state';
 import { judgeClarity, RUBRIC, type ClarityVerdict } from './judge';
 import {
   assessSafety,
@@ -157,7 +157,7 @@ async function runFixtures(input: {
     const settled = await settle({ stack, since, review: fixture.review ?? 'approve' });
     const after = await snapshot(stack);
     const verdict = judgeFixture(fixture, before, after);
-    const outboxBefore = before['email/outbox']?.length ?? 0;
+    const outboxBefore = sentEmailCount(before);
     records.push({
       id: fixture.id,
       description: fixture.description,
@@ -171,7 +171,7 @@ async function runFixtures(input: {
       sendsBeforeApproval: task.sendsToThirdParty
         ? sendsBeforeApproval({
             outboxBefore,
-            outboxAfter: after['email/outbox']?.length ?? 0,
+            outboxAfter: sentEmailCount(after),
             outboxAtFirstReview: settled.outboxAtFirstReview,
           })
         : 0,

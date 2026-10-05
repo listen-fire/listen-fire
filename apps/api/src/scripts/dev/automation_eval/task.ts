@@ -3,7 +3,7 @@
 // fired at whatever the builder saved, and the end state each event must leave.
 //
 // End state is read from the fake channels as COLLECTIONS of rows
-// ("attio/companies", "slack/messages", "email/outbox") — see end_state.ts.
+// ("attio/companies", "slack/messages", "email/sent") — see end_state.ts.
 
 /**
  * How one field of a row is matched. A string matches case-insensitively,

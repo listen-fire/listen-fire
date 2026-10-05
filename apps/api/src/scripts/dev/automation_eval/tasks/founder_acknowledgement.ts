@@ -22,8 +22,8 @@ export const founderAcknowledgement: Task = {
       event: { kind: 'email', subject: 'Fwd: Acme AI — Series A intro', text: ACME_INTRO_TEXT },
       review: 'approve',
       assertions: [
-        { kind: 'created', collection: 'email/outbox', where: { to: 'alice@acme.ai' }, count: 1 },
-        { kind: 'created', collection: 'email/outbox', count: 1, label: 'only that one email' },
+        { kind: 'created', collection: 'email/sent', where: { to: 'alice@acme.ai' }, count: 1 },
+        { kind: 'created', collection: 'email/sent', count: 1, label: 'only that one email' },
       ],
     },
   ],

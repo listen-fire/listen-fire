@@ -94,6 +94,14 @@ function flattenSlackMessage(
   };
 }
 
+/**
+ * Outgoing email is one collection whichever provider sent it: an assertion
+ * says "an email to alice@acme.ai went out", never which adapter carried it.
+ * Row ids are prefixed by provider so two stores can't collide.
+ */
+const SENT_EMAIL = 'email/sent';
+
+/** A message in the shared Mailgun/Resend outbox. */
 interface OutboxMessage {
   id: string;
   recipients?: Array<{ email?: string } | string>;
@@ -104,9 +112,39 @@ interface OutboxMessage {
 function flattenOutboxMessage(stored: OutboxMessage): Row {
   const to = (stored.recipients ?? []).map((r) => (typeof r === 'string' ? r : (r.email ?? '')));
   return {
-    id: String(stored.id),
+    id: `outbox:${stored.id}`,
     fields: { to: to.filter(Boolean), subject: [stored.subject ?? ''], body: [stored.data ?? ''] },
   };
+}
+
+/** A sent message as the fake Gmail mailbox reports its outbox (headers as raw strings). */
+interface GmailSentMessage {
+  id: string;
+  to?: string;
+  cc?: string;
+  subject?: string;
+  body?: string;
+}
+
+/** Bare addresses out of an RFC 2822 address list ("Alice <a@x.ai>, b@y.ai"). */
+function addressesIn(header: string | undefined): string[] {
+  return header?.match(/[^\s<>,"';]+@[^\s<>,"';]+/g) ?? [];
+}
+
+function flattenGmailSent(stored: GmailSentMessage): Row {
+  return {
+    id: `gmail:${stored.id}`,
+    fields: {
+      to: addressesIn(stored.to),
+      subject: [stored.subject ?? ''],
+      body: [stored.body ?? ''],
+    },
+  };
+}
+
+/** How many emails have gone out, across every provider. */
+function sentEmailCount(snapshot: Snapshot): number {
+  return snapshot[SENT_EMAIL]?.length ?? 0;
 }
 
 // ── Reading ────────────────────────────────────────────────────────────────
@@ -150,7 +188,8 @@ async function readSnapshot(fakeChannelsUrl: string): Promise<Snapshot> {
   snapshot['slack/messages'] = (slack.message ?? []).map((m) => flattenSlackMessage(m, channelNames));
 
   const outbox = await getJson<{ data: OutboxMessage[] }>(`${fakeChannelsUrl}/email/outbox`);
-  snapshot['email/outbox'] = outbox.data.map(flattenOutboxMessage);
+  const gmail = await getJson<{ outbox: GmailSentMessage[] }>(`${fakeChannelsUrl}/fake-gmail/state`);
+  snapshot[SENT_EMAIL] = [...outbox.data.map(flattenOutboxMessage), ...gmail.outbox.map(flattenGmailSent)];
 
   return snapshot;
 }
@@ -293,9 +332,12 @@ export {
   diffSnapshots,
   evaluateAssertion,
   flattenAttioRecord,
+  flattenGmailSent,
   flattenOutboxMessage,
   flattenSlackMessage,
   judgeFixture,
   readSnapshot,
+  SENT_EMAIL,
+  sentEmailCount,
 };
 export type { AssertionResult, Delta, FixtureVerdict, Row, Snapshot };

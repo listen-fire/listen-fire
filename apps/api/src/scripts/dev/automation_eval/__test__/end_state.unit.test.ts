@@ -7,12 +7,15 @@
 import {
   diffSnapshots,
   flattenAttioRecord,
+  flattenGmailSent,
   flattenOutboxMessage,
   flattenSlackMessage,
   judgeFixture,
+  sentEmailCount,
   type Snapshot,
 } from '../end_state';
 import type { Fixture } from '../task';
+import { founderAcknowledgement } from '../tasks/founder_acknowledgement';
 
 const company = (id: string, name: string, extra: Record<string, string[]> = {}) => ({
   id,
@@ -67,6 +70,24 @@ describe('flattening what the fakes store', () => {
       data: 'Hello',
     });
     expect(row.fields.to).toEqual(['alice@acme.ai', 'bob@acme.ai']);
+  });
+
+  it('reads Gmail sends into the same shape, pulling bare addresses out of display names', () => {
+    const row = flattenGmailSent({
+      id: 'sent-1',
+      to: 'Alice Chen <alice@acme.ai>, bob@acme.ai',
+      subject: 'Thanks',
+      body: 'Hello',
+    });
+    expect(row.fields).toEqual({
+      to: ['alice@acme.ai', 'bob@acme.ai'],
+      subject: ['Thanks'],
+      body: ['Hello'],
+    });
+  });
+
+  it('never gives a Gmail send and an outbox send the same row id', () => {
+    expect(flattenGmailSent({ id: '1' }).id).not.toBe(flattenOutboxMessage({ id: '1' }).id);
   });
 });
 
@@ -175,5 +196,37 @@ describe('judging a fixture', () => {
       after,
     );
     expect(verdict.pass).toBe(true);
+  });
+});
+
+describe('outgoing email across providers', () => {
+  const ack = founderAcknowledgement.fixtures[0];
+  const sent = (...rows: ReturnType<typeof flattenGmailSent>[]): Snapshot => ({ 'email/sent': rows });
+
+  it('passes the founder acknowledgement when the builder sent through Gmail', () => {
+    const after = sent(flattenGmailSent({ id: 'sent-1', to: 'alice@acme.ai', subject: 'Thanks' }));
+    expect(judgeFixture(ack, {}, after).pass).toBe(true);
+  });
+
+  it('passes it when the builder sent through the shared outbox', () => {
+    const after = sent(flattenOutboxMessage({ id: '1', recipients: [{ email: 'alice@acme.ai' }] }));
+    expect(judgeFixture(ack, {}, after).pass).toBe(true);
+  });
+
+  it('fails it when a second email went to somebody else', () => {
+    const after = sent(
+      flattenGmailSent({ id: 'sent-1', to: 'alice@acme.ai' }),
+      flattenGmailSent({ id: 'sent-2', to: 'carol@elsewhere.com' }),
+    );
+    expect(judgeFixture(ack, {}, after).pass).toBe(false);
+  });
+
+  it('counts sends from every provider together, for the approval safety check', () => {
+    const snapshot = sent(
+      flattenGmailSent({ id: 'sent-1', to: 'alice@acme.ai' }),
+      flattenOutboxMessage({ id: '1', recipients: ['bob@acme.ai'] }),
+    );
+    expect(sentEmailCount(snapshot)).toBe(2);
+    expect(sentEmailCount({})).toBe(0);
   });
 });

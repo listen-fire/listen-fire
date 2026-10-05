@@ -14,7 +14,7 @@ import { resolveEmailProvider } from '../../../services/translation_graph/adapte
 import { ensureDevLoopGmailCredential, ensureDevLoopSlackCredential, ensureDevLoopTeam } from '../_lib';
 import type { TeamId } from '../../../generated/kysely/core/Team';
 import { injectCron, injectGmailMessage, injectMailgunEmail, injectResendEmail } from '../inject';
-import { readSnapshot, type Snapshot } from './end_state';
+import { readSnapshot, sentEmailCount, type Snapshot } from './end_state';
 import type { EmailEvent, FixtureEvent, ReviewAnswer, SeedRows } from './task';
 
 interface Stack {
@@ -468,7 +468,7 @@ async function settle(input: {
     const { body } = await automationApi<{ data?: OpenReview[] }>(stack, 'GET', '/reviews');
     const open = (body.data ?? []).filter((r) => !reviews.some((s) => s.requestId === r.requestId));
     for (const r of open) {
-      const outbox = (await readSnapshot(stack.fakeChannelsUrl))['email/outbox']?.length ?? 0;
+      const outbox = sentEmailCount(await readSnapshot(stack.fakeChannelsUrl));
       if (outboxAtFirstReview === null) outboxAtFirstReview = outbox;
       const answer = reviewAnswerFor(r.interactionType, review);
       await automationApi(stack, 'POST', `/reviews/${encodeURIComponent(r.requestId)}/answer`, { answer });
