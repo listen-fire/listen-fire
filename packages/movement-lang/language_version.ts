@@ -34,7 +34,7 @@ export const LANGUAGE_VERSIONS: readonly LanguageVersionInfo[] = [
   {
     version: 3,
     name: 'Steady Lynx',
-    is: 'the language after v0.9.1: a list literal is a tuple — exact at a literal index, a list of its members\' union elsewhere',
+    is: 'the language from v0.10.0: a list literal is a tuple — exact at a literal index, a list of its members\' union elsewhere',
   },
 ];
 

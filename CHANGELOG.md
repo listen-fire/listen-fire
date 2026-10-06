@@ -6,6 +6,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
+<!-- add merged PRs here -->
+
+## [v0.10.0] - 2026-10-06
+
 > These changes are a broad effort to make the language more consistent and behave more predictably. With a tighter mental model, we get a handbook that's faster to grok and correct automations written faster - @Henry
 
 Language version 3, **Steady Lynx**, arrives. New automations are written in it. The deploy check moves an existing automation up to it when it validates cleanly there. An automation that does not validate stays on its version until it is repaired and upgraded, and behaves exactly as before.
@@ -455,7 +459,8 @@ Language versions arrive. Every automation is pinned to the language version it 
 - The running version shows at `/healthz/workers` and under Settings, About.
 - Self-hosting guides for compose, Render, AWS and a GCP VM, and an upgrade runbook.
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.10.0...HEAD
+[v0.10.0]: https://github.com/listen-fire/listen-fire/compare/v0.9.1...v0.10.0
 [v0.9.1]: https://github.com/listen-fire/listen-fire/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/listen-fire/listen-fire/compare/v0.8.5...v0.9.0
 [v0.8.5]: https://github.com/listen-fire/listen-fire/compare/v0.8.4...v0.8.5
