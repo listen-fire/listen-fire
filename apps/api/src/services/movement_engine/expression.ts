@@ -585,6 +585,13 @@ export type Binding =
        *  round-trips through jsonb, which reorders keys). */
       fieldOrder: string[];
       fieldProvenance: Record<string, Provenance>;
+      /** The edge of a node this run built that this node is a landing on —
+       *  set when a write creates it there, or a `link` first appends it. A
+       *  landing has identity on that edge (it IS the record, held by
+       *  reference), so `write e { … }` updates it in place; a node on no
+       *  edge (a literal, an extracted record) has none to update. Also the
+       *  name the firing log records an update of it under. */
+      landedOn?: string;
       /** The arrow plane: one entry per edge the literal declared, LANDED
        *  (synthesised literals, or a walk already run) or DEFERRED (a `lazy`
        *  hop, walked afresh on every read). */

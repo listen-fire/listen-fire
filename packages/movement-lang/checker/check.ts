@@ -2389,7 +2389,7 @@ function declaredLocalGraph(
         readable: true,
         ...(edge.sequenced !== undefined ? { sequenced: edge.sequenced } : {}),
       },
-      ...(target !== undefined ? { target, structural: true as const } : {}),
+      ...(target !== undefined ? { target: runBuiltLanding(target), structural: true as const } : {}),
     };
   }
   return {
@@ -2561,6 +2561,31 @@ function mayHoldMap(type: FieldType): boolean {
 }
 
 /** Is this graph a node DECLARATION (rather than a constructed system)? */
+/** What `write e { … }` may set on a record the run holds on one of its own
+ *  edges — every field its landing type carries — or undefined when `type` is
+ *  not such a record. */
+function runBuiltWriteShape(
+  type: PositionTypeRef,
+): { fields: Record<string, SchemaFieldType>; declared: boolean } | undefined {
+  const landing =
+    type.kind === 'position' && type.runBuilt === true
+      ? type
+      : type.kind === 'local'
+        ? type.runBuilt?.landing
+        : undefined;
+  if (landing === undefined) return undefined;
+  const schema = positionSchemaOfRef(landing);
+  const instance = instanceOfType(landing);
+  if (schema === undefined || instance === undefined) return undefined;
+  return { fields: schema.properties, declared: isDeclaredNode(instance) };
+}
+
+/** A declared node's records as they land on an appendable edge of a node the
+ *  run built — records with identity in the run's own graph. */
+function runBuiltLanding(target: PositionTypeRef): PositionTypeRef {
+  return target.kind === 'position' ? { ...target, runBuilt: true } : target;
+}
+
 function isDeclaredNode(instance: InstanceRef): boolean {
   const { token } = instance;
   return 'kind' in token && token.kind === 'shape';
@@ -6936,7 +6961,15 @@ class Checker {
   private checkPositionWriteTarget(
     target: Extract<WriteExpression['target'], { kind: 'position' }>,
     scope: Scope,
-  ): { root?: WritableRootSchema; handle?: PositionTypeRef; description: string } {
+  ): {
+    root?: WritableRootSchema;
+    handle?: PositionTypeRef;
+    description: string;
+    /** The record is on an edge of a node this run built. */
+    local?: true;
+    /** …and is a node declaration's record, typed by this program. */
+    declared?: true;
+  } {
     const resolution = scope.resolve(target.alias);
     if (resolution.kind !== 'found') {
       this.reportResolutionFailure(target.alias, target.span, resolution);
@@ -6946,6 +6979,21 @@ class Checker {
     // Schema-less / untyped binding: unknown never errors — stay silent and
     // type-check the body against nothing.
     if (posType === undefined) return { description: `'${target.alias}'` };
+    // A record the run holds on one of its own edges: the run's graph is its
+    // system, and that system updates by id. What it may set is what it
+    // carries — the landing type IS the write shape, as for the write that
+    // put it there.
+    const runBuilt = runBuiltWriteShape(posType);
+    if (runBuilt !== undefined) {
+      const description = `'${target.alias}' (${describePosition(posType)} this run built)`;
+      return {
+        root: { fields: runBuilt.fields, resultShape: runBuilt.fields },
+        handle: posType,
+        description,
+        local: true,
+        ...(runBuilt.declared ? { declared: true as const } : {}),
+      };
+    }
     if (posType.kind !== 'position' && posType.kind !== 'handle' && posType.kind !== 'union') {
       this.report(
         DiagnosticCodes.WRITE_POSITION_NOT_RECORD,
@@ -7257,6 +7305,8 @@ class Checker {
       root = position.root;
       handle = position.handle;
       rootDescription = position.description;
+      local = position.local === true;
+      declaredTarget = position.declared === true;
     }
 
     // A DISCRIMINATED write shape (the write-side dual of read narrowing): the
@@ -8020,6 +8070,7 @@ class Checker {
       handle: {
         kind: 'local',
         label: `a '${edgeName}' landing`,
+        runBuilt: { landing },
         reads: schema.properties,
         ...(nested !== undefined ? { edges: nested } : {}),
       },
@@ -8055,7 +8106,7 @@ class Checker {
           readable: true,
           ...(declared.sequenced !== undefined ? { sequenced: declared.sequenced } : {}),
         },
-        target,
+        target: runBuiltLanding(target),
         structural: true,
       };
     }
@@ -10066,7 +10117,7 @@ class Checker {
       const resolution = scope.resolve(type.graph);
       if (resolution.kind === 'found' && resolution.symbol.kind === 'shape') {
         const target = declaredRootPosition(resolution.symbol);
-        return target !== undefined ? { target, structural: true } : {};
+        return target !== undefined ? { target: runBuiltLanding(target), structural: true } : {};
       }
       this.report(
         DiagnosticCodes.NODE_ENTRY_TYPE,

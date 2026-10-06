@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Added
+
+- `write e { … }` updates a record the run built in place: an entry on a `node { … }` collection, or a record in a `graph<Shape> { … }`'s nested node. It works through the handle a write handed back, the alias of a block head, and a `MAP`/`FILTER`/`REDUCE` function's parameter. The named fields are merged and the rest are left as they were, `?:` fills only what is empty, the entry keeps its place in the collection, and its nested records are untouched. Two `MAP` members updating the same entry take turns. The firing log records the update as a local write, not one committed to a system. Before, validation refused these writes; this applies to every language version. Writing to a whole `graph { … }` or `node { … }` value is still refused, because it is not a record.
+
 ## [v0.10.3] - 2026-10-06
 
 ### Changed
