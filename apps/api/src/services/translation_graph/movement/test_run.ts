@@ -147,6 +147,7 @@ export async function runMovementTestRun(
   try {
     teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: movementRow.source,
+      languageVersion: movementRow.languageVersion,
     });
   } catch (err) {
     return {

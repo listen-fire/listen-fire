@@ -1071,7 +1071,10 @@ async function runSave(
   // pairs this program (and its imported libraries) constructs, not the
   // whole workspace.
   const teamCatalog = await timer.step('catalog', () =>
-    movementCatalogForTeam(input.teamId as TeamId, { source: input.source }),
+    movementCatalogForTeam(input.teamId as TeamId, {
+      source: input.source,
+      languageVersion: row.languageVersion,
+    }),
   );
   timer.note(teamCatalog.cost ?? {});
 

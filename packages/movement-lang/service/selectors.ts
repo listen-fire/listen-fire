@@ -24,6 +24,7 @@ import { listElementExpression, objectMemberExpression } from '@listen-fire/shar
 import type {
   AwaitExpression,
   CallArg,
+  ClosureExpression,
   ExprSlot,
   NodeLiteral,
   PathHead,
@@ -31,6 +32,7 @@ import type {
   CombinatorExpression,
   Statement,
   MatchExpression,
+  MovementParam,
   WriteExpression,
   WriteTarget,
 } from '../parser/ast';
@@ -38,6 +40,7 @@ import { pathRootName, probePathHead, typeNameOf } from '../parser/ast';
 import { parseProgram } from '../parser/parse';
 import { unwrapCredentialArg } from '../parser/scan';
 import { expressionOfSlot, parseMovementExpression } from '../expression/bridge';
+import { CURRENT_LANGUAGE_VERSION, since, type LanguageVersion } from '../language_version';
 
 export interface InstanceChain {
   /** The construction's adapter slug (import aliases resolved back). */
@@ -93,10 +96,22 @@ interface AliasGrounding {
  * if conditions, extract sources, error messages) — nested chains expanded
  * through their enclosing blocks' aliases, and through the bodies every
  * nesting form carries (blocks, movements, `parallel`, `if`, race branches,
- * inline blocks). Never throws: an unparseable program or path yields no
- * chains.
+ * inline blocks, functions handed to a built-in). Never throws: an unparseable
+ * program or path yields no chains.
  */
-export function scanInstanceChains(source: string): InstanceChain[] {
+export function scanInstanceChains(
+  source: string,
+  options?: {
+    /**
+     * The pin of the movement this source is. A function's body handed to a
+     * built-in (`MAP(xs, (x) => { … })`) is demanded from version 3 on: an
+     * older movement was saved, and runs, checked without that demand, and
+     * the extra schemas could refuse it now.
+     */
+    languageVersion?: LanguageVersion;
+  },
+): InstanceChain[] {
+  const languageVersion = options?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
   let program: Program;
   try {
     program = parseProgram(source);
@@ -349,9 +364,46 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     else if (arg.kind === 'call') {
       for (const nested of arg.call.args) visitCallArg(nested, aliasScope);
     } else if (arg.kind === 'node') visitNode(arg.node, aliasScope);
-    // A function or a type handed to a built-in (`MAP(xs, (x) => { … })`,
-    // `MEMBERS(<T>)`): the scan reads neither, as it reads neither when the
-    // collection op is written as its own statement.
+    // A function handed to a built-in runs once per member, so its body is
+    // this movement's demand like any closure's. A type (`MEMBERS(<T>)`) walks
+    // nothing.
+    else if (arg.kind === 'closure') {
+      if (since(languageVersion, 3)) walkClosure(arg.closure, aliasScope);
+    }
+  };
+
+  /**
+   * A closure's body reads through the scope it captured, minus the names its
+   * parameters rebind. A parameter typed with a position (`(c: <crm-[:Companies]->>)`)
+   * roots chains at that type, as a movement's does; an untyped one (a
+   * collection op's member) is a value whose type the checker infers later,
+   * so a hop off it grounds nothing here rather than something invented.
+   *
+   * Version 3 on: before it, a closure body was walked in the captured scope
+   * unchanged, and an older movement keeps that scan.
+   */
+  const walkClosure = (closure: ClosureExpression, aliasScope: Map<string, AliasGrounding>): void => {
+    if (!since(languageVersion, 3)) {
+      walk(closure.body, aliasScope);
+      return;
+    }
+    const inner = new Map(aliasScope);
+    for (const param of closure.params) {
+      const grounding = paramGrounding(param);
+      if (grounding) inner.set(param.name, grounding);
+      else inner.delete(param.name);
+    }
+    walk(closure.body, inner);
+  };
+
+  /** A parameter typed with a position (`x: <wa-[:\`Type\`]->>`) roots chains
+   *  at that type, so `x-[:edge]->` walks Type's edges. */
+  const paramGrounding = (param: MovementParam): AliasGrounding | undefined => {
+    const type = typeNameOf(param.type);
+    if (type?.position === undefined) return undefined;
+    const instanceBinding = bindings.get(type.graph);
+    if (!instanceBinding) return undefined;
+    return { binding: instanceBinding, prefix: [], startPosition: type.position };
   };
 
   /** A block head grounds its hop aliases for the block's body. */
@@ -430,7 +482,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
     if (source.kind === 'sleep') return undefined;
     if (source.kind === 'until') {
       if (source.condition.kind === 'expr') visitSlot(source.condition.expr, aliasScope);
-      else walk(source.condition.closure.body, aliasScope);
+      else walkClosure(source.condition.closure, aliasScope);
       return undefined;
     }
     // The combinators: an arm closure's body walks like any body; the receipt
@@ -478,7 +530,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
       return;
     }
     for (const arm of expr.arms.arms) {
-      if (arm.kind === 'closure') walk(arm.closure.body, aliasScope);
+      if (arm.kind === 'closure') walkClosure(arm.closure, aliasScope);
     }
   };
   const walk = (statements: Statement[], outerScope: Map<string, AliasGrounding>): void => {
@@ -559,12 +611,12 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           } else if (statement.value.kind === 'closure') {
             // A closure body reads through the scope it captured — its demand
             // is this movement's, deferred.
-            walk(statement.value.closure.body, aliasScope);
+            walkClosure(statement.value.closure, aliasScope);
           } else if (statement.value.kind === 'callback') {
             // A callback body is a closure over this scope — its writes and
             // traversals are this movement's, minted now and run later.
             const subject = statement.value.callback.subject;
-            if (subject.kind === 'inline') walk(subject.closure.body, aliasScope);
+            if (subject.kind === 'inline') walkClosure(subject.closure, aliasScope);
             else {
               for (const arg of subject.args) visitCallArg(arg, aliasScope);
             }
@@ -591,7 +643,7 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           else if (value.kind === 'combinator') visitCombinator(value.combinator, aliasScope);
           else if (value.kind === 'call') {
             for (const arg of value.call.args) visitCallArg(arg, aliasScope);
-          } else if (value.kind === 'closure') walk(value.closure.body, aliasScope);
+          } else if (value.kind === 'closure') walkClosure(value.closure, aliasScope);
           else if (value.kind === 'lazy') {
             visitLanding(value.lazy.head, aliasScope);
             if (value.lazy.mapping) {
@@ -617,20 +669,10 @@ export function scanInstanceChains(source: string): InstanceChain[] {
           for (const arg of statement.args) visitCallArg(arg, aliasScope);
           break;
         case 'movement': {
-          // Parameters root chains at their declared position type
-          // (`movement m(x: <wa-[:\`Type\`]->>)` — `x-[:edge]->` walks Type's
-          // edges), so ground each typed param for the body's scope.
           const paramScope = new Map(aliasScope);
           for (const param of statement.params) {
-            const type = typeNameOf(param.type);
-            if (type?.position === undefined) continue;
-            const instanceBinding = bindings.get(type.graph);
-            if (!instanceBinding) continue;
-            paramScope.set(param.name, {
-              binding: instanceBinding,
-              prefix: [],
-              startPosition: type.position,
-            });
+            const grounding = paramGrounding(param);
+            if (grounding) paramScope.set(param.name, grounding);
           }
           walk(statement.body, paramScope);
           break;

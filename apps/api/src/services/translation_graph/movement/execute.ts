@@ -87,6 +87,7 @@ async function interpretMovementFiring(input: {
 }): Promise<MovementRunResult> {
   const teamCatalog = await movementCatalogForTeam(input.teamId, {
     source: input.movementRow.source,
+    languageVersion: input.movementRow.languageVersion,
   });
   return runMovement({
     source: input.movementRow.source,
@@ -494,6 +495,7 @@ async function resumeMovementFiringInContext(
     const languageVersion = input.pinnedLanguageVersion;
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
+      languageVersion,
     });
     const commonInput = {
       source: input.pinnedSource,
@@ -707,6 +709,7 @@ async function fireCallbackFiringInContext(
     const languageVersion = input.pinnedLanguageVersion;
     const teamCatalog = await movementCatalogForTeam(input.teamId, {
       source: input.pinnedSource,
+      languageVersion,
     });
     const fire = () =>
       fireCallbackBody({
