@@ -288,7 +288,7 @@ import {
   type SummarisedOrigin,
 } from './provenance';
 import { surfaceReadAdapter } from './kg';
-import { localEdgeAdapter } from './local_edge_adapter';
+import { localEdgeAdapter, localRecordLock } from './local_edge_adapter';
 import {
   countShapeNodes,
   ExtractCallRunState,
@@ -1225,6 +1225,11 @@ function setGraphEdge(
 ): void {
   delete node.fields[name];
   node.fieldOrder = node.fieldOrder.filter((f) => f !== name);
+  // A node the graph builds on its edge has landed there: it is a record of
+  // the run's own graph from now on, updatable in place.
+  for (const landing of landings) {
+    if (landing.kind === 'nodePosition' && landing.landedOn === undefined) landing.landedOn = name;
+  }
   node.edges[name] = {
     kind: 'landed',
     landings,
@@ -8929,6 +8934,9 @@ class Interpreter {
     env: Environment,
   ): Promise<Binding> {
     const binding = env.resolve(target.alias);
+    if (binding?.kind === 'nodePosition') {
+      return this.executeLocalPositionWrite(write, { alias: target.alias, landing: binding }, bindingName, env);
+    }
     const resolved = await this.resolvePositionWriteTarget(target.alias, binding, env);
 
     const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources } =
@@ -8961,6 +8969,72 @@ class Interpreter {
       target: resolved.target,
       fieldProvenance,
     });
+  }
+
+  /**
+   * `write e { … }` where `e` is a landing the run holds on one of its own
+   * edges — the run's graph is the record's system, and it updates by id.
+   *
+   * Nothing here is a second update path: the engine stands in as the adapter
+   * over the one landing (`localEdgeAdapter`) and the ordinary merge runs on
+   * top of it, so `?:` / `+:` read the landing's current values exactly as
+   * they read a system record's. The landing object IS the record every other
+   * name holds, so the merge is seen by every later read, and its place on its
+   * edge never moves. Its nested edges are not fields, and nothing here
+   * touches them.
+   *
+   * The update holds the record (`localRecordLock`), as any update does: two
+   * flows of a MAP updating the same landing merge one after the other, and
+   * two updating different landings never wait for each other.
+   *
+   * The firing log gets the row a local create gets — `local`, no
+   * `externalId`, `committed: false` — because nothing left the run.
+   */
+  private async executeLocalPositionWrite(
+    write: WriteExpression,
+    target: { alias: string; landing: Extract<Binding, { kind: 'nodePosition' }> },
+    bindingName: string | undefined,
+    env: Environment,
+  ): Promise<Binding> {
+    const { alias, landing } = target;
+    const edgeName = landing.landedOn;
+    if (edgeName === undefined) {
+      throw new MovementEngineError(
+        'MOVENG_RUNTIME',
+        `'write ${alias} { … }' — '${alias}' is a node this run synthesised, not a record on one of its edges, so there is no record to update. Write it onto an edge ('write node-[:edge]-> { … }') and update what that hands back`,
+      );
+    }
+    const store = localEdgeAdapter({ edge: { kind: 'landed', landings: [landing] }, edgeName });
+    const destination: WriteDestination = { adapter: store.adapter, recordType: edgeName, parents: [] };
+    const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources } =
+      await this.evaluateWriteFields({ write, target: destination, env });
+    const record = await this.applyUpdate({
+      adapter: store.adapter,
+      recordType: edgeName,
+      externalId: '0',
+      fields,
+      fieldSemantics,
+      fieldEvidence,
+      resources,
+      parentLinks: [],
+      locks: [localRecordLock(landing)],
+    });
+    if ('notFound' in record) {
+      throw new MovementEngineError('MOVENG_RUNTIME', `'write ${alias} { … }' — the landing on '${edgeName}' is gone`);
+    }
+    // The trail of each value actually SENT; a field the fill gate suppressed
+    // keeps the trail it had.
+    for (const field of Object.keys(record.writtenValues)) {
+      landing.fieldProvenance[field] = fieldProvenance[field] ?? NO_PROVENANCE;
+    }
+    const { externalId: _local, ...row } = record;
+    this.recordLocalWrite({
+      record: { ...row, committed: false, local: { edge: edgeName } },
+      fieldProvenance,
+      bindingName,
+    });
+    if (bindingName !== undefined) env.declare(bindingName, landing);
+    return landing;
   }
 
   /**
@@ -9186,9 +9260,8 @@ class Interpreter {
       // reaching the record any other way never asks for.
       updateLocks: async (externalId) => {
         const landing = store.landingOf(externalId);
-        if (landing === undefined || landing.kind === 'nodePosition') {
-          return [recordLock(store.adapter, externalId)];
-        }
+        if (landing === undefined) return [recordLock(store.adapter, externalId)];
+        if (landing.kind === 'nodePosition') return [localRecordLock(landing)];
         const real = await realRecordOf(landing);
         return [
           recordLock(real.target.adapter, real.externalId),
@@ -10080,6 +10153,7 @@ class Interpreter {
         `${at} ${link.to.name}: an edge lands on a position — '${link.to.name}' is ${describeBinding[to.kind]}`,
       );
     }
+    if (to.kind === 'nodePosition' && to.landedOn === undefined) to.landedOn = link.edge;
     edge.landings.push(to);
   }
 

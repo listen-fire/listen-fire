@@ -188,6 +188,7 @@ export type BindingDescriptor =
        *  map's own keys stand in, in whatever order jsonb returned them. */
       fieldOrder?: string[];
       fieldProvenance: Extract<Binding, { kind: 'nodePosition' }>['fieldProvenance'];
+      landedOn?: string;
       edges: Record<string, NodeEdgeDescriptor>;
     }
   /**
@@ -541,6 +542,7 @@ export function serializeBinding(binding: Binding, park: ParkWriter = newParkWri
         fields: binding.fields,
         fieldOrder: binding.fieldOrder,
         fieldProvenance: binding.fieldProvenance,
+        ...(binding.landedOn !== undefined ? { landedOn: binding.landedOn } : {}),
         edges,
       };
     }
@@ -762,6 +764,7 @@ async function rehydrateInPark(
       node.fields = withFiles(inOrder(descriptor.fields, descriptor.fieldOrder), ctx);
       node.fieldOrder = descriptor.fieldOrder ?? Object.keys(descriptor.fields);
       node.fieldProvenance = descriptor.fieldProvenance;
+      if (descriptor.landedOn !== undefined) node.landedOn = descriptor.landedOn;
       const edges: Record<string, NodeEdge> = {};
       for (const [name, edge] of Object.entries(descriptor.edges)) {
         edges[name] =

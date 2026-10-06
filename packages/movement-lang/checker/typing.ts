@@ -542,6 +542,13 @@ export type PositionTypeRef =
       address?: EventAddress;
       /** Fields a guard in scope has proven present — as on `extract`. */
       present?: ReadonlySet<string>;
+      /**
+       * The record is a landing on an appendable edge of a node THIS RUN
+       * BUILT (`deduped-[e:entries]->`). The run's own graph holds it and it
+       * has identity there, so `write e { … }` updates it in place exactly as
+       * it would a record in a system that updates by id.
+       */
+      runBuilt?: true;
     }
   /** A union-typed position (`crm.record`); narrowed by `IS` tests. */
   | {
@@ -647,6 +654,13 @@ export type PositionTypeRef =
        *  as unknown, the other is an error. */
       reads: Record<string, FieldType | undefined>;
       edges?: Record<string, LocalEdge>;
+      /** The landing `write deduped-[:entries]-> { … }` handed back: a record
+       *  on an edge of a node this run built, updatable in place as the
+       *  `position` kind's `runBuilt` is, with the edge's landing type — what
+       *  `write h { … }` may set. A value the run merely synthesised (a
+       *  `node { … }` or `graph<Shape> { … }` literal, an extracted record) is
+       *  on no such edge, and does not carry it. */
+      runBuilt?: { landing: PositionTypeRef };
     };
 
 /** One edge of a checker-local node: the same `EdgeSchema` promises every other
