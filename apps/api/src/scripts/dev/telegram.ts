@@ -34,15 +34,13 @@ import './_profile_loader';
 // the real provision path (catalog assembly, listener reconciliation).
 import '../../services';
 
-import { randomUUID } from 'node:crypto';
-
-import { getAutomationsQb } from '../../lib/kysely';
-import { encryptToken } from '../../lib/credentials';
-import { defaultAppIdForType } from '../../services/credentials/app_id';
-import type { TeamId } from '../../generated/kysely/core/Team';
-import type { ExternalServiceCredentialsId } from '../../generated/kysely/automations/ExternalServiceCredentials';
 import ExternalServiceType from '../../generated/kysely/automations/ExternalServiceType';
-import { DEV_LOOP_EMAIL, ensureDevLoopTeam } from './_lib';
+import {
+  DEV_LOOP_EMAIL,
+  ensureCredential,
+  ensureDevLoopTelegramCredential,
+  ensureDevLoopTeam,
+} from './_lib';
 import { saveMovement } from '../../services/translation_graph/movement/provision';
 
 /**
@@ -125,40 +123,6 @@ movement tg_dm(m: <tg-[:\`Message\`]->>) {
 listen to tg {} fire tg_dm
 `;
 
-/** Idempotent mock credential of the given type (any secret works — the
- *  fake-channels base-url injection keys off credential TYPE + the
- *  test-harness team). Mirrors the whatsapp/granola setup helpers. */
-async function ensureCredential(input: {
-  teamId: string;
-  type: ExternalServiceType;
-  name: string;
-  secret: Record<string, string>;
-}): Promise<void> {
-  const existing = await getAutomationsQb(['external_service_credentials'])
-    .selectFrom('external_service_credentials')
-    .where('team_id', '=', input.teamId as TeamId)
-    .where('type', '=', input.type)
-    .select('id')
-    .executeTakeFirst();
-  if (existing) return;
-  const credId = randomUUID() as ExternalServiceCredentialsId;
-  const encrypted = await encryptToken(JSON.stringify(input.secret), credId);
-  await getAutomationsQb(['external_service_credentials'])
-    .insertInto('external_service_credentials')
-    .values({
-      id: credId,
-      name: input.name,
-      type: input.type,
-      credentials: encrypted,
-      team_id: input.teamId,
-      // Slack is two apps and a NULL app_id reads as the LEGACY one, which the
-      // authoring surface hides — so omitting this mints a credential the
-      // checker can't see. undefined for every other type.
-      app_id: defaultAppIdForType(input.type),
-    } as never)
-    .execute();
-}
-
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0] ?? 'setup';
@@ -168,12 +132,7 @@ async function main() {
   }
 
   const seed = await ensureDevLoopTeam();
-  await ensureCredential({
-    teamId: seed.teamId,
-    type: ExternalServiceType.TELEGRAM,
-    name: 'Dev Loop Telegram',
-    secret: { botToken: 'dev-loop-telegram-token' },
-  });
+  await ensureDevLoopTelegramCredential(seed.teamId);
   await ensureCredential({
     teamId: seed.teamId,
     type: ExternalServiceType.SLACK,

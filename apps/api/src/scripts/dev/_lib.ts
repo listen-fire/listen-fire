@@ -663,3 +663,48 @@ export function buildAgentContext(teamId: string, userId: string): Context {
   ctx.bindPrincipal(userPrincipal({ userId, teamId }));
   return ctx;
 }
+
+/** Idempotent mock credential of the given type (any secret works — the
+ *  fake-channels base-url injection keys off credential TYPE + the
+ *  test-harness team). Mirrors the whatsapp/granola setup helpers. */
+export async function ensureCredential(input: {
+  teamId: string;
+  type: ExternalServiceType;
+  name: string;
+  secret: Record<string, string>;
+}): Promise<void> {
+  const existing = await getAutomationsQb(['external_service_credentials'])
+    .selectFrom('external_service_credentials')
+    .where('team_id', '=', input.teamId as TeamId)
+    .where('type', '=', input.type)
+    .select('id')
+    .executeTakeFirst();
+  if (existing) return;
+  const credId = randomUUID() as ExternalServiceCredentialsId;
+  const encrypted = await encryptToken(JSON.stringify(input.secret), credId);
+  await getAutomationsQb(['external_service_credentials'])
+    .insertInto('external_service_credentials')
+    .values({
+      id: credId,
+      name: input.name,
+      type: input.type,
+      credentials: encrypted,
+      team_id: input.teamId,
+      // Slack is two apps and a NULL app_id reads as the LEGACY one, which the
+      // authoring surface hides — so omitting this mints a credential the
+      // checker can't see. undefined for every other type.
+      app_id: defaultAppIdForType(input.type),
+    } as never)
+    .execute();
+}
+
+/** `pnpm dev:telegram setup` provisions the same credential; a catalog capture
+ *  needs it too, without the movements that command also saves. */
+export async function ensureDevLoopTelegramCredential(teamId: string): Promise<void> {
+  await ensureCredential({
+    teamId,
+    type: ExternalServiceType.TELEGRAM,
+    name: 'Dev Loop Telegram',
+    secret: { botToken: 'dev-loop-telegram-token' },
+  });
+}

@@ -49,7 +49,12 @@ import { encryptToken } from '../../lib/credentials';
 import type { TeamId } from '../../generated/kysely/core/Team';
 import type { ExternalServiceCredentialsId } from '../../generated/kysely/automations/ExternalServiceCredentials';
 import ExternalServiceType from '../../generated/kysely/automations/ExternalServiceType';
-import { buildAgentContext, ensureDevLoopTeam, ensureDevLoopSlackCredential } from './_lib';
+import {
+  buildAgentContext,
+  ensureDevLoopSlackCredential,
+  ensureDevLoopTelegramCredential,
+  ensureDevLoopTeam,
+} from './_lib';
 import { saveMovement } from '../../services/translation_graph/movement/provision';
 import { runMovementNow } from '../../services/translation_graph/movement/run_now';
 import { getMovementRowByName } from '../../services/translation_graph/movement/store';
@@ -57,7 +62,7 @@ import {
   movementCatalogForTeam,
   type TeamMovementCatalog,
 } from '../../services/translation_graph/movement/catalog';
-import type { InstanceSchema } from 'movement-lang';
+import { referencedConstructions, type InstanceSchema } from 'movement-lang';
 import {
   handbookCaptureSources,
   mergeInstanceSchemas,
@@ -301,6 +306,10 @@ async function main() {
 
   const seed = await ensureDevLoopTeam();
   await ensureDevLoopSlackCredential(seed.teamId);
+  // The handbook's examples construct Telegram, and only `dev:telegram setup`
+  // otherwise creates its credential — without it the capture silently drops
+  // the system.
+  if (command === 'snapshot-catalog') await ensureDevLoopTelegramCredential(seed.teamId);
 
   if (command === 'catalog') {
     const catalog = await movementCatalogForTeam(seed.teamId as TeamId);
@@ -350,6 +359,21 @@ async function main() {
             adapters: adapters ?? DEFAULT_SNAPSHOT_ADAPTERS,
           });
     for (const note of captured.notes) console.error(`! ${note}`);
+    if (args.includes('--handbook')) {
+      // A capture missing an adapter the examples construct would write a
+      // fixture that quietly checks those examples against nothing.
+      const absent = [
+        ...new Set(sources.flatMap((s) => referencedConstructions(s.source).map((r) => r.adapter))),
+      ]
+        .filter((adapter) => captured.schemas[adapter] === undefined)
+        .sort();
+      if (absent.length > 0) {
+        console.error(
+          `snapshot-catalog --handbook: the handbook's examples construct ${absent.join(', ')}, but the capture has no schema for ${absent.length === 1 ? 'it' : 'them'} — see the notes above. Not writing the fixture.`,
+        );
+        process.exit(1);
+      }
+    }
     const out = argValue(args, '--out');
     const json = `${JSON.stringify(
       {

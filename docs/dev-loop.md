@@ -721,6 +721,26 @@ tail -F .dev-loop/loop.log | grep -E "WebhookTG|TGRouter"  # TG dispatch events
 This is your fastest "what just happened" view when an inject doesn't
 do what you expected.
 
+## Regenerating the handbook's adapter schema snapshot
+
+The movement handbook's examples are checked against
+`apps/api/src/lib/knowledge/movement_handbook/__test__/adapter_schemas.fixture.json`,
+a capture of what the dev-loop team's real adapters publish. Regenerate it
+whenever an adapter's shape changes:
+
+1. `pnpm dev:loop:agent` (the capture reads its env from the stack's profile file, so the stack must be up)
+2. `pnpm dev:seed`
+3. `pnpm dev:movement snapshot-catalog --handbook --out apps/api/src/lib/knowledge/movement_handbook/__test__/adapter_schemas.fixture.json`
+4. `git diff` the fixture and read it.
+
+The capture provisions the Telegram credential itself, and exits non-zero naming
+any adapter the handbook's examples construct that came back with no schema.
+
+Read the diff as a claim about the adapters. Any position that turns
+`undescribed` is a regression to explain (usually a missing credential or a
+lost demand), never one to accept. Always take the whole file from one capture:
+hand-merging sections leaves `capturedAt` wrong for the parts you kept.
+
 ## Fake-channels HTTP reference
 
 Base URL: `http://localhost:5556`

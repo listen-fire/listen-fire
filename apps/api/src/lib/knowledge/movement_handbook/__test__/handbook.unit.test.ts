@@ -230,6 +230,9 @@ describe('movement_handbook referential integrity', () => {
 //        pnpm dev:movement snapshot-catalog --handbook \
 //          --out <this dir>/adapter_schemas.fixture.json
 //
+//    (the full procedure — boot, seed, and how to read the diff — is in
+//    docs/dev-loop.md, "Regenerating the handbook's adapter schema snapshot")
+//
 //    A hand-written fixture validates an example against a shape someone
 //    imagined, which is validation theatre: the previous fixture declared
 //    `Companies -[:People]-> People`, an edge REAL Attio does not have (its
