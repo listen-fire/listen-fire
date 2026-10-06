@@ -6,7 +6,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
-<!-- PREFACE: Henry to write — the theme of this release and why it is so large. -->
+> These changes are a broad effort to make the language more consistent and behave more predictably. With a tighter mental model, we get a handbook that's faster to grok and correct automations written faster - @Henry
 
 Language version 3, **Steady Lynx**, arrives. New automations are written in it. The deploy check moves an existing automation up to it when it validates cleanly there. An automation that does not validate stays on its version until it is repaired and upgraded, and behaves exactly as before.
 
