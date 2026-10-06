@@ -412,6 +412,39 @@ describe('parseExpression', () => {
         const b = '{\n    return FIRST(x-[#linked]->) }';
         expect(blockOf(nested(b))).toBe(b);
       });
+
+      it('a comment after a `#` hop head on the same line is still a comment', () => {
+        const b = "{\n    return FIRST(x-[#linked]->) # isn't } closed\n  }";
+        expect(blockOf(nested(b))).toBe(b);
+      });
+    });
+
+    // The body's end is found by the same rules the lexer reads it with, so no
+    // literal can hide a brace from one and show it to the other.
+    describe('a literal in a nested block body is read whole', () => {
+      const nested = (b: string) => `FIRST(MAP([e], { onError: "warn" }, (x) => ${b}))`;
+      const blockOf = (text: string): string => {
+        const tree = parseExpression(text);
+        if (tree.kind !== 'call') throw new Error('expected a call');
+        const map = tree.args[0].value;
+        if (map.kind !== 'call') throw new Error('expected MAP');
+        const closure = map.args[2].value;
+        if (closure.kind !== 'closure' || closure.body.kind !== 'block') throw new Error('expected a block closure');
+        return text.slice(closure.body.at.start, closure.body.at.end);
+      };
+
+      it.each([
+        ['a backtick name with an escaped backtick', '{\n    return x.`a\\`}`\n  }'],
+        ["a ' inside a \" string", '{\n    return "it\'s } here"\n  }'],
+        ["a \" inside a ' string", "{\n    return 'say \"hi\" }'\n  }"],
+        ['a brace in a string inside an interpolation', '{\n    return "a ${ "}" } b"\n  }'],
+      ])('%s', (_label, b) => {
+        expect(blockOf(nested(b))).toBe(b);
+      });
+
+      it('an escaped backtick is part of the name', () => {
+        expect(parseExpression('`a\\`b`')).toMatchObject({ kind: 'name', name: { text: 'a`b', quoted: true } });
+      });
     });
   });
 
