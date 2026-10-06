@@ -2598,8 +2598,9 @@ async function traverseFrom(
       // A synthesised node reads on BOTH planes: its entries by dot, its
       // synthesised landings by arrow. The arrow walk is the meta-node walker —
       // a landing is just another binding, so nested literals and blocks
-      // flatten through the same hops.
-      if (expr.steps.length > 0) {
+      // flatten through the same hops. `EXISTS(d-[:edge]->)` arrives as an
+      // exists terminal with no steps of its own, and walks too.
+      if (expr.steps.length > 0 || expr.expression.type === 'exists') {
         const reached = await walkMetaSteps([binding], expr.steps, name, ctx);
         const existsTerminal = existsTerminalOf(expr, name, { allowSteps: true });
         if (existsTerminal) return evaluateExists(existsTerminal, reached, ctx);
@@ -3072,6 +3073,13 @@ async function stepExistsCursor(
       );
     case 'blockMeta':
       return cursor.edges.get(step.edgeTypeId) ?? [];
+    case 'nodePosition': {
+      // A local graph's edge: its landings in hand, or a deferred walk run now
+      // — the same hop a block head takes from the node.
+      const edge = cursor.edges[step.edgeTypeId];
+      if (edge?.kind === 'deferred') return resolveDeferred(edge.walk, [], ctx, step.edgeTypeId);
+      return edge?.landings ?? [];
+    }
     case 'positions':
       return (
         await Promise.all(cursor.landings.map((landing) => stepExistsCursor(landing, step, ctx)))

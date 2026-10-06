@@ -2573,6 +2573,11 @@ function mayHoldMap(type: FieldType): boolean {
 function runBuiltWriteShape(
   type: PositionTypeRef,
 ): { fields: Record<string, SchemaFieldType>; declared: boolean } | undefined {
+  // An extracted record is one this run built: it carries the fields the
+  // extraction declared, typed by this program, and updates in place.
+  if (type.kind === 'local' && type.extracted !== undefined) {
+    return { fields: type.extracted.fields, declared: true };
+  }
   const landing =
     type.kind === 'position' && type.runBuilt === true
       ? type
@@ -2665,7 +2670,9 @@ function recordSurface(type: PositionTypeRef): SuppliedSurface | undefined {
  */
 function extractedRecordType(node: ExtractNodeType): Extract<PositionTypeRef, { kind: 'local' }> {
   const reads: Record<string, FieldType | undefined> = {};
+  const fields: Record<string, SchemaFieldType> = {};
   for (const [name, field] of node.properties) {
+    fields[name] = field.explicit ?? 'text';
     reads[name] = readsAsPresentText(field)
       ? 'text'
       : field.explicit !== undefined
@@ -2680,7 +2687,7 @@ function extractedRecordType(node: ExtractNodeType): Extract<PositionTypeRef, { 
       structural: true,
     };
   }
-  return { kind: 'local', label: `an extracted '${node.name}' record`, reads, edges };
+  return { kind: 'local', label: `an extracted '${node.name}' record`, reads, edges, extracted: { fields } };
 }
 
 /** Why `extract` cannot read this content as it is, or undefined. `written` is
@@ -10035,8 +10042,12 @@ class Checker {
       reads[name] = type;
       plan.fields.push(name);
     }
+    // A record this program wrote into a system is read as what the write
+    // handed back — its fields. Its edges are the system's, read live, and a
+    // snapshot never hops past the landing to fetch them.
+    const followsEdges = record.position?.kind !== 'handle';
     for (const [name, edge] of Object.entries(declared?.edges ?? {})) {
-      if (!Object.hasOwn(supplied.edges, name) || written.has(name)) continue;
+      if (!followsEdges || !Object.hasOwn(supplied.edges, name) || written.has(name)) continue;
       const child: RequiredPosition = { schema: required.schema, position: edge.target };
       const misfit = surfaceMisfit(supplied.edges[name]?.(), child, { absentMayBeMissing: true });
       if (misfit !== undefined) {

@@ -35,9 +35,9 @@ const WALK: Record<Origin, { bare: string; as: (alias: string) => string }> = {
 };
 
 /** Whether `write x { … }` has a record to update: the bound record sits on an
- *  edge (`true`), sits on none (`false` — refused), or nobody has decided
- *  (`'unknown'` — every such write cell is triage). */
-export type OnEdge = boolean | 'unknown';
+ *  edge of a graph — a system's, or one the run built, an extraction's
+ *  included (`true`) — or on none (`false` — refused). */
+export type OnEdge = boolean;
 
 /**
  * How a path hands its binding to a consumer:
@@ -125,12 +125,12 @@ function manyPaths(): ManyPath[] {
     );
   }
   paths.push(
-    { arity: 'many', id: 'extract(…) answer', since: 3, onEdge: 'unknown', instances: [ACME, BETA], program: (body) => [`xs = ${EXTRACT}`, ...body('xs')] },
+    { arity: 'many', id: 'extract(…) answer', since: 3, onEdge: true, instances: [ACME, BETA], program: (body) => [`xs = ${EXTRACT}`, ...body('xs')] },
     {
       arity: 'many',
       id: '{ entries: extract(…) }.entries',
       since: 3,
-      onEdge: 'unknown',
+      onEdge: true,
       instances: [ACME, BETA],
       program: (body) => [`m = { piece: "p", entries: ${EXTRACT} }`, ...body('m.entries')],
     },
@@ -138,7 +138,7 @@ function manyPaths(): ManyPath[] {
       arity: 'many',
       id: 'MAP-returned { entries: extract(…) }.entries',
       since: 3,
-      onEdge: 'unknown',
+      onEdge: true,
       instances: [ACME, BETA],
       program: (body) => [
         'rows = MAP(["p"], (p) => {',
@@ -323,7 +323,7 @@ function onePaths(): OnePath[] {
       ...each,
       id: 'extractOne(…) answer',
       since: 3,
-      onEdge: 'unknown',
+      onEdge: true,
       instances: [ACME],
       program: (body) => ['x = extractOne([msg.`text`], Entry)', GUARD, ...body('x')],
     },
@@ -607,7 +607,6 @@ function oneExpectation(path: OnePath, consumer: OneConsumer): Cell['expect'] {
   const refusal = ruledRefusal(path, consumer);
   if (refusal !== undefined) return refusal;
   if (consumer.form === 'statement' && consumer.writesInPlace === true) {
-    if (path.onEdge === 'unknown') return { kind: 'triage' };
     if (path.onEdge === false) return { kind: 'refused', code: 'MOV_WRITE_POSITION_NOT_RECORD', why: 'the record is on no edge' };
   }
   if (consumer.form === 'statement') {

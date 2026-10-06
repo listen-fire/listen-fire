@@ -658,9 +658,13 @@ export type PositionTypeRef =
        *  on an edge of a node this run built, updatable in place as the
        *  `position` kind's `runBuilt` is, with the edge's landing type — what
        *  `write h { … }` may set. A value the run merely synthesised (a
-       *  `node { … }` or `graph<Shape> { … }` literal, an extracted record) is
-       *  on no such edge, and does not carry it. */
+       *  `node { … }` or `graph<Shape> { … }` literal) is on no such edge, and
+       *  does not carry it. */
       runBuilt?: { landing: PositionTypeRef };
+      /** A record `extract(…)` / `extractOne(…)` handed back: one the run
+       *  built, updatable in place like a landing — `fields` is what
+       *  `write r { … }` may set, the fields the extraction declared. */
+      extracted?: { fields: Record<string, SchemaFieldType> };
     };
 
 /** One edge of a checker-local node: the same `EdgeSchema` promises every other
@@ -5121,8 +5125,9 @@ export class ExpressionTyping {
    * so the only author-time mistake is the one the engine would otherwise
    * throw for — a record whose fields the program does not hold (read live
    * from a system, one field at a time, or the movement's own trigger).
-   * Same test as `checkStdlibRecordArg`, same reason; a record nested inside
-   * a list or dict is beyond what the type says here and fails the run, named.
+   * Same test as `checkStdlibRecordArg`, same reason, for one record or a
+   * list of them; a record nested inside a dict is beyond what the type says
+   * here and fails the run, named.
    */
   private checkStdlibWholeValueArg(
     spec: StdlibFunctionSpec,
@@ -5132,9 +5137,9 @@ export class ExpressionTyping {
     if (declared === undefined) return;
     const type = args[declared.index];
     if (type === undefined) return;
-    const stripped = stripAbsent(type);
-    if (!isRecordType(stripped)) return;
-    const position = recordIn(stripped)?.position;
+    const record = recordIn(type);
+    if (record === undefined) return;
+    const position = record.position;
     if (!this.holdsSpelledFields(position)) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
