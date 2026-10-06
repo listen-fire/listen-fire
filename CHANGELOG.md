@@ -12,6 +12,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - Bright Data web searches (`WEB_SEARCH_PROVIDER=brightdata`) are paced at 14 per minute per process, set by `BRIGHT_DATA_SERP_PER_MINUTE`; searches beyond it wait their turn instead of being refused by Bright Data, and LinkedIn activity research spends two or three searches per person instead of up to six.
 
+### Fixed
+
+- On save, `write e { … }` inside a `MAP` or `FILTER` function is now refused when `e` is an entry the run built itself (a landing on a `node { … }` edge), the same as it is for the alias of a block head. Before, the program validated and every member failed at run time with "'e' is a synthesised node — 'write e { … }' needs a record position". This applies to every language version. A function's parameter that holds one record is now checked as that record everywhere a record is checked, so a write to it is also checked field by field against the record it came from.
+
 ## [v0.10.2] - 2026-10-06
 
 ### Fixed
