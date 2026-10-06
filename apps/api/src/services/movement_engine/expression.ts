@@ -1877,7 +1877,11 @@ async function evalValueMember(
   ctx: MovementExprContext,
 ): Promise<MovementEvalResult> {
   const position = ctx.scope === undefined ? memberPosition(expr, ctx) : undefined;
-  if (position !== undefined) {
+  // A name holding MANY records (an `extract(…)` answer, a block's returned
+  // records) is a list, and the member is that list — the same reading the bare
+  // name gets anywhere else. Stored as the binding, a later `MAP(x.entries, …)`
+  // would read back the engine's wrapper instead of the records.
+  if (position !== undefined && position.kind !== 'positions') {
     return { value: position, provenance: { origins: bindingEntityOrigins(position) } };
   }
   return evalMovementExpr(expr, ctx);

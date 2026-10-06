@@ -3390,12 +3390,13 @@ export class ExpressionTyping {
        *  reading the name yields `record` or nothing. */
       isRecordName?: (name: string) => boolean;
       /** Is this name bound to a whole traversal block's return — a
-       *  COLLECTION, even though its type is the one record a member of it
-       *  carries (plurality lives in the traversal, never in a second type —
-       *  `ScopeSymbol.plural`)? The one reader is `checkStdlibRecordArg`
-       *  (`TEXT.PAIRS`'s argument): the engine reads a record's fields off
-       *  ONE landing, never a fan-out of them. */
-      isPluralName?: (name: string) => boolean;
+       *  COLLECTION, even though its position type is the one record a member
+       *  of it carries (plurality lives in the traversal, never in a second
+       *  type — `ScopeSymbol.plural`)? Answers the order the returns were
+       *  collected in, undefined for any other name. Read as a VALUE the name
+       *  is the list of those records (`bareNameType`), which is what the
+       *  engine hands a map field, a list member or a call argument. */
+      pluralOrderOf?: (name: string) => CollectionOrder | undefined;
       /** The value plane's half of the same fact: is this name bound to a
        *  walk read for a field (`pdfs = m-[a:Attachments]->.\`File\``) — one
        *  value per landing, typed as the one value? A spread reads it as the
@@ -3493,9 +3494,14 @@ export class ExpressionTyping {
   private bareNameType(name: string): FieldType | undefined {
     const scalar = this.scalarType(name);
     if (scalar !== undefined) return scalar;
-    const record = recordValueOf(this.rootType(name));
-    if (record !== undefined) return record;
-    return this.options.isRecordName?.(name) === true ? recordOf(undefined) : undefined;
+    const record =
+      recordValueOf(this.rootType(name))
+      ?? (this.options.isRecordName?.(name) === true ? recordOf(undefined) : undefined);
+    if (record === undefined) return undefined;
+    // A block's returned records are a LIST of them — the walk is many-valued,
+    // and so is its value.
+    const collected = this.options.pluralOrderOf?.(name);
+    return collected !== undefined ? listOf(record, collected) : record;
   }
 
   /**
@@ -5032,7 +5038,7 @@ export class ExpressionTyping {
    * extraction's exported fields, a write's result — never off a live system
    * (fields come back one adapter call at a time; there is no "give me all of
    * them" to ask for) and never off a fan-out (it reads ONE landing, not
-   * many). `holdsSpelledFields` refuses the first; `isPluralName` the second
+   * many). `holdsSpelledFields` refuses the first; `pluralOrderOf` the second
    * — both checked here so the engine's `MOVENG_UNSUPPORTED` for either is
    * one a saved movement can never reach.
    */
@@ -5046,6 +5052,19 @@ export class ExpressionTyping {
     const type = args[declared.index];
     if (type === undefined) return; // unknown stays silent
     const stripped = stripAbsent(type);
+    const notSpelledOut = () =>
+      this.report(
+        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
+        `\`${spec.namespace}.${spec.name}\` takes a record whose fields the program spells out — a dict literal, a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
+      );
+    // A block's whole return is a list of records, and the reach for it is
+    // reaching for the one record a member carries — answered as that.
+    const raw = rawArgs[declared.index];
+    const name = raw !== undefined ? bareName(raw) : undefined;
+    if (name !== undefined && this.options.pluralOrderOf?.(name) !== undefined) {
+      notSpelledOut();
+      return;
+    }
     // One of several dicts is still a dict whose keys the author wrote.
     if (unionMembers(stripped).length > 1 && unionMembers(stripped).every(isDictType)) return;
     if (!isRecordType(stripped) && !isDictType(stripped)) {
@@ -5056,15 +5075,7 @@ export class ExpressionTyping {
       return;
     }
     if (isDictType(stripped)) return; // a dict's keys are the ones the author wrote
-    const raw = rawArgs[declared.index];
-    const name = raw !== undefined ? bareName(raw) : undefined;
-    const plural = name !== undefined && this.options.isPluralName?.(name) === true;
-    if (plural || !this.holdsSpelledFields(recordIn(stripped)?.position)) {
-      this.report(
-        TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
-        `\`${spec.namespace}.${spec.name}\` takes a record whose fields the program spells out — a dict literal, a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
-      );
-    }
+    if (!this.holdsSpelledFields(recordIn(stripped)?.position)) notSpelledOut();
   }
 
   /**

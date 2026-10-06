@@ -3237,7 +3237,7 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
-      isPluralName: name => this.isPluralSymbol(name, scope),
+      pluralOrderOf: name => this.pluralOrderOf(name, scope),
       isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
@@ -3282,7 +3282,7 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
-      isPluralName: name => this.isPluralSymbol(name, scope),
+      pluralOrderOf: name => this.pluralOrderOf(name, scope),
       isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
@@ -3306,7 +3306,7 @@ class Checker {
       },
       resolveScalar: name => this.symbolScalarType(scope, name),
       isRecordName: name => this.nodePlaneSymbol(name, scope) !== undefined,
-      isPluralName: name => this.isPluralSymbol(name, scope),
+      pluralOrderOf: name => this.pluralOrderOf(name, scope),
       isManyValuedName: name => this.isManyValuedSymbol(name, scope),
       isDeclaredGraphToken: token => this.declaredShapeTokens.has(token),
       nameInScope: name => scope.resolve(name).kind === 'found',
@@ -4855,7 +4855,12 @@ class Checker {
       };
     }
     if (posType !== undefined) {
-      return { ...symbol, posType, bindingPlane: 'node', ...(plural ? { plural } : {}) };
+      return {
+        ...symbol,
+        posType,
+        bindingPlane: 'node',
+        ...(plural ? { plural, collectedOrder: collectAs ?? 'unknown' } : {}),
+      };
     }
     return symbol;
   }
@@ -5566,15 +5571,16 @@ class Checker {
       && resolution.symbol.bindingPlane === 'scalar';
   }
 
-  /** Is `name` bound to a whole traversal block's return (`ScopeSymbol.plural`)
-   *  — a collection, not the one record its type says? Read by
-   *  `checkStdlibRecordArg` (`TEXT.PAIRS`'s argument), the one place that
-   *  distinction matters: the type is silent on it by design. */
-  private isPluralSymbol(name: string, scope: Scope): boolean {
+  /** The order `name`'s records were collected in, when it is bound to a whole
+   *  traversal block's return (`ScopeSymbol.plural`) — a collection, not the
+   *  one record its position type says. Undefined for every other name. Read
+   *  as a value, the name is the list of those records. */
+  private pluralOrderOf(name: string, scope: Scope): CollectionOrder | undefined {
     const resolution = scope.resolve(name);
-    return resolution.kind === 'found'
-      && resolution.symbol.plural === true
-      && resolution.symbol.bindingPlane !== 'scalar';
+    if (resolution.kind !== 'found') return undefined;
+    const { symbol } = resolution;
+    if (symbol.plural !== true || symbol.bindingPlane === 'scalar') return undefined;
+    return symbol.collectedOrder ?? 'unknown';
   }
 
   /**
