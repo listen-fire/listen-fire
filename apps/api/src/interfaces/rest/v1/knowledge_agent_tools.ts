@@ -41,11 +41,6 @@ import { WHATSAPP_MOVEMENTS_WA_ME_LINK } from '../../../services/translation_gra
 
 import { readBook } from '../../../lib/knowledge/library';
 import {
-  HANDBOOK_MODE_HEADER,
-  handbookModeFor,
-  type HandbookMode,
-} from '../../../lib/knowledge/movement_handbook/handbook_mode';
-import {
   LANGUAGE_SEARCH_KINDS,
   searchLanguage,
 } from '../../../lib/knowledge/movement_handbook/language_search';
@@ -219,30 +214,17 @@ const readBookSchema = z.object({
   section: z.string().optional(),
 });
 
-/** The handbook mode a request is served in, or a 400 naming the bad header. */
-function requestHandbookMode(
-  req: Parameters<RequestHandler>[0],
-): { ok: true; mode: HandbookMode } | { ok: false; error: string } {
-  try {
-    return { ok: true, mode: handbookModeFor(req.headers?.[HANDBOOK_MODE_HEADER]) };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-const readBookHandler: RequestHandler = async (req, res, next) => {
-  const mode = requestHandbookMode(req);
-  if (!mode.ok) return res.status(400).json({ error: mode.error });
-  return await jsonHandler(readBookSchema, 'body', async (input) =>
-    readBook({
-      bookId: input.handbook,
-      chapter: input.chapter,
-      chapters: input.chapters,
-      section: input.section,
-      mode: mode.mode,
-    }),
-  )(req, res, next);
-};
+// The connector's agent has searchLanguage, so it is served the front page and
+// looks the rest up rather than reading whole chapters.
+const readBookHandler: RequestHandler = jsonHandler(readBookSchema, 'body', async (input) =>
+  readBook({
+    bookId: input.handbook,
+    chapter: input.chapter,
+    chapters: input.chapters,
+    section: input.section,
+    frontPageInsteadOfChapters: true,
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // library.read — searchLanguage
@@ -755,8 +737,6 @@ const getStartedSchema = z.object({ team: z.string().optional() });
 // Markdown, not JSON: the answer is prose and a digest, and escaping it into a
 // JSON string costs the reader tokens for nothing.
 const getStartedHandler: RequestHandler = async (req, res) => {
-  const mode = requestHandbookMode(req);
-  if (!mode.ok) return res.status(400).json({ error: mode.error });
   const parsed = getStartedSchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
@@ -769,7 +749,7 @@ const getStartedHandler: RequestHandler = async (req, res) => {
       parsed.data.team === undefined && teams.length > 1
         ? null
         : ((await resolveToolTeam(parsed.data.team)) as TeamId);
-    const text = await renderGetStarted({ teams, teamId, mode: mode.mode });
+    const text = await renderGetStarted({ teams, teamId });
     return res.status(200).type('text/markdown').send(text);
   } catch (err) {
     return internalError(res, err);
@@ -1535,7 +1515,7 @@ function mountAutomationToolRoutes(router: ReturnType<typeof Router>): void {
   // teams (shared with the knowledge connector)
   router.get('/teams', listTeamsHandler);
 
-  // the first read of a build: the handbook's first page, the team, its systems
+  // the first read of a build: the handbook's front page, the team, its systems
   router.get('/get-started', getStartedHandler);
 
   // library.read — the authoring handbook
@@ -1638,7 +1618,7 @@ function registerAutomationToolRoutes(): void {
   reg(
     'GET',
     '/get-started',
-    'The first read of a build, as markdown: the automations handbook\'s first page (the front page, or the foundations chapter in the full handbook), the team (every team, with ids, when the connection spans several and no `team` is named), and that team\'s systems — how to construct each, its record types with their fields, and what a listen on it may say. Query: team?. Also the top-level "getStarted" tool.',
+    'The first read of a build, as markdown: the automations handbook\'s front page, the team (every team, with ids, when the connection spans several and no `team` is named), and that team\'s systems — how to construct each, its record types with their fields, and what a listen on it may say. Query: team?. Also the top-level "getStarted" tool.',
     { inputSchema: getStartedSchema, readOnly: true, latency: 'medium' },
   );
 
@@ -1646,7 +1626,7 @@ function registerAutomationToolRoutes(): void {
   reg(
     'POST',
     '/handbook',
-    'Read the Listen-Fire handbooks. No args → every handbook + its chapters. handbook → that handbook\'s chapter index + when-to-read-what. handbook + chapter(s) → chapter bodies. The authoring doctrine lives in the automations handbook\'s `foundations` chapter. Also the top-level "readHandbook" tool.',
+    'Read the Listen-Fire handbooks. No args → every handbook + its chapters. handbook → that handbook\'s chapter index + when-to-read-what; for the automations handbook, its front page. handbook + chapter(s) → chapter bodies, except a whole hand-written automations chapter, which answers with a pointer to searchLanguage (its sections, system and plugin chapters, and the front page\'s sections read). Also the top-level "readHandbook" tool.',
     {
       inputSchema: readBookSchema,
       readOnly: true,

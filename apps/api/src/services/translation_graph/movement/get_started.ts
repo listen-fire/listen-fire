@@ -1,5 +1,5 @@
 // What an authoring agent reads before it writes anything, in one call: the
-// handbook's first page, the team it is acting in, and that team's systems in
+// handbook's front page, the team it is acting in, and that team's systems in
 // digest form (connection_digest.ts). The point is a build that needs no other
 // reading — everything here would otherwise cost a readHandbook, a listTeams,
 // a listConnections and a describeConnection per system.
@@ -7,9 +7,7 @@
 import type { TeamRef } from 'principal';
 
 import type { TeamId } from '../../../generated/kysely/core/Team';
-import { readBook } from '../../../lib/knowledge/library';
-import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
-import { neverAsAny } from '../../../lib/utils/types';
+import { renderFrontPage } from '../../../lib/knowledge/movement_handbook/front_page';
 import { describeMovementInstance, movementCatalogSnapshotForTeam } from './catalog';
 import { renderConnectionsDigest, type SystemDigestInput } from './connection_digest';
 import { connectionsFor, resolveStubLandings, within } from './describe_connection';
@@ -20,22 +18,6 @@ const DESCRIBE_TIMEOUT_MS = 8_000;
 /** The whole of one system — root, then its stubbed record types — within
  *  this; record types not described by then stay named, without fields. */
 const SYSTEM_TIMEOUT_MS = 12_000;
-
-/** The page the handbook mode starts an agent on: the front page (lean) or the foundations chapter (full). */
-export function firstHandbookPage(mode: HandbookMode): string {
-  switch (mode) {
-    case 'lean': {
-      const read = readBook({ bookId: 'automations', mode });
-      return 'content' in read && typeof read.content === 'string' ? read.content : '';
-    }
-    case 'full': {
-      const read = readBook({ bookId: 'automations', chapter: 'foundations', mode });
-      return 'content' in read && typeof read.content === 'string' ? read.content : '';
-    }
-    default:
-      return neverAsAny(mode);
-  }
-}
 
 /**
  * The team's systems: those it connected first, then those that need no
@@ -127,12 +109,11 @@ const EXTRACT_CACHE_TIP =
 export async function renderGetStarted(input: {
   teams: TeamRef[];
   teamId: TeamId | null;
-  mode: HandbookMode;
 }): Promise<string> {
   const systems = input.teamId === null ? null : await connectedSystemsDigest(input.teamId);
   return [
     teamSection(input),
     ...(systems !== null ? ['## Systems', systems, EXTRACT_CACHE_TIP] : []),
-    firstHandbookPage(input.mode),
+    renderFrontPage(),
   ].join('\n\n');
 }

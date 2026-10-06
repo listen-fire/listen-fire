@@ -1,11 +1,10 @@
-// The lean handbook's front page: short enough to read on every build, held to
+// The handbook's front page: short enough to read on every build, held to
 // the prose contract, and every anchor a diagnostic names resolves to it.
 // Its examples are checked with the chapters' (handbook.unit.test.ts and
 // engine_claims.unit.test.ts take `frontPageClaims()` alongside them).
 
 import { HANDBOOK_POINTERS, HANDBOOK_POINTER_BY_CODE } from 'movement-lang';
 import { readBook } from '../../library';
-import { HANDBOOK_MODES } from '../handbook_mode';
 import { CONCEPTS, TS_EXCEPT, exampleProgram, frontPageClaims, frontSection, renderFrontPage } from '../front_page';
 import { proseViolations } from './prose_rules';
 
@@ -58,10 +57,10 @@ describe('the front page', () => {
 describe('diagnostics point at a section that exists', () => {
   const anchors = [...new Set([...Object.values(HANDBOOK_POINTERS), ...Object.values(HANDBOOK_POINTER_BY_CODE)])];
 
-  it.each(anchors.flatMap((anchor) => HANDBOOK_MODES.map((mode) => [anchor, mode] as const)))(
-    '%s resolves through the handbook (%s)',
-    (anchor, mode) => {
-      const read = readBook({ bookId: 'automations', chapter: anchor, mode }) as { content?: string; error?: string };
+  it.each(anchors.flatMap((anchor) => [false, true].map((frontPageInsteadOfChapters) => [anchor, frontPageInsteadOfChapters] as const)))(
+    '%s resolves through the handbook (front page instead of chapters: %s)',
+    (anchor, frontPageInsteadOfChapters) => {
+      const read = readBook({ bookId: 'automations', chapter: anchor, frontPageInsteadOfChapters }) as { content?: string; error?: string };
       expect(read.error).toBeUndefined();
       expect(read.content?.length ?? 0).toBeGreaterThan(40);
     },

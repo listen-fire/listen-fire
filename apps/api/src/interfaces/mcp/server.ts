@@ -9,13 +9,9 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { getEnvVar } from '../../lib/utils/environment';
 import { isClientAbort } from '../../lib/middleware/context';
 import { logger } from '../../services/logger';
-import { HANDBOOK_MODE_HEADER } from '../../lib/knowledge/movement_handbook/handbook_mode';
 import { describeRoutes, validateCallApiBody } from './registry';
 
 const PORT = process.env.PORT ?? 3000;
-
-/** Request headers a client sets for itself that a tool's internal route reads. */
-const FORWARDED_CLIENT_HEADERS = [HANDBOOK_MODE_HEADER] as const;
 
 // The server's own icon, declared on Implementation.icons (MCP spec) so
 // connector UIs render the product mark instead of scraping a favicon. The
@@ -146,9 +142,7 @@ function resolvePathParams(
 interface McpRouterOptions {
   name: string;
   domain: string;
-  /** Static, or chosen per request — the transport is stateless, so the
-   *  server (and what it tells a client on `initialize`) is built per request. */
-  instructions?: string | ((req: Parameters<RequestHandler>[0]) => string);
+  instructions?: string;
   /** Top-level tools exposed directly in the tool list (no describe_api needed) */
   tools?: Record<string, TopLevelTool>;
   /**
@@ -291,12 +285,6 @@ function callLocalApi(
     headers['X-Mcp-Tool'] = options.mcp.tool;
     headers['X-Mcp-Domain'] = options.mcp.domain;
   }
-  // What the client chose for itself rides the loopback too, so the route
-  // answers as the client asked (the route decides whether to honour it).
-  for (const name of FORWARDED_CLIENT_HEADERS) {
-    const value = req.headers[name];
-    if (typeof value === 'string') headers[name] = value;
-  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 55_000);
@@ -345,10 +333,7 @@ function callLocalApi(
  * parameter so a test can build the very server a client talks to without an
  * HTTP request behind it.
  */
-function buildMcpServer(
-  options: Omit<McpRouterOptions, 'instructions'> & { instructions?: string },
-  callApi: LocalApiCall,
-): McpServer {
+function buildMcpServer(options: McpRouterOptions, callApi: LocalApiCall): McpServer {
   const { name, domain, instructions, tools = {}, genericApiTools = true } = options;
   const server = new McpServer({ name, version: '1.0.0', icons: serverIcons() }, { instructions });
 
@@ -456,9 +441,7 @@ function createMcpRouter(options: McpRouterOptions): ReturnType<typeof Router> {
   }
 
   const handler: RequestHandler = async (req, res) => {
-    const instructions =
-      typeof options.instructions === 'function' ? options.instructions(req) : options.instructions;
-    const server = buildMcpServer({ ...options, instructions }, (method, path, callOptions) =>
+    const server = buildMcpServer(options, (method, path, callOptions) =>
       callLocalApi(req, method, path, callOptions),
     );
 

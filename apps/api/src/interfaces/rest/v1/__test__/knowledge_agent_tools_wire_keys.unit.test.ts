@@ -177,7 +177,7 @@ describe('POST /handbook — wire key `handbook` reaches readBook as `bookId`', 
       bookId: 'automations',
       chapter: 'foundations',
       chapters: undefined,
-      mode: 'full',
+      frontPageInsteadOfChapters: true,
     });
     expect(res.statusCode).toBe(200);
   });

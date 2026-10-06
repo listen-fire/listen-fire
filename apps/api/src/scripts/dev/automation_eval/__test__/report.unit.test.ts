@@ -125,7 +125,6 @@ function trial(overrides: Partial<TrialRecord>): TrialRecord {
   return {
     taskId: 't1',
     variant: 'noskill',
-    handbook: 'full',
     rep: 0,
     outcome: 'scored',
     buildEndReason: 'done',
@@ -173,17 +172,11 @@ describe('aggregation', () => {
     trial({ rep: 1, correct: false, fixtures: [fixtureRecord('a', true), fixtureRecord('b', false)], costUsd: 2 }),
     trial({ taskId: 't2', outcome: 'budget-exceeded', correct: false, costUsd: 2 }),
     trial({ variant: 'skill', costUsd: 0.5 }),
-    trial({ handbook: 'lean', costUsd: 0.25 }),
   ];
 
   it('summarizes per task and variant, with per-fixture pass rates', () => {
     const cells = summarize(trials);
-    expect(cells.map((c) => `${c.taskId}/${c.variant}/${c.handbook}`)).toEqual([
-      't1/noskill/full',
-      't2/noskill/full',
-      't1/skill/full',
-      't1/noskill/lean',
-    ]);
+    expect(cells.map((c) => `${c.taskId}/${c.variant}`)).toEqual(['t1/noskill', 't2/noskill', 't1/skill']);
     const [t1] = cells;
     expect(t1?.trials).toBe(2);
     expect(t1?.correctRate).toBe(0.5);
@@ -192,23 +185,21 @@ describe('aggregation', () => {
     expect(cells[1]?.budgetExceeded).toBe(1);
   });
 
-  it('totals each variant and handbook pairing apart', () => {
+  it('totals each variant', () => {
     const totals = totalsByVariant(trials);
-    expect(totals.map((t) => `${t.variant}/${t.handbook}`)).toEqual(['noskill/full', 'skill/full', 'noskill/lean']);
-    expect(totals.find((t) => t.variant === 'noskill' && t.handbook === 'full')).toMatchObject({ trials: 3, totalCostUsd: 5 });
-    expect(totals.find((t) => t.handbook === 'lean')).toMatchObject({ trials: 1, totalCostUsd: 0.25 });
+    expect(totals.map((t) => t.variant)).toEqual(['noskill', 'skill']);
+    expect(totals.find((t) => t.variant === 'noskill')).toMatchObject({ trials: 3, totalCostUsd: 5 });
     expect(totals.find((t) => t.variant === 'skill')?.correctRate).toBe(1);
   });
 
   it('leads every table with time and tokens, then correctness', () => {
     const md = renderSummary({ startedAt: 'now', args: { k: 2 }, trials });
     expect(md).toContain(
-      '| variant | handbook | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct |',
+      '| variant | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct |',
     );
-    expect(md).toContain('| noskill | full | 3 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 33% |');
-    expect(md).toContain('| t1 | noskill | full | 2 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 50% |');
-    expect(md).toContain('| t1 | noskill | lean | 1 |');
-    expect(md).toContain('| t1 | noskill | full | 2 | 2.0s | 1.2s | 0.3s | 0.0s | 2 | 0 | 0 | 0 | 0 | 0 | no |');
+    expect(md).toContain('| noskill | 3 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 33% |');
+    expect(md).toContain('| t1 | noskill | 2 | 2.0s | 1.2s | 0.3s | 2.0 | 0.0 | 0 | 50% |');
+    expect(md).toContain('| t1 | noskill | 2 | 2.0s | 1.2s | 0.3s | 0.0s | 2 | 0 | 0 | 0 | 0 | 0 | no |');
   });
 
   it('renders a summary that names failing assertions', () => {

@@ -1,5 +1,5 @@
-// The front page — the one page an authoring agent reads in the lean
-// handbook. It is not a lesson in the language: an agent already writes
+// The front page — the one page an authoring agent on the automations
+// connector reads. It is not a lesson in the language: an agent already writes
 // TypeScript, so the page names only the places that prior pulls the wrong
 // way, then the few ideas TypeScript has no word for, then the build loop.
 // Everything else (a built-in's signature, a system's behaviour, a recipe) is
@@ -175,7 +175,7 @@ function renderConcept(entry: FrontEntry): string {
   return `### ${entry.anchor} — ${entry.title}\n\n${entry.text}${entry.example ? `\n${renderExample(entry.example)}` : ''}`;
 }
 
-/** The front page, as the lean handbook serves it. */
+/** The front page, as the automations connector serves it. */
 export function renderFrontPage(): string {
   return [
     '## Writing automations: it is TypeScript, except…',

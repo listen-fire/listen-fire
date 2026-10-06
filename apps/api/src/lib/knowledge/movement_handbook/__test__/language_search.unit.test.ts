@@ -85,11 +85,11 @@ describe('ranking', () => {
 });
 
 describe('what the search hands out', () => {
-  it('every anchor reads in the lean handbook', () => {
+  it('every anchor reads with the front page instead of chapters', () => {
     const anchors = [...new Set(index.flatMap((e) => (e.anchor ? [e.anchor] : [])))];
     for (const anchor of anchors) {
-      const read = readBook({ bookId: 'automations', chapter: anchor, mode: 'lean' }) as { content?: string };
-      if (!read.content) throw new Error(`${anchor} does not read in the lean handbook: ${JSON.stringify(read)}`);
+      const read = readBook({ bookId: 'automations', chapter: anchor, frontPageInsteadOfChapters: true }) as { content?: string };
+      if (!read.content) throw new Error(`${anchor} does not read with the front page instead of chapters: ${JSON.stringify(read)}`);
     }
   });
 

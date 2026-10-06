@@ -2,7 +2,7 @@
 // Moved here so a deployment that does not run automations does not serve it
 // (D30(d)); the definition itself is unchanged.
 
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 
 import { createMcpRouter, type McpRouterOptions } from '../server';
@@ -12,12 +12,6 @@ import {
   whatsappLinkVerification,
   type WhatsappLinkVerification,
 } from '../../../services/whatsapp/phone_verification/link_verification';
-import {
-  HANDBOOK_MODE_HEADER,
-  handbookModeFor,
-  handbookModeFromEnv,
-  type HandbookMode,
-} from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import { LANGUAGE_SEARCH_KINDS } from '../../../lib/knowledge/movement_handbook/language_search';
 
 // The two WhatsApp linking tools describe the flow THIS deployment runs, so an
@@ -37,32 +31,11 @@ const WHATSAPP_CONFIRM_DESCRIPTION: Record<WhatsappLinkVerification, string> = {
 // What the connector tells a client on `initialize`. Reference material only:
 // how to talk to the user, and what to ask them before going live, lives in the
 // builder skill, never here: behaviour served by a connector reads as injected
-// instructions, and a second voice competes with the skill's. The one part that
-// differs by handbook mode is how the handbook is to be read.
-const INSTRUCTIONS_BEFORE_LOOP =
-  "To automate anything for the user — react to events, move data between their systems, push into their CRM or chat — build an \"automation\" here: a small program over their real connected systems. This connector is how you make Listen-Fire DO things.\n\n";
-
-const INSTRUCTIONS_AFTER_LOOP =
+// instructions, and a second voice competes with the skill's.
+const AUTOMATION_INSTRUCTIONS =
+  "To automate anything for the user — react to events, move data between their systems, push into their CRM or chat — build an \"automation\" here: a small program over their real connected systems. This connector is how you make Listen-Fire DO things.\n\n" +
+  "The loop. Call getStarted first: one call returns the handbook's front page (where this language differs from TypeScript, the few ideas it adds, the build loop), your team, and its connected systems with their record types and fields. The handbook's chapters are not needed: look up anything else — a built-in's signature, a system's behaviour, a recipe — with searchLanguage, and read the anchor a result or a diagnostic names with readHandbook (\"front#maybe-absent\"); where anything else disagrees with the handbook, the handbook wins. " +
   "Reconcile getStarted's systems against the task — mint any missing connection first via connectSystem. Author against the real record and field names (getStarted's digest; describeConnection for more of one system), never from memory. Then saveAutomation: it validates first and saves nothing while there are errors, handing back the diagnostics, so a separate validateAutomation is not needed. Then runAutomation on real input; checkRun and inspectRun show what a run did. Make independent tool calls together, in one turn. Once something is saved, prefer a small edit over resending the whole program: readAutomation (or getAutomation, which also carries its metadata) to see the current text, grepAutomations to find where something is defined or used, and editAutomation to change it — anchored on a unique snippet plus the revision you just read, so a concurrent edit is caught instead of clobbered. Reach for saveAutomation itself only for a brand-new automation or a genuine rewrite. A write a third party sees (an email, a message to someone else) gets an approval step inside the automation — a question a person acts on. The user's knowledge graph is reachable as the `kg` system in listConnections.\n\nTeams. This connection may span several teams; getStarted lists them with their ids. Creating or changing anything in a team needs its id as `team`; with exactly one team you may omit it.";
-
-const HANDBOOK_LOOP: Record<HandbookMode, string> = {
-  full: "The loop. Call getStarted first: one call returns the automations handbook's `foundations` chapter (the model, the conventions, and the map of what to read next), your team, and its connected systems with their record types and fields. A later readHandbook can name a single section, \"writes#identity\", rather than pay for a whole chapter; where anything else disagrees with the handbook, the handbook wins. ",
-  lean: "The loop. Call getStarted first: one call returns the handbook's front page (where this language differs from TypeScript, the few ideas it adds, the build loop), your team, and its connected systems with their record types and fields. The handbook's chapters are not needed: look up anything else — a built-in's signature, a system's behaviour, a recipe — with searchLanguage, and read the anchor a result or a diagnostic names with readHandbook (\"front#maybe-absent\"); where anything else disagrees with the handbook, the handbook wins. ",
-};
-
-function automationInstructions(mode: HandbookMode): string {
-  return `${INSTRUCTIONS_BEFORE_LOOP}${HANDBOOK_LOOP[mode]}${INSTRUCTIONS_AFTER_LOOP}`;
-}
-
-/** The mode a client is served in. A header the handbook route would refuse
- *  leaves the instructions on the deployment's own mode; the route says why. */
-function instructionsMode(req: Parameters<RequestHandler>[0]): HandbookMode {
-  try {
-    return handbookModeFor(req.headers[HANDBOOK_MODE_HEADER]);
-  } catch {
-    return handbookModeFromEnv();
-  }
-}
 
 /** The connector as served: what a client is told and the tools it is offered. */
 function automationConnectorOptions(): McpRouterOptions {
@@ -71,11 +44,11 @@ function automationConnectorOptions(): McpRouterOptions {
     name: 'listen-fire-automation',
     domain: 'automation',
     genericApiTools: false,
-    instructions: (req) => automationInstructions(instructionsMode(req)),
+    instructions: AUTOMATION_INSTRUCTIONS,
     tools: {
       getStarted: {
         description:
-          "START HERE, in one call: the automations handbook's first page, your team, and its connected systems — how to import and construct each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. When this connection spans several teams and you name none, it lists them with their ids instead of the systems; call again with `team`. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
+          "START HERE, in one call: the automations handbook's front page, your team, and its connected systems — how to import and construct each, its record types with their fields (`!` required, `*` identifying), and what a listen on it may say. When this connection spans several teams and you name none, it lists them with their ids instead of the systems; call again with `team`. Enough to write a first automation: describeConnection goes deeper on one system, searchLanguage answers a lookup.",
         annotations: { readOnlyHint: true },
         inputSchema: {
           team: z
@@ -157,7 +130,7 @@ function automationConnectorOptions(): McpRouterOptions {
       },
       readHandbook: {
         description:
-          'getStarted already serves the automations handbook\'s first page; read here for an anchor a search result or a diagnostic names, or another handbook. The Listen-Fire handbooks teach every capability directly (setting up automations, the knowledge model, querying, connecting integrations) — read them, then do the work yourself. No args → every handbook + its chapters. handbook → that handbook\'s chapter index, whose "when to read what" routes each situation to a `chapter` or a `chapter#section`. handbook + chapter (or chapters[]) → the bodies — go straight there when you know what you need; you don\'t have to list the shelf first. A chapter id may name ONE SECTION of it — "writes#identity" — and that is what to fetch for a single rule, rather than paying for a whole chapter. Read the relevant chapters BEFORE setting up an automation; the automation model, the one cardinal rule, and the conventions are all in the automations handbook\'s `foundations` chapter.',
+          'getStarted already serves the automations handbook\'s front page; read here for an anchor a searchLanguage result or a diagnostic names ("front#maybe-absent", "writes#identity", "system:slack"), or another handbook. For automations, look things up with searchLanguage rather than reading chapters: a whole hand-written automations chapter answers with a pointer to it, while its sections, system and plugin chapters, and the front page\'s sections read in full. The other Listen-Fire handbooks (the knowledge model, querying, connecting integrations) read by chapter. No args → every handbook + its chapters. handbook → that handbook\'s chapter index (the automations handbook: its front page). handbook + chapter (or chapters[]) → the bodies — go straight there when you know what you need; you don\'t have to list the shelf first.',
         annotations: { readOnlyHint: true },
         inputSchema: {
           handbook: z
@@ -169,12 +142,12 @@ function automationConnectorOptions(): McpRouterOptions {
           chapter: z
             .string()
             .optional()
-            .describe('A single chapter id, or one section of it: "writes" / "writes#identity".'),
+            .describe('A single anchor: a section ("writes#identity", "front#maybe-absent") or a system\'s chapter ("system:slack").'),
           chapters: z
             .array(z.string())
             .optional()
             .describe(
-              'Several chapters or sections to read in one call, e.g. ["foundations","writes#identity","system:slack"] (preferred — frontload the reading).',
+              'Several anchors to read in one call, e.g. ["front#maybe-absent","writes#identity","system:slack"].',
             ),
         },
         title: 'Read the Listen-Fire handbook',
@@ -583,9 +556,7 @@ function automationConnectorOptions(): McpRouterOptions {
 }
 
 function createAutomationMcpRouter(): ReturnType<typeof Router> {
-  // An unknown AUTOMATION_HANDBOOK fails the boot, not the first request.
-  handbookModeFromEnv();
   return createMcpRouter(automationConnectorOptions());
 }
 
-export { AUTOMATION_MCP_PATH, automationConnectorOptions, automationInstructions, createAutomationMcpRouter };
+export { AUTOMATION_INSTRUCTIONS, AUTOMATION_MCP_PATH, automationConnectorOptions, createAutomationMcpRouter };

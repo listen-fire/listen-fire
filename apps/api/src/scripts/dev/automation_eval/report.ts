@@ -2,7 +2,6 @@
 // and the roll-up across trials into the JSON report and the markdown summary.
 // Pure: main.ts gathers the facts, this module turns them into scores.
 
-import type { HandbookMode } from '../../../lib/knowledge/movement_handbook/handbook_mode';
 import type { BuildEndReason, BuildTiming, BuilderStep, ToolCallRecord, TranscriptEntry, Variant } from './builder';
 import type { AssertionResult } from './end_state';
 import type { ClarityVerdict } from './judge';
@@ -79,7 +78,6 @@ type TrialOutcome = 'scored' | 'budget-exceeded' | 'build-failed' | 'setup-faile
 interface TrialRecord {
   taskId: string;
   variant: Variant;
-  handbook: HandbookMode;
   rep: number;
   outcome: TrialOutcome;
   buildEndReason: BuildEndReason | null;
@@ -238,7 +236,6 @@ const rate = (xs: boolean[]) => mean(xs.map((x) => (x ? 1 : 0)));
 interface CellSummary {
   taskId: string;
   variant: Variant;
-  handbook: HandbookMode;
   trials: number;
   /** Share of trials where every fixture passed. */
   correctRate: number | null;
@@ -269,7 +266,6 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
   return {
     taskId: first.taskId,
     variant: first.variant,
-    handbook: first.handbook,
     trials: trials.length,
     correctRate: rate(trials.map((t) => t.correct)),
     fixturePassRate: Object.fromEntries(
@@ -294,11 +290,11 @@ function summarizeCell(trials: TrialRecord[]): CellSummary {
   };
 }
 
-/** One summary per (task, variant, handbook), in the order trials first appear. */
+/** One summary per (task, variant), in the order trials first appear. */
 function summarize(trials: TrialRecord[]): CellSummary[] {
   const cells = new Map<string, TrialRecord[]>();
   for (const t of trials) {
-    const key = `${t.taskId}\u0000${t.variant}\u0000${t.handbook}`;
+    const key = `${t.taskId}\u0000${t.variant}`;
     cells.set(key, [...(cells.get(key) ?? []), t]);
   }
   return [...cells.values()].map(summarizeCell);
@@ -306,7 +302,6 @@ function summarize(trials: TrialRecord[]): CellSummary[] {
 
 interface VariantTotals {
   variant: Variant;
-  handbook: HandbookMode;
   trials: number;
   meanBuildWallMs: number | null;
   meanModelMs: number | null;
@@ -321,15 +316,14 @@ interface VariantTotals {
   meanClarity: number | null;
 }
 
-/** One total per (variant, handbook) pairing that ran, in the order first seen. */
+/** One total per variant that ran, in the order first seen. */
 function totalsByVariant(trials: TrialRecord[]): VariantTotals[] {
-  const pairings = [...new Map(trials.map((t) => [`${t.variant}\u0000${t.handbook}`, t])).values()];
-  return pairings.map(({ variant, handbook }) => {
-    const mine = trials.filter((t) => t.variant === variant && t.handbook === handbook);
+  const variants = [...new Set(trials.map((t) => t.variant))];
+  return variants.map((variant) => {
+    const mine = trials.filter((t) => t.variant === variant);
     const meanOf = (pick: (e: Efficiency) => number) => mean(mine.map((t) => pick(t.efficiency)));
     return {
       variant,
-      handbook,
       trials: mine.length,
       meanBuildWallMs: meanOf((e) => e.buildWallMs),
       meanModelMs: meanOf((e) => e.modelMs),
@@ -369,36 +363,36 @@ function renderSummary(input: {
     '',
     '## Totals',
     '',
-    '| variant | handbook | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity (1–5) | cost total | cost / trial |',
+    '| variant | trials | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity (1–5) | cost total | cost / trial |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...totals.map(
       (t) =>
-        `| ${t.variant} | ${t.handbook} | ${t.trials} | ${secs(t.meanBuildWallMs)} | ${secs(t.meanModelMs)} | ${secs(t.meanToolMs)} | ${num(t.meanModelCalls)} | ${num(t.meanToolCalls)} | ${num(t.meanReadTokens, 0)} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
+        `| ${t.variant} | ${t.trials} | ${secs(t.meanBuildWallMs)} | ${secs(t.meanModelMs)} | ${secs(t.meanToolMs)} | ${num(t.meanModelCalls)} | ${num(t.meanToolCalls)} | ${num(t.meanReadTokens, 0)} | ${pct(t.correctRate)} | ${pct(t.safeRate)} | ${num(t.meanClarity)} | ${usd(t.totalCostUsd)} | ${usd(t.meanCostUsd)} |`,
     ),
     '',
     '## Per task',
     '',
-    '| task | variant | handbook | n | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity | asked? | validates | rounds→save | handbook reads | cost |',
+    '| task | variant | n | build time | model time | tool time | model calls | tool calls | tokens read | correct | safe | clarity | asked? | validates | rounds→save | handbook reads | cost |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...cells.map(
       (c) =>
-        `| ${c.taskId} | ${c.variant} | ${c.handbook} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${secs(c.meanBuildWallMs)} | ${secs(c.meanModelMs)} | ${secs(c.meanToolMs)} | ${num(c.meanModelCalls)} | ${num(c.meanToolCalls)} | ${num(c.meanReadTokens, 0)} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${usd(c.meanCostUsd)} |`,
+        `| ${c.taskId} | ${c.variant} | ${c.trials}${c.budgetExceeded ? ` (${c.budgetExceeded} over budget)` : ''} | ${secs(c.meanBuildWallMs)} | ${secs(c.meanModelMs)} | ${secs(c.meanToolMs)} | ${num(c.meanModelCalls)} | ${num(c.meanToolCalls)} | ${num(c.meanReadTokens, 0)} | ${pct(c.correctRate)} | ${pct(c.safeRate)} | ${num(c.meanClarity)} | ${pct(c.askedClarifyingRate)} | ${num(c.meanValidateCalls)} | ${num(c.meanRoundsToFirstSave)} | ${num(c.meanHandbookReads)} | ${usd(c.meanCostUsd)} |`,
     ),
     '',
     '## Per trial',
     '',
-    '| task | variant | handbook | trial | build time | model time | tool time | user time | model calls | tool calls | getStarted tokens | handbook tokens | search tokens | connection tokens | correct |',
+    '| task | variant | trial | build time | model time | tool time | user time | model calls | tool calls | getStarted tokens | handbook tokens | search tokens | connection tokens | correct |',
     '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ...input.trials.map((t) => {
       const e = t.efficiency;
-      return `| ${t.taskId} | ${t.variant} | ${t.handbook} | ${t.rep + 1} | ${secs(e.buildWallMs)} | ${secs(e.modelMs)} | ${secs(e.toolMs)} | ${secs(e.userMs)} | ${e.modelCalls} | ${e.toolCalls} | ${e.readTokens.getStarted} | ${e.readTokens.handbook} | ${e.readTokens.search} | ${e.readTokens.connections} | ${t.correct ? 'yes' : 'no'} |`;
+      return `| ${t.taskId} | ${t.variant} | ${t.rep + 1} | ${secs(e.buildWallMs)} | ${secs(e.modelMs)} | ${secs(e.toolMs)} | ${secs(e.userMs)} | ${e.modelCalls} | ${e.toolCalls} | ${e.readTokens.getStarted} | ${e.readTokens.handbook} | ${e.readTokens.search} | ${e.readTokens.connections} | ${t.correct ? 'yes' : 'no'} |`;
     }),
     '',
     '## Fixtures',
     '',
   ];
   for (const t of input.trials) {
-    lines.push(`### ${t.taskId} · ${t.variant} · ${t.handbook} handbook · trial ${t.rep + 1} — ${t.outcome}${t.error ? ` (${t.error})` : ''}`);
+    lines.push(`### ${t.taskId} · ${t.variant} · trial ${t.rep + 1} — ${t.outcome}${t.error ? ` (${t.error})` : ''}`);
     lines.push('');
     for (const f of t.fixtures) {
       lines.push(`- ${f.pass ? 'PASS' : 'FAIL'} **${f.id}** — ${f.description}${f.fireNote ? ` _(${f.fireNote})_` : ''}`);

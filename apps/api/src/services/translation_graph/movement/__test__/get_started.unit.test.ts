@@ -247,7 +247,7 @@ describe('getStarted', () => {
       People: { name: 'People', properties: { Name: text({ required: true }), Email: text() }, unique: [['Email']] },
     });
 
-    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId });
 
     expect(landingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ adapter: 'attio', credentialName: 'acme', types: ['Companies', 'People', 'VC Deal Flow'] }),
@@ -267,13 +267,13 @@ describe('getStarted', () => {
       notes: [],
     }));
     landingsMock.mockRejectedValue(new Error('rate limited'));
-    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId });
     expect(page).toContain('- Deals [rw]: fields not loaded — describe it');
   });
 
   it('answers with the team, its systems — connected ones first — and the front page', async () => {
     stubTeamCatalog();
-    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId });
 
     expect(page.startsWith('## Team: Acme Ventures — `team-1`')).toBe(true);
     expect(page.indexOf('### attio')).toBeLessThan(page.indexOf('### email'));
@@ -285,7 +285,7 @@ describe('getStarted', () => {
 
   it('stays near 3k tokens for a team with the usual systems', async () => {
     stubTeamCatalog();
-    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'lean' });
+    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId });
     expect(Math.ceil(page.length / 4)).toBeLessThanOrEqual(3_200);
   });
 
@@ -293,17 +293,9 @@ describe('getStarted', () => {
     const page = await renderGetStarted({
       teams: [TEAM, { teamId: 'team-2', name: 'Me', access: 'write', isPersonal: true }],
       teamId: null,
-      mode: 'lean',
     });
     expect(page).toContain('- Acme Ventures — `team-1`\n- Me — `team-2` (personal)');
     expect(page).not.toContain('## Systems');
     expect(snapshotMock).not.toHaveBeenCalled();
-  });
-
-  it('serves the foundations chapter as the first page of the full handbook', async () => {
-    stubTeamCatalog();
-    const page = await renderGetStarted({ teams: [TEAM], teamId: 'team-1' as TeamId, mode: 'full' });
-    expect(page).not.toContain('## Writing automations: it is TypeScript, except…');
-    expect(page.length).toBeGreaterThan(2_000);
   });
 });

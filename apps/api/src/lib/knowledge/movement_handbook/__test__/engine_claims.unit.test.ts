@@ -28,7 +28,7 @@ const claims: Array<EngineClaim & { chapter: string }> = Object.values(
 ).flatMap((chapter): Array<EngineClaim & { chapter: string }> =>
   (chapter.engineClaims ?? []).map((claim) => ({ ...claim, chapter: chapter.id })),
 ).concat(
-  // The lean handbook's front page and the language search's
+  // The handbook's front page and the language search's
   // control forms show examples too, outside any chapter; they are held the
   // same way.
   frontPageClaims().map((claim) => ({ ...claim, chapter: 'front' })),

@@ -3,22 +3,24 @@
 // read chapters, and call independent tools together. Pinned because these
 // sentences are what turn a 13-call build into a 4-call one.
 
-import { automationConnectorOptions, automationInstructions } from '../automation';
+import { AUTOMATION_INSTRUCTIONS, automationConnectorOptions } from '../automation';
 
 const tools = automationConnectorOptions().tools ?? {};
 const description = (name: string) => tools[name]?.description ?? '';
 
 describe('the build loop the connector teaches', () => {
-  it.each(['lean', 'full'] as const)('points at getStarted first, in the %s handbook', (mode) => {
-    const text = automationInstructions(mode);
-    expect(text).toContain('Call getStarted first');
-    expect(text).toContain('a separate validateAutomation is not needed');
-    expect(text).toContain('Make independent tool calls together, in one turn.');
-    expect(text).not.toContain('listTeams');
+  it('points at getStarted first', () => {
+    expect(AUTOMATION_INSTRUCTIONS).toContain('Call getStarted first');
+    expect(AUTOMATION_INSTRUCTIONS).toContain('a separate validateAutomation is not needed');
+    expect(AUTOMATION_INSTRUCTIONS).toContain('Make independent tool calls together, in one turn.');
+    expect(AUTOMATION_INSTRUCTIONS).not.toContain('listTeams');
   });
 
-  it('says in the lean handbook that chapters are not needed', () => {
-    expect(automationInstructions('lean')).toContain("The handbook's chapters are not needed");
+  it('says chapters are not needed, and never sends the agent to the foundations chapter', () => {
+    expect(AUTOMATION_INSTRUCTIONS).toContain("The handbook's chapters are not needed");
+    expect(AUTOMATION_INSTRUCTIONS).not.toContain('foundations');
+    expect(description('readHandbook')).not.toContain('foundations');
+    expect(description('readHandbook')).toContain('searchLanguage');
   });
 
   it('offers getStarted as the place to start, read-only, behind its own route', () => {

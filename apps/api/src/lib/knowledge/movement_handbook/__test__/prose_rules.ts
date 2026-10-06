@@ -107,7 +107,7 @@ function proseOnly(text: string): string {
  * Every way `chapter` breaks the contract, named. Empty means it holds.
  *
  * `agentFacing` is for the one page that is served only to an authoring agent
- * (the lean handbook's front page): it may name the tools of that agent's
+ * (the handbook's front page): it may name the tools of that agent's
  * loop, and is held to everything else.
  */
 export function proseViolations(chapter: Chapter, options: { agentFacing?: boolean } = {}): string[] {
