@@ -134,7 +134,7 @@ export const CONCEPTS: readonly FrontEntry[] = [
   {
     anchor: 'identity',
     title: 'A write creates or updates, by identity',
-    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Match a strong key first, then a fuzzy name as a second `unique by` line (lines are OR). A line whose key is absent is skipped: never skip a record for a missing key. Write related records off the parent\'s handle.',
+    text: '`unique by (…)` names the fields that make it the same record, so a repeat event updates rather than duplicates. Match a strong key first, then a fuzzy name as a second `unique by` line (lines are OR). A line missing its key is skipped; never skip the record. Write related records off the parent\'s handle.',
     example: {
       body: 'co = write crm-[:Companies]-> { unique by (Name), Name: m.Subject }\nwrite co-[:Team]-> {\n  unique by (Email)\n  unique by (FUZZY Name)\n  Email: m.From\n  Name: m.From\n}',
     },
