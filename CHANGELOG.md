@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Changed
+
+- Bright Data web searches (`WEB_SEARCH_PROVIDER=brightdata`) are paced at 14 per minute per process, set by `BRIGHT_DATA_SERP_PER_MINUTE`; searches beyond it wait their turn instead of being refused by Bright Data, and LinkedIn activity research spends two or three searches per person instead of up to six.
+
 ## [v0.10.2] - 2026-10-06
 
 ### Fixed
