@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- A `#` comment in a closure body written inside a list or another bracketed expression (for example `[MAP(xs, (x) => { … })]`) no longer breaks saving when its prose holds a quote, a backtick or a brace. A single-quoted string may hold a `"`, a `#` or a brace, and a backtick name may hold an escaped backtick (`` `a\`b` ``), in a statement as well as inside a closure body. Before, these failed to save with errors such as "Unbalanced '}'" or "Unterminated string"; this applied to every language version, and programs that saved before read exactly as they did.
+
 ## [v0.10.4] - 2026-10-06
 
 ### Added

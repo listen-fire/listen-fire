@@ -2092,3 +2092,44 @@ describe('`<T | null>` — an extraction field that may be missing', () => {
     expectParseError('t = MEMBERS(<Thesis | null>)', where);
   });
 });
+
+// A statement's expression slot ends where the expression grammar would end it:
+// both find a bracket's close with the same scan, so a literal or comment hides
+// a bracket from both or from neither.
+describe('a slot steps over literals and comments at every depth', () => {
+  const callArgs = (source: string): string[] => {
+    const call = rv(as(parseProgram(source).statements[0], 'assign').value, 'call').call;
+    return call.args.map((arg) => (arg.kind === 'expr' ? arg.expr.raw : arg.kind));
+  };
+
+  it.each([
+    ["a ' inside a \" string", '"it\'s } here"'],
+    ["a \" inside a ' string", "'say \"hi\" }'"],
+    ['a brace in a string inside an interpolation', '"a ${ "}" } b"'],
+    ['a backtick name with an escaped backtick', '`a\\`}`'],
+  ])('%s', (_label, literal) => {
+    expect(callArgs(`y = CONCAT(${literal}, z)`)).toEqual([literal, 'z']);
+  });
+
+  it('a comment inside a closure body is prose wherever the closure is written', () => {
+    const closure = ['MAP(xs, (x) => {', '  # the "website } isn\'t `here', '  return x', '})'].join('\n');
+    expect(callArgs(`y = ${closure}`)).toEqual(['xs', 'closure']);
+    // Inside a list the closure is one bracketed slot, found by the scan alone.
+    const listed = rv(as(parseProgram(`y = [${closure}]`).statements[0], 'assign').value, 'expr');
+    expect(listed.expr.raw).toBe(`[${closure}]`);
+  });
+
+  it('a `#` hop head inside a closure body is the hop, and a comment after it is a comment', () => {
+    const source = ['y = MAP(xs, (x) => {', "  return FIRST(x-[#linked]->) # isn't }", '})'].join('\n');
+    const call = rv(as(parseProgram(source).statements[0], 'assign').value, 'call').call;
+    const closure = call.args[1];
+    if (closure.kind !== 'closure') throw new Error('expected a closure argument');
+    const ret = as(closure.closure.body[0], 'return');
+    expect(rv(ret.value, 'call').call.args).toMatchObject([{ kind: 'expr', expr: { raw: 'x-[#linked]->' } }]);
+  });
+
+  it('a `#` inside a hop is a head at statement level too', () => {
+    const program = parseProgram(['x-[#linked]-> {', '  z = 1 # a comment }', '}'].join('\n'));
+    expect(as(program.statements[0], 'block').block.head.hopsRaw).toBe('-[#linked]->');
+  });
+});
