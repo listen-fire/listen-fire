@@ -141,11 +141,11 @@ import {
 import {
   children as expressionChildren,
   endingHop,
-  hopReadsConfig,
+  isTransformHop,
   specialRecordField,
 } from '../parser/expression/lower';
 import { ExpressionSyntaxError, parseExpression } from '../parser/expression/parse_expression';
-import type { At, MExpr } from '../parser/expression/tree';
+import { isMapSpread, type At, type Hop, type MapEntry, type MExpr } from '../parser/expression/tree';
 import { MovementParseError, parseNestedCall } from '../parser/parse';
 import {
   hoistingMemberReads,
@@ -388,18 +388,30 @@ export const DiagnosticCodes = {
   /** `IF … THEN … END` with no `ELSE` (language version 3). Before it, the
    *  missing arm silently read as `""`, whatever the THEN arm held. */
   IF_WITHOUT_ELSE: 'MOV_IF_WITHOUT_ELSE',
-  /** A `{ … }` settings object on a hop that reads none — every hop but
-   *  `#transform` (language version 3). Before it, the settings were dropped
-   *  without a word. */
+  /** A `{ … }` settings object on a hop (language version 3) — no hop reads
+   *  one. Before it, the settings were dropped without a word. */
   HOP_CONFIG_UNREAD: 'MOV_HOP_CONFIG_UNREAD',
-  /** A walk ending in `-[:_resources]->` or `-[#linked …]->` that would lose
-   *  part of what was written (language version 3): as a value, its root; as
-   *  a block head, the hops before it. Before it, both were dropped silently. */
+  /** A walk ending in `-[:_resources]->` that would lose part of what was
+   *  written (language version 3): as a value, its root; as a block head,
+   *  the hops before it. Before it, both were dropped silently. */
   RESOURCE_WALK_UNREAD: 'MOV_RESOURCE_WALK_UNREAD',
-  /** `@resource.<field>` or `@parent.<field>` naming a field that record does
-   *  not have (language version 3). Before it, the field was read unchecked
-   *  and an unknown one was null. */
-  META_FIELD_UNKNOWN: 'MOV_META_FIELD_UNKNOWN',
+  // Translation-graph reads a movement run has no source for (language
+  // version 3). Before it, each was accepted; the movement engine refused the
+  // first two at run time, and the last two read the translation graph's
+  // context, which a run does not have.
+  /** RETIRED: the `-[t:#transform { plugin: … }]->` hop. A plugin is
+   *  imported and called. */
+  TRANSFORM_HOP_RETIRED: 'MOV_TRANSFORM_HOP_RETIRED',
+  /** RETIRED: the `-[#linked WHERE type = "…"]->` hop, which looked a record
+   *  up by another system's id. The record a write lands on is its handle. */
+  LINKED_HOP_RETIRED: 'MOV_LINKED_HOP_RETIRED',
+  /** RETIRED: `@parent.created` / `@parent.external_id` — the parent action
+   *  node's result. A child is written off the parent write's handle. */
+  PARENT_READ_RETIRED: 'MOV_PARENT_READ_RETIRED',
+  /** RETIRED: `@resource.<field>`. Inside a `-[:_resources WHERE …]->` filter
+   *  it is the bare field name, which the fix writes; anywhere else it was
+   *  always null. */
+  RESOURCE_READ_RETIRED: 'MOV_RESOURCE_READ_RETIRED',
   /** A built-in the catalog lists that the movement engine cannot run
    *  (`LLM_AGG`; language version 3). Before it, the call passed the save
    *  check and failed the run. */
@@ -1704,6 +1716,23 @@ function rawPath(path: PathHead): string {
 /** The span of `at` — an extent of `slot.raw` — in the file. */
 function spanOfExtent(slot: ExprSlot, at: At): Span {
   return { start: spanWithin(slot, at.start).start, end: spanWithin(slot, at.end).start };
+}
+
+/**
+ * The span of `at` — an extent of a block head's probe text
+ * (`probePathHead`) — in the file,
+ * where the hops can be placed exactly: the hop chain is the head's source
+ * verbatim and ends where the head does, so a chain on one line starts its
+ * own length before that. A chain over several lines, or an extent outside
+ * the hops (the probe's stand-in root), has no exact place.
+ */
+function headHopsExtent(head: PathHead, at: At): Span | undefined {
+  if (head.hopsRaw.includes('\n')) return undefined;
+  const offset = probePathHead(head).length - head.hopsRaw.length;
+  if (at.start < offset || at.end > offset + head.hopsRaw.length) return undefined;
+  const { end } = head.span;
+  const hops: ExprSlot = { raw: head.hopsRaw, span: { start: { line: end.line, col: end.col - head.hopsRaw.length }, end } };
+  return spanOfExtent(hops, { start: at.start - offset, end: at.end - offset });
 }
 
 function spanWithin(slot: ExprSlot, pos: number | undefined): Span {
@@ -5037,9 +5066,11 @@ class Checker {
    *   - a built-in is handed exactly the arguments its signature takes, in
    *     the form it reads them, and is one the engine runs;
    *   - an `IF` says what it is when its condition fails (`ELSE`);
-   *   - a walk keeps everything written in it: no hop settings the hop does
-   *     not read, no root or hops a resource or linked hop would drop;
-   *   - `@resource.<field>` and `@parent.<field>` name a field that exists.
+   *   - a walk keeps everything written in it: no hop settings (no hop reads
+   *     them), no root or hops a resource hop would drop;
+   *   - nothing reads the translation graph's context, which a run does not
+   *     have: no `#transform` or `#linked` hop, no `@parent.…` or
+   *     `@resource.…`.
    */
   private checkSlotExpression(slot: ExprSlot, scope: Scope, options?: { writeField?: true }): void {
     if (before(this.languageVersion, 3)) return;
@@ -5049,19 +5080,34 @@ class Checker {
     } catch {
       return; // the syntax error is reported where the slot is read
     }
-    this.checkExpressionTree(tree, { spanOf: (at) => spanWithin(slot, at.start), slot, scope, writeField: options?.writeField === true });
+    this.checkExpressionTree(tree, {
+      spanOf: (at) => spanWithin(slot, at.start),
+      extentOf: (at) => spanOfExtent(slot, at),
+      slot,
+      scope,
+      writeField: options?.writeField === true,
+    });
   }
 
   /** `checkSlotExpression` over a tree that is not a slot's — a block head's
    *  hops, read through the probe the head is parsed as (`head`: the walk the
-   *  head IS, as opposed to a walk written inside one of its hops). */
+   *  head IS, as opposed to a walk written inside one of its hops).
+   *  `extentOf` places an extent of the tree exactly in the file, where it
+   *  can — what an exact rewrite needs. */
   private checkExpressionTree(
     tree: MExpr,
-    at: { spanOf: (at: At) => Span; slot?: ExprSlot; scope: Scope; writeField: boolean; head?: MExpr },
+    at: {
+      spanOf: (at: At) => Span;
+      extentOf: (at: At) => Span | undefined;
+      slot?: ExprSlot;
+      scope: Scope;
+      writeField: boolean;
+      head?: MExpr;
+    },
   ): void {
-    const visit = (expr: MExpr, perMember: boolean): void => {
+    const visit = (expr: MExpr, perMember: boolean, inResourceWhere: boolean): void => {
       if (expr.kind === 'path') this.checkWalkKeepsWhatIsWritten(expr, at.spanOf(expr.at), expr === at.head);
-      if (expr.kind === 'special') this.checkSpecialRecordField(expr.text, at.spanOf(expr.at));
+      if (expr.kind === 'special') this.checkSpecialRecordRead(expr, { ...at, inResourceWhere });
       if (expr.kind === 'if' && expr.else === undefined) {
         this.report(
           DiagnosticCodes.IF_WITHOUT_ELSE,
@@ -5080,38 +5126,57 @@ class Checker {
         this.checkCallInExpression(expr, written, at);
       }
       const key = expr.kind === 'call' ? sortKeyOf(expr) : undefined;
-      for (const child of expressionChildren(expr)) visit(child, perMember || child === key);
+      // A resource hop's WHERE reads the resource's own fields by bare name.
+      const resourceWheres: ReadonlySet<MExpr> = new Set(
+        expr.kind === 'path'
+          ? expr.hops.flatMap(hop => (hop.where !== undefined && endingHop(hop) === 'resources' ? [hop.where] : []))
+          : [],
+      );
+      for (const child of expressionChildren(expr)) {
+        visit(child, perMember || child === key, inResourceWhere || resourceWheres.has(child));
+      }
     };
-    visit(tree, false);
+    visit(tree, false, false);
   }
 
   /**
-   * What the lowering would drop from a walk (language version 3): settings on
-   * a hop that reads none, and — for a walk ending in a resource or linked
-   * hop, which lowers to a node of its own — the root of a walk read as a
-   * value, or the hops before it in a block head. A block head's root is read
-   * by the engine from the head itself, so a one-hop head keeps it.
+   * What the lowering would drop or never run in a walk (language version 3):
+   * a `#transform` or `#linked` hop; settings on a hop, which none reads; and
+   * — for a walk ending in a resource hop, which lowers to a node of its own —
+   * the root of a walk read as a value, or the hops before it in a block
+   * head. A block head's root is read by the engine from the head itself, so
+   * a one-hop head keeps it.
    */
   private checkWalkKeepsWhatIsWritten(walk: Extract<MExpr, { kind: 'path' }>, span: Span, isHead: boolean): void {
     for (const hop of walk.hops) {
-      if (hop.config === undefined || hopReadsConfig(hop)) continue;
+      if (isTransformHop(hop)) {
+        this.report(DiagnosticCodes.TRANSFORM_HOP_RETIRED, this.transformHopRetiredMessage(hop), span);
+        continue;
+      }
+      if (endingHop(hop) === 'linked') {
+        this.report(
+          DiagnosticCodes.LINKED_HOP_RETIRED,
+          "the '-[#linked …]->' hop is retired — it looked a record up by the id another system gave it, not by the record this run wrote. "
+            + "Keep the write's handle and read from it: 'rec = write crm-[:Companies]-> { … }', then 'rec.<field>' or 'rec-[:…]->'; "
+            + "or tie a write to a record you hold with 'write … bind other { … }'",
+          span,
+        );
+        continue;
+      }
+      if (hop.config === undefined) continue;
       this.report(
         DiagnosticCodes.HOP_CONFIG_UNREAD,
-        `the settings '{ … }' on the hop '${hop.label.text}' are not read — only a '#transform' hop takes settings. Remove them, or say what they mean in the hop's WHERE`,
+        `the settings '{ … }' on the hop '${hop.label.text}' are not read — a hop takes no settings. Remove them, or say what they mean in the hop's WHERE`,
         span,
       );
     }
     const last = walk.hops[walk.hops.length - 1];
-    const ending = last === undefined ? undefined : endingHop(last);
-    if (ending === undefined) return;
-    const hop = ending === 'resources' ? '-[:_resources]->' : '-[#linked …]->';
+    if (last === undefined || endingHop(last) !== 'resources') return;
     if (isHead && walk.hops.length > 1) {
       this.report(
         DiagnosticCodes.RESOURCE_WALK_UNREAD,
-        `a block head that ends in ${hop} walks only the hops before it — the ${hop} hop is never read, so the body would run once per record those hops reach, not once per ${ending === 'resources' ? 'resource' : 'linked record'}. `
-          + (ending === 'resources'
-            ? "Walk to the record in one block, then its resources as the one hop of a block inside: '…-[m:…]-> { m-[f:_resources]-> { … } }'"
-            : 'Walk the edge to the linked record instead'),
+        "a block head that ends in -[:_resources]-> walks only the hops before it — the -[:_resources]-> hop is never read, so the body would run once per record those hops reach, not once per resource. "
+          + "Walk to the record in one block, then its resources as the one hop of a block inside: '…-[m:…]-> { m-[f:_resources]-> { … } }'",
         span,
       );
       return;
@@ -5120,23 +5185,75 @@ class Checker {
     const root = walk.root.kind === 'name' ? walk.root.name.text : 'the root';
     this.report(
       DiagnosticCodes.RESOURCE_WALK_UNREAD,
-      ending === 'resources'
-        ? `a walk that ends in ${hop} is read here from no record — '${root}' would be dropped, and the resources read would not be ${root}'s. Walk ${root}'s resources as a block: '${root}-[f:_resources]-> { … f.\`url\` … }'`
-        : `${hop} is a legacy hop read from no record — '${root}' would be dropped, and the linked record read would not be ${root}'s. Walk the edge from ${root} to the record instead`,
+      `a walk that ends in -[:_resources]-> is read here from no record — '${root}' would be dropped, and the resources read would not be ${root}'s. Walk ${root}'s resources as a block: '${root}-[f:_resources]-> { … f.\`url\` … }'`,
       span,
     );
   }
 
-  /** `@resource.<field>` / `@parent.<field>` names a field that record has
-   *  (language version 3). Any other `@` value is the meta-key check's. */
-  private checkSpecialRecordField(text: string, span: Span): void {
-    const read = specialRecordField(text);
-    if (read === undefined || read.known.includes(read.field)) return;
-    this.report(
-      DiagnosticCodes.META_FIELD_UNKNOWN,
-      `'@${read.record}' has no field '${read.field}' — it has ${read.known.join(', ')}${didYouMean(read.field, read.known)}`,
-      span,
-    );
+  /** The plugin call a `#transform` hop is written as instead — named, with
+   *  its required arguments, when its `plugin:` setting names one the catalog
+   *  has. */
+  private transformHopRetiredMessage(hop: Hop): string {
+    const lead = "the '#transform' hop is retired — the movement engine never runs it. Import the plugin and call it with the value it reads";
+    const named = hop.config?.entries.find((entry): entry is MapEntry => !isMapSpread(entry) && entry.key.text === 'plugin');
+    const plugin = named?.value.kind === 'string' && named.value.parts.length === 1 && typeof named.value.parts[0] === 'string'
+      ? named.value.parts[0]
+      : undefined;
+    const spec = plugin === undefined ? undefined : this.catalog.plugin(plugin);
+    if (plugin === undefined || spec === undefined) {
+      return `${lead}, e.g. '${importLine('fetch_url', 'plugins')}', then 'page = fetch_url(url: m.u)'`;
+    }
+    const args = (spec.requiredArgs ?? []).map(arg => `${arg}: …`).join(', ');
+    return `${lead}: '${importLine(plugin, 'plugins')}', then 'out = ${spellName(plugin)}(${args.length > 0 ? args : '…'})'`;
+  }
+
+  /**
+   * `@parent.<field>` and `@resource.<field>` (language version 3): the
+   * translation graph's parent result and resource, which a run does not
+   * have. Inside a resource hop's WHERE, `@resource.<field>` is the bare field
+   * name — the one place it ever read a value — so the rewrite is exact. Any
+   * other `@` value is the meta-key check's.
+   */
+  private checkSpecialRecordRead(
+    special: Extract<MExpr, { kind: 'special' }>,
+    at: { spanOf: (at: At) => Span; extentOf: (at: At) => Span | undefined; inResourceWhere: boolean },
+  ): void {
+    const read = specialRecordField(special.text);
+    if (read === undefined) return;
+    const span = at.spanOf(special.at);
+    switch (read.record) {
+      case 'parent':
+        this.report(
+          DiagnosticCodes.PARENT_READ_RETIRED,
+          `'@parent.${read.field}' is retired — it read the translation graph's parent result, which a movement run does not have. `
+            + "Keep the parent write's handle and write the child off it: 'co = write crm-[:Companies]-> { … }', then 'write co-[:Team]-> { … }'",
+          span,
+        );
+        return;
+      case 'resource': {
+        const known = read.known.includes(read.field);
+        if (!at.inResourceWhere || !known) {
+          this.report(
+            DiagnosticCodes.RESOURCE_READ_RETIRED,
+            at.inResourceWhere
+              ? `'@resource.${read.field}' is retired, and a resource has no field '${read.field}' — it has ${read.known.join(', ')}${didYouMean(read.field, read.known)}. Inside a -[:_resources WHERE …]-> filter, write the field's bare name`
+              : `'@resource.${read.field}' is retired — outside a -[:_resources WHERE …]-> filter it was always null. Walk the record's resources and read the field off the landing: 'r-[f:_resources]-> { … f.\`${known ? read.field : 'url'}\` … }'`,
+            span,
+          );
+          return;
+        }
+        const extent = at.extentOf(special.at);
+        this.reportWithFix({
+          code: DiagnosticCodes.RESOURCE_READ_RETIRED,
+          message: `'@resource.${read.field}' is retired — inside a -[:_resources WHERE …]-> filter, write the field's bare name: '${read.field}'`,
+          span,
+          ...(extent !== undefined ? { fix: { edits: [{ span: extent, text: read.field }] } } : {}),
+        });
+        return;
+      }
+      default:
+        neverAsAny(read.record);
+    }
   }
 
   private checkCallInExpression(
@@ -8670,6 +8787,7 @@ class Checker {
           const walk = tree.kind === 'member' ? tree.object : undefined;
           this.checkExpressionTree(tree, {
             spanOf: () => head.span,
+            extentOf: (at) => headHopsExtent(head, at),
             scope,
             writeField: false,
             ...(walk !== undefined ? { head: walk } : {}),
