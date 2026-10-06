@@ -1083,13 +1083,21 @@ class ExpressionParser {
     return { kind: 'closure', params, body: { kind: 'expr', expr }, at: this.span(open.start) };
   }
 
-  /** The index of the bracket closing the one at `open`, skipping literals. */
+  /** The index of the bracket closing the one at `open`, skipping literals and
+   *  comments. A closure's block body is statements, so a `#` there starts a
+   *  comment whose prose is never read — except directly inside a hop's
+   *  brackets, where `#` begins a head (`-[#linked]->`), as in the statement
+   *  grammar's own scan. */
   private matchingClose(open: number): number | undefined {
     const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
-    const stack: string[] = [];
+    const stack: Array<{ close: string; hop: boolean }> = [];
     let i = open;
     while (i < this.limit) {
       const c = this.src[i];
+      if (c === '#' && !stack[stack.length - 1]?.hop) {
+        while (i < this.limit && this.src[i] !== '\n') i++;
+        continue;
+      }
       if (c === '"' || c === "'") {
         try {
           i = this.skipQuoted(i);
@@ -1104,9 +1112,9 @@ class ExpressionParser {
         i = close + 1;
         continue;
       }
-      if (c in pairs) stack.push(pairs[c]);
+      if (c in pairs) stack.push({ close: pairs[c], hop: c === '[' && this.src[i - 1] === '-' && this.isHopInterior(i + 1) });
       else if (c === ')' || c === ']' || c === '}') {
-        if (stack.pop() !== c) return undefined;
+        if (stack.pop()?.close !== c) return undefined;
         if (stack.length === 0) return i;
       }
       i++;
