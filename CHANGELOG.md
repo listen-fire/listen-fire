@@ -12,6 +12,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - Bright Data web searches (`WEB_SEARCH_PROVIDER=brightdata`) are paced at 14 per minute per process, set by `BRIGHT_DATA_SERP_PER_MINUTE`; searches beyond it wait their turn instead of being refused by Bright Data, and LinkedIn activity research spends two or three searches per person instead of up to six.
 
+### Fixed
+
+- A `#` comment inside a closure body that sits inside an expression (for example `FIRST(MAP(xs, (x) => { … }))`) no longer breaks saving when the comment contains an apostrophe, a quote, a backtick or a brace. Before, the save failed with "Expected '}' to close the closure body"; this applied to every language version.
+
 ## [v0.10.2] - 2026-10-06
 
 ### Fixed

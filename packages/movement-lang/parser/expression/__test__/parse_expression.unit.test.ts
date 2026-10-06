@@ -360,6 +360,59 @@ describe('parseExpression', () => {
         args: [{ value: name('xs') }, { value: { kind: 'closure' } }],
       });
     });
+
+    // A `#` comment in a block body runs to the end of its line and nothing in
+    // it is read: prose with a quote, a backtick or a brace must neither open a
+    // literal nor close the body.
+    describe('a comment in a nested block body is prose', () => {
+      const body = (comment: string, extra = '') =>
+        [
+          '{',
+          `    # ${comment}`,
+          ...(extra ? [extra] : []),
+          '    page = fetch_url(url: x.website)',
+          '    return page',
+          '  }',
+        ].join('\n');
+      const nested = (b: string) => `FIRST(MAP([e], { onError: "warn" }, (x) => ${b}))`;
+      const blockOf = (text: string): string => {
+        const tree = parseExpression(text);
+        if (tree.kind !== 'call') throw new Error('expected a call');
+        const map = tree.args[0].value;
+        if (map.kind !== 'call') throw new Error('expected MAP');
+        const closure = map.args[2].value;
+        if (closure.kind !== 'closure' || closure.body.kind !== 'block') throw new Error('expected a block closure');
+        return text.slice(closure.body.at.start, closure.body.at.end);
+      };
+
+      it.each([
+        ['an apostrophe', "LinkedIn research isn't cheap"],
+        ['a lone backtick', 'runs only for `x with no website'],
+        ['a backtick pair', 'runs only for `x` with no website'],
+        ['a double quote', 'the "website field may be empty'],
+        ['a closing brace', 'no } here closes anything'],
+        ['an opening brace', 'nor does { open anything'],
+        ['all of them', 'isn\'t `x` "quoted" } {'],
+      ])('%s', (_label, comment) => {
+        const b = body(comment);
+        expect(blockOf(nested(b))).toBe(b);
+      });
+
+      it('a `#` inside a string after the comment is still the string', () => {
+        const b = body("isn't a boundary", '    tag = "issue #42 isn\'t } closed"');
+        expect(blockOf(nested(b))).toBe(b);
+      });
+
+      it('a `#` inside a string is never a comment', () => {
+        const b = '{\n    return "a # b }"\n  }';
+        expect(blockOf(nested(b))).toBe(b);
+      });
+
+      it('a `#` head inside a hop is the hop, not a comment', () => {
+        const b = '{\n    return FIRST(x-[#linked]->) }';
+        expect(blockOf(nested(b))).toBe(b);
+      });
+    });
   });
 
   describe('node and graph literals, inline declarations', () => {
