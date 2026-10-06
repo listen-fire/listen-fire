@@ -8,6 +8,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.10.6] - 2026-10-06
+
 ### Added
 
 - `MAP`, `FILTER`, `REDUCE`, `GROUPBY` and `KEYBY` take the records a block returned (`xs = src-[e:companies]-> { return e }`), as `COUNT`, `FIRST` and `AT` already did. Before, saving refused them with "reads a collection, and this is … one thing, not several". This applies to every language version.
