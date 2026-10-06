@@ -3,7 +3,14 @@
 // the program's traversal paths, iterated because a target only becomes
 // known once its parent is described.
 
-import { scanInstanceChains } from 'movement-lang';
+import {
+  checkProgram,
+  fromCatalogSnapshot,
+  parseProgram,
+  scanInstanceChains,
+  type CatalogSnapshot,
+  type InstanceSchema,
+} from 'movement-lang';
 import type { SchemaEntryPoint, SchemaTypeDescriptor } from '../../types';
 import {
   closeDemandOverChains,
@@ -270,5 +277,138 @@ movement m(x: <c-[:Companies]->>) {
     it('demands firing entries even with an EMPTY mention list', () => {
       expect(demandSeed({ entries, mentions: [] })).toEqual(new Set(['obj-events']));
     });
+  });
+});
+
+// A function handed to MAP is a body the run executes once per member, so every
+// chain inside it is the movement's demand exactly as if it were written
+// outside. The scan used to skip such bodies, so a type reached only by walking
+// from a write handle bound INSIDE one (`record-[:Lists]->`) was never
+// described, and the checker checked that write against nothing.
+describe('demand reads the body of a function handed to MAP', () => {
+  const listEntries: SchemaEntryPoint[] = [
+    { typeId: 'obj-companies', displayName: 'Companies', writable: true, readable: true },
+    { typeId: 'obj-list', displayName: 'Companies List', writable: true, readable: true },
+  ];
+  const listDescriptors = new Map<string, SchemaTypeDescriptor>([
+    [
+      'obj-companies',
+      {
+        typeId: 'obj-companies',
+        displayName: 'Companies',
+        fields: [
+          { fieldId: 'Name', displayName: 'Name', kind: 'string', writable: true, required: true },
+        ],
+        // The edge NAME ('Lists') is not the target's type name, so only the
+        // chain closure can reach `Companies List`, never the textual seed.
+        references: [
+          { fieldId: 'Lists', targetTypeId: 'obj-list', cardinality: 'many', writable: true },
+        ],
+      },
+    ],
+    [
+      'obj-list',
+      {
+        typeId: 'obj-list',
+        displayName: 'Companies List',
+        fields: [
+          { fieldId: 'Stage', displayName: 'Stage', kind: 'string', writable: true, required: false },
+        ],
+        references: [],
+      },
+    ],
+  ]);
+
+  const PRELUDE = `import { crm } from adapters
+import { crm_cred } from credentials
+c = crm(credentials: crm_cred)
+`;
+  const writes = (listBody: string) =>
+    `    record = write c-[:Companies]-> { Name: n }\n    write record-[:Lists]-> { ${listBody} }`;
+  const insideMap = (listBody: string) =>
+    `${PRELUDE}movement m() {\n  names = ["Acme", "Globex"]\n  MAP(names, (n) => {\n${writes(listBody)}\n  })\n}`;
+  const outsideMap = (listBody: string) =>
+    `${PRELUDE}movement m() {\n  n = "Acme"\n${writes(listBody)}\n}`;
+
+  const walkedPaths = (source: string, languageVersion?: number): string[] =>
+    scanInstanceChains(source, languageVersion !== undefined ? { languageVersion } : undefined)
+      .map((chain) =>
+        chain.steps.map((step) => (step.type === 'edge' ? step.edgeTypeId : '?')).join(' → '),
+      )
+      .sort();
+
+  /** The catalog's demand loop in miniature: seed, describe what is demanded,
+   *  close over the chains, repeat until a round adds nothing. */
+  const demandScopedSchema = (source: string): InstanceSchema => {
+    const demanded = demandSeed({ entries: listEntries, sources: [source] });
+    const typeIdByName = new Map(listEntries.map((e) => [e.displayName, e.typeId]));
+    const chains = scanInstanceChains(source);
+    for (;;) {
+      const described = new Map<string, SchemaTypeDescriptor>();
+      for (const typeId of demanded) {
+        const descriptor = listDescriptors.get(typeId);
+        if (descriptor) described.set(typeId, descriptor);
+      }
+      const projection = instanceSchemaFromDescriptors({
+        adapterType: 'crm',
+        entries: listEntries,
+        descriptors: described,
+        supportsInPlaceUpdate: false,
+      });
+      let grew = false;
+      for (const name of closeDemandOverChains({ schema: projection.schema, chains })) {
+        const typeId = typeIdByName.get(name) ?? name;
+        if (!demanded.has(typeId)) {
+          demanded.add(typeId);
+          grew = true;
+        }
+      }
+      if (!grew) return projection.schema;
+    }
+  };
+
+  const errorCodes = (source: string): string[] => {
+    const snapshot: CatalogSnapshot = {
+      adapters: {
+        crm: {
+          constructionArgs: [{ name: 'credentials', kind: 'credential', required: true }],
+          schemas: { crm_cred: demandScopedSchema(source) },
+        },
+      },
+      credentials: { crm_cred: { adapter: 'crm' } },
+      plugins: {},
+    };
+    return checkProgram(parseProgram(source), fromCatalogSnapshot(snapshot))
+      .filter((d) => (d.severity ?? 'error') === 'error')
+      .map((d) => d.code);
+  };
+
+  it('walks the same paths inside MAP as outside it', () => {
+    const outside = walkedPaths(outsideMap('Stage: "Seed"'));
+    expect(outside).toEqual(['Companies', 'Companies → Lists']);
+    expect(walkedPaths(insideMap('Stage: "Seed"'))).toEqual(outside);
+  });
+
+  it('a field the walked type lacks is refused inside MAP, as it is outside', () => {
+    expect(errorCodes(insideMap('Stage: "Seed"'))).toEqual([]);
+    const outside = errorCodes(outsideMap('Stage: "Seed", Bogus: "x"'));
+    expect(outside.length).toBeGreaterThan(0);
+    expect(errorCodes(insideMap('Stage: "Seed", Bogus: "x"'))).toEqual(outside);
+  });
+
+  it("a hop rooted at the function's parameter grounds nothing — its type is not the scan's to invent", () => {
+    const source = `${PRELUDE}movement m() {\n  names = ["Acme"]\n  MAP(names, (n) => {\n    n-[:Lists]-> { }\n  })\n}`;
+    expect(walkedPaths(source)).toEqual([]);
+  });
+
+  it('a parameter shadows a handle of the same name bound outside the function', () => {
+    const source = `${PRELUDE}movement m() {\n  record = write c-[:Companies]-> { Name: "Acme" }\n  MAP(["x"], (record) => {\n    record-[:Lists]-> { }\n  })\n}`;
+    expect(walkedPaths(source)).toEqual(['Companies']);
+  });
+
+  it('a movement pinned to version 1 or 2 keeps the scan it was saved under', () => {
+    for (const languageVersion of [1, 2]) {
+      expect(walkedPaths(insideMap('Stage: "Seed"'), languageVersion)).toEqual([]);
+    }
   });
 });

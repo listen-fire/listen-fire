@@ -49,6 +49,7 @@ import {
   type CredentialSpec,
   type SchemaFieldType,
   type InstanceSchema,
+  type LanguageVersion,
   type PluginOutput,
   type PluginSpec,
   type ResolveFile,
@@ -871,6 +872,9 @@ export async function movementCatalogForTeam(
      *
      */
     types?: readonly string[];
+    /** `source`'s language-version pin — absent means the current version, as
+     *  for an entry point given none. */
+    languageVersion?: LanguageVersion;
   } = {},
 ): Promise<TeamMovementCatalog> {
   registerBundledTransforms();
@@ -886,15 +890,21 @@ export async function movementCatalogForTeam(
   // File-import closure: libraries construct their OWN instances, so their
   // (adapter, credential) pairs join the referenced set, and the resolver
   // over the prefetched sources serves checkProgram/compile/runMovement.
+  // Each file's language-version pin, beside its source: the pre-scan reads a
+  // file as the version it was saved under.
+  const filePins = new Map<string, LanguageVersion>();
   const fileSources =
     options.source !== undefined
       ? await assembleMovementFileSources({
           rootSource: options.source,
-          load: async (path) =>
-            (await getMovementRowByName({ teamId: teamId as unknown as string, name: path }))
-              ?.source ?? null,
+          load: async (path) => {
+            const row = await getMovementRowByName({ teamId: teamId as unknown as string, name: path });
+            if (row === null) return null;
+            filePins.set(path, row.languageVersion);
+            return row.source;
+          },
         })
-      : await allTeamMovementSources(teamId);
+      : await allTeamMovementSources(teamId, filePins);
   const resolveFile = resolverOverSources(fileSources);
 
   const schemaByAdapterAndCred = new Map<string, AdapterSchemaProjection>();
@@ -931,7 +941,16 @@ export async function movementCatalogForTeam(
   // to refine).
   const scanSources =
     options.source !== undefined ? [options.source, ...fileSources.values()] : [...fileSources.values()];
-  const allChains = scanSources.flatMap((s) => scanInstanceChains(s));
+  const pinnedOf = (languageVersion: LanguageVersion | undefined) =>
+    languageVersion !== undefined ? { languageVersion } : undefined;
+  const allChains = [
+    ...(options.source !== undefined
+      ? scanInstanceChains(options.source, pinnedOf(options.languageVersion))
+      : []),
+    ...[...fileSources].flatMap(([path, source]) =>
+      scanInstanceChains(source, pinnedOf(filePins.get(path))),
+    ),
+  ];
   const chainsForKey = (key: string) =>
     allChains.filter((chain) => {
       const credentialsId =
@@ -1490,8 +1509,12 @@ export async function movementCatalogForTeam(
 
 /** The full-workspace path → source map (the no-source sweep's resolver
  *  base — the dev CLI's catalog dump has no root program to walk from). */
-async function allTeamMovementSources(teamId: TeamId): Promise<Map<string, string>> {
+async function allTeamMovementSources(
+  teamId: TeamId,
+  pins: Map<string, LanguageVersion>,
+): Promise<Map<string, string>> {
   const rows = await listMovementRows(teamId as unknown as string);
+  for (const row of rows) pins.set(row.name, row.languageVersion);
   return new Map(rows.map((row) => [row.name, row.source]));
 }
 

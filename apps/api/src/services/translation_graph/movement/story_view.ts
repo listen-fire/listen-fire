@@ -646,7 +646,10 @@ export async function projectStoryView(row: {
   // bracket never loads a graph.
   let teamCatalog: TeamMovementCatalog;
   try {
-    teamCatalog = await movementCatalogForTeam(row.teamId as TeamId, { source: row.source });
+    teamCatalog = await movementCatalogForTeam(row.teamId as TeamId, {
+      source: row.source,
+      ...(row.languageVersion !== undefined ? { languageVersion: row.languageVersion } : {}),
+    });
   } catch (e) {
     if (!(e instanceof BridgeError || e instanceof MovementParseError)) throw e;
     teamCatalog = await movementCatalogForTeam(row.teamId as TeamId, { types: [] });

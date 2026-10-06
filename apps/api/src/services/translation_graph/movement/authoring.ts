@@ -294,7 +294,10 @@ async function runValidate(
   let scanFailure: string | undefined;
   try {
     teamCatalog = await timer.step('catalog', () =>
-      movementCatalogForTeam(input.teamId as TeamId, { source: input.source }),
+      movementCatalogForTeam(input.teamId as TeamId, {
+        source: input.source,
+        ...(input.languageVersion !== undefined ? { languageVersion: input.languageVersion } : {}),
+      }),
     );
   } catch (e) {
     if (!(e instanceof BridgeError || e instanceof MovementParseError)) throw e;
