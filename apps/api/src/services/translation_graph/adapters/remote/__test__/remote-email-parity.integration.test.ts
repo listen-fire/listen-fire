@@ -49,7 +49,7 @@ import type { SourcePosition } from '../../../types';
 async function attachmentsVia(adapter: Adapter, position: SourcePosition): Promise<Record<string, unknown>[]> {
   const related = await adapter.getRelated({
     position,
-    fieldId: 'attachments',
+    fieldId: 'Attachments',
     direction: 'outgoing',
   });
   return related.map((r) => (positionData(r.position) ?? {}) as Record<string, unknown>);

@@ -300,6 +300,7 @@ describe('timer_resume — the wake driver (real DB)', () => {
       credentialsByName: {},
       resolveFile: () => null,
       notes: [],
+      gaps: [],
     });
 
     const target = makeSlackTargetFake();

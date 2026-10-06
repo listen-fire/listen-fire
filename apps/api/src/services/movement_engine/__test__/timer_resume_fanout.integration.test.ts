@@ -383,6 +383,7 @@ describe('timer_resume — fan-out sleep, multi-park-per-run under a join (real 
       credentialsByName: {},
       resolveFile: () => null,
       notes: [],
+      gaps: [],
     });
 
     const target = makeSlackTargetFake();

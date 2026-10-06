@@ -50,7 +50,7 @@ import { mintMovementVersionIfChanged } from '../../translation_graph/movement/v
 import { makeStablePosition, positionData } from '../../translation_graph/types';
 import type { Adapter, RuntimeCapabilities } from '../../translation_graph/adapter';
 import { containerAssociation } from '../../translation_graph/adapter';
-import type { Catalog, InstanceSchema, PositionSchema } from 'movement-lang';
+import type { Catalog, InstanceSchema, LanguageVersion, PositionSchema } from 'movement-lang';
 import { eventAddressKey, CURRENT_LANGUAGE_VERSION } from 'movement-lang';
 import type { TriggerEvent } from '../../translation_graph/triggers/types';
 import { resumeTimerParkedRuns } from '../timer_resume';
@@ -370,7 +370,7 @@ const FANOUT_TAIL_REPARK = [
 
 async function seedMovement(
   teamId: TeamId,
-  opts: { source: string; firedName: string; name: string },
+  opts: { source: string; firedName: string; name: string; languageVersion?: LanguageVersion },
 ): Promise<{ triggerId: TriggerId }> {
   const pipelineConfigurationId = randomUUID() as PipelineConfigurationId;
   await getQb(['pipeline_configuration'])
@@ -386,7 +386,7 @@ async function seedMovement(
     .values({ id: movementId, team_id: teamId, name: opts.name, source: opts.source } as any)
     .execute();
 
-  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source, languageVersion: CURRENT_LANGUAGE_VERSION });
+  await mintMovementVersionIfChanged({ teamId, movementId, source: opts.source, languageVersion: opts.languageVersion ?? CURRENT_LANGUAGE_VERSION });
 
   const triggerId = randomUUID() as TriggerId;
   await getAutomationsQb(['trigger'])
@@ -510,6 +510,7 @@ describe('timer_resume — unwind-and-continue matrix (real DB)', () => {
       credentialsByName: {},
       resolveFile: () => null,
       notes: [],
+      gaps: [],
     });
 
     const target = makeSlackTargetFake();
@@ -571,6 +572,8 @@ describe('timer_resume — unwind-and-continue matrix (real DB)', () => {
   it('parallel + trailing: both branches park; the closer runs the trailing write exactly once', async () => {
     const { triggerId } = await seedMovement(teamId, {
       source: PARALLEL_TAIL,
+      // `parallel { … }` is retired under version 3; these sources were written for version 2.
+      languageVersion: 2,
       firedName: 'parallel_tail',
       name: 'Parallel tail',
     });
@@ -660,6 +663,8 @@ describe('timer_resume — unwind-and-continue matrix (real DB)', () => {
   it('three levels deep (if > parallel > fan-out): joins close bottom-up, trailing runs exactly once', async () => {
     const { triggerId } = await seedMovement(teamId, {
       source: DEEP_NEST,
+      // `parallel { … }` is retired under version 3; these sources were written for version 2.
+      languageVersion: 2,
       firedName: 'deep_nest',
       name: 'Deep nest',
     });
