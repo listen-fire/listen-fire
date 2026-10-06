@@ -28,7 +28,7 @@
 
 import { translateStringEscape, unrecognisedCharacterMessage } from '@listen-fire/shared/expression/formula';
 import { BridgeError } from '../../expression/error';
-import { callStyleIfMessage } from '../scan';
+import { callStyleIfMessage, isHopInterior, matchingClose, skipBacktickName } from '../scan';
 import type {
   At,
   BinaryOp,
@@ -213,8 +213,8 @@ class ExpressionParser {
       while (i < this.limit && /[a-zA-Z0-9_.]/.test(src[i])) i++;
       return { ...base, end: i, t: 'special', text: src.slice(start, i) };
     }
-    if ((c === '-' && at(start + 1) === '[' && this.isHopInterior(start + 2)) ||
-        (c === '<' && at(start + 1) === '-' && at(start + 2) === '[' && this.isHopInterior(start + 3))) {
+    if ((c === '-' && at(start + 1) === '[' && isHopInterior(src, start + 2, this.limit)) ||
+        (c === '<' && at(start + 1) === '-' && at(start + 2) === '[' && isHopInterior(src, start + 3, this.limit))) {
       return { ...base, end: start, t: 'hop' };
     }
     if (IDENT_START.test(c)) {
@@ -240,43 +240,10 @@ class ExpressionParser {
     this.fail(unrecognisedCharacterMessage(c), start);
   }
 
-  /** `start` is just inside `-[` / `<-[`: a hop opens with `:`, `#`, or an
-   *  alias (`name:`). Anything else is a minus and a list. */
-  private isHopInterior(start: number): boolean {
-    let i = start;
-    while (i < this.limit && /\s/.test(this.src[i])) i++;
-    const c = this.src[i];
-    if (c === ':' || c === '#') return true;
-    let end: number | undefined;
-    if (c === '`') {
-      let j = i + 1;
-      while (j < this.limit && this.src[j] !== '`') j += this.src[j] === '\\' ? 2 : 1;
-      if (j >= this.limit) return false;
-      end = j + 1;
-    } else if (c !== undefined && IDENT_START.test(c)) {
-      let j = i + 1;
-      while (j < this.limit && IDENT_CHAR.test(this.src[j])) j++;
-      end = j;
-    }
-    if (end === undefined) return false;
-    while (end < this.limit && /\s/.test(this.src[end])) end++;
-    return this.src[end] === ':';
-  }
-
   private scanBacktick(start: number): { name: string; end: number } {
-    let i = start + 1;
-    let name = '';
-    while (i < this.limit && this.src[i] !== '`') {
-      if (this.src[i] === '\\' && i + 1 < this.limit) {
-        name += this.src[i + 1];
-        i += 2;
-        continue;
-      }
-      name += this.src[i];
-      i++;
-    }
-    if (i >= this.limit) this.fail('Unterminated backtick-quoted name', start);
-    return { name, end: i + 1 };
+    const end = skipBacktickName(this.src, start, this.limit);
+    if (end === undefined) this.fail('Unterminated backtick-quoted name', start);
+    return { name: this.src.slice(start + 1, end - 1).replace(/\\(.)/g, '$1'), end };
   }
 
   private lexString(
@@ -297,7 +264,8 @@ class ExpressionParser {
       if (quote === '"' && c === '$' && this.src[i + 1] === '{') {
         if (text) segments.push(text);
         text = '';
-        const close = this.findInterpolationClose(i + 2);
+        const close = matchingClose(this.src, i + 1, this.limit);
+        if (close === undefined) this.fail('Unterminated ${…} interpolation', i);
         segments.push({ start: i + 2, end: close });
         i = close + 1;
         continue;
@@ -307,47 +275,6 @@ class ExpressionParser {
         return { ...base, end: i + 1, t: 'string', quote, segments };
       }
       text += c;
-      i++;
-    }
-    this.fail('Unterminated string literal', start);
-  }
-
-  /** `start` is just after `${`; the index of the matching `}`. */
-  private findInterpolationClose(start: number): number {
-    let depth = 1;
-    let i = start;
-    while (i < this.limit) {
-      const c = this.src[i];
-      if (c === '"' || c === "'") {
-        i = this.skipQuoted(i);
-        continue;
-      }
-      if (c === '`') {
-        i = this.scanBacktick(i).end;
-        continue;
-      }
-      if (c === '{') depth++;
-      else if (c === '}' && --depth === 0) return i;
-      i++;
-    }
-    this.fail('Unterminated ${…} interpolation', start - 2);
-  }
-
-  /** Index just past a quoted string starting at `start` (interpolations skipped whole). */
-  private skipQuoted(start: number): number {
-    const quote = this.src[start];
-    let i = start + 1;
-    while (i < this.limit) {
-      const c = this.src[i];
-      if (c === '\\') {
-        i += 2;
-        continue;
-      }
-      if (quote === '"' && c === '$' && this.src[i + 1] === '{') {
-        i = this.findInterpolationClose(i + 2) + 1;
-        continue;
-      }
-      if (c === quote) return i + 1;
       i++;
     }
     this.fail('Unterminated string literal', start);
@@ -1044,7 +971,7 @@ class ExpressionParser {
    *  after the balanced parameter list, so it costs a scan and nothing else. */
   private tryParseClosure(): MExpr | undefined {
     const open = this.peek();
-    const close = this.matchingClose(open.start);
+    const close = matchingClose(this.src, open.start, this.limit);
     if (close === undefined) return undefined;
     let i = close + 1;
     while (i < this.limit && /\s/.test(this.src[i])) i++;
@@ -1069,7 +996,7 @@ class ExpressionParser {
     this.expectOp('=>', "between a closure's parameters and its body");
     const bodyTok = this.peek();
     if (this.isPunct(bodyTok, '{')) {
-      const end = this.matchingClose(bodyTok.start);
+      const end = matchingClose(this.src, bodyTok.start, this.limit);
       if (end === undefined) this.fail("Expected '}' to close the closure body", bodyTok.start);
       this.consumedTo(end + 1);
       return {
@@ -1081,45 +1008,6 @@ class ExpressionParser {
     }
     const expr = this.parseWhere();
     return { kind: 'closure', params, body: { kind: 'expr', expr }, at: this.span(open.start) };
-  }
-
-  /** The index of the bracket closing the one at `open`, skipping literals and
-   *  comments. A closure's block body is statements, so a `#` there starts a
-   *  comment whose prose is never read — except directly inside a hop's
-   *  brackets, where `#` begins a head (`-[#linked]->`), as in the statement
-   *  grammar's own scan. */
-  private matchingClose(open: number): number | undefined {
-    const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
-    const stack: Array<{ close: string; hop: boolean }> = [];
-    let i = open;
-    while (i < this.limit) {
-      const c = this.src[i];
-      if (c === '#' && !stack[stack.length - 1]?.hop) {
-        while (i < this.limit && this.src[i] !== '\n') i++;
-        continue;
-      }
-      if (c === '"' || c === "'") {
-        try {
-          i = this.skipQuoted(i);
-        } catch {
-          return undefined;
-        }
-        continue;
-      }
-      if (c === '`') {
-        const close = this.src.indexOf('`', i + 1);
-        if (close === -1 || close >= this.limit) return undefined;
-        i = close + 1;
-        continue;
-      }
-      if (c in pairs) stack.push({ close: pairs[c], hop: c === '[' && this.src[i - 1] === '-' && this.isHopInterior(i + 1) });
-      else if (c === ')' || c === ']' || c === '}') {
-        if (stack.pop()?.close !== c) return undefined;
-        if (stack.length === 0) return i;
-      }
-      i++;
-    }
-    return undefined;
   }
 
   // ── Node and graph literals, inline declarations ──

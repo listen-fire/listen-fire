@@ -8,6 +8,13 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.10.5] - 2026-10-06
+
+### Fixed
+
+- A `MAP`/`FILTER`/`REDUCE` written inside an expression (for example `FIRST(MAP([e], (x) => { … }))`) now runs its function the way the validator checked it. Before, a `graph<Shape> { ...x }` inside such a function validated and then failed every member with "'...x' spreads a map into a graph, and 'x' holds no value". A list written around one record, such as `[e]` where `e` is a write's result or an extracted record, now holds that record's type too, so spreading or reading a member of it is checked like `e` itself instead of being refused. This applies to every language version.
+- A `#` comment in a closure body written inside a list or another bracketed expression (for example `[MAP(xs, (x) => { … })]`) no longer breaks saving when its prose holds a quote, a backtick or a brace. A single-quoted string may hold a `"`, a `#` or a brace, and a backtick name may hold an escaped backtick (`` `a\`b` ``), in a statement as well as inside a closure body. Before, these failed to save with errors such as "Unbalanced '}'" or "Unterminated string"; this applied to every language version, and programs that saved before read exactly as they did.
+
 ## [v0.10.4] - 2026-10-06
 
 ### Added

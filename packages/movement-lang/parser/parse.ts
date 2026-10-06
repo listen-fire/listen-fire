@@ -4,7 +4,8 @@
 // Hand-rolled, line-oriented recursive descent. Statements and `field: expr` entries are
 // newline-terminated; termination is suspended inside unbalanced ( ) [ ] { }, inside
 // double-quoted strings (which may span newlines and carry ${…} interpolation), and inside
-// backtick-quoted names. `#` starts a comment to end of line, outside strings/backticks.
+// backtick-quoted names. `#` starts a comment to end of line, outside strings/backticks and
+// at any bracket depth except directly inside a hop's brackets (`-[#linked]->`).
 // Expression positions are NOT parsed here — they are captured verbatim as ExprSlot spans
 // for the expression grammar (./expression), read through expression/bridge.ts.
 
@@ -84,8 +85,19 @@ import {
   WriteTarget,
 } from './ast';
 import { spellName } from './ast';
+import { originalSlot } from '../expression/bridge';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
-import { callStyleIfMessage, scanBacktickName, scanIdent, scanName } from './scan';
+import {
+  callStyleIfMessage,
+  CLOSER,
+  opensHop,
+  scanBacktickName,
+  scanIdent,
+  scanName,
+  skipOpaque,
+  skipString,
+  type Opaque,
+} from './scan';
 import { KEYWORDS } from '@listen-fire/shared/expression/formula';
 
 /** The two spellings of a movement declaration — `function` is a pure parser
@@ -161,8 +173,25 @@ export function parseNestedCall(
   at: { start: number; end: number },
   languageVersion: LanguageVersion,
 ): RValue {
-  return new Parser(slot.raw.slice(0, at.end), languageVersion, slot.span.start).parseNestedCallValue(at.start);
+  // Read once per place in the program, as a call on its own line is: the
+  // checker records what it settles on the call's statements (a spread's copy
+  // plan, a walk's), and the engine runs those same statements.
+  const origin = originalSlot(slot);
+  let read = nestedCallReads.get(origin);
+  if (read === undefined) {
+    read = new Map();
+    nestedCallReads.set(origin, read);
+  }
+  const key = `${languageVersion}@${at.start}-${at.end}`;
+  let value = read.get(key);
+  if (value === undefined) {
+    value = new Parser(slot.raw.slice(0, at.end), languageVersion, slot.span.start).parseNestedCallValue(at.start);
+    read.set(key, value);
+  }
+  return value;
 }
+
+const nestedCallReads = new WeakMap<ExprSlot, Map<string, RValue>>();
 
 /**
  * The bare name a WHERE-less single hop lands on (`-[:company]->`; an alias is
@@ -178,8 +207,6 @@ function unpinnedHopName(hopRaw: string): string | undefined {
   const name = match[1];
   return name.startsWith('`') ? name.slice(1, -1) : name;
 }
-
-const CLOSER: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
 
 // `?:` is EXCLUSIVELY the per-field set-if-empty write marker (parsed only in a
 // write body's operator ladder). Anywhere else — an expression slot or a bare
@@ -680,27 +707,16 @@ class Parser {
 
   /** Consumes a complete double-quoted string (may span newlines; `${…}` is a balanced region). */
   private scanString(): void {
-    const start = this.pos;
-    this.pos++; // opening quote
-    while (!this.eof()) {
-      const c = this.peekCh();
-      if (c === '\\') {
-        this.pos += 2;
-        continue;
-      }
-      if (c === '"') {
-        this.pos++;
-        return;
-      }
-      if (c === '$' && this.peekCh(1) === '{') {
-        this.pos += 2;
-        this.scanBalanced({ stops: '}', context: 'the ${…} interpolation' });
-        this.pos++; // closing '}'
-        continue;
-      }
-      this.pos++;
-    }
-    this.error('Unterminated string — expected a closing \'"\'', start);
+    const end = skipString(this.src, this.pos);
+    if (end === undefined) this.unterminated({ kind: 'unterminated', what: 'string', start: this.pos });
+    this.pos = end;
+  }
+
+  private unterminated(opaque: Extract<Opaque, { kind: 'unterminated' }>): never {
+    const what = opaque.what === 'name' ? 'backtick-quoted name' : 'string';
+    const quote = opaque.what === 'name' ? '`' : this.src[opaque.start];
+    const shown = quote === "'" ? `"'"` : `'${quote}'`;
+    this.error(`Unterminated ${what} — expected a closing ${shown}`, opaque.start);
   }
 
   private readQuotedString(context: string): { text: string; span: Span } {
@@ -734,7 +750,7 @@ class Parser {
    */
   private scanBalanced(options: ScanOptions): { stop: string; contentEnd: number } {
     const comments = options.comments !== false;
-    const brackets: Array<{ ch: string; offset: number }> = [];
+    const brackets: Array<{ ch: string; offset: number; hop: boolean }> = [];
     // Open value-level `IF … END` at top bracket level: while inside one, a
     // newline must not terminate the slot (an IF may span lines). `ELSE IF` is
     // the chain form — one END closes the whole chain — so it does NOT open a
@@ -748,25 +764,17 @@ class Parser {
       if (brackets.length === 0 && ifDepth === 0 && options.stops.includes(c)) {
         return { stop: c, contentEnd };
       }
-      if (c === '#' && comments && brackets.length === 0) {
-        while (!this.eof() && this.peekCh() !== '\n') this.pos++;
-        prevWord = '';
-        continue;
-      }
-      if (c === '"') {
-        this.scanString();
-        contentEnd = this.pos;
-        prevWord = '';
-        continue;
-      }
-      if (c === '`') {
-        this.readBacktickName();
-        contentEnd = this.pos;
+      const inHop = brackets.length === 0 ? !comments : brackets[brackets.length - 1].hop;
+      const opaque = skipOpaque(this.src, this.pos, { inHop });
+      if (opaque !== undefined) {
+        if (opaque.kind === 'unterminated') this.unterminated(opaque);
+        this.pos = opaque.end;
+        if (opaque.kind !== 'comment') contentEnd = this.pos;
         prevWord = '';
         continue;
       }
       if (c === '(' || c === '[' || c === '{') {
-        brackets.push({ ch: c, offset: this.pos });
+        brackets.push({ ch: c, offset: this.pos, hop: opensHop(this.src, this.pos) });
         this.pos++;
         contentEnd = this.pos;
         prevWord = '';
@@ -1460,40 +1468,32 @@ class Parser {
    */
   private scanExpressionRootEnd(): number | undefined {
     const src = this.src;
-    let depth = 0;
+    const hops: boolean[] = [];
     let i = this.pos;
     while (i < src.length) {
       const c = src[i];
       // A head is written on one line, and a comment ends the line's code.
-      if (c === '\n' || (c === '#' && depth === 0)) return undefined;
+      if (c === '\n') return undefined;
       // A top-level separator ends whatever is being written and starts the
       // next one — a node literal's entries, a tuple's paths, an inline
       // statement — so nothing across it is one expression.
-      if (depth === 0 && (c === ',' || c === ';')) return undefined;
-      if (c === '"') {
-        i++;
-        while (i < src.length && src[i] !== '"') i += src[i] === '\\' ? 2 : 1;
-        if (i >= src.length) return undefined;
-        i++;
+      if (hops.length === 0 && (c === ',' || c === ';')) return undefined;
+      const opaque = skipOpaque(src, i, { inHop: hops[hops.length - 1] ?? false });
+      if (opaque !== undefined) {
+        if (opaque.kind !== 'string' && opaque.kind !== 'name') return undefined;
+        i = opaque.end;
         continue;
       }
-      if (c === '`') {
-        const quoted = scanBacktickName(src, i);
-        if (quoted === null) return undefined;
-        i = quoted.end + 1;
-        continue;
-      }
-      if (depth === 0 && c === '-' && src[i + 1] === '[') {
+      if (hops.length === 0 && c === '-' && src[i + 1] === '[') {
         const end = this.pos + src.slice(this.pos, i).trimEnd().length;
         return this.isExpressionRoot(end) ? end : undefined;
       }
-      if (c === '(' || c === '[' || c === '{') depth++;
+      if (c in CLOSER) hops.push(opensHop(src, i));
       else if (c === ')' || c === ']' || c === '}') {
         // A closer with nothing open belongs to whoever opened it (an
         // `await FIRST(…)`, a call's argument list) — the expression stops
         // short of it, and there is no hop before it, so this is not a head.
-        if (depth === 0) return undefined;
-        depth--;
+        if (hops.pop() === undefined) return undefined;
       }
       i++;
     }
