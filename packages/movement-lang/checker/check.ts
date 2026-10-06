@@ -113,6 +113,8 @@ import {
   TypeRef,
   WriteExpression,
   WriteSpread,
+  type SpreadPath,
+  spreadSourceText,
   type ParamTypeRef,
   type ValueTypeMember,
 } from '../parser/ast';
@@ -697,6 +699,12 @@ export const DiagnosticCodes = {
    *  position — a meta/extract/block node, or an unknown name, has no single
    *  record to update in place. */
   WRITE_POSITION_NOT_RECORD: 'MOV_WRITE_POSITION_NOT_RECORD',
+  /** A name reached a rule that needs a record and its binding says nothing
+   *  about what it holds — on either plane. Every way of binding a name types
+   *  it, so this is the checker failing to, and it is said rather than
+   *  accepted: an untyped binding would otherwise reach the run, which is
+   *  where the disagreement would show. */
+  UNTYPED_BINDING: 'MOV_INTERNAL_UNTYPED_BINDING',
   /** The bound position's system can't update records in place — its adapter
    *  doesn't implement `updateRecord` (e.g. an append-only Slack/Drive). */
   WRITE_POSITION_NO_UPDATE: 'MOV_WRITE_POSITION_NO_UPDATE',
@@ -3266,6 +3274,49 @@ class Checker {
     // a surface type — the symbol slot it rides in holds any value type.
     const declared = resolution.symbol.fieldType;
     return isEnumType(declared) ? declared : undefined;
+  }
+
+  /**
+   * The record a name is bound to, for a rule that needs one (a position
+   * write's target, a linked write's parent, a `bind`, a `refresh`). One
+   * reading of every binding path — an alias, a pick, a parameter, a map
+   * field, a write handle — through `positionTypeOf`, so no rule asks where
+   * the name came from:
+   *   - `record` — its record type;
+   *   - `value` — it holds a value, not a record (the rule refuses it, by its
+   *     own code);
+   *   - `undescribed` — a record whose system describes nothing (a schema-less
+   *     graph): unknown, never an error;
+   *   - undefined — the binding carries no type at all, reported here as the
+   *     internal error it is.
+   */
+  private recordOfName(
+    symbol: ScopeSymbol,
+    name: string,
+    span: Span,
+  ):
+    | { kind: 'record'; type: PositionTypeRef }
+    | { kind: 'value'; what: string }
+    | { kind: 'undescribed' }
+    | undefined {
+    const type = this.symbolPositionType(symbol);
+    if (type !== undefined) return { kind: 'record', type };
+    if (symbol.fieldType !== undefined) {
+      return holdsRecords(symbol.fieldType)
+        ? { kind: 'undescribed' }
+        : { kind: 'value', what: describeFieldType(symbol.fieldType) };
+    }
+    if (symbol.kind !== 'binding' || symbol.bindingPlane === 'node' || symbol.plural === true) {
+      return symbol.kind === 'alias' || symbol.kind === 'param' || symbol.kind === 'binding'
+        ? { kind: 'undescribed' }
+        : { kind: 'value', what: describeKind[symbol.kind] };
+    }
+    this.report(
+      DiagnosticCodes.UNTYPED_BINDING,
+      `internal: '${name}' is bound, but its binding says nothing about what it holds, so this can't be checked — please report this program`,
+      span,
+    );
+    return undefined;
   }
 
   /** A slot's value type, read without reporting — for a rule asked of a slot
@@ -6025,8 +6076,10 @@ class Checker {
    * `union`). Refusing (MOV_REFRESH_UNSTABLE): the EVENT payload (a movement
    * `param` — inline event data with no stored record to re-read) and an
    * EXTRACTED node (`extract` — synthesized, not stored). A graph root / receipt
-   * / block-meta is not a record either. Untyped heads stay silent (the honesty
-   * rule). The since-deleted case is a RUN error, not an author-time one (F22).
+   * / block-meta is not a record either, nor is a value. A record whose system
+   * describes nothing stays silent (the honesty rule); a binding that says
+   * nothing at all is an internal error (`recordOfName`). The since-deleted
+   * case is a RUN error, not an author-time one (F22).
    */
   private checkRefresh(statement: RefreshStatement, scope: Scope): void {
     this.recordNode({
@@ -6054,8 +6107,18 @@ class Checker {
       );
       return;
     }
-    const posType = this.symbolPositionType(symbol);
-    if (posType === undefined) return; // untyped — stay silent
+    const record = this.recordOfName(symbol, statement.name, statement.nameSpan);
+    if (record?.kind === 'value') {
+      this.report(
+        DiagnosticCodes.REFRESH_UNSTABLE,
+        `'${statement.name}' is ${record.what} — 'refresh' re-fetches a stored record by its id. Refresh a write handle or a traversed record instead.`,
+        statement.nameSpan,
+      );
+      return;
+    }
+    // A record whose system describes nothing: unknown never errors.
+    if (record?.kind !== 'record') return;
+    const posType = record.type;
     if (posType.kind === 'handle' || posType.kind === 'position' || posType.kind === 'union') {
       return; // a re-fetchable record
     }
@@ -6976,10 +7039,18 @@ class Checker {
       this.reportResolutionFailure(bind.name, bind.span, resolution);
       return;
     }
-    const posType = this.symbolPositionType(resolution.symbol);
-    // Schema-less / untyped binding: unknown never errors (consistent with
-    // position writes) — stay silent.
-    if (posType === undefined) return;
+    const record = this.recordOfName(resolution.symbol, bind.name, bind.span);
+    if (record?.kind === 'value') {
+      this.report(
+        DiagnosticCodes.WRITE_BIND_NOT_RECORD,
+        `'${bind.name}' is ${record.what} — 'bind' names the counterpart RECORD this write corresponds to, so it needs a record position: a traversal alias, a prior write result, or the event position`,
+        bind.span,
+      );
+      return;
+    }
+    // A record whose system describes nothing: unknown never errors.
+    if (record?.kind !== 'record') return;
+    const posType = record.type;
     if (posType.kind !== 'position' && posType.kind !== 'handle' && posType.kind !== 'union') {
       this.report(
         DiagnosticCodes.WRITE_BIND_NOT_RECORD,
@@ -7006,10 +7077,19 @@ class Checker {
       this.reportResolutionFailure(target.alias, target.span, resolution);
       return { description: `'${target.alias}'` };
     }
-    const posType = this.symbolPositionType(resolution.symbol);
-    // Schema-less / untyped binding: unknown never errors — stay silent and
-    // type-check the body against nothing.
-    if (posType === undefined) return { description: `'${target.alias}'` };
+    const record = this.recordOfName(resolution.symbol, target.alias, target.span);
+    if (record?.kind === 'value') {
+      this.report(
+        DiagnosticCodes.WRITE_POSITION_NOT_RECORD,
+        `'${target.alias}' is ${record.what} — 'write ${target.alias} { … }' updates an already-identified record in place, so it needs a record: a traversal alias, a prior write result, or a record picked from either`,
+        target.span,
+      );
+      return { description: `'${target.alias}'` };
+    }
+    // A record whose system describes nothing: unknown never errors — the
+    // body is checked against nothing.
+    if (record?.kind !== 'record') return { description: `'${target.alias}'` };
+    const posType = record.type;
     // A record the run holds on one of its own edges: the run's graph is its
     // system, and that system updates by id. What it may set is what it
     // carries — the landing type IS the write shape, as for the write that
@@ -7539,26 +7619,53 @@ class Checker {
    * way). A system's record is refused: its field list is the system's to say.
    */
   private spreadFields(spread: WriteSpread, scope: Scope): readonly string[] | undefined {
-    const resolution = scope.resolve(spread.source);
-    if (resolution.kind !== 'found') {
-      this.reportResolutionFailure(spread.source, spread.span, resolution);
-      return undefined;
-    }
+    const symbol = this.spreadSourceSymbol(spread, scope);
+    if (symbol === undefined) return undefined;
     // Whichever plane the record was bound on — a traversal alias, a pick, a
-    // collection op's parameter, an extraction's answer. A block's whole
-    // return is many records, not one to copy.
-    const type = resolution.symbol.plural === true ? undefined : this.symbolPositionType(resolution.symbol);
+    // collection op's parameter, an extraction's answer, a map's key. A
+    // block's whole return is many records, not one to copy.
+    const type = symbol.plural === true ? undefined : this.symbolPositionType(symbol);
     const fields = type !== undefined ? knownFieldsOf(type) : undefined;
     if (fields !== undefined) {
       spread.fields = fields;
       return fields;
     }
+    // A binding that says nothing at all is the internal error, not this rule.
+    if (type === undefined && symbol.plural !== true && this.recordOfName(symbol, spread.source, spread.span) === undefined) {
+      return undefined;
+    }
     this.report(
       DiagnosticCodes.WRITE_SPREAD_SOURCE,
-      `'...${spread.source}' writes every field of a record whose fields this program spells out — an extracted record, a declared structure, or a 'node { … }' — and '${spread.source}' is ${resolution.symbol.plural === true ? "a block's returned records, several of them" : type !== undefined ? describePosition(type) : describeKind[resolution.symbol.kind]}${type !== undefined && instanceOfType(type) !== undefined ? ", whose fields are the system's to say, not this program's" : ''}. Write the fields it should carry one per line ('name: ${spread.source}.name')`,
+      `'...${spread.source}' writes every field of a record whose fields this program spells out — an extracted record, a declared structure, or a 'node { … }' — and '${spread.source}' is ${symbol.plural === true ? "a block's returned records, several of them" : type !== undefined ? describePosition(type) : describeKind[symbol.kind]}${type !== undefined && instanceOfType(type) !== undefined ? ", whose fields are the system's to say, not this program's" : ''}. Write the fields it should carry one per line ('name: ${spread.source}.name')`,
       spread.span,
     );
     return undefined;
+  }
+
+  /**
+   * The binding a spread copies from: its name's, or — for `...m.k` — the
+   * binding `x = m.k` would make, so a record held under a key spreads as
+   * any record does. Undefined (reported) when the name is not in scope.
+   */
+  private spreadSourceSymbol(
+    spread: { source: string; path?: SpreadPath; span: Span },
+    scope: Scope,
+  ): ScopeSymbol | undefined {
+    const root = spread.path?.root ?? spread.source;
+    const resolution = scope.resolve(root);
+    if (resolution.kind !== 'found') {
+      this.reportResolutionFailure(root, spread.span, resolution);
+      return undefined;
+    }
+    if (spread.path === undefined) return resolution.symbol;
+    const { valueType } = this.checkExprSlot({ raw: spreadSourceText(spread), span: spread.span }, scope);
+    return {
+      name: spread.source,
+      kind: 'binding',
+      span: spread.span,
+      bindingPlane: 'scalar',
+      ...(valueType !== undefined ? { fieldType: valueType } : {}),
+    };
   }
 
   /**
@@ -8218,13 +8325,19 @@ class Checker {
     };
   } {
     const head = this.checkPathHead(input.path, scope);
+    const rootName = pathRootName(input.path);
+    if (head.rootType === undefined && rootName !== undefined) {
+      // A value root is the head's own refusal; a binding that says nothing
+      // at all is the internal error `recordOfName` reports.
+      const resolution = scope.resolve(rootName);
+      if (resolution.kind === 'found') this.recordOfName(resolution.symbol, rootName, input.span);
+    }
     if (!head.steps || head.steps.length === 0 || head.rootType === undefined) return {};
     // A write/link needs a record that IS there. Traversing INTO a maybe-empty
     // node is gate-discharged (the block runs zero times), but a write is not a
     // block: nothing about the statement says it might not happen, and the
     // engine has no record to parent it to. This is the require-present site for
     // the node plane, mirroring a plain write FIELD on the scalar plane.
-    const rootName = pathRootName(input.path);
     if (head.rootType.kind === 'maybeEmpty' && rootName !== undefined) {
       this.report(
         DiagnosticCodes.ABSENT_REQUIRED,
@@ -9948,7 +10061,7 @@ class Checker {
       earlier: ReadonlySet<string>;
     },
   ): SpreadKeys | undefined {
-    const symbol = this.resolveName(entry.source, entry.span, scope);
+    const symbol = this.spreadSourceSymbol(entry, scope);
     if (symbol === undefined) return undefined;
     const record = spreadRecordOf(symbol);
     if (record !== undefined) {

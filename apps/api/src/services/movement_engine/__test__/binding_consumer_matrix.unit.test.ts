@@ -154,81 +154,12 @@ interface TriageEntry {
 }
 
 const TODO = {
-  extract_in_place: "TODO: an extracted record is on no system's edge; decide whether `write x { … }` on one is meaningful (today: refused as not a record)",
-  plugin_untyped: "TODO: plugin arguments are untyped names, so a record reaches fetch_url's `url` and the run goes on; decide whether the checker refuses a record there",
   graph_spread_children: "TODO: `graph<Entry> { ...e }` copies e's nested child records, while `write … { ...e }` copies fields only; decide what a spread carries",
   handle_serialise: "TODO: a created system record serialises with no `child` key, where a record read back shows `child: []`; decide whether an untraversed edge appears",
-  block_returns_not_collection: "TODO: `xs = W-[e:…]-> { return e }` is a collection to COUNT/FIRST/AT/EXISTS/a block head but 'one thing, not several' to MAP/FILTER/REDUCE/GROUPBY/KEYBY; one of the two is wrong",
-  map_field_record: "TODO: a record held in a map field (`m.k`) cannot be read (`m.k.name` is an unknown name), written (`write m.k`) or spread (`...m.k`); decide whether a map field is a place a record can be used through",
-  picked_spread_source: "TODO: the rule's own message lists an extracted record as a legal spread source, yet extractOne's answer, a FIRST/ONLY/AT pick (of anything), a list-literal pick and a created system record are all refused, while FIRST of a bare local traversal is accepted; decide what a picked record is",
-  narrowing_first_of_walk: "TODO: under this version `if x == null { return null }` does not narrow `x = FIRST(<bare traversal>)`, so the read stays maybe-absent; every other pick narrows",
+  write_through_map_field: "TODO: rules disagree — a record held in a map field reads, spreads and passes like any record, but the grammar's own rule is that a write starts from a NAMED record ('bind it first: parent = m.k'), and `write m.k { … }` is the retired type-path target; decide whether a write may start from a member path",
 };
 
 const TRIAGE: TriageEntry[] = [
-  {
-    reason: TODO.extract_in_place,
-    observed: 'refused:MOV_WRITE_POSITION_NOT_RECORD',
-    cells: [
-      "extractOne(…) answer × write x {…}",
-      "FIRST of extract(…) answer × write x {…}",
-      "ONLY of extract(…) answer × write x {…}",
-      "AT of extract(…) answer × write x {…}",
-      "FIRST of { entries: extract(…) }.entries × write x {…}",
-      "ONLY of { entries: extract(…) }.entries × write x {…}",
-      "AT of { entries: extract(…) }.entries × write x {…}",
-      "FIRST of MAP-returned { entries: extract(…) }.entries × write x {…}",
-      "ONLY of MAP-returned { entries: extract(…) }.entries × write x {…}",
-      "AT of MAP-returned { entries: extract(…) }.entries × write x {…}",
-    ],
-  },
-  {
-    reason: TODO.plugin_untyped,
-    observed: 'wrong',
-    cells: [
-      "local: FIRST([e]) × plugin(arg: x)",
-      "local: AT([e], 0) × plugin(arg: x)",
-      "local: { k: e }.k × plugin(arg: x)",
-      "FIRST of local: bare traversal × plugin(arg: x)",
-      "ONLY of local: bare traversal × plugin(arg: x)",
-      "AT of local: bare traversal × plugin(arg: x)",
-      "FIRST of local: name = traversal × plugin(arg: x)",
-      "ONLY of local: name = traversal × plugin(arg: x)",
-      "AT of local: name = traversal × plugin(arg: x)",
-      "FIRST of local: block's returned records × plugin(arg: x)",
-      "AT of local: block's returned records × plugin(arg: x)",
-      "FIRST of local: FILTER(…) result × plugin(arg: x)",
-      "ONLY of local: FILTER(…) result × plugin(arg: x)",
-      "AT of local: FILTER(…) result × plugin(arg: x)",
-      "FIRST of local: { k: list }.k × plugin(arg: x)",
-      "ONLY of local: { k: list }.k × plugin(arg: x)",
-      "AT of local: { k: list }.k × plugin(arg: x)",
-      "ONLY of system: bare traversal × plugin(arg: x)",
-      "AT of system: bare traversal × plugin(arg: x)",
-      "FIRST of system: name = traversal × plugin(arg: x)",
-      "ONLY of system: name = traversal × plugin(arg: x)",
-      "AT of system: name = traversal × plugin(arg: x)",
-      "FIRST of system: block's returned records × plugin(arg: x)",
-      "AT of system: block's returned records × plugin(arg: x)",
-      "FIRST of system: FILTER(…) result × plugin(arg: x)",
-      "ONLY of system: FILTER(…) result × plugin(arg: x)",
-      "AT of system: FILTER(…) result × plugin(arg: x)",
-      "FIRST of system: { k: list }.k × plugin(arg: x)",
-      "ONLY of system: { k: list }.k × plugin(arg: x)",
-      "AT of system: { k: list }.k × plugin(arg: x)",
-      "FIRST of extract(…) answer × plugin(arg: x)",
-      "ONLY of extract(…) answer × plugin(arg: x)",
-      "AT of extract(…) answer × plugin(arg: x)",
-      "FIRST of { entries: extract(…) }.entries × plugin(arg: x)",
-      "ONLY of { entries: extract(…) }.entries × plugin(arg: x)",
-      "AT of { entries: extract(…) }.entries × plugin(arg: x)",
-      "FIRST of MAP-returned { entries: extract(…) }.entries × plugin(arg: x)",
-      "ONLY of MAP-returned { entries: extract(…) }.entries × plugin(arg: x)",
-      "AT of MAP-returned { entries: extract(…) }.entries × plugin(arg: x)",
-      "FIRST of graph<Holder> nested walk × plugin(arg: x)",
-      "ONLY of graph<Holder> nested walk × plugin(arg: x)",
-      "AT of graph<Holder> nested walk × plugin(arg: x)",
-    ],
-  },
   {
     reason: TODO.graph_spread_children,
     observed: 'wrong',
@@ -245,171 +176,11 @@ const TRIAGE: TriageEntry[] = [
     ],
   },
   {
-    reason: TODO.block_returns_not_collection,
-    observed: 'refused:MOV_COLLECTION_OP_NOT_A_COLLECTION',
-    cells: [
-      "ONLY of local: block's returned records × x.f",
-      "ONLY of local: block's returned records × \"${x.f}\"",
-      "ONLY of local: block's returned records × TEXT.PAIRS(x)",
-      "ONLY of local: block's returned records × TEXT.SERIALISE(x)",
-      "ONLY of local: block's returned records × write x {…}",
-      "ONLY of local: block's returned records × write x-[:child]->",
-      "ONLY of local: block's returned records × x-[c:child]-> {…}",
-      "ONLY of local: block's returned records × movement(e: <Entry>)",
-      "ONLY of system: block's returned records × x.f",
-      "ONLY of system: block's returned records × \"${x.f}\"",
-      "ONLY of system: block's returned records × TEXT.PAIRS(x)",
-      "ONLY of system: block's returned records × TEXT.SERIALISE(x)",
-      "ONLY of system: block's returned records × write x {…}",
-      "ONLY of system: block's returned records × write x-[:child]->",
-      "ONLY of system: block's returned records × x-[c:child]-> {…}",
-      "ONLY of system: block's returned records × movement(e: <Entry>)",
-      "local: block's returned records × MAP",
-      "local: block's returned records × FILTER",
-      "local: block's returned records × REDUCE",
-      "local: block's returned records × GROUPBY",
-      "local: block's returned records × KEYBY",
-      "system: block's returned records × MAP",
-      "system: block's returned records × FILTER",
-      "system: block's returned records × REDUCE",
-      "system: block's returned records × GROUPBY",
-      "system: block's returned records × KEYBY",
-    ],
-  },
-  {
-    reason: TODO.block_returns_not_collection,
-    observed: 'refused:MOV_COLLECTION_OP_NOT_A_COLLECTION+MOV_GRAPH_SPREAD_NOT_MAP',
-    cells: [
-      "ONLY of local: block's returned records × graph<Entry> { ...x }",
-      "ONLY of system: block's returned records × graph<Entry> { ...x }",
-    ],
-  },
-  {
-    reason: TODO.block_returns_not_collection,
-    observed: 'refused:MOV_COLLECTION_OP_NOT_A_COLLECTION+MOV_JSON_OPAQUE',
-    cells: [
-      "ONLY of local: block's returned records × { ...x }",
-      "ONLY of system: block's returned records × { ...x }",
-    ],
-  },
-  {
-    reason: TODO.block_returns_not_collection,
-    observed: 'refused:MOV_COLLECTION_OP_NOT_A_COLLECTION+MOV_WRITE_SPREAD_SOURCE',
-    cells: [
-      "ONLY of local: block's returned records × write { ...x }",
-      "ONLY of local: block's returned records × write { ?...x }",
-      "ONLY of system: block's returned records × write { ...x }",
-      "ONLY of system: block's returned records × write { ?...x }",
-    ],
-  },
-  {
-    reason: TODO.map_field_record,
-    observed: 'refused:MOV_NAME_UNRESOLVED',
-    cells: [
-      "local: { k: e }.k × x.f",
-      "local: { k: e }.k × \"${x.f}\"",
-    ],
-  },
-  {
-    reason: TODO.map_field_record,
+    reason: TODO.write_through_map_field,
     observed: 'refused:PARSE',
     cells: [
-      "local: { k: e }.k × graph<Entry> { ...x }",
       "local: { k: e }.k × write x {…}",
       "local: { k: e }.k × write x-[:child]->",
-      "local: { k: e }.k × write { ...x }",
-      "local: { k: e }.k × write { ?...x }",
-    ],
-  },
-  {
-    reason: TODO.picked_spread_source,
-    versions: [2],
-    observed: 'refused:MOV_WRITE_SPREAD_SOURCE',
-    cells: [
-      "FIRST of local: bare traversal × write { ...x }",
-      "FIRST of local: bare traversal × write { ?...x }",
-    ],
-  },
-  {
-    reason: TODO.picked_spread_source,
-    observed: 'refused:MOV_WRITE_SPREAD_SOURCE',
-    cells: [
-      "system: write handle × write { ...x }",
-      "system: write handle × write { ?...x }",
-      "local: FIRST([e]) × write { ...x }",
-      "local: FIRST([e]) × write { ?...x }",
-      "local: AT([e], 0) × write { ...x }",
-      "local: AT([e], 0) × write { ?...x }",
-      "extractOne(…) answer × write { ...x }",
-      "extractOne(…) answer × write { ?...x }",
-      "ONLY of local: bare traversal × write { ...x }",
-      "ONLY of local: bare traversal × write { ?...x }",
-      "AT of local: bare traversal × write { ...x }",
-      "AT of local: bare traversal × write { ?...x }",
-      "FIRST of local: name = traversal × write { ...x }",
-      "FIRST of local: name = traversal × write { ?...x }",
-      "ONLY of local: name = traversal × write { ...x }",
-      "ONLY of local: name = traversal × write { ?...x }",
-      "AT of local: name = traversal × write { ...x }",
-      "AT of local: name = traversal × write { ?...x }",
-      "FIRST of local: block's returned records × write { ...x }",
-      "FIRST of local: block's returned records × write { ?...x }",
-      "AT of local: block's returned records × write { ...x }",
-      "AT of local: block's returned records × write { ?...x }",
-      "FIRST of local: FILTER(…) result × write { ...x }",
-      "FIRST of local: FILTER(…) result × write { ?...x }",
-      "ONLY of local: FILTER(…) result × write { ...x }",
-      "ONLY of local: FILTER(…) result × write { ?...x }",
-      "AT of local: FILTER(…) result × write { ...x }",
-      "AT of local: FILTER(…) result × write { ?...x }",
-      "FIRST of local: { k: list }.k × write { ...x }",
-      "FIRST of local: { k: list }.k × write { ?...x }",
-      "ONLY of local: { k: list }.k × write { ...x }",
-      "ONLY of local: { k: list }.k × write { ?...x }",
-      "AT of local: { k: list }.k × write { ...x }",
-      "AT of local: { k: list }.k × write { ?...x }",
-      "FIRST of extract(…) answer × write { ...x }",
-      "FIRST of extract(…) answer × write { ?...x }",
-      "ONLY of extract(…) answer × write { ...x }",
-      "ONLY of extract(…) answer × write { ?...x }",
-      "AT of extract(…) answer × write { ...x }",
-      "AT of extract(…) answer × write { ?...x }",
-      "FIRST of { entries: extract(…) }.entries × write { ...x }",
-      "FIRST of { entries: extract(…) }.entries × write { ?...x }",
-      "ONLY of { entries: extract(…) }.entries × write { ...x }",
-      "ONLY of { entries: extract(…) }.entries × write { ?...x }",
-      "AT of { entries: extract(…) }.entries × write { ...x }",
-      "AT of { entries: extract(…) }.entries × write { ?...x }",
-      "FIRST of MAP-returned { entries: extract(…) }.entries × write { ...x }",
-      "FIRST of MAP-returned { entries: extract(…) }.entries × write { ?...x }",
-      "ONLY of MAP-returned { entries: extract(…) }.entries × write { ...x }",
-      "ONLY of MAP-returned { entries: extract(…) }.entries × write { ?...x }",
-      "AT of MAP-returned { entries: extract(…) }.entries × write { ...x }",
-      "AT of MAP-returned { entries: extract(…) }.entries × write { ?...x }",
-      "ONLY of graph<Holder> nested walk × write { ...x }",
-      "ONLY of graph<Holder> nested walk × write { ?...x }",
-      "AT of graph<Holder> nested walk × write { ...x }",
-      "AT of graph<Holder> nested walk × write { ?...x }",
-    ],
-  },
-  {
-    reason: TODO.narrowing_first_of_walk,
-    versions: [1, 2],
-    observed: 'refused:MOV_ABSENT_REQUIRED',
-    cells: [
-      "FIRST of local: bare traversal × x.f",
-      "FIRST of local: bare traversal × write x-[:child]->",
-      "FIRST of system: bare traversal × x.f",
-      "FIRST of system: bare traversal × write x-[:child]->",
-    ],
-  },
-  {
-    reason: TODO.narrowing_first_of_walk,
-    versions: [1, 2],
-    observed: 'refused:MOV_WRITE_POSITION_NOT_RECORD',
-    cells: [
-      "FIRST of local: bare traversal × write x {…}",
-      "FIRST of system: bare traversal × write x {…}",
     ],
   },
 ];
@@ -654,8 +425,7 @@ function verdictOf(cell: Cell, outcome: Outcome): Verdict {
     case 'threw':
       return 'FAIL';
     case 'ran':
-      if (cell.expect.kind === 'value' && JSON.stringify(outcome.rows) === JSON.stringify(cell.expect.observed)) return 'ok';
-      return cell.expect.kind === 'triage' ? 'ok' : 'wrong';
+      return cell.expect.kind === 'value' && JSON.stringify(outcome.rows) === JSON.stringify(cell.expect.observed) ? 'ok' : 'wrong';
   }
 }
 
@@ -678,8 +448,6 @@ function expectedLabel(cell: Cell): string {
       return 'ok';
     case 'refused':
       return `refused:${cell.expect.code ?? 'any'}`;
-    case 'triage':
-      return 'triage';
   }
 }
 
@@ -711,7 +479,7 @@ describe(`binding × consumer matrix under language version ${VERSION}`, () => {
       const outcome = await runCell(cell);
       const verdict = verdictOf(cell, outcome);
       const triaged = triageFor(id);
-      report.push({ cell: id, path: cell.path.id, consumer: cell.consumer.id, expected: expectedLabel(cell), verdict, detail: outcome.kind === 'refused' ? `${describeOutcome(outcome)} — ${outcome.message.slice(0, 300)}` : describeOutcome(outcome), triage: triaged !== undefined || cell.expect.kind === 'triage' });
+      report.push({ cell: id, path: cell.path.id, consumer: cell.consumer.id, expected: expectedLabel(cell), verdict, detail: outcome.kind === 'refused' ? `${describeOutcome(outcome)} — ${outcome.message.slice(0, 300)}` : describeOutcome(outcome), triage: triaged !== undefined });
 
       if (triaged !== undefined) {
         // Pinned to today's outcome until someone decides the right one.
@@ -719,8 +487,6 @@ describe(`binding × consumer matrix under language version ${VERSION}`, () => {
         return;
       }
       switch (cell.expect.kind) {
-        case 'triage':
-          throw new Error(`${id}: no expectation and no TRIAGE entry — today it is ${verdict} (${describeOutcome(outcome)})`);
         case 'refused':
           expect({ cell: id, outcome: describeOutcome(outcome) }).toEqual({
             cell: id,

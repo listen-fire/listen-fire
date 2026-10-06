@@ -412,9 +412,26 @@ export interface FieldEntry {
  * fields ARE known: the checker resolves them from `e`'s type and records them
  * on the spread (`fields`), and the engine expands from that record.
  */
+/**
+ * `...m.k` — a spread whose record is held under a key of a map: the bound
+ * name, then the keys read off it, in order. Present only for such a path;
+ * `source` then spells the path as written.
+ */
+export interface SpreadPath {
+  root: string;
+  members: string[];
+}
+
+/** A spread's source as source text: the path as written, or the name. */
+export function spreadSourceText(spread: { source: string; path?: SpreadPath }): string {
+  return spread.path !== undefined ? spread.source : spellName(spread.source);
+}
+
 export interface WriteSpread {
-  /** The spread record's bound name. */
+  /** The spread record's bound name — or, for a member path, the path as
+   *  written (`path` then says what it reads). */
   source: string;
+  path?: SpreadPath;
   /** `?...` ⇒ `'fill'`; absent ⇒ a plain assignment. */
   semantics?: 'fill';
   /**
@@ -451,7 +468,7 @@ export function expandWriteSpreads(
       written.add(name);
       lines.push({
         name,
-        value: { raw: `${spellName(spread.source)}.${spellName(name)}`, span: spread.span },
+        value: { raw: `${spreadSourceText(spread)}.${spellName(name)}`, span: spread.span },
         ...(spread.semantics !== undefined ? { semantics: spread.semantics } : {}),
         spread: spread.source,
         span: spread.span,
@@ -613,8 +630,10 @@ export type NodeEntry =
  * nothing.
  */
 export interface MapSpread {
-  /** The map's (or the record's) bound name. */
+  /** The map's (or the record's) bound name — or, for a member path, the
+   *  path as written (`path` then says what it reads). */
   source: string;
+  path?: SpreadPath;
   /** How many entries were written before this spread — where among them it stands. */
   after: number;
   /** A record spread: what the snapshot copies, as the checker resolved it.

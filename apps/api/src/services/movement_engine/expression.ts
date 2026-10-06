@@ -4044,8 +4044,6 @@ export function recordFields(binding: Binding): Record<string, unknown> {
     case 'callback':
       return { id: readCallbackField(binding, 'id'), url: readCallbackField(binding, 'url') };
     case 'value': {
-      const held = bindingOf(binding.value);
-      if (held !== undefined) return recordFields(held);
       if (isDictValue(binding.value)) return { ...binding.value };
       throw unsupported(`reading every field of ${describeHeldValue(binding.value)}`);
     }
@@ -4096,11 +4094,8 @@ function readBindingField(
     case 'extractRoot':
       return readEmissionField(binding.emission, field);
     case 'value': {
+      // One record is never held here — it binds as itself (`bindValue`).
       const value = binding.value;
-      // A RECORD held on the value plane (`deck = FIRST(pages)`) reads as the
-      // record it is — the dot-plane twin of a block head walking from one.
-      const held = bindingOf(value);
-      if (held !== undefined) return readBindingField(held, field, name);
       const projected =
         value !== null && typeof value === 'object' && !Array.isArray(value)
           ? ((value as Record<string, unknown>)[field] ?? null)

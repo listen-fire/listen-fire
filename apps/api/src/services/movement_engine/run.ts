@@ -1282,6 +1282,21 @@ function graphValueMisfit(
 }
 
 /**
+ * The binding a spread copies from: its name's, or — for `...m.k` — what the
+ * map holds under the key, bound as `x = m.k` would bind it.
+ */
+function spreadSourceBinding(spread: MapSpread, env: Environment): Binding | undefined {
+  if (spread.path === undefined) return env.resolve(spread.source);
+  let bound = env.resolve(spread.path.root);
+  for (const key of spread.path.members) {
+    const held = bound?.kind === 'value' ? bound.value : undefined;
+    if (!isDictValue(held)) return undefined;
+    bound = bindValue(held[key] ?? null, bound?.kind === 'value' ? bound.provenance : undefined);
+  }
+  return bound;
+}
+
+/**
  * The one record `...r` copies — held as a value or bound on the arrow plane —
  * or undefined when it is absent. Anything else is a program the checker
  * should have refused.
@@ -5960,7 +5975,7 @@ class Interpreter {
     // parameter does. Only a POSITION parameter is held to positions below.
     if (arg.kind === 'expr' && options.takesValue) {
       const { value, provenance } = await this.evaluateSlot(arg.expr, { env });
-      return { kind: 'value', value, provenance };
+      return bindValue(value, provenance);
     }
     if (arg.kind === 'write') {
       return this.executeWrite(arg.write, undefined, env, body);
@@ -9677,7 +9692,7 @@ class Interpreter {
   /** The map a `...v` spreads, as it is at run time — undefined when it is
    *  absent, which copies nothing, as TypeScript's `...undefined` does. */
   private spreadMap(spread: MapSpread, env: Environment): Record<string, unknown> | undefined {
-    const bound = env.resolve(spread.source);
+    const bound = spreadSourceBinding(spread, env);
     const value = bound?.kind === 'value' ? bound.value : undefined;
     if (bound?.kind === 'value' && (value === undefined || value === null)) return undefined;
     if (!isDictValue(value)) {
@@ -9699,7 +9714,7 @@ class Interpreter {
     node: Extract<Binding, { kind: 'nodePosition' }>,
     { spread, plan, env, shape }: { spread: MapSpread; plan: CopyPlan; env: Environment; shape: ShapeNode | undefined },
   ): Promise<void> {
-    const record = spreadRecord(spread, env.resolve(spread.source));
+    const record = spreadRecord(spread, spreadSourceBinding(spread, env));
     if (record === undefined) return;
     const copy = await this.snapshotRecord(record, plan, env);
     for (const field of plan.fields) {

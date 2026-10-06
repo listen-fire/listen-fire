@@ -580,8 +580,9 @@ export interface Cell {
   /** The movement body, one line per element, indented for the movement. */
   body: string[];
   since: LanguageVersion;
-  /** What the cell must do — or `triage` when nobody has decided. */
-  expect: Expectation | { kind: 'triage' };
+  /** What the cell must do. A cell whose right answer nobody has decided is
+   *  pinned to today's outcome by the test's TRIAGE table. */
+  expect: Expectation;
 }
 
 function oneBody(path: OnePath, consumer: OneConsumer): string[] | undefined {
