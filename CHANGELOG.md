@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- A `MAP`/`FILTER`/`REDUCE` written inside an expression (for example `FIRST(MAP([e], (x) => { … }))`) now runs its function the way the validator checked it. Before, a `graph<Shape> { ...x }` inside such a function validated and then failed every member with "'...x' spreads a map into a graph, and 'x' holds no value". A list written around one record, such as `[e]` where `e` is a write's result or an extracted record, now holds that record's type too, so spreading or reading a member of it is checked like `e` itself instead of being refused. This applies to every language version.
+
 ## [v0.10.4] - 2026-10-06
 
 ### Added

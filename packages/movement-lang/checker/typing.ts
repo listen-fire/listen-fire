@@ -2700,6 +2700,9 @@ export function positionsMatch(arg: PositionTypeRef, param: PositionTypeRef): bo
  * synthesised node, none of which anything can tell apart — is not a yes.
  */
 export function sameStartingPoint(a: PositionTypeRef, b: PositionTypeRef): boolean {
+  // One type is the same as itself, whatever kind: `[h]` of a write's result
+  // is a list of THAT record, not of a record nobody can name.
+  if (a === b) return true;
   return positionsMatch(a, b) === true && positionsMatch(b, a) === true;
 }
 

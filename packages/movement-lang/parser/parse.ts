@@ -84,6 +84,7 @@ import {
   WriteTarget,
 } from './ast';
 import { spellName } from './ast';
+import { originalSlot } from '../expression/bridge';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import { callStyleIfMessage, scanBacktickName, scanIdent, scanName } from './scan';
 import { KEYWORDS } from '@listen-fire/shared/expression/formula';
@@ -161,8 +162,25 @@ export function parseNestedCall(
   at: { start: number; end: number },
   languageVersion: LanguageVersion,
 ): RValue {
-  return new Parser(slot.raw.slice(0, at.end), languageVersion, slot.span.start).parseNestedCallValue(at.start);
+  // Read once per place in the program, as a call on its own line is: the
+  // checker records what it settles on the call's statements (a spread's copy
+  // plan, a walk's), and the engine runs those same statements.
+  const origin = originalSlot(slot);
+  let read = nestedCallReads.get(origin);
+  if (read === undefined) {
+    read = new Map();
+    nestedCallReads.set(origin, read);
+  }
+  const key = `${languageVersion}@${at.start}-${at.end}`;
+  let value = read.get(key);
+  if (value === undefined) {
+    value = new Parser(slot.raw.slice(0, at.end), languageVersion, slot.span.start).parseNestedCallValue(at.start);
+    read.set(key, value);
+  }
+  return value;
 }
+
+const nestedCallReads = new WeakMap<ExprSlot, Map<string, RValue>>();
 
 /**
  * The bare name a WHERE-less single hop lands on (`-[:company]->`; an alias is
