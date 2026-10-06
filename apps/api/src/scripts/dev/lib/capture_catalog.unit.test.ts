@@ -1,5 +1,6 @@
 import type { InstanceSchema } from 'movement-lang';
 import {
+  describableAdapters,
   handbookCaptureSources,
   mergeInstanceSchemas,
   rewriteConnectionNames,
@@ -136,5 +137,27 @@ describe('handbookCaptureSources', () => {
       expect(entry.label).toMatch(/ — /);
       expect(entry.source.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('describableAdapters', () => {
+  const requires: Record<string, boolean> = { email: false, telegram: true, kg: true };
+  const select = (constructed: string[], connected: string[]) =>
+    describableAdapters({
+      constructed,
+      requiresConnection: (adapter) => requires[adapter],
+      hasConnection: (adapter) => connected.includes(adapter),
+    });
+
+  it('drops names that are not adapters (plugins)', () => {
+    expect(select(['email', 'fetch_url'], [])).toEqual(['email']);
+  });
+
+  it('drops a credentialed adapter the workspace has no connection for', () => {
+    expect(select(['kg', 'telegram'], ['telegram'])).toEqual(['telegram']);
+  });
+
+  it('keeps a connected adapter, so its missing schema stays a loud failure', () => {
+    expect(select(['telegram', 'telegram'], ['telegram'])).toEqual(['telegram']);
   });
 });

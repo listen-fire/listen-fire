@@ -62,8 +62,10 @@ import {
   movementCatalogForTeam,
   type TeamMovementCatalog,
 } from '../../services/translation_graph/movement/catalog';
+import { indexManifestsByName, listAdapterManifests } from '../../services/translation_graph/adapters/registry';
 import { referencedConstructions, type InstanceSchema } from 'movement-lang';
 import {
+  describableAdapters,
   handbookCaptureSources,
   mergeInstanceSchemas,
   rewriteConnectionNames,
@@ -148,6 +150,8 @@ interface CapturedCatalog {
   schemas: Record<string, InstanceSchema>;
   specs: Record<string, unknown>;
   notes: string[];
+  /** Which constructed names this workspace could have described at all. */
+  describable: (constructed: Iterable<string>) => string[];
 }
 
 /** The adapter SPEC (construction signature + the `listen { … }` config
@@ -245,7 +249,21 @@ async function captureByDemand(input: {
       notes.push(`${adapter}: nothing in the demand set constructs it — absent from this capture`);
     }
   }
-  return { schemas, specs, notes };
+  const manifests = indexManifestsByName(listAdapterManifests());
+  return {
+    schemas,
+    specs,
+    notes,
+    describable: (constructed) =>
+      describableAdapters({
+        constructed,
+        requiresConnection: (adapter) => {
+          const manifest = manifests.get(adapter);
+          return manifest === undefined ? undefined : Boolean(manifest.requiredCredentialType);
+        },
+        hasConnection: (adapter) => connectionByAdapter.has(adapter),
+      }),
+  };
 }
 
 /**
@@ -280,7 +298,7 @@ async function captureFullSurface(input: {
     schemas[adapter] = schema;
     specs[adapter] = specOf(catalog, adapter);
   }
-  return { schemas, specs, notes };
+  return { schemas, specs, notes, describable: (constructed) => [...new Set(constructed)] };
 }
 
 /** Best-effort content type from a file extension — enough for the dev loop's
@@ -362,9 +380,8 @@ async function main() {
     if (args.includes('--handbook')) {
       // A capture missing an adapter the examples construct would write a
       // fixture that quietly checks those examples against nothing.
-      const absent = [
-        ...new Set(sources.flatMap((s) => referencedConstructions(s.source).map((r) => r.adapter))),
-      ]
+      const absent = captured
+        .describable(sources.flatMap((s) => referencedConstructions(s.source).map((r) => r.adapter)))
         .filter((adapter) => captured.schemas[adapter] === undefined)
         .sort();
       if (absent.length > 0) {

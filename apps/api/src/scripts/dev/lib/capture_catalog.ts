@@ -116,6 +116,29 @@ export function rewriteConnectionNames(input: {
   return { source, unresolved };
 }
 
+/**
+ * The constructed names the capture can actually describe on this workspace.
+ *
+ * A name is describable when it is a registered adapter AND the workspace can
+ * supply what constructing it needs: no credential, or a connection of that
+ * adapter. Anything else is out of the capture's reach by construction — a
+ * plugin is not an adapter, and an adapter with no connection here (the
+ * knowledge graph is optional per team) has no instance to describe; the
+ * capture's own notes already report both. What stays loud is the case the
+ * guard exists for: a describable adapter that the capture nevertheless failed
+ * to produce a schema for.
+ */
+export function describableAdapters(input: {
+  constructed: Iterable<string>;
+  requiresConnection: (adapter: string) => boolean | undefined;
+  hasConnection: (adapter: string) => boolean;
+}): string[] {
+  return [...new Set(input.constructed)].filter((adapter) => {
+    const requires = input.requiresConnection(adapter);
+    return requires !== undefined && (!requires || input.hasConnection(adapter));
+  });
+}
+
 function described(position: PositionSchema | undefined): boolean {
   return position !== undefined && position.undescribed !== true;
 }
