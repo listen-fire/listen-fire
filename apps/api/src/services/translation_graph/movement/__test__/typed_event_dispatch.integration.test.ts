@@ -288,6 +288,7 @@ describe('typed listen events — dispatch path (real DB)', () => {
       credentialsByName: {},
       resolveFile: () => null,
       notes: [],
+      gaps: [],
     });
 
     // Adapter I/O: a fake Attio source + a fake Slack target.

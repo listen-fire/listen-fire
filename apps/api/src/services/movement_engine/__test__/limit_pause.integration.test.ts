@@ -282,6 +282,7 @@ describe('a run paused at its cost cap (real DB)', () => {
       credentialsByName: {},
       resolveFile: () => null,
       notes: [],
+      gaps: [],
     });
     const target = makeSlackTargetFake();
     slackCreates = target.creates;
