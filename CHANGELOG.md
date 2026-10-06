@@ -6,7 +6,9 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 ## [Unreleased]
 
-<!-- add merged PRs here -->
+### Fixed
+
+- The Google Drive viewer fallback (used when the Drive API can't download a view-only file) reads pages again, now that it follows the viewer's current page-box and page-image labels instead of a page-counter control the viewer no longer renders.
 
 ## [v0.10.1] - 2026-10-06
 
