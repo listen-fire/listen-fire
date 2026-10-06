@@ -230,42 +230,6 @@ const FANOUT_THEN_TAIL = [
   'listen to crm { events: ["record.created"] } fire fanout_then_tail',
 ].join('\n');
 
-// §10.4 — parallel + trailing. A `parallel` branch is a SINGLE statement, so each
-// branch is an `if` wrapping `sleep; write` (a compound single statement that both
-// parks and writes). Both branches park; the closer runs the trailing write once.
-// (Cross-branch BINDING reconstruction can't be done via `sleep` — a timer branch
-// can't both park and bind a readable value in one statement — so §12.4's
-// cross-branch read is proven via `ask` in the interaction integration test.)
-const PARALLEL_TAIL = [
-  ...PRELUDE,
-  'movement parallel_tail(ev: <crm-[:`Webhook Event`]->>) {',
-  '  parallel {',
-  '    if ev IS <crm-[:`Webhook Event` WHERE `action` == "record.created"]->> {',
-  '      await sleep(1s)',
-  '      write chat-[:messages]-> {',
-  '        channel: "#a"',
-  '        text: "A"',
-  '      }',
-  '    }',
-  '    if ev IS <crm-[:`Webhook Event` WHERE `action` == "record.created"]->> {',
-  '      await sleep(1s)',
-  '      write chat-[:messages]-> {',
-  '        channel: "#b"',
-  '        text: "B"',
-  '      }',
-  '    }',
-  '  }',
-  '  write chat-[:messages]-> {',
-  '    channel: "#done"',
-  '    text: "DONE"',
-  '  }',
-  '}',
-  '',
-  'listen to crm { events: ["record.created"] } fire parallel_tail',
-].join('\n');
-
-// §10 item 11 — assigned fan-out; each iteration exports a write handle `m`; a
-// trailing read COUNTs the FULL blockMeta (all N iterations, not just the closer).
 const ASSIGNED_FANOUT = [
   ...PRELUDE,
   'movement assigned_fanout(ev: <crm-[:`Webhook Event`]->>) {',
@@ -286,43 +250,6 @@ const ASSIGNED_FANOUT = [
   '',
   'listen to crm { events: ["record.created"] } fire assigned_fanout',
 ].join('\n');
-
-// §10.5 — three levels deep: if { parallel { fanout{sleep;write} ; if{sleep;write} } };
-// trailing write. Each parallel branch is one statement (the fan-out block; a
-// nested if). Joins close bottom-up (fanout → parallel → if → body).
-const DEEP_NEST = [
-  ...PRELUDE,
-  'movement deep_nest(ev: <crm-[:`Webhook Event`]->>) {',
-  '  if ev IS <crm-[:`Webhook Event` WHERE `action` == "record.created"]->> {',
-  '    parallel {',
-  '      ev-[c:Contacts]-> {',
-  '        await sleep(1s)',
-  '        write chat-[:messages]-> {',
-  '          channel: "#alerts"',
-  '          text: c.`Name`',
-  '        }',
-  '      }',
-  '      if ev IS <crm-[:`Webhook Event` WHERE `action` == "record.created"]->> {',
-  '        await sleep(1s)',
-  '        write chat-[:messages]-> {',
-  '          channel: "#other"',
-  '          text: "other"',
-  '        }',
-  '      }',
-  '    }',
-  '  }',
-  '  write chat-[:messages]-> {',
-  '    channel: "#done"',
-  '    text: "DONE"',
-  '  }',
-  '}',
-  '',
-  'listen to crm { events: ["record.created"] } fire deep_nest',
-].join('\n');
-
-// §10.4 under language version 3 — the `parallel([…])` combinator. Each arm is a
-// closure, so it can both park and return a value; the trailing write reads both
-// slots of the receipt, proving the finished arms' returns are rebuilt on resume.
 const PARALLEL_TAIL_V3 = [
   ...PRELUDE,
   'movement parallel_tail_v3(ev: <crm-[:`Webhook Event`]->>) {',
@@ -642,40 +569,6 @@ describe('timer_resume — unwind-and-continue matrix (real DB)', () => {
 
   // ── §10.4 — parallel + trailing: both branches park; on wake the closer runs
   // the trailing write EXACTLY ONCE (only when the LAST branch closes the join). ─
-  it('parallel + trailing: both branches park; the closer runs the trailing write exactly once', async () => {
-    const { triggerId } = await seedMovement(teamId, {
-      source: PARALLEL_TAIL,
-      // `parallel { … }` is retired under version 3; these sources were written for version 2.
-      languageVersion: 2,
-      firedName: 'parallel_tail',
-      name: 'Parallel tail',
-    });
-
-    await dispatchTriggerByIdEvent({ triggerId, teamId, event: webhookEvent() });
-    // Both branches parked at their sleep; no writes yet.
-    expect(slackCreates).toHaveLength(0);
-    const parks = await timerParks(teamId);
-    expect(parks).toHaveLength(2);
-    const runId = parks[0].runId;
-    expect((await joinRows(runId))[0].pending).toBe(2);
-
-    await backdate(runId, parks.map((p) => p.address));
-    await resumeTimerParkedRuns();
-
-    // Each branch ran its own write …
-    expect(slackCreates.filter((c) => c.channel === '#a')).toHaveLength(1);
-    expect(slackCreates.filter((c) => c.channel === '#b')).toHaveLength(1);
-    // … and the trailing top-level write ran EXACTLY ONCE (the parallel closer).
-    expect(slackCreates.filter((c) => c.channel === '#done')).toEqual([
-      { channel: '#done', text: 'DONE' },
-    ]);
-
-    expect(await runStatus(runId)).toBe('success');
-    expect(await joinRows(runId)).toEqual([]);
-    expect(await joinBranchExportCount(runId)).toBe(0);
-    expect(await remainingParks(runId)).toBe(0);
-  });
-
   it('parallel([…]) combinator + trailing (version 3): both arms park; the closer runs the trailing write exactly once', async () => {
     const { triggerId } = await seedMovement(teamId, {
       source: PARALLEL_TAIL_V3,
@@ -767,39 +660,6 @@ describe('timer_resume — unwind-and-continue matrix (real DB)', () => {
 
   // ── §10.5 — three levels deep: if { parallel { fanout } { sleep } }; joins
   // close bottom-up, each ancestor's continuation runs once. ────────────────────
-  it('three levels deep (if > parallel > fan-out): joins close bottom-up, trailing runs exactly once', async () => {
-    const { triggerId } = await seedMovement(teamId, {
-      source: DEEP_NEST,
-      // `parallel { … }` is retired under version 3; these sources were written for version 2.
-      languageVersion: 2,
-      firedName: 'deep_nest',
-      name: 'Deep nest',
-    });
-
-    await dispatchTriggerByIdEvent({ triggerId, teamId, event: webhookEvent() });
-    const parks = await timerParks(teamId);
-    // N fan-out leaves (parallel branch 0) + 1 parallel-branch-1 sleep leaf.
-    expect(parks).toHaveLength(FANOUT_N + 1);
-    const runId = parks[0].runId;
-    // Two join frames: the inner fan-out (pending N) and the outer parallel
-    // (pending 2).
-    const jr = await joinRows(runId);
-    expect(jr.map((r) => r.pending).sort()).toEqual([2, FANOUT_N].sort());
-
-    await backdate(runId, parks.map((p) => p.address));
-    await resumeTimerParkedRuns();
-
-    expect(slackCreates.filter((c) => c.channel === '#alerts')).toHaveLength(FANOUT_N);
-    expect(slackCreates.filter((c) => c.channel === '#other')).toHaveLength(1);
-    expect(slackCreates.filter((c) => c.channel === '#done')).toEqual([
-      { channel: '#done', text: 'DONE' },
-    ]);
-    expect(await runStatus(runId)).toBe('success');
-    expect(await joinRows(runId)).toEqual([]);
-    expect(await joinBranchExportCount(runId)).toBe(0);
-    expect(await remainingParks(runId)).toBe(0);
-  });
-
   it('three levels deep (if > parallel([…]) > fan-out, version 3): joins close bottom-up, trailing runs exactly once', async () => {
     const { triggerId } = await seedMovement(teamId, {
       source: DEEP_NEST_V3,
