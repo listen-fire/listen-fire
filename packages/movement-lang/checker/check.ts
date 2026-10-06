@@ -1997,11 +1997,21 @@ export function instanceRefOf(symbol: ScopeSymbol): InstanceRef | undefined {
     : undefined;
 }
 
-/** The position a bound name denotes: its own type, or — for a graph — the
- *  graph's meta position. The one rule for "what type is this name?", shared
- *  by the checker and the editor so neither can drift from the other. */
+/** The position a bound name denotes: its own type, a record value's record,
+ *  or — for a graph — the graph's meta position. The one rule for "what type
+ *  is this name?", shared by the checker and the editor so neither can drift
+ *  from the other.
+ *
+ *  A name holding ONE record on the value plane (a collection op's parameter,
+ *  `FIRST(…)`) denotes that record, exactly as the alias of the hop it came
+ *  off does — otherwise every rule asking "what record is this?" (a position
+ *  write's target, a `bind`) hears nothing and stays silent. */
 export function positionTypeOf(symbol: ScopeSymbol): PositionTypeRef | undefined {
   if (symbol.posType) return symbol.posType;
+  const value = symbol.fieldType;
+  if (typeof value === 'object' && value.kind === 'record' && value.position !== undefined) {
+    return value.position;
+  }
   if (isGraphSymbol(symbol)) {
     const instance = instanceRefOf(symbol);
     if (instance) return { kind: 'meta', instance };
