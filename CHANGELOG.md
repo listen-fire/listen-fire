@@ -9,6 +9,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 ### Fixed
 
 - The Google Drive viewer fallback (used when the Drive API can't download a view-only file) reads pages again, now that it follows the viewer's current page-box and page-image labels instead of a page-counter control the viewer no longer renders.
+- A map that holds a list of records reads that list back. Examples are `{ piece: p, entries: extract(…) }`, a walk, and the records a block returned. `MAP`, `FILTER`, `REDUCE`, `GROUPBY`, `KEYBY`, `COUNT`, `FIRST`, `AT` and a block head over `x.entries` now work on it. Before, a run failed with "'MAP' reads a collection of values and got object", which applied to every language version. On save, the records a block returned now count as a list wherever they are held (a map key, a list member, a call argument). Before, the checker took them for one record.
 
 ## [v0.10.1] - 2026-10-06
 
