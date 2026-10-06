@@ -251,6 +251,8 @@ import {
   MovementEngineError,
   applyHopOrderLimit,
   bindingOf,
+  bindValue,
+  recordFields,
   closedHopPushdown,
   decidePurePredicate,
   describeBinding,
@@ -3987,12 +3989,7 @@ class Interpreter {
               return;
             }
             const { value, provenance } = await this.evaluateSlot(rhs.expr, { env });
-            env.declare(statement.name, {
-              kind: 'value',
-              value,
-              provenance,
-              ...(this.bindsManyValues(rhs.expr, env) ? { many: true } : {}),
-            });
+            env.declare(statement.name, bindValue(value, provenance, { many: this.bindsManyValues(rhs.expr, env) }));
             return;
           }
           case 'extract':
@@ -5920,7 +5917,11 @@ class Interpreter {
         );
       }
       const { value, provenance } = await this.evaluateSlot(arg.expr, { env });
-      config[arg.name] = value;
+      // A record reaches only an argument declared to take structured data
+      // (the checker refuses it anywhere else), and what that takes is the
+      // record's fields.
+      const record = bindingOf(value);
+      config[arg.name] = record !== undefined ? recordFields(record) : value;
       trails.push(provenance);
     }
     const started = Date.now();
@@ -5989,37 +5990,27 @@ class Interpreter {
         `a ${arg.kind === 'closure' ? 'function' : 'type'} handed to a function's parameter — the checker should have caught this`,
       );
     }
-    const raw = arg.expr.raw.trim();
-    if (BARE_IDENT.test(raw)) {
-      const binding = env.resolve(raw);
-      if (!binding) {
-        throw new MovementEngineError(
-          'MOVENG_RUNTIME',
-          `'${raw}' is not in scope — the checker should have caught this`,
+    // A POSITION parameter takes the record the argument is bound to — the
+    // binding `x = <argument>` would make, whatever path produced the record
+    // (a name, a pick, a map field).
+    const binding = await this.bindSlotValue(arg.expr, env);
+    switch (binding.kind) {
+      case 'event':
+      case 'handle':
+      case 'shapePosition':
+      case 'extractRoot':
+      case 'extractPosition':
+      case 'sourcePosition':
+      case 'resource':
+      case 'nodePosition':
+      case 'lazyWalk':
+        return binding;
+      default:
+        throw unsupported(
+          `passing ${describeBinding[binding.kind]} ('${arg.expr.raw.trim()}') as a movement argument`,
+          'arguments are positions — pass the event, a write handle, or adapt with an inline shape-write',
         );
-      }
-      switch (binding.kind) {
-        case 'event':
-        case 'handle':
-        case 'shapePosition':
-        case 'extractRoot':
-        case 'extractPosition':
-        case 'sourcePosition':
-        case 'resource':
-        case 'nodePosition':
-        case 'lazyWalk':
-          return binding;
-        default:
-          throw unsupported(
-            `passing ${describeBinding[binding.kind]} ('${raw}') as a movement argument`,
-            'arguments are positions — pass the event, a write handle, or adapt with an inline shape-write',
-          );
-      }
     }
-    throw unsupported(
-      'computed expressions as movement arguments',
-      'arguments are positions — pass a bound position or adapt with an inline shape-write',
-    );
   }
 
   private async interpretIf(
@@ -6744,19 +6735,9 @@ class Interpreter {
     // Its own name first, so a parameter of the same name shadows it.
     if (binding.self !== undefined) child.declare(binding.self, binding);
     for (const param of binding.closure.params) {
-      const supplied = values[param.name] ?? null;
-      // A RECORD arrives as the record it is. A collection op hands each member
-      // back in the currency it arrived in, so a member may BE a binding — and
-      // declaring it as one is what makes the parameter behave like every other
-      // name bound to a record: its fields read, a block head walks it, a list
-      // literal holds it, and interpolating it is refused. Wrapping it in a
-      // value binding made it a record only the places that unwrap by hand
-      // could see.
-      const record = bindingOf(supplied);
-      child.declare(
-        param.name,
-        record ?? { kind: 'value', value: supplied, provenance: NO_PROVENANCE },
-      );
+      // A collection op hands each member back in the currency it arrived in,
+      // so a member may BE a record — and binds as one.
+      child.declare(param.name, bindValue(values[param.name] ?? null));
     }
     return this.interpretBody(binding.closure.body, child, body);
   }
@@ -11624,12 +11605,7 @@ class Interpreter {
     const selected = await this.selectedPositionBinding(slot, env);
     if (selected !== undefined) return selected;
     const evaluated = await this.evaluateSlot(slot, { env });
-    return {
-      kind: 'value',
-      value: evaluated.value,
-      provenance: evaluated.provenance,
-      ...(this.bindsManyValues(slot, env) ? { many: true } : {}),
-    };
+    return bindValue(evaluated.value, evaluated.provenance, { many: this.bindsManyValues(slot, env) });
   }
 
   /** A walk read for a field, or a second name for one: the value bound is

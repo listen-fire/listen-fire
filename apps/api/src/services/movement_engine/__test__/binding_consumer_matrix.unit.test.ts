@@ -15,8 +15,8 @@
 //
 // A cell expects (b) only where a checker rule documented by its own
 // diagnostic says so (`ruledRefusal` in the cells file: a system record's
-// field list is not in hand, a parameter is not a spread source, a record on
-// no edge cannot be updated); every other cell expects (a).
+// field list is not in hand, a record on no edge cannot be updated, a record
+// is not a plugin's text argument); every other cell expects (a).
 //
 // Accepted-then-thrown is a FAILURE named by its pair; accepted-then-wrong is
 // one too. A cell nobody has decided the right answer for is in TRIAGE below
@@ -31,7 +31,7 @@
 //
 // To add a binding path or a consumer: add it to binding_consumer_matrix.cells.ts
 // (a path says what records it binds and the facts the rules read — on an
-// edge, opaque, a parameter; a consumer says the rows it leaves per record and
+// edge, opaque; a consumer says the rows it leaves per record and
 // which rule it trips). Every new pairing is generated; run this file under
 // each version and either fix the expectation or add a TRIAGE entry.
 //

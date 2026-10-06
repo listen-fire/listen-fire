@@ -638,6 +638,25 @@ export function bindingOf(value: unknown): Binding | undefined {
 }
 
 /**
+ * The ONE way a name is bound to what an expression evaluated to. A record
+ * binds as the record it is — whatever produced it: a traversal's landing
+ * picked by `FIRST`/`ONLY`/`AT`, a collection op's member, a field of a map
+ * that holds one, a block's returned record, an extraction's answer — so every
+ * consumer sees the same binding whichever path made it, and none has to ask
+ * where a name came from. Anything else binds on the value plane; `many` marks
+ * a walk read for a field (`isManyValued`).
+ */
+export function bindValue(
+  value: unknown,
+  provenance: Provenance = NO_PROVENANCE,
+  { many }: { many?: boolean } = {},
+): Binding {
+  const record = bindingOf(value);
+  if (record !== undefined) return record;
+  return { kind: 'value', value, provenance, ...(many === true ? { many: true } : {}) };
+}
+
+/**
  * Two records compared. `undefined` where neither side is a record, which is
  * every scalar comparison and the shared comparator's business.
  *
@@ -734,6 +753,38 @@ const BINDING_IS_POSITION: Record<Binding['kind'], boolean> = {
   plugin: false,
   opaque: false,
 };
+
+/** One record the run holds — what a name bound to a record IS, read as a
+ *  value. Not the event (the movement's parameter, read through its source),
+ *  a block's many returns, a meta-node or a deferred walk. */
+function isOneRecord(binding: Binding): boolean {
+  switch (binding.kind) {
+    case 'handle':
+    case 'extractRoot':
+    case 'extractPosition':
+    case 'sourcePosition':
+    case 'resource':
+    case 'shapePosition':
+    case 'nodePosition':
+    case 'callback':
+      return true;
+    case 'event':
+    case 'instance':
+    case 'blockMeta':
+    case 'positions':
+    case 'tuple':
+    case 'closure':
+    case 'value':
+    case 'shape':
+    case 'movement':
+    case 'lazyWalk':
+    case 'plugin':
+    case 'opaque':
+      return false;
+    default:
+      return neverAsAny(binding);
+  }
+}
 
 /** The dot plane of a callback binding — the two reads the construct declares
  *  (`CALLBACK_READS` in the checker says the same thing, statically). */
@@ -1848,6 +1899,13 @@ function readBareName(name: string, ctx: MovementExprContext): MovementEvalResul
       provenance: { origins: binding.landings.flatMap(bindingEntityOrigins) },
     };
   }
+  if (isOneRecord(binding)) {
+    // One record reads as itself, however the name was bound to it — a
+    // traversal alias, a pick, a collection op's parameter, a map field. A
+    // consumer that takes data (an interpolation, a plugin's text argument) is
+    // refused it by the checker.
+    return { value: binding, provenance: { origins: bindingEntityOrigins(binding) } };
+  }
   if (binding.kind === 'tuple') {
     // The receipt read as a plain list — its slots' values, in order. That is
     // what `AT(r, i)` indexes and what a null check on a slot compares. A slot
@@ -2589,6 +2647,14 @@ async function traverseFrom(
       // already gives it (run.ts `headIterationsFrom`).
       const held = heldRecords(binding.value, expr);
       if (held !== undefined) return traverseFrom(expr, name, held, ctx);
+      // `m.k.f` — the read goes on from what the key holds, bound as a name
+      // bound to it would be.
+      const member = expr.expression;
+      if (expr.steps.length === 0 && member.type === 'traverse' && member.aliasRoot !== undefined) {
+        const key = member.aliasRoot;
+        const { value, provenance } = readBindingField(binding, key, name);
+        return traverseFrom(member, `${name}.${key}`, bindValue(value, provenance), ctx);
+      }
       // EXISTS(x) on a value binding asks "does it hold a value?" —
       // null/undefined (an AI() that declared has_value: false, an
       // absent field projection) and empty lists answer false. This is

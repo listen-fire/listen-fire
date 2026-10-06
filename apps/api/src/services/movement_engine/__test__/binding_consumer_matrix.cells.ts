@@ -56,9 +56,6 @@ interface PathFacts {
   /** A record traversed off an external system: the program does not hold
    *  its field list, so a consumer that needs every field is refused. */
   opaque?: true;
-  /** A lambda parameter: a write spread of it is refused (its fields are not
-   *  spelled out where the write is). */
-  parameter?: true;
   /** The whole path is refused, whatever consumes it. */
   refusedAs?: string;
 }
@@ -164,6 +161,11 @@ function manyPaths(): ManyPath[] {
   return paths;
 }
 
+/** What a pick's consumer runs under: the record is there. `ERROR` leaves the
+ *  body in every version (a `return` narrows only from version 3), so the
+ *  guard narrows the pick wherever the cell runs. */
+const GUARD = 'if x == null { ERROR("no record") }';
+
 /** FIRST / ONLY / AT of a plural path — a singular path of its own. */
 function pickedFrom(many: ManyPath): OnePath[] {
   const [first, second] = many.instances;
@@ -175,7 +177,7 @@ function pickedFrom(many: ManyPath): OnePath[] {
     onEdge: many.onEdge,
     ...(many.opaque !== undefined ? { opaque: many.opaque } : {}),
     instances: [rec],
-    program: (body) => many.program((xs) => [...pick(xs), 'if x == null { return null }', ...body('x')]),
+    program: (body) => many.program((xs) => [...pick(xs), GUARD, ...body('x')]),
   });
   return [
     picked('FIRST', (xs) => [`x = FIRST(${xs})`], first),
@@ -204,7 +206,6 @@ function onePaths(): OnePath[] {
       {
         ...each,
         ...opaque,
-        parameter: true,
         id: `${origin}: MAP parameter`,
         since: 1,
         onEdge: true,
@@ -214,7 +215,6 @@ function onePaths(): OnePath[] {
       {
         arity: 'one',
         ...opaque,
-        parameter: true,
         id: `${origin}: REDUCE parameter`,
         since: 1,
         emit: 'reduce',
@@ -233,7 +233,6 @@ function onePaths(): OnePath[] {
       {
         arity: 'one',
         ...opaque,
-        parameter: true,
         id: `${origin}: FILTER parameter`,
         since: 1,
         emit: 'count',
@@ -293,7 +292,6 @@ function onePaths(): OnePath[] {
       id: 'local: MAP([e], (x) => …)',
       since: 1,
       onEdge: true,
-      parameter: true,
       instances: [ACME, BETA],
       program: (body) => [`${WALK.local.as('e')} {`, '  MAP([e], (x) => {', ...indent(body('x'), '    '), '  })', '}'],
     },
@@ -303,7 +301,7 @@ function onePaths(): OnePath[] {
       since: 1,
       onEdge: true,
       instances: [ACME, BETA],
-      program: (body) => [`${WALK.local.as('e')} {`, '  x = FIRST([e])', '  if x == null { return null }', ...indent(body('x')), '}'],
+      program: (body) => [`${WALK.local.as('e')} {`, '  x = FIRST([e])', `  ${GUARD}`, ...indent(body('x')), '}'],
     },
     {
       ...each,
@@ -311,7 +309,7 @@ function onePaths(): OnePath[] {
       since: 1,
       onEdge: true,
       instances: [ACME, BETA],
-      program: (body) => [`${WALK.local.as('e')} {`, '  x = AT([e], 0)', '  if x == null { return null }', ...indent(body('x')), '}'],
+      program: (body) => [`${WALK.local.as('e')} {`, '  x = AT([e], 0)', `  ${GUARD}`, ...indent(body('x')), '}'],
     },
     {
       ...each,
@@ -327,7 +325,7 @@ function onePaths(): OnePath[] {
       since: 3,
       onEdge: 'unknown',
       instances: [ACME],
-      program: (body) => ['x = extractOne([msg.`text`], Entry)', 'if x == null { return null }', ...body('x')],
+      program: (body) => ['x = extractOne([msg.`text`], Entry)', GUARD, ...body('x')],
     },
     {
       ...each,
@@ -396,8 +394,6 @@ interface ConsumerBase {
   /** Needs every field of the record: refused, with this code, over a
    *  record whose field list the program does not hold (`opaque`). */
   fieldList?: string;
-  /** A write spread: refused over a lambda parameter (`parameter`). */
-  writeSpread?: true;
   /** The right answer is a refusal whatever the path. */
   refused?: { code?: string; why: string };
 }
@@ -471,7 +467,7 @@ function oneConsumers(): OneConsumer[] {
       pre: (x) => [`page = fetch_url(url: ${x})`],
       expr: () => 'COALESCE(page, "none")',
       value: () => 'page',
-      refused: { why: 'a record is not a text argument' },
+      refused: { code: 'MOV_CALL_ARG_TYPE', why: "a record is not the plugin's text argument" },
     }),
     {
       arity: 'one',
@@ -512,7 +508,6 @@ function oneConsumers(): OneConsumer[] {
       id: 'write { ...x }',
       since: 2,
       fieldList: 'MOV_WRITE_SPREAD_SOURCE',
-      writeSpread: true,
       stmts: (x) => [`write sink-[:rows]-> { ...${x} }`],
       rows: (r) => [row({ name: r.name, tag: r.tag })],
     },
@@ -522,7 +517,6 @@ function oneConsumers(): OneConsumer[] {
       id: 'write { ?...x }',
       since: 2,
       fieldList: 'MOV_WRITE_SPREAD_SOURCE',
-      writeSpread: true,
       stmts: (x) => [`write sink-[:rows]-> { v: "s", ?...${x} }`],
       rows: (r) => [row({ name: r.name, tag: r.tag, v: 's' })],
     },
@@ -605,9 +599,6 @@ function ruledRefusal(path: PathFacts, consumer: ConsumerBase): Extract<Expectat
   if (consumer.refused !== undefined) return { kind: 'refused', ...consumer.refused };
   if (path.opaque === true && consumer.fieldList !== undefined) {
     return { kind: 'refused', code: consumer.fieldList, why: "a system record's field list is not in the program's hands" };
-  }
-  if (path.parameter === true && consumer.writeSpread === true) {
-    return { kind: 'refused', code: 'MOV_WRITE_SPREAD_SOURCE', why: "a parameter's fields are not spelled out at the write" };
   }
   return undefined;
 }

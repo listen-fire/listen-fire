@@ -3595,20 +3595,41 @@ export class ExpressionTyping {
    * through to the record plane and typed nothing.
    */
   private dictMemberRead(expr: Extract<Expression, { type: 'traverse' }>): { type: FieldType | undefined } | undefined {
-    if (before(this.options.languageVersion, 3)) return undefined;
-    if (expr.aliasRoot === undefined || expr.steps.length > 0 || expr.expression.type !== 'property') return undefined;
+    if (expr.aliasRoot === undefined || expr.steps.length > 0) return undefined;
+    // `d.k` ends at the key; `d.k.f` reads on from what the key holds.
+    const member = expr.expression;
+    const key =
+      member.type === 'property'
+        ? member.propertyTypeId
+        : member.type === 'traverse' && member.aliasRoot !== undefined
+          ? member.aliasRoot
+          : undefined;
+    if (key === undefined) return undefined;
     if (this.rootType(expr.aliasRoot) !== undefined) return undefined;
     const held = this.scalarType(expr.aliasRoot);
     const dict = held !== undefined ? stripAbsent(held) : undefined;
     if (dict === undefined || !isDictType(dict)) return undefined;
-    const key = expr.expression.propertyTypeId;
-    if (dict.shape === undefined) return { type: maybeAbsent(dict.of) };
-    if (!Object.hasOwn(dict.shape, key)) {
-      this.reportUnknownDictKey(key, Object.keys(dict.shape));
-      return { type: undefined };
+    const slotType = (): FieldType | undefined => {
+      if (dict.shape === undefined) return maybeAbsent(dict.of);
+      if (!Object.hasOwn(dict.shape, key)) {
+        this.reportUnknownDictKey(key, Object.keys(dict.shape));
+        return undefined;
+      }
+      const slot = dict.shape[key] ?? undefined;
+      return isMaybeAbsent(held) ? maybeAbsent(slot) : slot;
+    };
+    // Before version 3 a key read fell through to the record plane and typed
+    // nothing — except a key holding records, which reads as the records it
+    // holds in every version, as a record bound to a name does.
+    if (before(this.options.languageVersion, 3)) {
+      const known = dict.shape === undefined ? dict.of : dict.shape[key] ?? undefined;
+      if (!holdsRecords(known)) return undefined;
     }
-    const slot = dict.shape[key] ?? undefined;
-    return { type: isMaybeAbsent(held) ? maybeAbsent(slot) : slot };
+    const type = slotType();
+    if (member.type !== 'traverse') return { type };
+    // A record held under the key is read on as that record.
+    const record = recordHeadPosition(type);
+    return { type: this.inferAt({ type: 'traverse', steps: member.steps, expression: member.expression }, record) };
   }
 
   /** Walk `body` with `proofs`' subjects read as PRESENT — the narrowing an
