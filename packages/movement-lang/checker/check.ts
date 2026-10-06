@@ -3302,6 +3302,15 @@ class Checker {
     const type = this.symbolPositionType(symbol);
     if (type !== undefined) return { kind: 'record', type };
     if (symbol.fieldType !== undefined) {
+      // One record that may not be there (an unguarded pick) is the
+      // maybe-empty landing it is, as a pick off a walk is.
+      const held = stripAbsent(symbol.fieldType);
+      if (typeof held === 'object' && held.kind === 'record' && held.position !== undefined) {
+        return {
+          kind: 'record',
+          type: isMaybeAbsent(symbol.fieldType) ? { kind: 'maybeEmpty', of: held.position } : held.position,
+        };
+      }
       return holdsRecords(symbol.fieldType)
         ? { kind: 'undescribed' }
         : { kind: 'value', what: describeFieldType(symbol.fieldType) };

@@ -8,6 +8,25 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Added
+
+- `MAP`, `FILTER`, `REDUCE`, `GROUPBY` and `KEYBY` take the records a block returned (`xs = src-[e:companies]-> { return e }`), as `COUNT`, `FIRST` and `AT` already did. Before, saving refused them with "reads a collection, and this is … one thing, not several". This applies to every language version.
+- A record that `extract(…)` or `extractOne(…)` handed back updates in place with `write r { … }`, as an entry on a `node { … }` collection does: the named fields are merged and the rest are left as they were. This works through any name holding it, including a `FIRST`/`ONLY`/`AT` pick from the answer. Before, saving refused the write. This applies to every language version.
+
+### Changed
+
+- A plugin's arguments are checked against the types the plugin declares. A record passed where a plugin takes text, such as `fetch_url(url: r)`, is refused on save with `MOV_CALL_ARG_TYPE`; pass one of its fields instead (`url: r.website`). Before, it saved and the plugin was handed the engine's internal form of the record. This applies to every language version.
+- `...x` in a write body takes any record whose fields the automation spells out, however the name holds it: a `MAP`/`FILTER`/`REDUCE` function's parameter, a `FIRST`/`ONLY`/`AT` pick, an extracted record, or a record the automation wrote into a system (its fields, not its id). Before, saving refused all but a few of these with `MOV_WRITE_SPREAD_SOURCE`. A spread of a record read from a system, or of a block's whole returned records, is still refused. This applies to every language version.
+
+### Fixed
+
+- A record picked with `FIRST`, `ONLY` or `AT` is the same record as the alias it came from, wherever the list came from (a walk, a list literal, a `FILTER` answer, a map's key, an extraction's answer). `write x { … }`, `write x-[:edge]-> { … }` and passing `x` to a function's record parameter now run. Before, they saved and then failed with "'x' is a value binding". This applies to every language version.
+- A record held under a map's key (`m = { k: e }`) reads (`m.k.name`), spreads (`write … { ...m.k }`, `graph<Shape> { ...m.k }`) and passes (`use(e: m.k)`) like any record. Before, saving refused the read and the spreads, and the call failed when it ran. Writing through it (`write m.k { … }`) is still refused: bind it to a name first. This applies to every language version.
+- `EXISTS(d-[:entries]->)` over a `node { … }` value, or over a nested node of a `graph<Shape> { … }`, now runs. Before, it saved and then failed with "this read shape on a synthesised node is not supported". This applies to every language version.
+- `graph<Shape> { ...h }`, where `h` is a record written into a system, copies the fields the write handed back. Before, it saved and then failed with "hopping past a 'child' landing that is a write handle". This applies to every language version.
+- `TEXT.SERIALISE` of a list of records read from a system is refused on save, as it is for one such record. Before, it saved and then failed. This applies to every language version.
+- `write x { … }`, `bind x` and `refresh x` where `x` holds a value rather than a record are refused on save. Before, they saved and then failed when they ran. This applies to every language version.
+
 ## [v0.10.5] - 2026-10-06
 
 ### Fixed
