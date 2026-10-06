@@ -220,8 +220,9 @@ class Lowering {
       case 'special': {
         const v = expr.text.slice(1);
         // The formula grammar carries these fields unchecked; mirrored as-is.
-        // Language version 3 refuses a field outside the known set (the
-        // checker's MOV_META_FIELD_UNKNOWN, read off `specialRecordField`).
+        // Language version 3 retires both reads (the checker's
+        // MOV_PARENT_READ_RETIRED and MOV_RESOURCE_READ_RETIRED, read off
+        // `specialRecordField`).
         if (v.startsWith('parent.')) return { type: 'parent_result', field: v.slice(7) as ParentResultField };
         if (v.startsWith('resource.')) return { type: 'resource', field: v.slice(9) as ResourceField };
         return { type: 'meta', key: v };
@@ -396,7 +397,7 @@ class Lowering {
           'The #extract meta-edge is retired (syntax amendment 4): extraction is not a traversal — use an `extract … { }` materialisation and traverse its result graph',
         );
       }
-      if (label === '#transform') {
+      if (isTransformHop(hop)) {
         const config = hop.config ? this.metaConfig(hop.config, ctx) : undefined;
         const step: MetaEdgeStep = {
           type: 'meta_edge',
@@ -413,8 +414,9 @@ class Lowering {
         const inner = ending === 'linked' ? this.linked(hop, rest) : this.resources(hop, rest, ctx);
         // The formula grammar drops the root of a walk that ends in a
         // resource or linked hop — reproduced, not endorsed. Language version
-        // 3 refuses a walk that would lose something here (the checker's
-        // MOV_RESOURCE_WALK_UNREAD).
+        // 3 refuses a resource walk that would lose something here (the
+        // checker's MOV_RESOURCE_WALK_UNREAD), and every linked hop
+        // (MOV_LINKED_HOP_RETIRED).
         return steps.length > 0 ? { type: 'traverse', steps, expression: inner } : inner;
       }
       steps.push(this.edgeStep(hop, ctx));
@@ -799,9 +801,11 @@ export function endingHop(hop: Hop): 'resources' | 'linked' | undefined {
   return undefined;
 }
 
-/** The one meta hop whose `{ … }` settings are read: `#transform`'s. On any
- *  other hop the lowering has nowhere to put them. */
-export function hopReadsConfig(hop: Hop): boolean {
+/** `-[t:#transform { plugin: … }]->` — the one meta hop whose `{ … }`
+ *  settings are read. On any other hop the lowering has nowhere to put them.
+ *  Language version 3 retires the hop (the checker's
+ *  MOV_TRANSFORM_HOP_RETIRED), and with it every hop's settings. */
+export function isTransformHop(hop: Hop): boolean {
   return hop.label.text === '#transform';
 }
 

@@ -1,12 +1,13 @@
-// Four places the expression path dropped or ignored what was written, without
+// Three places the expression path dropped or ignored what was written, without
 // a word, refused at save under language version 3:
-//   - `{ … }` settings on a hop other than `#transform` were dropped;
-//   - a walk ending in `-[:_resources]->` or `-[#linked …]->` lost its root
-//     (as a value) or the hops before it (as a block head);
-//   - `@resource.<field>` / `@parent.<field>` read any field, unchecked;
+//   - `{ … }` settings on a hop were dropped;
+//   - a walk ending in `-[:_resources]->` lost its root (as a value) or the
+//     hops before it (as a block head);
 //   - `LLM_AGG(…)` passed the save check, then failed the run, and its
 //     instruction never reached a model.
-// Under versions 1 and 2 each is accepted exactly as before.
+// Under versions 1 and 2 each is accepted exactly as before. The `#transform`
+// and `#linked` hops and the `@parent` / `@resource` reads are retired under
+// version 3 outright (translation_graph_reads_retired.unit.test.ts).
 
 import { parseProgram } from '../../parser/parse';
 import { checkProgram, DiagnosticCodes as C } from '../check';
@@ -40,7 +41,6 @@ listen to chat fire scan`;
 const OURS: ReadonlySet<string> = new Set([
   C.HOP_CONFIG_UNREAD,
   C.RESOURCE_WALK_UNREAD,
-  C.META_FIELD_UNKNOWN,
   C.BUILTIN_NOT_RUN,
 ]);
 
@@ -54,19 +54,15 @@ function messages(body: string): string {
   return check(body, 3).map((d) => d.message).join('\n');
 }
 
-describe('settings on a hop are read, or refused', () => {
+describe('settings on a hop are refused', () => {
   it('settings on a plain edge hop are refused, in a value and in a block head', () => {
     expect(codes('  x = COUNT(c-[m:members { limit: 3 }]->)')).toEqual([C.HOP_CONFIG_UNREAD]);
     expect(codes('  c-[m:members { limit: 3 }]-> {\n    write chat-[:note]-> { Body: m.Name }\n  }')).toEqual([C.HOP_CONFIG_UNREAD]);
-    expect(messages('  x = COUNT(c-[m:members { limit: 3 }]->)')).toContain('#transform');
+    expect(messages('  x = COUNT(c-[m:members { limit: 3 }]->)')).toContain('a hop takes no settings');
   });
 
   it('a hop without settings is fine', () => {
     expect(codes('  x = COUNT(c-[m:members]->)')).toEqual([]);
-  });
-
-  it("a #transform hop's settings are read, and stay accepted", () => {
-    expect(codes('  x = c-[t:#transform { plugin: "x" }]->.out')).toEqual([]);
   });
 
   it('before version 3 the settings are dropped — unchanged', () => {
@@ -74,19 +70,19 @@ describe('settings on a hop are read, or refused', () => {
   });
 });
 
-describe('a walk ending in a resource or linked hop keeps what was written', () => {
+describe('a walk ending in a resource hop keeps what was written', () => {
   it('as a value, a rooted resource walk is refused — its root was dropped', () => {
     expect(codes('  x = c-[:_resources]->.url')).toEqual([C.RESOURCE_WALK_UNREAD]);
     expect(codes('  x = c-[m:members]->-[:_resources]->.url')).toEqual([C.RESOURCE_WALK_UNREAD]);
     expect(messages('  x = c-[:_resources]->.url')).toContain("c-[f:_resources]-> {");
   });
 
-  it('as a value, a rooted #linked walk is refused', () => {
-    expect(codes('  x = c-[#linked WHERE type = "ATTIO"]->.external_id')).toEqual([C.RESOURCE_WALK_UNREAD]);
+  it('a rootless one drops nothing and is not this refusal', () => {
+    expect(codes('  x = -[:_resources]->.url')).toEqual([]);
   });
 
-  it('a rootless one drops nothing and is not this refusal', () => {
-    expect(codes('  x = -[#linked WHERE type = "ATTIO"]->.external_id')).toEqual([]);
+  it('before version 3 a rooted #linked walk drops its root — unchanged', () => {
+    expect(codes('  x = c-[#linked WHERE type = "ATTIO"]->.external_id', 2)).toEqual([]);
   });
 
   it("a one-hop block head keeps its root — the engine reads it off the head", () => {
@@ -101,32 +97,6 @@ describe('a walk ending in a resource or linked hop keeps what was written', () 
   it('before version 3 the root and the leading hops are dropped — unchanged', () => {
     expect(codes('  x = c-[:_resources]->.url', 2)).toEqual([]);
     expect(codes('  c-[m:members]->-[f:_resources]-> {\n    write chat-[:note]-> { Body: f.url }\n  }', 2)).toEqual([]);
-  });
-});
-
-describe('@resource and @parent name a field the record has', () => {
-  it('an unknown field is refused, with the fields there are', () => {
-    expect(codes('  x = @resource.uri')).toEqual([C.META_FIELD_UNKNOWN]);
-    expect(codes('  x = @parent.id')).toEqual([C.META_FIELD_UNKNOWN]);
-    expect(messages('  x = @resource.uri')).toContain("did you mean 'url'");
-    expect(messages('  x = @parent.id')).toContain('it has created, external_id');
-  });
-
-  it('inside a resource walk WHERE, where it is read per resource', () => {
-    expect(codes('  c-[f:_resources WHERE @resource.mime == "a"]-> {\n    write chat-[:note]-> { Body: "x" }\n  }'))
-      .toEqual([C.META_FIELD_UNKNOWN]);
-    expect(codes('  c-[f:_resources WHERE @resource.contentType == "a"]-> {\n    write chat-[:note]-> { Body: "x" }\n  }'))
-      .toEqual([]);
-  });
-
-  it('a known field is fine', () => {
-    expect(codes('  x = @resource.url')).toEqual([]);
-    expect(codes('  x = @parent.external_id')).toEqual([]);
-  });
-
-  it('before version 3 any field is read unchecked — unchanged', () => {
-    expect(codes('  x = @resource.uri', 2)).toEqual([]);
-    expect(codes('  x = @parent.id', 2)).toEqual([]);
   });
 });
 
