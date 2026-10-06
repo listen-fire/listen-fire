@@ -157,7 +157,7 @@ MAP(deduped-[:companies]->, { concurrency: 6 }, (c) => {
 \`\`\`
 
 - \`write c { … }\` merges the named fields into the record and leaves the rest as they were; \`?:\` fills only what is empty. The record keeps its place, its nested nodes are untouched, and every later read sees the new values.
-- Any name holding the record updates it: the handle a write handed back, a block's alias, a \`MAP\` parameter. Two updates of one record take turns; updates of different records run together.
+- Any name holding the record updates it: the handle a write handed back, a block's alias, a \`MAP\` parameter, a \`FIRST\`/\`AT\` pick. A record \`extract\`/\`extractOne\` handed back updates the same way. Two updates of one record take turns; updates of different records run together.
 - A field the nested node does not declare is refused when you save, and so is \`write g { … }\` on a whole \`graph { … }\` value, which is not a record.
 
 ### declared-structures

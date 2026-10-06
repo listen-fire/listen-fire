@@ -58,7 +58,7 @@ import type {
   SourceRead,
   WriteRecord,
 } from './expression';
-import { bindingOf, isDictValue } from './expression';
+import { bindValue, bindingOf, isDictValue } from './expression';
 import { isFileRef, reviveFileRefs } from '../translation_graph/engine/files/retrieve';
 import type { Provenance } from './provenance';
 import { MovementEngineError } from './errors';
@@ -790,13 +790,12 @@ async function rehydrateInPark(
         ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
         ...(descriptor.many === true ? { many: true } : {}),
       };
+    // Through the one binding constructor, so a park taken while a name held
+    // one record on the value plane resumes with the record bound as itself.
     case 'recordValue':
-      return {
-        kind: 'value',
-        value: await rehydrateValue(descriptor.value, ctx, park),
-        ...(descriptor.provenance !== undefined ? { provenance: descriptor.provenance } : {}),
-        ...(descriptor.many === true ? { many: true } : {}),
-      };
+      return bindValue(await rehydrateValue(descriptor.value, ctx, park), descriptor.provenance, {
+        many: descriptor.many === true,
+      });
     case 'callback':
       return {
         kind: 'callback',

@@ -1847,8 +1847,21 @@ class Parser {
         `'${spelled}' spreads a record's fields into the write — name the record right after it: '${spelled}e'`,
       );
     }
-    const source = this.readName(`the record to spread after '${spelled}'`);
-    const spread: WriteSpread = { source, span: this.spanFrom(start) };
+    const root = this.readName(`the record to spread after '${spelled}'`);
+    // `...m.k` — a record held under a key of a map spreads as that record.
+    const members: string[] = [];
+    while (this.peekCh() === '.' && /[A-Za-z_`]/.test(this.peekCh(1) ?? '')) {
+      this.pos++;
+      members.push(this.readName(`the key to read after '${spelled}${root}.'`));
+    }
+    const spread: WriteSpread =
+      members.length === 0
+        ? { source: root, span: this.spanFrom(start) }
+        : {
+            source: [root, ...members].map(spellName).join('.'),
+            path: { root, members },
+            span: this.spanFrom(start),
+          };
     if (fill) spread.semantics = 'fill';
     return spread;
   }
@@ -2320,7 +2333,12 @@ class Parser {
             spreadStart,
           );
         }
-        spreads.push({ source: spread.source, after: entries.length, span: spread.span });
+        spreads.push({
+          source: spread.source,
+          ...(spread.path !== undefined ? { path: spread.path } : {}),
+          after: entries.length,
+          span: spread.span,
+        });
         this.finishNodeEntry(spread.source);
         continue;
       }

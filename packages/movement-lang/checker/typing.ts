@@ -658,9 +658,13 @@ export type PositionTypeRef =
        *  on an edge of a node this run built, updatable in place as the
        *  `position` kind's `runBuilt` is, with the edge's landing type — what
        *  `write h { … }` may set. A value the run merely synthesised (a
-       *  `node { … }` or `graph<Shape> { … }` literal, an extracted record) is
-       *  on no such edge, and does not carry it. */
+       *  `node { … }` or `graph<Shape> { … }` literal) is on no such edge, and
+       *  does not carry it. */
       runBuilt?: { landing: PositionTypeRef };
+      /** A record `extract(…)` / `extractOne(…)` handed back: one the run
+       *  built, updatable in place like a landing — `fields` is what
+       *  `write r { … }` may set, the fields the extraction declared. */
+      extracted?: { fields: Record<string, SchemaFieldType> };
     };
 
 /** One edge of a checker-local node: the same `EdgeSchema` promises every other
@@ -3595,20 +3599,41 @@ export class ExpressionTyping {
    * through to the record plane and typed nothing.
    */
   private dictMemberRead(expr: Extract<Expression, { type: 'traverse' }>): { type: FieldType | undefined } | undefined {
-    if (before(this.options.languageVersion, 3)) return undefined;
-    if (expr.aliasRoot === undefined || expr.steps.length > 0 || expr.expression.type !== 'property') return undefined;
+    if (expr.aliasRoot === undefined || expr.steps.length > 0) return undefined;
+    // `d.k` ends at the key; `d.k.f` reads on from what the key holds.
+    const member = expr.expression;
+    const key =
+      member.type === 'property'
+        ? member.propertyTypeId
+        : member.type === 'traverse' && member.aliasRoot !== undefined
+          ? member.aliasRoot
+          : undefined;
+    if (key === undefined) return undefined;
     if (this.rootType(expr.aliasRoot) !== undefined) return undefined;
     const held = this.scalarType(expr.aliasRoot);
     const dict = held !== undefined ? stripAbsent(held) : undefined;
     if (dict === undefined || !isDictType(dict)) return undefined;
-    const key = expr.expression.propertyTypeId;
-    if (dict.shape === undefined) return { type: maybeAbsent(dict.of) };
-    if (!Object.hasOwn(dict.shape, key)) {
-      this.reportUnknownDictKey(key, Object.keys(dict.shape));
-      return { type: undefined };
+    const slotType = (): FieldType | undefined => {
+      if (dict.shape === undefined) return maybeAbsent(dict.of);
+      if (!Object.hasOwn(dict.shape, key)) {
+        this.reportUnknownDictKey(key, Object.keys(dict.shape));
+        return undefined;
+      }
+      const slot = dict.shape[key] ?? undefined;
+      return isMaybeAbsent(held) ? maybeAbsent(slot) : slot;
+    };
+    // Before version 3 a key read fell through to the record plane and typed
+    // nothing — except a key holding records, which reads as the records it
+    // holds in every version, as a record bound to a name does.
+    if (before(this.options.languageVersion, 3)) {
+      const known = dict.shape === undefined ? dict.of : dict.shape[key] ?? undefined;
+      if (!holdsRecords(known)) return undefined;
     }
-    const slot = dict.shape[key] ?? undefined;
-    return { type: isMaybeAbsent(held) ? maybeAbsent(slot) : slot };
+    const type = slotType();
+    if (member.type !== 'traverse') return { type };
+    // A record held under the key is read on as that record.
+    const record = recordHeadPosition(type);
+    return { type: this.inferAt({ type: 'traverse', steps: member.steps, expression: member.expression }, record) };
   }
 
   /** Walk `body` with `proofs`' subjects read as PRESENT — the narrowing an
@@ -5100,8 +5125,9 @@ export class ExpressionTyping {
    * so the only author-time mistake is the one the engine would otherwise
    * throw for — a record whose fields the program does not hold (read live
    * from a system, one field at a time, or the movement's own trigger).
-   * Same test as `checkStdlibRecordArg`, same reason; a record nested inside
-   * a list or dict is beyond what the type says here and fails the run, named.
+   * Same test as `checkStdlibRecordArg`, same reason, for one record or a
+   * list of them; a record nested inside a dict is beyond what the type says
+   * here and fails the run, named.
    */
   private checkStdlibWholeValueArg(
     spec: StdlibFunctionSpec,
@@ -5111,9 +5137,9 @@ export class ExpressionTyping {
     if (declared === undefined) return;
     const type = args[declared.index];
     if (type === undefined) return;
-    const stripped = stripAbsent(type);
-    if (!isRecordType(stripped)) return;
-    const position = recordIn(stripped)?.position;
+    const record = recordIn(type);
+    if (record === undefined) return;
+    const position = record.position;
     if (!this.holdsSpelledFields(position)) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
