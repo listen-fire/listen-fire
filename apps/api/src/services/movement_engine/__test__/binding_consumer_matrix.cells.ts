@@ -487,6 +487,24 @@ function oneConsumers(): OneConsumer[] {
     }),
     value({ id: 'TEXT.PAIRS(x)', since: 2, fieldList: 'MOV_STDLIB_ARG_NOT_RECORD', expr: (x) => `TEXT.PAIRS(${x})`, value: (r) => `name=${r.name} | tag=${r.tag}` }),
     value({ id: 'TEXT.SERIALISE(x)', since: 3, fieldList: 'MOV_STDLIB_ARG_NOT_RECORD', expr: (x) => `TEXT.SERIALISE(${x}, "JSON")`, value: (r) => json(serialised(r)) }),
+    // A plugin argument that takes structured data is handed every field at
+    // once: the engine reads a system's record's fields one at a time, so it
+    // has none to hand over.
+    value({
+      id: 'plugin(data: x) (json)',
+      since: 1,
+      fieldList: 'MOV_CALL_ARG_TYPE',
+      pre: (x) => [`said = summarise(data: ${x})`],
+      expr: () => 'said',
+      value: (r) => r.name,
+    }),
+    value({
+      id: 'plugin(data: { name: x.name }) (json)',
+      since: 1,
+      pre: (x) => [`said = summarise(data: { name: ${x}.name })`],
+      expr: () => 'said',
+      value: (r) => r.name,
+    }),
     value({
       id: 'plugin(arg: x)',
       since: 1,
@@ -547,6 +565,54 @@ function oneConsumers(): OneConsumer[] {
       since: 3,
       fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
       stmts: (x) => [`serialise_entry(e: ${x})`],
+      rows: (r) => [v(json(serialised(r)))],
+    },
+    // A record reached through the parameter is the caller's record's child:
+    // its fields are in hand exactly when the caller's are.
+    {
+      arity: 'one',
+      form: 'statement',
+      id: "movement(e: <Entry>) that walks e's child and reads a field",
+      since: 1,
+      stmts: (x) => [`child_entry(e: ${x})`],
+      rows: (r) => r.child.map(v),
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: "movement(e: <Entry>) that walks e's child and serialises it",
+      since: 3,
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      stmts: (x) => [`serialise_child(e: ${x})`],
+      rows: (r) => r.child.map((first) => v(json({ first }))),
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: "movement(e: <Entry>) that hands e to a plugin's json argument",
+      since: 1,
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      stmts: (x) => [`summarise_entry(e: ${x})`],
+      rows: (r) => [v(r.name)],
+    },
+    // A closure bound to a name is a function (version 3): its record
+    // parameter carries what its body needs, as a declared function's does.
+    // `r`, not `e`: several paths already bind `e`.
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'closure (r: <Entry>) => … that reads r.name, called with x',
+      since: 3,
+      stmts: (x) => ['named = (r: <Entry>) => {', `  ${emit('r.name')}`, '}', `named(r: ${x})`],
+      rows: (r) => [v(r.name)],
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'closure (r: <Entry>) => … that serialises r, called with x',
+      since: 3,
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      stmts: (x) => ['ser_closure = (r: <Entry>) => {', `  ${emit('TEXT.SERIALISE(r, "JSON")')}`, '}', `ser_closure(r: ${x})`],
       rows: (r) => [v(json(serialised(r)))],
     },
     {

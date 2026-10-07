@@ -576,6 +576,28 @@ export function parameterNeedOf(position: PositionTypeRef | undefined): FieldsNe
   return position.kind === 'position' || position.kind === 'union' ? position.parameter : undefined;
 }
 
+/** `landing`, walked from `from`, carrying `from`'s parameter cell: a child
+ *  of an opaque record is opaque, a child of a record in hand is in hand, so
+ *  a body's need of the child is a need of the record the caller handed over. */
+export function withParameterOf(
+  from: PositionTypeRef | undefined,
+  landing: PositionTypeRef | undefined,
+): PositionTypeRef | undefined {
+  const need = parameterNeedOf(from);
+  if (need === undefined || landing === undefined) return landing;
+  switch (landing.kind) {
+    case 'maybeEmpty': {
+      const of = withParameterOf(from, landing.of);
+      return of !== undefined ? { ...landing, of } : landing;
+    }
+    case 'position':
+    case 'union':
+      return { ...landing, parameter: need };
+    default:
+      return landing;
+  }
+}
+
 /** One parameter of a closure: its name, and what it accepts. */
 export interface ClosureParam extends PlaneType {
   name: string;
@@ -4905,8 +4927,13 @@ export class ExpressionTyping {
         ordering = this.hopOrdering(from, step, this.lastEdgeSchema);
         orderingEdge = step.edgeTypeId;
         this.checkHopLimitOrder(step, ordering);
-        const next =
-          stepped !== undefined ? refineSelected(stepped, step.expressionFilter) : stepped;
+        // A record reached through a function's parameter is the caller's
+        // record's child: its fields are in hand exactly when the caller's
+        // are, so what the body needs of it is the parameter's need.
+        const next = withParameterOf(
+          from,
+          stepped !== undefined ? refineSelected(stepped, step.expressionFilter) : stepped,
+        );
         // The hop's own alias names the element it lands on, and the bracket's
         // WHERE and ORDER BY are expressions over that element — so the alias
         // is bound before either is typed (`-[e:X WHERE e.`F` == 1]->`, `ORDER

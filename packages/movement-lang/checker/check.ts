@@ -2141,23 +2141,28 @@ interface DeclaredExtractShape {
  * node built in memory. Undefined for a system's record — its fields are the
  * system's — and for anything that is not a record.
  */
-/** `position` as the type of parameter `name` of the function `info`
- *  declares: it carries the parameter's `FieldsNeed` cell, made on first ask
- *  and shared from then on. Only a position or a union names a record a
- *  caller hands over. */
+/** `position` as the type of parameter `param` of the function `fn`: it
+ *  carries the parameter's `FieldsNeed` cell, made on first ask and kept in
+ *  `cells` (the function's own, shared by every walk of its body) from then
+ *  on. Only a position or a union names a record a caller hands over. */
 function asParameter(
   position: PositionTypeRef,
-  info: NonNullable<ScopeSymbol['movement']>,
-  name: string,
+  cells: Map<string, FieldsNeed>,
+  at: { fn: string; param: string },
 ): PositionTypeRef {
   if (position.kind !== 'position' && position.kind !== 'union') return position;
-  info.paramNeeds ??= new Map();
-  let need = info.paramNeeds.get(name);
+  let need = cells.get(at.param);
   if (need === undefined) {
-    need = { fn: info.decl.name, param: name, passedTo: [] };
-    info.paramNeeds.set(name, need);
+    need = { ...at, passedTo: [] };
+    cells.set(at.param, need);
   }
   return { ...position, parameter: need };
+}
+
+/** The parameter cells of a declared function. */
+function paramNeedsOf(info: NonNullable<ScopeSymbol['movement']>): Map<string, FieldsNeed> {
+  info.paramNeeds ??= new Map();
+  return info.paramNeeds;
 }
 
 /** `position` with no parameter cell — the record once it has left the body. */
@@ -3686,7 +3691,7 @@ class Checker {
       info.paramTypes = info.decl.params.map(param => {
         if (param.type === undefined) return {};
         const plane = this.planeTypeOf(param.type, info.declScope);
-        return plane.posType !== undefined ? { ...plane, posType: asParameter(plane.posType, info, param.name) } : plane;
+        return plane.posType !== undefined ? { ...plane, posType: asParameter(plane.posType, paramNeedsOf(info), { fn: info.decl.name, param: param.name }) } : plane;
       });
     }
     return info.paramTypes;
@@ -4035,7 +4040,7 @@ class Checker {
         name: param.name,
         kind: 'param',
         span: param.span,
-        ...(posType ? { posType: asParameter(posType, info, param.name) } : {}),
+        ...(posType ? { posType: asParameter(posType, paramNeedsOf(info), { fn: info.decl.name, param: param.name }) } : {}),
       });
     }
     this.typeOnlyDepth++;
@@ -5556,7 +5561,7 @@ class Checker {
         ? this.asShape(supplied)
         : options.valueParamsOnly === true
         ? this.asShape({ fieldType: this.checkCallbackParamType(param.type, param.name, scope) })
-        : this.closureParamShape(param, scope);
+        : this.closureParamShape(param, scope, closure, options.self);
       if (param.type === undefined && supplied === undefined) {
         this.reportParamNeedsType(param.name, param.span, options.label);
       }
@@ -5613,7 +5618,13 @@ class Checker {
     if (self !== undefined && collector.returns.length === 0) {
       for (const use of this.boundSelfCalls.get(self) ?? []) this.reportCallReturnsNothing(use.callee, use.span);
     }
-    const returns = declared !== undefined ? { returns: true, ...declared } : inferred;
+    // A parameter handed back is the caller's record again (as a declared
+    // function's is).
+    const returns = declared !== undefined
+      ? { returns: true, ...declared }
+      : inferred.posType !== undefined
+      ? { ...inferred, posType: withoutParameter(inferred.posType) }
+      : inferred;
     return { params, returns, effects };
   }
 
@@ -5675,8 +5686,15 @@ class Checker {
   }
 
   /** A closure parameter's type — the same two things a movement parameter may
-   *  be: a scalar, or an address into a graph in scope. */
-  private closureParamShape(param: MovementParam, scope: Scope): PlaneType {
+   *  be: a scalar, or an address into a graph in scope. A record parameter
+   *  carries what the body needs of it, as a declared function's does: its
+   *  cell lives with the closure, so every walk of the body shares it. */
+  private closureParamShape(
+    param: MovementParam,
+    scope: Scope,
+    closure?: ClosureExpression,
+    self?: string,
+  ): PlaneType {
     const written = param.type;
     // No annotation ⇒ nothing written to resolve. The caller decides whether
     // something SUPPLIES the type (a collection op does) or the parameter is
@@ -5688,8 +5706,19 @@ class Checker {
     const graphSymbol = this.resolveName(written.graph, written.span, scope);
     if (graphSymbol === undefined || graphSymbol.kind === 'adapter') return {};
     const posType = this.positionFromTypeRefStrict(graphSymbol, written, written.span);
-    return posType !== undefined ? { posType } : {};
+    if (posType === undefined) return {};
+    if (closure === undefined) return { posType };
+    let cells = this.closureParamNeeds.get(closure);
+    if (cells === undefined) {
+      cells = new Map();
+      this.closureParamNeeds.set(closure, cells);
+    }
+    return { posType: asParameter(posType, cells, { fn: self ?? 'the closure', param: param.name }) };
   }
+
+  /** What each closure's body needs of its record parameters — the closure's
+   *  `paramNeeds`. */
+  private readonly closureParamNeeds = new WeakMap<ClosureExpression, Map<string, FieldsNeed>>();
 
   /**
    * The symbol a bare-name slot refers to, when that name is bound on the NODE
@@ -10775,7 +10804,9 @@ class Checker {
           : undefined;
       const info = scope.symbols.get(statement.name)?.movement;
       const posType =
-        declared !== undefined && info?.decl === statement ? asParameter(declared, info, param.name) : declared;
+        declared !== undefined && info?.decl === statement
+          ? asParameter(declared, paramNeedsOf(info), { fn: info.decl.name, param: param.name })
+          : declared;
       const existing = this.declareAuthored(
         movementScope,
         {
@@ -12430,14 +12461,25 @@ class Checker {
     scope: Scope,
   ): void {
     if (declared === 'json') {
-      // Handed its fields: a function's parameter passed here needs them in
-      // hand, whatever the plugin then reads of them.
-      if (arg.kind === 'expr') {
+      // Handed its fields, all at once: a record whose fields are read from
+      // its system one at a time has none to hand, and a function's parameter
+      // passed here needs them in hand, whatever the plugin then reads of them.
+      if (arg.kind !== 'expr') return;
+      const record =
+        this.bareSlotPositionType(arg.expr, scope) ?? recordIn(this.slotValueTypeSilently(arg.expr, scope))?.position;
+      if (record === undefined) return;
+      if (holdsFieldsInHand(record, token => this.declaredShapeTokens.has(token))) {
         noteFieldsNeeded(
-          recordIn(this.slotValueTypeSilently(arg.expr, scope))?.position,
+          record,
           `hands it to '${callee}' as '${arg.name}', which takes every field (line ${arg.expr.span.start.line})`,
         );
+        return;
       }
+      this.report(
+        DiagnosticCodes.CALL_ARG_TYPE,
+        `'${callee}' takes every field of the record it is given as '${arg.name}', and this is ${describePosition(record)}, whose fields are read from its system one at a time. Pass a dict of the fields it needs ('${arg.name}: { name: r.name, … }')`,
+        arg.expr.span,
+      );
       return;
     }
     if (declared === undefined) return;
