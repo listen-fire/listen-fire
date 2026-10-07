@@ -12557,7 +12557,9 @@ class Checker {
    * A RECORD handed to a plugin argument whose declared type holds none (text,
    * a url, a number) — refused where it is written, as a movement's value
    * parameter refuses one. An argument declared to take structured data
-   * (`json`) takes a record, and is handed its fields.
+   * (`json`) takes a record, and is handed its fields. Whatever the type, or
+   * none, a plugin is handed values: an argument written in place that is not
+   * an expression is refused.
    */
   private reportPluginArgType(
     callee: string,
@@ -12565,22 +12567,26 @@ class Checker {
     arg: CallArg,
     scope: Scope,
   ): void {
+    switch (arg.kind) {
+      case 'expr':
+        break;
+      case 'write':
+      case 'node':
+      case 'call':
+        this.refusePluginArgInPlace(callee, declared, arg);
+        return;
+      // Refused for every callee where arguments are bound: no argument
+      // carries one.
+      case 'closure':
+      case 'type':
+        return;
+      default:
+        return neverAsAny(arg);
+    }
     if (declared === 'json') {
       // Handed its fields, all at once: a record whose fields are read from
       // its system one at a time has none to hand, and a function's parameter
       // passed here needs them in hand, whatever the plugin then reads of them.
-      // A write or a `node { … }` written in place is a statement's result,
-      // not a value the plugin can be handed: bound to a name first, it is.
-      if (arg.kind === 'write' || arg.kind === 'node') {
-        const what = arg.kind === 'write' ? 'a write' : "a 'node { … }' literal";
-        this.report(
-          DiagnosticCodes.CALL_ARG_TYPE,
-          `'${callee}' takes structured data for '${arg.name}' (a value: a dict, or a record bound to a name), and this is ${what} written in place, which a plugin is not handed. Bind it first ('r = ${arg.kind === 'write' ? 'write …' : 'node { … }'}') and pass '${arg.name}: r', or pass a dict of the fields ('${arg.name}: { name: … }')`,
-          callArgSpan(arg),
-        );
-        return;
-      }
-      if (arg.kind !== 'expr') return;
       const record =
         this.bareSlotPositionType(arg.expr, scope) ?? recordIn(this.slotValueTypeSilently(arg.expr, scope))?.position;
       if (record === undefined) return;
@@ -12599,29 +12605,62 @@ class Checker {
       return;
     }
     if (declared === undefined) return;
-    const span = callArgSpan(arg);
-    const record = (() => {
+    const valueType = this.slotValueTypeSilently(arg.expr, scope);
+    if (valueType === undefined || !holdsRecords(stripAbsent(valueType))) return;
+    this.report(
+      DiagnosticCodes.CALL_ARG_TYPE,
+      `'${callee}' takes ${describeFieldType(declared)} for '${arg.name}', and this is a record — pass one of its fields ('${arg.name}: r.website')`,
+      arg.expr.span,
+    );
+  }
+
+  /**
+   * A plugin argument written in place that is no expression: a write, a
+   * `node { … }` or a call (a built-in's included). A plugin is handed values, and
+   * the engine has always refused these at run time ("a plugin takes
+   * values"); said here, where it is written. A write, a node or a call has a
+   * value once bound to a name.
+   */
+  private refusePluginArgInPlace(
+    callee: string,
+    declared: SchemaFieldType | undefined,
+    arg: Extract<CallArg, { kind: 'write' | 'node' | 'call' }>,
+  ): void {
+    const takes =
+      declared === undefined
+        ? 'a value'
+        : declared === 'json'
+        ? 'structured data (a dict, or a record bound to a name)'
+        : describeFieldType(declared);
+    const what = (() => {
       switch (arg.kind) {
         case 'write':
+          return 'a write';
         case 'node':
-          return true;
-        case 'expr': {
-          const valueType = this.slotValueTypeSilently(arg.expr, scope);
-          return valueType !== undefined && holdsRecords(stripAbsent(valueType));
-        }
+          return "a 'node { … }' literal";
         case 'call':
-        case 'closure':
-        case 'type':
-          return false;
+          return `a call to '${arg.call.callee}'`;
         default:
           return neverAsAny(arg);
       }
     })();
-    if (!record) return;
+    const repair = (() => {
+      switch (arg.kind) {
+        case 'write':
+        case 'node':
+          return declared === undefined || declared === 'json'
+            ? `Bind it to a name first ('r = …') and pass '${arg.name}: r'`
+            : `Bind it to a name first ('r = …') and pass one of its fields ('${arg.name}: r.website')`;
+        case 'call':
+          return `Bind its value to a name first ('v = ${arg.call.callee}(…)') and pass '${arg.name}: v'`;
+        default:
+          return neverAsAny(arg);
+      }
+    })();
     this.report(
       DiagnosticCodes.CALL_ARG_TYPE,
-      `'${callee}' takes ${describeFieldType(declared)} for '${arg.name}', and this is a record — pass one of its fields ('${arg.name}: r.website')`,
-      span,
+      `'${callee}' takes ${takes} for '${arg.name}', and this is ${what} written in place, which a plugin is not handed — a plugin's arguments are values. ${repair}`,
+      callArgSpan(arg),
     );
   }
 

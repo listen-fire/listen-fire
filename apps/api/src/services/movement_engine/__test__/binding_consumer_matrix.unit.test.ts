@@ -189,6 +189,9 @@ const fetchUrl = staticCatalogFromManifests({ credentials: {} }).plugin('fetch_u
  *  record's fields all at once, and hands back the name it was given. No
  *  registered plugin takes one today; the type is the plugin contract's. */
 const SUMMARISE = 'summarise';
+/** A plugin whose argument declares no type: it hands back the text it was
+ *  given. */
+const RELAY = 'relay';
 const catalog = mockCatalog({
   adapters: {
     email: { constructionArgs: credentialArg, schema: emailSchema },
@@ -199,6 +202,7 @@ const catalog = mockCatalog({
   plugins: {
     ...(fetchUrl !== undefined ? { fetch_url: fetchUrl } : {}),
     [SUMMARISE]: { args: ['data'], argTypes: { data: 'json' }, requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
+    [RELAY]: { args: ['data'], requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
   },
 });
 
@@ -219,7 +223,7 @@ function prelude(version: LanguageVersion): string {
   return [
     'import { email, attio, sheets } from adapters',
     'import { inbox_cred, crm_cred, sheet_cred } from credentials',
-    `import { ${[...(fetchUrl !== undefined ? ['fetch_url'] : []), SUMMARISE].join(', ')} } from plugins`,
+    `import { ${[...(fetchUrl !== undefined ? ['fetch_url'] : []), SUMMARISE, RELAY].join(', ')} } from plugins`,
     '',
     'inbox = email(credentials: inbox_cred)',
     'src = attio(credentials: crm_cred)',
@@ -362,10 +366,11 @@ const extractLlm = {
 
 const transformInvoker: MovementTransformInvoker = {
   declaredOutput: (plugin) =>
-    plugin === SUMMARISE
+    plugin === SUMMARISE || plugin === RELAY
       ? { kind: 'value', type: { kind: 'string' } }
       : (getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-')))?.signature.output,
   async invoke({ plugin, config }) {
+    if (plugin === RELAY) return { text: typeof config.data === 'string' ? config.data : 'not text' };
     if (plugin !== SUMMARISE) return { text: 'page' };
     const data = config.data;
     const name = typeof data === 'object' && data !== null && 'name' in data ? data.name : undefined;

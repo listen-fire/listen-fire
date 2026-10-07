@@ -439,6 +439,9 @@ interface ConsumerBase {
   throughEdges?: true;
   /** The right answer is a refusal whatever the path. */
   refused?: { code?: string; why: string };
+  /** Paired with this path alone: the consumer's verdict does not depend on
+   *  how the record was bound. */
+  onlyPath?: string;
 }
 
 /** A consumer that reads a VALUE off the binding — usable anywhere, including
@@ -653,6 +656,9 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => [`said = summarise(data: node { name: ${x}.name, tag: "c" })`, emit('said')],
       rows: (r) => [v(r.name)],
     },
+    // An untyped plugin argument is handed a value: anything written in place
+    // that is not an expression is refused, whatever it is.
+    ...pluginArgForms(),
     {
       arity: 'one',
       form: 'statement',
@@ -671,6 +677,44 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => [`write sink-[:rows]-> { v: "s", ?...${x} }`],
       rows: (r) => [row({ name: r.name, tag: r.tag, v: 's' })],
     },
+  ];
+}
+
+/** The run-built row the plugin-argument forms are paired with. */
+const RUN_BUILT_ROW = 'local: block head alias';
+
+function pluginArgForms(): OneStatementConsumer[] {
+  const form = (
+    id: string,
+    o: {
+      since: LanguageVersion;
+      arg: (x: string) => string;
+      pre?: (x: string) => string[];
+      rows: (rec: Rec) => string[];
+      /** Why it is refused, when it is. */
+      refused?: string;
+    },
+  ): OneStatementConsumer => ({
+    arity: 'one',
+    form: 'statement',
+    id: `relay(data: ${id}) (untyped)`,
+    since: o.since,
+    onlyPath: RUN_BUILT_ROW,
+    ...(o.refused !== undefined ? { refused: { code: 'MOV_CALL_ARG_TYPE', why: o.refused } } : {}),
+    stmts: (x) => [...(o.pre?.(x) ?? []), `relayed = relay(data: ${o.arg(x)})`, emit('relayed')],
+    rows: o.rows,
+  });
+  const named = (r: Rec) => [v(r.name)];
+  const shouted = (r: Rec) => [v(r.name.toUpperCase())];
+  return [
+    form('x.name', { since: 1, arg: (x) => `${x}.name`, rows: named }),
+    form('u = UPPER(x.name), u', { since: 3, pre: (x) => [`u = UPPER(${x}.name)`], arg: () => 'u', rows: shouted }),
+    form('UPPER(x.name)', { since: 3, arg: (x) => `UPPER(${x}.name)`, rows: shouted, refused: "a built-in's call written in place is not a value a plugin is handed" }),
+    form('write …', { since: 1, arg: (x) => `write copies-[:entries]-> { name: ${x}.name, tag: "c" }`, rows: named, refused: 'a write written in place is not a value a plugin is handed' }),
+    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named, refused: "a 'node { … }' written in place is not a value a plugin is handed" }),
+    form('summarise(data: …)', { since: 1, arg: (x) => `summarise(data: { name: ${x}.name })`, rows: named, refused: 'a call written in place is not a value a plugin is handed' }),
+    form('(r) => …', { since: 3, arg: () => '(r) => { return r }', rows: named, refused: 'a function is not a value an argument carries' }),
+    form('<Entry>', { since: 3, arg: () => '<Entry>', rows: named, refused: 'a type is not a value an argument carries' }),
   ];
 }
 
@@ -813,6 +857,7 @@ export function cells(): Cell[] {
   const out: Cell[] = [];
   for (const path of onePaths()) {
     for (const consumer of oneConsumers()) {
+      if (consumer.onlyPath !== undefined && consumer.onlyPath !== path.id) continue;
       const body = oneBody(path, consumer);
       if (body === undefined) continue;
       const before = expectationBefore(path, consumer);

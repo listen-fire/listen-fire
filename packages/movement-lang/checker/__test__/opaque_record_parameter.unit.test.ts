@@ -43,11 +43,14 @@ const catalog = mockCatalog({
       effects: { ai: true },
       output: { kind: 'value', type: 'text' },
     },
+    // A plugin whose argument declares no type, and one that takes text.
+    relay: { args: ['data'], requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
+    shout: { args: ['data'], argTypes: { data: 'text' }, requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
   },
 });
 
 const PRELUDE = `import { attio, sheets } from adapters
-import { summarise } from plugins
+import { summarise, relay, shout } from plugins
 src = attio()
 sink = sheets()
 
@@ -484,6 +487,64 @@ movement run2(go: <src>) {
       expect(message).toContain("'summarise'");
       expect(message).toContain('structured data');
       expect(message).toContain(named);
+    });
+  });
+
+  describe('a plugin argument written in place that is no expression is refused, whatever the argument takes', () => {
+    const FORMS: Array<[string, string, string]> = [
+      ['a write', 'write src-[:companies]-> { name: "Gamma", tag: "g" }', 'a write'],
+      ['a node literal', 'node { name: "n", tag: "t" }', "'node { … }'"],
+      ['a call', 'summarise(data: { name: "n" })', "a call to 'summarise'"],
+      ["a built-in's call", 'UPPER("n")', "a call to 'UPPER'"],
+    ];
+    const PLUGINS: Array<[string, string]> = [
+      ['relay', 'a value'],
+      ['shout', 'text'],
+      ['summarise', 'structured data'],
+    ];
+    it.each(PLUGINS.flatMap(([plugin, takes]) => FORMS.map(([label, arg, named]) => [plugin, label, arg, named, takes] as const)))(
+      "'%s' given %s",
+      (plugin, _label, arg, named, takes) => {
+        const source = `movement run2(go: <src>) {
+  s = ${plugin}(data: ${arg})
+  write sink-[:rows]-> { v: s }
+}
+`;
+        expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+        const message = messages(source);
+        expect(message).toContain(`'${plugin}'`);
+        expect(message).toContain(named);
+        expect(message).toContain(takes);
+      },
+    );
+
+    it.each([
+      ['a function', '(r) => { return r }', 'a function written in place'],
+      ['a type', '<Entry>', 'a type'],
+    ])('%s is refused once, by the rule every argument has', (_label, arg, named) => {
+      const source = `movement run2(go: <src>) {
+  s = relay(data: ${arg})
+  write sink-[:rows]-> { v: s }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      expect(messages(source)).toContain(named);
+    });
+
+    it('the same values bound to a name first, and an expression, pass', () => {
+      const source = `movement run2(go: <src>) {
+  n = node { name: "n", tag: "t" }
+  v = summarise(data: { name: "n" })
+  s1 = relay(data: n)
+  s2 = relay(data: v)
+  s3 = shout(data: v)
+  s4 = summarise(data: n)
+  u = UPPER(v)
+  s5 = relay(data: u)
+  write sink-[:rows]-> { v: "\${s1}\${s2}\${s3}\${s4}\${s5}" }
+}
+`;
+      expect(codes(source)).toEqual([]);
     });
   });
 });
