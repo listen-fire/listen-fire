@@ -487,6 +487,7 @@ ${pre.map((l) => `  ${l}\n`).join('')}  s = ${line}
       ['shout', 'summarise(data: { name: "n" })'],
       ['relay', 'relay(data: UPPER("n"))'],
       ['summarise', 'node { name: "n", tag: "t" }'],
+      ['relay', 'node { name: "n", tag: "t" }'],
     ])("'%s' given %s runs", (plugin, arg) => {
       expect(codes(run(`${plugin}(data: ${arg})`))).toEqual([]);
     });
@@ -505,7 +506,6 @@ ${pre.map((l) => `  ${l}\n`).join('')}  s = ${line}
     });
 
     it.each([
-      ['relay', 'a value'],
       ['shout', 'text'],
     ])("'%s' given a node literal is refused: a record is no value it takes", (plugin, takes) => {
       const source = run(`${plugin}(data: node { name: "n", tag: "t" })`);

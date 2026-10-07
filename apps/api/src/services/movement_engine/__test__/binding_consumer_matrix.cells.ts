@@ -656,9 +656,9 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => [`said = summarise(data: node { name: ${x}.name, tag: "c" })`, emit('said')],
       rows: (r) => [v(r.name)],
     },
-    // An untyped plugin argument is handed a value: a call written in place is
-    // the value it computes; a record, a function or a type written in place
-    // is refused.
+    // An untyped plugin argument is handed what binding the argument to a name
+    // would bind: a call written in place is the value it computes, a node
+    // literal its fields; a write, a function or a type is refused.
     ...pluginArgForms(),
     {
       arity: 'one',
@@ -712,7 +712,10 @@ function pluginArgForms(): OneStatementConsumer[] {
     form('u = UPPER(x.name), u', { since: 1, pre: (x) => [`u = UPPER(${x}.name)`], arg: () => 'u', rows: shouted }),
     form('UPPER(x.name)', { since: 1, arg: (x) => `UPPER(${x}.name)`, rows: shouted }),
     form('write …', { since: 1, arg: (x) => `write copies-[:entries]-> { name: ${x}.name, tag: "c" }`, rows: named, refused: 'a write written in place is not a value a plugin is handed' }),
-    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named, refused: "a 'node { … }' written in place is a record, and this argument takes a value" }),
+    // The literal's fields, as the same literal bound to a name would hand
+    // over: `relay` answers the name among them.
+    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named }),
+    form('n = node {…}, n', { since: 1, pre: (x) => [`n = node { name: ${x}.name, tag: "c" }`], arg: () => 'n', rows: named }),
     form('summarise(data: …)', { since: 1, arg: (x) => `summarise(data: { name: ${x}.name })`, rows: named }),
     form('(r) => …', { since: 3, arg: () => '(r) => { return r }', rows: named, refused: 'a function is not a value an argument carries' }),
     form('<Entry>', { since: 3, arg: () => '<Entry>', rows: named, refused: 'a type is not a value an argument carries' }),

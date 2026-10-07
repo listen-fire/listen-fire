@@ -12560,8 +12560,9 @@ class Checker {
    * argument whose declared type holds none (text, a url, a number) is
    * refused, as a movement's value parameter refuses one; an argument
    * declared to take structured data (`json`) takes a record, and is handed
-   * its fields — a `node { … }` literal included. A write, or a node literal
-   * anywhere else, is a record written in place, not a value.
+   * its fields — a `node { … }` literal included, as an argument with no
+   * declared type does. A write, or a node literal handed to an argument that
+   * takes a plain value, is a record written in place, not a value.
    */
   private reportPluginArgType(
     callee: string,
@@ -12599,7 +12600,9 @@ class Checker {
         return;
       }
       case 'node':
-        if (declared === 'json') {
+        // Structured data, or no declared type: the literal is what binding
+        // it to a name and passing the name would hand over — its fields.
+        if (declared === 'json' || declared === undefined) {
           const synthesised = this.checkNodeLiteral(arg.node, scope);
           this.checkPluginArgValue({ callee, declared, name, record: synthesised, valueType: recordOf(synthesised), span: arg.node.span });
           return;
@@ -12655,10 +12658,10 @@ class Checker {
   }
 
   /**
-   * A write or a `node { … }` written in place as a plugin argument: a record,
-   * and a plugin is handed values (a node literal is one only as structured
-   * data — a `json` argument). The engine has always refused these at run time
-   * ("a plugin takes values"); said here, where it is written.
+   * A write written in place as a plugin argument, or a `node { … }` handed
+   * to one that takes a plain value: a record, where a value is taken. The
+   * engine has always refused a write at run time ("a plugin takes values");
+   * said here, where it is written.
    */
   private refusePluginRecordInPlace(
     callee: string,

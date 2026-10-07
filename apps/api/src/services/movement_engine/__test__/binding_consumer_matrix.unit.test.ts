@@ -190,7 +190,7 @@ const fetchUrl = staticCatalogFromManifests({ credentials: {} }).plugin('fetch_u
  *  registered plugin takes one today; the type is the plugin contract's. */
 const SUMMARISE = 'summarise';
 /** A plugin whose argument declares no type: it hands back the text it was
- *  given. */
+ *  given, or the name among the fields it was given. */
 const RELAY = 'relay';
 const catalog = mockCatalog({
   adapters: {
@@ -370,9 +370,9 @@ const transformInvoker: MovementTransformInvoker = {
       ? { kind: 'value', type: { kind: 'string' } }
       : (getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-')))?.signature.output,
   async invoke({ plugin, config }) {
-    if (plugin === RELAY) return { text: typeof config.data === 'string' ? config.data : 'not text' };
-    if (plugin !== SUMMARISE) return { text: 'page' };
     const data = config.data;
+    if (plugin === RELAY && typeof data === 'string') return { text: data };
+    if (plugin !== SUMMARISE && plugin !== RELAY) return { text: 'page' };
     const name = typeof data === 'object' && data !== null && 'name' in data ? data.name : undefined;
     return { text: typeof name === 'string' ? name : 'no name' };
   },
