@@ -524,6 +524,58 @@ export interface PlaneType {
   fieldType?: FieldType;
 }
 
+/**
+ * What a function's record PARAMETER needs of the record it is handed — the
+ * half of its type its body decides. A system's record is opaque: its fields
+ * are read one at a time, so a consumer that needs every field in hand (a
+ * serialisation, a spread) refuses one. Inside the body the parameter is typed
+ * by its declared shape, which holds its fields, so the body is accepted and
+ * the requirement is filed here instead; every call site checks its argument
+ * against it, as TypeScript checks an argument against a parameter.
+ *
+ * One cell per parameter, shared by every walk of the body and carried on the
+ * parameter's position type (`PositionTypeRef.parameter`), so a name bound to
+ * the parameter, a list holding it or a closure over it records here too.
+ * A parameter passed on to another function's parameter takes on that one's
+ * requirement (`passedTo`), read when a call site asks — so a cycle of calls
+ * needs no fixpoint.
+ */
+export interface FieldsNeed {
+  fn: string;
+  param: string;
+  /** The first consumer in the body that needs the fields in hand. */
+  consumer?: string;
+  passedTo: Array<{ need: FieldsNeed; at: string }>;
+}
+
+/** Why `need`'s parameter needs its record's fields in hand, if it does —
+ *  directly, or through the parameters it is passed on to. */
+export function fieldsNeededBy(need: FieldsNeed, seen = new Set<FieldsNeed>()): string | undefined {
+  if (need.consumer !== undefined) return need.consumer;
+  seen.add(need);
+  for (const onward of need.passedTo) {
+    if (seen.has(onward.need)) continue;
+    const why = fieldsNeededBy(onward.need, seen);
+    if (why !== undefined) return `${onward.at}, and '${onward.need.fn}' ${why}`;
+  }
+  return undefined;
+}
+
+/** Files that `position`'s record — when it is a function's parameter — has
+ *  its fields read by `consumer`. A position that is no parameter is nobody's
+ *  business here. */
+export function noteFieldsNeeded(position: PositionTypeRef | undefined, consumer: string): void {
+  const need = parameterNeedOf(position);
+  if (need !== undefined) need.consumer ??= consumer;
+}
+
+/** The parameter cell a position carries, through a gate. */
+export function parameterNeedOf(position: PositionTypeRef | undefined): FieldsNeed | undefined {
+  if (position === undefined) return undefined;
+  if (position.kind === 'maybeEmpty') return parameterNeedOf(position.of);
+  return position.kind === 'position' || position.kind === 'union' ? position.parameter : undefined;
+}
+
 /** One parameter of a closure: its name, and what it accepts. */
 export interface ClosureParam extends PlaneType {
   name: string;
@@ -549,6 +601,9 @@ export type PositionTypeRef =
        * it would a record in a system that updates by id.
        */
       runBuilt?: true;
+      /** The record is a function's parameter: what its body needs of it is
+       *  filed here (`FieldsNeed`). */
+      parameter?: FieldsNeed;
     }
   /** A union-typed position (`crm.record`); narrowed by `IS` tests. */
   | {
@@ -559,6 +614,7 @@ export type PositionTypeRef =
       narrowsEvent?: string;
       display?: string;
       address?: EventAddress;
+      parameter?: FieldsNeed;
     }
   // `narrowsEvent` above: the UNNARROWED event type this one narrows (the
   // event edge whose address pins base/table/action). Set only on an
@@ -693,6 +749,32 @@ export interface LocalEdge {
   references?: true;
 }
 
+/** Does the checker hold this record's fields IN HAND — see
+ *  `ExpressionTyping.holdsSpelledFields`, which is this plus the note a
+ *  parameter's body files. */
+export function holdsFieldsInHand(
+  position: PositionTypeRef | undefined,
+  isDeclaredGraphToken: ((token: object) => boolean) | undefined,
+): boolean {
+  if (position === undefined) return false;
+  switch (position.kind) {
+    case 'extract':
+    case 'handle':
+    case 'local':
+      return true;
+    case 'maybeEmpty':
+      return holdsFieldsInHand(position.of, isDeclaredGraphToken);
+    case 'position':
+    case 'union':
+      return isDeclaredGraphToken?.(position.instance.token) === true;
+    case 'meta':
+    case 'closure':
+      return false;
+    default:
+      return neverAsAny(position);
+  }
+}
+
 /**
  * The first reference edge, at any depth inside a checker-local node, that
  * holds records read live from a system — a record whose fields the program
@@ -701,11 +783,14 @@ export interface LocalEdge {
 function liveReferenceWithin(
   position: PositionTypeRef,
   isDeclaredGraphToken: ((token: object) => boolean) | undefined,
+  /** Told of every record held by reference whose fields ARE in hand — a
+   *  function's parameter among them files its need through it. */
+  onParameter?: (held: PositionTypeRef | undefined) => void,
   seen = new Set<PositionTypeRef>(),
 ): string | undefined {
   if (seen.has(position)) return undefined;
   seen.add(position);
-  if (position.kind === 'maybeEmpty') return liveReferenceWithin(position.of, isDeclaredGraphToken, seen);
+  if (position.kind === 'maybeEmpty') return liveReferenceWithin(position.of, isDeclaredGraphToken, onParameter, seen);
   if (position.kind !== 'local') return undefined;
   for (const [name, edge] of Object.entries(position.edges ?? {})) {
     const target = edge.target?.kind === 'maybeEmpty' ? edge.target.of : edge.target;
@@ -716,7 +801,8 @@ function liveReferenceWithin(
     ) {
       return name;
     }
-    const nested = edge.target === undefined ? undefined : liveReferenceWithin(edge.target, isDeclaredGraphToken, seen);
+    if (edge.references === true) onParameter?.(target);
+    const nested = edge.target === undefined ? undefined : liveReferenceWithin(edge.target, isDeclaredGraphToken, onParameter, seen);
     if (nested !== undefined) return nested;
   }
   return undefined;
@@ -4340,7 +4426,7 @@ export class ExpressionTyping {
         : { of: present.of, mayBeAbsent };
     }
     const record = variantOf(present).kind === 'record' ? recordIn(present)?.position : undefined;
-    if (record !== undefined && this.holdsSpelledFields(record)) {
+    if (record !== undefined && this.holdsSpelledFields(record, "copies its fields into a map with '...'")) {
       const fields = recordFieldTypes(record);
       return fields !== undefined ? { keys: fields, mayBeAbsent } : { of: 'json', mayBeAbsent };
     }
@@ -5117,7 +5203,7 @@ export class ExpressionTyping {
       return;
     }
     if (isDictType(stripped)) return; // a dict's keys are the ones the author wrote
-    if (!this.holdsSpelledFields(recordIn(stripped)?.position)) notSpelledOut();
+    if (!this.holdsSpelledFields(recordIn(stripped)?.position, `reads every field of it with \`${spec.namespace}.${spec.name}\``)) notSpelledOut();
   }
 
   /**
@@ -5140,7 +5226,7 @@ export class ExpressionTyping {
     const record = recordIn(type);
     if (record === undefined) return;
     const position = record.position;
-    if (!this.holdsSpelledFields(position)) {
+    if (!this.holdsSpelledFields(position, `writes it out with \`${spec.namespace}.${spec.name}\``)) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
         `\`${spec.namespace}.${spec.name}\` writes out a record whose fields the program spells out — a \`node { … }\` literal, an extracted record or a declared one; build a dict of the fields you want from this record`,
@@ -5150,7 +5236,11 @@ export class ExpressionTyping {
     // A graph holding references holds the real records, so one read live
     // from a system is refused through the graph as it is on its own.
     const liveEdge =
-      position === undefined ? undefined : liveReferenceWithin(position, this.options.isDeclaredGraphToken);
+      position === undefined
+        ? undefined
+        : liveReferenceWithin(position, this.options.isDeclaredGraphToken, held =>
+            noteFieldsNeeded(held, `writes out a graph holding it with \`${spec.namespace}.${spec.name}\` (line ${this.options.span.start.line})`),
+          );
     if (liveEdge !== undefined) {
       this.report(
         TypedDiagnosticCodes.STDLIB_ARG_NOT_RECORD,
@@ -5176,24 +5266,12 @@ export class ExpressionTyping {
    *  time, not the program's own words) or the bare instance root (`meta`)?
    *  A closure has no fields to spell out. `maybeEmpty` reads through to
    *  what it wraps — a gate changes presence, not which fields exist. */
-  private holdsSpelledFields(position: PositionTypeRef | undefined): boolean {
-    if (position === undefined) return false;
-    switch (position.kind) {
-      case 'extract':
-      case 'handle':
-      case 'local':
-        return true;
-      case 'maybeEmpty':
-        return this.holdsSpelledFields(position.of);
-      case 'position':
-      case 'union':
-        return this.options.isDeclaredGraphToken?.(position.instance.token) === true;
-      case 'meta':
-      case 'closure':
-        return false;
-      default:
-        return neverAsAny(position);
-    }
+  private holdsSpelledFields(position: PositionTypeRef | undefined, consumer: string): boolean {
+    const held = holdsFieldsInHand(position, this.options.isDeclaredGraphToken);
+    // A parameter's declared shape holds its fields here; whether the record
+    // a caller hands over does is that caller's to show.
+    if (held) noteFieldsNeeded(position, `${consumer} (line ${this.options.span.start.line})`);
+    return held;
   }
 
   /**

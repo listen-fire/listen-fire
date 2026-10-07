@@ -528,6 +528,27 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => [`use_entry(e: ${x})`],
       rows: (r) => [v(r.name)],
     },
+    // A function's parameter carries what its body needs of the record: one
+    // that serialises it needs the fields in hand, so a system's record is
+    // refused at the call, as it is by the consumer written in place.
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'movement(e: <Entry>) that reads TEXT.PAIRS(e)',
+      since: 2,
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      stmts: (x) => [`pairs_entry(e: ${x})`],
+      rows: (r) => [v(`name=${r.name} | tag=${r.tag}`)],
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'movement(e: <Entry>) that serialises e',
+      since: 3,
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      stmts: (x) => [`serialise_entry(e: ${x})`],
+      rows: (r) => [v(json(serialised(r)))],
+    },
     {
       arity: 'one',
       form: 'statement',
