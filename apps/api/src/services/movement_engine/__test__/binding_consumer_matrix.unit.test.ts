@@ -154,18 +154,10 @@ interface TriageEntry {
 }
 
 const TODO = {
-  handle_serialise: "TODO: a created system record serialises with no `child` key, where a record read back shows `child: []`; decide whether an untraversed edge appears",
   write_through_map_field: "TODO: rules disagree — a record held in a map field reads, spreads and passes like any record, but the grammar's own rule is that a write starts from a NAMED record ('bind it first: parent = m.k'), and `write m.k { … }` is the retired type-path target; decide whether a write may start from a member path",
 };
 
 const TRIAGE: TriageEntry[] = [
-  {
-    reason: TODO.handle_serialise,
-    observed: 'wrong',
-    cells: [
-      "system: write handle × TEXT.SERIALISE(x)",
-    ],
-  },
   {
     reason: TODO.write_through_map_field,
     observed: 'refused:PARSE',
