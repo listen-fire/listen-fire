@@ -126,7 +126,7 @@ export type { ReturnShape } from './typing';
 /** The `until` cadence floor (F12 / build-order ops ruling): re-checking faster
  *  than once a minute is refused. */
 const UNTIL_CADENCE_FLOOR_MS = 60_000;
-import { unwrapCredentialArg } from '../parser/scan';
+import { scanName, unwrapCredentialArg } from '../parser/scan';
 import { cronScheduleError, cronTimezoneError } from '@listen-fire/shared/cron';
 import {
   BridgeError,
@@ -1679,6 +1679,18 @@ function skipHeadString(text: string, start: number): number {
   return text.length;
 }
 
+/** The alias opening a hop's interior (`c:` / `` `a b`: ``), read as every
+ *  other name is. */
+function hopAliasAt(hopsRaw: string, interiorStart: number): string | undefined {
+  let i = interiorStart;
+  while (i < hopsRaw.length && /\s/.test(hopsRaw[i])) i++;
+  const scanned = scanName(hopsRaw, i);
+  if (scanned === null) return undefined;
+  let j = scanned.end;
+  while (j < hopsRaw.length && /\s/.test(hopsRaw[j])) j++;
+  return hopsRaw[j] === ':' ? scanned.name : undefined;
+}
+
 export function extractHopAliases(hopsRaw: string): string[] {
   const aliases: string[] = [];
   let i = 0;
@@ -1686,8 +1698,8 @@ export function extractHopAliases(hopsRaw: string): string[] {
     const open = hopsRaw.indexOf('-[', i);
     if (open === -1) break;
     const interiorStart = open + 2;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(hopsRaw.slice(interiorStart));
-    if (match) aliases.push(match[1]);
+    const alias = hopAliasAt(hopsRaw, interiorStart);
+    if (alias !== undefined) aliases.push(alias);
     // Skip to the hop's closing ']' respecting nesting and literals.
     let depth = 1;
     let j = interiorStart;

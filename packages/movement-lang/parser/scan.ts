@@ -31,23 +31,25 @@ export function scanIdent(src: string, pos: number): ScannedName | null {
 
 /**
  * Scan a backtick-quoted name starting at `pos` (which must be the opening
- * backtick). A quoted name is single-line. Returns the interior (backticks
- * stripped) and the index of the CLOSING backtick — callers advance past it.
- * Returns `null` when the name is unterminated (no closing backtick before EOF
- * or newline), leaving the specific error to the caller.
+ * backtick). A quoted name is single-line, and a backslash escapes the next
+ * character (`` `a\`b` `` is the name a`b, `` `a\\b` `` is a\b) — the
+ * expression lexer's rule, so every reader of a name reads it the same way.
+ * Returns the name (backticks stripped, escapes read) and the index of the
+ * CLOSING backtick — callers advance past it. Returns `null` when the name is
+ * unterminated (no closing backtick before EOF or newline), leaving the
+ * specific error to the caller.
  */
-export function scanBacktickName(src: string, pos: number): ScannedName | null {
+export function scanBacktickName(src: string, pos: number, limit = src.length): ScannedName | null {
   if (src[pos] !== '`') return null;
-  let end = pos + 1;
-  while (end < src.length && src[end] !== '`' && src[end] !== '\n') end++;
-  if (end >= src.length || src[end] === '\n') return null;
-  return { name: src.slice(pos + 1, end), end };
+  const after = skipBacktickName(src, pos, limit);
+  if (after === undefined) return null;
+  return { name: src.slice(pos + 1, after - 1).replace(/\\(.)/g, '$1'), end: after - 1 };
 }
 
 /**
  * Scan a NAME starting at `pos` — a backtick-quoted name when `src[pos]` is a
- * backtick, otherwise a bare identifier. Returns the name verbatim (backticks
- * stripped) and the index just past the token (the closing backtick for a quoted
+ * backtick, otherwise a bare identifier. Returns the name (backticks stripped,
+ * escapes read) and the index just past the token (the closing backtick for a quoted
  * name; one past the last identifier char for a bare one). `null` when no name
  * is present (or a quoted name is unterminated).
  */
@@ -272,3 +274,4 @@ export function matchingClose(src: string, open: number, limit = src.length): nu
   }
   return undefined;
 }
+

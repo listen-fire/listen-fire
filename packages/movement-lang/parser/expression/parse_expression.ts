@@ -28,7 +28,7 @@
 
 import { translateStringEscape, unrecognisedCharacterMessage } from '@listen-fire/shared/expression/formula';
 import { BridgeError } from '../../expression/error';
-import { callStyleIfMessage, isHopInterior, matchingClose, skipBacktickName } from '../scan';
+import { callStyleIfMessage, isHopInterior, matchingClose, scanBacktickName } from '../scan';
 import type {
   At,
   BinaryOp,
@@ -241,9 +241,9 @@ class ExpressionParser {
   }
 
   private scanBacktick(start: number): { name: string; end: number } {
-    const end = skipBacktickName(this.src, start, this.limit);
-    if (end === undefined) this.fail('Unterminated backtick-quoted name', start);
-    return { name: this.src.slice(start + 1, end - 1).replace(/\\(.)/g, '$1'), end };
+    const scanned = scanBacktickName(this.src, start, this.limit);
+    if (scanned === null) this.fail('Unterminated backtick-quoted name', start);
+    return { name: scanned.name, end: scanned.end + 1 };
   }
 
   private lexString(

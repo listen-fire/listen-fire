@@ -723,6 +723,11 @@ movement intake(msg: <inbox-[:message]->>) {
     it.each([
       ['`Snoozed Until`', 'Snoozed Until'],
       ['Status', 'Status'],
+      // Escapes read as the parser reads them: an escaped backtick, an
+      // escaped backslash, a letter escape.
+      ['`Snoozed\\`Until`', 'Snoozed`Until'],
+      ['`Snoozed\\\\Until`', 'Snoozed\\Until'],
+      ['`Snoozed\\Until`', 'SnoozedUntil'],
     ])('recognises field key %s exactly as scanName does', (spelling, verbatim) => {
       // The parser's scanner accepts this key and reports the verbatim name.
       const scanned = scanName(spelling, 0);

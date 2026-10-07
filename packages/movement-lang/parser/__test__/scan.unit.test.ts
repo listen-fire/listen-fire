@@ -5,6 +5,9 @@
 
 import { scanName, unwrapCredentialArg } from '../scan';
 import { parseProgram } from '../parse';
+import { parseExpression } from '../expression/parse_expression';
+import { extractHopAliases } from '../../checker/check';
+import { quoteName } from '@listen-fire/shared/expression/formula';
 
 describe('scanName — the one name grammar', () => {
   it('accepts a bare identifier, reporting the index just past it', () => {
@@ -94,5 +97,35 @@ movement intake(msg: <inbox-[:message]->>) {
     const write = body.find(s => s.kind === 'call' || s.kind === 'write') ?? body[0];
     const fieldNames = JSON.stringify(write).includes(`"${verbatim}"`);
     expect(fieldNames).toBe(true);
+  });
+});
+
+// A backslash in a backtick-quoted name escapes the next character — the only
+// way to put a backtick in a name — and every reader of a name reads it so.
+describe('a backtick name reads one way through every reader', () => {
+  it.each([
+    ['an escaped backtick', '`a\\`b`', 'a`b'],
+    ['an escaped backslash', '`a\\\\b`', 'a\\b'],
+    ['a letter escape', '`a\\nb`', 'anb'],
+  ])('%s', (_label, spelling, name) => {
+    // The shared scan (the editor's completion context reads names with it).
+    expect(scanName(spelling, 0)).toEqual({ name, end: spelling.length });
+    // A statement head.
+    const head = parseProgram(`${spelling} = 1`).statements[0];
+    expect(head).toMatchObject({ kind: 'assign', name });
+    // An expression.
+    expect(parseExpression(spelling)).toMatchObject({ kind: 'name', name: { text: name, quoted: true } });
+    // A block head's hop alias.
+    expect(extractHopAliases(`-[${spelling}:companies]->`)).toEqual([name]);
+    const block = parseProgram(`xs-[${spelling}:companies]-> {\n  y = 1\n}`).statements[0];
+    expect(block.kind === 'block' && extractHopAliases(block.block.head.hopsRaw)).toEqual([name]);
+    // A credential argument.
+    expect(unwrapCredentialArg(spelling)).toBe(name);
+  });
+
+  it('quotes a name so that it reads back unchanged', () => {
+    for (const name of ['a`b', 'a\\b', 'a b']) {
+      expect(scanName(quoteName(name), 0)?.name).toBe(name);
+    }
   });
 });
