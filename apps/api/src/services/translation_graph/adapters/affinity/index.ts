@@ -131,6 +131,7 @@ import {
   type ReferenceHolderResolver,
   type AffinityCustomFieldValue,
   type WebUrlSource,
+  organisationMatchContext,
 } from './shared';
 import {
   createOrganization,
@@ -638,7 +639,27 @@ export class AffinityAdapter extends BaseAdapter {
       operations,
       decoded: forResolve,
       resolve: { ...input, record, constraints },
+      ...(forResolve?.entity === 'organization'
+        ? { organisationContext: await this.organisationMatchContext(naturalTypeName, input.record) }
+        : {}),
     });
+  }
+
+  /** The judge's context for an organization match, read off the write's
+   *  NATURAL field names (the labels the author wrote) — built-ins excluded
+   *  by their internal ids. */
+  private async organisationMatchContext(
+    naturalTypeName: string,
+    fields: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    const resolver = await this.resolver({ types: [naturalTypeName] });
+    return organisationMatchContext(
+      Object.entries(fields).map(([label, value]) => ({
+        label,
+        value,
+        fieldId: resolver.tryFieldId(naturalName(naturalTypeName), naturalName(label)) ?? label,
+      })),
+    );
   }
 
   /** The list-pinned identity behind a membership write: the collection type
@@ -1360,7 +1381,13 @@ export class AffinityAdapter extends BaseAdapter {
 
     switch (decoded.entity) {
       case 'organization':
-        return createOrganization({ operations, web, write: input, holderFor: this.holderFor });
+        return createOrganization({
+          operations,
+          web,
+          write: input,
+          holderFor: this.holderFor,
+          matchContext: await this.organisationMatchContext(rawInput.recordType, rawInput.fields),
+        });
       case 'person':
         return createPerson({ operations, web, write: input, holderFor: this.holderFor });
       case 'list-entry':

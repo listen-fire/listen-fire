@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Changed
+
+- An Affinity company written without a website can now be matched by name to one of Affinity's own shared records, when the name is distinctive and nearly the same ("Fyvie" finds "Fyvie AI") and nothing else the automation writes about the company contradicts it. A common name such as "Atlas" needs a matching website before one of Affinity's records is used. A record already in your workspace is always preferred, and an exact name alone still only matches a workspace record. Before, such a company was matched only against the workspace, so a second, empty copy was created beside Affinity's record.
+
 ## [v0.10.8] - 2026-10-07
 
 ### Fixed

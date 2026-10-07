@@ -1703,7 +1703,13 @@ describe('AffinityAdapter.createRecord(organization)', () => {
 
     // built-ins drove createOrUpdateOrganisation
     expect(calls.createOrUpdateOrganisation).toHaveLength(1);
-    expect(calls.createOrUpdateOrganisation[0].searchQuery).toEqual({ name: 'Acme', domain: 'acme.com' });
+    // The custom text fields ride along as the matcher judge's context,
+    // labelled by the names the author wrote.
+    expect(calls.createOrUpdateOrganisation[0].searchQuery).toEqual({
+      name: 'Acme',
+      domain: 'acme.com',
+      context: 'Stage: Series A\nEmployees: 250\nCrunchbase Rank: 5',
+    });
 
     // custom field writes: ranked dropdown resolved to option id, number coerced;
     // the enriched field 102 written like the rest.
