@@ -18,7 +18,9 @@ export const ACME: Rec = { name: 'Acme', tag: 'a', child: ['Ann'] };
 export const BETA: Rec = { name: 'Beta', tag: 'b', child: ['Bob'] };
 export const GAMMA: Rec = { name: 'Gamma', tag: 'g', child: ['Gail'] };
 
-/** A record copied by a spread: spreads carry fields, never nested nodes. */
+/** A record copied by a spread into a WRITE: fields only, never nested
+ *  records (Henry's ruling 2026-10-07). A spread into a GRAPH LITERAL keeps
+ *  nested records too — those paths use the record as-is, child and all. */
 const fieldsOnly = (rec: Rec): Rec => ({ ...rec, child: [] });
 
 // ── Binding paths ───────────────────────────────────────────────────────────
@@ -348,7 +350,9 @@ function onePaths(): OnePath[] {
       id: 'local: graph<Entry> { ...e }',
       since: 3,
       onEdge: false,
-      instances: [fieldsOnly(ACME), fieldsOnly(BETA)],
+      // Unlike a write spread, a graph-literal spread is a VALUE copy: it
+      // keeps e's nested child records.
+      instances: [ACME, BETA],
       program: (body) => [`${WALK.local.as('e')} {`, '  x = graph<Entry> { ...e }', ...indent(body('x')), '}'],
     },
     {
