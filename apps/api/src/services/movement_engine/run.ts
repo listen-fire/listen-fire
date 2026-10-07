@@ -5926,16 +5926,15 @@ class Interpreter {
     const trails: Provenance[] = [];
     for (const arg of statement.args) {
       if (arg.name === undefined) continue; // refused above: never positional
-      if (arg.kind !== 'expr') {
-        // A plugin's parameters are values. A record passed into one has no
-        // meaning the plugin could act on, so it is refused here rather than
-        // arriving as an unreadable config entry.
+      if (arg.kind === 'write' || arg.kind === 'closure' || arg.kind === 'type') {
+        // A plugin's parameters are values: a write is an effect, and a
+        // function or a type is no value yet. The checker refuses each.
         throw unsupported(
           `a ${arg.kind} argument to the plugin '${statement.callee}'`,
           'a plugin takes values — pass a field or an expression',
         );
       }
-      const { value, provenance } = await this.evaluateSlot(arg.expr, { env });
+      const { value, provenance } = await this.pluginArgValue(arg, env, body);
       // A record reaches only an argument declared to take structured data
       // (the checker refuses it anywhere else), and what that takes is the
       // record's fields.
@@ -5966,6 +5965,21 @@ class Interpreter {
       returned: handedBack ? 'value' : 'absent',
     });
     return binding;
+  }
+
+  /** A plugin argument's value: what `v = <argument>` would bind, read back
+   *  as `v` is. A call (a built-in's or a function's) or a node literal
+   *  evaluates exactly as it does as a function's value argument. */
+  private async pluginArgValue(
+    arg: Extract<CallArg, { kind: 'expr' | 'call' | 'node' }>,
+    env: Environment,
+    body: BodyContext,
+  ): Promise<{ value: unknown; provenance: Provenance }> {
+    if (arg.kind === 'expr') return this.evaluateSlot(arg.expr, { env });
+    const bound = await this.evaluateCallArg(arg, env, body, { takesValue: true });
+    return bound.kind === 'value'
+      ? { value: bound.value, provenance: bound.provenance ?? NO_PROVENANCE }
+      : { value: bound, provenance: NO_PROVENANCE };
   }
 
   private async evaluateCallArg(

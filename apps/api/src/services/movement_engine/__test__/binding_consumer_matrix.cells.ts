@@ -636,8 +636,9 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => ['ser_closure = (r: <Entry>) => {', `  ${emit('TEXT.SERIALISE(r, "JSON")')}`, '}', `ser_closure(r: ${x})`],
       rows: (r) => [v(json(serialised(r)))],
     },
-    // A write or a `node { … }` written in place is no value a plugin can be
-    // handed, whatever the binding: refused, where binding it first is not.
+    // A write written in place is no value a plugin can be handed, whatever
+    // the binding; a `node { … }` is, to an argument that takes structured
+    // data: the dict of its fields.
     {
       arity: 'one',
       form: 'statement',
@@ -652,12 +653,12 @@ function oneConsumers(): OneConsumer[] {
       form: 'statement',
       id: 'plugin(data: node {…}) (json)',
       since: 1,
-      refused: { code: 'MOV_CALL_ARG_TYPE', why: "a 'node { … }' written in place is not a value a plugin is handed" },
       stmts: (x) => [`said = summarise(data: node { name: ${x}.name, tag: "c" })`, emit('said')],
       rows: (r) => [v(r.name)],
     },
-    // An untyped plugin argument is handed a value: anything written in place
-    // that is not an expression is refused, whatever it is.
+    // An untyped plugin argument is handed a value: a call written in place is
+    // the value it computes; a record, a function or a type written in place
+    // is refused.
     ...pluginArgForms(),
     {
       arity: 'one',
@@ -708,11 +709,11 @@ function pluginArgForms(): OneStatementConsumer[] {
   const shouted = (r: Rec) => [v(r.name.toUpperCase())];
   return [
     form('x.name', { since: 1, arg: (x) => `${x}.name`, rows: named }),
-    form('u = UPPER(x.name), u', { since: 3, pre: (x) => [`u = UPPER(${x}.name)`], arg: () => 'u', rows: shouted }),
-    form('UPPER(x.name)', { since: 3, arg: (x) => `UPPER(${x}.name)`, rows: shouted, refused: "a built-in's call written in place is not a value a plugin is handed" }),
+    form('u = UPPER(x.name), u', { since: 1, pre: (x) => [`u = UPPER(${x}.name)`], arg: () => 'u', rows: shouted }),
+    form('UPPER(x.name)', { since: 1, arg: (x) => `UPPER(${x}.name)`, rows: shouted }),
     form('write …', { since: 1, arg: (x) => `write copies-[:entries]-> { name: ${x}.name, tag: "c" }`, rows: named, refused: 'a write written in place is not a value a plugin is handed' }),
-    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named, refused: "a 'node { … }' written in place is not a value a plugin is handed" }),
-    form('summarise(data: …)', { since: 1, arg: (x) => `summarise(data: { name: ${x}.name })`, rows: named, refused: 'a call written in place is not a value a plugin is handed' }),
+    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named, refused: "a 'node { … }' written in place is a record, and this argument takes a value" }),
+    form('summarise(data: …)', { since: 1, arg: (x) => `summarise(data: { name: ${x}.name })`, rows: named }),
     form('(r) => …', { since: 3, arg: () => '(r) => { return r }', rows: named, refused: 'a function is not a value an argument carries' }),
     form('<Entry>', { since: 3, arg: () => '<Entry>', rows: named, refused: 'a type is not a value an argument carries' }),
   ];

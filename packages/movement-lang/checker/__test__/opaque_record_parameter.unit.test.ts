@@ -472,79 +472,92 @@ movement run2(go: <src>) {
     });
   });
 
-  describe("a write or a node literal written in place as a plugin's json argument", () => {
-    it.each([
-      ['a write', 'summarise(data: write src-[:companies]-> { name: "Gamma", tag: "g" })', 'a write'],
-      ['a node literal', 'summarise(data: node { name: "n", tag: "t" })', "'node { … }'"],
-    ])('%s is refused, naming what was passed and what the plugin takes', (_label, call, named) => {
-      const source = `movement run2(go: <src>) {
-  s = ${call}
+  describe('a plugin is handed values: a call written in place is its value, a record written in place is refused', () => {
+    const run = (line: string, pre: string[] = []): string => `movement run2(go: <src>) {
+${pre.map((l) => `  ${l}\n`).join('')}  s = ${line}
   write sink-[:rows]-> { v: s }
 }
 `;
-      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
-      const message = messages(source);
-      expect(message).toContain("'summarise'");
-      expect(message).toContain('structured data');
-      expect(message).toContain(named);
-    });
-  });
 
-  describe('a plugin argument written in place that is no expression is refused, whatever the argument takes', () => {
-    const FORMS: Array<[string, string, string]> = [
-      ['a write', 'write src-[:companies]-> { name: "Gamma", tag: "g" }', 'a write'],
-      ['a node literal', 'node { name: "n", tag: "t" }', "'node { … }'"],
-      ['a call', 'summarise(data: { name: "n" })', "a call to 'summarise'"],
-      ["a built-in's call", 'UPPER("n")', "a call to 'UPPER'"],
-    ];
-    const PLUGINS: Array<[string, string]> = [
+    it.each([
+      ['relay', 'UPPER("n")'],
+      ['shout', 'UPPER("n")'],
+      ['summarise', 'UPPER("n")'],
+      ['relay', 'summarise(data: { name: "n" })'],
+      ['shout', 'summarise(data: { name: "n" })'],
+      ['relay', 'relay(data: UPPER("n"))'],
+      ['summarise', 'node { name: "n", tag: "t" }'],
+    ])("'%s' given %s runs", (plugin, arg) => {
+      expect(codes(run(`${plugin}(data: ${arg})`))).toEqual([]);
+    });
+
+    it.each([
       ['relay', 'a value'],
       ['shout', 'text'],
       ['summarise', 'structured data'],
-    ];
-    it.each(PLUGINS.flatMap(([plugin, takes]) => FORMS.map(([label, arg, named]) => [plugin, label, arg, named, takes] as const)))(
-      "'%s' given %s",
-      (plugin, _label, arg, named, takes) => {
-        const source = `movement run2(go: <src>) {
-  s = ${plugin}(data: ${arg})
-  write sink-[:rows]-> { v: s }
-}
-`;
-        expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
-        const message = messages(source);
-        expect(message).toContain(`'${plugin}'`);
-        expect(message).toContain(named);
-        expect(message).toContain(takes);
-      },
-    );
+    ])("'%s' given a write written in place is refused, naming what it takes", (plugin, takes) => {
+      const source = run(`${plugin}(data: write src-[:companies]-> { name: "Gamma", tag: "g" })`);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      const message = messages(source);
+      expect(message).toContain(`'${plugin}'`);
+      expect(message).toContain('a write');
+      expect(message).toContain(takes);
+    });
+
+    it.each([
+      ['relay', 'a value'],
+      ['shout', 'text'],
+    ])("'%s' given a node literal is refused: a record is no value it takes", (plugin, takes) => {
+      const source = run(`${plugin}(data: node { name: "n", tag: "t" })`);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      const message = messages(source);
+      expect(message).toContain("'node { … }'");
+      expect(message).toContain(takes);
+    });
 
     it.each([
       ['a function', '(r) => { return r }', 'a function written in place'],
       ['a type', '<Entry>', 'a type'],
     ])('%s is refused once, by the rule every argument has', (_label, arg, named) => {
-      const source = `movement run2(go: <src>) {
-  s = relay(data: ${arg})
-  write sink-[:rows]-> { v: s }
-}
-`;
+      const source = run(`relay(data: ${arg})`);
       expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
       expect(messages(source)).toContain(named);
     });
 
-    it('the same values bound to a name first, and an expression, pass', () => {
+    it("a call's value is checked against the type the argument declares, as a name's is", () => {
+      const source = `function mk(n: <text>): <Entry> {
+  return node { name: n, tag: "t" }
+}
+` + run('shout(data: mk(n: "x"))');
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      expect(messages(source)).toContain('this is a record');
+    });
+
+    it('a call that returns nothing is refused as it is when bound', () => {
+      const source = `movement none(n: <text>) {
+  write sink-[:rows]-> { v: n }
+}
+` + run('relay(data: none(n: "x"))');
+      expect(codes(source)).toEqual([C.CALL_RETURNS_NOTHING]);
+    });
+
+    it("a built-in's call is checked as the expression it is", () => {
       const source = `movement run2(go: <src>) {
-  n = node { name: "n", tag: "t" }
-  v = summarise(data: { name: "n" })
-  s1 = relay(data: n)
-  s2 = relay(data: v)
-  s3 = shout(data: v)
-  s4 = summarise(data: n)
-  u = UPPER(v)
-  s5 = relay(data: u)
-  write sink-[:rows]-> { v: "\${s1}\${s2}\${s3}\${s4}\${s5}" }
+  src-[c:companies]-> {
+    s = relay(data: UPPER(c.nope))
+    write sink-[:rows]-> { v: s }
+  }
 }
 `;
-      expect(codes(source)).toEqual([]);
+      expect(codes(source)).not.toEqual([]);
+    });
+
+    it("a system record reached through a function's call is refused at a json argument as a name is", () => {
+      const source = `function first_company(go: <src>) {
+  return FIRST(src-[:companies ORDER BY name]->)
+}
+` + run('summarise(data: first_company(go: go))');
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
     });
   });
 });
