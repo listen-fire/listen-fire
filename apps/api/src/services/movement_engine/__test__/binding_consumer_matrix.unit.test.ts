@@ -129,10 +129,10 @@ import type { TeamId } from '../../../generated/kysely/core/Team';
 import { runMovement, runFailureCause, type MovementRunResult } from '../run';
 import { MovementEngineError } from '../errors';
 import { containerAssociation, type Adapter } from '../../translation_graph/adapter';
-import { makeStablePosition, positionData, META_RECORD_TYPE } from '../../translation_graph/types';
+import { makeStablePosition, positionData, positionRecordId, META_RECORD_TYPE } from '../../translation_graph/types';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { getTransform } from '../../translation_graph/engine/transforms/registry';
-import { ACME, BETA, cellId, cells, expectationAt, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
+import { ACME, BETA, GAMMA, cellId, cells, expectationAt, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000088' as TeamId;
 const VERSION: LanguageVersion = CURRENT_LANGUAGE_VERSION;
@@ -273,6 +273,11 @@ function programFor(cell: Pick<Cell, 'body'>, version: LanguageVersion): string 
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
 const SYSTEM_RECORDS: Rec[] = [ACME, BETA];
+/** The company a cell's run creates in the system. The system gives it
+ *  children of its own (a CRM that files a founder with every company), so a
+ *  walk off a write's result reaches the system's records — the case a
+ *  serialisation of one must refuse. */
+const CREATED: Rec = GAMMA;
 
 /** One field of the data a fake position was minted with. */
 function dataField(position: Parameters<typeof positionData>[0], key: string): unknown {
@@ -305,8 +310,11 @@ function systemAdapter(): Adapter {
         }));
       }
       if (position.recordType === 'company' && fieldId === 'child') {
-        const owner = SYSTEM_RECORDS.find((r) => r.name === dataField(position, 'name'));
-        return (owner?.child ?? []).map((first) => ({
+        // A company the system did not list is one the run created (a dry
+        // run mints its id and hands back no data).
+        const id = positionRecordId(position);
+        const owner = SYSTEM_RECORDS.find((r) => `c-${r.name}` === id) ?? CREATED;
+        return owner.child.map((first) => ({
           position: makeStablePosition({ adapterType: 'attio', recordType: 'person', recordId: `p-${first}`, data: { first } }),
         }));
       }

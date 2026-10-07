@@ -27,9 +27,10 @@ export const GAMMA: Rec = { name: 'Gamma', tag: 'g', child: ['Gail'] };
  *  nested records too — those paths use the record as-is, child and all. */
 const fieldsOnly = (rec: Rec): Rec => ({ ...rec, child: [] });
 
-/** A system record a write created: it has no children until one is written,
- *  and the run never walked its edge to find out. */
-const createdUnwalked = (rec: Rec): Rec => ({ ...rec, child: [], childInHand: false });
+/** A system record a write created: the system gives it its children (the
+ *  fake attaches `rec.child`), and the run never walked its edge to find out
+ *  — so a serialisation leaves the edge out, and a walk finds the system's. */
+const createdUnwalked = (rec: Rec): Rec => ({ ...rec, childInHand: false });
 
 // ── Binding paths ───────────────────────────────────────────────────────────
 
@@ -66,6 +67,10 @@ interface PathFacts {
   /** A record traversed off an external system: the program does not hold
    *  its field list, so a consumer that needs every field is refused. */
   opaque?: true;
+  /** The record's own fields are in hand, but the records reached through its
+   *  edges are a system's (a system write's result): a consumer that needs
+   *  every field of a CHILD is refused. Implied by `opaque`. */
+  childrenOpaque?: true;
   /** The whole path is refused, whatever consumes it. */
   refusedAs?: string;
   /** The record is held under a map key, and before this version every key of
@@ -303,6 +308,7 @@ function onePaths(): OnePath[] {
       id: 'system: write handle',
       since: 1,
       onEdge: true,
+      childrenOpaque: true,
       instances: [createdUnwalked(GAMMA)],
       program: (body) => ['x = write src-[:companies]-> { name: "Gamma", tag: "g" }', ...body('x')],
     },
@@ -428,6 +434,9 @@ interface ConsumerBase {
   /** Needs every field of the record: refused, with this code, over a
    *  record whose field list the program does not hold (`opaque`). */
   fieldList?: string;
+  /** `fieldList` is about the records reached through the binding's edges,
+   *  not the binding itself: refused over `childrenOpaque` paths too. */
+  throughEdges?: true;
   /** The right answer is a refusal whatever the path. */
   refused?: { code?: string; why: string };
 }
@@ -591,6 +600,7 @@ function oneConsumers(): OneConsumer[] {
       id: "movement(e: <Entry>) that walks e's child and serialises it",
       since: 3,
       fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      throughEdges: true,
       stmts: (x) => [`serialise_child(e: ${x})`],
       rows: (r) => r.child.map((first) => v(json({ first }))),
     },
@@ -622,6 +632,26 @@ function oneConsumers(): OneConsumer[] {
       fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
       stmts: (x) => ['ser_closure = (r: <Entry>) => {', `  ${emit('TEXT.SERIALISE(r, "JSON")')}`, '}', `ser_closure(r: ${x})`],
       rows: (r) => [v(json(serialised(r)))],
+    },
+    // A write or a `node { … }` written in place is no value a plugin can be
+    // handed, whatever the binding: refused, where binding it first is not.
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'plugin(data: write copies-[:entries]-> {…}) (json)',
+      since: 1,
+      refused: { code: 'MOV_CALL_ARG_TYPE', why: 'a write written in place is not a value a plugin is handed' },
+      stmts: (x) => [`said = summarise(data: write copies-[:entries]-> { name: ${x}.name, tag: "c" })`, emit('said')],
+      rows: (r) => [v(r.name)],
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'plugin(data: node {…}) (json)',
+      since: 1,
+      refused: { code: 'MOV_CALL_ARG_TYPE', why: "a 'node { … }' written in place is not a value a plugin is handed" },
+      stmts: (x) => [`said = summarise(data: node { name: ${x}.name, tag: "c" })`, emit('said')],
+      rows: (r) => [v(r.name)],
     },
     {
       arity: 'one',
@@ -683,6 +713,24 @@ function manyConsumers(): ManyConsumer[] {
       ...value('TEXT.SERIALISE(xs)', 3, (xs) => ({ expr: `TEXT.SERIALISE(${xs}, "JSON")` }), (rs) => json(rs.map(serialised))),
       fieldList: 'MOV_STDLIB_ARG_NOT_RECORD',
     },
+    // A collection op binds its function's annotated record parameter to each
+    // member: one whose body serialises it needs every member's fields in
+    // hand, as a declared function's call does.
+    value(
+      'MAP(xs, (e: <Entry>) => e.name)',
+      1,
+      (xs) => ({ pre: [`names3 = MAP(${xs}, (e: <Entry>) => { return e.name })`], expr: 'JOIN(names3, ",")' }),
+      (rs) => rs.map((r) => r.name).join(','),
+    ),
+    {
+      ...value(
+        'MAP(xs, (e: <Entry>) => TEXT.SERIALISE(e))',
+        3,
+        (xs) => ({ pre: [`sers = MAP(${xs}, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })`], expr: 'JOIN(sers, "|")' }),
+        (rs) => rs.map((r) => json(serialised(r))).join('|'),
+      ),
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+    },
     {
       arity: 'many',
       id: 'xs-[c:child]-> {…}',
@@ -735,7 +783,8 @@ function oneBody(path: OnePath, consumer: OneConsumer): string[] | undefined {
 function ruledRefusal(path: PathFacts, consumer: ConsumerBase): Extract<Expectation, { kind: 'refused' }> | undefined {
   if (path.refusedAs !== undefined) return { kind: 'refused', code: path.refusedAs, why: 'the path itself is refused' };
   if (consumer.refused !== undefined) return { kind: 'refused', ...consumer.refused };
-  if (path.opaque === true && consumer.fieldList !== undefined) {
+  const fieldsOpaque = path.opaque === true || (consumer.throughEdges === true && path.childrenOpaque === true);
+  if (fieldsOpaque && consumer.fieldList !== undefined) {
     return { kind: 'refused', code: consumer.fieldList, why: "a system record's field list is not in the program's hands" };
   }
   return undefined;

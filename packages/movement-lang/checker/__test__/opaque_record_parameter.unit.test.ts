@@ -345,4 +345,145 @@ movement use(e: <Holder>) {
       expect(codes(source)).toEqual([]);
     });
   });
+
+  describe("what a body needs of the records reached through the parameter is asked of the caller's record's children", () => {
+    const HOLDER = `node Holder {
+  name: <text>
+  node child {
+    first: <text>
+  }
+}
+`;
+    const SER_CHILD = `movement ser_child(e: <Holder>) {
+  e-[k:child]-> {
+    write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }
+  }
+}
+`;
+
+    it("a system write's result holds its own fields but not its children's: refused", () => {
+      const source = HOLDER + SER_CHILD + `movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  ser_child(e: w)
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      const message = messages(source);
+      expect(message).toContain("the records 'e' leads to");
+      expect(message).toContain('TEXT.SERIALISE');
+    });
+
+    it("the same function takes a run-built record, whose children the run holds", () => {
+      const source = HOLDER + SER_CHILD + `movement run2(go: <src>) {
+  deduped = node { entries: <Holder> order by arrival }
+  a = write deduped-[:entries]-> { name: "Acme" }
+  write a-[:child]-> { first: "Ann" }
+  ser_child(e: a)
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it("a system write's result handed to a body that reads its child's field one at a time passes", () => {
+      const source = HOLDER + `movement read_child(e: <Holder>) {
+  e-[k:child]-> {
+    write sink-[:rows]-> { v: k.first }
+  }
+}
+movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  read_child(e: w)
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a child passed on to a function that serialises it carries the need to the outer call', () => {
+      const source = HOLDER + `node Person {
+  first: <text>
+}
+movement ser_one(k: <Person>) {
+  write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }
+}
+movement walk(e: <Holder>) {
+  e-[k:child]-> {
+    ser_one(k: k)
+  }
+}
+movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  walk(e: w)
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'ser_one'");
+    });
+  });
+
+  describe("a collection op binds its function's annotated record parameter to each member", () => {
+    it('a serialising closure over a system collection is refused', () => {
+      const source = `movement run2(go: <src>) {
+  vs = MAP(src-[:companies ORDER BY name]->, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      const message = messages(source);
+      expect(message).toContain("'MAP'");
+      expect(message).toContain('TEXT.SERIALISE');
+    });
+
+    it('a field-reading closure over a system collection, and a serialising one over run-built records, pass', () => {
+      const source = `movement run2(go: <src>) {
+  names = MAP(src-[:companies ORDER BY name]->, (e: <Entry>) => { return e.name })
+  deduped = node { entries: <Entry> order by arrival }
+  write deduped-[:entries]-> { name: "Acme", tag: "a" }
+  vs = MAP(deduped-[:entries]->, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+  write sink-[:rows]-> { v: JOIN(names, ",") }
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a named closure handed to the op is held to the same requirement', () => {
+      const source = `movement run2(go: <src>) {
+  f = (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") }
+  vs = MAP(src-[:companies ORDER BY name]->, f)
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'f'");
+    });
+
+    it('FILTER and REDUCE bind their member the same way', () => {
+      const source = `movement run2(go: <src>) {
+  kept = FILTER(src-[:companies ORDER BY name]->, (e: <Entry>) => { return TEXT.PAIRS(e) != "" })
+  folded = REDUCE(src-[:companies ORDER BY name]->, "", (acc, e: <Entry>) => { return "\${acc}\${TEXT.PAIRS(e)}" })
+  write sink-[:rows]-> { v: folded }
+  write sink-[:rows]-> { v: "\${COUNT(kept)}" }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD, C.CALL_ARG_OPAQUE_RECORD]);
+    });
+  });
+
+  describe("a write or a node literal written in place as a plugin's json argument", () => {
+    it.each([
+      ['a write', 'summarise(data: write src-[:companies]-> { name: "Gamma", tag: "g" })', 'a write'],
+      ['a node literal', 'summarise(data: node { name: "n", tag: "t" })', "'node { … }'"],
+    ])('%s is refused, naming what was passed and what the plugin takes', (_label, call, named) => {
+      const source = `movement run2(go: <src>) {
+  s = ${call}
+  write sink-[:rows]-> { v: s }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      const message = messages(source);
+      expect(message).toContain("'summarise'");
+      expect(message).toContain('structured data');
+      expect(message).toContain(named);
+    });
+  });
 });
