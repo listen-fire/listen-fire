@@ -12,6 +12,10 @@ export interface Rec {
   name: string;
   tag: string;
   child: string[];
+  /** `false` for a system record the run created and never walked: what its
+   *  `child` edge holds is not in hand, so a serialisation leaves the edge out
+   *  rather than claim it is empty. */
+  childInHand?: false;
 }
 
 export const ACME: Rec = { name: 'Acme', tag: 'a', child: ['Ann'] };
@@ -20,6 +24,10 @@ export const GAMMA: Rec = { name: 'Gamma', tag: 'g', child: ['Gail'] };
 
 /** A record copied by a spread: spreads carry fields, never nested nodes. */
 const fieldsOnly = (rec: Rec): Rec => ({ ...rec, child: [] });
+
+/** A system record a write created: it has no children until one is written,
+ *  and the run never walked its edge to find out. */
+const createdUnwalked = (rec: Rec): Rec => ({ ...rec, child: [], childInHand: false });
 
 // ── Binding paths ───────────────────────────────────────────────────────────
 
@@ -206,6 +214,15 @@ function onePaths(): OnePath[] {
       {
         ...each,
         ...opaque,
+        id: `${origin}: block head alias, child walked`,
+        since: 1,
+        onEdge: true,
+        instances: [ACME, BETA],
+        program: (body) => [`${walk.as('x')} {`, '  kids = x-[:child]->', ...indent(body('x')), '}'],
+      },
+      {
+        ...each,
+        ...opaque,
         id: `${origin}: MAP parameter`,
         since: 1,
         onEdge: true,
@@ -268,7 +285,7 @@ function onePaths(): OnePath[] {
       id: 'system: write handle',
       since: 1,
       onEdge: true,
-      instances: [fieldsOnly(GAMMA)],
+      instances: [createdUnwalked(GAMMA)],
       program: (body) => ['x = write src-[:companies]-> { name: "Gamma", tag: "g" }', ...body('x')],
     },
     {
@@ -386,7 +403,12 @@ export const row = (fields: Record<string, unknown>): string =>
     .join(';');
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
-const serialised = (rec: Rec) => ({ child: rec.child.map((first) => ({ first })), name: rec.name, tag: rec.tag });
+/** A record serialised: an edge the run never walked is absent, never `[]`. */
+const serialised = (rec: Rec) => ({
+  ...(rec.childInHand === false ? {} : { child: rec.child.map((first) => ({ first })) }),
+  name: rec.name,
+  tag: rec.tag,
+});
 
 interface ConsumerBase {
   id: string;
