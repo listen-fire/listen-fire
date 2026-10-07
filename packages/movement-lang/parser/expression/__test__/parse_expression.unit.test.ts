@@ -590,3 +590,33 @@ describe('parseExpression', () => {
     });
   });
 });
+
+// A `#` comment runs to the end of its line wherever the expression grammar
+// reads — except directly inside a hop's brackets, where `#` begins a head.
+describe('# comments inside an expression', () => {
+  it('inside a list', () => {
+    expect(parse('[1, # note\n  2]')).toEqual(parse('[1, 2]'));
+  });
+
+  it('inside a map literal', () => {
+    expect(parse('{ a: 1, # note\n  b: 2 }')).toEqual(parse('{ a: 1, b: 2 }'));
+  });
+
+  it("after a closure's => on its own line", () => {
+    expect(parse('MAP(xs, (x) => # the doubled value\n  x * 2)')).toEqual(parse('MAP(xs, (x) => x * 2)'));
+  });
+
+  it('a # hop head still parses, and a comment after the hop is a comment', () => {
+    expect(parse('x-[#linked]-> # note')).toEqual(parse('x-[#linked]->'));
+    expect(parse('[x-[#linked]->, # note\n  y]')).toEqual(parse('[x-[#linked]->, y]'));
+  });
+
+  it("a comment inside a hop's config map is a comment", () => {
+    expect(parse('x-[:a { limit: 1, # note\n  order: 2 }]->')).toEqual(parse('x-[:a { limit: 1, order: 2 }]->'));
+  });
+
+  it('a # inside a string is text', () => {
+    expect(parseExpression('"a # b"')).toMatchObject({ kind: 'string' });
+    expect(parseExpression("'a # b'")).toMatchObject({ kind: 'string' });
+  });
+});

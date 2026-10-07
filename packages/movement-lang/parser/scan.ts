@@ -275,3 +275,25 @@ export function matchingClose(src: string, open: number, limit = src.length): nu
   return undefined;
 }
 
+/**
+ * Is `pos` directly inside a hop's brackets — where `#` begins a head, not a
+ * comment? `from` is outside every bracket; the brackets between it and `pos`
+ * are read with the scan's own rules.
+ */
+export function isDirectlyInHop(src: string, from: number, pos: number): boolean {
+  const hops: boolean[] = [];
+  let i = from;
+  while (i < pos) {
+    const skipped = skipOpaque(src, i, { inHop: hops[hops.length - 1] ?? false, limit: pos });
+    if (skipped !== undefined) {
+      if (skipped.kind === 'unterminated') return false;
+      i = skipped.end;
+      continue;
+    }
+    const c = src[i];
+    if (c in CLOSER) hops.push(opensHop(src, i));
+    else if (c === ')' || c === ']' || c === '}') hops.pop();
+    i++;
+  }
+  return hops[hops.length - 1] ?? false;
+}
