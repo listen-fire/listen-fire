@@ -549,6 +549,25 @@ function str(v: unknown): string | undefined {
   return s.length ? s : undefined;
 }
 
+/** Everything else an organization write says about the company — each
+ *  text-valued custom field, labelled by the name the author wrote it under —
+ *  for the matcher's judge. A write with no website is matched by name alone,
+ *  and a description is what tells "Fyvie" the startup from every other Fyvie
+ *  in Affinity's global dataset. Capped so a long memo cannot crowd the judge. */
+export function organisationMatchContext(
+  fields: Array<{ label: string; fieldId: string; value: unknown }>,
+): string | undefined {
+  const lines = fields.flatMap(({ label, fieldId, value }) => {
+    if (ORG_BUILTIN_IDS.has(fieldId) || typeof value !== 'string') return [];
+    const text = value.trim();
+    return text ? [`${label}: ${text.slice(0, MATCH_CONTEXT_FIELD_CHARS)}`] : [];
+  });
+  return lines.length ? lines.join('\n').slice(0, MATCH_CONTEXT_CHARS) : undefined;
+}
+
+const MATCH_CONTEXT_FIELD_CHARS = 500;
+const MATCH_CONTEXT_CHARS = 2000;
+
 export function readOrgBuiltins(fields: Record<string, unknown>): { name?: string; domain?: string } {
   return { name: str(fields.name), domain: str(fields.domain) };
 }
