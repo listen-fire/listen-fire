@@ -58,6 +58,10 @@ interface PathFacts {
   opaque?: true;
   /** The whole path is refused, whatever consumes it. */
   refusedAs?: string;
+  /** The record is held under a map key, and before this version every key of
+   *  a map literal may miss (version 1 typed a literal by its values alone):
+   *  the record is maybe-empty, which a write updating it in place refuses. */
+  keysMayMissBefore?: LanguageVersion;
 }
 
 export interface OnePath extends PathFacts {
@@ -193,6 +197,18 @@ function onePaths(): OnePath[] {
   for (const origin of ['local', 'system'] as const) {
     const walk = WALK[origin];
     const opaque = origin === 'system' ? { opaque: true as const } : {};
+    // A record held under a map key — one key deep, and under a nested map.
+    const held = (id: string, map: string, path: string): OnePath => ({
+      ...each,
+      ...opaque,
+      id: `${origin}: ${id}`,
+      since: 1,
+      onEdge: true,
+      keysMayMissBefore: 2,
+      instances: [ACME, BETA],
+      program: (body) => [`${walk.as('e')} {`, `  m = ${map}`, ...indent(body(path)), '}'],
+    });
+    paths.push(held('{ k: e }.k', '{ k: e }', 'm.k'), held('{ k: { inner: e } }.k.inner', '{ k: { inner: e } }', 'm.k.inner'));
     paths.push(
       {
         ...each,
@@ -310,14 +326,6 @@ function onePaths(): OnePath[] {
       onEdge: true,
       instances: [ACME, BETA],
       program: (body) => [`${WALK.local.as('e')} {`, '  x = AT([e], 0)', `  ${GUARD}`, ...indent(body('x')), '}'],
-    },
-    {
-      ...each,
-      id: 'local: { k: e }.k',
-      since: 1,
-      onEdge: true,
-      instances: [ACME, BETA],
-      program: (body) => [`${WALK.local.as('e')} {`, '  m = { k: e }', ...indent(body('m.k')), '}'],
     },
     {
       ...each,
@@ -583,6 +591,22 @@ export interface Cell {
   /** What the cell must do. A cell whose right answer nobody has decided is
    *  pinned to today's outcome by the test's TRIAGE table. */
   expect: Expectation;
+  /** What it must do instead under the versions before `version`. */
+  expectBefore?: { version: LanguageVersion; expect: Expectation };
+}
+
+/** What a cell must do under `version`. */
+export const expectationAt = (cell: Cell, version: LanguageVersion): Expectation =>
+  cell.expectBefore !== undefined && version < cell.expectBefore.version ? cell.expectBefore.expect : cell.expect;
+
+/** A version rule that changes a pairing's answer, where one does. */
+function expectationBefore(path: PathFacts, consumer: Consumer): Cell['expectBefore'] {
+  if (path.keysMayMissBefore === undefined || !('writesInPlace' in consumer) || consumer.writesInPlace !== true) return undefined;
+  if (ruledRefusal(path, consumer) !== undefined) return undefined;
+  return {
+    version: path.keysMayMissBefore,
+    expect: { kind: 'refused', code: 'MOV_WRITE_POSITION_NOT_RECORD', why: 'a key of a map literal may miss, so the record may be empty' },
+  };
 }
 
 function oneBody(path: OnePath, consumer: OneConsumer): string[] | undefined {
@@ -629,7 +653,15 @@ export function cells(): Cell[] {
     for (const consumer of oneConsumers()) {
       const body = oneBody(path, consumer);
       if (body === undefined) continue;
-      out.push({ path, consumer, body: indent(body), since: Math.max(path.since, consumer.since), expect: oneExpectation(path, consumer) });
+      const before = expectationBefore(path, consumer);
+      out.push({
+        path,
+        consumer,
+        body: indent(body),
+        since: Math.max(path.since, consumer.since),
+        expect: oneExpectation(path, consumer),
+        ...(before !== undefined ? { expectBefore: before } : {}),
+      });
     }
   }
   for (const path of manyPaths()) {

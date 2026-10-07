@@ -85,6 +85,8 @@ import {
   aggregatedBarePath,
   bareName,
   isWalkProjection,
+  mapTargetRoots,
+  memberPathBindingName,
   pathRootName,
   probePathHead,
   spellPathHead,
@@ -168,6 +170,7 @@ import type {
   LinkTarget,
   LinkedExport,
   MatchExpression,
+  MatchTarget,
   LinkedFile,
   EventAddress,
   MovementCondition,
@@ -186,6 +189,7 @@ import type {
   TraversalBlock,
   WriteExpression,
   WriteSpread,
+  WriteTarget,
   FieldWriteMode,
   SuppliedSurface,
 } from 'movement-lang';
@@ -8244,6 +8248,45 @@ class Interpreter {
 
   // ── Writes ──
 
+  /**
+   * A target that starts at a MEMBER PATH (`write m.k { … }`,
+   * `write m.k-[:child]-> { … }`) starts at the record the path holds, bound
+   * exactly as `x = m.k` binds it (`bindSlotValue`), into an environment of
+   * the write's own under the path's spelling — so every step after this
+   * reads a name, as the checker's `bindTargetRoots` has it. `undefined` when
+   * every root is a name already.
+   */
+  private async bindTargetRoots(
+    target: MatchTarget,
+    env: Environment,
+  ): Promise<{ target: MatchTarget; env: Environment } | undefined>;
+  private async bindTargetRoots(
+    target: WriteTarget,
+    env: Environment,
+  ): Promise<{ target: WriteTarget; env: Environment } | undefined>;
+  private async bindTargetRoots(
+    target: WriteTarget,
+    env: Environment,
+  ): Promise<{ target: WriteTarget; env: Environment } | undefined> {
+    const paths: Array<{ name: string; expr: ExprSlot }> = [];
+    const named = mapTargetRoots(target, (root) => {
+      if (root.kind === 'name') return root;
+      const name = memberPathBindingName(root.expr);
+      if (name === undefined) {
+        throw new MovementEngineError(
+          'MOVENG_RUNTIME',
+          `'${root.expr.raw}' starts a write — only a name or a member path can, and the parser should have refused it`,
+        );
+      }
+      paths.push({ name, expr: root.expr });
+      return { kind: 'name', name };
+    });
+    if (paths.length === 0) return undefined;
+    const own = env.child();
+    for (const { name, expr } of paths) own.declare(name, await this.bindSlotValue(expr, env));
+    return { target: named, env: own };
+  }
+
   /** Returns the binding the write produced (a handle, or an in-memory
    *  shape position) — declared under `bindingName` when one is given,
    *  and the argument-adaptation currency for inline call args. */
@@ -8253,6 +8296,12 @@ class Interpreter {
     env: Environment,
     body: BodyContext,
   ): Promise<Binding> {
+    const rooted = await this.bindTargetRoots(authored.target, env);
+    if (rooted !== undefined) {
+      const written = await this.executeWrite({ ...authored, target: rooted.target }, bindingName, rooted.env, body);
+      if (bindingName !== undefined) env.declare(bindingName, written);
+      return written;
+    }
     // A spread is the field lines it stands for — from here on nothing can
     // tell `...e` from the lines written out.
     const write: WriteExpression =
@@ -8929,11 +8978,17 @@ class Interpreter {
     bindingName: string | undefined,
     env: Environment,
   ): Promise<Binding> {
-    const binding = env.resolve(target.alias);
-    if (binding?.kind === 'nodePosition') {
-      return this.executeLocalPositionWrite(write, { alias: target.alias, landing: binding }, bindingName, env);
+    // A member-path root is bound to a name before a write runs
+    // (`bindTargetRoots`), so the root here is a name.
+    const alias = pathRootName(target);
+    if (alias === undefined) {
+      throw new MovementEngineError('MOVENG_RUNTIME', `'write ${spellPathRoot(target.root)} { … }' reached the update path unbound`);
     }
-    const resolved = await this.resolvePositionWriteTarget(target.alias, binding, env);
+    const binding = env.resolve(alias);
+    if (binding?.kind === 'nodePosition') {
+      return this.executeLocalPositionWrite(write, { alias, landing: binding }, bindingName, env);
+    }
+    const resolved = await this.resolvePositionWriteTarget(alias, binding, env);
 
     const { fields, fieldProvenance, fieldSemantics, fieldEvidence, resources } =
       await this.evaluateWriteFields({ write, target: resolved.target, env });
@@ -8954,7 +9009,7 @@ class Interpreter {
     if ('notFound' in handle) {
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'write ${target.alias} { … }' — the record (${resolved.target.adapter.adapterType} ${resolved.externalId}) no longer exists`,
+        `'write ${alias} { … }' — the record (${resolved.target.adapter.adapterType} ${resolved.externalId}) no longer exists`,
       );
     }
 
@@ -10177,6 +10232,12 @@ class Interpreter {
     bindingName: string | undefined,
     env: Environment,
   ): Promise<Binding> {
+    const rooted = await this.bindTargetRoots(match.target, env);
+    if (rooted !== undefined) {
+      const found = await this.executeMatch({ ...match, target: rooted.target }, bindingName, rooted.env);
+      if (bindingName !== undefined) env.declare(bindingName, found);
+      return found;
+    }
     const at = `match ${describeMatchTarget(match)}`;
     if (match.target.kind === 'linked') {
       const root = pathRootName(match.target.path);
@@ -10612,7 +10673,7 @@ class Interpreter {
       // `executePositionWrite` before resolving a create target.
       throw new MovementEngineError(
         'MOVENG_RUNTIME',
-        `'write ${write.target.alias} { … }' is a position write — it should have been dispatched to the update path`,
+        `'write ${spellPathRoot(write.target.root)} { … }' is a position write — it should have been dispatched to the update path`,
       );
     }
 

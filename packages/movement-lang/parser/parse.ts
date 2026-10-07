@@ -54,6 +54,7 @@ import {
   NodeEntry,
   NodeLiteral,
   PathHead,
+  PathRoot,
   PluginCall,
   Program,
   RValue,
@@ -84,7 +85,7 @@ import {
   WriteSpread,
   WriteTarget,
 } from './ast';
-import { spellName } from './ast';
+import { memberPathBindingName, spellName, spellPathRoot } from './ast';
 import { originalSlot } from '../expression/bridge';
 import type { EdgeSequencing } from '@listen-fire/shared/expression/types';
 import {
@@ -93,6 +94,7 @@ import {
   opensHop,
   scanBacktickName,
   scanIdent,
+  scanMemberPath,
   scanName,
   skipOpaque,
   skipString,
@@ -1578,8 +1580,9 @@ class Parser {
   private parseMatchExpression(start: number): MatchExpression {
     const target = this.parseWriteTarget('match');
     if (target.kind === 'position') {
+      const held = spellPathRoot(target.root);
       throw new MovementParseError(
-        `'${target.alias}' is already a record — a match FINDS one, from where records are: a hop ('match ${target.alias}-[:Edge]-> { … }') or an instance's collection ('match crm-[:companies]-> { … }')`,
+        `'${held}' is already a record — a match FINDS one, from where records are: a hop ('match ${held}-[:Edge]-> { … }') or an instance's collection ('match crm-[:companies]-> { … }')`,
         target.span.start,
       );
     }
@@ -1629,39 +1632,7 @@ class Parser {
     this.skipInlineWs();
     const targetStart = this.pos;
     if (this.peekCh() === '(') return this.parseTupleWriteTarget(targetStart, keyword);
-    // A traversal head may start at an EXPRESSION; a write's parent may not. A
-    // write attaches to ONE record whose identity it has to carry — the graph
-    // it lands in, a `bind` counterpart, who it is attributed to — and an
-    // expression has no name to carry that, so the parent is named first.
-    // Refused HERE, with the repair, rather than parsed into a target nothing
-    // downstream can resolve.
-    const exprParentEnd = this.scanExpressionRootEnd();
-    if (exprParentEnd !== undefined) {
-      this.error(
-        `A ${keyword}'s parent is a NAMED record — bind it first ('parent = ${this.src.slice(this.pos, exprParentEnd)}', then '${keyword} parent-[:edge]-> { … }'). A ${keyword} starts from one record whose identity it carries (the graph it lands in, its 'bind' counterpart, who it is attributed to), and an expression has no name to carry.`,
-      );
-    }
-    const scannedFirst = scanName(this.src, this.pos);
-    if (!scannedFirst) {
-      this.error(
-        `Expected a ${keyword} target after '${keyword}' — a linked path like '<instance>-[:edge]->' or 'parent-[:edge]->', or a tuple '(a-[:e]->, b-[:f]->)' — found ${this.describeHere()}`,
-      );
-    }
-    const first = scannedFirst.name;
-    this.pos = scannedFirst.end;
-    if (this.peekCh() === '.') {
-      const dotStart = this.pos;
-      this.pos++;
-      const type = this.readName(`a type name after '${first}.'`);
-      // The flat `<instance>.<type>` write target is retired: a write names the
-      // edge it creates, not the type. `write crm.company` becomes
-      // `write crm-[:company]-> { … }` — the linked write mints the record and
-      // its edge in one move.
-      this.error(
-        `${keyword === 'write' ? 'Write' : 'Match'} targets name the edge, not the type — use '${keyword} ${first}-[:${type}]-> { … }'. The flat '${first}.${type}' form is no longer a ${keyword} target.`,
-        dotStart,
-      );
-    }
+    const root = this.parseWriteRoot(keyword);
     if (this.peekCh() === '-' && this.peekCh(1) === '[') {
       const hopsStart = this.pos;
       do {
@@ -1669,17 +1640,63 @@ class Parser {
       } while (this.peekCh() === '-' && this.peekCh(1) === '[');
       const hopsRaw = this.src.slice(hopsStart, this.pos);
       const explicitType = this.tryReadExplicitWriteType();
-      const path: PathHead = {
-        root: { kind: 'name', name: first },
-        hopsRaw,
-        span: this.spanFrom(targetStart),
-      };
+      const path: PathHead = { root, hopsRaw, span: this.spanFrom(targetStart) };
       return { kind: 'linked', path, explicitType, span: this.spanFrom(targetStart) };
     }
-    // A bare name → update the record at the bound position `first` in
-    // place (`write a { … }`). The write body follows; the checker
-    // validates that `first` is a writable stable record.
-    return { kind: 'position', alias: first, span: this.spanFrom(targetStart) };
+    // A bare name or member path → update the record it holds in place
+    // (`write a { … }`, `write m.k { … }`). The write body follows; the
+    // checker validates that it is a writable stable record.
+    return { kind: 'position', root, span: this.spanFrom(targetStart) };
+  }
+
+  /**
+   * Where a write or a match starts: the record a NAME holds, or the one a
+   * MEMBER PATH reaches (`m.k`, `m.k.inner`) — read exactly as `x = m.k` would
+   * bind it. Any other expression is bound to a name first.
+   */
+  private parseWriteRoot(keyword: 'write' | 'match'): PathRoot {
+    const start = this.pos;
+    const member = scanMemberPath(this.src, start);
+    const name = member === null ? scanName(this.src, start) : null;
+    const end = member?.end ?? name?.end;
+    if (end === undefined || this.src[end] === '(' || this.src[end] === '[') {
+      this.refuseWriteRootExpression(keyword);
+    }
+    this.pos = end;
+    if (name !== null) return { kind: 'name', name: name.name };
+    return { kind: 'expression', expr: { raw: this.src.slice(start, end), span: this.spanFrom(start, end) } };
+  }
+
+  /** A write's root that is neither a name nor a member path: the repair is
+   *  to bind it first. With no expression to name, the target is missing. */
+  private refuseWriteRootExpression(keyword: 'write' | 'match'): never {
+    const exprEnd = this.scanExpressionRootEnd() ?? this.scanWriteRootExpressionEnd();
+    if (exprEnd !== undefined) {
+      this.error(
+        `A ${keyword} starts from a record a name or a member path holds ('parent', 'm.k') — bind this one first: 'parent = ${this.src.slice(this.pos, exprEnd)}', then '${keyword} parent-[:edge]-> { … }' or '${keyword} parent { … }'.`,
+      );
+    }
+    this.error(
+      `Expected a ${keyword} target after '${keyword}' — a linked path like '<instance>-[:edge]->' or 'parent-[:edge]->', or a tuple '(a-[:e]->, b-[:f]->)' — found ${this.describeHere()}`,
+    );
+  }
+
+  /** Where a write's EXPRESSION root ends when no hop follows it — a call or
+   *  an index on a name (`FIRST(xs)`, `rows[0]`), up to the body's `{`. Peeks
+   *  only. */
+  private scanWriteRootExpressionEnd(): number | undefined {
+    const save = this.pos;
+    const name = scanName(this.src, save);
+    if (name === null || (this.src[name.end] !== '(' && this.src[name.end] !== '[')) return undefined;
+    try {
+      const { contentEnd } = this.scanBalanced({ stops: '{\n', context: 'the write target' });
+      return contentEnd > save ? contentEnd : undefined;
+    } catch (e) {
+      if (e instanceof MovementParseError) return undefined;
+      throw e;
+    } finally {
+      this.pos = save;
+    }
   }
 
   /**
@@ -1723,8 +1740,11 @@ class Parser {
           `Expected a linked path like 'parent-[:edge]->' in the tuple ${keyword} target, found ${this.describeHere()}`,
         );
       }
-      if (path.root === undefined || path.root.kind === 'expression') {
-        this.error('Every tuple path starts at a bound handle — name the parent', targetStart);
+      if (
+        path.root === undefined
+        || (path.root.kind === 'expression' && memberPathBindingName(path.root.expr) === undefined)
+      ) {
+        this.error('Every tuple path starts at a record a name or a member path holds — bind the parent first', targetStart);
       }
       paths.push(path);
       this.skipAllWs();

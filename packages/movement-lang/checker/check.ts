@@ -52,6 +52,8 @@ import {
   constructionAsCall,
   EXPRESSION_ROOT_PROBE,
   expandWriteSpreads,
+  mapTargetRoots,
+  memberPathBindingName,
   pathRootName,
   probePathHead,
   spellName,
@@ -86,6 +88,7 @@ import {
   Loc,
   MatchExpression,
   MatchTarget,
+  WriteTarget,
   MovementDeclaration,
   MovementParam,
   NamedArg,
@@ -7015,7 +7018,7 @@ class Checker {
     if (write.target.kind === 'position') {
       this.report(
         DiagnosticCodes.WRITE_BIND_POSITION,
-        `'bind' has no meaning on a position write — 'write ${write.target.alias} { … }' already holds the exact record, so there is no counterpart to establish. Drop the 'bind ${bind.name}'`,
+        `'bind' has no meaning on a position write — 'write ${spellPathRoot(write.target.root)} { … }' already holds the exact record, so there is no counterpart to establish. Drop the 'bind ${bind.name}'`,
         bind.span,
       );
       return;
@@ -7081,23 +7084,27 @@ class Checker {
     /** …and is a node declaration's record, typed by this program. */
     declared?: true;
   } {
-    const resolution = scope.resolve(target.alias);
+    // A member-path root is bound to a name before a target is checked
+    // (`bindTargetRoots`), so the root here is a name.
+    const alias = pathRootName(target);
+    if (alias === undefined) return { description: `'${spellPathRoot(target.root)}'` };
+    const resolution = scope.resolve(alias);
     if (resolution.kind !== 'found') {
-      this.reportResolutionFailure(target.alias, target.span, resolution);
-      return { description: `'${target.alias}'` };
+      this.reportResolutionFailure(alias, target.span, resolution);
+      return { description: `'${alias}'` };
     }
-    const record = this.recordOfName(resolution.symbol, target.alias, target.span);
+    const record = this.recordOfName(resolution.symbol, alias, target.span);
     if (record?.kind === 'value') {
       this.report(
         DiagnosticCodes.WRITE_POSITION_NOT_RECORD,
-        `'${target.alias}' is ${record.what} — 'write ${target.alias} { … }' updates an already-identified record in place, so it needs a record: a traversal alias, a prior write result, or a record picked from either`,
+        `'${alias}' is ${record.what} — 'write ${alias} { … }' updates an already-identified record in place, so it needs a record: a traversal alias, a prior write result, or a record picked from either`,
         target.span,
       );
-      return { description: `'${target.alias}'` };
+      return { description: `'${alias}'` };
     }
     // A record whose system describes nothing: unknown never errors — the
     // body is checked against nothing.
-    if (record?.kind !== 'record') return { description: `'${target.alias}'` };
+    if (record?.kind !== 'record') return { description: `'${alias}'` };
     const posType = record.type;
     // A record the run holds on one of its own edges: the run's graph is its
     // system, and that system updates by id. What it may set is what it
@@ -7105,7 +7112,7 @@ class Checker {
     // put it there.
     const runBuilt = runBuiltWriteShape(posType);
     if (runBuilt !== undefined) {
-      const description = `'${target.alias}' (${describePosition(posType)} this run built)`;
+      const description = `'${alias}' (${describePosition(posType)} this run built)`;
       return {
         root: { fields: runBuilt.fields, resultShape: runBuilt.fields },
         handle: posType,
@@ -7117,15 +7124,15 @@ class Checker {
     if (posType.kind !== 'position' && posType.kind !== 'handle' && posType.kind !== 'union') {
       this.report(
         DiagnosticCodes.WRITE_POSITION_NOT_RECORD,
-        `'${target.alias}' is ${describePosition(posType)} — 'write ${target.alias} { … }' updates an already-identified record in place, so it needs a record position: a traversal alias or a prior write result`,
+        `'${alias}' is ${describePosition(posType)} — 'write ${alias} { … }' updates an already-identified record in place, so it needs a record position: a traversal alias or a prior write result`,
         target.span,
       );
-      return { description: `'${target.alias}'` };
+      return { description: `'${alias}'` };
     }
     if (!posType.instance.schema.supportsInPlaceUpdate) {
       this.report(
         DiagnosticCodes.WRITE_POSITION_NO_UPDATE,
-        `'${posType.instance.name}' can't update records in place — its system has no update-by-id. To change ${describePosition(posType)}, create a new record (a graph-root, linked, or tuple-path write) instead of 'write ${target.alias} { … }'`,
+        `'${posType.instance.name}' can't update records in place — its system has no update-by-id. To change ${describePosition(posType)}, create a new record (a graph-root, linked, or tuple-path write) instead of 'write ${alias} { … }'`,
         target.span,
       );
       return { description: describePosition(posType) };
@@ -7363,11 +7370,36 @@ class Checker {
     return true;
   }
 
+  /**
+   * A target that starts at a MEMBER PATH (`write m.k { … }`,
+   * `write m.k-[:child]-> { … }`) starts at the record the path holds, bound
+   * exactly as `x = m.k` binds it — the same right-hand side, checked into a
+   * scope of the write's own under the path's spelling — so every rule after
+   * this reads a name, whichever way the author reached the record.
+   */
+  private bindTargetRoots(target: MatchTarget, scope: Scope): { target: MatchTarget; scope: Scope };
+  private bindTargetRoots(target: WriteTarget, scope: Scope): { target: WriteTarget; scope: Scope };
+  private bindTargetRoots(target: WriteTarget, scope: Scope): { target: WriteTarget; scope: Scope } {
+    let own: Scope | undefined;
+    const named = mapTargetRoots(target, (root) => {
+      if (root.kind === 'name') return root;
+      const name = memberPathBindingName(root.expr);
+      if (name === undefined) return root;
+      own ??= new Scope('branch', scope);
+      const shape = this.checkRValue({ kind: 'expr', expr: root.expr }, scope, name, root.expr.span);
+      own.declare({ name, kind: 'binding', span: root.expr.span, ...shape });
+      return { kind: 'name', name };
+    });
+    return { target: named, scope: own ?? scope };
+  }
+
   private checkWrite(
     authored: WriteExpression,
     scope: Scope,
     options?: { isBound?: boolean; binding?: string },
   ): PositionTypeRef | undefined {
+    const rooted = this.bindTargetRoots(authored.target, scope);
+    if (rooted.scope !== scope) return this.checkWrite({ ...authored, target: rooted.target }, rooted.scope, options);
     // A spread is the field lines it stands for, so every check below — an
     // excess field, a maybe-absent value, a required field — reads them as if
     // they had been written out.
@@ -7494,7 +7526,7 @@ class Checker {
       if (write.uniqueBy.length > 0) {
         this.report(
           DiagnosticCodes.WRITE_POSITION_UNIQUE,
-          `'unique by' has no meaning on a position write — 'write ${write.target.alias} { … }' already holds the exact record. Drop the 'unique by' clause`,
+          `'unique by' has no meaning on a position write — 'write ${spellPathRoot(write.target.root)} { … }' already holds the exact record. Drop the 'unique by' clause`,
           write.uniqueBy[0].span,
         );
       }
@@ -7974,6 +8006,8 @@ class Checker {
       impliedIdentity?: boolean;
     },
   ): PositionTypeRef | undefined {
+    const rooted = this.bindTargetRoots(match.target, scope);
+    if (rooted.scope !== scope) return this.checkMatch({ ...match, target: rooted.target }, rooted.scope, options);
     let root: WritableRootSchema | undefined;
     let rootDescription = 'the match target';
     let handle: PositionTypeRef | undefined;
