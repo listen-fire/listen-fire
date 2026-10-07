@@ -154,20 +154,11 @@ interface TriageEntry {
 }
 
 const TODO = {
-  graph_spread_children: "TODO: `graph<Entry> { ...e }` copies e's nested child records, while `write … { ...e }` copies fields only; decide what a spread carries",
   handle_serialise: "TODO: a created system record serialises with no `child` key, where a record read back shows `child: []`; decide whether an untraversed edge appears",
   write_through_map_field: "TODO: rules disagree — a record held in a map field reads, spreads and passes like any record, but the grammar's own rule is that a write starts from a NAMED record ('bind it first: parent = m.k'), and `write m.k { … }` is the retired type-path target; decide whether a write may start from a member path",
 };
 
 const TRIAGE: TriageEntry[] = [
-  {
-    reason: TODO.graph_spread_children,
-    observed: 'wrong',
-    cells: [
-      "local: graph<Entry> { ...e } × TEXT.SERIALISE(x)",
-      "local: graph<Entry> { ...e } × x-[c:child]-> {…}",
-    ],
-  },
   {
     reason: TODO.handle_serialise,
     observed: 'wrong',
