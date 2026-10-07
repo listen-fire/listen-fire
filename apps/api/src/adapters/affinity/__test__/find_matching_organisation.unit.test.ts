@@ -142,7 +142,38 @@ describe('findMatchingOrganisation weighs global records only through the judge'
       [10, true],
     ]);
     expect(system).toContain('Prefer a workspace candidate (global: false) over a global candidate');
-    expect(system).toContain('Accept a global candidate only when the name is distinctive AND query.context or query.domain corroborates it');
+  });
+
+  // Project A's deal write carries only a name and a domain, so the case being
+  // fixed reaches the judge with no context at all.
+  it('adopts the global "Fyvie AI" for "Fyvie" with no context, under the near-exact rule', async () => {
+    judge.mockResolvedValue('10');
+    const { client } = clientWith([FYVIE_GLOBAL]);
+
+    const match = await findMatchingOrganisation(client, { name: 'Fyvie' });
+
+    expect(match).toEqual(FYVIE_GLOBAL);
+    const { system, query } = judgeInput();
+    expect(query.query).toEqual({ name: 'Fyvie', domain: null, context: null });
+    expect(system).toContain('Accept a global candidate when the name is distinctive and near-exact');
+    expect(system).toContain('a brand-like token plus a generic suffix such as "AI", "Labs", "Technologies"');
+    expect(system).toContain('when query.context or query.domain is supplied, it does not contradict the candidate');
+  });
+
+  it('tells the judge a generic name like "Atlas" never adopts a global record without a corroborating domain', async () => {
+    const ATLAS_GLOBAL: Org = { id: 20, name: 'Atlas AI', domain: 'atlas.ai', domains: ['atlas.ai'], global: true };
+    const { client } = clientWith([ATLAS_GLOBAL]);
+
+    const match = await findMatchingOrganisation(client, { name: 'Atlas' });
+
+    expect(match).toBeNull();
+    const { system, query } = judgeInput();
+    expect(query.organizations).toEqual([
+      { id: 20, name: 'Atlas AI', domain: 'atlas.ai', domains: ['atlas.ai'], global: true },
+    ]);
+    expect(system).toContain(
+      'Never adopt a global candidate for a generic or common name (e.g. "Acme", "Nova", "Atlas") without a corroborating domain',
+    );
   });
 
   it('adopts a global record when the judge picks it', async () => {

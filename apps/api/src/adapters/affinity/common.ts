@@ -83,9 +83,10 @@ Matching rules (apply in this order):
 1) If query.domain is present, prioritize exact domain match after normalizing (ignore protocol and www). Also consider any value in organization.domains.
 2) If no domain match, consider name similarity but be conservative. Treat common or generic names (e.g. "BrightSpark", "Acme", "NextGen") as ambiguous unless there is a strong signal.
 3) Distinctive or famous names (e.g. "HubSpot", "Nostos Genomics") can be accepted on exact name match.
-4) Prefer a workspace candidate (global: false) over a global candidate (global: true) whenever both are plausible.
-5) Accept a global candidate only when the name is distinctive AND query.context or query.domain corroborates it (a name match alone is not enough).
-6) Prefer returning null over a wrong match. Only output a match if you are confident.
+4) Prefer a workspace candidate (global: false) over a global candidate (global: true) whenever the workspace candidate is plausible.
+5) Accept a global candidate when the name is distinctive and near-exact, AND, when query.context or query.domain is supplied, it does not contradict the candidate. Near-exact includes a brand-like token plus a generic suffix such as "AI", "Labs", "Technologies" (e.g. "Fyvie" vs "Fyvie AI").
+6) Never adopt a global candidate for a generic or common name (e.g. "Acme", "Nova", "Atlas") without a corroborating domain.
+7) Prefer returning null over a wrong match. Only output a match if you are confident.
 
 Output: Strictly JSON: either a number (the id) or null. No extra text.`;
 
