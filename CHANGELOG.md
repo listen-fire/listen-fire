@@ -12,6 +12,7 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 - A backslash in a backtick-quoted name escapes the next character everywhere a name is read: `` `a\`b` `` is the name a`b and `` `a\\b` `` is a\b. Before, a name at the start of a statement or in a block head kept the backslash while the same name inside an expression dropped it, so a name with a backslash never had one meaning; no saved automation in the test corpora uses one. This applies to every language version.
 - A `#` comment inside a bracketed value saves, as in `ids = [1, # the first` with `2]` on the next line, or the same inside a `{ … }` map or after a function's `=>`. Before, saving refused the `#`. A `#` directly inside a hop's brackets (`-[#linked]->`) is still a head, not a comment. This applies to every language version.
+- The editor treats the same text as a comment as the parser does: a `#` inside a `'…'` string or directly inside a hop's brackets is not a comment, and a `#` after `[` in a list is. Before, completions disappeared inside such strings and hops and appeared inside such comments.
 - A block head's hop alias may be backtick-quoted (`` xs-[`the company`:companies]-> { … } ``) and is bound like a bare one. Before, saving refused reads through it. This applies to every language version.
 
 ## [v0.10.6] - 2026-10-06

@@ -1394,6 +1394,35 @@ movement intake(msg: <inbox-[:message]->>) {
 `);
     expect(result.items).toEqual([]);
   });
+
+  // The editor finds a comment with the parser's own scan, so it agrees with
+  // the parser on what is prose.
+  describe('a comment is where the parser sees one', () => {
+    const at = (line: string) =>
+      completionsAt(`${HEADER}
+movement intake(msg: <inbox-[:message]->>) {
+${line}
+}
+`);
+
+    it("a # inside a ' string is not a comment", () => {
+      expect(labels(at("  x = CONCAT('a # b', ¦"))).toContain('msg');
+    });
+
+    it('a # directly inside a hop is not a comment', () => {
+      expect(at('  x = msg-[#linked WHERE ¦').items).not.toEqual([]);
+      expect(at('  x = msg-[ #linked WHERE ¦').items).not.toEqual([]);
+    });
+
+    it('a # inside a list is a comment', () => {
+      expect(at('  xs = [# the ids we wri¦').items).toEqual([]);
+    });
+
+    it('a # after a closing bracket is a comment', () => {
+      expect(at('  y = msg-[:sender]-> # who wro¦').items).toEqual([]);
+      expect(at('  y = [1, 2] # two wri¦').items).toEqual([]);
+    });
+  });
 });
 
 describe('getHoverInfo', () => {
