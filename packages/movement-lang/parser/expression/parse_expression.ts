@@ -28,7 +28,7 @@
 
 import { translateStringEscape, unrecognisedCharacterMessage } from '@listen-fire/shared/expression/formula';
 import { BridgeError } from '../../expression/error';
-import { callStyleIfMessage, isHopInterior, matchingClose, skipBacktickName } from '../scan';
+import { callStyleIfMessage, isDirectlyInHop, isHopInterior, matchingClose, scanBacktickName } from '../scan';
 import type {
   At,
   BinaryOp,
@@ -109,11 +109,12 @@ class ExpressionParser {
 
   constructor(
     private readonly src: string,
-    start: number,
+    /** Where this parse began — outside every bracket it reads. */
+    private readonly origin: number,
     private readonly limit: number,
   ) {
-    this.pos = start;
-    this.lastEnd = start;
+    this.pos = origin;
+    this.lastEnd = origin;
   }
 
   parseWhole(): MExpr {
@@ -142,10 +143,18 @@ class ExpressionParser {
     this.fail(message, tok.start);
   }
 
+  /** Whitespace and `#` comments — except directly inside a hop's brackets,
+   *  where `#` begins a head (`-[#linked]->`). */
   private skipWs(): boolean {
     let newline = false;
-    while (this.pos < this.limit && /\s/.test(this.src[this.pos])) {
-      if (this.src[this.pos] === '\n') newline = true;
+    while (this.pos < this.limit) {
+      const c = this.src[this.pos];
+      if (c === '#' && !isDirectlyInHop(this.src, this.origin, this.pos)) {
+        while (this.pos < this.limit && this.src[this.pos] !== '\n') this.pos++;
+        continue;
+      }
+      if (!/\s/.test(c)) break;
+      if (c === '\n') newline = true;
       this.pos++;
     }
     return newline;
@@ -241,9 +250,9 @@ class ExpressionParser {
   }
 
   private scanBacktick(start: number): { name: string; end: number } {
-    const end = skipBacktickName(this.src, start, this.limit);
-    if (end === undefined) this.fail('Unterminated backtick-quoted name', start);
-    return { name: this.src.slice(start + 1, end - 1).replace(/\\(.)/g, '$1'), end };
+    const scanned = scanBacktickName(this.src, start, this.limit);
+    if (scanned === null) this.fail('Unterminated backtick-quoted name', start);
+    return { name: scanned.name, end: scanned.end + 1 };
   }
 
   private lexString(
