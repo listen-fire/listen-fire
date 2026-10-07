@@ -8,6 +8,8 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+## [v0.10.7] - 2026-10-07
+
 ### Added
 
 - A write can start from a member path: `write m.k { … }` updates the record a map's key holds, and `write m.k-[:edge]-> { … }` hangs a new record off it, as `x = m.k` then `write x …` would. The same rules apply: a path that holds a value is refused with `MOV_WRITE_POSITION_NOT_RECORD`, a system without update-by-id with `MOV_WRITE_POSITION_NO_UPDATE`, and an unknown field by name. Nested keys work too (`m.k.inner`), for writes and for reads. Before, saving refused these, and `write m.k { … }` was read as the old `instance.type` target. A call or literal as the start is still refused: bind it to a name first. This applies to every language version; under version 1, where any key of a map may be missing, `write m.k { … }` is refused as a record that may be empty.
