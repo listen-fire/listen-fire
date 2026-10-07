@@ -300,7 +300,6 @@ export class AffinityAdapter extends BaseAdapter {
     if (!catalogType) return null;
     const fields = await cachedFields({
       client: await this.getApiClient(),
-      teamId: this.teamId,
       type: catalogType,
     });
     return fields.find((f) => f.id === fieldId)?.list_id ?? null;
@@ -1630,8 +1629,7 @@ export class AffinityAdapter extends BaseAdapter {
     // The built-in association: a person and an organization, either way
     // round, along the edge the catalog publishes it under. NAMED rather than
     // inferred by exclusion — "anything that is not a custom reference field"
-    // would swallow an enrichment-sourced reference the workspace simply will
-    // not let anyone write, and turn a refusal into a silent employer link.
+    // would turn a misspelt or unknown edge into a silent employer link.
     const fromDecoded = await this.structuredIdFor(input.from.recordType);
     const fromId = Number(input.from.externalId);
     if (Number.isInteger(fromId) && isEmployerEdge(edgeName)) {
@@ -1714,7 +1712,6 @@ export class AffinityAdapter extends BaseAdapter {
     return readCustomFieldValues(operations, scope, {
       catalog: await cachedFields({
         client: await this.getApiClient(),
-        teamId: this.teamId,
         type:
           catalogType ??
           (scope.kind === 'entity' && scope.entityType === 'organization'
@@ -1814,7 +1811,7 @@ export class AffinityAdapter extends BaseAdapter {
     const client = await this.getApiClient();
     const [values, catalog] = await Promise.all([
       client.getFieldValues({ list_entry_id: listEntryId }),
-      cachedFields({ client, teamId: this.teamId, type: catalogType }),
+      cachedFields({ client, type: catalogType }),
     ]);
     const list = await this.listOfEntry(decoded, values, catalog);
     const grouped = await readCustomFieldValues(
