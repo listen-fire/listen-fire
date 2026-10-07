@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Fixed
+
+- Affinity fields that Affinity fills in itself, such as a person's LinkedIn URL, can be written like any other field. Before, saving refused a write to them as an unknown field, and a linked write along such a reference was refused. A value Affinity refuses fails the run with an error naming the field, the record and Affinity's reason; the record's other fields are still written.
+
 ## [v0.10.7] - 2026-10-07
 
 ### Added

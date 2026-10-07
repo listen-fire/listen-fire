@@ -15,7 +15,6 @@ import type { ParentAssociation, ParentLink, WriteInput } from '../../adapter';
 import { writeParentLinks } from '../../adapter';
 import {
   decodedFixedType,
-  isReadOnlyField,
   isReferenceValueType,
   listScopedFieldDisplayNames,
   INTERACTION_TYPE_LABELS,
@@ -378,7 +377,6 @@ export async function writeCustomFieldValues(
           `the published schema and the workspace disagree.`,
       );
     }
-    if (isReadOnlyField(fieldDef)) continue; // enrichment-sourced: not writable
     if (fieldDef.list_id && !listEntryId) continue; // list field with no entry to hang it on
 
     // An existing value is UPDATED, never skipped: the engine decided what to
@@ -407,8 +405,11 @@ export async function writeCustomFieldValues(
       }
     } catch (err) {
       if (isAdapterCallCeilingExceeded(err)) throw err;
-      logger.warn(`[AffinityAdapter] writeCustomFieldValues: failed to write field "${key}"`, { err });
-      failed.push(`"${key}" (${err instanceof Error ? err.message : String(err)})`);
+      // `key` may be the internal id the adapter resolved the author's name
+      // to; the author wrote the field's name, so the failure names that.
+      const label = displayNames?.get(fieldDef.id) ?? fieldDef.name;
+      logger.warn(`[AffinityAdapter] writeCustomFieldValues: failed to write field "${label}"`, { err });
+      failed.push(`"${label}" (${err instanceof Error ? err.message : String(err)})`);
     }
   }
 
@@ -786,7 +787,6 @@ export async function referenceFieldOn(
   );
   if (!fieldDef) return null;
   if (!isReferenceValueType(fieldDef.value_type)) return null;
-  if (isReadOnlyField(fieldDef)) return null; // enrichment-sourced: not writable
   return fieldDef;
 }
 
