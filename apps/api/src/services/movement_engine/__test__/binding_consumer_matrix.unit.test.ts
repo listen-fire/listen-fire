@@ -16,7 +16,9 @@
 // A cell expects (b) only where a checker rule documented by its own
 // diagnostic says so (`ruledRefusal` in the cells file: a system record's
 // field list is not in hand, a record on no edge cannot be updated, a record
-// is not a plugin's text argument); every other cell expects (a).
+// is not a plugin's text argument; and, by version, `expectationBefore`: a
+// version-1 map's keys may all miss, so the record one holds may be empty);
+// every other cell expects (a).
 //
 // Accepted-then-thrown is a FAILURE named by its pair; accepted-then-wrong is
 // one too. A cell nobody has decided the right answer for is in TRIAGE below
@@ -130,7 +132,7 @@ import { containerAssociation, type Adapter } from '../../translation_graph/adap
 import { makeStablePosition, positionData, META_RECORD_TYPE } from '../../translation_graph/types';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { getTransform } from '../../translation_graph/engine/transforms/registry';
-import { ACME, BETA, cellId, cells, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
+import { ACME, BETA, cellId, cells, expectationAt, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000088' as TeamId;
 const VERSION: LanguageVersion = CURRENT_LANGUAGE_VERSION;
@@ -153,20 +155,9 @@ interface TriageEntry {
   cells: string[];
 }
 
-const TODO = {
-  write_through_map_field: "TODO: rules disagree — a record held in a map field reads, spreads and passes like any record, but the grammar's own rule is that a write starts from a NAMED record ('bind it first: parent = m.k'), and `write m.k { … }` is the retired type-path target; decide whether a write may start from a member path",
-};
+const TODO = {} as const;
 
-const TRIAGE: TriageEntry[] = [
-  {
-    reason: TODO.write_through_map_field,
-    observed: 'refused:PARSE',
-    cells: [
-      "local: { k: e }.k × write x {…}",
-      "local: { k: e }.k × write x-[:child]->",
-    ],
-  },
-];
+const TRIAGE: TriageEntry[] = [];
 
 
 // ── The skeleton ─────────────────────────────────────────────────────────────
@@ -410,7 +401,10 @@ function verdictOf(cell: Cell, outcome: Outcome): Verdict {
     case 'threw':
       return 'FAIL';
     case 'ran':
-      return cell.expect.kind === 'value' && JSON.stringify(outcome.rows) === JSON.stringify(cell.expect.observed) ? 'ok' : 'wrong';
+    {
+      const expected = expectationAt(cell, VERSION);
+      return expected.kind === 'value' && JSON.stringify(outcome.rows) === JSON.stringify(expected.observed) ? 'ok' : 'wrong';
+    }
   }
 }
 
@@ -428,11 +422,12 @@ function describeOutcome(outcome: Outcome): string {
 const report: Array<{ cell: string; path: string; consumer: string; expected: string; verdict: Verdict | 'skipped'; detail: string; triage: boolean }> = [];
 
 function expectedLabel(cell: Cell): string {
-  switch (cell.expect.kind) {
+  const expected = expectationAt(cell, VERSION);
+  switch (expected.kind) {
     case 'value':
       return 'ok';
     case 'refused':
-      return `refused:${cell.expect.code ?? 'any'}`;
+      return `refused:${expected.code ?? 'any'}`;
   }
 }
 
@@ -471,20 +466,21 @@ describe(`binding × consumer matrix under language version ${VERSION}`, () => {
         expect({ cell: id, verdict, detail: describeOutcome(outcome) }).toMatchObject({ verdict: triaged.observed });
         return;
       }
-      switch (cell.expect.kind) {
+      const expected = expectationAt(cell, VERSION);
+      switch (expected.kind) {
         case 'refused':
           expect({ cell: id, outcome: describeOutcome(outcome) }).toEqual({
             cell: id,
             outcome:
-              cell.expect.code === undefined && outcome.kind === 'refused'
+              expected.code === undefined && outcome.kind === 'refused'
                 ? describeOutcome(outcome)
-                : `refused: ${cell.expect.code?.split('+').join(', ') ?? `(any code — ${cell.expect.why})`}`,
+                : `refused: ${expected.code?.split('+').join(', ') ?? `(any code — ${expected.why})`}`,
           });
           return;
         case 'value':
           expect({ cell: id, outcome: describeOutcome(outcome) }).toEqual({
             cell: id,
-            outcome: `ran, leaving ${JSON.stringify(cell.expect.observed)}`,
+            outcome: `ran, leaving ${JSON.stringify(expected.observed)}`,
           });
           return;
       }

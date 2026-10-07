@@ -8,6 +8,10 @@ Entries are written for two readers: an operator running a self-hosted installat
 
 <!-- add merged PRs here -->
 
+### Added
+
+- A write can start from a member path: `write m.k { … }` updates the record a map's key holds, and `write m.k-[:edge]-> { … }` hangs a new record off it, as `x = m.k` then `write x …` would. The same rules apply: a path that holds a value is refused with `MOV_WRITE_POSITION_NOT_RECORD`, a system without update-by-id with `MOV_WRITE_POSITION_NO_UPDATE`, and an unknown field by name. Nested keys work too (`m.k.inner`), for writes and for reads. Before, saving refused these, and `write m.k { … }` was read as the old `instance.type` target. A call or literal as the start is still refused: bind it to a name first. This applies to every language version; under version 1, where any key of a map may be missing, `write m.k { … }` is refused as a record that may be empty.
+
 ### Fixed
 
 - A record read from a system, handed to a function whose body serialises it, spreads it or passes it on to one that does, is refused on save with `MOV_CALL_ARG_OPAQUE_RECORD`, naming the parameter and the line that needs every field. Before, it saved and the run failed with `MOVENG_UNSUPPORTED`. Copy the fields into a record the automation builds and pass that. A function that only reads fields one at a time still takes a system's record. This applies to every language version.

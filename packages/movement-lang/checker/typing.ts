@@ -3686,8 +3686,27 @@ export class ExpressionTyping {
    */
   private dictMemberRead(expr: Extract<Expression, { type: 'traverse' }>): { type: FieldType | undefined } | undefined {
     if (expr.aliasRoot === undefined || expr.steps.length > 0) return undefined;
-    // `d.k` ends at the key; `d.k.f` reads on from what the key holds.
-    const member = expr.expression;
+    if (this.rootType(expr.aliasRoot) !== undefined) return undefined;
+    const held = this.scalarType(expr.aliasRoot);
+    if (held === undefined) return undefined;
+    return this.readDictMember(held, expr.expression);
+  }
+
+  /**
+   * `k`, `k.f`, `k.inner.f` read off a dict of type `held`: `d.k` ends at the
+   * key; `d.k.f` reads on from what the key holds — a dict as a dict again
+   * (`d.k.inner`), a record as that record. Undefined when `held` is not a dict
+   * or `member` reads no key of it — and, `within` a dict read on, a key the
+   * inner dict was not written with: that read types as it did before nested
+   * dicts were read on, and is not refused.
+   */
+  private readDictMember(
+    held: FieldType,
+    member: Expression,
+    within = false,
+  ): { type: FieldType | undefined } | undefined {
+    const dict = stripAbsent(held);
+    if (!isDictType(dict)) return undefined;
     const key =
       member.type === 'property'
         ? member.propertyTypeId
@@ -3695,28 +3714,29 @@ export class ExpressionTyping {
           ? member.aliasRoot
           : undefined;
     if (key === undefined) return undefined;
-    if (this.rootType(expr.aliasRoot) !== undefined) return undefined;
-    const held = this.scalarType(expr.aliasRoot);
-    const dict = held !== undefined ? stripAbsent(held) : undefined;
-    if (dict === undefined || !isDictType(dict)) return undefined;
-    const slotType = (): FieldType | undefined => {
-      if (dict.shape === undefined) return maybeAbsent(dict.of);
-      if (!Object.hasOwn(dict.shape, key)) {
-        this.reportUnknownDictKey(key, Object.keys(dict.shape));
-        return undefined;
-      }
-      const slot = dict.shape[key] ?? undefined;
-      return isMaybeAbsent(held) ? maybeAbsent(slot) : slot;
-    };
+    if (within && dict.shape !== undefined && !Object.hasOwn(dict.shape, key)) return undefined;
+    const known = dict.shape === undefined ? dict.of : dict.shape[key] ?? undefined;
+    const nested = member.type === 'traverse' && member.steps.length === 0 && known !== undefined && isDictType(stripAbsent(known));
     // Before version 3 a key read fell through to the record plane and typed
-    // nothing — except a key holding records, which reads as the records it
-    // holds in every version, as a record bound to a name does.
-    if (before(this.options.languageVersion, 3)) {
-      const known = dict.shape === undefined ? dict.of : dict.shape[key] ?? undefined;
-      if (!holdsRecords(known)) return undefined;
+    // nothing — except a key holding records (or a dict read on to them),
+    // which reads as the records it holds in every version, as a record bound
+    // to a name does.
+    if (before(this.options.languageVersion, 3) && !nested && !holdsRecords(known)) return undefined;
+    let type: FieldType | undefined;
+    if (dict.shape === undefined) type = maybeAbsent(dict.of);
+    else if (!Object.hasOwn(dict.shape, key)) {
+      this.reportUnknownDictKey(key, Object.keys(dict.shape));
+      type = undefined;
+    } else {
+      const slot = dict.shape[key] ?? undefined;
+      type = isMaybeAbsent(held) ? maybeAbsent(slot) : slot;
     }
-    const type = slotType();
     if (member.type !== 'traverse') return { type };
+    if (nested && type !== undefined) {
+      const inner = this.readDictMember(type, member.expression, true);
+      if (inner !== undefined) return inner;
+      if (before(this.options.languageVersion, 3)) return undefined;
+    }
     // A record held under the key is read on as that record.
     const record = recordHeadPosition(type);
     return { type: this.inferAt({ type: 'traverse', steps: member.steps, expression: member.expression }, record) };

@@ -65,6 +65,26 @@ export function scanName(src: string, pos: number): ScannedName | null {
 }
 
 /**
+ * Scan a MEMBER PATH starting at `pos` — a name and one or more property steps
+ * (`m.k`, ``m.`a key`.inner``), nothing else. Returns each step's name verbatim
+ * and the index just past the last one, or `null` when `src[pos]` starts no
+ * name, or a name with no `.` step after it.
+ */
+export function scanMemberPath(src: string, pos: number): { names: string[]; end: number } | null {
+  const first = scanName(src, pos);
+  if (first === null) return null;
+  const names = [first.name];
+  let end = first.end;
+  while (src[end] === '.') {
+    const step = scanName(src, end + 1);
+    if (step === null) break;
+    names.push(step.name);
+    end = step.end;
+  }
+  return names.length > 1 ? { names, end } : null;
+}
+
+/**
  * Unwrap a raw credential argument value to its catalog-side name.
  *
  * A construction's credential argument is always a reference to an imported

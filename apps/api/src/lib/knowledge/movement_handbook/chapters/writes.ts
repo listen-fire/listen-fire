@@ -127,6 +127,8 @@ write company-[:Team]-> { Name: enquiry.\`Contact Name\` }
 
 One effect, two assertions: the record *and* its link from \`company\`. The type comes from the edge, so the child can't be authored without its connection. Chains compose, which is why you write parents first: every child hangs off a handle already in hand.
 
+A parent is a name or a member path: \`write m.k-[:Team]-> { … }\` hangs the child off the record a map's key holds. Bind any other expression to a name first.
+
 The edge may be declared on **either side**: where only the child references back, write it at the root and \`link\` it instead. Never put a handle in a reference-shaped *field* (\`Partner: pa\`) — connections live in the write target, not the body.
 
 ### conversation-writes
@@ -192,7 +194,7 @@ crm-[record:Companies WHERE \`Categories\` == "Lead"]-> {
 }
 \`\`\`
 
-\`write <alias> { … }\` updates the record the alias already stands on — traversed, or a handle from earlier in the run. Nothing is left to resolve, so \`unique by\` is rejected, and there is no create to gate: set only the fields that change, and use \`link\`/\`unlink\` for connections. A target that can't update by id (an append-only channel, a drive that only creates files) is flagged at save.
+\`write <alias> { … }\` updates the record the alias already stands on — traversed, or a handle from earlier in the run — and \`write m.k { … }\` updates the one a map's key holds, as \`x = m.k\` then \`write x { … }\` would. Nothing is left to resolve, so \`unique by\` is rejected, and there is no create to gate: set only the fields that change, and use \`link\`/\`unlink\` for connections. A target that can't update by id (an append-only channel, a drive that only creates files) is flagged at save.
 
 ### removal
 
