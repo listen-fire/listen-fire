@@ -34,9 +34,20 @@ const catalog = mockCatalog({
     attio: { constructionArgs: [], schema: crmSchema },
     sheets: { constructionArgs: [], schema: sinkSchema },
   },
+  plugins: {
+    // A plugin handed a record's fields all at once.
+    summarise: {
+      args: ['data'],
+      argTypes: { data: 'json' },
+      requiredArgs: ['data'],
+      effects: { ai: true },
+      output: { kind: 'value', type: 'text' },
+    },
+  },
 });
 
 const PRELUDE = `import { attio, sheets } from adapters
+import { summarise } from plugins
 src = attio()
 sink = sheets()
 
@@ -198,5 +209,140 @@ movement recap(go: <src>) {
 }
 ` + caller('use_ser(e: c)');
     expect(codes(source, version)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+  });
+
+  describe('a record reached through the parameter is the caller\'s record\'s child', () => {
+    it.each([
+      ['a block head over its child', 'e-[k:child]-> {\n    write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }\n  }'],
+      ['MAP over its child', 'vs = MAP(e-[:child ORDER BY first]->, (k) => { return TEXT.SERIALISE(k, "JSON") })\n  write sink-[:rows]-> { v: JOIN(vs, ",") }'],
+    ])('%s, serialised, needs the fields of the record in hand', (_label, line) => {
+      const source = `node Holder {
+  name: <text>
+  node child {
+    first: <text>
+  }
+}
+movement use(e: <Holder>) {
+  ${line}
+}
+` + caller('use(e: c)');
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain('TEXT.SERIALISE');
+    });
+
+    it("a body that reads one field of the child takes a system record", () => {
+      const source = `node Holder {
+  name: <text>
+  node child {
+    first: <text>
+  }
+}
+movement use(e: <Holder>) {
+  e-[k:child]-> {
+    write sink-[:rows]-> { v: k.first }
+  }
+}
+` + caller('use(e: c)');
+      expect(codes(source)).toEqual([]);
+    });
+  });
+
+  describe("a plugin's json argument takes every field of the record", () => {
+    it('a system record handed to it directly is refused, naming the plugin', () => {
+      const source = caller('s = summarise(data: c)', []);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      expect(messages(source)).toContain("'summarise'");
+    });
+
+    it('a record the program holds passes, and so does a dict of the fields', () => {
+      const source = `movement run2(go: <src>) {
+  deduped = node { entries: <Entry> order by arrival }
+  a = write deduped-[:entries]-> { name: "Acme", tag: "a" }
+  s1 = summarise(data: a)
+  src-[c:companies]-> {
+    s2 = summarise(data: { name: c.name })
+  }
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a function handing its parameter to it refuses a system record at the call', () => {
+      const source = `movement use(e: <Entry>) {
+  s = summarise(data: e)
+  write sink-[:rows]-> { v: s }
+}
+` + caller('use(e: c)');
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'summarise'");
+    });
+  });
+
+  describe('a named closure with a record parameter carries the same requirement', () => {
+    it('a closure that serialises its parameter refuses a system record at the call', () => {
+      const source = `movement run2(go: <src>) {
+  f = (e: <Entry>) => {
+    write sink-[:rows]-> { v: TEXT.SERIALISE(e, "JSON") }
+  }
+  src-[c:companies]-> {
+    f(e: c)
+  }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      const message = messages(source);
+      expect(message).toContain("'f'");
+      expect(message).toContain('TEXT.SERIALISE');
+    });
+
+    it('a closure that reads one field takes a system record; one that serialises takes a record in hand', () => {
+      const source = `movement run2(go: <src>) {
+  f = (e: <Entry>) => {
+    write sink-[:rows]-> { v: e.name }
+  }
+  g = (e: <Entry>) => {
+    write sink-[:rows]-> { v: TEXT.SERIALISE(e, "JSON") }
+  }
+  deduped = node { entries: <Entry> order by arrival }
+  a = write deduped-[:entries]-> { name: "Acme", tag: "a" }
+  g(e: a)
+  src-[c:companies]-> {
+    f(e: c)
+  }
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a closure passing its parameter on to a function that serialises carries the need', () => {
+      const source = USE_SER + `movement run2(go: <src>) {
+  f = (r: <Entry>) => {
+    use_ser(e: r)
+  }
+  src-[c:companies]-> {
+    f(r: c)
+  }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'use_ser'");
+    });
+
+    it('a closure handing its parameter back gives the caller its own record again', () => {
+      const source = `movement run2(go: <src>) {
+  f = (e: <Entry>) => {
+    return e
+  }
+  deduped = node { entries: <Entry> order by arrival }
+  a = write deduped-[:entries]-> { name: "Acme", tag: "a" }
+  b = f(e: a)
+  write sink-[:rows]-> { v: TEXT.SERIALISE(b, "JSON") }
+  src-[c:companies]-> {
+    f(e: c)
+  }
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
   });
 });

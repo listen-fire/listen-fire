@@ -185,6 +185,10 @@ const sinkSchema: InstanceSchema = {
 
 const credentialArg = [{ name: 'credentials', kind: 'credential' as const, required: true }];
 const fetchUrl = staticCatalogFromManifests({ credentials: {} }).plugin('fetch_url');
+/** A plugin whose argument takes structured data (`json`): it is handed the
+ *  record's fields all at once, and hands back the name it was given. No
+ *  registered plugin takes one today; the type is the plugin contract's. */
+const SUMMARISE = 'summarise';
 const catalog = mockCatalog({
   adapters: {
     email: { constructionArgs: credentialArg, schema: emailSchema },
@@ -192,7 +196,10 @@ const catalog = mockCatalog({
     sheets: { constructionArgs: credentialArg, schema: sinkSchema },
   },
   credentials: { inbox_cred: { adapters: ['email'] }, crm_cred: { adapters: ['attio'] }, sheet_cred: { adapters: ['sheets'] } },
-  ...(fetchUrl !== undefined ? { plugins: { fetch_url: fetchUrl } } : {}),
+  plugins: {
+    ...(fetchUrl !== undefined ? { fetch_url: fetchUrl } : {}),
+    [SUMMARISE]: { args: ['data'], argTypes: { data: 'json' }, requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
+  },
 });
 
 /** The shape every record path binds. Descriptions are an extraction's
@@ -212,7 +219,7 @@ function prelude(version: LanguageVersion): string {
   return [
     'import { email, attio, sheets } from adapters',
     'import { inbox_cred, crm_cred, sheet_cred } from credentials',
-    ...(fetchUrl !== undefined ? ['import { fetch_url } from plugins'] : []),
+    `import { ${[...(fetchUrl !== undefined ? ['fetch_url'] : []), SUMMARISE].join(', ')} } from plugins`,
     '',
     'inbox = email(credentials: inbox_cred)',
     'src = attio(credentials: crm_cred)',
@@ -235,6 +242,18 @@ function prelude(version: LanguageVersion): string {
     '}',
     ...(version >= 2 ? ['movement pairs_entry(e: <Entry>) {', '  write sink-[:rows]-> { v: TEXT.PAIRS(e) }', '}'] : []),
     ...(version >= 3 ? ['movement serialise_entry(e: <Entry>) {', '  write sink-[:rows]-> { v: TEXT.SERIALISE(e, "JSON") }', '}'] : []),
+    'movement child_entry(e: <Entry>) {',
+    '  e-[k:child]-> {',
+    '    write sink-[:rows]-> { v: k.first }',
+    '  }',
+    '}',
+    ...(version >= 3
+      ? ['movement serialise_child(e: <Entry>) {', '  e-[k:child]-> {', '    write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }', '  }', '}']
+      : []),
+    'movement summarise_entry(e: <Entry>) {',
+    `  s = ${SUMMARISE}(data: e)`,
+    '  write sink-[:rows]-> { v: s }',
+    '}',
   ].join('\n');
 }
 
@@ -334,9 +353,15 @@ const extractLlm = {
 };
 
 const transformInvoker: MovementTransformInvoker = {
-  declaredOutput: (plugin) => (getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-')))?.signature.output,
-  async invoke() {
-    return { text: 'page' };
+  declaredOutput: (plugin) =>
+    plugin === SUMMARISE
+      ? { kind: 'value', type: { kind: 'string' } }
+      : (getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-')))?.signature.output,
+  async invoke({ plugin, config }) {
+    if (plugin !== SUMMARISE) return { text: 'page' };
+    const data = config.data;
+    const name = typeof data === 'object' && data !== null && 'name' in data ? data.name : undefined;
+    return { text: typeof name === 'string' ? name : 'no name' };
   },
 };
 
