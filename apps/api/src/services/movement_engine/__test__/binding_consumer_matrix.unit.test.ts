@@ -242,6 +242,8 @@ function prelude(version: LanguageVersion): string {
     'movement use_entry(e: <Entry>) {',
     '  write sink-[:rows]-> { v: e.name }',
     '}',
+    ...(version >= 2 ? ['movement pairs_entry(e: <Entry>) {', '  write sink-[:rows]-> { v: TEXT.PAIRS(e) }', '}'] : []),
+    ...(version >= 3 ? ['movement serialise_entry(e: <Entry>) {', '  write sink-[:rows]-> { v: TEXT.SERIALISE(e, "JSON") }', '}'] : []),
   ].join('\n');
 }
 

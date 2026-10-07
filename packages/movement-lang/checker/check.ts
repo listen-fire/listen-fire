@@ -263,6 +263,11 @@ import {
   checkEnumDomain,
   describePosition,
   checkJsonOpaque,
+  fieldsNeededBy,
+  type FieldsNeed,
+  holdsFieldsInHand,
+  noteFieldsNeeded,
+  parameterNeedOf,
   displayNameOf,
   EXTRACT_ROOT_NAME,
   ExpressionTyping,
@@ -575,6 +580,10 @@ export const DiagnosticCodes = {
   /** `...x` in a write body where `x`'s fields are not known — a spread
    *  writes every field of an extracted record, so it needs one. */
   WRITE_SPREAD_SOURCE: 'MOV_WRITE_SPREAD_SOURCE',
+  /** A record whose fields are read from its system one at a time, handed to
+   *  a function parameter whose body needs every field in hand (it
+   *  serialises, spreads or passes on the record to one that does). */
+  CALL_ARG_OPAQUE_RECORD: 'MOV_CALL_ARG_OPAQUE_RECORD',
   // Listeners (trigger rows are derived from `listen` statements)
   LISTEN_FILE_LEVEL: 'MOV_LISTEN_FILE_LEVEL',
   LISTEN_NOT_INSTANCE: 'MOV_LISTEN_NOT_INSTANCE',
@@ -2132,6 +2141,33 @@ interface DeclaredExtractShape {
  * node built in memory. Undefined for a system's record — its fields are the
  * system's — and for anything that is not a record.
  */
+/** `position` as the type of parameter `name` of the function `info`
+ *  declares: it carries the parameter's `FieldsNeed` cell, made on first ask
+ *  and shared from then on. Only a position or a union names a record a
+ *  caller hands over. */
+function asParameter(
+  position: PositionTypeRef,
+  info: NonNullable<ScopeSymbol['movement']>,
+  name: string,
+): PositionTypeRef {
+  if (position.kind !== 'position' && position.kind !== 'union') return position;
+  info.paramNeeds ??= new Map();
+  let need = info.paramNeeds.get(name);
+  if (need === undefined) {
+    need = { fn: info.decl.name, param: name, passedTo: [] };
+    info.paramNeeds.set(name, need);
+  }
+  return { ...position, parameter: need };
+}
+
+/** `position` with no parameter cell — the record once it has left the body. */
+function withoutParameter(position: PositionTypeRef): PositionTypeRef {
+  if (position.kind === 'maybeEmpty') return { ...position, of: withoutParameter(position.of) };
+  if ((position.kind !== 'position' && position.kind !== 'union') || position.parameter === undefined) return position;
+  const { parameter: _left, ...rest } = position;
+  return rest;
+}
+
 function knownFieldsOf(type: PositionTypeRef): string[] | undefined {
   switch (type.kind) {
     case 'extract':
@@ -3647,9 +3683,11 @@ class Checker {
     if (!info.paramTypes) {
       // An unannotated parameter is refused where it is DECLARED; here it
       // simply has no type to offer.
-      info.paramTypes = info.decl.params.map(param =>
-        param.type === undefined ? {} : this.planeTypeOf(param.type, info.declScope),
-      );
+      info.paramTypes = info.decl.params.map(param => {
+        if (param.type === undefined) return {};
+        const plane = this.planeTypeOf(param.type, info.declScope);
+        return plane.posType !== undefined ? { ...plane, posType: asParameter(plane.posType, info, param.name) } : plane;
+      });
     }
     return info.paramTypes;
   }
@@ -3997,7 +4035,7 @@ class Checker {
         name: param.name,
         kind: 'param',
         span: param.span,
-        ...(posType ? { posType } : {}),
+        ...(posType ? { posType: asParameter(posType, info, param.name) } : {}),
       });
     }
     this.typeOnlyDepth++;
@@ -4032,10 +4070,13 @@ class Checker {
     // A returned checker-local node carries a free-text label, and at a call
     // site the useful text is WHOSE value this is. Nothing else about the type
     // changes — a local node IS its structure.
+    // A parameter handed back is the caller's record again: what this body
+    // needs of it was said at the call that handed it over.
+    const returned = shape.posType !== undefined ? { ...shape, posType: withoutParameter(shape.posType) } : shape;
     const labelled: ReturnShape =
-      shape.posType?.kind === 'local'
-        ? { ...shape, posType: { ...shape.posType, label: `the value of '${info.decl.name}'` } }
-        : shape;
+      returned.posType?.kind === 'local'
+        ? { ...returned, posType: { ...returned.posType, label: `the value of '${info.decl.name}'` } }
+        : returned;
     info.returnType = { done: true, shape: labelled };
     return labelled;
   }
@@ -7648,6 +7689,7 @@ class Checker {
     const type = symbol.plural === true ? undefined : this.symbolPositionType(symbol);
     const fields = type !== undefined ? knownFieldsOf(type) : undefined;
     if (fields !== undefined) {
+      noteFieldsNeeded(type, `writes every field of it with '...${spread.source}' (line ${spread.span.start.line})`);
       spread.fields = fields;
       return fields;
     }
@@ -9219,6 +9261,9 @@ class Checker {
           );
         }
         params = this.movementParams(callee);
+        // What its body needs of each record argument is learned on the
+        // inference walk, which a declared return type otherwise skips.
+        if (callee.movement !== undefined && callee.movement.returnType === undefined) this.inferMovement(callee);
       } else if (callee.kind === 'plugin') {
         // One function sort: a plugin is a function whose body isn't visible.
         value = this.checkPluginApplication(statement, callee, scope);
@@ -9293,6 +9338,7 @@ class Checker {
         }
         this.refuseValueForPosition(fit, argType === undefined ? valueType : undefined, arg.expr.span);
         this.checkCallArgFit(fit, argType, param?.type.posType, arg.expr.span);
+        this.checkArgFieldsInHand(fit, argType ?? recordIn(valueType)?.position, arg.expr.span);
         return;
       }
       case 'write': {
@@ -9302,6 +9348,7 @@ class Checker {
           return;
         }
         this.checkCallArgFit(fit, handle, param?.type.posType, arg.write.span);
+        this.checkArgFieldsInHand(fit, handle, arg.write.span);
         return;
       }
       case 'node': {
@@ -9311,6 +9358,7 @@ class Checker {
           return;
         }
         this.checkCallArgFit(fit, synthesised, param?.type.posType, arg.node.span);
+        this.checkArgFieldsInHand(fit, synthesised, arg.node.span);
         return;
       }
       case 'closure':
@@ -9352,9 +9400,37 @@ class Checker {
         }
         this.refuseValueForPosition(fit, value.posType === undefined ? value.fieldType : undefined, arg.call.span);
         this.checkCallArgFit(fit, value.posType, param?.type.posType, arg.call.span);
+        this.checkArgFieldsInHand(fit, value.posType, arg.call.span);
         return;
       }
     }
+  }
+
+  /**
+   * A record argument against what the callee's body needs of it
+   * (`FieldsNeed`): TypeScript's parameter-versus-argument check, on whether
+   * the record's fields are in hand. A record read from its system one field
+   * at a time does not satisfy a parameter whose body serialises or spreads
+   * it. The calling function's own parameter, passed on, takes on the
+   * callee's need instead — its callers answer for it.
+   */
+  private checkArgFieldsInHand(fit: ArgFit, arg: PositionTypeRef | undefined, span: Span): void {
+    const need = parameterNeedOf(fit.param?.type.posType);
+    if (need === undefined || arg === undefined) return;
+    if (holdsFieldsInHand(arg, token => this.declaredShapeTokens.has(token))) {
+      const own = parameterNeedOf(arg);
+      if (own !== undefined && own !== need && !own.passedTo.some(onward => onward.need === need)) {
+        own.passedTo.push({ need, at: `passes it to '${fit.callee}' as '${need.param}' (line ${span.start.line})` });
+      }
+      return;
+    }
+    const why = fieldsNeededBy(need);
+    if (why === undefined) return;
+    this.report(
+      DiagnosticCodes.CALL_ARG_OPAQUE_RECORD,
+      `'${fit.callee}' needs every field of '${need.param}' in hand — its body ${why} — and this argument is ${describePosition(arg)}, whose fields are read from its system one at a time${describeArgPlace(fit)}. Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have '${fit.callee}' read the fields it uses one by one`,
+      span,
+    );
   }
 
   /**
@@ -10693,10 +10769,13 @@ class Checker {
           span: { start: statement.span.start, end: statement.span.start },
         });
       }
-      const posType =
+      const declared =
         graphSymbol && graphSymbol.kind !== 'adapter'
           ? this.positionFromTypeRefStrict(graphSymbol, paramTypeRef, paramTypeRef.span)
           : undefined;
+      const info = scope.symbols.get(statement.name)?.movement;
+      const posType =
+        declared !== undefined && info?.decl === statement ? asParameter(declared, info, param.name) : declared;
       const existing = this.declareAuthored(
         movementScope,
         {
@@ -12350,7 +12429,18 @@ class Checker {
     arg: CallArg,
     scope: Scope,
   ): void {
-    if (declared === undefined || declared === 'json') return;
+    if (declared === 'json') {
+      // Handed its fields: a function's parameter passed here needs them in
+      // hand, whatever the plugin then reads of them.
+      if (arg.kind === 'expr') {
+        noteFieldsNeeded(
+          recordIn(this.slotValueTypeSilently(arg.expr, scope))?.position,
+          `hands it to '${callee}' as '${arg.name}', which takes every field (line ${arg.expr.span.start.line})`,
+        );
+      }
+      return;
+    }
+    if (declared === undefined) return;
     const span = callArgSpan(arg);
     const record = (() => {
       switch (arg.kind) {

@@ -30,7 +30,7 @@ import { FieldType, InstanceSchema } from './catalog';
 import type { EffectRow } from './effects';
 import type { CollectionOrder } from './typing';
 import type { CallCycle } from './call_cycles';
-import { PlaneType, PositionTypeRef, ReturnShape } from './typing';
+import { FieldsNeed, PlaneType, PositionTypeRef, ReturnShape } from './typing';
 
 export type SymbolKind =
   /** `import { attio } from adapters` */
@@ -167,6 +167,10 @@ export interface ScopeSymbol {
     /** The call cycle (strongly connected component) this function is in,
      *  when it is in one — `checker/call_cycles.ts`. */
     cycle?: CallCycle;
+    /** What the body needs of the record each record parameter is handed,
+     *  by parameter name — one cell per parameter, shared by every walk of
+     *  the body and every call site (`FieldsNeed`). */
+    paramNeeds?: Map<string, FieldsNeed>;
   };
 }
 

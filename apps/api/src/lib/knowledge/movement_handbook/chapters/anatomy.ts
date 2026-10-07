@@ -266,6 +266,7 @@ function \`Intake\`(msg: <inbox-[:Email]->>) {
 
 - Pass a bound name (the event, a write handle) when it already fits the parameter, or build the argument in place with \`graph<Lead> { … }\` from whatever the caller holds. Related records travel as nested nodes of that graph. A call that needs two unrelated things takes two parameters.
 - A record reached by walking a collection fits a parameter typed on the listener's address for the same kind of record.
+- A function that serialises or spreads a record parameter needs one whose fields the automation holds (built, extracted or written). Copy a record read from a system into \`graph<Lead> { … }\` first, or the call is refused.
 - The callee sees only its parameters and ITS OWN file's top-level names. An imported function runs against its own file's imports and constructions.
 - A callee's writes are recorded on the caller's run.
 
