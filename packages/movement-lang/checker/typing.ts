@@ -546,17 +546,47 @@ export interface FieldsNeed {
   /** The first consumer in the body that needs the fields in hand. */
   consumer?: string;
   passedTo: Array<{ need: FieldsNeed; at: string }>;
+  /** The cell for the records reached THROUGH the parameter's edges, at any
+   *  depth: a body that walks to a child and serialises it needs the child's
+   *  fields in hand, which a record whose own fields are in hand may still not
+   *  offer (a system write's result: its children are the system's). */
+  reached?: FieldsNeed;
+  /** This cell is a parameter's `reached` cell. */
+  throughEdges?: true;
 }
 
-/** Why `need`'s parameter needs its record's fields in hand, if it does —
- *  directly, or through the parameters it is passed on to. */
-export function fieldsNeededBy(need: FieldsNeed, seen = new Set<FieldsNeed>()): string | undefined {
-  if (need.consumer !== undefined) return need.consumer;
-  seen.add(need);
+/** What a requirement is asked of: the record handed over itself, or the
+ *  records reached through its edges. */
+export type FieldsReach = 'record' | 'reached';
+
+/** Why `need`'s parameter needs the fields of its record (`record`) or of
+ *  what is reached through it (`reached`) in hand, if it does — directly, or
+ *  through the parameters it is passed on to. */
+export function fieldsNeededBy(
+  need: FieldsNeed,
+  reach: FieldsReach = 'record',
+  seen: Array<{ need: FieldsNeed; reach: FieldsReach }> = [],
+): string | undefined {
+  // A reached cell stands for every depth below the parameter, so what is
+  // reached from one of its records is reached from the parameter too.
+  const asked: FieldsReach = need.throughEdges === true ? 'record' : reach;
+  if (seen.some(s => s.need === need && s.reach === asked)) return undefined;
+  seen.push({ need, reach: asked });
+  if (asked === 'record' && need.consumer !== undefined) {
+    return need.throughEdges === true
+      ? `reaches a record through '${need.param}' and ${need.consumer}`
+      : need.consumer;
+  }
+  if (asked === 'reached' && need.reached !== undefined) {
+    const why = fieldsNeededBy(need.reached, 'record', seen);
+    if (why !== undefined) return why;
+  }
+  const onwardReaches: FieldsReach[] = need.throughEdges === true ? ['record', 'reached'] : [asked];
   for (const onward of need.passedTo) {
-    if (seen.has(onward.need)) continue;
-    const why = fieldsNeededBy(onward.need, seen);
-    if (why !== undefined) return `${onward.at}, and '${onward.need.fn}' ${why}`;
+    for (const onwardReach of onwardReaches) {
+      const why = fieldsNeededBy(onward.need, onwardReach, seen);
+      if (why !== undefined) return `${onward.at}, and '${onward.need.fn}' ${why}`;
+    }
   }
   return undefined;
 }
@@ -576,9 +606,18 @@ export function parameterNeedOf(position: PositionTypeRef | undefined): FieldsNe
   return position.kind === 'position' || position.kind === 'union' ? position.parameter : undefined;
 }
 
-/** `landing`, walked from `from`, carrying `from`'s parameter cell: a child
- *  of an opaque record is opaque, a child of a record in hand is in hand, so
- *  a body's need of the child is a need of the record the caller handed over. */
+/** The cell for what is reached through `need`'s parameter — made on first
+ *  ask; a reached cell is its own (every depth shares it). */
+function reachedThrough(need: FieldsNeed): FieldsNeed {
+  if (need.throughEdges === true) return need;
+  need.reached ??= { fn: need.fn, param: need.param, passedTo: [], throughEdges: true };
+  return need.reached;
+}
+
+/** `landing`, walked from `from`, carrying the cell for what is reached
+ *  through `from`'s parameter: a body's need of the child is a need of what
+ *  the caller's record leads to, which is in hand exactly when the caller's
+ *  record's children are (`holdsReachedFieldsInHand`). */
 export function withParameterOf(
   from: PositionTypeRef | undefined,
   landing: PositionTypeRef | undefined,
@@ -592,7 +631,7 @@ export function withParameterOf(
     }
     case 'position':
     case 'union':
-      return { ...landing, parameter: need };
+      return { ...landing, parameter: reachedThrough(need) };
     default:
       return landing;
   }
@@ -786,6 +825,35 @@ export function holdsFieldsInHand(
       return true;
     case 'maybeEmpty':
       return holdsFieldsInHand(position.of, isDeclaredGraphToken);
+    case 'position':
+    case 'union':
+      return isDeclaredGraphToken?.(position.instance.token) === true;
+    case 'meta':
+    case 'closure':
+      return false;
+    default:
+      return neverAsAny(position);
+  }
+}
+
+/** Does the checker hold IN HAND the fields of the records reached through
+ *  this record's edges? A walked child of a system's record — one traversed,
+ *  or a system write's own result — is the system's record, read one field at
+ *  a time; a record the run built (or extracted, or a declared shape's) holds
+ *  its children, unless it holds a system's records by reference. */
+export function holdsReachedFieldsInHand(
+  position: PositionTypeRef | undefined,
+  isDeclaredGraphToken: ((token: object) => boolean) | undefined,
+): boolean {
+  if (position === undefined) return false;
+  switch (position.kind) {
+    case 'extract':
+      return true;
+    case 'local':
+      return liveReferenceWithin(position, isDeclaredGraphToken) === undefined;
+    case 'maybeEmpty':
+      return holdsReachedFieldsInHand(position.of, isDeclaredGraphToken);
+    case 'handle':
     case 'position':
     case 'union':
       return isDeclaredGraphToken?.(position.instance.token) === true;

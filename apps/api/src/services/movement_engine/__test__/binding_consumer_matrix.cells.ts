@@ -27,9 +27,10 @@ export const GAMMA: Rec = { name: 'Gamma', tag: 'g', child: ['Gail'] };
  *  nested records too — those paths use the record as-is, child and all. */
 const fieldsOnly = (rec: Rec): Rec => ({ ...rec, child: [] });
 
-/** A system record a write created: it has no children until one is written,
- *  and the run never walked its edge to find out. */
-const createdUnwalked = (rec: Rec): Rec => ({ ...rec, child: [], childInHand: false });
+/** A system record a write created: the system gives it its children (the
+ *  fake attaches `rec.child`), and the run never walked its edge to find out
+ *  — so a serialisation leaves the edge out, and a walk finds the system's. */
+const createdUnwalked = (rec: Rec): Rec => ({ ...rec, childInHand: false });
 
 // ── Binding paths ───────────────────────────────────────────────────────────
 
@@ -66,6 +67,10 @@ interface PathFacts {
   /** A record traversed off an external system: the program does not hold
    *  its field list, so a consumer that needs every field is refused. */
   opaque?: true;
+  /** The record's own fields are in hand, but the records reached through its
+   *  edges are a system's (a system write's result): a consumer that needs
+   *  every field of a CHILD is refused. Implied by `opaque`. */
+  childrenOpaque?: true;
   /** The whole path is refused, whatever consumes it. */
   refusedAs?: string;
   /** The record is held under a map key, and before this version every key of
@@ -303,6 +308,7 @@ function onePaths(): OnePath[] {
       id: 'system: write handle',
       since: 1,
       onEdge: true,
+      childrenOpaque: true,
       instances: [createdUnwalked(GAMMA)],
       program: (body) => ['x = write src-[:companies]-> { name: "Gamma", tag: "g" }', ...body('x')],
     },
@@ -428,8 +434,14 @@ interface ConsumerBase {
   /** Needs every field of the record: refused, with this code, over a
    *  record whose field list the program does not hold (`opaque`). */
   fieldList?: string;
+  /** `fieldList` is about the records reached through the binding's edges,
+   *  not the binding itself: refused over `childrenOpaque` paths too. */
+  throughEdges?: true;
   /** The right answer is a refusal whatever the path. */
   refused?: { code?: string; why: string };
+  /** Paired with this path alone: the consumer's verdict does not depend on
+   *  how the record was bound. */
+  onlyPath?: string;
 }
 
 /** A consumer that reads a VALUE off the binding — usable anywhere, including
@@ -591,6 +603,7 @@ function oneConsumers(): OneConsumer[] {
       id: "movement(e: <Entry>) that walks e's child and serialises it",
       since: 3,
       fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
+      throughEdges: true,
       stmts: (x) => [`serialise_child(e: ${x})`],
       rows: (r) => r.child.map((first) => v(json({ first }))),
     },
@@ -623,6 +636,30 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => ['ser_closure = (r: <Entry>) => {', `  ${emit('TEXT.SERIALISE(r, "JSON")')}`, '}', `ser_closure(r: ${x})`],
       rows: (r) => [v(json(serialised(r)))],
     },
+    // A write written in place is no value a plugin can be handed, whatever
+    // the binding; a `node { … }` is, to an argument that takes structured
+    // data: the dict of its fields.
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'plugin(data: write copies-[:entries]-> {…}) (json)',
+      since: 1,
+      refused: { code: 'MOV_CALL_ARG_TYPE', why: 'a write written in place is not a value a plugin is handed' },
+      stmts: (x) => [`said = summarise(data: write copies-[:entries]-> { name: ${x}.name, tag: "c" })`, emit('said')],
+      rows: (r) => [v(r.name)],
+    },
+    {
+      arity: 'one',
+      form: 'statement',
+      id: 'plugin(data: node {…}) (json)',
+      since: 1,
+      stmts: (x) => [`said = summarise(data: node { name: ${x}.name, tag: "c" })`, emit('said')],
+      rows: (r) => [v(r.name)],
+    },
+    // An untyped plugin argument is handed what binding the argument to a name
+    // would bind: a call written in place is the value it computes, a node
+    // literal its fields; a write, a function or a type is refused.
+    ...pluginArgForms(),
     {
       arity: 'one',
       form: 'statement',
@@ -641,6 +678,47 @@ function oneConsumers(): OneConsumer[] {
       stmts: (x) => [`write sink-[:rows]-> { v: "s", ?...${x} }`],
       rows: (r) => [row({ name: r.name, tag: r.tag, v: 's' })],
     },
+  ];
+}
+
+/** The run-built row the plugin-argument forms are paired with. */
+const RUN_BUILT_ROW = 'local: block head alias';
+
+function pluginArgForms(): OneStatementConsumer[] {
+  const form = (
+    id: string,
+    o: {
+      since: LanguageVersion;
+      arg: (x: string) => string;
+      pre?: (x: string) => string[];
+      rows: (rec: Rec) => string[];
+      /** Why it is refused, when it is. */
+      refused?: string;
+    },
+  ): OneStatementConsumer => ({
+    arity: 'one',
+    form: 'statement',
+    id: `relay(data: ${id}) (untyped)`,
+    since: o.since,
+    onlyPath: RUN_BUILT_ROW,
+    ...(o.refused !== undefined ? { refused: { code: 'MOV_CALL_ARG_TYPE', why: o.refused } } : {}),
+    stmts: (x) => [...(o.pre?.(x) ?? []), `relayed = relay(data: ${o.arg(x)})`, emit('relayed')],
+    rows: o.rows,
+  });
+  const named = (r: Rec) => [v(r.name)];
+  const shouted = (r: Rec) => [v(r.name.toUpperCase())];
+  return [
+    form('x.name', { since: 1, arg: (x) => `${x}.name`, rows: named }),
+    form('u = UPPER(x.name), u', { since: 1, pre: (x) => [`u = UPPER(${x}.name)`], arg: () => 'u', rows: shouted }),
+    form('UPPER(x.name)', { since: 1, arg: (x) => `UPPER(${x}.name)`, rows: shouted }),
+    form('write …', { since: 1, arg: (x) => `write copies-[:entries]-> { name: ${x}.name, tag: "c" }`, rows: named, refused: 'a write written in place is not a value a plugin is handed' }),
+    // The literal's fields, as the same literal bound to a name would hand
+    // over: `relay` answers the name among them.
+    form('node {…}', { since: 1, arg: (x) => `node { name: ${x}.name, tag: "c" }`, rows: named }),
+    form('n = node {…}, n', { since: 1, pre: (x) => [`n = node { name: ${x}.name, tag: "c" }`], arg: () => 'n', rows: named }),
+    form('summarise(data: …)', { since: 1, arg: (x) => `summarise(data: { name: ${x}.name })`, rows: named }),
+    form('(r) => …', { since: 3, arg: () => '(r) => { return r }', rows: named, refused: 'a function is not a value an argument carries' }),
+    form('<Entry>', { since: 3, arg: () => '<Entry>', rows: named, refused: 'a type is not a value an argument carries' }),
   ];
 }
 
@@ -682,6 +760,24 @@ function manyConsumers(): ManyConsumer[] {
     {
       ...value('TEXT.SERIALISE(xs)', 3, (xs) => ({ expr: `TEXT.SERIALISE(${xs}, "JSON")` }), (rs) => json(rs.map(serialised))),
       fieldList: 'MOV_STDLIB_ARG_NOT_RECORD',
+    },
+    // A collection op binds its function's annotated record parameter to each
+    // member: one whose body serialises it needs every member's fields in
+    // hand, as a declared function's call does.
+    value(
+      'MAP(xs, (e: <Entry>) => e.name)',
+      1,
+      (xs) => ({ pre: [`names3 = MAP(${xs}, (e: <Entry>) => { return e.name })`], expr: 'JOIN(names3, ",")' }),
+      (rs) => rs.map((r) => r.name).join(','),
+    ),
+    {
+      ...value(
+        'MAP(xs, (e: <Entry>) => TEXT.SERIALISE(e))',
+        3,
+        (xs) => ({ pre: [`sers = MAP(${xs}, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })`], expr: 'JOIN(sers, "|")' }),
+        (rs) => rs.map((r) => json(serialised(r))).join('|'),
+      ),
+      fieldList: 'MOV_CALL_ARG_OPAQUE_RECORD',
     },
     {
       arity: 'many',
@@ -735,7 +831,8 @@ function oneBody(path: OnePath, consumer: OneConsumer): string[] | undefined {
 function ruledRefusal(path: PathFacts, consumer: ConsumerBase): Extract<Expectation, { kind: 'refused' }> | undefined {
   if (path.refusedAs !== undefined) return { kind: 'refused', code: path.refusedAs, why: 'the path itself is refused' };
   if (consumer.refused !== undefined) return { kind: 'refused', ...consumer.refused };
-  if (path.opaque === true && consumer.fieldList !== undefined) {
+  const fieldsOpaque = path.opaque === true || (consumer.throughEdges === true && path.childrenOpaque === true);
+  if (fieldsOpaque && consumer.fieldList !== undefined) {
     return { kind: 'refused', code: consumer.fieldList, why: "a system record's field list is not in the program's hands" };
   }
   return undefined;
@@ -764,6 +861,7 @@ export function cells(): Cell[] {
   const out: Cell[] = [];
   for (const path of onePaths()) {
     for (const consumer of oneConsumers()) {
+      if (consumer.onlyPath !== undefined && consumer.onlyPath !== path.id) continue;
       const body = oneBody(path, consumer);
       if (body === undefined) continue;
       const before = expectationBefore(path, consumer);

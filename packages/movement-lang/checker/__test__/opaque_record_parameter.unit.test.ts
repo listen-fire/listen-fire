@@ -43,11 +43,14 @@ const catalog = mockCatalog({
       effects: { ai: true },
       output: { kind: 'value', type: 'text' },
     },
+    // A plugin whose argument declares no type, and one that takes text.
+    relay: { args: ['data'], requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
+    shout: { args: ['data'], argTypes: { data: 'text' }, requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
   },
 });
 
 const PRELUDE = `import { attio, sheets } from adapters
-import { summarise } from plugins
+import { summarise, relay, shout } from plugins
 src = attio()
 sink = sheets()
 
@@ -343,6 +346,218 @@ movement use(e: <Holder>) {
 }
 `;
       expect(codes(source)).toEqual([]);
+    });
+  });
+
+  describe("what a body needs of the records reached through the parameter is asked of the caller's record's children", () => {
+    const HOLDER = `node Holder {
+  name: <text>
+  node child {
+    first: <text>
+  }
+}
+`;
+    const SER_CHILD = `movement ser_child(e: <Holder>) {
+  e-[k:child]-> {
+    write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }
+  }
+}
+`;
+
+    it("a system write's result holds its own fields but not its children's: refused", () => {
+      const source = HOLDER + SER_CHILD + `movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  ser_child(e: w)
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      const message = messages(source);
+      expect(message).toContain("the records 'e' leads to");
+      expect(message).toContain('TEXT.SERIALISE');
+    });
+
+    it("the same function takes a run-built record, whose children the run holds", () => {
+      const source = HOLDER + SER_CHILD + `movement run2(go: <src>) {
+  deduped = node { entries: <Holder> order by arrival }
+  a = write deduped-[:entries]-> { name: "Acme" }
+  write a-[:child]-> { first: "Ann" }
+  ser_child(e: a)
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it("a system write's result handed to a body that reads its child's field one at a time passes", () => {
+      const source = HOLDER + `movement read_child(e: <Holder>) {
+  e-[k:child]-> {
+    write sink-[:rows]-> { v: k.first }
+  }
+}
+movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  read_child(e: w)
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a child passed on to a function that serialises it carries the need to the outer call', () => {
+      const source = HOLDER + `node Person {
+  first: <text>
+}
+movement ser_one(k: <Person>) {
+  write sink-[:rows]-> { v: TEXT.SERIALISE(k, "JSON") }
+}
+movement walk(e: <Holder>) {
+  e-[k:child]-> {
+    ser_one(k: k)
+  }
+}
+movement run2(go: <src>) {
+  w = write src-[:companies]-> { name: "Gamma", tag: "g" }
+  walk(e: w)
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'ser_one'");
+    });
+  });
+
+  describe("a collection op binds its function's annotated record parameter to each member", () => {
+    it('a serialising closure over a system collection is refused', () => {
+      const source = `movement run2(go: <src>) {
+  vs = MAP(src-[:companies ORDER BY name]->, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      const message = messages(source);
+      expect(message).toContain("'MAP'");
+      expect(message).toContain('TEXT.SERIALISE');
+    });
+
+    it('a field-reading closure over a system collection, and a serialising one over run-built records, pass', () => {
+      const source = `movement run2(go: <src>) {
+  names = MAP(src-[:companies ORDER BY name]->, (e: <Entry>) => { return e.name })
+  deduped = node { entries: <Entry> order by arrival }
+  write deduped-[:entries]-> { name: "Acme", tag: "a" }
+  vs = MAP(deduped-[:entries]->, (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") })
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+  write sink-[:rows]-> { v: JOIN(names, ",") }
+}
+`;
+      expect(codes(source)).toEqual([]);
+    });
+
+    it('a named closure handed to the op is held to the same requirement', () => {
+      const source = `movement run2(go: <src>) {
+  f = (e: <Entry>) => { return TEXT.SERIALISE(e, "JSON") }
+  vs = MAP(src-[:companies ORDER BY name]->, f)
+  write sink-[:rows]-> { v: JOIN(vs, ",") }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD]);
+      expect(messages(source)).toContain("'f'");
+    });
+
+    it('FILTER and REDUCE bind their member the same way', () => {
+      const source = `movement run2(go: <src>) {
+  kept = FILTER(src-[:companies ORDER BY name]->, (e: <Entry>) => { return TEXT.PAIRS(e) != "" })
+  folded = REDUCE(src-[:companies ORDER BY name]->, "", (acc, e: <Entry>) => { return "\${acc}\${TEXT.PAIRS(e)}" })
+  write sink-[:rows]-> { v: folded }
+  write sink-[:rows]-> { v: "\${COUNT(kept)}" }
+}
+`;
+      expect(codes(source)).toEqual([C.CALL_ARG_OPAQUE_RECORD, C.CALL_ARG_OPAQUE_RECORD]);
+    });
+  });
+
+  describe('a plugin is handed values: a call written in place is its value, a record written in place is refused', () => {
+    const run = (line: string, pre: string[] = []): string => `movement run2(go: <src>) {
+${pre.map((l) => `  ${l}\n`).join('')}  s = ${line}
+  write sink-[:rows]-> { v: s }
+}
+`;
+
+    it.each([
+      ['relay', 'UPPER("n")'],
+      ['shout', 'UPPER("n")'],
+      ['summarise', 'UPPER("n")'],
+      ['relay', 'summarise(data: { name: "n" })'],
+      ['shout', 'summarise(data: { name: "n" })'],
+      ['relay', 'relay(data: UPPER("n"))'],
+      ['summarise', 'node { name: "n", tag: "t" }'],
+      ['relay', 'node { name: "n", tag: "t" }'],
+    ])("'%s' given %s runs", (plugin, arg) => {
+      expect(codes(run(`${plugin}(data: ${arg})`))).toEqual([]);
+    });
+
+    it.each([
+      ['relay', 'a value'],
+      ['shout', 'text'],
+      ['summarise', 'structured data'],
+    ])("'%s' given a write written in place is refused, naming what it takes", (plugin, takes) => {
+      const source = run(`${plugin}(data: write src-[:companies]-> { name: "Gamma", tag: "g" })`);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      const message = messages(source);
+      expect(message).toContain(`'${plugin}'`);
+      expect(message).toContain('a write');
+      expect(message).toContain(takes);
+    });
+
+    it.each([
+      ['shout', 'text'],
+    ])("'%s' given a node literal is refused: a record is no value it takes", (plugin, takes) => {
+      const source = run(`${plugin}(data: node { name: "n", tag: "t" })`);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      const message = messages(source);
+      expect(message).toContain("'node { … }'");
+      expect(message).toContain(takes);
+    });
+
+    it.each([
+      ['a function', '(r) => { return r }', 'a function written in place'],
+      ['a type', '<Entry>', 'a type'],
+    ])('%s is refused once, by the rule every argument has', (_label, arg, named) => {
+      const source = run(`relay(data: ${arg})`);
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      expect(messages(source)).toContain(named);
+    });
+
+    it("a call's value is checked against the type the argument declares, as a name's is", () => {
+      const source = `function mk(n: <text>): <Entry> {
+  return node { name: n, tag: "t" }
+}
+` + run('shout(data: mk(n: "x"))');
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
+      expect(messages(source)).toContain('this is a record');
+    });
+
+    it('a call that returns nothing is refused as it is when bound', () => {
+      const source = `movement none(n: <text>) {
+  write sink-[:rows]-> { v: n }
+}
+` + run('relay(data: none(n: "x"))');
+      expect(codes(source)).toEqual([C.CALL_RETURNS_NOTHING]);
+    });
+
+    it("a built-in's call is checked as the expression it is", () => {
+      const source = `movement run2(go: <src>) {
+  src-[c:companies]-> {
+    s = relay(data: UPPER(c.nope))
+    write sink-[:rows]-> { v: s }
+  }
+}
+`;
+      expect(codes(source)).not.toEqual([]);
+    });
+
+    it("a system record reached through a function's call is refused at a json argument as a name is", () => {
+      const source = `function first_company(go: <src>) {
+  return FIRST(src-[:companies ORDER BY name]->)
+}
+` + run('summarise(data: first_company(go: go))');
+      expect(codes(source)).toEqual([C.CALL_ARG_TYPE]);
     });
   });
 });

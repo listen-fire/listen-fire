@@ -269,6 +269,7 @@ import {
   fieldsNeededBy,
   type FieldsNeed,
   holdsFieldsInHand,
+  holdsReachedFieldsInHand,
   noteFieldsNeeded,
   parameterNeedOf,
   displayNameOf,
@@ -6371,19 +6372,62 @@ class Checker {
       if (params.length !== arity) {
         this.reportArmArity(spelling, arity, params.length, params[0]?.name, expr.fn.span);
       }
-      const { returns, effects } = this.checkClosure(expr.fn.closure, scope, {
+      const { params: bound, returns, effects } = this.checkClosure(expr.fn.closure, scope, {
         label: `the function for '${spelling}'`,
         suppliedParams: supplied,
       });
+      this.checkMembersFieldsInHand(spelling, `the function for '${spelling}'`, bound, supplied, expr.fn.span);
       this.absorbCollectionRow(effects, spelling, expr.fn.span);
       if (expr.op === 'map' && !returns.returns) return MAP_SLOT_ABSENT;
       this.requireCollectionReturn(returns, spelling, expr.fn.span);
       return returns;
     }
     const named = this.checkArm(expr.fn, spelling, scope, undefined, arity);
+    const resolved = scope.resolve(expr.fn.name);
+    const symbol = resolved.kind === 'found' ? resolved.symbol : undefined;
+    // What a function's body needs of each record parameter is learned on the
+    // inference walk, which a declared return type otherwise skips.
+    if (symbol?.movement !== undefined && symbol.movement.returnType === undefined) this.inferMovement(symbol);
+    const namedParams = symbol?.posType?.kind === 'closure'
+      ? symbol.posType.params
+      : symbol?.kind === 'movement'
+      ? (this.movementParams(symbol) ?? []).map(param => ({ name: param.name, ...param.type }))
+      : [];
+    this.checkMembersFieldsInHand(spelling, `'${expr.fn.name}'`, namedParams, supplied, expr.fn.span);
     if (expr.op === 'map' && !named.returns) return MAP_SLOT_ABSENT;
     this.requireCollectionReturn(named, spelling, expr.fn.span);
     return named;
+  }
+
+  /**
+   * The members a collection op binds to its function's parameters, against
+   * what the function's body needs of each record parameter — the call-site
+   * check (`checkArgFieldsInHand`) where the op, not the author, makes the
+   * call.
+   */
+  private checkMembersFieldsInHand(
+    spelling: string,
+    fn: string,
+    params: ReadonlyArray<{ name: string; posType?: PositionTypeRef }>,
+    supplied: ReadonlyArray<PlaneType>,
+    span: Span,
+  ): void {
+    for (const [index, param] of params.entries()) {
+      const need = parameterNeedOf(param.posType);
+      const member = recordIn(supplied[index]?.fieldType)?.position;
+      if (need === undefined || member === undefined) continue;
+      const shortfall = this.fieldsInHandShortfall(
+        need,
+        member,
+        `hands it to ${fn} as '${need.param}' (line ${span.start.line})`,
+      );
+      if (shortfall === undefined) continue;
+      this.report(
+        DiagnosticCodes.CALL_ARG_OPAQUE_RECORD,
+        `${fn} needs every field of ${shortfall.what} in hand — its body ${shortfall.why} — and '${spelling}' hands it each member of the collection, ${describePosition(member)}, ${shortfall.whose}. Copy the fields it needs into records the program holds first ('MAP(…, (r) => { return node { name: r.name, … } })'), or have the function read the fields it uses one by one`,
+        span,
+      );
+    }
   }
 
   /** A collection op runs its function to completion, once per member. */
@@ -9474,26 +9518,53 @@ class Checker {
    * (`FieldsNeed`): TypeScript's parameter-versus-argument check, on whether
    * the record's fields are in hand. A record read from its system one field
    * at a time does not satisfy a parameter whose body serialises or spreads
-   * it. The calling function's own parameter, passed on, takes on the
-   * callee's need instead — its callers answer for it.
+   * it, nor does a record whose children are the system's (a system write's
+   * result) satisfy one whose body walks to a child and serialises that. The
+   * calling function's own parameter, passed on, takes on the callee's need
+   * instead — its callers answer for it.
    */
   private checkArgFieldsInHand(fit: ArgFit, arg: PositionTypeRef | undefined, span: Span): void {
     const need = parameterNeedOf(fit.param?.type.posType);
     if (need === undefined || arg === undefined) return;
-    if (holdsFieldsInHand(arg, token => this.declaredShapeTokens.has(token))) {
-      const own = parameterNeedOf(arg);
-      if (own !== undefined && own !== need && !own.passedTo.some(onward => onward.need === need)) {
-        own.passedTo.push({ need, at: `passes it to '${fit.callee}' as '${need.param}' (line ${span.start.line})` });
-      }
-      return;
-    }
-    const why = fieldsNeededBy(need);
-    if (why === undefined) return;
+    const shortfall = this.fieldsInHandShortfall(need, arg, `passes it to '${fit.callee}' as '${need.param}' (line ${span.start.line})`);
+    if (shortfall === undefined) return;
     this.report(
       DiagnosticCodes.CALL_ARG_OPAQUE_RECORD,
-      `'${fit.callee}' needs every field of '${need.param}' in hand — its body ${why} — and this argument is ${describePosition(arg)}, whose fields are read from its system one at a time${describeArgPlace(fit)}. Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have '${fit.callee}' read the fields it uses one by one`,
+      `'${fit.callee}' needs every field of ${shortfall.what} in hand — its body ${shortfall.why} — and this argument is ${describePosition(arg)}, ${shortfall.whose}${describeArgPlace(fit)}. Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have '${fit.callee}' read the fields it uses one by one`,
       span,
     );
+  }
+
+  /**
+   * What `record` falls short of `need` by, if anything: the fields of the
+   * record itself, or of the records reached through its edges. A record
+   * that is itself a parameter of the function being checked, with its
+   * fields in hand there, files `need` as its own (`passedTo`, said `at`).
+   */
+  private fieldsInHandShortfall(
+    need: FieldsNeed,
+    record: PositionTypeRef,
+    at: string,
+  ): { what: string; why: string; whose: string } | undefined {
+    const isDeclared = (token: object) => this.declaredShapeTokens.has(token);
+    const inHand = holdsFieldsInHand(record, isDeclared);
+    const own = parameterNeedOf(record);
+    if (inHand && own !== undefined) {
+      if (own !== need && !own.passedTo.some(onward => onward.need === need)) own.passedTo.push({ need, at });
+      return undefined;
+    }
+    const why = inHand ? undefined : fieldsNeededBy(need, 'record');
+    if (why !== undefined) {
+      return { what: `'${need.param}'`, why, whose: 'whose fields are read from its system one at a time' };
+    }
+    if (holdsReachedFieldsInHand(record, isDeclared)) return undefined;
+    const whyReached = fieldsNeededBy(need, 'reached');
+    if (whyReached === undefined) return undefined;
+    return {
+      what: `the records '${need.param}' leads to`,
+      why: whyReached,
+      whose: "whose linked records are the system's, read one field at a time",
+    };
   }
 
   /**
@@ -12483,10 +12554,15 @@ class Checker {
   }
 
   /**
-   * A RECORD handed to a plugin argument whose declared type holds none (text,
-   * a url, a number) — refused where it is written, as a movement's value
-   * parameter refuses one. An argument declared to take structured data
-   * (`json`) takes a record, and is handed its fields.
+   * A plugin argument against what the plugin declares it takes. A plugin is
+   * handed values: an expression, or a call (a built-in's or a function's),
+   * read as the value `v = <argument>` would bind. A RECORD handed to an
+   * argument whose declared type holds none (text, a url, a number) is
+   * refused, as a movement's value parameter refuses one; an argument
+   * declared to take structured data (`json`) takes a record, and is handed
+   * its fields — a `node { … }` literal included, as an argument with no
+   * declared type does. A write, or a node literal handed to an argument that
+   * takes a plain value, is a record written in place, not a value.
    */
   private reportPluginArgType(
     callee: string,
@@ -12494,52 +12570,115 @@ class Checker {
     arg: CallArg,
     scope: Scope,
   ): void {
+    const name = arg.name ?? '';
+    switch (arg.kind) {
+      case 'expr': {
+        const valueType = this.slotValueTypeSilently(arg.expr, scope);
+        const record = this.bareSlotPositionType(arg.expr, scope) ?? recordIn(valueType)?.position;
+        this.checkPluginArgValue({ callee, declared, name, record, valueType, span: arg.expr.span });
+        return;
+      }
+      case 'call': {
+        const reading = this.readCallAt(arg.call, scope, 'argument');
+        if (reading.kind === 'value') {
+          // A built-in called here (`relay(data: UPPER(x))`) is the value it
+          // computes — an ordinary expression argument.
+          const { valueType } = this.checkExprSlot(reading.expr, scope);
+          const record = this.bareSlotPositionType(reading.expr, scope) ?? recordIn(valueType)?.position;
+          this.checkPluginArgValue({ callee, declared, name, record, valueType, span: arg.call.span });
+          return;
+        }
+        if (reading.kind === 'refused') {
+          this.reportCallRefusal(reading.refusal);
+          return;
+        }
+        // A function's call: it runs, and its value is the argument.
+        const shape = this.boundCallShape(arg.call, scope, undefined, arg.call.span);
+        const record = shape.posType ?? recordIn(shape.fieldType)?.position;
+        const valueType = shape.fieldType ?? (shape.posType !== undefined ? recordOf(shape.posType) : undefined);
+        this.checkPluginArgValue({ callee, declared, name, record, valueType, span: arg.call.span });
+        return;
+      }
+      case 'node':
+        // Structured data, or no declared type: the literal is what binding
+        // it to a name and passing the name would hand over — its fields.
+        if (declared === 'json' || declared === undefined) {
+          const synthesised = this.checkNodeLiteral(arg.node, scope);
+          this.checkPluginArgValue({ callee, declared, name, record: synthesised, valueType: recordOf(synthesised), span: arg.node.span });
+          return;
+        }
+        this.refusePluginRecordInPlace(callee, declared, arg);
+        return;
+      case 'write':
+        this.refusePluginRecordInPlace(callee, declared, arg);
+        return;
+      // Refused for every callee where arguments are bound: no argument
+      // carries one.
+      case 'closure':
+      case 'type':
+        return;
+      default:
+        return neverAsAny(arg);
+    }
+  }
+
+  /** A plugin argument's value against the type the plugin declares for it. */
+  private checkPluginArgValue(at: {
+    callee: string;
+    declared: SchemaFieldType | undefined;
+    name: string;
+    record: PositionTypeRef | undefined;
+    valueType: FieldType | undefined;
+    span: Span;
+  }): void {
+    const { callee, declared, name, record, valueType, span } = at;
     if (declared === 'json') {
       // Handed its fields, all at once: a record whose fields are read from
       // its system one at a time has none to hand, and a function's parameter
       // passed here needs them in hand, whatever the plugin then reads of them.
-      if (arg.kind !== 'expr') return;
-      const record =
-        this.bareSlotPositionType(arg.expr, scope) ?? recordIn(this.slotValueTypeSilently(arg.expr, scope))?.position;
       if (record === undefined) return;
       if (holdsFieldsInHand(record, token => this.declaredShapeTokens.has(token))) {
-        noteFieldsNeeded(
-          record,
-          `hands it to '${callee}' as '${arg.name}', which takes every field (line ${arg.expr.span.start.line})`,
-        );
+        noteFieldsNeeded(record, `hands it to '${callee}' as '${name}', which takes every field (line ${span.start.line})`);
         return;
       }
       this.report(
         DiagnosticCodes.CALL_ARG_TYPE,
-        `'${callee}' takes every field of the record it is given as '${arg.name}', and this is ${describePosition(record)}, whose fields are read from its system one at a time. Pass a dict of the fields it needs ('${arg.name}: { name: r.name, … }')`,
-        arg.expr.span,
+        `'${callee}' takes every field of the record it is given as '${name}', and this is ${describePosition(record)}, whose fields are read from its system one at a time. Pass a dict of the fields it needs ('${name}: { name: r.name, … }')`,
+        span,
       );
       return;
     }
     if (declared === undefined) return;
-    const span = callArgSpan(arg);
-    const record = (() => {
-      switch (arg.kind) {
-        case 'write':
-        case 'node':
-          return true;
-        case 'expr': {
-          const valueType = this.slotValueTypeSilently(arg.expr, scope);
-          return valueType !== undefined && holdsRecords(stripAbsent(valueType));
-        }
-        case 'call':
-        case 'closure':
-        case 'type':
-          return false;
-        default:
-          return neverAsAny(arg);
-      }
-    })();
-    if (!record) return;
+    if (record === undefined && (valueType === undefined || !holdsRecords(stripAbsent(valueType)))) return;
     this.report(
       DiagnosticCodes.CALL_ARG_TYPE,
-      `'${callee}' takes ${describeFieldType(declared)} for '${arg.name}', and this is a record — pass one of its fields ('${arg.name}: r.website')`,
+      `'${callee}' takes ${describeFieldType(declared)} for '${name}', and this is a record — pass one of its fields ('${name}: r.website')`,
       span,
+    );
+  }
+
+  /**
+   * A write written in place as a plugin argument, or a `node { … }` handed
+   * to one that takes a plain value: a record, where a value is taken. The
+   * engine has always refused a write at run time ("a plugin takes values");
+   * said here, where it is written.
+   */
+  private refusePluginRecordInPlace(
+    callee: string,
+    declared: SchemaFieldType | undefined,
+    arg: Extract<CallArg, { kind: 'write' | 'node' }>,
+  ): void {
+    const takes =
+      declared === undefined ? 'a value' : declared === 'json' ? 'structured data' : describeFieldType(declared);
+    const what = arg.kind === 'write' ? 'a write' : "a 'node { … }' literal";
+    const repair =
+      arg.kind === 'write'
+        ? `Run the write first ('r = write …') and pass ${declared === undefined || declared === 'json' ? `'${arg.name}: r' or ` : ''}one of its fields ('${arg.name}: r.name')`
+        : `Pass one of the values it would hold ('${arg.name}: …')`;
+    this.report(
+      DiagnosticCodes.CALL_ARG_TYPE,
+      `'${callee}' takes ${takes} for '${arg.name}', and this is ${what} written in place — a record, and a plugin's arguments are values. ${repair}`,
+      callArgSpan(arg),
     );
   }
 

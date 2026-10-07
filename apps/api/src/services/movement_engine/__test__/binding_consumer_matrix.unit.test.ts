@@ -129,10 +129,10 @@ import type { TeamId } from '../../../generated/kysely/core/Team';
 import { runMovement, runFailureCause, type MovementRunResult } from '../run';
 import { MovementEngineError } from '../errors';
 import { containerAssociation, type Adapter } from '../../translation_graph/adapter';
-import { makeStablePosition, positionData, META_RECORD_TYPE } from '../../translation_graph/types';
+import { makeStablePosition, positionData, positionRecordId, META_RECORD_TYPE } from '../../translation_graph/types';
 import { staticCatalogFromManifests } from '../../translation_graph/movement/catalog';
 import { getTransform } from '../../translation_graph/engine/transforms/registry';
-import { ACME, BETA, cellId, cells, expectationAt, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
+import { ACME, BETA, GAMMA, cellId, cells, expectationAt, row, type Cell, type Rec } from './binding_consumer_matrix.cells';
 
 const TEAM_ID = '00000000-0000-0000-0000-000000000088' as TeamId;
 const VERSION: LanguageVersion = CURRENT_LANGUAGE_VERSION;
@@ -189,6 +189,9 @@ const fetchUrl = staticCatalogFromManifests({ credentials: {} }).plugin('fetch_u
  *  record's fields all at once, and hands back the name it was given. No
  *  registered plugin takes one today; the type is the plugin contract's. */
 const SUMMARISE = 'summarise';
+/** A plugin whose argument declares no type: it hands back the text it was
+ *  given, or the name among the fields it was given. */
+const RELAY = 'relay';
 const catalog = mockCatalog({
   adapters: {
     email: { constructionArgs: credentialArg, schema: emailSchema },
@@ -199,6 +202,7 @@ const catalog = mockCatalog({
   plugins: {
     ...(fetchUrl !== undefined ? { fetch_url: fetchUrl } : {}),
     [SUMMARISE]: { args: ['data'], argTypes: { data: 'json' }, requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
+    [RELAY]: { args: ['data'], requiredArgs: ['data'], effects: { ai: true }, output: { kind: 'value', type: 'text' } },
   },
 });
 
@@ -219,7 +223,7 @@ function prelude(version: LanguageVersion): string {
   return [
     'import { email, attio, sheets } from adapters',
     'import { inbox_cred, crm_cred, sheet_cred } from credentials',
-    `import { ${[...(fetchUrl !== undefined ? ['fetch_url'] : []), SUMMARISE].join(', ')} } from plugins`,
+    `import { ${[...(fetchUrl !== undefined ? ['fetch_url'] : []), SUMMARISE, RELAY].join(', ')} } from plugins`,
     '',
     'inbox = email(credentials: inbox_cred)',
     'src = attio(credentials: crm_cred)',
@@ -273,6 +277,11 @@ function programFor(cell: Pick<Cell, 'body'>, version: LanguageVersion): string 
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
 const SYSTEM_RECORDS: Rec[] = [ACME, BETA];
+/** The company a cell's run creates in the system. The system gives it
+ *  children of its own (a CRM that files a founder with every company), so a
+ *  walk off a write's result reaches the system's records — the case a
+ *  serialisation of one must refuse. */
+const CREATED: Rec = GAMMA;
 
 /** One field of the data a fake position was minted with. */
 function dataField(position: Parameters<typeof positionData>[0], key: string): unknown {
@@ -305,8 +314,11 @@ function systemAdapter(): Adapter {
         }));
       }
       if (position.recordType === 'company' && fieldId === 'child') {
-        const owner = SYSTEM_RECORDS.find((r) => r.name === dataField(position, 'name'));
-        return (owner?.child ?? []).map((first) => ({
+        // A company the system did not list is one the run created (a dry
+        // run mints its id and hands back no data).
+        const id = positionRecordId(position);
+        const owner = SYSTEM_RECORDS.find((r) => `c-${r.name}` === id) ?? CREATED;
+        return owner.child.map((first) => ({
           position: makeStablePosition({ adapterType: 'attio', recordType: 'person', recordId: `p-${first}`, data: { first } }),
         }));
       }
@@ -354,12 +366,13 @@ const extractLlm = {
 
 const transformInvoker: MovementTransformInvoker = {
   declaredOutput: (plugin) =>
-    plugin === SUMMARISE
+    plugin === SUMMARISE || plugin === RELAY
       ? { kind: 'value', type: { kind: 'string' } }
       : (getTransform(plugin) ?? getTransform(plugin.replace(/_/g, '-')))?.signature.output,
   async invoke({ plugin, config }) {
-    if (plugin !== SUMMARISE) return { text: 'page' };
     const data = config.data;
+    if (plugin === RELAY && typeof data === 'string') return { text: data };
+    if (plugin !== SUMMARISE && plugin !== RELAY) return { text: 'page' };
     const name = typeof data === 'object' && data !== null && 'name' in data ? data.name : undefined;
     return { text: typeof name === 'string' ? name : 'no name' };
   },
