@@ -3,7 +3,7 @@
 //! settings record `{ name: value }` for the rest. Binding turns that call
 //! into the named arguments of the canonical tree, so every check and the
 //! wire to the plugin read one form. The TypeScript twin is `bindPluginArgs` in
-//! packages/legacy-lang/checker/catalog.ts; both checkers and both engines
+//! lf-platform's packages/legacy-lang/checker/catalog.ts; both checkers and both engines
 //! bind through these two and nothing else.
 
 use crate::ast::{CallArg, ExprSlot, NamedArg, PluginCall, Span};

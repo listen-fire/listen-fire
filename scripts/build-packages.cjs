@@ -41,9 +41,6 @@ const PACKAGES = [
   { dir: 'packages/file-text' },
   { dir: 'modules/anthropic' },
   { dir: 'packages/model-providers' },
-  { dir: 'packages/embedding-providers' },
-  { dir: 'packages/image-providers' },
-  { dir: 'packages/transcription-providers' },
   { dir: 'packages/files-s3' },
   { dir: 'packages/ocr-google' },
   { dir: 'packages/module-kit' },
@@ -52,8 +49,7 @@ const PACKAGES = [
   ...fs
     .readdirSync(path.join(ROOT, 'modules'))
     .filter((name) => !['google-sheets', 'anthropic'].includes(name) && fs.existsSync(path.join(ROOT, 'modules', name, 'package.json')))
-    // A private module is platform-supplied (`@lf/system`, `@lf/native-valuations`):
-    // only the platform hosts it, so it is never published.
+    // A module marked private is never published.
     .filter((name) => JSON.parse(fs.readFileSync(path.join(ROOT, 'modules', name, 'package.json'), 'utf8')).private !== true)
     .sort()
     .map((name) => ({ dir: `modules/${name}`, ...(name === 'judge-llm' ? { assets: [/^prompts\/[^/]+\.md$/] } : {}) })),
@@ -67,9 +63,6 @@ const SPELLINGS = {
   'module-runtime': '@listen-fire/module-runtime',
   'file-text': '@listen-fire/file-text',
   'model-providers': '@listen-fire/model-providers',
-  'embedding-providers': '@listen-fire/embedding-providers',
-  'image-providers': '@listen-fire/image-providers',
-  'transcription-providers': '@listen-fire/transcription-providers',
   'files-s3': '@listen-fire/files-s3',
   'ocr-google': '@listen-fire/ocr-google',
   'movement-lang': '@listen-fire/movement-lang',
@@ -163,7 +156,7 @@ function build({ dir, assets = [], copies = [] }) {
     if (!/\.(js|d\.ts)$/.test(file)) continue;
     const text = fs.readFileSync(file, 'utf8');
     const renamed = text.replace(
-      /(require\(|from |import\()(["'])(movement-engine|engine-contracts|module-kit|module-runtime|file-text|model-providers|embedding-providers|image-providers|transcription-providers|files-s3|ocr-google|movement-lang)(\/[^"']*)?\2/g,
+      /(require\(|from |import\()(["'])(movement-engine|engine-contracts|module-kit|module-runtime|file-text|model-providers|files-s3|ocr-google|movement-lang)(\/[^"']*)?\2/g,
       (_match, call, quote, spelling, rest = '') => `${call}${quote}${SPELLINGS[spelling]}${rest}${quote}`,
     );
     if (renamed !== text) fs.writeFileSync(file, renamed);

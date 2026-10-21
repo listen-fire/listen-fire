@@ -5,9 +5,9 @@
 // native implementation is held to it by tests/env_services.rs.
 // Seeded: a rerun writes the same bytes on the same Node and ICU.
 //
-// Regenerate from apps/api (for its ts-node and compiler settings):
-//   TS_NODE_PROJECT=tsconfig.json npx ts-node --transpile-only \
-//     ../../crates/movement-engine/tests/env/generate.ts
+// Regenerate from the repository root (movement-wasm.yml checks it is current):
+//   TS_NODE_COMPILER_OPTIONS='{"module":"commonjs","moduleResolution":"node"}' \
+//     node_modules/.bin/ts-node --transpile-only crates/movement-engine/tests/env/generate.ts
 
 // Before anything reads the clock: Node re-reads TZ when it is assigned.
 process.env.TZ = 'UTC';

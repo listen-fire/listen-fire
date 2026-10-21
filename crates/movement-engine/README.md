@@ -15,7 +15,7 @@ example. The rest of this file is the engine's internals.
 
 The movement engine in Rust. A segment of a run executes inside one WASM
 instance and asks for everything outside the program in the host contract's
-own shapes (docs/contracts/host-families.md); `apps/api/src/services/movement_engine/
+own shapes (docs/contracts/host-families.md); lf-platform's `apps/api/src/services/movement_engine/
 rust_engine.ts` drives it, and `rust_host.ts` forwards each request to the
 run's `EngineHost`.
 
@@ -242,7 +242,7 @@ module; `frozen::…` is tests/stdlib_frozen.rs).
 | `Intl.DateTimeFormat` (DATE.TODAY, DATETIME.AT) | the zone's wall reading asked of the environment (`tz_convert`); `instantAtZonedWallTime`'s search over those readings written out, `Date.UTC`'s 19xx years included | `stdlib::tests::datetime_at_names_the_instant_on_the_zones_wall_clock`, `frozen::…` (`date.today`, `datetime.at`) |
 | `JSON.stringify` (TEXT.SERIALISE) | its quoting and two-space layout; keys sorted as texts, then laid out in object order | `js::tests::json_stringify_indents_as_javascript_does`, `stdlib::tests::text_members` |
 | the figure and month tables | `MAGNITUDE_SUFFIXES["constructor"]` is `Object`, so `"5 constructor"` is NaN; `MONTH_NAMES["constructor"]` fails `validParts` like no month (stdlib.rs keeps the tables' own quirk) | `stdlib::tests::figures_read_as_the_regex_reads_them` |
-| a dict whose `kind` names a binding kind | data, as every dict is: only an engine object (`Js::Record`) is a record, so the content of data never changes how it is treated (Henry's ruling, 2026-10-10) | `record::tests::a_dict_is_never_a_record_whatever_its_kind`, apps/api's `rust_engine.unit.test.ts` ("host data is never read as an engine object") |
+| a dict whose `kind` names a binding kind | data, as every dict is: only an engine object (`Js::Record`) is a record, so the content of data never changes how it is treated (Henry's ruling, 2026-10-10) | `record::tests::a_dict_is_never_a_record_whatever_its_kind`, lf-platform's apps/api `rust_engine.unit.test.ts` ("host data is never read as an engine object") |
 
 `tests/priced_pin.rs` holds the priced-plugin cap to tests/oracle/priced.json:
 80 priced-plugin ledgers. It is written by tests/oracle/generate.ts with the
@@ -943,7 +943,7 @@ message, after the same calls.
 
 ### For an embedder: the segment protocol
 
-Every shape here is what apps/api's rust_engine.ts sends and answers; another
+Every shape here is what lf-platform's apps/api rust_engine.ts sends and answers; another
 host answers the same requests the same way.
 
 **The eval wire** (src/env.rs): plain JSON. Null, booleans, finite
@@ -1171,7 +1171,7 @@ MOVENG_PARSE, MOVENG_LANGUAGE_VERSION) before anything else is asked. In
 process the run host has already checked it (run.ts `checkPinned`), so a
 program that fails has made no host request. Without `nativeCheck` the
 segment asks for the check: `check.program {source, languageVersion,
-upgradingFrom?}`, answered `{diagnostics, link?, stamps}` (apps/api's
+upgradingFrom?}`, answered `{diagnostics, link?, stamps}` (lf-platform's apps/api
 program_check.ts); a program that fails it never gets an answer, and the
 host ends the run with the check's error. The request carries no segment,
 so an embedder may answer it, or check, before its own `segment.open`.
@@ -1260,7 +1260,7 @@ manifest), `rust_engine_abi.unit.test.ts` (the committed artifact), `rust_run.un
 (whole runs on both engines, compared). The oracle for the evaluator and the
 runs is the version 5 conformance corpus.
 
-**Running a corpus case on Rust.** In apps/api, after
+**Running a corpus case on Rust.** In lf-platform's apps/api, after
 `scripts/build-movement-wasm.sh` if a crate changed, run the version 5
 conformance corpus and the engine's unit suites (`pnpm test:unit
 --testPathPattern movement_engine`). The Rust engine is the only engine for

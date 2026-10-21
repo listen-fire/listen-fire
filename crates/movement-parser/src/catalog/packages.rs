@@ -3,7 +3,7 @@
 //! parsed. ``import { `@lf/web` as web } from plugins`` binds each member
 //! under the dotted local name `web.fetchUrl`, so a call of it is an
 //! ordinary plugin call. The TypeScript twin is `packageMembers` in
-//! packages/legacy-lang/checker/catalog.ts.
+//! lf-platform's packages/legacy-lang/checker/catalog.ts.
 
 use crate::ast::{ImportSource, ImportedName, Program, Statement};
 use crate::catalog::types::{JsMap, PluginSpec};
@@ -73,7 +73,7 @@ pub fn package_members(plugins: &JsMap<PluginSpec>, tag: &str) -> Vec<PackageMem
 
 /// The package a bare name stands for when the program imported none: the
 /// tag whose default local name is `name` (`@lf/pdf` → `pdf`). The TypeScript
-/// twin is `packageCalled` in packages/legacy-lang/checker/catalog.ts.
+/// twin is `packageCalled` in lf-platform's packages/legacy-lang/checker/catalog.ts.
 pub fn package_called(plugins: &JsMap<PluginSpec>, name: &str) -> Option<String> {
     plugins
         .iter()

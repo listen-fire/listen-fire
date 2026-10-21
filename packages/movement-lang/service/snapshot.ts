@@ -7,7 +7,7 @@
 // the wire once and the browser can parse/check/complete offline.
 //
 // Two consumers:
-//   - apps/api builds a snapshot per team (movement/catalog.ts) and serves
+//   - lf-platform's apps/api builds a snapshot per team (movement/catalog.ts) and serves
 //     it over tRPC;
 //   - the editor (and these language-service functions) rebuild a `Catalog`
 //     from it via `fromCatalogSnapshot`.

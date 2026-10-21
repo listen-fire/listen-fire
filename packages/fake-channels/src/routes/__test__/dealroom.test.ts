@@ -14,7 +14,7 @@ import { adminRoutes } from '../admin';
  * Route-level tests for the fake Dealroom service, run via `node --test`
  * (through `tsx --test`, no jest in this package — see package.json). Each
  * test boots its own EntityStore against a throwaway sqlite file so tests
- * don't share state or clobber the dev-loop's `test-harness-data/fake-channels.db`.
+ * don't share state or clobber lf-platform's dev-loop `test-harness-data/fake-channels.db`.
  */
 
 function basicAuth(key = 'dev-loop-dealroom-key'): { Authorization: string } {

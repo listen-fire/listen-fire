@@ -4,7 +4,7 @@ import type { EntityStore } from '../store';
 const SVC = 'granola';
 
 /**
- * Fake Granola public API — the two endpoints `GranolaClient` (apps/api
+ * Fake Granola public API — the two endpoints `GranolaClient` (lf-platform's apps/api
  * adapters/granola/client.ts) calls:
  *
  *   GET /v1/notes?updated_after=&cursor=&page_size=  → { notes: summary[], hasMore, cursor }
@@ -18,7 +18,7 @@ const SVC = 'granola';
  * client's `listNotes`/`listAllNotes` parse, honouring `updated_after` (the poll
  * checkpoint). `getNote` returns the stored note verbatim — its summary/transcript/
  * attendees are what `normalizeNote` flattens. The Bearer token is not validated
- * (the dev-loop credential is a stub; identity isn't the thing under test here).
+ * (lf-platform's dev-loop credential is a stub; identity isn't the thing under test here).
  */
 
 interface GranolaUser {

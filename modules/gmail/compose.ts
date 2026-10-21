@@ -6,7 +6,7 @@
 // the mirror of `mime.ts`: that one flattens a MIME tree into a record, this one
 // assembles a record into a tree.
 //
-// Hand-rolled rather than pulled in: apps/api has no mail composer (no
+// Hand-rolled rather than pulled in: lf-platform's apps/api has no mail composer (no
 // nodemailer, no mimetext), and the subset a send needs — a text part, an
 // optional HTML alternative, attachments, and the two reply headers — is a
 // hundred lines with no configuration surface. A dependency here would be

@@ -18,7 +18,7 @@ and whose exports are this crate's ABI plus the engine's.
 
 `lowering/vocabulary/data.rs` (the stdlib families, the FILE/READ and
 options-map contracts, the AI tiers) is generated from the TypeScript
-declarations by `packages/legacy-lang/parser/expression/__test__/lowering_vocabulary.unit.test.ts`,
+declarations by lf-platform's `packages/legacy-lang/parser/expression/__test__/lowering_vocabulary.unit.test.ts`,
 which pins it: run that test with `UPDATE_LOWERING_VOCABULARY=1` after
 changing expression/stdlib.ts, then rebuild the WASM.
 
@@ -54,7 +54,7 @@ CI (`.github/workflows/movement-wasm.yml`) rebuilds both and fails when
 either's bytes differ, so a change to the crate, `Cargo.lock`, the release
 profile or the toolchain ships with rebuilt artifacts.
 
-The web app copies the parser's artifact into `apps/web/public` (under a
+The web app copies the parser's artifact into lf-platform's `apps/web/public` (under a
 content-hashed name) when `next.config.ts` loads, so a running `next dev`
 keeps serving the old parser until it is restarted.
 
@@ -122,7 +122,7 @@ expression/call_shape.ts, now ported, threw that class), and `"MalformedTree"` w
 
 A tree the lowering cannot read (past the 2,048-level JSON bound or an unknown
 shape) surfaces to TypeScript as a plain `Error`, not a `BridgeError`, so
-apps/api aborts the run loudly rather than degrading. The invalid-UTF-8
+lf-platform's apps/api aborts the run loudly rather than degrading. The invalid-UTF-8
 refusal's `pos` is a byte offset (serde's `valid_up_to`), unlike every other
 offset, which is in UTF-16 units; only raw `Uint8Array` callers can reach it.
 

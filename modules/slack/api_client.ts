@@ -4,7 +4,7 @@
 // inbound message makes). One client per token and base URL per process.
 //
 // The platform's installer and its v3 output agent use the same client
-// (apps/api adapters/slack/webApi re-exports it).
+// (lf-platform's apps/api adapters/slack/webApi re-exports it).
 
 import { z } from 'zod';
 import { WebAPICallResult, WebClient } from '@slack/web-api';

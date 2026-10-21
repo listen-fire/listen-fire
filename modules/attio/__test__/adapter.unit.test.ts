@@ -653,7 +653,7 @@ describe('AttioAdapter record-reference write promises (layer 13)', () => {
 // `Deal` descriptor mock that HARDCODED a `Created At` date field. The
 // REAL adapter never produces that field from `listAttributes` — Attio's
 // `/v2/objects/<id>/attributes` doesn't reliably return the system
-// `created_at` date, and the dev-loop fake-channels mock returns zero
+// `created_at` date, and lf-platform's dev-loop fake-channels mock returns zero
 // attributes for `deals`. So the agent's real authoring path got
 // `resolveFieldName('Created At') → No field named 'Created At'` and
 // rolled back, while the unit test stayed green.
@@ -686,7 +686,7 @@ function makeRecordAdapter(input: {
 
 describe('AttioAdapter object within recency key (INV3)', () => {
   it('surfaces `Created At` as a read-only date on a record descriptor even when listAttributes omits it', async () => {
-    // Exactly the fake-channels dev-loop shape: object custom attributes
+    // Exactly lf-platform's fake-channels dev-loop shape: object custom attributes
     // with NO system `created_at` (the real Attio attributes endpoint
     // behaves the same). This is what the agent's real path saw.
     const adapter = makeRecordAdapter({

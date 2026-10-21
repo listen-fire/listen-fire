@@ -1,6 +1,6 @@
 // The run host's contract suite: one set of cases, written against the backend
 // families (store.ts) and the core's rules over them, run against every
-// backend (the hosted Postgres one in apps/api's integration set, `lf`'s
+// backend (the hosted Postgres one in lf-platform's apps/api integration set, `lf`'s
 // SQLite one in apps/cli's tests). Ported from the hosted integration tests
 // (work store, join_pending, park sink, run lease, await correlation, the
 // resume drivers) and lf's state tests, keeping the cases about what the

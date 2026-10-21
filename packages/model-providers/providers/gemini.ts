@@ -5,7 +5,7 @@
 // silently lose something on the way to Gemini never leaves.
 //
 // Reaching the fake Gemini in packages/fake-channels (mounted at /gemini), from
-// apps/api, with the dev loop's fake channels running on FAKE_CHANNELS_PORT:
+// lf-platform's apps/api, with the dev loop's fake channels running on FAKE_CHANNELS_PORT:
 //
 //   MODEL_MAP='{"claude-sonnet-5":"gemini/gemini-3-pro"}' \
 //   GEMINI_BASE_URL="http://localhost:${FAKE_CHANNELS_PORT}/gemini" \

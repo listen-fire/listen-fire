@@ -1,6 +1,6 @@
 // The browser slot's contract suite: the cases every module filling the slot
 // is held to — the built-in `@lf/chromium` against a page served on loopback
-// (apps/api), and the scripted fake page the gated-document tests drive
+// (lf-platform's apps/api), and the scripted fake page the gated-document tests drive
 // (fake_browser.ts). Runner-agnostic, as the other slots' suites are: each
 // case is a name and an async body that throws on failure (node:assert).
 

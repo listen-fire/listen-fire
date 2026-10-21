@@ -11,7 +11,7 @@ The reference for the movement language itself is the handbook the authoring age
 
 The hosted platform that runs movements for teams (the API, the web app, the admin app, the dev loop) is a separate repository, `lf-platform`, in the same GitHub organisation. Its documentation lives there:
 
-- `dev-loop.md`: the local development loop. Boot the whole stack against real Postgres and Redis and fake third-party services, drive the UI, inject synthetic inbound events, and inspect what the system did.
+- `docs/dev-loop.md`: the local development loop. Boot the whole stack against real Postgres and Redis and fake third-party services, drive the UI, inject synthetic inbound events, and inspect what the system did.
 - `api-ingest.md`: the ingest API, submitting records over HTTP with an API key.
 - `security-google-oauth.md`: the security posture of the Google OAuth integration, written against the CASA Tier 2 requirements.
 - `engine-host.md`: how the platform's hosts serve the host families: spend metering, the cross-run write locks, the production and test hosts, and what stays outside the contract.

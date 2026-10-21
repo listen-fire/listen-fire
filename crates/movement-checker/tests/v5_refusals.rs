@@ -4,7 +4,7 @@
 //! outside a hop's WHERE (MOV_WALK_ROOTLESS), and a `unique by` on a write to
 //! a declared node (MOV_WRITE_SHAPE_UNIQUE). `_resources` reads off an
 //! extraction call's result as off the keyword's. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/v5_refusals.unit.test.ts, same
+//! lf-platform's packages/legacy-lang/checker/__test__/v5_refusals.unit.test.ts, same
 //! programs, same messages.
 
 use movement_checker::{CheckOptions, check_source};

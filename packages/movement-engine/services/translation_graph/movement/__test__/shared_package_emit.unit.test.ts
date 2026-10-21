@@ -6,7 +6,7 @@
 // `e instanceof ParseError` guard in expression/bridge.ts was false in
 // production and a plain expression parse error escaped the checker as an
 // internal error. The tests and the dev loop never saw it — they compile the
-// same files under apps/api's tsconfig.
+// same files under lf-platform's apps/api tsconfig.
 //
 // This pins the language package's effective compile options to the ones every
 // other consumer of these files uses.

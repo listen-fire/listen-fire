@@ -80,8 +80,8 @@ A divergence over a request with no recorded counterpart also carries that reque
 
 ### The language kit: checked programs
 
-Every program the test suites check, with its catalog snapshot, language version and full diagnostics. `pnpm language:conformance <checks.json>` replays a corpus against the checker, ours or your own. Ours is assembled by `pnpm checks:corpus` (in `packages/movement-lang`) into `target/checks/checks.json`, because the repository pins each program by a hash of its text and the text lives in its test. See [`packages/legacy-lang/conformance/README.md`](../../packages/legacy-lang/conformance/README.md).
+Every program the test suites check, with its catalog snapshot, language version and full diagnostics. The corpus and its tools are lf-platform's: in an lf-platform checkout, `pnpm language:conformance <checks.json>` replays a corpus against the checker, ours or your own, and `pnpm checks:corpus` assembles ours into `target/checks/checks.json`, because the repository pins each program by a hash of its text and the text lives in its test. The tools' guide is in lf-platform, `packages/legacy-lang/conformance/README.md`.
 
 ### The adapter kit
 
-`pnpm adapter:conformance` runs a vendor's server through the adapter protocol and reports each check. See step 1, "Run the conformance CLI against your server", of [Build your first adapter](adapter-protocol.md#build-your-first-adapter).
+lf-platform's `pnpm adapter:conformance` runs a vendor's server through the adapter protocol and reports each check. See step 1, "Run the conformance CLI against your server", of [Build your first adapter](adapter-protocol.md#build-your-first-adapter).

@@ -1,6 +1,6 @@
 //! The catalog the checker consults: the schema types, a snapshot's lookups
 //! (`fromCatalogSnapshot`), and the pure catalog helpers — ported from
-//! packages/legacy-lang/checker/catalog.ts and service/snapshot.ts, proven
+//! lf-platform's packages/legacy-lang/checker/catalog.ts and service/snapshot.ts, proven
 //! against them by checker/__test__/catalog_differential.unit.test.ts.
 
 pub mod helpers;

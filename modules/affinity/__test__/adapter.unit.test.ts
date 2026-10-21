@@ -2183,7 +2183,7 @@ describe('listScopedFieldDisplayNames', () => {
 // then through the Rust checker — the same three layers a save walks.
 //
 // movement-lang's own jest is broken locally, so the language layer is
-// exercised through apps/api's ts-jest (per repo convention).
+// exercised through lf-platform's apps/api ts-jest (per repo convention).
 
 describe('write org-[:List Entries]-> reaches the checker', () => {
   async function affinitySnapshot(): Promise<CatalogSnapshot> {

@@ -1,5 +1,5 @@
 // Recorded parity, off the platform. The platform's own parity test
-// (apps/api engine/transforms/__test__/web_plugins_parity) holds the module to
+// (lf-platform's apps/api engine/transforms/__test__/web_plugins_parity) holds the module to
 // the legacy plugins' service calls and answers, and records here what each
 // plugin asked of its tools and what the module answered. These replay that
 // recording in process and through serve-module as a child process, called

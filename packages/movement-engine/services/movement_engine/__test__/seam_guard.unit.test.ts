@@ -17,7 +17,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import { HOST_FAMILIES, hostMethodPaths } from '../../../public/host';
 
-/** The engine package, its paths mirroring the platform's `apps/api/src`. */
+/** The engine package, its paths mirroring lf-platform's `apps/api/src`. */
 const PKG_DIR = path.resolve(__dirname, '../../..');
 const ENGINE_DIR = path.join(PKG_DIR, 'services/movement_engine');
 const REPO_DIR = path.resolve(PKG_DIR, '../..');
@@ -79,7 +79,7 @@ function engineFile(file: string): string {
  *  into a URL. */
 const BYTE_READERS = ['retrieve', 'redeem', 'expose', 'fetch-stream'];
 
-/** Module paths are relative to apps/api/src, without extension. */
+/** Module paths are relative to lf-platform's apps/api/src, without extension. */
 const FORBIDDEN: Array<{ matches: (module: string) => boolean; reason: string }> = [
   { matches: under('lib/kysely'), reason: 'the database client (the host owns storage)' },
   { matches: under('generated/kysely'), reason: 'generated database code (types only)' },
@@ -229,7 +229,7 @@ function under(prefix: string): (module: string) => boolean {
 }
 
 /** A relative specifier becomes a path under the engine package (which mirrors
- *  apps/api/src); a bare one stays, but the package's own. */
+ *  lf-platform's apps/api/src); a bare one stays, but the package's own. */
 function moduleOf(fromFile: string, specifier: string): string {
   if (specifier.startsWith('movement-engine/')) return specifier.slice('movement-engine/'.length);
   if (!specifier.startsWith('.')) return specifier;

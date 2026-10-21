@@ -2,7 +2,7 @@
 // shapes that cross on their own (a segment's opening, an adapter resolution,
 // a binding endpoint, a wake), and the manifest of every family and method.
 // The full `EngineHost` interface — each method over the engine's own value
-// types — is the engine's (apps/api `movement_engine/host.ts`), which the
+// types — is the engine's (lf-platform's apps/api `movement_engine/host.ts`), which the
 // compiler holds equal to the manifest here.
 
 import type { LanguageVersion } from 'movement-lang';

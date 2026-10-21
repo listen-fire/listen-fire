@@ -102,15 +102,15 @@ jobs:
         with:
           node-version: 22.20.0
           cache: "pnpm"
-      # Full workspace install, as in api-test.yml: movement-lang's tests
-      # resolve workspace packages through symlinks a filtered install omits.
+      # Full workspace install: movement-lang's tests resolve workspace
+      # packages through symlinks a filtered install omits.
       - run: pnpm install --frozen-lockfile
       - name: Wasm loader, environment services and expression parser pins
         working-directory: packages/movement-lang
         run: pnpm run test --testPathPattern 'catalog_depth|loader|env_services|parse_expression'
-      # The catalog differential needs the assembled checks corpus
-      # (`pnpm checks:corpus`, ~16 min with a test database), so it runs in
-      # the ship gate, not CI (Henry 2026-10-17: corpus checks are gate, not CI).
+      # The catalog differential needs the assembled checks corpus, which
+      # lf-platform assembles (its `checks:corpus`, ~16 min with a test
+      # database), so it runs there, not here.
       - name: Engine shim, against a double and through the committed artifact
         working-directory: packages/movement-engine
         run: pnpm run test --testPathPattern 'movement_engine/__test__/(rust_engine|rust_engine_abi|rust_run|rust_traverse|rust_verbs)\.unit\.test\.ts$'

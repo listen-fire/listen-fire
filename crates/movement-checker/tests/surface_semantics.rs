@@ -1,7 +1,7 @@
 //! Language version 5's semantics the spelling rewrite alone cannot carry
 //! (the spine report's item (e)), through the Rust checker: the old text is
 //! refused with a fix, and the fixed program checks clean. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/v5_semantics.unit.test.ts.
+//! lf-platform's packages/legacy-lang/checker/__test__/v5_semantics.unit.test.ts.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;

@@ -1,4 +1,4 @@
-//! The pure helpers of checker/catalog.ts that the checker and apps/api call
+//! The pure helpers of checker/catalog.ts that the checker and lf-platform's apps/api call
 //! on schema data, and the two snapshot.ts leans on (`entryPositionKeyOf`,
 //! parser/scan.ts's `unwrapCredentialArg`).
 

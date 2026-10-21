@@ -88,7 +88,7 @@ const nestedCallReads = new WeakMap<ExprSlot, Map<string, NestedCallRead>>();
 
 /** Every nested call read in `slot` so far, in the order first read: what the
  *  checker settled on each is on the value, which a re-parse of the source
- *  does not carry (the check answer's stamps, apps/api program_check). */
+ *  does not carry (the check answer's stamps, lf-platform's apps/api program_check). */
 export function nestedCallsReadIn(slot: ExprSlot): NestedCallRead[] {
   return [...(nestedCallReads.get(slot)?.values() ?? [])];
 }

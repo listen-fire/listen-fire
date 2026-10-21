@@ -677,7 +677,7 @@ describe('a segment the Rust engine will not run', () => {
 
 describe('a host without the clock and ids', () => {
   // A version-4 run, on the platform's TypeScript engine, is refused the same
-  // way (packages/legacy-engine engine_by_version.unit.test.ts).
+  // way (lf-platform's packages/legacy-engine engine_by_version.unit.test.ts).
   it.each([5])('is refused before any segment opens (version %d)', async (languageVersion) => {
     resetRustRunStats();
     const { clock: _clock, ids: _ids, ...host } = makeTestHost();

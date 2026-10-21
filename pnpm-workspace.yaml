@@ -1,5 +1,5 @@
 packages:
-  - "apps/*"
+  - "apps/cli"
   - "packages/*"
   - "modules/*"
   - "examples/embed-saas"

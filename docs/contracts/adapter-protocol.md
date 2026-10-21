@@ -1285,7 +1285,8 @@ conformance CLI (step 1), not by an automation: `Company` is not readable
 from the root, so no automation can walk the collection.
 
 1. **Run the conformance CLI against your server.** Start with it and keep
-   it green as you build. It needs no Listen-Fire stack and no database:
+   it green as you build. It is lf-platform's; run it from an lf-platform
+   checkout. It needs no Listen-Fire stack and no database:
 
    ```bash
    export ADAPTER_CONFORMANCE_SECRET=<your secret>
@@ -1363,7 +1364,7 @@ from the root, so no automation can walk the collection.
    to `/wake`. When somebody creates a company, it `POST`s the event to
    `/emit`. Both send `Authorization: Bearer <secret>`.
 
-7. **Try it in the dev loop.**
+7. **Try it in lf-platform's dev loop** (from an lf-platform checkout).
 
    ```bash
    pnpm dev:loop:agent                # starts the fake CRM with the stack
@@ -1407,7 +1408,7 @@ from the root, so no automation can walk the collection.
 
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
-- **Conformance CLI.** `pnpm adapter:conformance` checks a server against this protocol; run it first when building an adapter ([Build your first adapter](#build-your-first-adapter)).
+- **Conformance CLI.** lf-platform's `pnpm adapter:conformance` checks a server against this protocol; run it first when building an adapter ([Build your first adapter](#build-your-first-adapter)).
 - **Version 2** (current; the only version this release speaks). Breaking for a server built against version 1:
   - Requests carry `protocolVersion: "2"`, and the `manifest` answers `protocolVersion: 2`. Installing probes the server and refuses anything older.
   - Names on the wire are the natural display names; `typeId` and `fieldId` are the server's own ids.

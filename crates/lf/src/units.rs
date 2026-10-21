@@ -1,7 +1,7 @@
 //! The run host's units (Henry 2026-10-16): `cron` and `manual`, in every
 //! file's scope from language version 5 with no import
 //! (movement_parser::version::RUN_HOST_UNITS). lf builds them in, as the
-//! platform does (apps/api translation_graph/adapters/{cron,manual}): their
+//! platform does (lf-platform's apps/api translation_graph/adapters/{cron,manual}): their
 //! catalog entries, the in-process adapter a run reads its event through, the
 //! event `lf run <movement>` fires on a manual listen, and the ticks `lf serve`
 //! and `lf drain` fire on a cron listen.
@@ -165,7 +165,7 @@ fn js_obj(value: serde_json::Value) -> Obj {
     }
 }
 
-/// A cron listen's schedule, read as packages/legacy-lang/cron reads it (five
+/// A cron listen's schedule, read as lf-platform's packages/legacy-lang/cron reads it (five
 /// fields, names for months and weekdays, 7 also Sunday; both day fields
 /// restricted means either matches), in the listen's zone or UTC.
 pub struct Schedule {

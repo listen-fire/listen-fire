@@ -1,11 +1,9 @@
-//! Parses every expression text in packages/movement-lang/parser/expression/
-//! __test__/__fixtures__/expression_slots.json and asserts none panics. The
-//! trees themselves are pinned in expression_trees.json, beside it
-//! (parser/expression/__test__/trees_regression.unit.test.ts).
+//! Parses every expression text in expression_slots.json, beside this file,
+//! and asserts none panics. The corpus is frozen: it is the TypeScript
+//! parser's slot harvest as of the split (lf-platform keeps the live one, in
+//! lf-platform's packages/legacy-lang/parser/expression/__test__/__fixtures__/).
 //!
 //!   cargo test -p movement-parser --test expression_slots -- --ignored --nocapture
-
-mod common;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -19,7 +17,7 @@ struct Slot {
 #[test]
 #[ignore = "a sweep of the whole corpus; run with --ignored"]
 fn every_expression_text_parses_without_panicking() {
-    let path = common::fixture("parser/expression/__test__/__fixtures__/expression_slots.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expression_slots.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     let slots: Vec<Slot> = serde_json::from_str(&text).unwrap_or_else(|e| panic!("expression_slots.json: {e}"));
     assert!(slots.len() > 1000, "expression_slots.json has only {} records", slots.len());
@@ -49,7 +47,7 @@ fn every_expression_text_parses_without_panicking() {
 #[ignore = "a sweep of the whole corpus; run with --ignored"]
 fn every_expression_tree_lowers_alike_from_its_json() {
     use movement_parser::lowering::{lower_condition, lower_condition_json, lower_expression, lower_expression_json};
-    let path = common::fixture("parser/expression/__test__/__fixtures__/expression_slots.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expression_slots.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     let slots: Vec<Slot> = serde_json::from_str(&text).unwrap_or_else(|e| panic!("expression_slots.json: {e}"));
     let (mut lowered, mut refused) = (0usize, 0usize);

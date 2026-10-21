@@ -393,7 +393,7 @@ export interface AdapterManifest {
  * the movement renderer render it with `fill: currentColor` unless `fill` is
  * false (stroke marks). Ported verbatim from the product app's
  * `service-icon.tsx`; the web app keeps its own copy (a later sweep unifies
- * them) so this shape must stay byte-identical to what `apps/web` expects.
+ * them) so this shape must stay byte-identical to what lf-platform's `apps/web` expects.
  */
 export interface BrandIcon {
   d: string;
@@ -1200,7 +1200,7 @@ export interface ResolveEntityInput {
    * `targetField` (e.g. KG property type id, Attio attribute slug).
    * Adapters interpret these values against their own identity model:
    *   - KG-as-target: feeds the node type's `uniqueness_constraints`
-   *     (see `apps/api/src/lib/knowledge/uniqueness_constraints.ts`).
+   *     (see lf-platform's `apps/api/src/lib/knowledge/uniqueness_constraints.ts`).
    *   - External-as-target: native rules — e.g. Attio's per-attribute
    *     `is_unique` flag (deferred today).
    *

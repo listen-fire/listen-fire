@@ -2,7 +2,7 @@
 // module in its own process: the install's credential read from the
 // embedder's secrets (one tenant's vault entry), and module state kept in
 // memory. The platform builds the same parts over its own tables
-// (apps/api builtin_modules.ts).
+// (lf-platform's apps/api builtin_modules.ts).
 
 import type { WireCredentialDeclarationShape } from 'engine-contracts';
 import { DEFAULT_REFRESH_WINDOW_MS, expiresWithin, type SecretsFamily } from 'module-runtime/secrets/family';

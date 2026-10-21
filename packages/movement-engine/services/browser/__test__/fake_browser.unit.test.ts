@@ -1,5 +1,5 @@
 // The scripted page held to the browser slot's contract (the built-in
-// Chromium is held to it in apps/api), and the empty slot's refusal.
+// Chromium is held to it in lf-platform's apps/api), and the empty slot's refusal.
 
 import { BrowserSlotEmpty, emptyBrowserSlot } from 'module-runtime/browser';
 import { browserContractCases, type ContractSite } from '../contract';

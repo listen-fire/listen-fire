@@ -2,7 +2,7 @@
 //! its own, it reads the record a `through […]` stage enriched) is a function
 //! from language version 5: the record it runs on is its one positional
 //! argument, and its call hands back what it declared. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/v5_fed_by_extraction.unit.test.ts.
+//! lf-platform's packages/legacy-lang/checker/__test__/v5_fed_by_extraction.unit.test.ts.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::plugin_args::PluginCallSite;

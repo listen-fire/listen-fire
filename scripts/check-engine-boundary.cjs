@@ -1,22 +1,15 @@
 #!/usr/bin/env node
-// The engine boundary guard. apps/api production code may reach the engine
-// package only through `movement-engine/public/*` (published: `@listen-fire/engine/public/*`),
-// and so may every other consumer of it (the command line, the model providers,
-// the modules, the example embedder); this lists every import of
-// an internal module (anything else under `movement-engine/`) and compares the
-// count with the baseline in engine-boundary-baseline.json.
+// The engine boundary guard. Every consumer of the engine package (the command
+// line, the model providers, the module kit, the modules, the example
+// embedder) may reach it only through `movement-engine/public/*` (published:
+// `@listen-fire/engine/public/*`); this lists every import of an internal
+// module (anything else under `movement-engine/`) in their production code and
+// compares the count with the baseline in engine-boundary-baseline.json. Only
+// the engine package's own tests reach its internals.
 //
-// The platform's trees hold their tests to the same rule: a platform test
-// installs the published engine, which has no internals to reach, so it uses
-// the public entries (the test host and the contract cases are in
-// `public/testing`, the log lines in `public/log`'s sink) and a `jest.mock` of
-// an internal module counts as an import of it. Only the engine package's own
-// tests reach its internals.
-//
-// The baseline is empty: any import of an internal fails. ESLint's
-// no-restricted-imports (apps/api/eslint.config.js) says the same in the
-// editor, and the package's `exports` map refuses an internal at run time
-// outside the test runners' `movement-engine-internals` condition.
+// The baseline is empty: any import of an internal fails. The package's
+// `exports` map refuses an internal at run time outside the test runners'
+// `movement-engine-internals` condition.
 //
 //   node scripts/check-engine-boundary.cjs            report / gate
 //   node scripts/check-engine-boundary.cjs --update   rewrite the baseline
@@ -30,20 +23,12 @@ const repoRoot = path.resolve(__dirname, '..');
 const modulesDir = path.join(repoRoot, 'modules');
 /** Every tree that consumes the engine, relative to the repo root. */
 const CONSUMER_ROOTS = [
-  'apps/api/src',
   'apps/cli/src',
   'packages/model-providers',
-  'packages/embedding-providers',
-  'packages/image-providers',
-  'packages/transcription-providers',
   'packages/ocr-google',
   'packages/module-kit',
   'packages/file-text',
   'examples/embed-saas/src',
-  'packages/legacy-engine',
-  'packages/legacy-lang',
-  'packages/trpc',
-  'packages/story-view',
   ...fs.readdirSync(modulesDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => `modules/${e.name}`),
 ].filter((root) => fs.existsSync(path.join(repoRoot, root)));
 const engineRoot = path.join(repoRoot, 'packages/movement-engine');
@@ -53,17 +38,8 @@ const PACKAGE = 'movement-engine';
 const PUBLISHED = '@listen-fire/engine';
 const args = new Set(process.argv.slice(2));
 
-/** The platform's trees: every file in them is held to the rule, tests too. */
-const PLATFORM_ROOTS = new Set([
-  'apps/api/src',
-  'packages/legacy-engine',
-  'packages/legacy-lang',
-  'packages/trpc',
-  'packages/story-view',
-]);
-
-// Not production code, outside the platform's trees: tests, their fixtures
-// and setup, and the dev-loop scripts that exercise the engine by hand.
+// Not production code: tests, their fixtures and setup, and the scripts that
+// exercise the engine by hand.
 const NOT_PRODUCTION = [
   /\.(test|spec)\.tsx?$/,
   /(^|\/)__(test|tests|conformance|fixtures)__(\/|$)/,
@@ -135,7 +111,7 @@ for (const root of CONSUMER_ROOTS) {
   const rootDir = path.join(repoRoot, root);
   for (const file of sourceFiles(rootDir)) {
     const relative = path.relative(rootDir, file).split(path.sep).join('/');
-    if (!PLATFORM_ROOTS.has(root) && NOT_PRODUCTION.some((pattern) => pattern.test(relative))) continue;
+    if (NOT_PRODUCTION.some((pattern) => pattern.test(relative))) continue;
     const text = fs.readFileSync(file, 'utf8');
     if (!text.includes(PACKAGE) && !text.includes(PUBLISHED) && !text.includes('packages/')) continue;
     const parsed = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);

@@ -1,7 +1,7 @@
 // The module over a host context: which bot a credential reaches, where it
 // reaches it, what the host's linked identities become, and how an owned file
 // names its install. The whole surface's answers are held to the legacy
-// adapter by apps/api's recorded parity (telegram_parity.unit.test.ts).
+// adapter by lf-platform's apps/api recorded parity (telegram_parity.unit.test.ts).
 
 import type { CredentialFields, LinkedIdentity, ModuleCredential } from 'module-kit';
 

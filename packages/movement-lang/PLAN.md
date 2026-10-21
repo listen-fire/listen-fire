@@ -1,5 +1,7 @@
 # movement-lang — implementation plan (working notes, mine)
 
+> Historical. The `apps/api` paths below are in lf-platform since the repository split (0.12.0).
+
 Spec: `plans/2026-06-10-data-movement-language/` (round-6 state, commit 052a43ea5).
 Strategy: build the **language front-end first** (parser → checker → compile-to-existing-engine),
 because the text surface is the spine everything hangs off and it validates the design fastest.

@@ -39,8 +39,7 @@ const WORKSPACE = {
   // gmail and google-drive reuse google-sheets' OAuth code by its package name.
   '@listen-fire/google-sheets': 'modules/google-sheets',
 };
-// A private module is platform-supplied (`@lf/system`, `@lf/native-valuations`):
-// only the platform hosts it, so lf never ships it.
+// A module marked private is never shipped.
 const modules = readdirSync('modules', { withFileTypes: true })
   .filter((e) => e.isDirectory() && JSON.parse(readFileSync(join('modules', e.name, 'package.json'), 'utf8')).private !== true)
   .map((e) => e.name);

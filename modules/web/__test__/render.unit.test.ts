@@ -1,6 +1,6 @@
 // `web.render`: text or HTML drawn as a PDF by the host's browser. Held here
 // against a fake browser slot that records the page it was given and answers a
-// PDF; the real Chromium run is in apps/api (chromium_render.unit.test.ts).
+// PDF; the real Chromium run is in lf-platform's apps/api (chromium_render.unit.test.ts).
 
 import type { BrowserPage, BrowserSlot } from 'movement-engine/public/browser';
 

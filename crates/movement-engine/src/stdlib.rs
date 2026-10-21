@@ -1,4 +1,4 @@
-//! The built-in functions (packages/legacy-lang/expression/stdlib.ts and
+//! The built-in functions (lf-platform's packages/legacy-lang/expression/stdlib.ts and
 //! the flat set in packages/movement-engine/services/movement_engine/expression.ts's
 //! `applyMovementFunction`), argument for argument and quirk for quirk.
 //!
@@ -24,7 +24,7 @@ pub const FLAT: [&str; 17] = [
 /// `EXISTS` and the rest the expression grammar reads as forms of its own,
 /// and the built-ins that run as calls (the collection ops, `MEMBERS`,
 /// `extract`). With `FLAT`, every flat built-in there is: held to the
-/// TypeScript's list by apps/api's rust_builtin_names.unit.test.ts.
+/// TypeScript's list by lf-platform's apps/api rust_builtin_names.unit.test.ts.
 pub const FORMS: [&str; 30] = [
     "map", "filter", "reduce", "groupby", "keyby", "members", "extract", "extractone", "file", "read", "chunks", "ai", "llm_agg", "kg_exists",
     "kg_value", "extract_value", "first", "last", "only", "count", "sum", "avg", "min", "max", "join", "collect", "at", "sort", "concat", "exists",
@@ -752,7 +752,7 @@ fn is_opaque_uri(raw: &str) -> bool {
     b.get(end) == Some(&b':') && !raw[end + 1..].starts_with("//")
 }
 
-// ── DATE.TODAY and DATETIME.AT (packages/legacy-lang/timezone) ───────────────────
+// ── DATE.TODAY and DATETIME.AT (lf-platform's packages/legacy-lang/timezone) ───────────────────
 
 /// cron's `cronTimezoneError`: `Intl` refuses the zone.
 fn zone_problem(zone: &str, services: &dyn EnvServices) -> Option<String> {

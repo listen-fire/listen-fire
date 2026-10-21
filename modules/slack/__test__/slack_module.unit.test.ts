@@ -2,7 +2,7 @@
 // host without a model or without a credential gets, how a file value's
 // bytes are found and uploaded, and what the module declares about its
 // inbound. The whole surface's answers are held to the legacy adapter by
-// apps/api's recorded parity (slack_parity.unit.test.ts).
+// lf-platform's apps/api recorded parity (slack_parity.unit.test.ts).
 
 import type { CredentialFields, ModuleCredential, ModuleFiles } from 'module-kit';
 

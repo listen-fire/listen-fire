@@ -3,7 +3,7 @@
 //! creates and migrates (`lf connect @lf/postgres-store`, src/core.rs);
 //! nothing of the hosted product's schema is read or written. The tables and
 //! statements keep the hosted backend's shapes and meaning
-//! (apps/api/src/services/movement_engine/run_host_store.ts,
+//! (lf-platform's apps/api/src/services/movement_engine/run_host_store.ts,
 //! callback_store.ts and work/store.ts), so the contract suite holds the two
 //! to the same cases:
 //!

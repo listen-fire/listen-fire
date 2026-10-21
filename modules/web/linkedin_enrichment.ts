@@ -14,7 +14,7 @@
 // search, and the page still has to be read.
 //
 // Behavioural parity is against the legacy plugin
-// `runLinkedInEnrichment` in `apps/api/src/services/knowledge_pipeline/plugins.ts`.
+// `runLinkedInEnrichment` in lf-platform's `apps/api/src/services/knowledge_pipeline/plugins.ts`.
 // As with `vc-url-retrieval`, we mirror the legacy logic here rather
 // than importing the legacy module — the new runtime is the production
 // surface and must own its dependencies.

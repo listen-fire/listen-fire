@@ -6,7 +6,7 @@
 // node to a record `{ name, url, file, text }`.
 //
 // Behavioural parity is against the legacy plugin
-// `runVcUrlRetrieval` in `apps/api/src/services/knowledge_pipeline/plugins.ts`.
+// `runVcUrlRetrieval` in lf-platform's `apps/api/src/services/knowledge_pipeline/plugins.ts`.
 // We deliberately do *not* import from the legacy module (the new
 // runtime owns its own URL-retrieval surface); the helpers below
 // mirror the legacy implementation closely enough that the URL

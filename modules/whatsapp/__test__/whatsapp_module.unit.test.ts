@@ -1,7 +1,7 @@
 // The module over a host context: which number a credential sends from and
 // where it reaches Meta, which media handles are the install's, and how a
 // file a write hands it is read. The whole surface's answers are held to the
-// legacy adapter by apps/api's recorded parity (whatsapp_parity.unit.test.ts).
+// legacy adapter by lf-platform's apps/api recorded parity (whatsapp_parity.unit.test.ts).
 
 import type { CredentialFields, ModuleCredential, ModuleFiles } from 'module-kit';
 

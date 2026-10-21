@@ -20,7 +20,7 @@
 // engine asks JavaScript for mid-evaluation (env_services.ts).
 
 // Declared here rather than taken from a lib: this package compiles without
-// the DOM and Node libs, while apps/api and apps/web compile it with them.
+// the DOM and Node libs, while lf-platform's apps/api and apps/web compile it with them.
 // Module-scoped declarations shadow those globals instead of clashing.
 declare const WebAssembly: {
   Module: new (bytes: Uint8Array) => WasmModule;

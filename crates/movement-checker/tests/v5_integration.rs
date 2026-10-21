@@ -3,7 +3,7 @@
 //! scope binds its name; and
 //! which fixes are
 //! marked safe to apply automatically. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/v5_integration.unit.test.ts.
+//! lf-platform's packages/legacy-lang/checker/__test__/v5_integration.unit.test.ts.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;

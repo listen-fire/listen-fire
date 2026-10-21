@@ -661,7 +661,7 @@ export async function describeTableAt(input: {
   return tableDescriptor(input);
 }
 
-/** Drop a base's cached tables — used after the dev-loop seeds new tables,
+/** Drop a base's cached tables — used after lf-platform's dev-loop seeds new tables,
  *  or on a stale-schema miss. Exposed for completeness; not on the hot path. */
 export function invalidateTableCache(teamId: string, baseId: string): void {
   tableCatalogCache.delete(tableCacheKey(teamId, baseId));

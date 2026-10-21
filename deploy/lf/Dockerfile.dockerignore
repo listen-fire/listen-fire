@@ -1,11 +1,8 @@
-# The lf image compiles crates/ (the repository's .dockerignore leaves it out for
-# the other images); BuildKit reads this file instead of it for deploy/lf/Dockerfile.
+# BuildKit reads this file for deploy/lf/Dockerfile (the build context is the
+# repository root, which has no .dockerignore of its own).
 node_modules
 **/node_modules
 .git
-# Same trap as `.env*` below: a bare `.next` matches only the context ROOT, so a
-# developer's `apps/web/.next` — build output AND a webpack cache keyed to host
-# paths — was riding into the image and poisoning the build inside it.
 .next
 **/.next
 **/dist
@@ -15,7 +12,7 @@ node_modules
 **/*.tsbuildinfo
 **/.vercel
 **/*.log
-# `.env*` alone matches only the context ROOT, so `apps/api/.env` was being
+# `.env*` alone matches only the context ROOT, so a package's `.env` would be
 # copied into the image — a developer's local secrets baked into a layer.
 .env*
 **/.env
@@ -27,13 +24,10 @@ node_modules
 /tmp
 target
 **/target
-# Not inputs to this image: (the engine ships as the committed wasm
-# artifacts under packages/movement-lang/wasm), the planning folders, and the
-# dev-loop's and agents' transient state. `target` and `**/target` above are
-# the Rust build output, which is gigabytes on a developer's machine.
+# Not inputs to this image: the planning folders and the agents' transient
+# state. `target` and `**/target` above are the Rust build output, which is
+# gigabytes on a developer's machine.
 plans
 .superpowers
-.dev-loop
 .github
-HEALTH.md
 **/.DS_Store

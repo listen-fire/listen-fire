@@ -1,6 +1,6 @@
 // The module over a host context: which keys reach which provider, where the
 // dev loop's fake takes Resend, and the sender a user's own credential makes.
-// The whole surface's answers are held to the legacy adapter by apps/api's
+// The whole surface's answers are held to the legacy adapter by lf-platform's apps/api
 // recorded parity (email_parity.unit.test.ts).
 
 import type { CredentialFields, ModuleCredential } from 'module-kit';

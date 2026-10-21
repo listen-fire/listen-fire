@@ -1,5 +1,5 @@
 // Acme CRM: a sample external speaking adapter protocol 2, with no
-// dependencies — a port of the dev loop's fake CRM (apps/api/src/scripts/dev/
+// dependencies — a port of the dev loop's fake CRM (lf-platform's apps/api/src/scripts/dev/
 // fake_crm_adapter.ts) as a plain process, so it shows an external can be any
 // program that answers the protocol over HTTP.
 //

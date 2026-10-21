@@ -23,15 +23,6 @@ const unscopedRootJest = (c) =>
 
 const rules = [
   {
-    test: (c) =>
-      /\bpnpm(\s+-r)?\s+test:unit\b/.test(c) &&
-      !/--testPathPattern|--findRelatedTests|--testNamePattern|\s-t\s/.test(c),
-    message:
-      'Blocked: unscoped `pnpm test:unit` kills the jest cache and runs hundreds of tests. ' +
-      'Scope it with --testPathPattern <file> or --findRelatedTests <changed-file>. ' +
-      'The full suite runs only via the ship gate (see CLAUDE.md "Done vs shippable").',
-  },
-  {
     test: unscopedRootJest,
     message:
       'Blocked: a bare root `jest` runs every package\'s suites. ' +

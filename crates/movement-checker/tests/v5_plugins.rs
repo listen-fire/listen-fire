@@ -2,7 +2,7 @@
 //! through the Rust checker: its required inputs in the manifest's order,
 //! then one settings record; the named form is refused with the positional
 //! rewrite. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/v5_plugins.unit.test.ts.
+//! lf-platform's packages/legacy-lang/checker/__test__/v5_plugins.unit.test.ts.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;

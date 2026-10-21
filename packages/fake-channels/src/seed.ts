@@ -3,7 +3,7 @@ import { mkLocation, mkParams } from './routes/dealroom';
 
 /**
  * Seeds the fake-channels store with default configuration data
- * so the apps/web pipeline configuration UI has something to work with.
+ * so lf-platform's apps/web pipeline configuration UI has something to work with.
  * Idempotent — skips if data already exists for a given service.
  */
 export function seedDefaults(store: EntityStore) {
@@ -530,7 +530,7 @@ export function seedDefaults(store: EntityStore) {
   // and a bogus Stage is MOV_ENUM_UNKNOWN_VALUE). Served by
   // `GET /v2/lists/vc_deal_flow/attributes/stage/statuses`. Its OWN idempotency
   // gate at TOP LEVEL (not nested under the attio-objects gate) so it heals an
-  // already-seeded shared dev-loop store, adding the statuses to a VC Deal Flow
+  // already-seeded shared lf-platform dev-loop store, adding the statuses to a VC Deal Flow
   // list that predates this block.
   if (store.list('attio', 'status:list:vc_deal_flow:stage').length === 0) {
     for (const title of ['Sourced', 'Diligence', 'Term Sheet', 'Passed']) {
@@ -560,7 +560,7 @@ export function seedDefaults(store: EntityStore) {
   // filtered on Stage" and went looking elsewhere. Real Attio has it as a
   // `status` with its stages served by `/statuses`; upgrade stores seeded
   // before this correction in place, then give it its stages. Own top-level
-  // gates so an already-seeded shared dev-loop store heals on boot. Includes
+  // gates so an already-seeded shared lf-platform dev-loop store heals on boot. Includes
   // the stages the authoring eval seeds onto deals (Sourced/Diligence/Passed).
   for (const a of store.list('attio', 'attribute:deals')) {
     if (a.data.api_slug === 'stage' && a.data.type !== 'status') {
@@ -782,10 +782,10 @@ export function seedDefaults(store: EntityStore) {
         name: 'devloop',
         real_name: 'Dev Loop',
         deleted: false,
-        // Matches DEV_LOOP_EMAIL (apps/api/src/scripts/dev/_lib.ts) — the only
-        // team member `pnpm dev:seed` registers on the dev-loop team. `ada@example.com`
-        // / `priya@example.com` below are NOT team members of the dev-loop team (that
-        // email is claimed by a real team), so the actor-gate dev-loop proof
+        // Matches DEV_LOOP_EMAIL (lf-platform's apps/api/src/scripts/dev/_lib.ts) — the only
+        // team member `pnpm dev:seed` registers on lf-platform's dev-loop team. `ada@example.com`
+        // / `priya@example.com` below are NOT team members of lf-platform's dev-loop team (that
+        // email is claimed by a real team), so the actor-gate lf-platform dev-loop proof
         // (message-write-unification-2026-07-07 Task 2) needs a fake Slack identity
         // that actually resolves as registered.
         profile: { display_name: 'devloop', real_name: 'Dev Loop', email: 'dev-loop@listen-fire.local' },

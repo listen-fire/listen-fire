@@ -1,5 +1,5 @@
 //! The requests a segment makes of its host, one builder per host call, named
-//! after the `EngineHost` groups (apps/api/src/services/movement_engine/
+//! after the `EngineHost` groups (lf-platform's apps/api/src/services/movement_engine/
 //! host.ts, docs/contracts/host-families.md). A builder is the only place a request's
 //! shape is written: the executor carries `{family, method, args}` without
 //! reading them, and the TypeScript shim routes on the same pair, so a shape

@@ -76,7 +76,7 @@ export async function sortByOrderKey<T>(
 ): Promise<T[]> {
   // Every key read settles before any failure is thrown, and the failure is
   // the earliest by position, not the first to arrive: the Rust engine and
-  // apps/api's settle-all (fans.ts, which this package cannot import) fail the
+  // lf-platform's apps/api settle-all (fans.ts, which this package cannot import) fail the
   // same way, so a run fails identically whatever order the reads land in.
   const outcomes = await Promise.allSettled(
     items.map(async (item, index) => ({ item, index, key: await options.value(item) })),

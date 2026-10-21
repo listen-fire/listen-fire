@@ -4,7 +4,7 @@
 // which number a reply leaves from is which client sends it.
 //
 // The platform's own sends as itself (verification codes, templates, its
-// legacy pipeline's replies) build on this client too (apps/api
+// legacy pipeline's replies) build on this client too (lf-platform's apps/api
 // services/whatsapp/metaApi.ts).
 
 import type { ModuleLog } from 'module-kit';

@@ -11,6 +11,7 @@
   },
   "exports": {
     "./testing": "./testing.ts",
+    "./bin/fake-channels.cjs": "./bin/fake-channels.cjs",
     "./package.json": "./package.json"
   },
   "scripts": {

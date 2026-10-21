@@ -47,7 +47,7 @@ function parseRoutingAddress(value: string | undefined): RoutingAddress | null {
  * The deployment's routing address, or null when it has none configured.
  *
  * Read per call rather than captured at module load: the manifest is built
- * once at import, but the door and the dev-loop injector are both exercised by
+ * once at import, but the door and lf-platform's dev-loop injector are both exercised by
  * tests that set the variable per case.
  */
 function inboundRoutingAddress(env: NodeJS.ProcessEnv = process.env): RoutingAddress | null {

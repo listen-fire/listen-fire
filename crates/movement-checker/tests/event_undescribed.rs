@@ -1,7 +1,7 @@
 //! MOV_EVENT_UNDESCRIBED: a read or a write off a movement's event parameter
 //! — or a closure's, or a library function's — whose instance the catalog has
 //! no description of. Refused. The TypeScript twin is
-//! packages/legacy-lang/checker/__test__/event_undescribed.unit.test.ts.
+//! lf-platform's packages/legacy-lang/checker/__test__/event_undescribed.unit.test.ts.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;

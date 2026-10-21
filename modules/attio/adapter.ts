@@ -4420,7 +4420,7 @@ export class AttioAdapter extends BaseAdapter {
   // READ side (symmetric with the write): a record's file-shaped attribute
   // values are surfaced as `attio:file` positions via `record-[:Files]->`
   // (`resolveFileRefs`, reached from `getRelated`). Attio's attribute
-  // catalogue (apps/api/src/adapters/attio/interface.ts) doesn't enumerate a
+  // catalogue (lf-platform's apps/api/src/adapters/attio/interface.ts) doesn't enumerate a
   // file kind, so detection is by value shape (`parseAttioFileEntry`), not
   // attribute type — keeping the adapter tolerant of file-bearing attributes
   // whose enum hasn't been wired through. Each file's `File` field returns a

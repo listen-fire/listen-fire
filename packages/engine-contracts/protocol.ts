@@ -4,7 +4,7 @@
 //
 // The protocol re-declares the adapter's input/result types as PLAIN zod,
 // free of any database brand. They are structurally identical at runtime to
-// the in-process `Adapter` interface's types (apps/api
+// the in-process `Adapter` interface's types (lf-platform's apps/api
 // `translation_graph/adapter.ts`, `translation_graph/types.ts`); the point is
 // that a third-party author depends on this package, never on the run host's
 // generated database code. The schemas are strict on the envelope / error /

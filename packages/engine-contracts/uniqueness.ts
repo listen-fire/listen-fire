@@ -12,7 +12,7 @@
 //     Attio/Airtable → filterByFormula).
 //
 // A KG node type stores its own richer `StoredUniquenessConstraints` (see
-// apps/api/src/lib/knowledge/uniqueness_constraints.ts) — a separate shape.
+// lf-platform's apps/api/src/lib/knowledge/uniqueness_constraints.ts) — a separate shape.
 
 import { z } from 'zod';
 import type { LanguageVersion } from 'movement-lang';
