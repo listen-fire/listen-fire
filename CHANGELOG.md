@@ -18,7 +18,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.0-rc.6] - 2026-10-22
+
 - The hosted platform (the api, the web app, the dev loop and the deploy images) now lives in its own repository, `lf-platform`; this repository is the language.
+- The published `@listen-fire/movement-lang` carries wasm artifacts built from this version (rc.5's were built before its version bump; functionally identical, only the build metadata differs).
+- `@listen-fire/fake-channels` exports its `bin` subpath, so `./bin/fake-channels.cjs` resolves (rc.5's `exports` map hid it).
 
 ## [0.12.0-rc.5] - 2026-10-21
 
@@ -2157,7 +2161,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.5...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.6...HEAD
+[0.12.0-rc.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.5...v0.12.0-rc.6
 [0.12.0-rc.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.4...v0.12.0-rc.5
 [0.12.0-rc.4]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.3...v0.12.0-rc.4
 [0.12.0-rc.3]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.2...v0.12.0-rc.3
