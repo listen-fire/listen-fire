@@ -5,6 +5,14 @@
 Every crate and every `@listen-fire/*` package is at `0.12.0-rc.5`.
 A suffixed tag never moves `:latest`, npm `latest`, or the default docs.
 
+0. After bumping the version (and before anything below), rebuild the committed
+   wasm artifacts and commit them: the crate versions change the build's
+   metadata, so `packages/movement-lang/wasm/*.wasm` no longer reproduce until
+   rebuilt, and CI's byte check (`movement-wasm.yml`) would fail.
+   ```sh
+   rm -rf target/movement-wasm && scripts/build-movement-wasm.sh
+   git add packages/movement-lang/wasm && git commit -m "build(wasm): artifacts rebuilt for <version>"
+   ```
 1. Push the branch.
    ```sh
    git push origin main
