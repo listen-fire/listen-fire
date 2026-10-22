@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.0-rc.8] - 2026-10-22
+
 - `lf connect` of a module package that serves plugins (`@lf/pdf`) installs it as a plugin external (`kind: plugin`), so `lf check` passes without a hand edit.
 - `lf resume` with no run steps only what is due: a timer that has come, an await that can resolve now. It no longer runs out every sleep at once, which fired the timeout arm of a run waiting on an approval; `lf resume <run-id>` still runs one run out now, and a resume with nothing due says how many runs wait.
 - Under `lf serve`, opening a callback's `url` in a browser (a GET) renders the hosted door's confirm page, a field per parameter, instead of a 404; its form post calls the callback and is answered with a page. A GET never calls it.
@@ -28,6 +30,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - A manual run started with no text (`lf run <movement>` without `--text`) reads `run.Text` as `""`, as `Content` already did, instead of absent while typed as text; `run.Text == ""` is the test for no text.
 - **Breaking (lf):** email under `lf` matches the handbook. `inbox = connect email` needs no credential: a module whose declared credentials are all optional constructs without `using` (the credential-free schema; sending refuses by name until `connect email using <keys>`). An email listen takes `key` (`listen to inbox { key: "deals" }`), and `lf` routes each message to the listen whose `key` is the plus-suffix of the address it was sent to (`<box>+deals@…`, compared without case); a listen with no key hears mail sent to the box itself, and a suffix no listen has runs nothing (a logged line), where before every email listen ran on every message. A catalog rule change: the wasm artifacts are rebuilt.
 - A vendor's rate limit (a 429 with its `Retry-After`) now closes the caller's key in the limiter slot until that wait is over, so every request made as that caller waits it out, in every host sharing the limiter, instead of the one request sleeping while it holds its place. `@lf/anthropic` (TypeScript and `lf`'s own client) throttles for the `Retry-After`, else `rateLimitWaitMs`; `@lf/affinity` declares four requests in flight per credential and throttles a 429 for its `Retry-After`, else 30s; `@lf/web`'s Bright Data zones are limited (SERP 14 a minute, Web Unlocker ten in flight) and a 429 throttles the zone. `vendorWaitMs` and `throttleAfter` are public in `@listen-fire/engine/public/limiter`, and the limiter contract cases in `public/testing`.
+- `@lf/postgres-limiter` publishes its `typesVersions` like its sibling packages, so a consumer resolves its types from the published package.
 
 ## [0.12.0-rc.7] - 2026-10-22
 
@@ -2185,7 +2188,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.7...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...HEAD
+[0.12.0-rc.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.7...v0.12.0-rc.8
 [0.12.0-rc.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.6...v0.12.0-rc.7
 [0.12.0-rc.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.5...v0.12.0-rc.6
 [0.12.0-rc.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.4...v0.12.0-rc.5
