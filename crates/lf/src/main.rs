@@ -522,6 +522,11 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "deliveries" => {
             let project = load()?;
             let store = backend::open_store(&store_of(&args, &project)?)?;
+            // A replay queues work, which the wake slot is told of; the other commands only read.
+            if args.rest.first().map(String::as_str) == Some("replay") {
+                let env: Vec<(String, String)> = std::env::vars().collect();
+                wake::install(wake::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?);
+            }
             let request = deliveries::Request { rest: &args.rest, subscription: args.subscription.as_deref(), since: args.since.as_deref(), json: args.json };
             deliveries::command(&*store, &request, &mut out)
         }

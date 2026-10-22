@@ -17,6 +17,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- `lf deliveries replay` tells the project's wake module (`core: { wake: … }`) of the events it queued, as a door does, so a worker starts at once rather than at the next scheduled drain.
 
 - `lf`'s own Anthropic client throttles per API key, as the TypeScript module does: a 429 on one key no longer closes requests made with another, and the in-flight limit counts per key (the limiter sees a hash of the key, never the key).
 
