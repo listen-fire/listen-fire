@@ -24,6 +24,18 @@ function marginOf(value: unknown): number {
   return value;
 }
 
+/** The file's name when the call names none. */
+export const DEFAULT_NAME = 'movement-artifact.pdf';
+
+function nameOf(value: unknown): string {
+  if (value === undefined || value === null) return DEFAULT_NAME;
+  if (typeof value !== 'string' || value.trim() === '' || /[/\\]/.test(value)) {
+    throw new Error(`@lf/pdf: name is a file name (no folders), not ${JSON.stringify(value)}`);
+  }
+  const name = value.trim();
+  return name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`;
+}
+
 function layoutOf(config: Record<string, unknown>): PdfLayout {
   return { pageSize: pageSizeOf(config.pageSize), margin: marginOf(config.margin) };
 }
@@ -43,7 +55,7 @@ export function renderPlugin(config: Record<string, unknown>): PluginAnswer {
   if (typeof text !== 'string') throw new Error('@lf/pdf: render takes the text to draw');
   const { bytes, lacking } = renderPlainTextPdf(text, layoutOf(config));
   return {
-    files: { value: { name: 'movement-artifact.pdf', contentType: 'application/pdf', base64: bytes.toString('base64') } },
+    files: { value: { name: nameOf(config.name), contentType: 'application/pdf', base64: bytes.toString('base64') } },
     ...(lacking.length > 0 ? { warnings: [lackingWarning(lacking)] } : {}),
   };
 }

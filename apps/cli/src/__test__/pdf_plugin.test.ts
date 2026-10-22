@@ -103,3 +103,13 @@ test('lf connect @lf/pdf installs it as a plugin external, so lf check passes wi
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
 });
+
+test('pdf.render names its file as the call says, and lf check takes the setting', () => {
+  const dir = pdfProject('pdf.render("Quarterly update", { name: "Report ${company.Name}" })');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const run = lf(dir, 'run', '--event', 'events/company_created.json');
+  assert.equal(run.code, 0, run.out);
+  const [company] = crmCompanies(dir) as Array<{ fields: Record<string, unknown> }>;
+  assert.match(JSON.stringify(company?.fields.Report), /"name":"Report Vireo Robotics\.pdf"/);
+});

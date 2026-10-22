@@ -50,6 +50,14 @@ describe('@lf/pdf', () => {
     await expect(render({ text: 'x', margin: -1 })).rejects.toThrow('margin is a whole number of points');
   });
 
+  it('names the file as the call says, adding ".pdf", and refuses a path', async () => {
+    expect((await render({ text: 'x' })).files?.value?.name).toBe('movement-artifact.pdf');
+    expect((await render({ text: 'x', name: 'Q3 report' })).files?.value?.name).toBe('Q3 report.pdf');
+    expect((await render({ text: 'x', name: 'board.PDF' })).files?.value?.name).toBe('board.PDF');
+    await expect(render({ text: 'x', name: '../etc/passwd' })).rejects.toThrow('name is a file name (no folders)');
+    await expect(render({ text: 'x', name: '' })).rejects.toThrow('name is a file name');
+  });
+
   it('served as a process, answers the same over the protocol', async () => {
     const serve = join(__dirname, '../../../packages/module-kit/bin/serve-module.cjs');
     const child = spawn(process.execPath, [serve, join(__dirname, '..')], { stdio: ['ignore', 'pipe', 'inherit'] });
