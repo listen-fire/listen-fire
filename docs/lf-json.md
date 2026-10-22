@@ -39,7 +39,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 - `ok` is false when any run failed. `dryRunWrites` is an array only under `--dry-run`.
 - `redelivered`: lines for listens that had already seen the event's idempotency key.
 - `returned`: what the movement returned, once the run has completed (`null` before then, or when it returned nothing). It is `{ "value" }`; `{ "truncated": true, "bytes", "preview" }` when its JSON is over 64 KiB (`preview` is the start of that JSON); or `{ "unwritable": "<why>" }` for a value with no plain form, such as a function. A file in the value is its reference (`__brand`, `name`, `contentType`, `size`, `source`: its owner and handle), never its bytes.
-- `resume` with nothing parked: `runs` is empty.
+- `resume` with nothing parked, or nothing due in what is parked: `runs` is empty.
 
 ## `lf call <callback-id> [--body f]`
 

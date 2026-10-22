@@ -1,7 +1,7 @@
 // The skeleton's end-to-end proof, through the real binary entry point: the
 // example project (examples/lf-acme) checks clean, an event runs and its write
-// lands in the sample external, the run parks on `await sleep` and `lf resume`
-// finishes it, and `lf serve` takes one signed webhook.
+// lands in the sample external, the run parks on `await sleep` and `lf resume
+// <run-id>` finishes it, and `lf serve` takes one signed webhook.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +36,15 @@ test('lf run --event writes through the external, parks on sleep, and lf resume 
   assert.match(run.out, /companies:welcome parked — 1 write\(s\)/);
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
 
-  const resumed = lf(dir, 'resume');
+  // The hour has not come: resume with no run leaves it parked.
+  const early = lf(dir, 'resume');
+  assert.equal(early.code, 0, early.out);
+  assert.match(early.out, /nothing due: 1 parked run/);
+  assert.deepEqual(companies(dir), ['Welcome Vireo Robotics']);
+
+  // Named, the run is run out now.
+  const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? '';
+  const resumed = lf(dir, 'resume', runId);
   assert.equal(resumed.code, 0, resumed.out);
   assert.match(resumed.out, /companies:welcome completed/);
   assert.deepEqual(companies(dir), ['Welcome Vireo Robotics', 'Follow up Vireo Robotics']);
@@ -99,7 +107,8 @@ test('a park inside an `all` arm: each arm resumes in its own process, and the j
   assert.deepEqual(companies(dir), []);
 
   // The other arm, in a fresh process: the first arm's answer comes back from the state.
-  const resumed = lf(dir, 'resume');
+  const runId = /^run (\S+) /m.exec(run.out)?.[1] ?? '';
+  const resumed = lf(dir, 'resume', runId);
   assert.equal(resumed.code, 0, resumed.out);
   assert.match(resumed.out, /join:both completed — 1 write\(s\)/);
   assert.deepEqual(companies(dir), ['early late Vireo Robotics']);

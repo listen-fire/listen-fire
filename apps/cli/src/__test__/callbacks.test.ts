@@ -171,3 +171,18 @@ test('lf cancel of a run another process is stepping: the request is recorded fo
   assert.equal(companies(dir).length, 1, `the body wrote nothing: ${JSON.stringify(companies(dir))}`);
   assert.match(lf(dir, 'runs').out, new RegExp(`${runId} .* callback:approve failed`), called.out);
 });
+
+test('lf resume with no run steps only what is due: the timeout arm beside an approval stays parked until its day comes', () => {
+  const dir = project('race');
+  const fired = lf(dir, 'run', '--event', 'events/company_created.json');
+  assert.match(fired.out, /race:approve parked/);
+  const resumed = lf(dir, 'resume');
+  assert.equal(resumed.code, 0, resumed.out);
+  assert.match(resumed.out, /nothing due: 1 parked run/);
+  assert.equal(companies(dir).length, 1, `the timeout arm did not fire: ${JSON.stringify(companies(dir))}`);
+
+  const called = lf(dir, 'call', minted(dir).id);
+  assert.equal(called.code, 0, called.out);
+  assert.match(called.out, /race:approve completed/);
+  assert.deepEqual(companies(dir).slice(1), ['Approved']);
+});

@@ -6,7 +6,7 @@
 //!   lf run <movement> [--dry-run]      run a movement a `listen to manual` fires
 //!   lf run --event <file> [--dry-run]   route an event to its listens and run each
 //!   lf run --poll <movement>            poll now the polled sources of the listens that fire it
-//!   lf resume [<run-id>]                step a parked run, or drain due work and every parked run
+//!   lf resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
 //!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
 //!   lf runs [show <run-id>]             the runs, most recent first; one run in full
 //!   --json                              (check, catalog, run, resume, runs, call, cancel, connect, credential list) one JSON document
@@ -182,7 +182,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|ser
   catalog   the catalog snapshot the files are checked against, as JSON
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
   run       run <movement>: one manual invocation, to the `listen to manual fire <movement>` listens; --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event
-  resume    step every parked leaf of one run, or drain due work and every parked run (as `lf resume`)
+  resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace and park
   --json    check, catalog, run, resume, runs, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
@@ -456,7 +456,13 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 None => session.resume_all(&mut std::io::sink()).await?,
             };
             if outcomes.is_empty() && !args.json {
-                writeln!(out, "no parked runs").map_err(|e| e.to_string())?;
+                let waiting = session.parked_runs()?.len();
+                let line = match waiting {
+                    0 => "no parked runs".to_string(),
+                    n => format!("nothing due: {n} parked run(s) wait on a timer not yet come or an await not yet answered (lf resume <run-id> runs one out now)"),
+                };
+                writeln!(out, "{line}").map_err(|e| e.to_string())?;
+                return Ok(0);
             }
             report_runs(&outcomes, args.json, &mut out)
         }

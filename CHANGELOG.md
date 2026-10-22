@@ -19,6 +19,7 @@ named in [`RELEASING.md`](RELEASING.md).
 <!-- add merged PRs here -->
 
 - `lf connect` of a module package that serves plugins (`@lf/pdf`) installs it as a plugin external (`kind: plugin`), so `lf check` passes without a hand edit.
+- `lf resume` with no run steps only what is due: a timer that has come, an await that can resolve now. It no longer runs out every sleep at once, which fired the timeout arm of a run waiting on an approval; `lf resume <run-id>` still runs one run out now, and a resume with nothing due says how many runs wait.
 
 ## [0.12.0-rc.7] - 2026-10-22
 

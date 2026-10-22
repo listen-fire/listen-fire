@@ -793,19 +793,28 @@ impl Session {
         }
     }
 
-    /// `lf resume` with no run: drain the due work, then step every leaf
-    /// still parked, now.
+    /// `lf resume` with no run: drain the due work, then step what is due in
+    /// every parked run: its timers that have come, and its awaits that can
+    /// resolve now. A timer not yet due stays parked, so a timeout arm
+    /// beside an approval never fires early; `lf resume <run>` runs a run's
+    /// every leaf out.
     pub async fn resume_all(&self, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
         let (_, mut outcomes) = self.drain_work(WORK_ROWS_PER_DRAIN, log).await?;
-        let parked: Vec<String> = self.store.runs(1000).map_err(|e| e.to_string())?.into_iter().filter(|r| r.status == "parked").map(|r| r.id).collect();
-        for run_id in parked {
-            match self.drive_parked_run(&run_id, Drain::EveryParkedLeaf).await? {
-                Parked::Busy => return Err(run_busy(&run_id)),
-                Parked::NotStepped => {}
-                Parked::Stepped(outcome) => outcomes.push(*outcome),
+        for run_id in self.parked_runs()? {
+            for drain in [Drain::DueTimers, Drain::Awaits(Vec::new())] {
+                match self.drive_parked_run(&run_id, drain).await? {
+                    Parked::Busy => return Err(run_busy(&run_id)),
+                    Parked::NotStepped => {}
+                    Parked::Stepped(outcome) => outcomes.push(*outcome),
+                }
             }
         }
         Ok(outcomes)
+    }
+
+    /// The runs parked now, most recent first.
+    pub fn parked_runs(&self) -> Result<Vec<String>, String> {
+        Ok(self.store.runs(1000).map_err(|e| e.to_string())?.into_iter().filter(|r| r.status == "parked").map(|r| r.id).collect())
     }
 
     /// Drain the work queue once: up to `limit` due rows are leased, done,

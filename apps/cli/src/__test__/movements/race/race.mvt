@@ -1,0 +1,26 @@
+import { acme_crm } from adapters
+import { acme } from credentials
+
+crm = connect acme_crm using acme
+
+# A company created in the CRM waits a day for an approval through a
+# callback; the sleep arm is the timeout.
+function approve(company: <crm-[:Company]->>) {
+  go = callback({ })
+  write crm-[:Company]-> { Name: "Asked ${go.id} at ${go.url}" }
+  r = race(
+    () => {
+      tap = await first(go-[:Called]->)
+      return tap.At
+    },
+    () => { await sleep(1d) },
+  )
+  if (r[0] == null) {
+    write crm-[:Company]-> { Name: "Timed out" }
+  }
+  if (r[0] != null) {
+    write crm-[:Company]-> { Name: "Approved" }
+  }
+}
+
+listen to crm {} fire approve
