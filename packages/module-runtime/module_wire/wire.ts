@@ -200,6 +200,41 @@ export class SlotRefusal extends Error {
   }
 }
 
+/** The envelope rules for one request whose body is already read as JSON,
+ *  without a server: the manifest answer, the protocol version refusal, an
+ *  unknown method and a module's `SlotRefusal` codes, a malformed body.
+ *  `serveSlot` answers every request through it, and a host router (the
+ *  platform's routes) applies the same rules by calling it. */
+export async function answerSlotRequest(manifest: WireSlotManifestShape, answer: SlotAnswer, body: unknown): Promise<{ status: number; body: unknown }> {
+  const envelope = SlotRequestEnvelope.safeParse(body);
+  if (!envelope.success) {
+    const version = body !== null && typeof body === 'object' ? Reflect.get(body, 'protocolVersion') : undefined;
+    if (version !== undefined && version !== PROTOCOL_VERSION) {
+      return { status: 200, body: { ok: false, error: { code: 'protocol_version', message: `this module speaks protocol ${PROTOCOL_VERSION}`, retryable: false } } };
+    }
+    return { status: 400, body: { error: 'bad_request' } };
+  }
+  const { method, params, settings } = envelope.data;
+  try {
+    const result = method === 'manifest' ? manifest : await answer(method, params, settings ?? {});
+    return { status: 200, body: { ok: true, result: result ?? null } };
+  } catch (error) {
+    const refusal = error instanceof SlotRefusal ? error : undefined;
+    return {
+      status: 200,
+      body: {
+        ok: false,
+        error: {
+          code: refusal?.code ?? 'module_error',
+          message: error instanceof Error ? error.message : String(error),
+          retryable: refusal === undefined,
+          ...(refusal?.data !== undefined ? { data: refusal.data } : {}),
+        },
+      },
+    };
+  }
+}
+
 export interface ServedSlot {
   address: SlotAddress;
   close(): Promise<void>;
@@ -225,30 +260,8 @@ export function serveSlot(options: { manifest: WireSlotManifestShape; answer: Sl
     } catch {
       return reply(response, 400, { error: 'bad_request' });
     }
-    const envelope = SlotRequestEnvelope.safeParse(json);
-    if (!envelope.success) {
-      const version = json !== null && typeof json === 'object' ? Reflect.get(json, 'protocolVersion') : undefined;
-      if (version !== undefined && version !== PROTOCOL_VERSION) {
-        return reply(response, 200, { ok: false, error: { code: 'protocol_version', message: `this module speaks protocol ${PROTOCOL_VERSION}`, retryable: false } });
-      }
-      return reply(response, 400, { error: 'bad_request' });
-    }
-    const { method, params, settings } = envelope.data;
-    try {
-      const result = method === 'manifest' ? options.manifest : await options.answer(method, params, settings ?? {});
-      reply(response, 200, { ok: true, result: result ?? null });
-    } catch (error) {
-      const refusal = error instanceof SlotRefusal ? error : undefined;
-      reply(response, 200, {
-        ok: false,
-        error: {
-          code: refusal?.code ?? 'module_error',
-          message: error instanceof Error ? error.message : String(error),
-          retryable: refusal === undefined,
-          ...(refusal?.data !== undefined ? { data: refusal.data } : {}),
-        },
-      });
-    }
+    const answered = await answerSlotRequest(options.manifest, options.answer, json);
+    reply(response, answered.status, answered.body);
   };
   const fromEnv = (process.env.MODULE_SOCKET || undefined) ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const listen = options.listen ?? fromEnv ?? freshSocketPath() ?? 0;
