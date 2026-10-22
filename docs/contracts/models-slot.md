@@ -10,10 +10,10 @@ One request, one answer: no streaming.
 
 | method | params | result |
 |---|---|---|
-| `models.call` | `{ label, system, userMessage, model?, effort?, maxTokens?, schema?, toolName?, toolDescription? }` | `{ text, data?, cost: [{ microdollars, label }], usage: { inputTokens, outputTokens, cacheReadTokens?, cacheCreationTokens? } }` |
+| `models.call` | `{ label, system, userMessage, model?, effort?, maxTokens?, schema?, toolName?, toolDescription?, runId? }` | `{ text, data?, cost: [{ microdollars, label }], usage: { inputTokens, outputTokens, cacheReadTokens?, cacheCreationTokens? } }` |
 | `models.prices` (optional) | `{}` | `{ prices: { <model name>: { input, output, cacheRead?, cacheCreation? } } }` |
 
-- **The request** is the models door's (`HostModelRequest`, `packages/engine-contracts/protocol.ts`) and an output ceiling, `maxTokens`; its `effort` may also be `xhigh` (the extraction keyword's `thorough` tier). `model` is a name a movement writes (`sonnet`, `claude-sonnet-5`); the module maps it to its provider's.
+- **The request** is the models door's (`HostModelRequest`, `packages/engine-contracts/protocol.ts`) and an output ceiling, `maxTokens`; its `effort` may also be `xhigh` (the extraction keyword's `thorough` tier). `runId`, when the call is made inside a run, names that run, so a host's usage rows can attribute the call to it. `model` is a name a movement writes (`sonnet`, `claude-sonnet-5`); the module maps it to its provider's.
 - **`schema`** (a JSON schema) asks for the reply as data: `data` is the reply read as that value, `text` its text.
 - **`maxTokens`** is the answer's output ceiling: the module asks its provider for no more.
 - **`cost`** is what the call spent, priced by the module. The host adds it to the run's spend, so `maxRunCostUsd` counts it. The host refuses a call before it starts once the run's budget is spent.

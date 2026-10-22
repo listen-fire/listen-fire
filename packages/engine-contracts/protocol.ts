@@ -1122,6 +1122,8 @@ export const HostModelRequest = z.object({
   schema: z.record(z.string(), z.unknown()).optional(),
   toolName: z.string().optional(),
   toolDescription: z.string().optional(),
+  /** The run the call is made for, when it is made inside one: a host's usage rows attribute the call to it. */
+  runId: z.string().optional(),
 });
 export type HostModelRequestShape = z.infer<typeof HostModelRequest>;
 

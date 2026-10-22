@@ -939,7 +939,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
         }
         #[cfg(feature = "anthropic")]
         "llm.client.call" | "llm.extractCall.call" | "llm.arbitrateEntities" => {
-            match crate::llm_calls::serve(label, args, host.adapters.externals().credentials).await {
+            match crate::llm_calls::serve(label, args, host.adapters.externals().credentials, Some(&host.run_id)).await {
                 Ok(answer) => {
                     host.charge(answer.get("cost"));
                     Ok(Some(host.wire.borrow().write(&Hv::of_js(&answer))))

@@ -71,15 +71,22 @@ pub enum Failed {
 }
 
 /// Serve one `llm` request of the engine.
-pub async fn serve(label: &str, args: &Json, credentials: &Credentials) -> Result<Js, Failed> {
-    serve_guarded(label, args, credentials, output_budget_on()).await
+/// `run_id`: the run the request is made inside, which a models module is told.
+pub async fn serve(label: &str, args: &Json, credentials: &Credentials, run_id: Option<&str>) -> Result<Js, Failed> {
+    serve_guarded(label, args, credentials, Guarded { output_budget: output_budget_on(), run_id }).await
 }
 
-async fn serve_guarded(label: &str, args: &Json, credentials: &Credentials, output_budget: bool) -> Result<Js, Failed> {
+struct Guarded<'a> {
+    output_budget: bool,
+    run_id: Option<&'a str>,
+}
+
+async fn serve_guarded(label: &str, args: &Json, credentials: &Credentials, guarded: Guarded<'_>) -> Result<Js, Failed> {
     match label {
         "llm.client.call" | "llm.extractCall.call" => {
             let mut request = ModelRequest::read(label, args).map_err(Failed::Fault)?;
-            request.output_budget = output_budget;
+            request.output_budget = guarded.output_budget;
+            request.run_id = guarded.run_id.map(str::to_string);
             let meter = Meter::new(request.budget);
             let answered = answer(&request, credentials, &meter).await;
             match answered {
@@ -172,7 +179,7 @@ impl Meter {
 pub async fn host_model_call(body: &Js, credentials: &Credentials) -> Result<Js, String> {
     let text = |name: &str| body.get(name).and_then(Js::as_str).map(str::to_string);
     let (Some(label), Some(system), Some(user)) = (text("label"), text("system"), text("userMessage")) else {
-        return Err("a models door request is { label, system, userMessage, model?, effort?, maxTokens?, schema? }".into());
+        return Err("a models door request is { label, system, userMessage, model?, effort?, maxTokens?, schema?, runId? }".into());
     };
     let model = text("model").unwrap_or_else(|| "sonnet".into());
     let wire_model = models::wire_model(&model).ok_or_else(|| format!("model {model} is not a model a call names"))?;
@@ -198,6 +205,7 @@ pub async fn host_model_call(body: &Js, credentials: &Credentials) -> Result<Js,
         budget: None,
         reports_usage: true,
         output_budget: false,
+        run_id: text("runId"),
     };
     let meter = Meter::new(None);
     let answered = answer(&request, credentials, &meter).await;
@@ -240,6 +248,8 @@ struct ModelRequest {
     reports_usage: bool,
     /// The loop guard (above) is on.
     output_budget: bool,
+    /// The run the call is made for, when it is made inside one.
+    run_id: Option<String>,
 }
 
 impl ModelRequest {
@@ -278,7 +288,7 @@ impl ModelRequest {
             let message = text("userMessage")?;
             (UserMessage::Text(message), false)
         };
-        Ok(ModelRequest { label: text("label")?, system: text("system")?, user, wire_model, effort, max_tokens, budget, reports_usage, output_budget: false })
+        Ok(ModelRequest { label: text("label")?, system: text("system")?, user, wire_model, effort, max_tokens, budget, reports_usage, output_budget: false, run_id: None })
     }
 }
 
@@ -376,6 +386,7 @@ async fn answer_by_module(models: &crate::remote_slots::ModelsModule, request: &
         model: request.wire_model,
         effort: request.effort.as_deref(),
         max_tokens: request.max_tokens,
+        run_id: request.run_id.as_deref(),
     };
     let answered = crate::remote_slots::call_model(module, &call).await.map_err(ChatError::Failed)?;
     let spent = answered.usage;
@@ -617,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn a_call_answers_the_json_and_the_cost_the_shared_table_prices_its_tokens_at() {
         let (url, _) = fake_anthropic(vec![Scripted::Stream(stream_of(&[("text", "{\"a\":1}")], "end_turn", (1000, 500)))]).await;
-        let answer = serve("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &credentials(&url)).await.ok().unwrap();
+        let answer = serve("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &credentials(&url), None).await.ok().unwrap();
         assert_eq!(answer.get("parsedJson").unwrap().to_json(), r#"{"a":1}"#);
         // claude-sonnet-5 is $2 in / $10 out per million: 1000 * 2 + 500 * 10.
         assert_eq!(cost_of(&answer), r#"[{"source":"model:claude-sonnet-5","microdollars":7000}]"#);
@@ -629,7 +640,7 @@ mod tests {
         let mut args = request(json!({ "remainingMicrodollars": 1_000_000 }));
         args.as_object_mut().unwrap().remove("userMessage");
         args["blocks"] = json!([{ "text": "a", "cacheBreakpoint": true }, { "text": "b" }]);
-        let answer = serve("llm.extractCall.call", &args, &credentials(&url)).await.ok().unwrap();
+        let answer = serve("llm.extractCall.call", &args, &credentials(&url), None).await.ok().unwrap();
         assert_eq!(answer.get("usage").unwrap().get("inputTokens"), Some(&Js::Num(10.into())));
         let sent = &seen.lock().unwrap()[0].0["messages"][0]["content"];
         assert_eq!(*sent, json!([{ "type": "text", "text": "a", "cache_control": { "type": "ephemeral" } }, { "type": "text", "text": "b" }]));
@@ -638,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn a_call_past_its_budget_answers_the_refusal_without_calling() {
         let (url, seen) = fake_anthropic(vec![Scripted::Stream(stream_of(&[("text", "{}")], "end_turn", (1, 1)))]).await;
-        let answer = serve("llm.client.call", &request(json!({ "remainingMicrodollars": 0 })), &credentials(&url)).await.ok().unwrap();
+        let answer = serve("llm.client.call", &request(json!({ "remainingMicrodollars": 0 })), &credentials(&url), None).await.ok().unwrap();
         assert_eq!(answer.get("error").unwrap().get("kind"), Some(&Js::str("budget")));
         assert_eq!(cost_of(&answer), "[]");
         assert!(seen.lock().unwrap().is_empty());
@@ -650,7 +661,7 @@ mod tests {
         let mut args = request(json!({ "remainingMicrodollars": null }));
         args["maxTokens"] = json!(50);
         // Every continuation is cut off too, so the call ends truncated.
-        let Err(Failed::Run(message)) = serve("llm.client.call", &args, &credentials(&url)).await else { panic!("expected a run failure") };
+        let Err(Failed::Run(message)) = serve("llm.client.call", &args, &credentials(&url), None).await else { panic!("expected a run failure") };
         assert_eq!(
             message,
             "Extraction 'test' produced no complete answer: the model hit the 50-token output ceiling and was still truncated after 5 continuations (EXTRACTION_OUTPUT_BUDGET off)."
@@ -660,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn with_the_output_budget_on_the_ceiling_follows_the_input_and_one_continuation_is_allowed() {
         let (url, seen) = fake_anthropic(vec![Scripted::Stream(stream_of(&[("text", "{\"a\":")], "max_tokens", (1, 1)))]).await;
-        let Err(Failed::Run(message)) = serve_guarded("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &credentials(&url), true).await else {
+        let Err(Failed::Run(message)) = serve_guarded("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &credentials(&url), Guarded { output_budget: true, run_id: None }).await else {
             panic!("expected a run failure")
         };
         // A two-character input is under the floor.
@@ -691,7 +702,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_provider_key_fails_naming_the_secrets_entry() {
-        let Err(Failed::Run(message)) = serve("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &Vec::new()).await else {
+        let Err(Failed::Run(message)) = serve("llm.client.call", &request(json!({ "remainingMicrodollars": null })), &Vec::new(), None).await else {
             panic!("expected a run failure")
         };
         assert!(message.starts_with("a model call needs a provider key"), "{message}");
@@ -712,11 +723,11 @@ mod tests {
         // 4,000 characters is 1,000 tokens in; claude-sonnet-5's $2 per million makes 2,000 microdollars.
         let mut args = request(json!({ "remainingMicrodollars": 1_999 }));
         args["userMessage"] = json!("x".repeat(3_999));
-        let answer = serve("llm.client.call", &args, &credentials(&url)).await.ok().unwrap();
+        let answer = serve("llm.client.call", &args, &credentials(&url), None).await.ok().unwrap();
         assert_eq!(answer.get("error").unwrap().get("kind"), Some(&Js::str("budget")));
         assert!(seen.lock().unwrap().is_empty());
         args["budget"] = json!({ "remainingMicrodollars": 2_000 });
-        let answer = serve("llm.client.call", &args, &credentials(&url)).await.ok().unwrap();
+        let answer = serve("llm.client.call", &args, &credentials(&url), None).await.ok().unwrap();
         assert!(answer.get("error").is_none(), "{}", answer.to_json());
     }
 
@@ -726,15 +737,27 @@ mod tests {
     /// with `answer` and `models.prices` with `prices` (none: the method is
     /// not implemented), counting the calls. Run inside a `LocalSet`.
     async fn models_module(answer: Js, prices: Option<Js>) -> (crate::remote_slots::ModelsModule, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let (module, calls, _) = models_module_seeing(answer, prices).await;
+        (module, calls)
+    }
+
+    /// `models_module`, and the params of every `models.call` it was sent.
+    async fn models_module_seeing(
+        answer: Js,
+        prices: Option<Js>,
+    ) -> (crate::remote_slots::ModelsModule, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::Mutex<Vec<Js>>>) {
         use crate::slot_server::{Listen, Refusal};
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = seen.clone();
         let socket = std::env::temp_dir().join(format!("lf-models-{}.sock", uuid::Uuid::new_v4()));
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = calls.clone();
         let methods: &[&str] = if prices.is_some() { &["models.call", "models.prices"] } else { &["models.call"] };
         let manifest = crate::slot_server::manifest("acme_llm", "models", methods);
-        tokio::task::spawn_local(crate::slot_server::serve_async(Listen::Unix(socket.clone()), manifest, move |method: String, _params: Js, _settings: Js| {
+        tokio::task::spawn_local(crate::slot_server::serve_async(Listen::Unix(socket.clone()), manifest, move |method: String, params: Js, _settings: Js| {
             let answered = match (method.as_str(), &prices) {
                 ("models.call", _) => {
+                    recorded.lock().unwrap().push(params);
                     counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     Ok(answer.clone())
                 }
@@ -748,7 +771,7 @@ mod tests {
         }
         let process = crate::core::ProcessModule { dir: std::env::temp_dir(), command: Vec::new(), env: Default::default(), url: Some(format!("unix:{}", socket.display())), auth_field: None };
         let client = crate::slot_client::SlotClient::start("models", "acme_llm", &process, &Default::default()).unwrap();
-        (crate::remote_slots::ModelsModule::new(std::sync::Arc::new(client)), calls)
+        (crate::remote_slots::ModelsModule::new(std::sync::Arc::new(client)), calls, seen)
     }
 
     fn module_request(user: &str) -> ModelRequest {
@@ -762,6 +785,7 @@ mod tests {
             budget: None,
             reports_usage: false,
             output_budget: false,
+            run_id: None,
         }
     }
 
@@ -771,6 +795,22 @@ mod tests {
 
     fn priced_at(input: f64, output: f64) -> Js {
         Js::parse(format!(r#"{{"prices":{{"claude-sonnet-5":{{"input":{input},"output":{output}}}}}}}"#).as_bytes()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_models_module_is_told_the_run_a_call_is_made_for() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (module, _, seen) = models_module_seeing(answered(10), None).await;
+                let mut request = module_request("u");
+                request.run_id = Some("run_42".into());
+                answer_by_module(&module, &request, &Meter::new(None)).await.ok().unwrap();
+                answer_by_module(&module, &module_request("u"), &Meter::new(None)).await.ok().unwrap();
+                let seen = seen.lock().unwrap();
+                assert_eq!(seen[0].get("runId").and_then(Js::as_str), Some("run_42"));
+                assert!(seen[1].get("runId").is_none(), "a call outside a run names none: {}", seen[1].to_json());
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -819,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_judge_is_declined_and_says_why() {
-        let answer = serve("llm.arbitrateEntities", &json!({}), &Vec::new()).await.ok().unwrap();
+        let answer = serve("llm.arbitrateEntities", &json!({}), &Vec::new(), None).await.ok().unwrap();
         assert_eq!(answer.get("index"), Some(&Js::Null));
         assert!(answer.get("judgeUnavailable").is_some());
     }

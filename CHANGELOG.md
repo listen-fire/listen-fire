@@ -17,6 +17,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- A model call made inside a run names the run: the models slot's `models.call` request (and the models door's `HostModelRequest`) carries an optional `runId`, which `lf` sends for a call a run makes, so a host's usage rows can attribute the call to its run. A call outside a run sends none; a module that ignores the field is unaffected. See `docs/contracts/models-slot.md`.
 - A limit of `calls: N, per: <window>` is a rolling window in every limiter (lf's built-in, the engine's in-process one and `@listen-fire/postgres-limiter`): no stretch of that length ever holds more than N calls. They were token buckets, which let a burst of N and then one call every window/N put nearly 2N in one window, so a module that declared fewer calls than its provider allows to make up for that can declare the real number now. A refusal's `retryAt` is when the oldest calls leave the window. `@listen-fire/postgres-limiter` keeps each call's instant in a `calls` table; opening it drops the old token columns, and each window starts empty after the upgrade. See `docs/contracts/limiter-slot.md`.
 - The built-ins reference names `pdf.render`'s and `web.render`'s `name` setting (and gains a `web.render` entry).
 - `web.render` (`@lf/web`) takes a `name` setting for its file like `pdf.render` (`web.render(html, { name: "Q3 report" })`; `.pdf` is added when missing). Without one the file is still `movement-artifact.pdf`.

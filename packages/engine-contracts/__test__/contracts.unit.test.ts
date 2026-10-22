@@ -10,6 +10,7 @@ import {
   LANGUAGE_CONTRACT,
   HOST_FAMILIES,
   HOST_FAMILIES_VERSION,
+  HostModelRequest,
   MANIFEST_PROTOCOL_VERSION,
   PARK_STATE_VERSION,
   PROTOCOL_VERSION,
@@ -20,6 +21,7 @@ import {
   refuseUnsupportedParkStateVersion,
   tenantIdOf,
 } from '../index';
+import { ModelsCallRequest } from '../slots';
 
 describe('the tenant id', () => {
   it('brands any non-empty string, which it carries unchanged', () => {
@@ -231,5 +233,22 @@ describe("the Rust engine's segment input is the one its documents name", () => 
     if (section === null) throw new Error('host-families.md no longer spells the inputs only the Rust engine takes as this test reads them');
     const named = [...section[1].matchAll(/^ {2}- `(\w+)`:/gm)].map(([, name]) => name);
     expect(named).toEqual(fields.filter((f) => f.fromEnvironment).map((f) => f.name));
+  });
+});
+
+describe('the host model request', () => {
+  const request = { label: 'affinity.formatLocation', system: 's', userMessage: 'u' };
+
+  it('may name the run it is for, which the models slot carries unchanged', () => {
+    expect(HostModelRequest.parse({ ...request, runId: 'run_1' })).toEqual({ ...request, runId: 'run_1' });
+    expect(ModelsCallRequest.parse({ ...request, runId: 'run_1', maxTokens: 10 })).toEqual({ ...request, runId: 'run_1', maxTokens: 10 });
+  });
+
+  it('is valid without one, as a call outside any run is', () => {
+    expect(HostModelRequest.parse(request)).toEqual(request);
+  });
+
+  it('refuses a run id that is not a string', () => {
+    expect(HostModelRequest.safeParse({ ...request, runId: 7 }).success).toBe(false);
   });
 });

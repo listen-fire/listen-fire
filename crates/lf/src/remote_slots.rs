@@ -115,6 +115,8 @@ pub struct ModelCall<'a> {
     pub model: &'a str,
     pub effort: Option<&'a str>,
     pub max_tokens: Option<u64>,
+    /// The run the call is made for, when it is made inside one.
+    pub run_id: Option<&'a str>,
 }
 
 /// What a models module answered: the text, what it cost, line by line, and
@@ -138,6 +140,9 @@ pub async fn call_model(client: &SlotClient, call: &ModelCall<'_>) -> Result<Mod
     }
     if let Some(max_tokens) = call.max_tokens {
         params.insert("maxTokens".into(), Js::Num(max_tokens.into()));
+    }
+    if let Some(run_id) = call.run_id {
+        params.insert("runId".into(), Js::str(run_id));
     }
     let answer = client.call_async("models.call", params).await?;
     let shape = || format!("{}: models.call answered {}, not {{ text, cost, usage: {{ inputTokens, outputTokens }} }}", client.label, answer.to_json());
