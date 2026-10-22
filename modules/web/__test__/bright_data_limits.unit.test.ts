@@ -62,7 +62,10 @@ describe("Bright Data's limits off the platform", () => {
     const searches = Array.from({ length: 15 }, (_, i) => tools.search(`q${i}`));
     await jest.advanceTimersByTimeAsync(0);
     expect(sent('serp_zone')).toBe(14);
-    await jest.advanceTimersByTimeAsync(60_000 / 14 + 10);
+    // Rolling window: the fifteenth leaves when the first call's minute ends, not on a refill schedule.
+    await jest.advanceTimersByTimeAsync(59_990);
+    expect(sent('serp_zone')).toBe(14);
+    await jest.advanceTimersByTimeAsync(20);
     expect(sent('serp_zone')).toBe(15);
     await Promise.all(searches);
   });
