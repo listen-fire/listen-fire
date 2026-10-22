@@ -25,6 +25,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - The secrets slot's wire is written down in `docs/contracts/secrets-slot.md`, with its conformance cases: `lf --contract-secrets-slot --dir <project>` serves the project's secrets module through lf's own client, and `secretsSlotCases`, `secretsReadOnlySlotCases` and `SecretsSlotBackend` (movement-engine `public/module-wire`) hold any secrets module to them and to the family's eleven cases. `SECRETS_METHODS` joins the other slots' method lists in `engine-contracts/slots`.
 - Deploying (operators): a cloud deployment fills the secrets slot with `core: { secrets: <module> }` and feeds the module's own settings through `LF_SECRET__<MODULE>__<SETTING>`, as for the other slot modules (`deploy/lf/README.md`).
 - `@lf/anthropic`: a 429 reaches the throttle at once. The keyed provider's SDK client no longer retries a 429 itself (it slept on Retry-After, twice, inside the held permit); the client's own backoff still retries 5xx and network failures. The throttle and the concurrency ceiling of 8 are now per API key (the caller carries a hash of the key, never the key), so a 429 on one key no longer closes calls made under another.
+- The engine's zone database moved to tz 2026e (jiff-tzdb 0.1.9), the data Node 22.23 carries. A run across the zones whose rules changed (Africa/Casablanca, Africa/El_Aaiun, America/Inuvik, America/Tijuana, Europe/Chisinau, EST5EDT) may convert differently. The wasm artifacts are rebuilt.
 
 ## [0.12.0-rc.8] - 2026-10-22
 
