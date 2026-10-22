@@ -5,7 +5,7 @@
 
 When an agent looks after a stream of events, it is called on every one: each webhook, cron tick and inbound email is another model call, and no two calls do quite the same thing.
 
-With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every matching email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI. When the program needs a person, it waits for one.
+With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every matching email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI.
 <!-- hero:end -->
 
 ## How it works
@@ -16,13 +16,11 @@ flowchart LR
   B --> C["An event arrives:<br>webhook, schedule, email"]
   C --> D["Engine runs the program<br>(no model needed)"]
   D --> E["Writes land in Slack,<br>the CRM, a sheet"]
-  D -. "needs a decision" .-> F["A person taps a button;<br>the run resumes"]
-  F --> E
 ```
 
 1. **An agent writes a program**: a short text file (`.mvt`) in a language made for moving data between systems. A person can write or review one too.
 2. **The engine runs it on every event** the program listens for, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
-3. **It waits for a person when the program says so**: post a button, park, and resume on the tap minutes or days later, holding nothing open in between. Every run is recorded.
+3. **Every run is recorded**: the event it started from, what it read, and what it wrote.
 
 ## Fastest path to a first run
 
@@ -85,7 +83,7 @@ Each system is presented to the program as a graph of records joined by edges, s
 
 Listen-Fire grew out of one job: keeping a venture fund's CRM up to date from email, meeting notes and Slack, without an associate retyping it. That job is the case study the rest of this README generalises from.
 
-The fund's programs do what the example above does, and then what the language is for. A company that arrives by email lands in Attio once, however many times it is mentioned (`unique by`, with `FUZZY` matching so "Acme" and "Acme Inc" are one record). Meeting notes from Granola attach to the company they were about. The fields of an attached deck are pulled out with `extract(…)`, the one step that calls a model. A cold inbound is not added until a partner has confirmed it from a button in Slack, with a deadline after which the run gives up (`race` with `await sleep(2d)`). The [reviews chapter](packages/handbook/chapters/asks.ts) of the handbook covers the waiting forms, and [`examples/lf-attio`](examples/lf-attio) is a runnable Attio project with its own walkthrough.
+The fund's programs do what the example above does, and then what the language is for. A company that arrives by email lands in Attio once, however many times it is mentioned (`unique by`, with `FUZZY` matching so "Acme" and "Acme Inc" are one record). Meeting notes from Granola attach to the company they were about. The fields of an attached deck are pulled out with `extract(…)`, the one step that calls a model. A cold inbound waits for a partner's tap in Slack before it is added (the handbook's [reviews chapter](packages/handbook/chapters/asks.ts) covers waiting). [`examples/lf-attio`](examples/lf-attio) is a runnable Attio project with its own walkthrough.
 
 ## Deploy options
 
