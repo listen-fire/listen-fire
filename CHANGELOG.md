@@ -25,6 +25,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - `lf call` (and the callback door's log under `lf serve`) reports a call as one line for its run, its writes the body's and the continuation's together, instead of a `called` line and a `run` line with different counts.
 - `pdf.render` (`@lf/pdf`) takes a `name` setting for its file (`pdf.render(text, { name: "Q3 report" })`; `.pdf` is added when missing). Without one the file is still `movement-artifact.pdf`.
 - `lf run <movement> --text "…"` gives the manual Invocation its `Text`, as "Run now" with pasted text does on the platform.
+- A manual run started with no text (`lf run <movement>` without `--text`) reads `run.Text` as `""`, as `Content` already did, instead of absent while typed as text; `run.Text == ""` is the test for no text.
 - **Breaking (lf):** email under `lf` matches the handbook. `inbox = connect email` needs no credential: a module whose declared credentials are all optional constructs without `using` (the credential-free schema; sending refuses by name until `connect email using <keys>`). An email listen takes `key` (`listen to inbox { key: "deals" }`), and `lf` routes each message to the listen whose `key` is the plus-suffix of the address it was sent to (`<box>+deals@…`, compared without case); a listen with no key hears mail sent to the box itself, and a suffix no listen has runs nothing (a logged line), where before every email listen ran on every message. A catalog rule change: the wasm artifacts are rebuilt.
 
 ## [0.12.0-rc.7] - 2026-10-22

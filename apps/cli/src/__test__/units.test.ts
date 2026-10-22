@@ -61,6 +61,20 @@ test('lf run <movement> --text gives the manual Invocation its Text; an event fi
   assert.match(refused.out, /--text gives a manual run its text/);
 });
 
+test('lf run <movement> with no --text: the manual Invocation\'s Text is the empty string, never absent', () => {
+  const dir = initialised();
+  writeFileSync(
+    join(dir, 'movements/echo.mvt'),
+    'function echo(run: <manual-[:Invocation]->>) {\n  if (run.Text == "") { return "empty: [${run.Text}]" }\n  return "given: [${run.Text}]"\n}\nlisten to manual fire echo\n',
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const run = lf(dir, 'run', 'echo');
+  assert.equal(run.code, 0, run.out);
+  assert.match(run.out, /returned "empty: \[\]"/);
+  assert.match(lf(dir, 'run', 'echo', '--text', 'hi').out, /returned "given: \[hi\]"/);
+});
+
 test('a cron tick missed while no worker ran fires once on the next drain, never twice', () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/tick.mvt'), TICK);

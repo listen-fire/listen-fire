@@ -124,7 +124,9 @@ pub fn call(unit: &str, method: &str, args: &Hv) -> Result<Js, String> {
                 .to_string();
             let data = position.get("identity").and_then(|i| i.get("data")).cloned().unwrap_or(Js::Null);
             Ok(match (unit, field_id.as_str()) {
-                (MANUAL, "content") => data.get("text").cloned().unwrap_or(Js::str("")),
+                // A run started with no text reads `""`, never absent: the
+                // schema types both as text, which is always present.
+                (MANUAL, "text" | "content") => data.get("text").cloned().unwrap_or(Js::str("")),
                 _ => data.get(&field_id).cloned().unwrap_or(Js::Null),
             })
         }
@@ -290,6 +292,25 @@ mod tests {
 
     fn at(iso: &str) -> i64 {
         ms_of(iso).unwrap()
+    }
+
+    #[test]
+    fn a_manual_text_not_given_reads_as_the_empty_string_like_its_content() {
+        let user = Js::Obj(Obj::new());
+        let read = |text: Option<&str>, field: &str| {
+            let event = manual_event("2026-10-22T00:00:00.000Z", &user, text);
+            let mut identity = Obj::new();
+            identity.insert("data".into(), event.get("payload").cloned().unwrap());
+            let mut position = Obj::new();
+            position.insert("recordType".into(), Js::str("invocation"));
+            position.insert("identity".into(), Js::Obj(identity));
+            let args = Hv::Obj(vec![("position".into(), Hv::of_js(&Js::Obj(position))), ("fieldId".into(), Hv::Str(field.into()))]);
+            call(MANUAL, "getFieldValue", &args).unwrap()
+        };
+        for field in ["text", "Text", "content", "Content"] {
+            assert_eq!(read(None, field), Js::str(""), "{field}");
+            assert_eq!(read(Some("hi there"), field), Js::str("hi there"), "{field}");
+        }
     }
 
     #[test]
