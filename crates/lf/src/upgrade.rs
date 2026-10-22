@@ -1,5 +1,5 @@
-//! `lf upgrade`: the project's movement files rewritten into the language
-//! version the project's engine runs, by the Rust checker's own fixes (the
+//! `lf upgrade`: the project's movement files rewritten into the language of
+//! this release, by the Rust checker's own fixes (the
 //! loop of lf-platform's packages/legacy-lang/checker/upgrade.ts). Check, take the fixes that do
 //! not overlap, apply them, check again, until nothing fixable is left. Only
 //! fixes marked safe are applied unless `--all`; the rest are listed with their
@@ -238,6 +238,23 @@ fn with_engine_pin(text: &str, to: &str) -> Result<Option<String>, String> {
     Ok(Some(lines.join("\n")))
 }
 
+enum PinStep {
+    /// The project already pins the current release.
+    Current,
+    /// The project validates clean under the current release: its `lf.yaml` with the new pin.
+    Set(String),
+    /// Fixes remain for the author, so the movements still read as the old release.
+    Held { remaining: usize },
+}
+
+/// The pin moves only when the rewritten project validates clean under the
+/// current release; otherwise a later `lf run` would read movements the
+/// current release still refuses.
+fn pin_step(lf_yaml: &str, remaining: usize) -> Result<PinStep, String> {
+    let Some(repinned) = with_engine_pin(lf_yaml, LANGUAGE_VERSION)? else { return Ok(PinStep::Current) };
+    Ok(if remaining == 0 { PinStep::Set(repinned) } else { PinStep::Held { remaining } })
+}
+
 pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     let checking = match open_checking(project).await? {
@@ -279,12 +296,17 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     }
     let pin_file = project.root.join(PROJECT_FILE);
     let pinned = std::fs::read_to_string(&pin_file).map_err(|e| format!("{}: {e}", pin_file.display()))?;
-    if let Some(repinned) = with_engine_pin(&pinned, LANGUAGE_VERSION)? {
-        if options.check_only {
+    match pin_step(&pinned, left)? {
+        PinStep::Current => {}
+        PinStep::Set(_) if options.check_only => {
             writeln!(out, "{PROJECT_FILE}: would set engine: {LANGUAGE_VERSION} (the pin is {})", project.engine).map_err(io)?;
-        } else {
+        }
+        PinStep::Set(repinned) => {
             std::fs::write(&pin_file, repinned).map_err(|e| format!("{}: {e}", pin_file.display()))?;
             writeln!(out, "{PROJECT_FILE}: engine: {LANGUAGE_VERSION} (was {})", project.engine).map_err(io)?;
+        }
+        PinStep::Held { remaining } => {
+            writeln!(out, "{PROJECT_FILE}: engine: left at {} until the {remaining} remaining diagnostic(s) are fixed; run `lf upgrade` again", project.engine).map_err(io)?;
         }
     }
     let verb = if options.check_only { "would be rewritten" } else { "rewritten" };
@@ -311,6 +333,15 @@ mod tests {
         assert_eq!(with_engine_pin(text, "0.12.0").unwrap().unwrap(), "# the project\nengine: 0.12.0\nmovements: movements\n");
         assert_eq!(with_engine_pin("engine: 0.12.0\n", "0.12.0").unwrap(), None);
         assert!(with_engine_pin("movements: m\n", "0.12.0").is_err());
+    }
+
+    #[test]
+    fn the_pin_moves_only_when_nothing_is_left_to_fix() {
+        let old = "engine: 0.11.0\nmovements: m\n";
+        let PinStep::Set(text) = pin_step(old, 0).unwrap() else { panic!("a clean project is repinned") };
+        assert_eq!(text, format!("engine: {LANGUAGE_VERSION}\nmovements: m\n"));
+        assert!(matches!(pin_step(old, 3).unwrap(), PinStep::Held { remaining: 3 }));
+        assert!(matches!(pin_step(&text, 3).unwrap(), PinStep::Current));
     }
 
     #[test]
