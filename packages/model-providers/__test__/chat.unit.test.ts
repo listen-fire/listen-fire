@@ -50,7 +50,6 @@ describe('chatCallFor', () => {
     expect(call.wireModel).toBe('claude-sonnet-5');
     expect(call.resolved.provider).toBe('anthropic');
     expect(call.client).toMatchObject({ credential: expect.stringMatching(/^sha256:[0-9a-f]{16}$/) });
-) });
     expect(anthropicCtor).toHaveBeenCalledWith({ apiKey: 'sk', maxRetries: 0 });
     expect(vertexCtor).not.toHaveBeenCalled();
   });
