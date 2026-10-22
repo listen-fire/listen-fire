@@ -88,7 +88,7 @@ function refuseEarlierPin(input: RunInput & { parkedOnEngine?: 'ts' | 'rust' }):
   if (input.parkedOnEngine === 'ts') {
     throw new MovementEngineError(
       'MOVENG_UNSUPPORTED',
-      `this run is pinned to language version ${languageVersion}, which runs only on the Rust engine, but the TypeScript engine parked it: it cannot resume`,
+      `this run is pinned to language ${languageVersion}, which runs only on the Rust engine, but the TypeScript engine parked it: it cannot resume`,
       { reason: PARKED_ON_TYPESCRIPT },
     );
   }

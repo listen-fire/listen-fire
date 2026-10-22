@@ -39,7 +39,6 @@ use crate::types::field::{
 use crate::types::position::{HandlePosition, InstanceRef, Position, describe_position, position_schema_of_ref};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::Typing;
-use crate::version;
 
 /// What a target path is for: a write creates along the edge, a match only
 /// looks along it.
@@ -1371,8 +1370,7 @@ impl Checker<'_> {
         self.report(
             codes::MATCH_UNNAMED,
             format!(
-                "'match … {{ }}' on its own gates nothing since {}: a miss is absent, not the end of the scope. Bind it and test the name — `existing = match … {{ … }}` then `{}`",
-                version::MATCH_AND_HANDLE_RULES_SINCE,
+                "'match … {{ }}' on its own gates nothing: a miss is absent, not the end of the scope. Bind it and test the name — `existing = match … {{ … }}` then `{}`",
                 self.code("if existing != null { … }")
             ),
             span,

@@ -137,7 +137,7 @@ The same holds for everything else the engine needs. Where runs are stored, whic
 
 ## Repository layout
 
-This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `lf` command, the modules that connect systems, and the embedding kit. It serves language version 5 and later; upgrading an older program is the platform's.
+This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `lf` command, the modules that connect systems, and the embedding kit. It serves the language of its own release; upgrading an older program is the platform's.
 
 - [`crates/`](crates): the Rust crates: parser, checker, engine, language service, module wire and kit, and the `lf` command (`crates/lf`).
 - [`packages/movement-lang`](packages/movement-lang): the wasm artifacts, their bindings, the version table, the expression AST and the catalog types.

@@ -12,7 +12,7 @@
 //! has stopped too; the failure is the earliest arm's (a limit met before
 //! any other).
 //!
-//! `all(…, { concurrency: n })` (language version 5's `parallel`) runs at
+//! `all(…, { concurrency: n })` (which replaced `parallel`) runs at
 //! most n arms at once: an arm that parks is waiting, not running, so it
 //! frees its place for the next. An arm whose failure `onError` forgives
 //! leaves its slot null (`warn` traces why).

@@ -66,7 +66,7 @@ fn attach_slot_trees(value: &mut Value) {
     }
 }
 
-/// One expression text in the v5 surface, read into the canonical tree
+/// One expression text in the current surface, read into the canonical tree
 /// (crate::surface).
 pub fn parse_expression(source: &str) -> Parsed {
     let tree = expr::parse_expression(source).map_err(|e| to_value(&e))?;

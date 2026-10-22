@@ -59,6 +59,6 @@ A suffixed tag never moves npm `latest` or the default docs.
 3. Repeat the steps above with plain tags (`v0.12.0`, `lf-v0.12.0`, `docs-v0.12.0`): the GitHub release is a full release, docs become the default.
 4. npm: publish without `--tag next`, or move `latest` explicitly: `npm dist-tag add @listen-fire/<name>@0.12.0 latest`. Remove `publishConfig.tag` from the packages before publishing, otherwise they still take `next`.
 
-Note: `0.12.0-rc.6` sorts above the released `0.11.0` and below `0.12.0`. The docs stay under `/docs/next/` until the plain `docs-v0.12.0` tag publishes `/docs/v5/` (and the language server's links switch with the crate version).
+Note: `0.12.0-rc.6` sorts above the released `0.11.0` and below `0.12.0`. The docs stay under `/docs/next/` until the plain `docs-v0.12.0` tag publishes `/docs/0.12/` (and the language server's links switch with the crate version).
 
-A release names the language versions it supports (version 5 only) in its CHANGELOG entry. The platform adopts a language release by raising the versions of the `@listen-fire/*` packages it installs.
+A release's language version is its own semver; its CHANGELOG entry says which pins it no longer reads. The platform adopts a language release by raising the versions of the `@listen-fire/*` packages it installs.

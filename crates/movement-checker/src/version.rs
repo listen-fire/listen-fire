@@ -9,10 +9,6 @@ use movement_parser::version::{LANGUAGE_VERSION, refusal};
 use crate::codes;
 use crate::diagnostic::Diagnostic;
 
-/// The release these texts call the one a rule changed in, by its old
-/// name. Task 4 rewrites the texts and this goes.
-pub(crate) const MATCH_AND_HANDLE_RULES_SINCE: &str = "\"Luminous Owl\" (4)";
-
 /// What a movement pinned to `pin` is told before anything else: an error
 /// when this release does not read it, nothing when it does. (A deprecation
 /// is the CHANGELOG's to announce: a compatible pin runs as written.)

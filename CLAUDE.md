@@ -28,16 +28,16 @@ degradation is the absence of a guarantee, not a weaker one).
 
 ## Language versions (breaking changes never break a saved movement)
 
-Every saved movement is pinned to the language version it was written against (an integer with a two-word name, e.g. 1 "Quiet Heron" = the language as of v0.6.0). The pin governs syntax AND semantics, and every layer honours it:
+The language version is the toolchain release: the one semver every crate and package carries (`0.12.0`). A saved movement is pinned to the release it was written against; there is no separate integer and no name. The pin governs syntax AND semantics, and every layer honours it through one rule, `compatible(pin, own)` (`crates/movement-parser/src/version.rs` and `packages/movement-lang/language_version.ts`, pinned to `docs/contracts/language-versions.md`):
 
-- A breaking change — a spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened — lands as a version conditional (`since(v, n)` / `before(v, n)` on the compile or run context's `languageVersion`) at the point of difference in the parser, checker, engine, plugin or adapter. Never a forked parser, never a second engine.
-- The old behaviour is proved by the older version's own test corpus run against the current code under that version. Add a version = add its fixtures; remove a version = delete its conditionals and its fixtures.
-- Any construct whose meaning changed gets a checker diagnostic under the new version, so "validates clean under the new version" can never hide a silent behaviour change.
-- A release names the versions it supports and deprecates. Unsupported: validate and run refuse, loudly. Deprecated: runs, with a warning.
+- A release reads a pin with its own compatibility key (the minor under 0.x, the major from 1.0) and refuses any other by name, with the remedy: a newer pin says to upgrade the engine; an older key says to validate under this release and upgrade.
+- A breaking change — a spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened — ships in a release of a new compatibility key, never within one. Never a forked parser, never a second engine in this repository.
+- Any construct whose meaning changed gets a checker diagnostic under the new key, so "validates clean under the new release" can never hide a silent behaviour change.
+- A deprecation is the CHANGELOG's to announce: a compatible pin runs as written.
 - The pin moves only by an explicit upgrade; never automatically, and never by an ordinary edit.
-- The CHANGELOG entry for a break says which version introduces it and why.
+- The CHANGELOG entry for a break says which release introduces it and why.
 
-This repository serves language version 5 and later (the supported set is {5}), with no conditional below it: versions 1 to 4, their corpora and their upgrade path are `lf-platform`'s. The first break after 5 lands as version 6 by the rules above.
+Diagnostic codes keep their names across releases (agents and tests key on them); only their texts change. Earlier integer-pinned movements, their corpora and their upgrade path are `lf-platform`'s.
 
 Plan: `plans/language-versioning-2026-09-29/` (gitignored, on Henry's machine).
 

@@ -1,4 +1,4 @@
-//! Language version 5's namespace functions chosen by what a value IS
+//! The namespace functions chosen by what a value IS
 //! (plans/naming-rethink-2026-10-14/5_design.md §2.2): a list's length is
 //! `count(xs)`, text's `Text.length(t)`; a list holds a value by
 //! `List.includes(xs, v)`, text by `Text.includes(t, v)`; a list's presence
@@ -6,7 +6,7 @@
 //! (movement_parser::surface) cannot see a type, so its fix for an old
 //! spelling is the one whose tree is the old one's (`Text.length`,
 //! `Text.includes`, `!= null`); here the checker, which can, rewrites that fix
-//! where the operand is a list, and refuses a v5 call given the wrong kind.
+//! where the operand is a list, and refuses a current-spelling call given the wrong kind.
 //! The TypeScript twin is lf-platform's packages/legacy-lang/checker/typed_spelling.ts.
 
 use movement_parser::ast::{ExprSlot, Span};
@@ -33,7 +33,7 @@ pub enum ValueKind {
 pub enum Found {
     /// The parser's MOV_V5_SPELLING finding at `at` takes this message and fix.
     Respell,
-    /// A v5 call given the wrong kind of value.
+    /// A current-spelling call given the wrong kind of value.
     Misuse,
 }
 
@@ -108,13 +108,13 @@ fn here(e: &MExpr, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueK
                 return Some(if written == "Text.length" {
                     TypedSpelling { found: Found::Misuse, at: *at, message: "`Text.length` takes text; a list's length is `count(xs)`".into(), text: fix, safe: false }
                 } else {
-                    TypedSpelling { found: Found::Respell, at: *at, message: format!("`{written}` of a list is written `count(xs)` from language version 5"), text: fix, safe: true }
+                    TypedSpelling { found: Found::Respell, at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs)`"), text: fix, safe: true }
                 });
             }
             if canonical == "EXISTS" && !matches!(arg, MExpr::Path { .. } | MExpr::Where { .. }) && kind_of(arg) == Some(ValueKind::List) {
                 let fix = format!("count({}) > 0", text(arg.at()));
                 let text = if whole(src, *at) { fix } else { format!("({fix})") };
-                return Some(TypedSpelling { found: Found::Respell, at: *at, message: format!("`{written}` of a list is written `count(xs) > 0` from language version 5"), text, safe: true });
+                return Some(TypedSpelling { found: Found::Respell, at: *at, message: format!("the retired spelling `{written}` of a list is written `count(xs) > 0`"), text, safe: true });
             }
             None
         }
@@ -123,7 +123,7 @@ fn here(e: &MExpr, src: &Utf16, kind_of: &mut dyn FnMut(&MExpr) -> Option<ValueK
             Some(if text(*at).starts_with("Text.includes") {
                 TypedSpelling { found: Found::Misuse, at: *at, message: "`Text.includes` takes text; a list holds a value by `List.includes(xs, v)`".into(), text: fix, safe: false }
             } else {
-                TypedSpelling { found: Found::Respell, at: *at, message: "`CONTAINS` on a list is written `List.includes(xs, v)` from language version 5".into(), text: fix, safe: false }
+                TypedSpelling { found: Found::Respell, at: *at, message: "the retired spelling `CONTAINS` on a list is written `List.includes(xs, v)`".into(), text: fix, safe: false }
             })
         }
         MExpr::Binary { op: BinaryOp::In, left, right, at } if text(*at).starts_with("List.includes") && kind_of(right) == Some(ValueKind::Text) => {
@@ -148,9 +148,9 @@ pub fn span_key(span: &Span) -> (usize, usize, usize, usize) {
 }
 
 impl Checker<'_> {
-    /// `checkTypedSpelling` (version 5): the parser's fix for an old
+    /// `checkTypedSpelling`: the parser's fix for an old
     /// spelling of a list's length, membership or presence rewritten, and a
-    /// v5 call given the wrong kind refused.
+    /// A current-spelling call given the wrong kind refused.
     pub fn check_typed_spelling(&mut self, tree: &MExpr, slot: &ExprSlot, scope: ScopeId) {
         if self.type_only > 0 {
             return;
@@ -187,7 +187,7 @@ impl Checker<'_> {
 
 // ── A walk's fields through its alias (design §2.5) ──
 //
-// From version 5 a hop's WHERE and ORDER BY read its record's fields through
+// A hop's WHERE and ORDER BY read its record's fields through
 // the hop's alias (`c.Name`); a bare name there is a variable from outside the
 // walk, as it is everywhere else. The parser reads `c.Name` into the bare
 // field the canonical tree has always held, marked as only ever the field
@@ -237,7 +237,7 @@ fn walk_visit(e: &MExpr, aliases: &[String], src: &Utf16, binds: &dyn Fn(&str) -
             edits.extend(fields.iter().map(|n| (n.at, format!("{alias}.{}", src.text(n.at.start, n.at.end)))));
             let written = src.text(first.at.start, first.at.end);
             let message = format!(
-                "from language version 5 a walk's field is read through the hop's alias: `{alias}.{written}` (a bare name inside the brackets is a variable from outside the walk)"
+                "a walk's field is read through the hop's alias: `{alias}.{written}` (a bare name inside the brackets is a variable from outside the walk)"
             );
             out.push(WalkField { at: first.at, message, edits, safe: true });
         }
@@ -250,7 +250,7 @@ fn walk_visit(e: &MExpr, aliases: &[String], src: &Utf16, binds: &dyn Fn(&str) -
         bare_names(predicate, &mut names);
         let fields: Vec<&movement_parser::tree::Name> = names.into_iter().filter(|n| is_field(n, &here, binds)).collect();
         let simple = last.where_.is_none() && last.order_by.is_none() && last.limit.is_none() && last.config.is_none();
-        let message = "from language version 5 a walk's filter is written inside its last hop, its fields through the hop's alias: `-[a:Edge WHERE a.Field …]->`".to_string();
+        let message = "a walk's filter is written inside its last hop, its fields through the hop's alias: `-[a:Edge WHERE a.Field …]->`".to_string();
         let edits = if simple {
             let (alias, insert) = alias_of(last, &here, src, binds);
             let mut predicate_text: Vec<(usize, usize, String)> =
@@ -317,7 +317,7 @@ fn alias_of(hop: &movement_parser::tree::Hop, taken: &[String], src: &Utf16, bin
 }
 
 impl Checker<'_> {
-    /// `checkWalkFields` (version 5): a walk's fields through its alias, in
+    /// `checkWalkFields`: a walk's fields through its alias, in
     /// a slot or a block head (read through its probe, `raw`).
     /// `parsed` is the text `tree` was parsed from (what it lowers against).
     pub fn check_walk_fields(&mut self, tree: &MExpr, (raw, parsed): (&str, &str), place: crate::families::calls::TreeAt, scope: ScopeId) {
@@ -353,7 +353,7 @@ impl Checker<'_> {
 
 // ── Arguments by position (design §2.7) ──
 
-/// A callee's parameters as a call passes them from version 5: in order,
+/// A callee's parameters as a call passes them: in order,
 /// then (a plugin's) the names its settings record takes.
 #[derive(Debug, Clone)]
 pub struct ArgOrder {

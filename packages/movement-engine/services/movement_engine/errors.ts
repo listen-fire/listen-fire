@@ -21,7 +21,7 @@ export type MovementEngineErrorCode =
   | 'MOVENG_NOT_FOUND'
   | 'MOVENG_UNSUPPORTED'
   | 'MOVENG_RUNTIME'
-  // Calls nested deeper than MOVEMENT_MAX_CALL_DEPTH (language version 3) —
+  // Calls nested deeper than MOVEMENT_MAX_CALL_DEPTH —
   // a recursion that may never end. Never forgiven by a collection op's
   // `onError` (`call_depth.ts`).
   | 'MOVENG_CALL_DEPTH'

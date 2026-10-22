@@ -108,7 +108,7 @@ fn a_knowledge_graph_query_text_is_retired() {
         [(
             "MOV_KG_QUERY_RETIRED".to_string(),
             8,
-            "'KG_VALUE(…)' is retired — it ran a query text against the knowledge graph, and no engine runs one from version 5. Walk the graph instead: connect it ('kg = connect graph'), then read along its edges ('kg-[c:Company WHERE …]->')".to_string()
+            "'KG_VALUE(…)' is retired — it ran a query text against the knowledge graph, and no engine runs one. Walk the graph instead: connect it ('kg = connect graph'), then read along its edges ('kg-[c:Company WHERE …]->')".to_string()
         )]
     );
     assert_eq!(codes("  if (KG_EXISTS(\"MATCH (n) RETURN n\")) {\n    x = 1\n  }"), ["MOV_KG_QUERY_RETIRED"]);

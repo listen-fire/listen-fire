@@ -332,7 +332,7 @@ pub struct LandingShape {
 
 /// `{kind: 'handle', handle: WriteRecord, targetType, graph: {kind: 'instance', instance}}`.
 ///
-/// The record it names is held in a cell: from version 4, `write org { … }`
+/// The record it names is held in a cell: `write org { … }`
 /// moves the handle `org` on to the updated record in place (run.ts
 /// `recordWrite`'s `into`), and every scope holding it reads the update.
 /// The record before its write (`-[:@old]->`) is held beside it: the

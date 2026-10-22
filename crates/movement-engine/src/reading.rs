@@ -136,7 +136,7 @@ impl Run<'_> {
         Err(unsupported(&format!("reading '{name}' ({}) as a bare value", record::describe(&binding))))
     }
 
-    /// A movement read as a value (language version 5): its parameters and
+    /// A movement read as a value: its parameters and
     /// body as a closure's, over a snapshot of its file's scope.
     pub(crate) fn function_value(&self, declared: &crate::bindings::MovementRef) -> Result<Binding, Failure> {
         let thrown = |stop: crate::run::Stop| match stop {
@@ -529,7 +529,7 @@ impl Run<'_> {
     /// `keepInMemoryHop`: one hop over records in hand (an extracted
     /// entity's children, a node literal's landings) from one origin — the
     /// ones its WHERE keeps, and from 5 in its ORDER BY and cut to its LIMIT,
-    /// as a hop over a source record is. Versions 1–4 never read an in-memory
+    /// as a hop over a source record is. The older language never read an in-memory
     /// hop's ORDER BY or LIMIT, so they still don't.
     pub(crate) async fn keep_in_memory_hop(&self, landings: Vec<Binding>, step: &EdgeStep, scope: &Rc<Scope>, span: &Js) -> Result<Vec<Binding>, Failure> {
         let mut kept = Vec::new();

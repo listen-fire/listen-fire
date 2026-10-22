@@ -352,7 +352,7 @@ describe('`_resources` off an adapter record, by language version', () => {
       'MOVENG_UNSUPPORTED',
     );
     expect(messageOf(rust.error)).toContain(
-      "'-[:_resources]->' is read only off an extraction's result since language version 5",
+      "'-[:_resources]->' is read only off an extraction's result",
     );
     expect(rust.calls.filter(([method]) => method === 'email.getRelated')).toEqual([]);
     expect(rustRunStats.segments).toBe(1);

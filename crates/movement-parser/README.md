@@ -10,7 +10,7 @@ and whose exports are this crate's ABI plus the engine's.
 | module | what |
 |---|---|
 | `lexer`, `expr`, `stmt`, `tree`, `ast`, `scan` | the parser: statement and expression grammars, their JSON shapes |
-| `surface` | language version 5's surface: the spelling table, and the rewrite of a v5 expression into the canonical tree with a finding (and its fix) for every old spelling |
+| `surface` | the current surface: the spelling table, and the rewrite of an expression in the current spelling into the canonical tree with a finding (and its fix) for every old spelling |
 | `lowering` | the expression tree → the shared `Expression` (packages/movement-lang/expression/types.ts); the only lowering since `parser/expression/lower.ts` became its wrapper |
 | `catalog` | the checker's catalog: the schema types (checker/catalog.ts), a snapshot's lookups (service/snapshot.ts `fromCatalogSnapshot`) and the pure catalog helpers; proven by checker/__test__/catalog_differential |
 | `util` | UTF-16 text, the JavaScript semantics both lean on, bounded JSON reads |
@@ -100,7 +100,7 @@ cargo would otherwise reuse dependencies built without the wrapper.
 | `dealloc` | `(ptr, len)` | frees an input or an output buffer |
 | `parse_program` | `(src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the `Program` as ast.ts types it; slots are `{raw, span}` |
 | `parse_program_eager` | as `parse_program` | the same `Program`, each slot also carrying `tree` (its `MExpr`) or `error` (`{message, pos}`) |
-| `parse_expression` | `(src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the v5 surface, read into the canonical tree |
+| `parse_expression` | `(src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the current surface, read into the canonical tree |
 | `spell_message` | as `parse_expression`, the message in | the message (a JSON string) naming built-ins as the language spells them |
 | `spell_code` | as `parse_expression`, the code in | the program text (a JSON string) a diagnostic suggests, as the language spells it |
 | `surface_table` | as `parse_expression`, input ignored | the spelling table (`surface::table::TABLE`) |

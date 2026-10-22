@@ -1,4 +1,4 @@
-//! A plugin's arguments by position (language version 5, design §2.7): its
+//! A plugin's arguments by position (design §2.7): its
 //! required inputs in the manifest's declared order, then one optional
 //! settings record `{ name: value }` for the rest. Binding turns that call
 //! into the named arguments of the canonical tree, so every check and the
@@ -64,7 +64,7 @@ pub struct PluginArgBinding {
 }
 
 /// `EXTRACTED_RECORD_PARAM`: the parameter a plain call hands a plugin fed
-/// only by an extraction (from language version 5) — the record it runs on,
+/// only by an extraction — the record it runs on,
 /// which a `through [ … ]` stage fed it implicitly.
 pub const EXTRACTED_RECORD_PARAM: &str = "record";
 

@@ -25,8 +25,7 @@ pub enum Ty {
     Json,
     /// The type of the `null` literal, and of nothing else.
     Absent,
-    /// What a value that never arrives has (`fail("…")`, from language
-    /// version 5): TypeScript's `never`. It fits every type, and a union with
+    /// What a value that never arrives has (`fail("…")`): TypeScript's `never`. It fits every type, and a union with
     /// it is the union's other members.
     Never,
     List { of: Rc<Ty>, unordered: bool },

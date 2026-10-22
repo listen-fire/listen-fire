@@ -1145,7 +1145,7 @@ mod tests {
         // Named groups.
         assert_eq!(found(r"(?<y>\d{4})-\k<y>", "2026-2026"), ["2026-2026", "2026"]);
         assert_eq!(found(r"(?<A>.)\k<A>", "xx"), ["xx", "x"]);
-        // Version 5 spells a group name in ASCII (`$`, `_`, letters, digits).
+        // This language spells a group name in ASCII (`$`, `_`, letters, digits).
         assert!(matches!(exec(r"(?<𝒜>.)", "x"), Err(RegexError::Syntax)));
         assert!(matches!(exec(r"(?<é>.)", "x"), Err(RegexError::Syntax)));
         assert_eq!(found(r"(?<_a1$>.)", "x"), ["x", "x"]);

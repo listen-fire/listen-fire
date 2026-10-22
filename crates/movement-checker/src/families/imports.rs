@@ -57,7 +57,7 @@ pub struct ImportState {
     link: Option<Rc<ProgramLink>>,
     current_file: Option<Rc<LinkedFile>>,
     checked: HashMap<String, IndexMap<String, SymbolId>>,
-    /// The old spellings (language version 5) of the libraries the file
+    /// The old spellings of the libraries the file
     /// being checked imports, each at the import that pulled its library in.
     /// Kept apart from the walk's diagnostics: a finding's message names the
     /// old spelling, which the program's own spelling must not rewrite.

@@ -33,7 +33,7 @@ export function parseProgram(source: string, options?: ParseOptions): Program {
 /**
  * A call written inside an expression — `f(x)` in `f(x) + 1`, `extract(c, S)`
  * in `ONLY(extract(c, S))` — read as the right-hand side of a binding, which
- * is what it means (language version 3): the expression is the same as binding
+ * is what it means: the expression is the same as binding
  * the call to a fresh name first and reading the name. `at` is the call's
  * extent in `slot.raw`, as the expression grammar found it; the statement
  * grammar reads it because a call's arguments are its own (a closure's

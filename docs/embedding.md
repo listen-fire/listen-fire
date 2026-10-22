@@ -19,7 +19,7 @@ A working example is in [`examples/embed-saas`](../examples/embed-saas): a small
 | `@listen-fire/file-text` | A file's text: PDF, decks, spreadsheets, audio. The file-reading slot's default module; leave it out and an `extract` over a file is refused by the file's name. Optional. |
 | `@lf/<name>` | Ready-made modules: `@lf/attio`, `@lf/slack`, `@lf/google-sheets`, `@lf/web`, and the rest. |
 
-Every package has the same version as the engine. The TypeScript engine is not part of the kit: the kit runs language version 5 and later. Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
+Every package has the same version as the engine. The TypeScript engine is not part of the kit: the kit runs the language of its own release, which is also the pin a movement is saved with (`ENGINE_VERSION`). Node 22 or later. With TypeScript, use `moduleResolution` `node16`, `nodenext` or `bundler` (plain `node` works too, through the packages' `typesVersions`).
 
 ```sh
 npm install @listen-fire/engine @listen-fire/engine-contracts @listen-fire/module-kit
@@ -87,15 +87,15 @@ const catalog = buildCatalogSnapshot({
 ## 3. Check a customer's movement
 
 ```ts
-checkPinnedInRust({ source, catalog, languageVersion: 5 });
+checkPinnedInRust({ source, catalog, languageVersion: ENGINE_VERSION });
 ```
 
-It throws `MovementEngineError` when the movement does not check, with the code `MOVENG_CHECK` (or `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) and every problem in its message. `isCheckFailure(error)` tells a check failure from anything else. Save the source with the language version you checked it under: a saved movement is pinned to it ([language versions](contracts/language-versions.md)).
+It throws `MovementEngineError` when the movement does not check, with the code `MOVENG_CHECK` (or `MOVENG_PARSE`, `MOVENG_LANGUAGE_VERSION`) and every problem in its message. `isCheckFailure(error)` tells a check failure from anything else. Save the source with the version you checked it under (`ENGINE_VERSION`): a saved movement is pinned to it ([language versions](contracts/language-versions.md)).
 
 Read its routing table once, as you save it:
 
 ```ts
-const listeners = collectFileListeners(parsePinned({ source, languageVersion: 5 }));
+const listeners = collectFileListeners(parsePinned({ source, languageVersion: ENGINE_VERSION }));
 // [{ adapter: 'crm', config: { events: ['company.created'] }, movementName: 'welcome', … }]
 ```
 
@@ -105,7 +105,7 @@ const listeners = collectFileListeners(parsePinned({ source, languageVersion: 5 
 if (listener.adapter === 'crm' && eventMatchesTriggerScope(event, listener.config)) {
   const { triggerEvent } = triggerEventOf({ pipelineInputId, adapterType: 'crm', triggerType: 'webhook', event, eventTypes, now: new Date() });
   const result = await runMovement({
-    source, languageVersion: 5, movementName: listener.movementName,
+    source, languageVersion: ENGINE_VERSION, movementName: listener.movementName,
     event: triggerEvent,
     teamId: tenantIdOf(tenant),
     catalog,

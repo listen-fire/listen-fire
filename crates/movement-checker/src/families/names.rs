@@ -57,7 +57,7 @@ fn insert_line_at_top(line: &str) -> serde_json::Value {
     json!({ "span": { "start": { "line": 1, "col": 1 }, "end": { "line": 1, "col": 1 } }, "text": format!("{line}\n") })
 }
 
-/// A name that hides a core word or a namespace (language version 5, §4.2).
+/// A name that hides a core word or a namespace (§4.2).
 /// The design allows it with a warning, a call going to the name; refused for
 /// now, because the spelling rewrite reads a core word's or a namespace's call
 /// before any name is bound (movement_parser::surface::canonical), so a call
@@ -389,7 +389,7 @@ impl Checker<'_> {
         }
     }
 
-    /// A package imported from plugins under version 5 (design §2.10): each
+    /// A package imported from plugins (design §2.10): each
     /// member declared as the plugin it is, under `web.fetchUrl`. False when
     /// the import names no package, which is then an import of one plugin.
     fn declare_package(&mut self, statement: &ImportStatement, imported: &ImportedName, local: &str, scope: ScopeId) -> bool {

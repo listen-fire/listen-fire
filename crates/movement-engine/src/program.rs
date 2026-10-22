@@ -24,7 +24,7 @@ use movement_parser::ast;
 use serde_json::{Value as Json, json};
 
 /// The node at `path` in `file`'s tree. A call nested in an expression
-/// (language version 3) has a place of its own, through the slot it is
+/// has a place of its own, through the slot it is
 /// written in: `<slot>/nested/<start>-<end>` is `{ value: <the right-hand
 /// side the call reads as> }`, `start` and `end` its extent in the slot's
 /// text (program_check.ts), re-read from the slot as the TypeScript read it

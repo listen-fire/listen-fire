@@ -30,8 +30,8 @@
 //! - `{failed: {error, result}}`: the body failed (`MovementRunFailed`,
 //!   which carries what the run did before it);
 //! - `{thrown: error}`: it failed before the body ran;
-//! - `{refused: reason}`: the pin is below version 5 (those versions run on
-//!   the TypeScript engine), before any host request;
+//! - `{refused: reason}`: the pin is one this release does not read (the compatibility
+//!   rule), before any host request;
 //! - `{declined: reason}`: before anything the host can see happened, the
 //!   run's input or the check's answer did not read.
 //!
@@ -152,7 +152,7 @@ pub struct SegmentInput {
     /// the deployment wrote it, a fraction included (positive and finite).
     #[serde(default = "default_file_chars")]
     pub extraction_file_chars: f64,
-    /// How many named calls deep one run may nest from version 3
+    /// How many named calls deep one run may nest
     /// (call_depth.ts `maxCallDepth`, a deployment's
     /// `MOVEMENT_MAX_CALL_DEPTH`): the shim reads it, so the engine reads no
     /// environment.
@@ -234,12 +234,12 @@ pub async fn segment(host: Host, input: SegmentInput) -> Json {
     done
 }
 
-/// The extraction keyword (versions 1–4), which this engine runs on no
-/// version: version 5's checker refuses it (MOV_EXTRACT_KEYWORD_RETIRED).
+/// The extraction keyword, which this engine runs on no
+/// version: the checker refuses it (MOV_EXTRACT_KEYWORD_RETIRED).
 fn legacy_extraction() -> Failure {
     Failure::unsupported(
         "the extraction keyword ('x = extract from […] { … }')",
-        "legacy_extraction: this engine does not run it on any version; version 5 writes 'extract(content, Shape)', and a version 1–4 program runs on the TypeScript engine",
+        "legacy_extraction: this engine does not run it on any version; it is written 'extract(content, Shape)'",
     )
 }
 
@@ -1376,7 +1376,7 @@ impl Run<'_> {
             // `return <value>`: the same right-hand side, bound into a slot
             // the grammar cannot spell, and the body ends.
             Statement::Return(ret) => {
-                // `(f) => f()` (language version 5): the closure hands back
+                // `(f) => f()`: the closure hands back
                 // what the call returns — and, when it returns nothing,
                 // nothing (`conciseCall`).
                 if ret.concise
@@ -1467,7 +1467,7 @@ impl Run<'_> {
                 let built = self.synthesise_node(node, scope, &format!("{path}/value/node")).await?;
                 scope.declare(name, Binding::Node(built));
             }
-            // Version 5's checker refuses it: no checked program reaches here.
+            // The checker refuses it: no checked program reaches here.
             RValue::Extract { .. } => return Err(Stop::Thrown(legacy_extraction())),
             // A call like any other: re-running its statement takes the
             // value it already extracted instead of paying for it again.
@@ -1630,7 +1630,7 @@ impl Run<'_> {
     }
 
     /// `aliasedNodeBinding`'s kinds: a bare name of one is a second name for
-    /// the binding itself (a shape's from version 3); of any other, the
+    /// the binding itself (a shape's); of any other, the
     /// value it reads as.
     fn aliases(&self, binding: &Binding) -> bool {
         match binding {
@@ -2821,7 +2821,7 @@ mod tests {
     }
 
     /// The pinned instant with no offset is UTC, whatever zone the host
-    /// names (the run reads no zone of its own from version 5): 00:30 on 15 July is
+    /// names (the run reads no zone of its own): 00:30 on 15 July is
     /// the 15th.
     #[test]
     fn the_pinned_instant_with_no_offset_is_utc() {
@@ -3249,7 +3249,7 @@ mod tests {
         for (state, reason) in [
             (json!({ "version": 2, "address": "s0", "suspended": false }), "resume_state_suspended"),
             // Version 1 names its code by its tree: the TypeScript engine's,
-            // for versions 1–4, which this engine never resumes.
+            // for the older language, which this engine never resumes.
             (json!({ "version": 1, "address": "s0" }), "resume_state_version"),
             (json!({ "version": 2, "address": "s0", "scopeChain": scope(json!({ "kind": "blockMeta", "edges": [] })) }), "resume_state_kind:blockMeta"),
         ] {
