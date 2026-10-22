@@ -110,6 +110,10 @@ struct HostState {
     last_used: Instant,
     /// Bumped on each start, so a stale idle timer leaves a newer process be.
     generation: u64,
+    /// This host's own idle period, where it is not the process-wide one.
+    /// Only a test sets it: `configure` is global, so a parallel test that
+    /// loads a project would change the period under it.
+    idle_timeout: Option<Duration>,
 }
 
 struct Running {
@@ -245,7 +249,7 @@ fn host_for(key: HostKey, launch: Launch) -> Arc<Host> {
         key: key.clone(),
         socket: crate::module_transport::fresh_socket_path(),
         starting: tokio::sync::Mutex::new(()),
-        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0 }),
+        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0, idle_timeout: None }),
     });
     pool.hosts.insert(key, host.clone());
     host
@@ -327,15 +331,16 @@ pub async fn module_exited() {
 
 /// Stops the host once nothing has used it for the idle period.
 fn stop_when_idle(host: Arc<Host>, generation: u64) {
+    let idle_of = |host: &Host| lock(&host.state).idle_timeout.unwrap_or_else(idle_timeout);
     watcher().spawn(async move {
-        let mut wait = idle_timeout();
+        let mut wait = idle_of(&host);
         loop {
             tokio::time::sleep(wait).await;
             let mut state = lock(&host.state);
             if state.generation != generation || state.running.is_none() {
                 return;
             }
-            let idle = idle_timeout();
+            let idle = state.idle_timeout.unwrap_or_else(idle_timeout);
             let unused = state.last_used.elapsed();
             if state.in_flight == 0 && unused >= idle {
                 state.running = None;
@@ -735,13 +740,12 @@ mod tests {
     async fn an_idle_process_is_stopped_and_a_leased_one_is_not() {
         let name = format!("idle-{}", uuid::Uuid::new_v4());
         let process = ModuleProcess::isolated(&name, sh("echo listening 2; sleep 30"));
-        configure(Duration::from_millis(200), DEFAULT_CALL_TIMEOUT);
+        lock(&process.host.state).idle_timeout = Some(Duration::from_millis(200));
         let held = process.lease().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(lock(&process.host.state).running.is_some(), "a lease keeps it up");
         drop(held);
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert!(lock(&process.host.state).running.is_none(), "idle, it was stopped");
-        configure(DEFAULT_IDLE_TIMEOUT, DEFAULT_CALL_TIMEOUT);
     }
 }
