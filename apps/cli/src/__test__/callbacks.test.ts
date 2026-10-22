@@ -44,7 +44,10 @@ test('lf call: a mismatch is refused and consumes nothing; the call runs its bod
   const called = lf(dir, 'call', id, '--body', values(dir, 'note.json', { note: 'ship it' }));
   assert.equal(called.code, 0, called.out);
   assert.match(called.out, /callback cb_\S+: recorded/);
-  assert.match(called.out, /callback:approve completed/);
+  // One line for the run: the body's write and the continuation's, together.
+  assert.deepEqual(called.out.split('\n').filter((l) => /callback:approve/.test(l)).map((l) => l.replace(/^(\w+) \S+ /, '$1 ')), [
+    'called callback:approve completed — 2 write(s), 1 trace entry',
+  ]);
   assert.deepEqual(companies(dir).slice(1), ['Body ship it', 'Approved ship it']);
 
   const again = lf(dir, 'call', id, '--body', join(dir, 'note.json'));
@@ -77,7 +80,7 @@ test('lf serve: the callback door at POST /api/cb/<id> answers as the hosted doo
     const recorded = await post(JSON.stringify({ note: 'from the door' }));
     assert.equal(recorded.status, 200);
     assert.deepEqual(await recorded.json(), { outcome: 'recorded', message: 'recorded; the run is carrying on' });
-    await serving.waitFor(/resumed .* callback:approve completed/);
+    await serving.waitFor(/called .* callback:approve completed/);
     assert.deepEqual(companies(dir).slice(2), ['Body from the door', 'Approved from the door']);
 
     const closed = await post(JSON.stringify({ note: 'again' }));
@@ -216,7 +219,7 @@ test('lf serve: GET on a callback url renders the confirm page and fires nothing
     });
     assert.equal(submitted.status, 200);
     assert.match(await submitted.text(), /<h1>Done<\/h1>/);
-    await serving.waitFor(/resumed .* callback:approve completed/);
+    await serving.waitFor(/called .* callback:approve completed/);
     assert.deepEqual(companies(dir).slice(2), ['Body from the page', 'Approved from the page']);
 
     const closed = await fetch(door);
@@ -249,5 +252,6 @@ test('lf run --dry-run rehearses past a park: a refresh of a rehearsed record mo
   assert.equal(called.code, 0, called.out);
   assert.match(called.out, /rehearsal:rehearse completed/);
   assert.match(called.out, /dry run, not written: .*"Name":"After Rehearsed"/);
+  assert.equal(called.out.match(/rehearsal:rehearse/g)?.length, 1, called.out);
   assert.deepEqual(companies(dir), [], 'a rehearsal writes nothing, before its park or after');
 });

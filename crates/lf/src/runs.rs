@@ -1118,19 +1118,17 @@ impl Session {
             UnderLease::Refused => return Ok(BodyRun::Refused),
             UnderLease::Ran { outcome, body, stepped } => (outcome, body, stepped),
         };
-        let mut called = self.settled_outcome(&run_id, "called", body, matches!(outcome, BodyOutcome::LeaseLost))?;
+        // One call is one entry into its run: the body and the awaits it
+        // woke are reported together, their writes summed.
+        let (woke, woke_captured) = stepped.filter(|(t, _)| t.stepped > 0).unwrap_or_default();
+        let tally = Tally { writes: body.writes + woke.writes, stepped: body.stepped + woke.stepped };
+        let mut called = self.settled_outcome(&run_id, "called", tally, matches!(outcome, BodyOutcome::LeaseLost))?;
         match outcome {
             BodyOutcome::Failed(error) => called.error = Some(format!("the callback's body failed: {error}")),
-            BodyOutcome::Ran(captured) => called.captured = captured,
+            BodyOutcome::Ran(captured) => called.captured = captured.map(|body| body.into_iter().chain(woke_captured.into_iter().flatten()).collect()),
             BodyOutcome::Cancelled(_) | BodyOutcome::LeaseLost => {}
         }
-        let mut outcomes = vec![called];
-        if let Some((stepped, captured)) = stepped.filter(|(t, _)| t.stepped > 0) {
-            let mut resumed = self.settled_outcome(&run_id, "resumed", stepped, false)?;
-            resumed.captured = captured;
-            outcomes.push(resumed);
-        }
-        Ok(BodyRun::Ran(outcomes))
+        Ok(BodyRun::Ran(vec![called]))
     }
 
     /// `runCallbackBody`: everything that decides whether the body runs is

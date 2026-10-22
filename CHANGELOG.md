@@ -22,6 +22,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - `lf resume` with no run steps only what is due: a timer that has come, an await that can resolve now. It no longer runs out every sleep at once, which fired the timeout arm of a run waiting on an approval; `lf resume <run-id>` still runs one run out now, and a resume with nothing due says how many runs wait.
 - Under `lf serve`, opening a callback's `url` in a browser (a GET) renders the hosted door's confirm page, a field per parameter, instead of a 404; its form post calls the callback and is answered with a page. A GET never calls it.
 - `--dry-run` rehearses the whole run. A rehearsal that parked (on a callback, say) resumed as a real run and made its later writes for real; it now captures them, and `lf call` and `lf resume` print them as not written. `refresh` of a record the rehearsal created moves nothing, instead of failing with "no longer exists" on a module that reads records by id (an engine change: the wasm artifacts need rebuilding).
+- `lf call` (and the callback door's log under `lf serve`) reports a call as one line for its run, its writes the body's and the continuation's together, instead of a `called` line and a `run` line with different counts.
 
 ## [0.12.0-rc.7] - 2026-10-22
 

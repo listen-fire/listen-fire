@@ -47,7 +47,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
 { "ok": true, "callback": "…", "result": "recorded", "message": null, "queued": false, "runs": [<run>] }
 ```
 
-`result`: `recorded`, `refused` (`message` says why), `notFound`, `closed` or `expired`. `queued`: another lf process steps the run and runs the body. `runs` as above.
+`result`: `recorded`, `refused` (`message` says why), `notFound`, `closed` or `expired`. `queued`: another lf process steps the run and runs the body. `runs` as above: one entry for the call (`entry`: `called`), its `writes` the body's and those of the run's continuation it woke.
 
 ## `lf cancel <run-id> [--reason t]`
 
