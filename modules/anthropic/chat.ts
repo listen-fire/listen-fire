@@ -13,6 +13,10 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ChatModelName, Resolved } from 'movement-engine/public/models';
 
 export type ChatProvider = {
+  /** A stable, non-reversible id of the API key this provider calls on, when
+   *  it has one: Anthropic's limits are per key, so the limiter counts and
+   *  throttles each key apart. A provider with none shares one module-wide. */
+  readonly credential?: string;
   messages: {
     create(
       params: Anthropic.MessageCreateParamsNonStreaming,

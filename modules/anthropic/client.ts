@@ -15,7 +15,7 @@ import type {
   WebSearchResult,
   WebToolEvent,
 } from './web_tools';
-import type { ChatCallFor } from './chat';
+import type { ChatCallFor, ChatProvider } from './chat';
 import type { ChatModelName, Provider, Resolved } from 'movement-engine/public/models';
 
 import behaviour from './behaviour.json';
@@ -35,7 +35,7 @@ import {
   webChatTools,
   WEB_FETCH_MAX_CONTENT_TOKENS,
 } from './web_tools';
-import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs } from 'movement-engine/public/limiter';
+import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs, type Caller } from 'movement-engine/public/limiter';
 import { logger } from 'movement-engine/public/log';
 import { assertRunBudget } from 'movement-engine/public/models';
 import { neverAsAny } from 'movement-engine/public/types';
@@ -70,17 +70,20 @@ interface ModelAccess {
   logFields(): Record<string, unknown>;
 }
 
-/** Who every model request is made as: where the vendor's rate limit lands
- *  (its throttle key) and what `@lf/anthropic`'s declared limit counts. */
-const MODELS_CALLER = { module: '@lf/anthropic', team: '' };
+/** Who a model request is made as: the API key it calls on (Anthropic's
+ *  limits are per key), so a 429 on one key leaves the others open. A provider
+ *  with no key of its own is one caller, module-wide. */
+function modelsCaller(provider: ChatProvider): Caller {
+  return { module: '@lf/anthropic', team: '', ...(provider.credential !== undefined ? { credential: provider.credential } : {}) };
+}
 
-/** Requests in flight at once: `@lf/anthropic`'s own declared limit, kept by
- *  the limiter slot (services/limiter), as lf's Rust client keeps it. A
- *  request holds its place through its retries, but not through a vendor's
+/** Requests in flight at once, per key: `@lf/anthropic`'s own declared limit,
+ *  kept by the limiter slot (services/limiter), as lf's Rust client keeps it.
+ *  A request holds its place through its retries, but not through a vendor's
  *  rate limit: that is a throttle on the caller, waited out in the queue. */
-const MODELS_REQUEST = limitRequest(MODELS_CALLER, [
-  { scope: 'module', concurrent: behaviour.concurrentRequests },
-]);
+function modelsRequest(caller: Caller) {
+  return limitRequest(caller, [{ scope: 'credential', concurrent: behaviour.concurrentRequests }]);
+}
 
 // behaviour.json, which the Rust lf's client is held to as well.
 const RETRY_LIMIT = behaviour.retry.attempts;
@@ -92,14 +95,16 @@ function rateLimited(e: unknown): boolean {
   return e instanceof Error && e.message.includes('429');
 }
 
-async function enqueueQuery<T>(fn: () => Promise<T>, signal?: AbortSignal) {
+async function enqueueQuery<T>(provider: ChatProvider, fn: () => Promise<T>, signal?: AbortSignal) {
+  const caller = modelsCaller(provider);
+  const request = modelsRequest(caller);
   // Every request — each turn of a tool loop, each continuation — first asks
   // whether its run has spent its cost cap. Here, in the caller's own async
   // context: the queued job may be started from another job's.
   assertRunBudget();
   for (let rateLimits = 1; ; rateLimits++) {
     try {
-      return await limited(limiterSlot(), MODELS_REQUEST, async () => {
+      return await limited(limiterSlot(), request, async () => {
         return backOff(fn, {
           jitter: 'none',
           numOfAttempts: RETRY_LIMIT,
@@ -128,7 +133,7 @@ async function enqueueQuery<T>(fn: () => Promise<T>, signal?: AbortSignal) {
       logger.info(
         `Hit model vendor rate limit, throttling model requests for ${wait / SECOND}s (${asked === undefined ? 'default' : 'from retry-after'})`,
       );
-      await throttleAfter(limiterSlot(), MODELS_CALLER, wait);
+      await throttleAfter(limiterSlot(), caller, wait);
     }
   }
 }
@@ -493,7 +498,7 @@ async function anthropicToolLoop(
 
     const llmStart = Date.now();
 
-    const response = await enqueueQuery(async () => {
+    const response = await enqueueQuery(client, async () => {
       return client.messages.create(
         {
           model: wireModel,
@@ -942,7 +947,7 @@ async function anthropicChatDetailed(access: ModelAccess, options: AnthropicChat
       // Streamed rather than awaited whole: above ~16K `max_tokens` a
       // non-streaming request outlives the SDK's HTTP timeout. `finalMessage()`
       // reassembles the same `Message`, so nothing downstream changes.
-      response = await enqueueQuery(async () => {
+      response = await enqueueQuery(client, async () => {
         const stream = client.messages.stream({
           model: wireModel,
           max_tokens: maxTokens,
@@ -1121,7 +1126,7 @@ async function anthropicChatStructured<T>(
   const tool = buildStructuredTool({ name: toolName, description: toolDescription, schema });
 
   const startMs = Date.now();
-  const response: Anthropic.Message = await enqueueQuery(async () =>
+  const response: Anthropic.Message = await enqueueQuery(client, async () =>
     client.messages.create({
       model: wireModel,
       max_tokens: maxTokens,
@@ -1513,7 +1518,7 @@ async function anthropicWebChat(
     const settleWatch = watchSlowCall({ ...callFields, turn });
     let response: Anthropic.Message;
     try {
-      response = await enqueueQuery(async () => {
+      response = await enqueueQuery(client, async () => {
         const stream = client.messages.stream(
           {
             model: wireModel,
