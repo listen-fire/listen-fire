@@ -1,6 +1,6 @@
 # The language service
 
-`lf lsp` is a language server over stdio (LSP 3.17, UTF-16 positions). Its answers come from the crate `listen-fire-language` (crates/movement-language), written for language version 5. The Rust parser and checker are its reference. It is not a port of the TypeScript service.
+`lf lsp` is a language server over stdio (LSP 3.17, UTF-16 positions). Its answers come from the crate `listen-fire-language` (crates/movement-language), written for language 0.12. The Rust parser and checker are its reference. It is not a port of the TypeScript service.
 
 Not a versioned contract: an editor speaks LSP, and LSP is the contract. This page says what the service answers, and from where.
 
@@ -30,7 +30,7 @@ Not a versioned contract: an editor speaks LSP, and LSP is the contract. This pa
 ## The LSP methods
 
 - **Diagnostics** (`textDocument/publishDiagnostics`): the checker's diagnostics for each open file, against the project's catalog. They are recomputed 200 ms after the last edit. Open buffers stand in for their files when another file imports them.
-- **Hover:** the type, a one-line doc, and a link to the versioned docs page: `https://listen-fire.github.io/listen-fire/docs/v5/<page>#<anchor>` (every target is a built page and heading; the base is one constant in the crate).
+- **Hover:** the type, a one-line doc, and a link to the versioned docs page: `https://listen-fire.github.io/listen-fire/docs/<key>/<page>#<anchor>` (every target is a built page and heading; the base is one constant in the crate).
 - **Completion:** the table above, picked by what the text just before the cursor is.
 - **Go to definition:** a binding, parameter, function or node goes to where it is declared. An imported name goes to its declaration in the library file.
 - **Code actions:** each diagnostic's own fix (`MOV_V5_SPELLING` and every other fix the checker offers) as a quick fix. A "did you mean 'x'" in a message becomes a quick fix that replaces the misspelled name.

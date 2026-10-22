@@ -1,6 +1,6 @@
 // Builds the documentation site from the repo's own docs into `site/`.
-// One section per language version: `site/docs/<vN>/<page>.html`, addressable
-// as `/docs/<vN>/<page>#<anchor>` (docs/README.md has the scheme). Plain Node,
+// One section per compatibility key: `site/docs/<key>/<page>.html`, addressable
+// as `/docs/<key>/<page>#<anchor>` (docs/README.md has the scheme). Plain Node,
 // no dependencies. Run with `pnpm docs:build`.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -16,11 +16,23 @@ const siteDir = join(root, 'site', PREFIX);
 const SITE_URL = readFileSync(join(root, 'crates/movement-language/src/docs.rs'), 'utf8').match(/DOCS_SITE: &str = "([^"]+)"/)[1] + (PREFIX ? `/${PREFIX}` : '');
 const REPO_URL = 'https://github.com/listen-fire/listen-fire';
 
-// A pre-release build (the crate version has a `-` suffix) publishes under `docs/next/`, beside the
-// current `docs/v5/`; the language server derives the same slug from the same version.
-const PRERELEASE = /^version = "[^"]*-/m.test(readFileSync(join(root, 'Cargo.toml'), 'utf8'));
-const VERSIONS = [{ number: 5, name: 'Dancing Wren', slug: PRERELEASE ? 'next' : 'v5' }];
+// The release version comes from Cargo.toml. The compatibility key is the part of it a pin must share
+// with the release: the minor under 0.x (`0.12`), the major from 1.0 (`1`). Source of truth:
+// `compatibility_key` in crates/movement-parser/src/version.rs (and language_version.ts); the
+// language server derives the same slug from the same version, so the two cannot drift.
+const VERSION = readFileSync(join(root, 'Cargo.toml'), 'utf8').match(/^version = "([^"]+)"/m)[1];
+const compatibilityKey = (version) => {
+  const [, major, minor] = version.match(/^(\d+)\.(\d+)\.\d+(?:-.*)?$/) ?? [];
+  if (major === undefined) throw new Error(`${version} is not a version`);
+  return major === '0' ? `0.${minor}` : major;
+};
+const KEY = compatibilityKey(VERSION);
+// A pre-release build (a `-` suffix) publishes under `docs/next/`, beside the current `docs/<key>/`.
+const PRERELEASE = VERSION.includes('-') && process.env.DOCS_FORCE_STABLE !== '1';
+const VERSIONS = [{ key: KEY, slug: PRERELEASE ? 'next' : KEY }];
 const CURRENT = VERSIONS[VERSIONS.length - 1];
+// Links released before the key scheme (`/docs/v5/<page>#<anchor>`) keep resolving: see writeLegacyRedirects.
+const LEGACY_SLUG = 'v5';
 
 const HANDBOOK_DIR = 'packages/handbook/chapters';
 // Reading order; the in-app handbook's own order of registration.
@@ -72,13 +84,15 @@ addFile('Guides', 'core-slots', 'docs/core-slots.md');
 addFile('Guides', 'lf-json', 'docs/lf-json.md');
 addFile('Guides', 'embedding', 'docs/embedding.md');
 addFile('Guides', 'adapter-protocol', 'docs/adapter-protocol.md');
-addFile('Guides', 'dancing-wren-migration', 'docs/language/dancing-wren-migration.md');
+addFile('Guides', 'migrating-to-0.12', 'docs/language/migrating-to-0.12.md');
 for (const name of ['README', 'language-versions', 'catalog-snapshot', 'host-families', 'store-slot', 'limiter-slot', 'run-limits', 'park-state', 'system-caller', 'adapter-protocol']) {
   addFile('Contracts', name === 'README' ? 'contracts' : `contracts-${name}`, `docs/contracts/${name}.md`, name === 'README' ? 'Contracts' : undefined);
 }
 
 const pageBySource = new Map(pages.map((p) => [p.source, p.page]));
 pageBySource.set('docs/contracts', 'contracts');
+// The guide's old filename, still linked from released text.
+pageBySource.set('docs/language/dancing-wren-migration.md', 'migrating-to-0.12');
 
 function linkResolver(source) {
   return (href) => {
@@ -104,12 +118,12 @@ function layout({ version, page, title, body, toc }) {
         .join('')}</ul>`,
   ).join('');
   const options = VERSIONS.map(
-    (v) => `<option value="../${v.slug}/${page}.html"${v.slug === version.slug ? ' selected' : ''}>v${v.number} ${v.name}</option>`,
+    (v) => `<option value="../${v.slug}/${page}.html"${v.slug === version.slug ? ' selected' : ''}>${v.key}${v.slug === 'next' ? ' (pre-release)' : ''}</option>`,
   ).join('');
   const onPage = toc.filter((h) => h.level >= 2 && h.level <= 3);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · listen-fire docs v${version.number}</title>
+<title>${esc(title)} · listen-fire docs ${version.key}</title>
 <link rel="canonical" href="${SITE_URL}/docs/${version.slug}/${page}.html">
 <style>
 :root{--bg:#fff;--fg:#1d2127;--muted:#5c6570;--line:#dfe3e8;--code:#f4f6f8;--accent:#2457c5}
@@ -127,7 +141,7 @@ blockquote{margin:0;padding:0 16px;border-left:3px solid var(--line);color:var(-
 @media(max-width:760px){body{display:block}nav.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}}
 </style></head><body>
 <nav class="side"><a href="index.html"><strong>listen-fire docs</strong></a>
-<h2>Language version</h2><select onchange="location.href=this.value" aria-label="Language version">${options}</select>${nav}</nav>
+<h2>Compatibility key</h2><select onchange="location.href=this.value" aria-label="Compatibility key">${options}</select>${nav}</nav>
 <main><h1>${esc(title)}</h1>${page === 'index' ? '' : ''}${body}</main></body></html>`;
 }
 
@@ -140,16 +154,31 @@ function build(version) {
     const body = html.replace(/^<h1 id="[^"]*">[\s\S]*?<\/h1>\n?/, '');
     writeFileSync(join(dir, `${p.page}.html`), layout({ version, page: p.page, title: p.title.replace(/^#+\s*/, ''), body, toc: headings }));
   }
-  const intro = `<p>Documentation for language version ${version.number}, ${version.name}. Pages below are built from this repository at the release's tag.</p>${GROUPS.map(
+  const intro = `<p>Documentation for the ${version.key} language. Pages below are built from this repository at the release's tag.</p>${GROUPS.map(
     (g) => `<h2>${g}</h2><ul>${pages.filter((p) => p.group === g).map((p) => `<li><a href="${p.page}.html">${esc(p.title)}</a></li>`).join('')}</ul>`,
   ).join('')}`;
-  writeFileSync(join(dir, 'index.html'), layout({ version, page: 'index', title: `listen-fire v${version.number} ${version.name}`, body: intro, toc: [] }));
+  writeFileSync(join(dir, 'index.html'), layout({ version, page: 'index', title: `listen-fire ${version.key}`, body: intro, toc: [] }));
+}
+
+/** `/docs/v5/<page>#<anchor>` links were published before the key scheme; each page redirects to the same page and anchor under the key. */
+function writeLegacyRedirects(version) {
+  const dir = join(siteDir, 'docs', LEGACY_SLUG);
+  mkdirSync(dir, { recursive: true });
+  for (const page of [...pages.map((p) => p.page), 'index']) {
+    const target = `../${version.slug}/${page}.html`;
+    // The meta refresh drops a #fragment, so the script re-appends location.hash.
+    writeFileSync(
+      join(dir, `${page}.html`),
+      `<!doctype html><meta charset="utf-8"><title>listen-fire docs ${version.key}</title><meta http-equiv="refresh" content="0;url=${target}"><script>location.replace(${JSON.stringify(target)} + location.hash)</script><a href="${target}">listen-fire docs ${version.key}</a>`,
+    );
+  }
 }
 
 // A pre-release leaves whatever else is in `site/` (the current docs) alone.
 if (PRERELEASE) rmSync(join(siteDir, 'docs', CURRENT.slug), { recursive: true, force: true });
 else rmSync(siteDir, { recursive: true, force: true });
 for (const v of VERSIONS) build(v);
+if (!PRERELEASE) writeLegacyRedirects(CURRENT);
 if (!PRERELEASE) writeFileSync(
   join(siteDir, 'index.html'),
   `<!doctype html><meta charset="utf-8"><title>listen-fire docs</title><meta http-equiv="refresh" content="0;url=docs/${CURRENT.slug}/index.html"><a href="docs/${CURRENT.slug}/index.html">listen-fire docs</a>`,
