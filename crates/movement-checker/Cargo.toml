@@ -35,4 +35,4 @@ native-zones = ["dep:jiff", "dep:jiff-tzdb"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The engine's pins (its native-env): one zone database for both crates.
 jiff = { version = "=0.2.16", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
-jiff-tzdb = { version = "=0.1.4", optional = true }
+jiff-tzdb = { version = "=0.1.9", optional = true }

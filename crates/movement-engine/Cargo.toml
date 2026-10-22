@@ -44,9 +44,9 @@ native-env = ["dep:jiff", "dep:jiff-tzdb", "dep:url", "dep:icu_normalizer"]
 # machine answers alike. Held at 0.2.16, the last release that accepts the
 # jiff-tzdb pin below.
 jiff = { version = "=0.2.16", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
-# Pinned to the zone data Node's ICU carries (process.versions.tz, 2025b
-# on Node 22.20), so both implementations read one database:
+# Pinned to the zone data Node's ICU carries (process.versions.tz, 2026e
+# on Node 22.23), so both implementations read one database:
 # tests/env_services.rs checks the pairing against tests/env/versions.json.
-jiff-tzdb = { version = "=0.1.4", optional = true }
+jiff-tzdb = { version = "=0.1.9", optional = true }
 url = { version = "2.5.8", optional = true }
 icu_normalizer = { version = "2.3.0", optional = true }
