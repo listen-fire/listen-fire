@@ -181,7 +181,9 @@ mod tests {
         let refused = ask(&bearer, r#"{"op":"acquire"}"#);
         assert_eq!(outcome(&refused), "wait");
         let Some(Js::Num(wait)) = refused.1.get("retryAfterMs") else { panic!("{}", refused.1.to_json()) };
-        assert!(wait.as_u64().is_some_and(|ms| ms > 0 && ms <= 30_000), "{wait}");
+        // The rolling window holds the third call until the first leaves it, a whole
+        // window after its grant; a token bucket would have answered after half of one.
+        assert!(wait.as_u64().is_some_and(|ms| ms > 30_000 && ms <= 60_000), "{wait}");
     }
 
     #[test]
