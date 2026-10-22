@@ -23,7 +23,7 @@
     "@listen-fire/movement-lang": "workspace:^",
     "date-fns": "3.6.0",
     "exponential-backoff": "3.1.1",
-    "lodash": "4.17.21",
+    "lodash": "4.18.1",
     "tldts": "6.1.44",
     "zod": "4.1.12"
   },

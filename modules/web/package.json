@@ -24,7 +24,7 @@
     "@listen-fire/module-kit": "workspace:^",
     "@listen-fire/movement-lang": "workspace:^",
     "html-to-text": "9.0.5",
-    "jspdf": "2.5.1",
+    "jspdf": "4.2.1",
     "zod": "4.1.12"
   },
   "devDependencies": {
