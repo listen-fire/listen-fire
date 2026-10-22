@@ -12,6 +12,14 @@ repository = "https://github.com/listen-fire/listen-fire"
 homepage = "https://github.com/listen-fire/listen-fire"
 rust-version = "1.85"
 
+# Debug builds keep line tables only: every test binary carried full debug info,
+# and five copies of the 86 MB `lf` test binary sat in one build directory.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 # The committed WASM artifact is built with this profile; the CI check
 # rebuilds it and compares bytes, so changing it means rebuilding and
 # committing the artifact in the same change.
