@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf`'s own Anthropic client throttles per API key, as the TypeScript module does: a 429 on one key no longer closes requests made with another, and the in-flight limit counts per key (the limiter sees a hash of the key, never the key).
+
 ## [0.12.0-rc.9] - 2026-10-22
 
 - Every delivery a door takes is kept as a receipt holding the events it produced (not its body, headers or signature), written in the door's one write; `lf runs show` names the delivery a run came from. `lf deliveries` lists them (`--subscription`, `--since`, `--json`), `lf deliveries show <id>` prints one with its events and runs, and `lf deliveries replay <id>` queues its events again as a delivery of its own, for `lf serve` or `lf drain` to run against the project as it is now. The drain forgets a delivery after `lf.yaml`'s `deliveries: { retainDays: 14 }` days once its runs are settled and its events are no longer queued. `--ephemeral` keeps its receipts only for the session. A project with no `deliveries:` and no delivery id behaves as before; the state file gains a `delivery` table and `run.delivery_id`.

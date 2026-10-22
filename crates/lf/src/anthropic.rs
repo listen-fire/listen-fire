@@ -38,7 +38,16 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// `rateLimitQueue`): `@lf/anthropic`'s own declared limit, kept by the
 /// limiter slot. A request holds its place through its retries.
 const MAX_REQUESTS_IN_FLIGHT: u64 = 8;
-const LIMITS: &[DeclaredLimit] = &[DeclaredLimit { scope: Scope::Module, calls: None, concurrent: Some(MAX_REQUESTS_IN_FLIGHT) }];
+const LIMITS: &[DeclaredLimit] = &[DeclaredLimit { scope: Scope::Credential, calls: None, concurrent: Some(MAX_REQUESTS_IN_FLIGHT) }];
+
+/// What the limiter knows a key by (`credentialId` in the TypeScript module):
+/// a hash, so neither the key nor any prefix of it reaches a throttle key.
+fn credential_id(api_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(api_key.as_bytes());
+    let hex: String = digest.iter().take(8).map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
 
 /// `MAX_CHAT_CONTINUATIONS`.
 pub const MAX_CHAT_CONTINUATIONS: u32 = 5;
@@ -287,7 +296,8 @@ impl Provider {
     /// the provider's `Retry-After` (else `rate_limit_wait`), so every request
     /// made as this caller, by any host sharing the limiter, waits it out.
     async fn request_with_backoff(&self, body: &Json) -> Result<Message, RequestError> {
-        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
+        let credential = credential_id(&self.key.api_key);
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&credential), team: "" };
         let backoff = self.backoff;
         let mut rate_limits = 1;
         loop {
@@ -831,8 +841,31 @@ pub mod tests {
         assert_eq!(seen.load(Ordering::SeqCst), 2);
         assert!(started.elapsed() >= Duration::from_millis(900), "waited {:?}", started.elapsed());
         // The wait was a throttle on the caller's key, not a sleep: it lapsed.
-        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
+        let credential = credential_id("test-key");
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&credential), team: "" };
         assert!(matches!(provider.limiter.acquire(&caller.request(&[])), Ok(crate::limiter::Grant::Granted { .. })));
+    }
+
+    #[tokio::test]
+    async fn a_429_on_one_key_leaves_another_keys_requests_granted() {
+        let (url, seen) = rate_limited_once(Some("1")).await;
+        let provider = quick(url);
+        let options = options(None, "claude-sonnet-5");
+        let (mine, other) = (credential_id("test-key"), credential_id("another-key"));
+        let acquire = |credential: &str| provider.limiter.acquire(&Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(credential), team: "" }.request(&[]));
+        let probe = async {
+            while seen.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            (acquire(&mine), acquire(&other))
+        };
+        let (reply, (throttled, unaffected)) = tokio::join!(provider.chat_detailed(&options, &|| true), probe);
+        assert!(matches!(throttled, Ok(crate::limiter::Grant::Refused { .. })));
+        assert!(matches!(unaffected, Ok(crate::limiter::Grant::Granted { .. })));
+        assert_eq!(reply.unwrap().text, "ok");
+        let throttle_key = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&mine), team: "" }.throttle_key();
+        assert!(!throttle_key.contains("test-key") && throttle_key.contains("sha256:"), "{throttle_key}");
     }
 
     #[tokio::test]
@@ -840,7 +873,8 @@ pub mod tests {
         let (url, seen) = rate_limited_once(None).await;
         let mut provider = quick(url);
         provider.backoff.rate_limit_wait = Duration::from_millis(600);
-        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
+        let credential = credential_id("test-key");
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&credential), team: "" };
         let started = std::time::Instant::now();
         let options = options(None, "claude-sonnet-5");
         let probe = async {
