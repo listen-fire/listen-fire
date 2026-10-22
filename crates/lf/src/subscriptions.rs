@@ -21,7 +21,7 @@ use crate::externals::{RunningExternal, rpc};
 use crate::check::LOCAL_TENANT;
 use crate::json::Js;
 use crate::runs::Session;
-use crate::secret_stores::{EntryChange, change_entry};
+use crate::secrets_slot::SecretsStore;
 use crate::secrets::{Credential, Credentials, credential_for};
 
 /// The source's id for the webhook it registered.
@@ -171,20 +171,20 @@ async fn reconcile_one(session: &Session, name: &str) -> Result<Option<(String, 
     Ok(Some((format!("registered webhook {id} for {events} at {callback}"), true)))
 }
 
-/// The credential's entry, as written by lf, its other fields kept.
-fn writable(credential: &Credential) -> Result<&crate::secrets::SecretsFile, String> {
-    match &credential.origin.file {
-        Some(file) if credential.origin.env_fields.is_empty() => Ok(file),
+/// The secrets module holding the credential's entry, as written by lf.
+fn writable(credential: &Credential) -> Result<std::rc::Rc<dyn SecretsStore>, String> {
+    let held = credential.origin.slot_ref.is_some() && credential.origin.env_fields.is_empty();
+    match crate::secrets_slot::installed() {
+        Some(store) if held => Ok(store),
         _ => Err(format!("credential \"{}\" comes from the environment, which lf cannot write the registration to", credential.name)),
     }
 }
 
+/// The credential's entry, its other fields kept.
 async fn keep(credential: &Credential, fields: Vec<(String, String)>) -> Result<(), String> {
-    let file = writable(credential)?;
-    change_entry(file, &credential.name, EntryChange::Replace(&|stored| Ok(spread(stored.unwrap_or_default(), fields.clone())))).await
+    writable(credential)?.replace(&credential.name, &|stored| Ok(spread(stored.unwrap_or_default(), fields.clone()))).await
 }
 
 async fn forget(credential: &Credential, names: &[&str]) -> Result<(), String> {
-    let file = writable(credential)?;
-    change_entry(file, &credential.name, EntryChange::Replace(&|stored| Ok(stored.unwrap_or_default().into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect()))).await
+    writable(credential)?.replace(&credential.name, &|stored| Ok(stored.unwrap_or_default().into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect())).await
 }

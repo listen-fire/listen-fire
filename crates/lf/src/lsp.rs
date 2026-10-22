@@ -106,7 +106,7 @@ async fn catalog_of_project(project: Option<&Project>, log: &mut Vec<String>) ->
     };
     let js = built.unwrap_or_else(|| {
         let env: Vec<(String, String)> = std::env::vars().collect();
-        let credentials = project.and_then(|p| crate::secrets::load_secrets(p, &env).ok()).unwrap_or_default();
+        let credentials = project.and_then(|p| crate::secrets::Secrets::open(p, &env).ok()).map(crate::secrets::Secrets::into_credentials).unwrap_or_default();
         let files = project.and_then(|p| crate::sources::scan_movements(p).ok()).unwrap_or_default();
         crate::catalog::catalog_of(&[], &IndexMap::new(), &credentials, &files)
     });

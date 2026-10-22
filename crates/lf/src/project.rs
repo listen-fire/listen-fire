@@ -131,7 +131,14 @@ fn is_http_url(text: &str) -> bool {
 
 /// The project whose `lf.yaml` is at `from` or the nearest folder above it.
 pub fn load_project(from: &Path) -> Result<Project, String> {
-    load_pinned(from, false)
+    load_project_with(from, &std::env::vars().collect::<Vec<_>>())
+}
+
+/// `load_project` under `env`: where a secrets module's own settings may come from.
+pub fn load_project_with(from: &Path, env: &[(String, String)]) -> Result<Project, String> {
+    let project = load_pinned(from, false)?;
+    crate::secrets_slot::refuse_unbootstrapped(&project, env).map_err(|why| format!("{}: {why}", project.root.join(PROJECT_FILE).display()))?;
+    Ok(project)
 }
 
 /// The same, for `lf upgrade`: a pin of an older key loads (the upgrade is

@@ -8,13 +8,13 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 
-use crate::project::Project;
-use crate::secrets::{Credential, Credentials, SecretsFile, apply_environment, parse_entry, read_secrets_file, secrets_paths};
-use crate::secrets_family::{FileLock, Fields, Record, SecretsBackend, SecretsFamily, WriteBack, redact_secrets};
+use crate::secrets::{Credential, Credentials, SecretsFile, apply_environment, parse_entry, read_secrets_file};
+use crate::secrets_family::{FileLock, Fields, Lease, LocalFuture, Record, SecretsBackend, SecretsFamily, WriteBack, redact_secrets};
+use crate::secrets_slot::SecretsStore;
 
 // ── A secrets file ──────────────────────────────────────────────────────────
 
@@ -27,13 +27,6 @@ fn entry_fields(file: &SecretsFile, name: &str) -> Result<Option<Fields>, String
 /// A secrets file as a store (secrets.ts `fileSecrets`).
 pub struct FileSecrets {
     pub file: SecretsFile,
-}
-
-impl FileSecrets {
-    pub fn at(path: &Path) -> Result<FileSecrets, String> {
-        let (_, encrypted) = read_secrets_file(path)?;
-        Ok(FileSecrets { file: SecretsFile { path: path.to_path_buf(), encrypted } })
-    }
 }
 
 impl SecretsBackend for FileSecrets {
@@ -69,10 +62,6 @@ impl SecretsBackend for FileSecrets {
         Ok(WriteBack::Written(Record::of(merged)))
     }
 
-    fn locked_file(&self) -> Option<PathBuf> {
-        Some(self.file.path.clone())
-    }
-
     fn assert_writable(&self, reference: &str) -> Result<(), String> {
         assert_sops_runs(reference, &self.file)
     }
@@ -93,7 +82,7 @@ fn sops_refusal(reference: &str, path: &Path, why: &str) -> String {
 }
 
 /// Through a staging file beside it, readable by its owner only.
-fn write_staged(path: &Path, name: &str, text: &str) -> Result<(), String> {
+pub fn write_staged(path: &Path, name: &str, text: &str) -> Result<(), String> {
     let staging = path.parent().unwrap_or(Path::new(".")).join(format!(".{name}.secrets.tmp"));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -147,13 +136,14 @@ impl SecretsBackend for EnvSecrets {
 // ── One loaded credential ───────────────────────────────────────────────────
 
 /// One loaded credential as a store (secrets.ts `credentialSecrets`): its
-/// secrets file's fields, read through to the file, with the fields the
-/// environment supplied over them. A write-back goes to the file for the
-/// fields that came from it, and is kept for this process (reported once)
-/// for the ones the environment supplied.
+/// fields as the secrets slot's module holds them, read through to it, with
+/// the fields the environment supplied over them. A write-back goes to the
+/// module for the fields that came from it, and is kept for this process
+/// (reported once) for the ones the environment supplied.
 struct CredentialSecrets {
     name: String,
-    file: Option<FileSecrets>,
+    /// The module holding it; None for one made wholly from the environment.
+    store: Option<Rc<dyn SecretsStore>>,
     env_fields: BTreeSet<String>,
     /// The credential's fields as last read or written.
     fields: RefCell<Fields>,
@@ -165,21 +155,21 @@ impl CredentialSecrets {
         self.env_fields.iter().filter_map(|f| fields.get(f).map(|v| (f.clone(), v.clone()))).collect()
     }
 
-    /// The fields now, and the file's own version of its part.
+    /// The fields now, and the module's own version of its part.
     fn read(&self) -> Result<Option<(Record, Option<String>)>, String> {
-        let Some(file) = &self.file else {
+        let Some(store) = &self.store else {
             // Nothing to read through to: the fields as loaded or last written.
             return Ok(Some((Record::of(self.fields.borrow().clone()), None)));
         };
-        let from_file = file.resolve(&self.name)?;
-        if from_file.is_none() && self.env_fields.is_empty() {
+        let held = store.resolve(&self.name)?;
+        if held.is_none() && self.env_fields.is_empty() {
             return Ok(None);
         }
-        let file_version = from_file.as_ref().map(|r| r.version.clone());
-        let mut fields = from_file.map(|r| r.fields).unwrap_or_default();
+        let held_version = held.as_ref().map(|r| r.version.clone());
+        let mut fields = held.map(|r| r.fields).unwrap_or_default();
         fields.extend(self.env_overlay());
         *self.fields.borrow_mut() = fields.clone();
-        Ok(Some((Record::of(fields), file_version)))
+        Ok(Some((Record::of(fields), held_version)))
     }
 }
 
@@ -189,15 +179,15 @@ impl SecretsBackend for CredentialSecrets {
     }
 
     fn write_back(&self, _reference: &str, fields: &Fields, expected: &str) -> Result<WriteBack, String> {
-        let Some((now, file_version)) = self.read()? else { return Ok(WriteBack::Missing) };
+        let Some((now, held_version)) = self.read()? else { return Ok(WriteBack::Missing) };
         if now.version != expected {
             return Ok(WriteBack::Conflict(now));
         }
-        let to_file: Fields = fields.iter().filter(|(f, _)| !self.env_fields.contains(*f)).map(|(k, v)| (k.clone(), v.clone())).collect();
-        if let (Some(file), Some(file_version)) = (&self.file, &file_version)
-            && !to_file.is_empty()
+        let to_store: Fields = fields.iter().filter(|(f, _)| !self.env_fields.contains(*f)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if let (Some(store), Some(held_version)) = (&self.store, &held_version)
+            && !to_store.is_empty()
         {
-            match file.write_back(&self.name, &to_file, file_version)? {
+            match store.write_back(&self.name, &to_store, held_version)? {
                 WriteBack::Conflict(current) => return Ok(WriteBack::Conflict(current)),
                 WriteBack::Missing => return Ok(WriteBack::Missing),
                 WriteBack::Written(_) | WriteBack::NotPersisted { .. } => {}
@@ -205,39 +195,52 @@ impl SecretsBackend for CredentialSecrets {
         }
         self.fields.borrow_mut().extend(fields.clone());
         let record = Record::of(self.fields.borrow().clone());
-        if to_file.len() < fields.len() {
+        if to_store.len() < fields.len() {
             return Ok(WriteBack::NotPersisted { record, why: env_not_persisted(&self.name) });
         }
-        if self.file.is_none() && !to_file.is_empty() {
+        if self.store.is_none() && !to_store.is_empty() {
             let why = format!("credential \"{}\" has no secrets file; its refreshed token is used for this run only", self.name);
             return Ok(WriteBack::NotPersisted { record, why });
         }
         Ok(WriteBack::Written(record))
     }
 
-    fn locked_file(&self) -> Option<PathBuf> {
-        self.file.as_ref().map(|f| f.file.path.clone())
+    fn lock<'a>(&'a self, reference: &'a str, ttl_ms: u64) -> LocalFuture<'a, Result<Lease, String>> {
+        Box::pin(async move {
+            match &self.store {
+                Some(store) => store.lock(reference, ttl_ms).await,
+                None => Ok(Lease::none()),
+            }
+        })
+    }
+
+    fn unlock(&self, reference: &str, lease: Lease) {
+        if let Some(store) = &self.store {
+            store.unlock(reference, lease);
+        }
     }
 
     fn assert_writable(&self, reference: &str) -> Result<(), String> {
-        match &self.file {
-            Some(file) => assert_sops_runs(reference, &file.file),
+        match &self.store {
+            Some(store) => store.assert_writable(reference),
             None => Ok(()),
         }
     }
 }
 
-/// A loaded credential: its name, and the secrets file it was read from.
-type FamilyKey = (String, Option<PathBuf>);
+/// A loaded credential: its name, and where the module holding it keeps it.
+type FamilyKey = (String, Option<String>);
 
 thread_local! {
     /// One family per loaded credential, so its single flight covers every call.
     static FAMILIES: RefCell<HashMap<FamilyKey, Rc<SecretsFamily>>> = RefCell::new(HashMap::new());
 }
 
-/// The secrets family a loaded credential is refreshed and written back through.
+/// The secrets family a loaded credential is refreshed and written back
+/// through: the secrets slot's module (crate::secrets_slot) for one it holds.
 pub fn secrets_of(credential: &Credential) -> Rc<SecretsFamily> {
-    let key = (credential.name.clone(), credential.origin.file.as_ref().map(|f| f.path.clone()));
+    let store = credential.origin.slot_ref.as_ref().and_then(|_| crate::secrets_slot::installed());
+    let key = (credential.name.clone(), store.as_ref().map(|s| s.label()));
     FAMILIES.with(|families| {
         families
             .borrow_mut()
@@ -245,7 +248,7 @@ pub fn secrets_of(credential: &Credential) -> Rc<SecretsFamily> {
             .or_insert_with(|| {
                 let backend = CredentialSecrets {
                     name: credential.name.clone(),
-                    file: credential.origin.file.clone().map(|file| FileSecrets { file }),
+                    store,
                     env_fields: credential.origin.env_fields.clone(),
                     fields: RefCell::new(credential.fields.clone()),
                 };
@@ -263,22 +266,6 @@ pub fn current_fields(credential: &Credential) -> Fields {
 
 // ── Whole entries: what `lf connect` and `lf credential` write ──────────────
 
-/// The file new entries go to: the one secrets are read from, else the
-/// project's `.lf/secrets.yaml` (created, readable by its owner only).
-pub fn secrets_file_for_writes(project: &Project, env: &[(String, String)]) -> Result<SecretsFile, String> {
-    let paths = secrets_paths(project, env);
-    if let Some(path) = paths.iter().find(|p| p.exists()) {
-        let (_, encrypted) = read_secrets_file(path)?;
-        return Ok(SecretsFile { path: path.clone(), encrypted });
-    }
-    if let Some((_, named)) = env.iter().find(|(k, v)| k == "LF_SECRETS_FILE" && !v.is_empty()) {
-        return Err(format!("LF_SECRETS_FILE points at {named}, which does not exist"));
-    }
-    let created = project.lf_dir.join("secrets.yaml");
-    write_staged(&created, "secrets", "# Written by `lf connect` and `lf credential`; not edited by hand.\n")?;
-    Ok(SecretsFile { path: created, encrypted: false })
-}
-
 /// A whole entry, its keys in order: binding keys, then fields.
 pub type Entry = Vec<(String, String)>;
 
@@ -290,7 +277,8 @@ pub enum EntryChange<'a> {
     Delete,
 }
 
-/// Change one whole entry of a secrets file, under its lock (secrets.ts `changeEntry`).
+/// Change one whole entry of a secrets file, under its lock (secrets.ts
+/// `changeEntry`): @lf/file-secrets' entry methods (crate::secrets_slot).
 pub async fn change_entry(file: &SecretsFile, name: &str, change: EntryChange<'_>) -> Result<(), String> {
     let path = &file.path;
     if name == "sops" {

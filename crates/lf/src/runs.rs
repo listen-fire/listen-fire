@@ -27,7 +27,7 @@ use crate::run_host::{
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
-use crate::secrets::{Credentials, load_secrets, missing_credentials};
+use crate::secrets::{Credentials, Secrets, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
 use crate::sources::{MovementFile, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
@@ -48,7 +48,7 @@ pub const DEFAULT_PORT: u16 = 4400;
 pub struct Session {
     pub project: Project,
     pub store: std::rc::Rc<dyn RunHostStore>,
-    credentials: Credentials,
+    secrets: Secrets,
     running: Vec<RunningExternal>,
     pub documents: Documents,
     files: Vec<MovementFile>,
@@ -107,22 +107,23 @@ fn due_clock_offset() -> Result<i64, String> {
 /// in a temporary state file instead.
 pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) -> Result<Session, String> {
     let env: Vec<(String, String)> = std::env::vars().collect();
-    let credentials = load_secrets(&project, &env)?;
+    let secrets = Secrets::open(&project, &env)?;
+    let credentials = secrets.credentials();
     let files = scan_movements(&project)?;
-    let missing = missing_credentials(&project, &files, &credentials, &env);
+    let missing = missing_credentials(&files, &secrets);
     if !missing.is_empty() {
         return Err(missing.iter().map(|m| format!("{}:{}:{} {}", m.file.display(), m.line, m.column, m.message)).collect::<Vec<_>>().join("\n"));
     }
-    let registered = |e: &crate::externals::External| crate::subscriptions::has_registered_webhook(&credentials, &e.manifest.name);
+    let registered = |e: &crate::externals::External| crate::subscriptions::has_registered_webhook(credentials, &e.manifest.name);
     let externals = needed_externals(scan_externals(&project)?, &files, registered);
-    let loop_guard = crate::loop_guard::of_project(&project, &env)?;
-    crate::wake::install(crate::wake::of_project(&project, &credentials)?);
+    let loop_guard = crate::loop_guard::of_project(&project, credentials)?;
+    crate::wake::install(crate::wake::of_project(&project, credentials)?);
     // Before any call: the manifest calls below ask it too.
-    crate::limiter::install(crate::limiter::of_project(&project, &env)?);
+    crate::limiter::install(crate::limiter::of_project(&project, credentials)?);
     // Before the externals and the slots' modules start, so they are told where it is.
-    crate::listener::open_models_door(&credentials).await?;
+    crate::listener::open_models_door(credentials).await?;
     // Before the externals start too: a browser module's address is handed to them.
-    crate::remote_slots::install(&project, &credentials).await?;
+    crate::remote_slots::install(&project, credentials).await?;
     let due_offset_ms = due_clock_offset()?;
     let (store, ephemeral_dir) = if ephemeral {
         let dir = std::env::temp_dir().join(format!("lf-{}", uuid::Uuid::new_v4()));
@@ -135,16 +136,16 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Before any module starts: what an earlier lf left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
-    let running = start_externals(&project, &externals, &credentials, LOCAL_TENANT).await?;
+    let running = start_externals(&project, &externals, credentials, LOCAL_TENANT).await?;
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
-    let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, &credentials)?);
+    let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
-        schemas.insert(r.external.manifest.name.clone(), describe_external(r, &credentials).await?);
+        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials).await?);
     }
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
-    let catalog = catalog_of(&running, &schemas, &credentials, &files);
+    let catalog = catalog_of(&running, &schemas, credentials, &files);
     let listens = collect_listens(&files);
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let public_url = project
@@ -152,7 +153,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         .clone()
         .or_else(|| crate::serve::host_url().map(str::to_string))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
-    Ok(Session { project, store, credentials, running, documents, files, catalog, listens, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
+    Ok(Session { project, store, secrets, running, documents, files, catalog, listens, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -280,14 +281,14 @@ impl Session {
         &self.running
     }
 
-    /// The installs: the secrets file's credentials, then the environment's.
+    /// The installs: the secrets module's credentials, then the environment's.
     pub fn credentials(&self) -> &Credentials {
-        &self.credentials
+        self.secrets.credentials()
     }
 
     /// Read the secrets again, after lf wrote to them (crate::subscriptions).
     pub fn reload_credentials(&mut self) -> Result<(), String> {
-        self.credentials = load_secrets(&self.project, &std::env::vars().collect::<Vec<_>>())?;
+        self.secrets = Secrets::open(&self.project, &std::env::vars().collect::<Vec<_>>())?;
         Ok(())
     }
 
@@ -297,7 +298,7 @@ impl Session {
     }
 
     pub fn externals(&self) -> Externals<'_> {
-        Externals { project: &self.project, running: &self.running, credentials: &self.credentials, documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
+        Externals { project: &self.project, running: &self.running, credentials: self.secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
     }
 
     fn due_by(&self) -> String {
@@ -441,7 +442,7 @@ impl Session {
     async fn poll_once(&self, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
         let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
         let params = poll_params(listen, state.as_ref());
-        let raw = rpc(running, &self.credentials, LOCAL_TENANT, "poll", params).await?;
+        let raw = rpc(running, self.secrets.credentials(), LOCAL_TENANT, "poll", params).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
@@ -500,7 +501,7 @@ impl Session {
         if !running.methods.iter().any(|m| m == "listEventTypes") {
             return Ok(Vec::new());
         }
-        let raw = rpc(running, &self.credentials, LOCAL_TENANT, "listEventTypes", serde_json::json!({})).await?;
+        let raw = rpc(running, self.secrets.credentials(), LOCAL_TENANT, "listEventTypes", serde_json::json!({})).await?;
         let types = wire_results::check("listEventTypes", external, &raw)?;
         Ok(types.as_array().map(<[Js]>::to_vec).unwrap_or_default())
     }
@@ -696,7 +697,7 @@ impl Session {
             return None;
         }
         let params = serde_json::json!({ "recordType": record_type, "externalId": external_id });
-        let read = match rpc(running, &self.credentials, LOCAL_TENANT, "readRecord", params).await {
+        let read = match rpc(running, self.secrets.credentials(), LOCAL_TENANT, "readRecord", params).await {
             Ok(raw) => wire_results::check("readRecord", external, &raw),
             Err(message) => Err(message),
         };

@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- Secrets are a core slot (`core: { secrets: … }`). The default, `@lf/file-secrets`, is the secrets file, SOPS and `LF_SECRET__…` exactly as before, so a project that names none behaves as it did. A secrets module holds credentials elsewhere (a vault a fleet of `lf` workers shares): a token one worker refreshes is kept for all, and two workers refresh it once. A secrets module's own settings come from `LF_SECRET__…` or the secrets file only; a project naming one whose settings neither holds is refused as it loads.
+
 ## [0.12.0-rc.8] - 2026-10-22
 
 - `lf connect` of a module package that serves plugins (`@lf/pdf`) installs it as a plugin external (`kind: plugin`), so `lf check` passes without a hand edit.

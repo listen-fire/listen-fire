@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::connect::{module_packages, process_env};
 use crate::externals::scan_externals;
 use crate::project::load_project;
-use crate::secrets::load_secrets;
+use crate::secrets::Secrets;
 
 const SUBCOMMANDS: &str = "init check lsp upgrade run resume serve runs call cancel connect credential completion catalog";
 const CREDENTIAL_ACTIONS: &str = "add update delete list";
@@ -66,7 +66,7 @@ fn listed(list: &str, dir: &Path) -> Vec<String> {
             }
             names
         }
-        "credentials" => load_secrets(&project, &process_env()).map(|c| c.into_iter().map(|c| c.name).collect()).unwrap_or_default(),
+        "credentials" => Secrets::open(&project, &process_env()).map(|s| s.into_credentials().into_iter().map(|c| c.name).collect()).unwrap_or_default(),
         _ => Vec::new(),
     }
 }

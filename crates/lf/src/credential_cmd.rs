@@ -27,8 +27,8 @@ use crate::oauth2::{ClientApp, Declaration, DeclarationKind};
 use crate::oauth_redirect::{RedirectMode, authorize_at_provider};
 use crate::project::{Project, load_project};
 use crate::prompt::{Ask, Prompter};
-use crate::secret_stores::{EntryChange, change_entry, secrets_file_for_writes, secrets_of};
-use crate::secrets::{Binding, Credential, Credentials, ENV_PREFIX, install_of, load_secrets};
+use crate::secret_stores::secrets_of;
+use crate::secrets::{Binding, Credential, Credentials, ENV_PREFIX, Secrets, install_of};
 use crate::secrets_family::Fields;
 
 /// How the provider sends the person back, as the command line asked.
@@ -66,13 +66,13 @@ pub struct AddInput<'a> {
 }
 
 pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &mut Prompter) -> Result<(), String> {
-    let env = process_env();
-    let credentials = load_secrets(project, &env)?;
+    let secrets = Secrets::open(project, &process_env())?;
+    let credentials = secrets.credentials();
     let Some(external) = find_external(project, input.module)? else {
         return Err(format!("module \"{}\" is not installed here; set it up first: lf connect {}", input.module, input.module));
     };
     let module = external.manifest.name.clone();
-    let install = install_of(&credentials, &module);
+    let install = install_of(credentials, &module);
     if install.is_none() && external.manifest.auth.is_some() {
         return Err(format!("module \"{module}\" is not set up here (its server secret): lf connect {module}"));
     }
@@ -100,8 +100,7 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
         fields = crate::connect::spread(fields, fields_vec(&grant));
     }
     let binding = Binding::Credential(declaration.name.clone());
-    let file = secrets_file_for_writes(project, &env)?;
-    change_entry(&file, &name, EntryChange::Create(entry_content(&module, &binding, &fields))).await?;
+    secrets.store().create(&name, entry_content(&module, &binding, &fields)).await?;
     prompter.print(&format!("added {name} ({module}, credential {}); a movement uses it as:", declaration.name));
     prompter.print(&format!("  import {{ {name} }} from credentials"));
     prompter.print(&format!("  x = connect {module} using {name}"));
@@ -117,8 +116,9 @@ pub struct UpdateInput<'a> {
 
 pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompter: &mut Prompter) -> Result<(), String> {
     let name = input.name;
-    let credentials = load_secrets(project, &process_env())?;
-    let credential = writable(&credentials, name)?;
+    let secrets = Secrets::open(project, &process_env())?;
+    let credentials = secrets.credentials();
+    let credential = writable(credentials, name)?;
     if credential.binding == Binding::Install {
         return Err(format!("\"{name}\" is the install of {}; change it with lf connect {}", credential.external, credential.external));
     }
@@ -128,7 +128,7 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
             credential.external, credential.external
         ));
     };
-    let install = install_of(&credentials, &credential.external);
+    let install = install_of(credentials, &credential.external);
     let facts = read_manifest(project, &external, install).await?;
     let named = match &credential.binding {
         Binding::Credential(declared) => Some(declared.clone()),
@@ -145,7 +145,6 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
         let grant = authorize_at_provider(oauth2, &client, &mode, prompter, &format!("\"{name}\" ({})", credential.external)).await?;
         edited.extend(grant);
     }
-    let Some(file) = credential.origin.file.clone() else { return Err(format!("\"{name}\" is not in a secrets file")) };
     // Through the family: the same lock and write a refresh takes.
     if !edited.is_empty() {
         secrets_of(credential).update(name, &edited).await?;
@@ -165,20 +164,19 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
             .collect();
         Ok(entry_content(&credential.external, &bound, &kept))
     };
-    change_entry(&file, name, EntryChange::Replace(&next)).await?;
+    secrets.store().replace(name, &next).await?;
     let recorded = if credential.binding == Binding::Legacy { "; its binding is now recorded" } else { "" };
     prompter.print(&format!("updated {name} ({}, credential {}){recorded}", credential.external, declaration.name));
     Ok(())
 }
 
 pub async fn delete_credential(project: &Project, name: &str, prompter: &mut Prompter) -> Result<(), String> {
-    let credentials = load_secrets(project, &process_env())?;
-    let credential = writable(&credentials, name)?;
+    let secrets = Secrets::open(project, &process_env())?;
+    let credential = writable(secrets.credentials(), name)?;
     if credential.binding == Binding::Install {
         return Err(format!("\"{name}\" is the install of {}, not a user credential", credential.external));
     }
-    let Some(file) = credential.origin.file.clone() else { return Err(format!("\"{name}\" is not in a secrets file")) };
-    change_entry(&file, name, EntryChange::Delete).await?;
+    secrets.store().delete(name).await?;
     prompter.print(&format!("deleted {name} ({})", credential.external));
     Ok(())
 }
@@ -191,8 +189,9 @@ pub struct ListedCredential {
 
 /// Each credential's name, module, declared credential, where it is kept and its token's expiry.
 pub fn list_credentials(project: &Project) -> Result<Vec<ListedCredential>, String> {
-    let credentials = load_secrets(project, &process_env())?;
-    Ok(credentials
+    let secrets = Secrets::open(project, &process_env())?;
+    Ok(secrets
+        .credentials()
         .iter()
         .map(|credential| {
             let (what, binding, declared) = match &credential.binding {
@@ -201,8 +200,8 @@ pub fn list_credentials(project: &Project) -> Result<Vec<ListedCredential>, Stri
                 Binding::Legacy => ("written by hand (lf credential update records its binding)".to_string(), "legacy", Js::Null),
             };
             let mut where_ = Vec::new();
-            if let Some(file) = &credential.origin.file {
-                where_.push(file.path.display().to_string());
+            if credential.origin.slot_ref.is_some() {
+                where_.push(secrets.store().label());
             }
             if !credential.origin.env_fields.is_empty() {
                 where_.push("environment".to_string());
@@ -226,10 +225,10 @@ pub fn list_credentials(project: &Project) -> Result<Vec<ListedCredential>, Stri
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A credential lf may write: in a secrets file, no field from the environment.
+/// A credential lf may write: held by the secrets module, no field from the environment.
 fn writable<'c>(credentials: &'c Credentials, name: &str) -> Result<&'c Credential, String> {
     let credential = credentials.iter().find(|c| c.name == name).ok_or_else(|| format!("there is no credential \"{name}\" (lf credential list)"))?;
-    if credential.origin.file.is_none() || !credential.origin.env_fields.is_empty() {
+    if credential.origin.slot_ref.is_none() || !credential.origin.env_fields.is_empty() {
         return Err(format!(
             "\"{name}\" has fields from the environment ({ENV_PREFIX}{}__…), which lf cannot write; change it there, or unset them",
             name.to_uppercase()

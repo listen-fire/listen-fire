@@ -7,9 +7,11 @@
 //! - A write-back names the version it was computed from, and is refused when
 //!   the stored credential has moved on (compare-and-swap).
 //! - A refresh runs at most once at a time per credential: in this process by
-//!   sharing the one in flight, across processes by the store's lock file (the
-//!   `<secrets file>.lock`, so two lf processes never refresh at once). The refresher runs only if the stored credential
-//!   is still the one the caller found stale.
+//!   sharing the one in flight, across processes by the store's lease (a
+//!   secrets file's is its lock file `<secrets file>.lock`; a secrets
+//!   module's is `secrets.lock`, so two lf processes never refresh at once).
+//!   The refresher runs only if the stored credential is still the one the
+//!   caller found stale.
 //! - A store that could not keep a rotated token refuses before the token is
 //!   spent.
 //! - No secret value reaches a warning or an error message.
@@ -56,14 +58,40 @@ pub trait SecretsBackend {
     fn resolve(&self, reference: &str) -> Result<Option<Record>, String>;
     /// Merge `fields` over the stored ones, if the stored version is still `expected`.
     fn write_back(&self, reference: &str, fields: &Fields, expected: &str) -> Result<WriteBack, String>;
-    /// The file whose lock (`<file>.lock`) every holder of the store takes,
-    /// other processes included. None: the store has one process.
-    fn locked_file(&self) -> Option<PathBuf> {
-        None
+    /// Hold `reference` against every other holder of the store, other
+    /// processes included, for at most `ttl_ms` (a holder that died lets go
+    /// then); waits while another holds it. A store only this process holds
+    /// grants at once and holds nothing.
+    fn lock<'a>(&'a self, _reference: &'a str, _ttl_ms: u64) -> LocalFuture<'a, Result<Lease, String>> {
+        Box::pin(async { Ok(Lease::none()) })
     }
+    fn unlock(&self, _reference: &str, _lease: Lease) {}
     /// Refuse, before a refresh spends a refresh token, when a write-back could not be stored.
     fn assert_writable(&self, _reference: &str) -> Result<(), String> {
         Ok(())
+    }
+}
+
+/// A credential held by `lock` until `unlock`: the module's token for it, or
+/// a secrets file's lock file (released when dropped).
+#[derive(Default)]
+pub struct Lease {
+    pub token: String,
+    /// Held until the lease is dropped.
+    _file: Option<FileLock>,
+}
+
+impl Lease {
+    pub fn none() -> Lease {
+        Lease::default()
+    }
+
+    pub fn of_token(token: String) -> Lease {
+        Lease { token, _file: None }
+    }
+
+    pub fn of_file(lock: FileLock) -> Lease {
+        Lease { token: lock.lock.display().to_string(), _file: Some(lock) }
     }
 }
 
@@ -124,8 +152,11 @@ pub struct SecretsFamily {
 const POLL: Duration = Duration::from_millis(20);
 /// How long a lock is waited for, and when one left by a process that died
 /// is taken over.
-const LOCK_WAIT: Duration = Duration::from_secs(10);
+pub const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_STALE: Duration = Duration::from_secs(30);
+/// How long a lease lasts when its holder never lets go: a lock file's stale age.
+pub const LEASE_TTL_MS: u64 = LOCK_STALE.as_millis() as u64;
+pub const POLL_EVERY: Duration = POLL;
 
 impl SecretsFamily {
     pub fn new(backend: Box<dyn SecretsBackend>, warn: Box<dyn Fn(&str)>) -> SecretsFamily {
@@ -241,29 +272,30 @@ impl SecretsFamily {
     }
 
     /// This credential's lock: against this process's other callers, then
-    /// against every other process through the store's lock file.
-    async fn lock(&self, reference: &str) -> Result<Held, SecretError> {
+    /// against every other process through the store's lease.
+    async fn lock(&self, reference: &str) -> Result<Held<'_>, SecretError> {
         while self.held.borrow().contains(reference) {
             tokio::time::sleep(POLL).await;
         }
         self.held.borrow_mut().insert(reference.to_string());
-        let mut held = Held { reference: reference.to_string(), set: self.held.clone(), file: None };
-        if let Some(path) = self.backend.locked_file() {
-            held.file = Some(FileLock::acquire(&path).await.map_err(SecretError::Store)?);
-        }
+        let mut held = Held { reference: reference.to_string(), set: self.held.clone(), lease: None, backend: self.backend.as_ref() };
+        held.lease = Some(self.backend.lock(reference, LEASE_TTL_MS).await.map_err(SecretError::Store)?);
         Ok(held)
     }
 }
 
-struct Held {
+struct Held<'b> {
     reference: String,
     set: Rc<RefCell<HashSet<String>>>,
-    file: Option<FileLock>,
+    lease: Option<Lease>,
+    backend: &'b dyn SecretsBackend,
 }
 
-impl Drop for Held {
+impl Drop for Held<'_> {
     fn drop(&mut self) {
-        drop(self.file.take());
+        if let Some(lease) = self.lease.take() {
+            self.backend.unlock(&self.reference, lease);
+        }
         self.set.borrow_mut().remove(&self.reference);
     }
 }
@@ -276,6 +308,11 @@ pub struct FileLock {
 
 impl FileLock {
     pub async fn acquire(path: &Path) -> Result<FileLock, String> {
+        FileLock::acquire_for(path, LOCK_STALE).await
+    }
+
+    /// The lock, one older than `stale` taken over.
+    pub async fn acquire_for(path: &Path, stale: Duration) -> Result<FileLock, String> {
         let mut name = path.as_os_str().to_owned();
         name.push(".lock");
         let lock = PathBuf::from(name);
@@ -286,10 +323,10 @@ impl FileLock {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(format!("{}: {e}", lock.display())),
             }
-            let stale = std::fs::metadata(&lock)
+            let left = std::fs::metadata(&lock)
                 .and_then(|m| m.modified())
-                .is_ok_and(|at| SystemTime::now().duration_since(at).is_ok_and(|age| age > LOCK_STALE));
-            if stale {
+                .is_ok_and(|at| SystemTime::now().duration_since(at).is_ok_and(|age| age > stale));
+            if left {
                 let _ = std::fs::remove_file(&lock);
             }
             if started.elapsed() > LOCK_WAIT {

@@ -1,6 +1,8 @@
-//! Secrets, read in order: the file (`LF_SECRETS_FILE`, else `<project>/.lf/secrets.yaml`, else
-//! `~/.config/lf/secrets.yaml`; a SOPS file is read with `sops -d`), then the
-//! environment field by field (`LF_SECRET__<CREDENTIAL>__<FIELD>`).
+//! Secrets, read in order: what the secrets slot's module holds (by default
+//! @lf/file-secrets, the file: `LF_SECRETS_FILE`, else
+//! `<project>/.lf/secrets.yaml`, else `~/.config/lf/secrets.yaml`; a SOPS
+//! file is read with `sops -d`; src/secrets_slot.rs), then the environment
+//! field by field (`LF_SECRET__<CREDENTIAL>__<FIELD>`).
 //!
 //! Each credential remembers where its fields came from, so a refreshed token
 //! is written back there (src/secret_stores.rs, through the secrets family of
@@ -9,10 +11,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 
 use movement_parser::ast::{ImportSource, Statement};
 
 use crate::project::Project;
+use crate::secrets_slot::SecretsStore;
 use crate::sources::MovementFile;
 
 pub const ENV_PREFIX: &str = "LF_SECRET__";
@@ -41,8 +45,8 @@ pub enum Binding {
 /// Where a credential's fields came from (secrets.ts `CredentialOrigin`).
 #[derive(Debug, Clone, Default)]
 pub struct Origin {
-    /// The secrets file it was read from; absent for one made wholly from the environment.
-    pub file: Option<SecretsFile>,
+    /// The secrets slot's module's name for it; absent for one made wholly from the environment.
+    pub slot_ref: Option<String>,
     /// The fields whose value the environment supplied.
     pub env_fields: BTreeSet<String>,
 }
@@ -68,29 +72,67 @@ fn env_var<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
     env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
 
-pub fn load_secrets(project: &Project, env: &[(String, String)]) -> Result<Credentials, String> {
-    let paths = secrets_paths(project, env);
-    let path = paths.iter().find(|p| p.exists());
-    let named = env_var(env, "LF_SECRETS_FILE").filter(|v| !v.is_empty());
-    if path.is_none()
-        && let Some(named) = named
-    {
-        return Err(format!("LF_SECRETS_FILE points at {named}, which does not exist"));
+/// The project's secrets: its secrets slot's module, and the credentials it
+/// held when they were read, the environment's over them.
+pub struct Secrets {
+    store: Rc<dyn SecretsStore>,
+    credentials: Credentials,
+}
+
+impl Secrets {
+    /// Read them; the module is the one a loaded credential is then refreshed
+    /// and written back through, and that whole entries are changed in.
+    pub fn open(project: &Project, env: &[(String, String)]) -> Result<Secrets, String> {
+        let store = crate::secrets_slot::of_project(project, env)?;
+        let credentials = read_credentials(store.as_ref(), env)?;
+        crate::secrets_slot::install(store.clone());
+        Ok(Secrets { store, credentials })
     }
-    let mut credentials: Credentials = Vec::new();
-    if let Some(path) = path {
-        let (content, encrypted) = read_secrets_file(path)?;
-        let file = SecretsFile { path: path.clone(), encrypted };
-        for (name, raw) in content {
-            if name == "sops" {
-                continue;
-            }
-            let (external, binding, fields) = parse_entry(raw).map_err(|why| format!("{}: entry \"{name}\" {why}", path.display()))?;
-            credentials.push(Credential { name, external, binding, fields, origin: Origin { file: Some(file.clone()), env_fields: BTreeSet::new() } });
-        }
+
+    /// The secrets file and the environment alone, whatever module fills the
+    /// slot: where the secrets module's own settings are kept.
+    /// A variable naming a credential the module holds is no part of these,
+    /// and is left for the module's credentials.
+    pub fn local(project: &Project, env: &[(String, String)]) -> Result<Secrets, String> {
+        let store: Rc<dyn SecretsStore> = Rc::new(crate::secrets_slot::FileSecretsModule::of_project(project, env));
+        let mut credentials = held_by(store.as_ref())?;
+        overlay_environment(&mut credentials, env)?;
+        credentials.retain(|c| !c.external.is_empty());
+        Ok(Secrets { store, credentials })
     }
+
+    pub fn credentials(&self) -> &Credentials {
+        &self.credentials
+    }
+
+    pub fn into_credentials(self) -> Credentials {
+        self.credentials
+    }
+
+    pub fn store(&self) -> &dyn SecretsStore {
+        self.store.as_ref()
+    }
+}
+
+/// What `store` holds, with the environment's fields over it.
+pub fn read_credentials(store: &dyn SecretsStore, env: &[(String, String)]) -> Result<Credentials, String> {
+    let mut credentials = held_by(store)?;
     apply_environment(&mut credentials, env)?;
     Ok(credentials)
+}
+
+fn held_by(store: &dyn SecretsStore) -> Result<Credentials, String> {
+    Ok(store
+        .entries()?
+        .into_iter()
+        .map(|stored| Credential {
+            name: stored.reference.clone(),
+            external: stored.external,
+            binding: stored.binding,
+            fields: stored.fields,
+            origin: Origin { slot_ref: Some(stored.reference), env_fields: BTreeSet::new() },
+        })
+        .collect())
 }
 
 /// One entry: the external it belongs to (`module:`, written by `lf connect` /
@@ -168,6 +210,14 @@ pub fn read_secrets_file(path: &Path) -> Result<(Vec<(String, serde_yaml::Value)
     Ok((plain, true))
 }
 
+/// A secrets file, and whether it carries SOPS metadata: read without decrypting it.
+pub fn secrets_file_of(path: &Path) -> Result<SecretsFile, String> {
+    refuse_if_readable_by_others(path)?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let parsed = mapping_of(&text).map_err(|_| format!("{}: expected a mapping of credential names", path.display()))?;
+    Ok(SecretsFile { path: path.to_path_buf(), encrypted: parsed.iter().any(|(k, _)| k == "sops") })
+}
+
 /// A YAML document as a mapping keyed by strings; an empty one is empty.
 fn mapping_of(text: &str) -> Result<Vec<(String, serde_yaml::Value)>, ()> {
     match serde_yaml::from_str::<serde_yaml::Value>(text).map_err(|_| ())? {
@@ -184,6 +234,22 @@ fn mapping_of(text: &str) -> Result<Vec<(String, serde_yaml::Value)>, ()> {
 }
 
 pub fn apply_environment(credentials: &mut Credentials, env: &[(String, String)]) -> Result<(), String> {
+    overlay_environment(credentials, env)?;
+    for credential in credentials.iter() {
+        if credential.external.is_empty() {
+            return Err(format!(
+                "credential \"{}\" comes from the environment but {ENV_PREFIX}{}__EXTERNAL is not set",
+                credential.name,
+                credential.name.to_uppercase()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Each `LF_SECRET__<CREDENTIAL>__<FIELD>` over the credentials, one made for
+/// a name none has (its external still to be named).
+fn overlay_environment(credentials: &mut Credentials, env: &[(String, String)]) -> Result<(), String> {
     for (key, value) in env {
         let Some(rest) = key.strip_prefix(ENV_PREFIX) else { continue };
         let lowered = rest.to_lowercase();
@@ -214,15 +280,6 @@ pub fn apply_environment(credentials: &mut Credentials, env: &[(String, String)]
             let existing = credential.fields.keys().find(|f| f.to_lowercase() == field).cloned().unwrap_or_else(|| field.into());
             credential.fields.insert(existing.clone(), value.clone());
             credential.origin.env_fields.insert(existing);
-        }
-    }
-    for credential in credentials.iter() {
-        if credential.external.is_empty() {
-            return Err(format!(
-                "credential \"{}\" comes from the environment but {ENV_PREFIX}{}__EXTERNAL is not set",
-                credential.name,
-                credential.name.to_uppercase()
-            ));
         }
     }
     Ok(())
@@ -258,12 +315,8 @@ pub struct MissingCredential {
 }
 
 /// Every credential the project's programs import, that the secrets do not hold.
-pub fn missing_credentials(
-    project: &Project,
-    files: &[MovementFile],
-    credentials: &Credentials,
-    env: &[(String, String)],
-) -> Vec<MissingCredential> {
+pub fn missing_credentials(files: &[MovementFile], secrets: &Secrets) -> Vec<MissingCredential> {
+    let credentials = secrets.credentials();
     let mut missing = Vec::new();
     for file in files {
         // `lf check` reports a file that does not parse.
@@ -277,7 +330,7 @@ pub fn missing_credentials(
                 if credentials.iter().any(|c| c.name == imported.name) {
                     continue;
                 }
-                let where_ = secrets_paths(project, env).iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
+                let where_ = secrets.store().looked_in();
                 let upper = imported.name.to_uppercase();
                 missing.push(MissingCredential {
                     file: file.path.clone(),

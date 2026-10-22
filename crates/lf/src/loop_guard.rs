@@ -91,9 +91,9 @@ pub fn event_record(event: &Js) -> Option<&str> {
 }
 
 /// The project's loop guard, if its slot is filled.
-pub fn of_project(project: &crate::project::Project, env: &[(String, String)]) -> Result<Option<std::sync::Arc<dyn LoopGuard>>, String> {
+pub fn of_project(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Option<std::sync::Arc<dyn LoopGuard>>, String> {
     let Some(module) = &project.core.loop_guard else { return Ok(None) };
-    let settings = crate::core::settings_of(&crate::secrets::load_secrets(project, env)?, module);
+    let settings = crate::core::settings_of(credentials, module);
     Ok(Some(match &module.process {
         Some(process) => std::sync::Arc::new(crate::guard_module::ProcessGuard::start(&module.name, process, &settings)?),
         None => std::sync::Arc::new(FingerprintGuard::open(&settings, &project.root, &project.lf_dir)?),

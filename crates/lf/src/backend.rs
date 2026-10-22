@@ -68,7 +68,7 @@ impl StoreSpec {
             return StoreSpec::parse(spec, &project.root, team);
         }
         let module = &project.core.store;
-        let settings = core::settings_of(&crate::secrets::load_secrets(project, env)?, module);
+        let settings = core::settings_of(crate::secrets::Secrets::open(project, env)?.credentials(), module);
         if let Some(process) = &module.process {
             if team.is_some() {
                 return Err(format!("--team names a Postgres store's tenant; {} names its own", module.name));

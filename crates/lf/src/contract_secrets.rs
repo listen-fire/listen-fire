@@ -1,5 +1,6 @@
 //! `lf --contract-secrets <secrets file | env>`: one of lf's secrets
-//! stores (src/secret_stores.rs) served over stdin/stdout, one JSON-RPC 2.0
+//! stores (@lf/file-secrets over one file, src/secrets_slot.rs; the
+//! environment, src/secret_stores.rs) served over stdin/stdout, one JSON-RPC 2.0
 //! message per line, so the TypeScript secrets contract suite (movement-engine
 //! services/secrets/contract.ts) holds this binary's stores to the meaning
 //! every store has — the same cases the platform's secret stores
@@ -7,7 +8,7 @@
 //!
 //!   resolve { ref }                            → { fields, version } | null
 //!   writeBack { ref, fields, expectedVersion } → { kind, record | current, why? }
-//!   lock { ref } / unlock { ref }              the store's lock file (a file store)
+//!   lock { ref } / unlock { ref }              the store's lease (a file's lock file)
 //!   assertWritable { ref }
 //!   env.set { key, value }                     a variable the environment store reads
 //!
@@ -23,8 +24,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::secret_stores::{EnvSecrets, FileSecrets};
-use crate::secrets_family::{FileLock, Fields, Record, SecretsBackend, WriteBack};
+use crate::secret_stores::EnvSecrets;
+use crate::secrets_family::{Fields, LEASE_TTL_MS, Lease, SecretsBackend};
+use crate::secrets_slot::{FileSecretsModule, record_js, write_back_js};
 
 const INVALID_PARAMS: i64 = -32602;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -32,7 +34,7 @@ const PARSE_ERROR: i64 = -32700;
 const STORE_FAILED: i64 = -32000;
 
 enum Store {
-    File(FileSecrets),
+    File(FileSecretsModule),
     Env(EnvSecrets),
 }
 
@@ -49,9 +51,9 @@ pub async fn serve(target: &Path) -> Result<(), String> {
     let store = if target == Path::new("env") {
         Store::Env(EnvSecrets::new(Rc::new(RefCell::new(Vec::new()))))
     } else {
-        Store::File(FileSecrets::at(target)?)
+        Store::File(FileSecretsModule::at(target)?)
     };
-    let mut held: HashMap<String, FileLock> = HashMap::new();
+    let mut held: HashMap<String, Lease> = HashMap::new();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
@@ -71,7 +73,7 @@ enum Failure {
     Store(String),
 }
 
-async fn answer(store: &Store, held: &mut HashMap<String, FileLock>, line: &str) -> Js {
+async fn answer(store: &Store, held: &mut HashMap<String, Lease>, line: &str) -> Js {
     let request = match Js::parse(line.as_bytes()) {
         Ok(request) => request,
         Err(e) => return reply(Js::Null, Err((PARSE_ERROR, format!("not JSON: {e}")))),
@@ -114,12 +116,7 @@ fn fields_of(params: &Js) -> Result<Fields, Failure> {
     }
 }
 
-fn record_js(record: &Record) -> Js {
-    let fields: Obj = record.fields.iter().map(|(k, v)| (k.clone(), Js::str(v))).collect();
-    Js::from(obj! { "fields" => Js::from(fields), "version" => Js::str(&record.version) })
-}
-
-async fn dispatch(store: &Store, held: &mut HashMap<String, FileLock>, method: &str, params: &Js) -> Result<Js, Failure> {
+async fn dispatch(store: &Store, held: &mut HashMap<String, Lease>, method: &str, params: &Js) -> Result<Js, Failure> {
     let backend = store.backend();
     match method {
         "resolve" => {
@@ -128,22 +125,19 @@ async fn dispatch(store: &Store, held: &mut HashMap<String, FileLock>, method: &
         }
         "writeBack" => {
             let outcome = backend.write_back(text(params, "ref")?, &fields_of(params)?, text(params, "expectedVersion")?).map_err(Failure::Store)?;
-            Ok(Js::from(match outcome {
-                WriteBack::Written(record) => obj! { "kind" => Js::str("written"), "record" => record_js(&record) },
-                WriteBack::NotPersisted { record, why } => obj! { "kind" => Js::str("not_persisted"), "record" => record_js(&record), "why" => Js::str(why) },
-                WriteBack::Conflict(current) => obj! { "kind" => Js::str("conflict"), "current" => record_js(&current) },
-                WriteBack::Missing => obj! { "kind" => Js::str("missing") },
-            }))
+            Ok(write_back_js(&outcome))
         }
         "lock" => {
             let reference = text(params, "ref")?.to_string();
-            if let Some(path) = backend.locked_file() {
-                held.insert(reference, FileLock::acquire(&path).await.map_err(Failure::Store)?);
-            }
+            let lease = backend.lock(&reference, LEASE_TTL_MS).await.map_err(Failure::Store)?;
+            held.insert(reference, lease);
             Ok(Js::Null)
         }
         "unlock" => {
-            held.remove(text(params, "ref")?);
+            let reference = text(params, "ref")?;
+            if let Some(lease) = held.remove(reference) {
+                backend.unlock(reference, lease);
+            }
             Ok(Js::Null)
         }
         "assertWritable" => backend.assert_writable(text(params, "ref")?).map(|()| Js::Null).map_err(Failure::Store),

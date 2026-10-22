@@ -20,6 +20,7 @@ core:
 | `browser` | a real page a module drives: a gated deck, a viewer that draws with script ([browser-slot.md](contracts/browser-slot.md)) | none: lf has no browser, and a module asking for a page is refused by name | none in lf; the platform's api image fills it with `@lf/chromium` |
 | `wake` | told when work is due, so whatever starts lf's workers starts one then ([wake-slot.md](contracts/wake-slot.md)) | none: nobody is told, and work waits for a scheduled `lf drain` | none in lf; a cloud queue module (Google Cloud Tasks) ships separately |
 | `ocr` | the text of a scanned PDF or an image, for `extract(…)`, `File.read` and a plugin's `ctx.ocr` ([ocr-slot.md](contracts/ocr-slot.md)) | none: a file with no text layer is unreadable, saying the slot is empty | none in lf; `@listen-fire/document-ai` (Google Document AI) and `@listen-fire/models` on Gemini fill it |
+| `secrets` | where credentials are kept: the ones a movement imports, each module's install, each core module's settings | `@lf/file-secrets` (the secrets file, plain or SOPS, and its lock file) | none in lf; a vault module (the platform's credential store, a cloud secret manager) fills it |
 
 A slot accepts only a module of its own kind; `lf check` and `lf run` refuse anything else, naming the slots.
 
@@ -68,6 +69,17 @@ Before every call to a module and every model request, the host asks the limiter
 - `@lf/memory-limiter` keeps the limits in one lf process. Two lf workers draining one store each keep their own count.
 - A limiter shared by all your workers is a module filling the slot over [its wire](contracts/limiter-slot.md). Name it in `core:`, like a store module.
 - The engine never sees a limit. A movement means the same under any limiter; it only waits longer.
+
+## The secrets module
+
+Every credential lf reads, refreshes and writes goes through the secrets slot.
+
+- `@lf/file-secrets` is the secrets file as it always was: `LF_SECRETS_FILE`, else `.lf/secrets.yaml`, else `~/.config/lf/secrets.yaml`; a SOPS file is read with `sops -d`. A refreshed token is written back in place, comments kept. Two lf processes take turns through the file's lock file.
+- A module filling the slot holds them instead, over its wire: lf lists what it holds, reads and writes one back by version, and takes a lease on one while a refresh spends its token. Two lf processes on one module refresh a token once between them.
+- `LF_SECRET__<CREDENTIAL>__<FIELD>` lies over what any module holds, field by field.
+- `lf connect`, `lf credential` and a webhook's registration write whole entries through the module.
+- A secrets module's own settings never come from itself. They come from `LF_SECRET__…` or the secrets file, so run `lf connect <module>` before naming it in `core:`. A project naming a secrets module whose settings neither holds is refused as it loads.
+- Refreshing a token stays in lf. A module only stores.
 
 ## The loop guard
 

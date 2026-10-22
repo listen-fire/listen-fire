@@ -135,6 +135,7 @@ mod schema;
 mod secret_stores;
 mod secrets;
 mod secrets_family;
+mod secrets_slot;
 mod segment;
 mod serve;
 mod slot_client;
@@ -594,12 +595,12 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
         contract_limiter::serve(std::sync::Arc::new(limiter::MemoryLimiter::default()), listen()?).await?;
     } else if args.contract_limiter_slot {
         let (project, env) = project_env()?;
-        contract_limiter::serve(limiter::of_project(&project, &env)?, listen()?).await?;
+        contract_limiter::serve(limiter::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?, listen()?).await?;
     } else if args.contract_guard {
         contract_guard::serve(contract_guard::Serving::BuiltIn(None), listen()?).await?;
     } else if args.contract_guard_slot {
         let (project, env) = project_env()?;
-        let guard = loop_guard::of_project(&project, &env)?.ok_or("the project's loopGuard slot is empty: name a module in lf.yaml's core:")?;
+        let guard = loop_guard::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())?.ok_or("the project's loopGuard slot is empty: name a module in lf.yaml's core:")?;
         contract_guard::serve(contract_guard::Serving::Slot(guard), listen()?).await?;
     } else if args.contract_models {
         #[cfg(feature = "anthropic")]
@@ -609,12 +610,12 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
     } else if args.contract_wake_slot {
         let (project, env) = project_env()?;
         let Some(module) = &project.core.wake else { return Err("the project's wake slot is empty: name a wake module in lf.yaml's `core: { wake: … }`".to_string()) };
-        let Some(wake) = wake::of_project(&project, &secrets::load_secrets(&project, &env)?)? else { return Err(format!("{}: no wake module to serve", module.name)) };
+        let Some(wake) = wake::of_project(&project, secrets::Secrets::open(&project, &env)?.credentials())? else { return Err(format!("{}: no wake module to serve", module.name)) };
         contract_wake::serve(wake, &module.name, listen()?).await?;
     } else if args.contract_ocr_slot {
         let (project, env) = project_env()?;
         let Some(module) = &project.core.ocr else { return Err("the project's ocr slot is empty: name an OCR module in lf.yaml's `core: { ocr: … }`".to_string()) };
-        contract_ocr::serve(module, &secrets::load_secrets(&project, &env)?, listen()?).await?;
+        contract_ocr::serve(module, secrets::Secrets::open(&project, &env)?.credentials(), listen()?).await?;
     } else if args.contract_judge {
         contract_slots::serve_judge(listen()?).await?;
     } else if args.contract_files {

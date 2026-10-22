@@ -285,11 +285,11 @@ pub fn install(limiter: Arc<dyn Limiter>) {
 }
 
 /// The limiter the project's slot names, opened with its settings.
-pub fn of_project(project: &crate::project::Project, env: &[(String, String)]) -> Result<Arc<dyn Limiter>, String> {
+pub fn of_project(project: &crate::project::Project, credentials: &crate::secrets::Credentials) -> Result<Arc<dyn Limiter>, String> {
     let module = &project.core.limiter;
     match &module.process {
         Some(process) => {
-            let settings = crate::core::settings_of(&crate::secrets::load_secrets(project, env)?, module);
+            let settings = crate::core::settings_of(credentials, module);
             Ok(Arc::new(crate::limiter_module::ProcessLimiter::start(&module.name, process, &settings)?))
         }
         None => Ok(Arc::new(MemoryLimiter::default())),

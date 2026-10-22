@@ -26,8 +26,7 @@ use crate::oauth2::Declaration;
 use crate::oauth_redirect::{loopback_redirect_uri, public_redirect_uri};
 use crate::project::Project;
 use crate::prompt::{Ask, Prompter};
-use crate::secret_stores::{EntryChange, change_entry, secrets_file_for_writes};
-use crate::secrets::{Binding, Credential, Credentials, Origin, install_of, load_secrets};
+use crate::secrets::{Binding, Credential, Credentials, Origin, Secrets, install_of};
 
 /// The install's fields for the OAuth app at the provider.
 pub const CLIENT_ID_FIELD: &str = "client_id";
@@ -72,7 +71,7 @@ pub struct KnownModule {
 /// `lf connect` with no module: the installed externals, and module packages
 /// the project can install.
 pub fn known_modules(project: &Project) -> Result<Vec<KnownModule>, String> {
-    let credentials = load_secrets(project, &process_env())?;
+    let credentials = Secrets::open(project, &process_env())?.into_credentials();
     let installed = scan_externals(project)?;
     let mut modules = Vec::new();
     for external in &installed {
@@ -218,13 +217,12 @@ pub async fn connect_module(project: &Project, reference: &str, prompter: &mut P
     if let Some(module) = crate::externals::core_modules_in(&project.externals_dir)?.into_iter().find(|m| m.name == reference) {
         return connect_core(project, &module, prompter).await;
     }
-    let env = process_env();
-    let credentials = load_secrets(project, &env)?;
+    let secrets = Secrets::open(project, &process_env())?;
     let (external, created) = match find_external(project, reference)? {
         Some(found) => (found, false),
         None => (install_external(project, reference, prompter, url).await?, true),
     };
-    let outcome = set_up(project, &external, &credentials, &env, prompter, options).await;
+    let outcome = set_up(project, &external, &secrets, prompter, options).await;
     match outcome {
         Err(message) => {
             if created {
@@ -247,18 +245,12 @@ fn mark_plugin(external: &External) -> Result<(), String> {
     std::fs::write(&path, marked).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-async fn set_up(
-    project: &Project,
-    external: &External,
-    credentials: &Credentials,
-    env: &[(String, String)],
-    prompter: &mut Prompter,
-    options: &ConnectOptions<'_>,
-) -> Result<ManifestFacts, String> {
+async fn set_up(project: &Project, external: &External, secrets: &Secrets, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<ManifestFacts, String> {
+    let credentials = secrets.credentials();
     let name = &external.manifest.name;
     let existing = install_of(credentials, name).filter(|c| !matches!(c.binding, Binding::Credential(_)));
     if let Some(existing) = existing
-        && (existing.origin.file.is_none() || !existing.origin.env_fields.is_empty())
+        && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
     {
         return Err(format!("the install of \"{name}\" (\"{}\") comes from the environment, which lf cannot write; change it there", existing.name));
     }
@@ -372,10 +364,6 @@ async fn set_up(
         }
     }
 
-    let file = match existing.and_then(|e| e.origin.file.clone()) {
-        Some(file) => file,
-        None => secrets_file_for_writes(project, env)?,
-    };
     let binding = existing.map(|e| e.binding.clone()).unwrap_or(Binding::Install);
     let content = entry_content(name, &binding, &fields);
     // A refresh beside this keeps its tokens: they are not an install's.
@@ -383,8 +371,8 @@ async fn set_up(
         let kept: Vec<(String, String)> = stored.unwrap_or_default().into_iter().filter(|(k, _)| !cleared.contains(k)).collect();
         Ok(spread(kept, content.clone()))
     };
-    change_entry(&file, &install_name, EntryChange::Replace(&next)).await?;
-    prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", file.path.display()));
+    secrets.store().replace(&install_name, &next).await?;
+    prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", secrets.store().label()));
     if facts.declarations.iter().all(crate::catalog::optional_credential) {
         if !facts.declarations.is_empty() {
             prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: lf credential add --module {name} <name>"));
@@ -399,14 +387,19 @@ async fn set_up(
 /// to its install entry, then its setup run (a store's schema created).
 async fn connect_core(project: &Project, module: &crate::core::CoreModule, prompter: &mut Prompter) -> Result<(), String> {
     let env = process_env();
-    let credentials = load_secrets(project, &env)?;
-    let existing = install_of(&credentials, &module.name);
+    // A secrets module's own settings are kept where it is not (crate::secrets_slot).
+    let secrets = match module.slot {
+        crate::core::Slot::Secrets => Secrets::local(project, &env)?,
+        _ => Secrets::open(project, &env)?,
+    };
+    let credentials = secrets.credentials();
+    let existing = install_of(credentials, &module.name);
     // Settings the environment supplies (a deployed lf) are not lf's to
     // write: the setup alone runs, over them.
     if let Some(existing) = existing
-        && (existing.origin.file.is_none() || !existing.origin.env_fields.is_empty())
+        && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
     {
-        let settings = crate::core::settings_of(&credentials, module);
+        let settings = crate::core::settings_of(credentials, module);
         for line in crate::core::set_up(project, module, &settings)? {
             prompter.print(&line);
         }
@@ -438,13 +431,9 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
         Some(existing) => existing.name.clone(),
         None => core_entry_name(&module.name),
     };
-    let file = match existing.and_then(|e| e.origin.file.clone()) {
-        Some(file) => file,
-        None => secrets_file_for_writes(project, &env)?,
-    };
     let content = entry_content(&module.name, &Binding::Install, &fields);
-    change_entry(&file, &install_name, EntryChange::Replace(&|_| Ok(content.clone()))).await?;
-    prompter.print(&format!("connected {}: its settings are \"{install_name}\" in {}", module.name, file.path.display()));
+    secrets.store().replace(&install_name, &|_| Ok(content.clone())).await?;
+    prompter.print(&format!("connected {}: its settings are \"{install_name}\" in {}", module.name, secrets.store().label()));
     let filling = match module.slot {
         crate::core::Slot::Store => Some(&project.core.store),
         crate::core::Slot::Models => Some(&project.core.models),
@@ -455,6 +444,7 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
         crate::core::Slot::Browser => project.core.browser.as_ref(),
         crate::core::Slot::Wake => project.core.wake.as_ref(),
         crate::core::Slot::Ocr => project.core.ocr.as_ref(),
+        crate::core::Slot::Secrets => Some(&project.core.secrets),
     };
     if filling.is_none_or(|filling| filling.name != module.name) {
         prompter.print(&format!("to use it, name it in lf.yaml: core: {{ {}: \"{}\" }}", module.slot.name(), module.name));

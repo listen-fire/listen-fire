@@ -868,8 +868,11 @@ export type WireModuleKindShape = z.infer<typeof WireModuleKind>;
  *  other host leaves empty (a module asking for a page is refused by name),
  *  and `wake`, which stays empty unless named (nobody is told work is due;
  *  a scheduled worker finds it), and `ocr`, which stays empty unless named
- *  (a scanned file is refused, saying the slot is empty). */
-export const CORE_SLOTS = ['models', 'judge', 'store', 'files', 'limiter', 'loopGuard', 'browser', 'wake', 'ocr'] as const;
+ *  (a scanned file is refused, saying the slot is empty). `secrets` is
+ *  where credentials are kept (`lf`'s default: its secrets file); a secrets
+ *  module's own settings come from the environment or that file, never
+ *  from itself. */
+export const CORE_SLOTS = ['models', 'judge', 'store', 'files', 'limiter', 'loopGuard', 'browser', 'wake', 'ocr', 'secrets'] as const;
 export const WireCoreSlot = z.enum(CORE_SLOTS);
 export type WireCoreSlotShape = z.infer<typeof WireCoreSlot>;
 

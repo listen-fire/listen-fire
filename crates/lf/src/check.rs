@@ -19,7 +19,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
-use crate::secrets::{Credentials, MissingCredential, load_secrets, missing_credentials};
+use crate::secrets::{Credentials, MissingCredential, Secrets, missing_credentials};
 use crate::sources::{MovementFile, scan_movements};
 
 /// The one tenant a local project is (`LOCAL_TENANT`).
@@ -107,23 +107,24 @@ pub enum Opened {
 
 pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     let env: Vec<(String, String)> = std::env::vars().collect();
-    let credentials = load_secrets(project, &env)?;
+    let secrets = Secrets::open(project, &env)?;
+    let credentials = secrets.credentials();
     let files = scan_movements(project)?;
-    let missing = missing_credentials(project, &files, &credentials, &env);
+    let missing = missing_credentials(&files, &secrets);
     if !missing.is_empty() {
         return Ok(Opened::MissingCredentials(missing));
     }
     // A check starts only what the files import: a third-party graph is
     // read live, so its module runs for the check.
     let externals = needed_externals(scan_externals(project)?, &files, |_| false);
-    let running = start_externals(project, &externals, &credentials, LOCAL_TENANT).await?;
+    let running = start_externals(project, &externals, credentials, LOCAL_TENANT).await?;
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
-        schemas.insert(r.external.manifest.name.clone(), describe_external(r, &credentials).await?);
+        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials).await?);
     }
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(project)?;
-    let catalog = catalog_of(&running, &schemas, &credentials, &files);
+    let catalog = catalog_of(&running, &schemas, credentials, &files);
     Ok(Opened::Ready(Checking { files, catalog, _running: running }))
 }
 

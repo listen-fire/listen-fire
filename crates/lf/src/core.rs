@@ -24,7 +24,10 @@
 //! ready now or at a time) has no built-in either, so it is empty unless
 //! named (crate::wake, docs/contracts/wake-slot.md). The ocr slot (a scanned
 //! file's text) has no built-in either: empty unless named, a scanned file
-//! is refused saying so (crate::ocr, docs/contracts/ocr-slot.md).
+//! is refused saying so (crate::ocr, docs/contracts/ocr-slot.md). The
+//! secrets slot (where credentials are kept) defaults to @lf/file-secrets,
+//! the secrets file; a secrets module's own settings come from the
+//! environment and that file, never from itself (crate::secrets_slot).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -45,10 +48,11 @@ pub enum Slot {
     Browser,
     Wake,
     Ocr,
+    Secrets,
 }
 
 impl Slot {
-    pub const ALL: [Slot; 9] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::LoopGuard, Slot::Browser, Slot::Wake, Slot::Ocr];
+    pub const ALL: [Slot; 10] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::LoopGuard, Slot::Browser, Slot::Wake, Slot::Ocr, Slot::Secrets];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -61,6 +65,7 @@ impl Slot {
             Slot::Browser => "browser",
             Slot::Wake => "wake",
             Slot::Ocr => "ocr",
+            Slot::Secrets => "secrets",
         }
     }
 
@@ -77,6 +82,7 @@ impl Slot {
             Slot::Store => SQLITE_STORE,
             Slot::Files => LOCAL_FILES,
             Slot::Limiter => MEMORY_LIMITER,
+            Slot::Secrets => FILE_SECRETS,
             Slot::LoopGuard | Slot::Browser | Slot::Wake | Slot::Ocr => return None,
         };
         Some(builtin(name).expect("a slot's default is a built-in"))
@@ -145,6 +151,7 @@ pub const NO_POSTGRES: &str = "this lf was built without the `postgres` feature,
 pub const LOCAL_FILES: &str = "@lf/local-files";
 pub const MEMORY_LIMITER: &str = "@lf/memory-limiter";
 pub const FINGERPRINT_GUARD: &str = "@lf/fingerprint-guard";
+pub const FILE_SECRETS: &str = "@lf/file-secrets";
 
 const ANTHROPIC_SETTINGS: &[Setting] = &[
     setting("api_key", "your Anthropic API key", true, false),
@@ -168,6 +175,8 @@ pub const BUILTIN: &[CoreModule] = &[
     built_in(MEMORY_LIMITER, Slot::Limiter, &[]),
     // Remembers what a run wrote for an hour, so the write's echo runs nothing.
     built_in(FINGERPRINT_GUARD, Slot::LoopGuard, FINGERPRINT_GUARD_SETTINGS),
+    // The secrets file (plain or SOPS) and its lock file: lf's secrets as they always were.
+    built_in(FILE_SECRETS, Slot::Secrets, &[]),
 ];
 
 pub fn builtin(name: &str) -> Option<&'static CoreModule> {
@@ -190,6 +199,7 @@ pub struct CoreChoice {
     pub wake: Option<CoreModule>,
     /// None: a file with no text layer is unreadable, saying the slot is empty.
     pub ocr: Option<CoreModule>,
+    pub secrets: CoreModule,
 }
 
 impl Default for CoreChoice {
@@ -204,6 +214,7 @@ impl Default for CoreChoice {
             browser: None,
             wake: None,
             ocr: None,
+            secrets: Slot::Secrets.default_module().expect("secrets has a default").clone(),
         }
     }
 }
@@ -257,6 +268,7 @@ impl CoreChoice {
                 Slot::Browser => choice.browser = Some(module),
                 Slot::Wake => choice.wake = Some(module),
                 Slot::Ocr => choice.ocr = Some(module),
+                Slot::Secrets => choice.secrets = module,
             }
         }
         Ok(choice)
@@ -269,6 +281,8 @@ fn builtin_names(slot: Slot) -> String {
 
 /// A core module's settings as its install entry holds them (`lf connect`
 /// writes it; `LF_SECRET__<ENTRY>__<FIELD>` supplies or overrides fields).
+/// The secrets slot's own module reads its from the environment and the
+/// secrets file only (crate::secrets_slot::module_settings).
 pub fn settings_of(credentials: &Credentials, module: &CoreModule) -> BTreeMap<String, String> {
     install_of(credentials, &module.name).map(|c| c.fields.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default()
 }
@@ -297,7 +311,7 @@ pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String
         crate::limiter_module::ProcessLimiter::start(&module.name, process, settings)?;
         return Ok(vec![format!("{} answered as a limiter", module.name)]);
     }
-    if let (Some(process), slot @ (Slot::Models | Slot::Judge | Slot::Files | Slot::Browser | Slot::Wake | Slot::Ocr)) = (&module.process, module.slot) {
+    if let (Some(process), slot @ (Slot::Models | Slot::Judge | Slot::Files | Slot::Browser | Slot::Wake | Slot::Ocr | Slot::Secrets)) = (&module.process, module.slot) {
         let client = crate::slot_client::SlotClient::start(slot.name(), &module.name, process, settings)?;
         let manifest = client.call_text("manifest", Default::default())?;
         let answered = manifest.get("slot").and_then(crate::json::Js::as_str);
@@ -379,6 +393,16 @@ mod tests {
             [ANTHROPIC, JUDGE, SQLITE_STORE, LOCAL_FILES, MEMORY_LIMITER]
         );
         assert_eq!(choice.loop_guard, None, "no guard runs unless lf.yaml names one");
+        assert_eq!(choice.secrets.name, FILE_SECRETS, "credentials are kept in the secrets file unless lf.yaml names a module");
+    }
+
+    #[test]
+    fn the_secrets_slot_takes_a_secrets_module() {
+        assert_eq!(Slot::of("secrets"), Some(Slot::Secrets));
+        let installed = [process_module("acme_vault", Slot::Secrets)];
+        assert_eq!(CoreChoice::of(&named(&[("secrets", "acme_vault")]), &installed, "lf.yaml").unwrap().secrets, installed[0]);
+        assert!(CoreChoice::of(&named(&[("secrets", "@lf/vault")]), &[], "lf.yaml").unwrap_err().contains("built-in secrets modules (@lf/file-secrets)"));
+        assert!(CoreChoice::of(&named(&[("store", FILE_SECRETS)]), &[], "lf.yaml").unwrap_err().contains("fills the secrets slot"));
     }
 
     #[test]
