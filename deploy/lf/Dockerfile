@@ -21,7 +21,7 @@ RUN cargo build --release --locked -p listen-fire \
 # The built-in modules run under node (serve-module): install only the module
 # kit's, dealroom's, web's, pdf's, s3-files's, postgres-limiter's, models's and document-ai's
 # closure of the workspace (web brings file-text; document-ai the platform's Document AI reader).
-FROM node:22.20.0-slim AS modules-build
+FROM node:22.23.4-slim AS modules-build
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@9.5.0 --activate
 WORKDIR /srv/lf
@@ -30,7 +30,7 @@ COPY packages packages
 COPY modules modules
 RUN pnpm install --frozen-lockfile --filter "@listen-fire/dealroom..." --filter "@listen-fire/web..." --filter "@listen-fire/pdf..." --filter "@listen-fire/module-kit..." --filter "@listen-fire/s3-files..." --filter "@listen-fire/postgres-limiter..." --filter "@listen-fire/models..." --filter "@listen-fire/document-ai..."
 
-FROM node:22.20.0-slim
+FROM node:22.23.4-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv/lf
