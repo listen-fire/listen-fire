@@ -19,7 +19,6 @@ import type { ChatCallFor } from './chat';
 import type { ChatModelName, Provider, Resolved } from 'movement-engine/public/models';
 
 import behaviour from './behaviour.json';
-import { rateLimitDelayMs } from './retry_after';
 import { buildStructuredTool, extractStructuredResult } from './structured';
 import {
   defaultPageReader,
@@ -36,7 +35,7 @@ import {
   webChatTools,
   WEB_FETCH_MAX_CONTENT_TOKENS,
 } from './web_tools';
-import { limited, limiterSlot, limitRequest } from 'movement-engine/public/limiter';
+import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs } from 'movement-engine/public/limiter';
 import { logger } from 'movement-engine/public/log';
 import { assertRunBudget } from 'movement-engine/public/models';
 import { neverAsAny } from 'movement-engine/public/types';
@@ -71,10 +70,15 @@ interface ModelAccess {
   logFields(): Record<string, unknown>;
 }
 
+/** Who every model request is made as: where the vendor's rate limit lands
+ *  (its throttle key) and what `@lf/anthropic`'s declared limit counts. */
+const MODELS_CALLER = { module: '@lf/anthropic', team: '' };
+
 /** Requests in flight at once: `@lf/anthropic`'s own declared limit, kept by
  *  the limiter slot (services/limiter), as lf's Rust client keeps it. A
- *  request holds its place through its retries. */
-const MODELS_REQUEST = limitRequest({ module: '@lf/anthropic', team: '' }, [
+ *  request holds its place through its retries, but not through a vendor's
+ *  rate limit: that is a throttle on the caller, waited out in the queue. */
+const MODELS_REQUEST = limitRequest(MODELS_CALLER, [
   { scope: 'module', concurrent: behaviour.concurrentRequests },
 ]);
 
@@ -82,41 +86,51 @@ const MODELS_REQUEST = limitRequest({ module: '@lf/anthropic', team: '' }, [
 const RETRY_LIMIT = behaviour.retry.attempts;
 const INITIAL_DELAY = behaviour.retry.initialDelayMs;
 const TIME_MULTIPLE = behaviour.retry.multiple;
-const RATE_LIMIT_DELAY = behaviour.retry.rateLimitWaitMs;
+const RATE_LIMIT_WAIT = behaviour.retry.rateLimitWaitMs;
+
+function rateLimited(e: unknown): boolean {
+  return e instanceof Error && e.message.includes('429');
+}
 
 async function enqueueQuery<T>(fn: () => Promise<T>, signal?: AbortSignal) {
   // Every request — each turn of a tool loop, each continuation — first asks
   // whether its run has spent its cost cap. Here, in the caller's own async
   // context: the queued job may be started from another job's.
   assertRunBudget();
-  return limited(limiterSlot(), MODELS_REQUEST, async () => {
-    return backOff(fn, {
-      jitter: 'none',
-      numOfAttempts: RETRY_LIMIT,
-      startingDelay: INITIAL_DELAY,
-      timeMultiple: TIME_MULTIPLE,
-      retry: async (e, attempt) => {
-        if (signal?.aborted) return false;
-        if (e instanceof Error && e.message.includes('429')) {
-          const asked = rateLimitDelayMs(e);
-          const wait = asked ?? RATE_LIMIT_DELAY;
-          logger.info(
-            `Hit model vendor rate limit, waiting ${wait / SECOND}s (${asked === undefined ? 'default' : 'from retry-after'})`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, wait));
-        } else if (e instanceof Error && e.message.includes('401')) {
-          return false;
-        }
-        if (attempt < RETRY_LIMIT) {
-          logger.info(
-            `Retrying Anthropic query in ${(INITIAL_DELAY / SECOND) * TIME_MULTIPLE ** (attempt - 1)}s`,
-            { error: e },
-          );
-        }
-        return true;
-      },
-    });
-  });
+  for (let rateLimits = 1; ; rateLimits++) {
+    try {
+      return await limited(limiterSlot(), MODELS_REQUEST, async () => {
+        return backOff(fn, {
+          jitter: 'none',
+          numOfAttempts: RETRY_LIMIT,
+          startingDelay: INITIAL_DELAY,
+          timeMultiple: TIME_MULTIPLE,
+          retry: async (e, attempt) => {
+            if (signal?.aborted) return false;
+            // Out of the permit: the throttle below holds every request
+            // made as this caller, not just this one.
+            if (rateLimited(e)) return false;
+            if (e instanceof Error && e.message.includes('401')) return false;
+            if (attempt < RETRY_LIMIT) {
+              logger.info(
+                `Retrying Anthropic query in ${(INITIAL_DELAY / SECOND) * TIME_MULTIPLE ** (attempt - 1)}s`,
+                { error: e },
+              );
+            }
+            return true;
+          },
+        });
+      });
+    } catch (e) {
+      if (!rateLimited(e) || signal?.aborted || rateLimits >= RETRY_LIMIT) throw e;
+      const asked = vendorWaitMs(e);
+      const wait = asked ?? RATE_LIMIT_WAIT;
+      logger.info(
+        `Hit model vendor rate limit, throttling model requests for ${wait / SECOND}s (${asked === undefined ? 'default' : 'from retry-after'})`,
+      );
+      await throttleAfter(limiterSlot(), MODELS_CALLER, wait);
+    }
+  }
 }
 
 // ── The usage meter ───────────────────────────────────────────────────────

@@ -1,5 +1,7 @@
 // The limiter slot: a module's declared limits held across the calls it makes
 // (`limitRequest`, then `limited` around the call), the slot a host fills
-// (`installLimiter`), and the in-process limiter a host starts from.
+// (`installLimiter`), the in-process limiter a host starts from, and a
+// vendor's rate-limit wait read (`vendorWaitMs`) and turned into a throttle on
+// the caller's key (`throttleAfter`).
 
 export * from '../services/limiter/limiter';

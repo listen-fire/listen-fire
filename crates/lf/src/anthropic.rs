@@ -69,7 +69,8 @@ pub enum ChatError {
 
 #[derive(Debug)]
 enum RequestError {
-    Http { status: u16, message: String },
+    /// `retry_after`: the wait a 429's `Retry-After` asked for (`vendor_wait`).
+    Http { status: u16, message: String, retry_after: Option<Duration> },
     Connection(String),
     /// An `error` event in the stream.
     Stream { retryable: bool, message: String },
@@ -93,6 +94,27 @@ impl RequestError {
     fn rate_limited(&self) -> bool {
         matches!(self, RequestError::Http { status: 429, .. })
     }
+
+    /// The wait a 429's `Retry-After` asked for, if it named one.
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            RequestError::Http { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+}
+
+/// A `Retry-After` value (whole seconds, or an HTTP date) as the wait it asks
+/// for from `now_ms`, clamped to [1s, 120s] as the TypeScript client's
+/// `vendorWaitMs` clamps it, so an absurd value neither spins nor stalls.
+fn vendor_wait(value: &str, now_ms: i64) -> Option<Duration> {
+    static HTTP_DATE: jiff::fmt::rfc2822::DateTimeParser = jiff::fmt::rfc2822::DateTimeParser::new();
+    let value = value.trim();
+    let ms = match value.parse::<f64>() {
+        Ok(seconds) if seconds.is_finite() && seconds >= 0.0 => seconds * 1000.0,
+        _ => (HTTP_DATE.parse_timestamp(value).ok()?.as_millisecond() - now_ms) as f64,
+    };
+    Some(Duration::from_millis(ms.round().clamp(1_000.0, 120_000.0) as u64))
 }
 
 /// A user turn block: `cache_control` makes the end of it a cache breakpoint.
@@ -260,24 +282,36 @@ impl Provider {
         })
     }
 
+    /// One request, retried with the backoff while it holds its place. A 429
+    /// gives the place up: it throttles the caller's key in the limiter for
+    /// the provider's `Retry-After` (else `rate_limit_wait`), so every request
+    /// made as this caller, by any host sharing the limiter, waits it out.
     async fn request_with_backoff(&self, body: &Json) -> Result<Message, RequestError> {
         let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
-        let _held = crate::limiter::acquire(&self.limiter, &caller.request(LIMITS)).await.map_err(RequestError::Connection)?;
         let backoff = self.backoff;
-        let mut attempt = 1;
+        let mut rate_limits = 1;
         loop {
-            let error = match self.request_once(body).await {
-                Ok(message) => return Ok(message),
-                Err(error) => error,
+            let held = crate::limiter::acquire(&self.limiter, &caller.request(LIMITS)).await.map_err(RequestError::Connection)?;
+            let mut attempt = 1;
+            let error = loop {
+                let error = match self.request_once(body).await {
+                    Ok(message) => return Ok(message),
+                    Err(error) => error,
+                };
+                if error.rate_limited() || !error.retryable() || attempt >= backoff.attempts {
+                    break error;
+                }
+                tokio::time::sleep(backoff.initial * backoff.multiple.pow(attempt - 1)).await;
+                attempt += 1;
             };
-            if !error.retryable() || attempt >= backoff.attempts {
+            drop(held);
+            if !error.rate_limited() || rate_limits >= backoff.attempts {
                 return Err(error);
             }
-            if error.rate_limited() {
-                tokio::time::sleep(backoff.rate_limit_wait).await;
-            }
-            tokio::time::sleep(backoff.initial * backoff.multiple.pow(attempt - 1)).await;
-            attempt += 1;
+            let wait = error.retry_after().unwrap_or(backoff.rate_limit_wait);
+            let until = crate::limiter::now_ms().saturating_add(i64::try_from(wait.as_millis()).unwrap_or(i64::MAX));
+            self.limiter.throttle(&caller.throttle_key(), until).map_err(RequestError::Connection)?;
+            rate_limits += 1;
         }
     }
 
@@ -302,7 +336,7 @@ impl Provider {
             .header("user-agent", concat!("lf/", env!("CARGO_PKG_VERSION")))
             .body(Full::new(Bytes::from(body.to_string())))
             .map_err(|e| connection_error(&e))?;
-        let (status, content_type, bytes) = if target.tls {
+        let (status, head, bytes) = if target.tls {
             let server_name = rustls::pki_types::ServerName::try_from(target.host.clone()).map_err(|e| connection_error(&e))?;
             let tls = tls_connector().connect(server_name, tcp).await.map_err(|e| connection_error(&e))?;
             exchange(tls, request).await.map_err(|e| connection_error(&e))?
@@ -310,16 +344,23 @@ impl Provider {
             exchange(tcp, request).await.map_err(|e| connection_error(&e))?
         };
         if !(200..300).contains(&status) {
-            return Err(RequestError::Http { status, message: http_error_message(status, &bytes) });
+            let retry_after = head.retry_after.as_deref().and_then(|value| vendor_wait(value, crate::limiter::now_ms()));
+            return Err(RequestError::Http { status, message: http_error_message(status, &bytes), retry_after });
         }
-        if content_type.starts_with("application/json") {
+        if head.content_type.starts_with("application/json") {
             return Message::of_json(&bytes).map_err(RequestError::Connection);
         }
         Message::of_stream(&String::from_utf8_lossy(&bytes))
     }
 }
 
-async fn exchange<S>(stream: S, request: Request<Full<Bytes>>) -> Result<(u16, String, Bytes), String>
+/// The response headers the client reads.
+struct Head {
+    content_type: String,
+    retry_after: Option<String>,
+}
+
+async fn exchange<S>(stream: S, request: Request<Full<Bytes>>) -> Result<(u16, Head, Bytes), String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -329,9 +370,10 @@ where
     });
     let response = sender.send_request(request).await.map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
-    let content_type = response.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let head = Head { content_type: header("content-type").unwrap_or_default(), retry_after: header("retry-after") };
     let bytes = response.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
-    Ok((status, content_type, bytes))
+    Ok((status, head, bytes))
 }
 
 /// The SDK's `APIError` message: the status, then the body's `message` or
@@ -754,6 +796,67 @@ pub mod tests {
         assert_eq!(peak.load(Ordering::SeqCst) as u64, MAX_REQUESTS_IN_FLIGHT);
     }
 
+    /// A provider answering its first request 429 with `retry_after` (if
+    /// any), then "ok"; returns its url and how many requests it saw.
+    async fn rate_limited_once(retry_after: Option<&'static str>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counting = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                read_request(&mut socket).await;
+                if counting.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let header = retry_after.map(|value| format!("retry-after: {value}\r\n")).unwrap_or_default();
+                    let payload = r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#;
+                    let reply = format!("HTTP/1.1 429 X\r\ncontent-type: application/json\r\n{header}content-length: {}\r\nconnection: close\r\n\r\n{payload}", payload.len());
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                } else {
+                    write_reply(&mut socket, 200, "text/event-stream", &stream_of(&[("text", "ok")], "end_turn", (1, 1))).await;
+                }
+            }
+        });
+        (url, seen)
+    }
+
+    #[tokio::test]
+    async fn a_429_throttles_the_caller_for_the_providers_retry_after() {
+        let (url, seen) = rate_limited_once(Some("1")).await;
+        let provider = quick(url);
+        let started = std::time::Instant::now();
+        let reply = provider.chat_detailed(&options(None, "claude-sonnet-5"), &|| true).await.unwrap();
+        assert_eq!(reply.text, "ok");
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+        assert!(started.elapsed() >= Duration::from_millis(900), "waited {:?}", started.elapsed());
+        // The wait was a throttle on the caller's key, not a sleep: it lapsed.
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
+        assert!(matches!(provider.limiter.acquire(&caller.request(&[])), Ok(crate::limiter::Grant::Granted { .. })));
+    }
+
+    #[tokio::test]
+    async fn a_429_naming_no_wait_throttles_for_the_behaviours_rate_limit_wait() {
+        let (url, seen) = rate_limited_once(None).await;
+        let mut provider = quick(url);
+        provider.backoff.rate_limit_wait = Duration::from_millis(600);
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: None, team: "" };
+        let started = std::time::Instant::now();
+        let options = options(None, "claude-sonnet-5");
+        let probe = async {
+            while seen.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            // Another request made as the same caller is refused until the wait is over.
+            provider.limiter.acquire(&caller.request(&[]))
+        };
+        let (reply, probed) = tokio::join!(provider.chat_detailed(&options, &|| true), probe);
+        assert!(matches!(probed, Ok(crate::limiter::Grant::Refused { .. })));
+        assert_eq!(reply.unwrap().text, "ok");
+        assert!(started.elapsed() >= Duration::from_millis(550), "waited {:?}", started.elapsed());
+    }
+
     /// @lf/anthropic's behaviour (modules/anthropic/behaviour.json), which the
     /// TypeScript client reads: the same declared limit, retries and
     /// continuations from both.
@@ -769,6 +872,13 @@ pub mod tests {
         assert_eq!(retry["initialDelayMs"].as_u64(), Some(backoff.initial.as_millis() as u64));
         assert_eq!(retry["multiple"].as_u64(), Some(u64::from(backoff.multiple)));
         assert_eq!(retry["rateLimitWaitMs"].as_u64(), Some(backoff.rate_limit_wait.as_millis() as u64));
+        // A 429's Retry-After, in either form, is the wait (vendorWaitMs), clamped to [1s, 120s].
+        let now = jiff::Timestamp::from_second(1_792_670_400).unwrap().as_millisecond();
+        assert_eq!(vendor_wait("7", now), Some(Duration::from_secs(7)));
+        assert_eq!(vendor_wait("Wed, 21 Oct 2026 12:00:30 GMT", jiff::Timestamp::from_second(1_792_584_000).unwrap().as_millisecond()), Some(Duration::from_secs(30)));
+        assert_eq!(vendor_wait("600", now), Some(Duration::from_secs(120)));
+        assert_eq!(vendor_wait("0", now), Some(Duration::from_secs(1)));
+        assert_eq!(vendor_wait("soon", now), None);
     }
 
     #[test]

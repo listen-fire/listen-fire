@@ -14,6 +14,8 @@
 import { randomUUID } from 'node:crypto';
 import type { WireDeclaredLimitShape, WireLimitScopeShape } from 'engine-contracts';
 
+export { vendorWaitMs } from 'module-runtime/vendor_wait';
+
 /** One limit a request is under, resolved to the bucket it counts in. */
 export interface LimitBucket {
   key: string;
@@ -143,6 +145,13 @@ export async function limited<T>(limiter: Limiter, request: LimitRequest, call: 
   } finally {
     await held.release();
   }
+}
+
+/** A vendor's "wait `waitMs`" (`vendorWaitMs`, or the caller's default) as a
+ *  throttle on `caller`'s key: every call made as that caller, by any host
+ *  sharing `limiter`, is refused until then, and `acquireOrWait` waits it out. */
+export async function throttleAfter(limiter: Limiter, caller: Caller, waitMs: number, now: number = Date.now()): Promise<void> {
+  await limiter.throttle({ key: throttleKey(caller), until: new Date(now + waitMs).toISOString() });
 }
 
 // ── The slot this process's calls ask ───────────────────────────────────────

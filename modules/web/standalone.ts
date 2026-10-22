@@ -10,6 +10,9 @@
 //   - Pages: Bright Data's Web Unlocker (`brightDataAccessToken`,
 //     `brightDataUnlockerZone`) when configured, else a plain GET — a local
 //     host reads the open web as its user does.
+//   - Bright Data's limits are the limiter slot's (`BRIGHT_DATA_SERP`,
+//     `BRIGHT_DATA_UNLOCKER`), and its 429 closes the zone's caller for the
+//     wait it asks (else the platform's default) in every host sharing it.
 //   - No profile reader: a profile address fails, naming what is not
 //     available off the platform.
 //   - Gated documents (a deck host, a data room, a Notion page) are read
@@ -25,7 +28,7 @@
 // `ctx.config.baseUrlOverride` stands in for api.brightdata.com and Anthropic
 // alike, so a test serves both from one fake.
 
-import type { WireCredentialDeclarationShape } from 'engine-contracts';
+import type { WireCredentialDeclarationShape, WireDeclaredLimitShape } from 'engine-contracts';
 import type { ModuleContext } from 'module-kit';
 
 import { Readable } from 'node:stream';
@@ -39,6 +42,7 @@ import type { FetchedResource, SearchResult, WebTools } from './tools';
 
 import { anthropicClient, anthropicKeyedChatProvider, type LlmUsage } from '@listen-fire/anthropic';
 import { costMicrodollars } from '@listen-fire/anthropic';
+import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs, type Caller } from 'movement-engine/public/limiter';
 import { models } from 'movement-engine/public/models';
 import { FULLY_SUPPORTED_DOCUMENT_REGEXES, NOTION_REGEX, PDF_REGEX, PPTX_REGEX, XLSX_REGEX } from 'engine-contracts/document_sources';
 import { isLinkedInUrl, looksLikeNonHtmlAddress } from './addresses';
@@ -64,6 +68,36 @@ interface DownloadedFile {
 }
 
 const BRIGHT_DATA = 'https://api.brightdata.com';
+
+/** One Bright Data zone's caller in the limiter slot. Each zone is a caller
+ *  of its own, since a vendor's throttle closes every call by its caller. */
+interface BrightDataZone {
+  module: string;
+  limits: readonly WireDeclaredLimitShape[];
+  /** How long a 429 that names no wait closes the zone. */
+  rateLimitWaitMs: number;
+}
+
+// The platform's numbers. The module has no settings surface, so they are
+// constants: the SERP rate mirrors the platform's BRIGHT_DATA_SERP_PER_MINUTE
+// (default 14), the Unlocker's ten in flight its scraper's queue; the waits
+// are its search's 30s and its scraper's 60s.
+const BRIGHT_DATA_SERP: BrightDataZone = {
+  module: '@lf/web/serp',
+  limits: [{ scope: 'install', calls: 14, per: '1m' }],
+  rateLimitWaitMs: 30_000,
+};
+const BRIGHT_DATA_UNLOCKER: BrightDataZone = {
+  module: '@lf/web/unlocker',
+  limits: [{ scope: 'install', concurrent: 10 }],
+  rateLimitWaitMs: 60_000,
+};
+
+/** Bright Data answers HTTP 200 for a request its own limit refused, and
+ *  carries the real status in `x-brd-status-code`. */
+function rateLimitedByBrightData(response: Response): boolean {
+  return response.status === 429 || response.headers.get('x-brd-status-code') === '429';
+}
 const PAGE_CHAR_LIMIT = 50_000;
 const PAGE_TIMEOUT_MS = 60_000;
 
@@ -146,12 +180,23 @@ export async function standaloneTools(ctx: ModuleContext): Promise<WebTools> {
     logFields: () => ({}),
   });
 
-  async function brightDataRequest(zone: string, url: string): Promise<Response> {
-    return ctx.fetch(`${brightData}/request`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fields.brightDataAccessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ zone, url, format: 'raw' }),
-      signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
+  async function brightDataRequest(of: BrightDataZone, { zone, url }: { zone: string; url: string }): Promise<Response> {
+    const caller: Caller = { module: of.module, install: zone, team: ctx.config.tenant };
+    return limited(limiterSlot(), limitRequest(caller, of.limits), async () => {
+      const response = await ctx.fetch(`${brightData}/request`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fields.brightDataAccessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zone, url, format: 'raw' }),
+        signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
+      });
+      if (!rateLimitedByBrightData(response)) return response;
+      // Before the release, so a request waiting on this permit sees the quiet.
+      const asked = vendorWaitMs(response);
+      const wait = asked ?? of.rateLimitWaitMs;
+      ctx.log.warn('@lf/web: Bright Data rate limit, throttling the zone', { zone, waitSeconds: wait / 1000, from: asked === undefined ? 'default' : 'retry-after' });
+      await throttleAfter(limiterSlot(), caller, wait);
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Bright Data answered 429 Too Many Requests on zone ${zone}`);
     });
   }
 
@@ -159,7 +204,7 @@ export async function standaloneTools(ctx: ModuleContext): Promise<WebTools> {
     const zone = fields.brightDataUnlockerZone;
     const response =
       fields.brightDataAccessToken && zone
-        ? await brightDataRequest(zone, url)
+        ? await brightDataRequest(BRIGHT_DATA_UNLOCKER, { zone, url })
         : await ctx.fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText} fetching ${url}`);
     return response;
@@ -299,7 +344,7 @@ export async function standaloneTools(ctx: ModuleContext): Promise<WebTools> {
     const target = new URL('https://www.google.com/search');
     target.searchParams.set('q', query);
     target.searchParams.set('brd_json', '1');
-    const response = await brightDataRequest(zone, target.toString());
+    const response = await brightDataRequest(BRIGHT_DATA_SERP, { zone, url: target.toString() });
     if (!response.ok) throw new Error(`Bright Data search failed: ${response.status} ${response.statusText}`);
     return { items: organicResults(await response.json()) };
   }

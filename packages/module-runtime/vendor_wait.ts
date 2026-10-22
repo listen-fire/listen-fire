@@ -1,10 +1,14 @@
+// How long a rate-limited vendor asked its caller to wait. Here, below both
+// the engine and the module kit, so the kit's limits door and the engine's
+// limiter (`throttleAfter`, movement-engine/public/limiter) read one parser.
+
 const SECOND = 1000;
 
-const MIN_DELAY = 1 * SECOND;
-const MAX_DELAY = 120 * SECOND;
+const MIN_WAIT_MS = 1 * SECOND;
+const MAX_WAIT_MS = 120 * SECOND;
 
 function clamp(ms: number): number {
-  return Math.min(MAX_DELAY, Math.max(MIN_DELAY, Math.round(ms)));
+  return Math.min(MAX_WAIT_MS, Math.max(MIN_WAIT_MS, Math.round(ms)));
 }
 
 /** `Retry-After` is either whole seconds or an HTTP date. */
@@ -27,6 +31,10 @@ function readHeader(headers: unknown, name: string): string | undefined {
   return undefined;
 }
 
+function field(value: unknown, name: string): unknown {
+  return typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined;
+}
+
 /**
  * Google's `google.rpc.RetryInfo` detail: `"retryDelay": "17s"` (or
  * `"17.5s"`) on the wire, `{ seconds: 17 }` in a decoded form. The genai SDK's
@@ -41,12 +49,13 @@ function fromRetryInfo(text: string): number | undefined {
 
 /**
  * How long the vendor asked a rate-limited caller to wait, or undefined when
- * it did not say. Clamped to [1s, 120s] so a hostile or absurd value can
- * neither spin nor stall a queue slot.
+ * it did not say. Read from `e.headers` (a plain object or `Headers`; a
+ * `Response` is one) or `e.response.headers`, else Google's `RetryInfo` in an
+ * error's message. Clamped to [1s, 120s] so a hostile or absurd value can
+ * neither spin nor stall a caller.
  */
-export function rateLimitDelayMs(e: unknown, now: number = Date.now()): number | undefined {
-  const headers = typeof e === 'object' && e !== null && 'headers' in e ? e.headers : undefined;
-  const header = readHeader(headers, 'retry-after');
+export function vendorWaitMs(e: unknown, now: number = Date.now()): number | undefined {
+  const header = readHeader(field(e, 'headers'), 'retry-after') ?? readHeader(field(field(e, 'response'), 'headers'), 'retry-after');
   const fromHeader = header === undefined ? undefined : fromHeaderValue(header, now);
   if (fromHeader !== undefined) return clamp(fromHeader);
 

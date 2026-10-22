@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 import { backOff } from 'exponential-backoff';
 import uniq from 'lodash/uniq';
+import type { WireDeclaredLimitShape } from 'engine-contracts';
 
-import { Queue } from 'movement-engine/public/adapter-support';
+import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs, type Caller } from 'movement-engine/public/limiter';
 import { logger } from 'movement-engine/public/log';
 import {
   bindAdapterCallCounter,
@@ -29,7 +32,13 @@ async function parseJsonResponse(response: Response, serviceName: string): Promi
 const RETRY_LIMIT = 5;
 const INITIAL_DELAY = 1 * SECOND;
 const TIME_MULTIPLE = 5;
-const RATE_LIMIT_DELAY = 30 * SECOND;
+/** How long a 429 that names no wait closes the credential. */
+const RATE_LIMIT_WAIT = 30 * SECOND;
+
+/** Affinity's limits, declared by the module (index.ts) and kept by the
+ *  limiter slot for each request this client sends: four in flight per
+ *  credential, as the client's own queue allowed before the limiter. */
+const AFFINITY_LIMITS: readonly WireDeclaredLimitShape[] = [{ scope: 'credential', concurrent: 4 }];
 
 /** Affinity v1 pages every collection endpoint the same way: `page_size` is
  *  both defaulted and capped at 500, and `next_page_token` comes back exactly
@@ -359,7 +368,10 @@ const webhookSubscriptionValidator = z
 class AffinityAPIClient {
   private apiKey: string;
   private baseUrl: string;
-  private rateLimitQueue = new Queue<unknown>({ concurrency: 4 });
+  /** Who each request is made as: the credential is the workspace's key,
+   *  hashed, since a limiter shared by many hosts keeps its keys in a
+   *  database. */
+  private readonly caller: Caller;
 
   /**
    * The workspace's shape, cached HERE because here is the one place that is
@@ -385,6 +397,8 @@ class AffinityAPIClient {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.memoScope = `affinity:${baseUrl}:${apiKey}:`;
+    const credential = createHash('sha256').update(`${baseUrl}\n${apiKey}`).digest('hex').slice(0, 32);
+    this.caller = { module: '@lf/affinity', credential, team: '' };
   }
 
   // ── Per-segment read memo (services/translation_graph/segment_scope.ts) ──
@@ -476,14 +490,19 @@ class AffinityAPIClient {
     logger.info(url.toString());
 
     // Bound HERE, not inside the job: this client is a process-wide singleton,
-    // so the queue below dequeues a job in whichever other job's async context
-    // happened to free a slot. Capturing the run at the point the call was
-    // ISSUED charges the segment that asked for it (segment_scope.ts).
+    // so a request waiting on the limiter may start in whichever other
+    // request's async context freed its place. Capturing the run at the point
+    // the call was ISSUED charges the segment that asked for it
+    // (segment_scope.ts).
     const countCall = bindAdapterCallCounter('affinity');
+    const request = limitRequest(this.caller, AFFINITY_LIMITS);
 
-    return this.rateLimitQueue.enqueue(async () => {
-      return backOff(
-        async (): Promise<T> => {
+    return backOff(
+      // Each attempt is its own request to the limiter: a throttle Affinity
+      // asked for holds the retry, and every other request on the key, until
+      // it is over.
+      () =>
+        limited(limiterSlot(), request, async (): Promise<T> => {
           // Per ATTEMPT, not per request: a retry is another call Affinity
           // sees, and a run that retries its way through the quota is exactly
           // what the ceiling is for.
@@ -493,6 +512,14 @@ class AffinityAPIClient {
             headers,
             body: body ? JSON.stringify(body) : formData,
           });
+
+          if (response.status === 429) {
+            // Before the release, so a request waiting on this permit sees the quiet.
+            const asked = vendorWaitMs(response);
+            const wait = asked ?? RATE_LIMIT_WAIT;
+            logger.info(`Hit Affinity rate limit, throttling this credential for ${wait / SECOND}s (${asked === undefined ? 'default' : 'from retry-after'})`);
+            await throttleAfter(limiterSlot(), this.caller, wait);
+          }
 
           if (response.status >= 400) {
             let text;
@@ -523,46 +550,38 @@ class AffinityAPIClient {
           }
 
           return null as T;
-        },
-        {
-          jitter: 'none',
-          numOfAttempts: RETRY_LIMIT,
-          startingDelay: INITIAL_DELAY,
-          timeMultiple: TIME_MULTIPLE, // 0s, 1s, 4s, 16s, 64s
-          retry: async (e, attempt) => {
-            if (isAdapterCallCeilingExceeded(e)) {
-              // Retrying the ceiling would spend the very attempts it exists
-              // to stop.
-              return false;
-            } else if (e instanceof AffinityMergedEntityError) {
-              return false;
-            } else if (e instanceof Error && e.message.includes('429')) {
-              // rate limit
-              // extra delay to lower the odds of hitting the rate limit again
-              logger.info(
-                `Hit rate limit, waiting an additional ${RATE_LIMIT_DELAY / SECOND} seconds`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY));
-            } else if (e instanceof Error && e.message.includes('401')) {
-              // invalid api key
-              return false;
-            }
+        }),
+      {
+        jitter: 'none',
+        numOfAttempts: RETRY_LIMIT,
+        startingDelay: INITIAL_DELAY,
+        timeMultiple: TIME_MULTIPLE, // 0s, 1s, 4s, 16s, 64s
+        retry: async (e, attempt) => {
+          if (isAdapterCallCeilingExceeded(e)) {
+            // Retrying the ceiling would spend the very attempts it exists
+            // to stop.
+            return false;
+          } else if (e instanceof AffinityMergedEntityError) {
+            return false;
+          } else if (e instanceof Error && e.message.includes('401')) {
+            // invalid api key
+            return false;
+          }
 
-            if (attempt < RETRY_LIMIT) {
-              logger.info(
-                `Retrying Affinity query in ${
-                  (INITIAL_DELAY / SECOND) * TIME_MULTIPLE ** (attempt - 1)
-                } seconds`,
-                {
-                  error: e,
-                },
-              );
-            }
-            return true;
-          },
+          if (attempt < RETRY_LIMIT) {
+            logger.info(
+              `Retrying Affinity query in ${
+                (INITIAL_DELAY / SECOND) * TIME_MULTIPLE ** (attempt - 1)
+              } seconds`,
+              {
+                error: e,
+              },
+            );
+          }
+          return true;
         },
-      );
-    }) as Promise<T>;
+      },
+    );
   }
 
   /**
@@ -1502,6 +1521,7 @@ const forgetAffinityWorkspace = (apiKey: string, baseUrl?: string): void => {
 };
 
 export {
+  AFFINITY_LIMITS,
   AffinityAPIClient,
   AffinityMergedEntityError,
   forgetAffinityWorkspace,

@@ -14,6 +14,7 @@
 // declaration the host counts each call once.
 
 import { HostLimitGrant, type HostLimitRequestShape, type WireHostLimitsDoorShape } from 'engine-contracts';
+import { vendorWaitMs } from 'module-runtime/vendor_wait';
 
 /** How long a 429 without a usable Retry-After quiets the provider. */
 export const DEFAULT_THROTTLE_MS = 1000;
@@ -21,7 +22,7 @@ export const DEFAULT_THROTTLE_MS = 1000;
 export interface LimitedFetchOptions {
   /** Default: `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
-  /** Default: `Date.now`, for an HTTP-date Retry-After. */
+  /** Default: `Date.now`, for an HTTP-date Retry-After (`vendorWaitMs`). */
   now?: () => number;
 }
 
@@ -54,7 +55,7 @@ export function limitedFetch(fetchImpl: typeof fetch, door: WireHostLimitsDoorSh
     try {
       const response = await fetchImpl(input, init);
       // Before the release, so a request waiting on this permit sees the quiet.
-      if (response.status === 429) await ask({ op: 'throttle', retryAfterMs: retryAfterMs(response.headers.get('retry-after'), now()) });
+      if (response.status === 429) await ask({ op: 'throttle', retryAfterMs: vendorWaitMs(response, now()) ?? DEFAULT_THROTTLE_MS });
       return response;
     } finally {
       // A permit left held is freed by the host when the call answers.
@@ -66,13 +67,4 @@ export function limitedFetch(fetchImpl: typeof fetch, door: WireHostLimitsDoorSh
 function requestUrl(input: Parameters<typeof fetch>[0]): string {
   if (typeof input === 'string') return input;
   return input instanceof URL ? input.href : input.url;
-}
-
-/** A Retry-After header (seconds, or an HTTP date) in milliseconds from `now`. */
-export function retryAfterMs(header: string | null, now: number): number {
-  if (header === null || header.trim() === '') return DEFAULT_THROTTLE_MS;
-  const text = header.trim();
-  if (/^\d+$/.test(text)) return Number(text) * 1000;
-  const at = Date.parse(text);
-  return Number.isNaN(at) ? DEFAULT_THROTTLE_MS : Math.max(0, at - now);
 }

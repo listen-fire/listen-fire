@@ -50,15 +50,17 @@ No method waits. A refusal says when to ask again; the host does the waiting.
 - **`concurrent`**: at most that many permits held at once in the bucket.
 - **`key`** (the request's own) is who the call is made as: where a provider's throttle lands.
 - **`holdMs`**: a permit never released lapses after this long, so a crashed host frees its places.
-- **`throttle`**: the provider asked for no call on `key` before `until`. Every `acquire` naming `key` is refused until then.
+- **`throttle`**: the provider asked for no call on `key` before `until`. Every `acquire` naming `key` is refused until then. It is how a vendor's wait reaches the limiter: a caller that meets a 429 throttles its own key for the wait the vendor asked (its `Retry-After`, seconds or an HTTP date, or Google's `RetryInfo`; `vendorWaitMs` in `@listen-fire/engine/public/limiter` reads them, clamped to 1–120 s), else for its own default (`throttleAfter`), and releases its permit rather than sleeping on it. The waiting is the host's, as for any refusal.
+- **A throttle closes a caller, not a request.** `key` is the caller's: the module, then its credential, else its install (`throttleKey`). One throttle refuses every call made as that caller, by every host sharing the limiter, whatever limits each call names. A provider whose limits differ per zone or endpoint (Bright Data's SERP and Web Unlocker zones) is called as a distinct caller per zone (`@lf/web/serp`, `@lf/web/unlocker`), so one zone's 429 leaves the other open.
 - Every request carries its limits. A limiter reads no manifest and keeps no configuration, so a new module, or a new limit on one, needs nothing from the limiter.
 
 ## The contract suite
 
-[`contract.ts`](../../packages/movement-engine/services/limiter/contract.ts) holds every limiter to the same cases. `apps/cli` runs it over `lf --contract-limiter` (lf's built-in) and `lf --contract-limiter-slot` (a test module filling a project's slot, `apps/cli/src/__test__/limiter_module/serve.ts`), in `limiter_contract.test.ts`. The platform's built-in passes the same cases in `services/limiter/__test__`.
+[`contract.ts`](../../packages/movement-engine/services/limiter/contract.ts) holds every limiter to the same cases. `apps/cli` runs it over `lf --contract-limiter` (lf's built-in) and `lf --contract-limiter-slot` (a test module filling a project's slot, `apps/cli/src/__test__/limiter_module/serve.ts`), in `limiter_contract.test.ts`. The platform's built-in passes the same cases in `services/limiter/__test__`. The cases are public (`limiterContractCases` in `@listen-fire/engine/public/testing`) for a limiter built outside this repository.
 
 ## Changes
 
+- **2026-10-22** (within adapter protocol 2): `throttle` is named as the intake for a vendor's wait, and the key's granularity is the caller's. `@lf/anthropic`, `@lf/affinity` and `@lf/web` throttle on a 429. The slot's methods are unchanged.
 - **2026-10-20** (within adapter protocol 2): a module that declares `hostLimits` is counted per provider request at the host's limits door, not per call. The slot's methods are unchanged.
 - **2026-10-19** (within adapter protocol 2): the methods ride adapter protocol 2's HTTP; the stdin/stdout JSON-RPC wire is retired.
 - **2026-10-18** (within adapter protocol 2): the limiter slot, its wire, and process modules filling it.

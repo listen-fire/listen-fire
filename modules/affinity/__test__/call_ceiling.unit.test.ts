@@ -3,7 +3,7 @@
 //
 // Two things are easy to get wrong and are asserted here: the ceiling is
 // charged where the call is ISSUED (the client is a process-wide singleton
-// behind a shared queue, so the run has to be captured, not looked up when the
+// behind the shared limiter, so the run has to be captured, not looked up when the
 // job eventually executes), and the ceiling error is TERMINAL — the retry loop
 // must not spend four more attempts on the very error that exists to stop
 // spending.

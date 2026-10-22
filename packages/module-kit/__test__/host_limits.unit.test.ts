@@ -10,7 +10,7 @@ import type { PluginDeclaration } from 'engine-contracts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { defineModule } from '../define';
-import { DEFAULT_THROTTLE_MS, limitedFetch, retryAfterMs } from '../host_limits';
+import { DEFAULT_THROTTLE_MS, limitedFetch } from '../host_limits';
 import { refusingFiles, refusingKv } from '../in_process';
 import { createModuleProtocolHandler } from '../module_server';
 
@@ -74,12 +74,10 @@ test("a provider's 429 is reported as a throttle, before the permit is released"
   expect(log).toEqual(['door:acquire', `provider:${PROVIDER}`, 'door:throttle:7000', 'door:release:p1']);
 });
 
-test('a Retry-After is seconds or a date; without one the quiet is short', () => {
-  const now = Date.parse('2026-10-20T12:00:00Z');
-  expect(retryAfterMs('30', now)).toBe(30_000);
-  expect(retryAfterMs('Tue, 20 Oct 2026 12:00:05 GMT', now)).toBe(5000);
-  expect(retryAfterMs(null, now)).toBe(DEFAULT_THROTTLE_MS);
-  expect(retryAfterMs('soon', now)).toBe(DEFAULT_THROTTLE_MS);
+test('a 429 without a Retry-After is reported as a short quiet', async () => {
+  const { impl, log } = fakeFetch({ statuses: [{ status: 429 }] });
+  await limitedFetch(impl, door)(PROVIDER);
+  expect(log).toContain(`door:throttle:${DEFAULT_THROTTLE_MS}`);
 });
 
 test("the host's own URLs (its files, its doors) are not the provider's requests", async () => {

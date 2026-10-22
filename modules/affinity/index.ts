@@ -9,7 +9,7 @@
 import { defineModule, type ModuleContext } from 'module-kit';
 
 import { AffinityAdapter } from './adapter';
-import { affinityCredsParser, getAffinityClient, type AffinityAPIClient } from './api_client';
+import { AFFINITY_LIMITS, affinityCredsParser, getAffinityClient, type AffinityAPIClient } from './api_client';
 import { AFFINITY_MANIFEST } from './manifest';
 
 /** The client the context's credential reaches Affinity with. */
@@ -39,6 +39,9 @@ export const affinityModule = defineModule({
       ],
     },
   ],
+  // Four requests in flight per credential, kept by the limiter slot around
+  // each request the client sends (api_client.ts).
+  limits: AFFINITY_LIMITS,
   // Today's provider key and header chain, so every registered webhook URL and
   // every valid signature keeps working.
   inbound: {
