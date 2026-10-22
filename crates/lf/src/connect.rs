@@ -225,10 +225,26 @@ pub async fn connect_module(project: &Project, reference: &str, prompter: &mut P
         None => (install_external(project, reference, prompter, url).await?, true),
     };
     let outcome = set_up(project, &external, &credentials, &env, prompter, options).await;
-    if outcome.is_err() && created {
-        let _ = std::fs::remove_dir_all(&external.dir);
+    match outcome {
+        Err(message) => {
+            if created {
+                let _ = std::fs::remove_dir_all(&external.dir);
+            }
+            Err(message)
+        }
+        // Installed as an adapter, as every package is until its manifest is
+        // read: one that answers with plugins is a plugin external.
+        Ok(facts) if created && facts.answer.get("plugins").is_some() => mark_plugin(&external),
+        Ok(_) => Ok(()),
     }
-    outcome
+}
+
+/// Write `kind: plugin` into an external lf connect just installed.
+fn mark_plugin(external: &External) -> Result<(), String> {
+    let path = external.dir.join(EXTERNAL_MANIFEST);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let marked = text.replacen("\nname: ", "\nkind: plugin\nname: ", 1);
+    std::fs::write(&path, marked).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 async fn set_up(
@@ -238,7 +254,7 @@ async fn set_up(
     env: &[(String, String)],
     prompter: &mut Prompter,
     options: &ConnectOptions<'_>,
-) -> Result<(), String> {
+) -> Result<ManifestFacts, String> {
     let name = &external.manifest.name;
     let existing = install_of(credentials, name).filter(|c| !matches!(c.binding, Binding::Credential(_)));
     if let Some(existing) = existing
@@ -372,7 +388,7 @@ async fn set_up(
     if !facts.declarations.is_empty() {
         prompter.print(&format!("next, a user credential: lf credential add --module {name} <name>"));
     }
-    Ok(())
+    Ok(facts)
 }
 
 /// A built-in core module (crate::core): its settings asked for and written

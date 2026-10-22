@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf connect` of a module package that serves plugins (`@lf/pdf`) installs it as a plugin external (`kind: plugin`), so `lf check` passes without a hand edit.
+
 ## [0.12.0-rc.7] - 2026-10-22
 
 The language is versioned by its release. The integer language versions and their two-word names

@@ -7,14 +7,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { crmCompanies, lf, project } from './example';
+import { spawnSync } from 'node:child_process';
+import { crmCompanies, lf, lfCommand, project } from './example';
 
 const PDF = resolve(__dirname, '../../../../modules/pdf');
 
-function pdfProject(body: string): string {
+function pdfProject(body: string, installed = true): string {
   const dir = project();
-  mkdirSync(join(dir, 'externals/pdf'));
-  writeFileSync(join(dir, 'externals/pdf/lf-external.yaml'), `name: pdf\nkind: plugin\nmodule: ${JSON.stringify(PDF)}\n`);
+  if (installed) {
+    mkdirSync(join(dir, 'externals/pdf'));
+    writeFileSync(join(dir, 'externals/pdf/lf-external.yaml'), `name: pdf\nkind: plugin\nmodule: ${JSON.stringify(PDF)}\n`);
+  }
   rmSync(join(dir, 'movements/companies.mvt'));
   writeFileSync(
     join(dir, 'movements/report.mvt'),
@@ -90,4 +93,13 @@ test('File.from(…, "pdf") is refused by lf check, with the plugin call as the 
   const check = lf(dir, 'check');
   assert.notEqual(check.code, 0);
   assert.match(check.out, /MOV_V5_SPELLING.*@lf\/pdf.*pdf\.render\(text\)/s);
+});
+
+test('lf connect @lf/pdf installs it as a plugin external, so lf check passes with no hand edit', () => {
+  const dir = pdfProject('pdf.render("hi")', false);
+  const connected = spawnSync(...lfCommand(['connect', '@lf/pdf']), { cwd: dir, encoding: 'utf8', input: '', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+  assert.equal(connected.status, 0, `${connected.stdout}${connected.stderr}`);
+  assert.match(readFileSync(join(dir, 'externals/pdf/lf-external.yaml'), 'utf8'), /^kind: plugin$/m);
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
 });
