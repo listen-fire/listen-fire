@@ -8,3 +8,5 @@ export * from '../services/run_host/contract';
 export * from '../services/browser/contract';
 export * from '../services/browser/fake_browser';
 export * from '../services/limiter/contract';
+export { RpcStoreBackend } from '../services/run_host/rpc_store';
+export type { NewDelivery, NewWorkRow } from '../services/run_host/rpc_store';
