@@ -3,19 +3,20 @@
 // <slot>`) are held to the slot conformance cases (movement-engine
 // `public/module-wire`) — the cases every slot module answers alike (its
 // manifest, the envelope's refusals) and the models, judge and files slots'
-// own. The store, limiter and loop guard are held to their families' contract
+// own; the secrets slot's default module is held to the envelope here and to its own
+// cases in secrets_slot_contract. The store, limiter and loop guard are held to their families' contract
 // cases over the same wire in run_host_contract, limiter_contract and
 // loop_guard_contract. The browser slot, which lf builds none of, is held to
 // its contract through the wire client, against the scripted page served as a
 // browser module.
 
 import { test } from 'node:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FILES_METHODS, JUDGE_METHODS, MODELS_METHODS } from 'engine-contracts/slots';
+import { FILES_METHODS, JUDGE_METHODS, MODELS_METHODS, SECRETS_METHODS } from 'engine-contracts/slots';
 import {
   SlotClient,
   browserSlotAnswer,
@@ -57,6 +58,12 @@ async function fakeAnthropic(): Promise<{ url: string; server: Server }> {
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
 
+function emptyProject(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'lf-slot-secrets-'));
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\n');
+  return dir;
+}
+
 const builtIns: Array<{ slot: Parameters<typeof commonSlotCases>[0]; args: () => string[]; methods: readonly string[]; cases: SlotConformanceCase[] }> = [
   { slot: 'models', args: () => ['--contract-models'], methods: MODELS_METHODS, cases: modelsSlotCases },
   { slot: 'judge', args: () => ['--contract-judge'], methods: JUDGE_METHODS, cases: judgeSlotCases },
@@ -64,6 +71,8 @@ const builtIns: Array<{ slot: Parameters<typeof commonSlotCases>[0]; args: () =>
   { slot: 'store', args: () => ['--contract-store', join(mkdtempSync(join(tmpdir(), 'lf-slot-')), 'state.db')], methods: ['store.open', 'runs.start', 'work.claimDue'], cases: [] },
   { slot: 'limiter', args: () => ['--contract-limiter'], methods: ['limiter.acquire'], cases: [] },
   { slot: 'loopGuard', args: () => ['--contract-guard'], methods: ['guard.isEcho'], cases: [] },
+  // The default module, over a project with nothing in it; the slot's own cases are secrets_slot_contract's.
+  { slot: 'secrets', args: () => ['--contract-secrets-slot', '--dir', emptyProject()], methods: SECRETS_METHODS, cases: [] },
 ];
 
 for (const builtIn of builtIns) {

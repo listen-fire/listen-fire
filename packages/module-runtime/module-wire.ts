@@ -9,3 +9,4 @@ export * from './module_wire/wire';
 export * from './module_wire/conformance';
 export * from './module_wire/browser';
 export * from './module_wire/scanned';
+export * from './module_wire/secrets';

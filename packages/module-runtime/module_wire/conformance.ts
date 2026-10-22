@@ -1,5 +1,6 @@
 // The conformance suites of the slots with no family contract of their own
-// (models, judge, files, wake, ocr), and the cases every slot module answers alike (its
+// (models, judge, files, wake, ocr), and the secrets slot's own cases beside
+// the family's (`services/secrets/contract.ts`), and the cases every slot module answers alike (its
 // manifest, the envelope's refusals). Each runs against any server over the
 // wire: written once here, they hold lf's built-ins (`lf --contract-<slot>`)
 // and a third-party module in any language to the same meaning. The store,
@@ -9,6 +10,7 @@
 // `services/browser/contract.ts` through its wire client.
 
 import { strict as assert } from 'node:assert';
+import { randomUUID } from 'node:crypto';
 
 import { PROTOCOL_VERSION, type WireCoreSlotShape as CoreSlot } from 'engine-contracts';
 import {
@@ -21,6 +23,10 @@ import {
   OCR_UNSUPPORTED_TYPE_CODE,
   OcrPricesAnswer,
   OcrReadAnswer,
+  SecretsEntryAnswer,
+  SecretsListed,
+  SecretsLockAnswer,
+  SecretsRecord,
   StoredFile,
   WireSlotManifest,
   isFreePrice,
@@ -28,6 +34,8 @@ import {
 } from 'engine-contracts/slots';
 
 import { pngOf, scannedPdfOf, textImage } from './scanned';
+import { z } from 'zod';
+
 import { SlotClient, SlotRefused, postTo } from './wire';
 
 export interface SlotConformanceCase {
@@ -356,6 +364,148 @@ export const wakeSlotCases: WakeConformanceCase[] = [
       await refusedWith('bad_request', harness.client.call('wake.at', { kind: 'resume_timer', at: 'soon' }));
       await refusedWith('bad_request', harness.client.call('wake.at', { kind: 'resume_timer' }));
       await refusedWith('bad_request', harness.client.call('wake.now', {}));
+    },
+  },
+];
+
+// ── The secrets slot ────────────────────────────────────────────────────────
+
+const NEW_REF = () => `conf_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+const SecretsList = z.array(SecretsListed);
+
+async function listed(client: SlotClient) {
+  return client.read('secrets.list', {}, SecretsList);
+}
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/** The secrets slot's own cases (docs/contracts/secrets-slot.md): the list,
+ *  the lease and whole entries. `client` reaches a module that can change its
+ *  entries; the family's cases (`secretsContractCases`) hold its resolve and
+ *  write-back to the meaning every store has. */
+export const secretsSlotCases: SlotConformanceCase[] = [
+  {
+    name: 'secrets: list names each credential with its external, binding and the version resolve answers',
+    async run(client) {
+      const ref = NEW_REF();
+      const binding = { credential: 'oauth' };
+      await client.read('secrets.create', { ref, external: 'acme_crm', binding, fields: { access_token: 'a1', workspace: 'w1' } }, SecretsEntryAnswer);
+      const one = (await listed(client)).find((entry) => entry.ref === ref);
+      assert.ok(one !== undefined, 'a created entry is listed');
+      assert.equal(one.external, 'acme_crm');
+      assert.deepEqual(one.binding, binding);
+      assert.equal(one.version, (await client.read('secrets.resolve', { ref }, SecretsRecord.nullable()))?.version);
+      await client.call('secrets.delete', { ref });
+    },
+  },
+  {
+    name: 'secrets: create, replace and delete change whole entries, each answered null',
+    async run(client) {
+      const ref = NEW_REF();
+      assert.equal(await client.call('secrets.create', { ref, external: 'acme_crm', binding: 'legacy', fields: { api_key: 'k1' } }), null);
+      assert.deepEqual((await client.read('secrets.resolve', { ref }, SecretsRecord.nullable()))?.fields, { api_key: 'k1' });
+      assert.equal(await client.call('secrets.replace', { ref, external: 'acme_crm', binding: 'install', fields: { api_key: 'k2', workspace: 'w2' } }), null);
+      assert.deepEqual((await client.read('secrets.resolve', { ref }, SecretsRecord.nullable()))?.fields, { api_key: 'k2', workspace: 'w2' }, 'replace is the whole entry, not a merge');
+      assert.equal((await listed(client)).find((entry) => entry.ref === ref)?.binding, 'install');
+      assert.equal(await client.call('secrets.delete', { ref }), null);
+      assert.equal(await client.call('secrets.resolve', { ref }), null);
+      assert.equal((await listed(client)).find((entry) => entry.ref === ref), undefined, 'a deleted entry is not listed');
+    },
+  },
+  {
+    name: 'secrets: create of an entry that exists, and delete of one that does not, are refused',
+    async run(client) {
+      const ref = NEW_REF();
+      const entry = { ref, external: 'acme_crm', binding: 'legacy', fields: { api_key: 'k1' } };
+      await client.call('secrets.create', entry);
+      await assert.rejects(client.call('secrets.create', { ...entry, fields: { api_key: 'k9' } }), SlotRefused);
+      assert.equal((await client.read('secrets.resolve', { ref }, SecretsRecord.nullable()))?.fields.api_key, 'k1', 'the refused create changed nothing');
+      await client.call('secrets.delete', { ref });
+      await assert.rejects(client.call('secrets.delete', { ref }), SlotRefused);
+    },
+  },
+  {
+    name: 'secrets: a second lock on a credential while one is held answers null; unlock frees it',
+    async run(client) {
+      const ref = NEW_REF();
+      const held = await client.read('secrets.lock', { ref, ttlMs: 30_000 }, SecretsLockAnswer);
+      assert.ok(held !== null, 'a free credential is locked');
+      assert.equal(await client.call('secrets.lock', { ref, ttlMs: 30_000 }), null);
+      assert.equal(await client.call('secrets.unlock', { ref, token: `${held.token}-not` }), null, 'a token that is not the lease\'s unlocks nothing');
+      assert.equal(await client.call('secrets.lock', { ref, ttlMs: 30_000 }), null);
+      assert.equal(await client.call('secrets.unlock', { ref, token: held.token }), null);
+      const again = await client.read('secrets.lock', { ref, ttlMs: 30_000 }, SecretsLockAnswer);
+      assert.ok(again !== null && again.token !== held.token, 'an unlocked credential is locked afresh, under a new token');
+      await client.call('secrets.unlock', { ref, token: again.token });
+    },
+  },
+  {
+    name: 'secrets: a lease whose ttl has lapsed is free, without an unlock',
+    async run(client) {
+      const ref = NEW_REF();
+      assert.ok((await client.read('secrets.lock', { ref, ttlMs: 150 }, SecretsLockAnswer)) !== null);
+      assert.equal(await client.call('secrets.lock', { ref, ttlMs: 150 }), null, 'held until its ttl');
+      await sleep(400);
+      const taken = await client.read('secrets.lock', { ref, ttlMs: 30_000 }, SecretsLockAnswer);
+      assert.ok(taken !== null, 'a lapsed lease is taken over');
+      await client.call('secrets.unlock', { ref, token: taken.token });
+    },
+  },
+  {
+    name: 'secrets: assertWritable of a module that changes its entries answers null',
+    async run(client) {
+      assert.equal(await client.call('secrets.assertWritable', { ref: NEW_REF() }), null);
+    },
+  },
+  {
+    name: 'secrets: a request without its ref, a lock without its ttl and an entry without its binding are refused as bad_request',
+    async run(client) {
+      await refusedWith('bad_request', client.call('secrets.resolve', {}));
+      await refusedWith('bad_request', client.call('secrets.lock', { ref: NEW_REF() }));
+      await refusedWith('bad_request', client.call('secrets.create', { ref: NEW_REF(), external: 'acme_crm', fields: {} }));
+    },
+  },
+];
+
+/** What a module that keeps its credentials where lf cannot change them
+ *  answers: `client` reaches one. Entries are refused by name with a reason;
+ *  everything a refresh needs still works. */
+export const secretsReadOnlySlotCases: SlotConformanceCase[] = [
+  ...(['secrets.create', 'secrets.replace'] as const).map(
+    (method): SlotConformanceCase => ({
+      name: `secrets: a read-only module answers ${method} with read_only and its reason, and keeps nothing`,
+      async run(client) {
+        const ref = NEW_REF();
+        const answer = await client.read(method, { ref, external: 'acme_crm', binding: 'legacy', fields: { api_key: 'k1' } }, SecretsEntryAnswer);
+        assert.ok(answer !== null && answer.kind === 'read_only' && answer.reason.length > 0, `${method} answered ${JSON.stringify(answer)}`);
+        assert.equal(await client.call('secrets.resolve', { ref }), null);
+        assert.equal((await listed(client)).find((entry) => entry.ref === ref), undefined);
+      },
+    }),
+  ),
+  {
+    name: 'secrets: a read-only module answers secrets.delete with read_only and its reason',
+    async run(client) {
+      const answer = await client.read('secrets.delete', { ref: NEW_REF() }, SecretsEntryAnswer);
+      assert.ok(answer !== null && answer.kind === 'read_only' && answer.reason.length > 0, `secrets.delete answered ${JSON.stringify(answer)}`);
+    },
+  },
+  {
+    name: 'secrets: a read-only module answers secrets.assertWritable with read_only and its reason',
+    async run(client) {
+      const answer = await client.read('secrets.assertWritable', { ref: NEW_REF() }, SecretsEntryAnswer);
+      assert.ok(answer !== null && answer.kind === 'read_only' && answer.reason.length > 0, `secrets.assertWritable answered ${JSON.stringify(answer)}`);
+    },
+  },
+  {
+    name: 'secrets: a read-only module still lists, resolves and leases',
+    async run(client) {
+      const ref = NEW_REF();
+      assert.ok(Array.isArray(await client.call('secrets.list', {})));
+      assert.equal(await client.call('secrets.resolve', { ref }), null);
+      const held = await client.read('secrets.lock', { ref, ttlMs: 30_000 }, SecretsLockAnswer);
+      assert.ok(held !== null);
+      assert.equal(await client.call('secrets.unlock', { ref, token: held.token }), null);
     },
   },
 ];

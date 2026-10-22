@@ -46,6 +46,19 @@ use crate::secrets::{Binding, Credentials, ENV_PREFIX, SecretsFile, install_of, 
 use crate::secrets_family::{Fields, FileLock, LOCK_WAIT, Lease, LocalFuture, POLL_EVERY, Record, SecretsBackend, WriteBack, content_version};
 use crate::slot_client::SlotClient;
 
+/// The slot's methods (engine-contracts `slots/secrets.ts` `SECRETS_METHODS`).
+pub const SECRETS_METHODS: &[&str] = &[
+    "secrets.resolve",
+    "secrets.writeBack",
+    "secrets.list",
+    "secrets.lock",
+    "secrets.unlock",
+    "secrets.assertWritable",
+    "secrets.create",
+    "secrets.replace",
+    "secrets.delete",
+];
+
 /// One credential a store holds, as `secrets.list` names it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listed {
@@ -495,6 +508,15 @@ pub fn binding_of(js: &Js) -> Option<Binding> {
     }
 }
 
+pub fn listed_js(listed: &Listed) -> Js {
+    Js::from(obj! {
+        "ref" => Js::str(&listed.reference),
+        "external" => Js::str(&listed.external),
+        "binding" => binding_js(&listed.binding),
+        "version" => Js::str(&listed.version),
+    })
+}
+
 pub fn listed_of(js: &Js) -> Option<Listed> {
     Some(Listed {
         reference: js.get("ref")?.as_str()?.to_string(),
@@ -573,15 +595,6 @@ pub fn refuse_unbootstrapped(project: &Project, env: &[(String, String)]) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn listed_js(listed: &Listed) -> Js {
-        Js::from(obj! {
-            "ref" => Js::str(&listed.reference),
-            "external" => Js::str(&listed.external),
-            "binding" => binding_js(&listed.binding),
-            "version" => Js::str(&listed.version),
-        })
-    }
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(future)

@@ -112,6 +112,11 @@ impl Secrets {
     pub fn store(&self) -> &dyn SecretsStore {
         self.store.as_ref()
     }
+
+    /// The store itself, to be held beyond these credentials (`lf --contract-secrets-slot`).
+    pub fn store_handle(&self) -> Rc<dyn SecretsStore> {
+        self.store.clone()
+    }
 }
 
 /// What `store` holds, with the environment's fields over it.
