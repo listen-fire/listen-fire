@@ -226,3 +226,28 @@ test('lf serve: GET on a callback url renders the confirm page and fires nothing
     await serving.stop();
   }
 });
+
+test('lf run --dry-run rehearses past a park: a refresh of a rehearsed record moves nothing, and the segment after the wait captures its writes too', () => {
+  const dir = project('rehearsal');
+  // The external reads a record by its id, so a refresh asks it.
+  const server = join(dir, 'externals/acme_crm/server.mjs');
+  const source = readFileSync(server, 'utf8');
+  const anchor = '  getRelated: () => [],\n';
+  assert.ok(source.includes(anchor), 'the example external changed; update this test patch');
+  writeFileSync(
+    server,
+    source.replace(anchor, `${anchor}  readRecord: ({ externalId }) => readState().companies.find((c) => c.externalId === externalId)?.fields ?? null,\n`),
+  );
+
+  const fired = lf(dir, 'run', '--dry-run', '--event', 'events/company_created.json');
+  assert.equal(fired.code, 0, fired.out);
+  assert.match(fired.out, /rehearsal:rehearse parked/);
+  const id = /"Name":"Asked (cb_[^"]+)"/.exec(fired.out)?.[1];
+  assert.ok(id !== undefined, fired.out);
+
+  const called = lf(dir, 'call', id);
+  assert.equal(called.code, 0, called.out);
+  assert.match(called.out, /rehearsal:rehearse completed/);
+  assert.match(called.out, /dry run, not written: .*"Name":"After Rehearsed"/);
+  assert.deepEqual(companies(dir), [], 'a rehearsal writes nothing, before its park or after');
+});

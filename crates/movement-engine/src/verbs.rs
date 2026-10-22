@@ -210,8 +210,9 @@ impl Run<'_> {
     /// traversed record by its id and move its field snapshot to now, for
     /// every holder of it (the TypeScript mutates the record in place, so
     /// the run's result and a park see the move too). A handle with no id (a
-    /// rehearsal's) has nothing to move; a record the system deleted fails
-    /// the run (F22).
+    /// rehearsal's) has nothing to move, nor has a record a rehearsal
+    /// created (the id its host minted names nothing in the system); a
+    /// record the system deleted fails the run (F22).
     pub(crate) async fn refresh(&self, name: &str, scope: &Rc<Scope>) -> Result<(), Stop> {
         let at = format!("refresh {name}");
         let Some(binding) = scope.resolve(name) else {
@@ -221,7 +222,8 @@ impl Run<'_> {
             Binding::Handle(handle) => {
                 let record = handle.record();
                 let external_id = record.get("externalId");
-                if matches!(external_id, Js::Undefined) {
+                let rehearsed_create = matches!(record.get("created"), Js::Bool(true)) && matches!(record.get("committed"), Js::Bool(false));
+                if matches!(external_id, Js::Undefined) || rehearsed_create {
                     return Ok(());
                 }
                 let record_type = record.get("recordType");

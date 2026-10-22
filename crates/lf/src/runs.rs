@@ -218,17 +218,24 @@ struct RunFacts {
     event: Js,
     movement_name: String,
     fired_at: String,
+    /// A rehearsal (`--dry-run`): every segment of the run captures its
+    /// writes, the ones after a park included.
+    dry_run: bool,
 }
 
 impl RunFacts {
     fn to_js(&self) -> Js {
-        Js::Obj(obj! {
+        let mut facts = obj! {
             "source" => Js::str(&self.source),
             "languageVersion" => Js::str(&self.language_version),
             "event" => self.event.clone(),
             "movementName" => Js::str(&self.movement_name),
             "firedAt" => Js::str(&self.fired_at),
-        })
+        };
+        if self.dry_run {
+            facts.insert("dryRun".into(), Js::Bool(true));
+        }
+        Js::Obj(facts)
     }
 
     /// A run's facts, refused when its pin is one lf does not run.
@@ -261,6 +268,7 @@ impl RunFacts {
             event: facts.get("event").cloned().unwrap_or(Js::Null),
             movement_name: text("movementName")?,
             fired_at: text("firedAt")?,
+            dry_run: facts.get("dryRun") == Some(&Js::Bool(true)),
         })
     }
 }
@@ -502,6 +510,7 @@ impl Session {
             event,
             movement_name: listen.movement_name.clone(),
             fired_at: fired_at.clone(),
+            dry_run,
         };
         let input = facts.to_js().to_json();
         let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input };
@@ -550,7 +559,7 @@ impl Session {
         completing: Option<&str>,
     ) -> Result<StepOutcome, String> {
         tally.borrow_mut().stepped += 1;
-        let ran = match self.segment(run_id, facts, fence, captured.is_some(), entry).await {
+        let ran = match self.segment(run_id, facts, fence, entry).await {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
             Err(Ended::Failed(message)) => {
@@ -595,7 +604,7 @@ impl Session {
     }
 
     /// One engine segment of the run, entered as `entry`, under `fence`.
-    async fn segment(&self, run_id: &str, facts: &RunFacts, fence: Option<&str>, dry_run: bool, entry: Entry) -> Result<Ran, Ended> {
+    async fn segment(&self, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> Result<Ran, Ended> {
         let externals = self.externals();
         let segment_id = uuid::Uuid::new_v4().to_string();
         let host = SegmentHost::new(SegmentHostParts {
@@ -615,7 +624,7 @@ impl Session {
             event: &facts.event,
             fired_at: &facts.fired_at,
             catalog: &self.catalog,
-            dry_run,
+            dry_run: facts.dry_run,
             entry,
             cost_cap_microdollars: self.project.cost_cap_microdollars,
         };
@@ -742,7 +751,7 @@ impl Session {
         if self.store.run(run_id).map_err(|e| e.to_string())?.is_none() {
             return Err(format!("no run {run_id}"));
         }
-        let held = with_run_lease(&*self.store, run_id, async |lease: &Lease| -> Result<Option<(Tally, bool)>, String> {
+        let held = with_run_lease(&*self.store, run_id, async |lease: &Lease| -> Result<Option<(Tally, bool, Option<Vec<Js>>)>, String> {
             let Some(stepper) = self.parked_stepper(run_id, lease)? else { return Ok(None) };
             let lease_lost = match &drain {
                 Drain::EveryParkedLeaf => {
@@ -758,15 +767,17 @@ impl Session {
                 Drain::DueTimers => drain_due_timers(&*self.store, run_id, &self.due_by(), lease, &stepper).await?,
                 Drain::Awaits(extra) => drain_awaits(&*self.store, run_id, extra, lease, &stepper).await?,
             };
-            Ok(Some((*stepper.tally.borrow(), lease_lost)))
+            Ok(Some((*stepper.tally.borrow(), lease_lost, stepper.rehearsed())))
         })
         .await?;
         let Some(held) = held else { return Ok(Parked::Busy) };
-        let Some((tally, lease_lost)) = held? else { return Ok(Parked::NotStepped) };
+        let Some((tally, lease_lost, captured)) = held? else { return Ok(Parked::NotStepped) };
         if tally.stepped == 0 {
             return Ok(Parked::NotStepped);
         }
-        Ok(Parked::Stepped(Box::new(self.settled_outcome(run_id, "resumed", tally, lease_lost)?)))
+        let mut outcome = self.settled_outcome(run_id, "resumed", tally, lease_lost)?;
+        outcome.captured = captured;
+        Ok(Parked::Stepped(Box::new(outcome)))
     }
 
     /// A parked run's step for the core's drains, under the lease. None when
@@ -777,7 +788,7 @@ impl Session {
             return Ok(None);
         }
         let facts = RunFacts::of_row(run_id, &row.input)?;
-        Ok(Some(LeafStepper { session: self, run_id: run_id.to_string(), facts, lease, tally: RefCell::new(Tally::default()) }))
+        Ok(Some(LeafStepper { session: self, run_id: run_id.to_string(), facts, lease, tally: RefCell::new(Tally::default()), captured: RefCell::new(Vec::new()) }))
     }
 
     /// `lf resume <run>`: every parked leaf of the run, now.
@@ -990,6 +1001,15 @@ struct LeafStepper<'a> {
     facts: RunFacts,
     lease: &'a Lease,
     tally: RefCell<Tally>,
+    /// A rehearsal's writes, captured by the leaves it stepped.
+    captured: RefCell<Vec<Js>>,
+}
+
+impl LeafStepper<'_> {
+    /// What the stepped leaves of a rehearsal captured; None for a real run.
+    fn rehearsed(&self) -> Option<Vec<Js>> {
+        self.facts.dry_run.then(|| self.captured.take())
+    }
 }
 
 impl Stepper for LeafStepper<'_> {
@@ -1001,7 +1021,7 @@ impl Stepper for LeafStepper<'_> {
         };
         let recorded = self
             .session
-            .record_segment(&self.run_id, &self.facts, Some(&self.lease.token), &self.tally, None, entry, Some(&completing))
+            .record_segment(&self.run_id, &self.facts, Some(&self.lease.token), &self.tally, self.facts.dry_run.then_some(&self.captured), entry, Some(&completing))
             .await;
         recorded.unwrap_or_else(StepOutcome::Failed)
     }
@@ -1036,7 +1056,8 @@ enum BodyRun {
 /// What a body segment came to (`CallbackBodyOutcome`): a failed body fails
 /// its segment, never the run.
 enum BodyOutcome {
-    Ran,
+    /// With a rehearsal's captured writes.
+    Ran(Option<Vec<Js>>),
     Failed(String),
     Cancelled(Option<String>),
     LeaseLost,
@@ -1044,7 +1065,8 @@ enum BodyOutcome {
 
 /// What `runCallbackBody` came to under the lease.
 enum UnderLease {
-    Ran { outcome: BodyOutcome, body: Tally, stepped: Option<Tally> },
+    /// `stepped`: the awaits the call woke, and a rehearsal's writes they captured.
+    Ran { outcome: BodyOutcome, body: Tally, stepped: Option<(Tally, Option<Vec<Js>>)> },
     NotStarted,
     /// Its callback is gone or closed, the call is not there or already
     /// started, or its run has ended.
@@ -1097,12 +1119,16 @@ impl Session {
             UnderLease::Ran { outcome, body, stepped } => (outcome, body, stepped),
         };
         let mut called = self.settled_outcome(&run_id, "called", body, matches!(outcome, BodyOutcome::LeaseLost))?;
-        if let BodyOutcome::Failed(error) = &outcome {
-            called.error = Some(format!("the callback's body failed: {error}"));
+        match outcome {
+            BodyOutcome::Failed(error) => called.error = Some(format!("the callback's body failed: {error}")),
+            BodyOutcome::Ran(captured) => called.captured = captured,
+            BodyOutcome::Cancelled(_) | BodyOutcome::LeaseLost => {}
         }
         let mut outcomes = vec![called];
-        if let Some(stepped) = stepped.filter(|t| t.stepped > 0) {
-            outcomes.push(self.settled_outcome(&run_id, "resumed", stepped, false)?);
+        if let Some((stepped, captured)) = stepped.filter(|(t, _)| t.stepped > 0) {
+            let mut resumed = self.settled_outcome(&run_id, "resumed", stepped, false)?;
+            resumed.captured = captured;
+            outcomes.push(resumed);
         }
         Ok(BodyRun::Ran(outcomes))
     }
@@ -1138,7 +1164,7 @@ impl Session {
                 fail_run(&*self.store, &callback.run_id, reason.as_deref().unwrap_or(CANCELLED_BY_OPERATOR), fence)?;
                 return Ok(UnderLease::Ran { outcome, body, stepped: None });
             }
-            BodyOutcome::Ran | BodyOutcome::Failed(_) => {}
+            BodyOutcome::Ran(_) | BodyOutcome::Failed(_) => {}
         }
         let parks: Vec<String> = self
             .store
@@ -1154,7 +1180,7 @@ impl Session {
         let Some(stepper) = self.parked_stepper(&callback.run_id, lease)? else { return Ok(UnderLease::Ran { outcome, body, stepped: None }) };
         drain_awaits(&*self.store, &callback.run_id, &parks, lease, &stepper).await?;
         let stepped = *stepper.tally.borrow();
-        Ok(UnderLease::Ran { outcome, body, stepped: Some(stepped) })
+        Ok(UnderLease::Ran { outcome, body, stepped: Some((stepped, stepper.rehearsed())) })
     }
 
     /// A callback's body (`callbackBodySegment`): one engine segment entered
@@ -1166,7 +1192,7 @@ impl Session {
         let facts = RunFacts::of_row(&row.id, &row.input)?;
         tally.stepped += 1;
         let entry = Entry::Fire { state: state.clone(), values: values.clone(), call_index };
-        Ok(match self.segment(&row.id, &facts, Some(&lease.token), false, entry).await {
+        Ok(match self.segment(&row.id, &facts, Some(&lease.token), entry).await {
             Err(Ended::LeaseLost) => BodyOutcome::LeaseLost,
             Err(Ended::Failed(message)) => BodyOutcome::Failed(message),
             Ok(ran) => {
@@ -1174,7 +1200,7 @@ impl Session {
                 if ran.cancelled {
                     BodyOutcome::Cancelled(self.store.cancel_request(&row.id).map_err(|e| e.to_string())?.flatten())
                 } else {
-                    BodyOutcome::Ran
+                    BodyOutcome::Ran(facts.dry_run.then_some(ran.captured))
                 }
             }
         })
