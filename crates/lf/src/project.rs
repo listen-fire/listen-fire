@@ -165,6 +165,20 @@ pub fn load_project_with(from: &Path, env: &[(String, String)]) -> Result<Projec
     Ok(project)
 }
 
+/// The module `lf.yaml` at exactly `root` names for a core slot, read from the
+/// `core:` map alone: no pin check, no externals, so a command that runs before
+/// a project loads (`lf init`) can ask. None when there is no `lf.yaml`, it
+/// does not parse, or it names nothing for the slot.
+pub fn named_core_module(root: &Path, slot: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct CoreOnly {
+        #[serde(default)]
+        core: std::collections::BTreeMap<String, String>,
+    }
+    let text = fs::read_to_string(root.join(PROJECT_FILE)).ok()?;
+    serde_yaml::from_str::<CoreOnly>(&text).ok()?.core.remove(slot)
+}
+
 /// The same, for `lf upgrade`: a pin of an older key loads (the upgrade is
 /// what moves it), checked in this release's language.
 pub fn load_project_to_upgrade(from: &Path) -> Result<Project, String> {
@@ -255,6 +269,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_module_lf_yaml_names_for_a_slot_is_read_without_loading_the_project() {
+        let root = std::env::temp_dir().join(format!("lf-named-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(named_core_module(&root, "movements"), None, "no lf.yaml");
+        fs::write(root.join(PROJECT_FILE), "engine: 0.11.0\ncore:\n  movements: acme_movements\n").unwrap();
+        assert_eq!(named_core_module(&root, "movements"), Some("acme_movements".to_string()), "an older pin is not checked");
+        assert_eq!(named_core_module(&root, "store"), None);
+        fs::write(root.join(PROJECT_FILE), "engine: 0.12.0\n").unwrap();
+        assert_eq!(named_core_module(&root, "movements"), None);
+        fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn an_engine_pin_is_read_by_its_standing_against_this_release() {

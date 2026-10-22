@@ -15,7 +15,9 @@ use movement_parser::util::form::{external_text, read_json_text};
 use serde_json::Value;
 
 use crate::check::{Opened, open_checking, parse};
+use crate::movements_slot::{self, WriteError, Written};
 use crate::project::{PROJECT_FILE, Project};
+use crate::sources::MOVEMENT_EXTENSION;
 use movement_parser::version::LANGUAGE_VERSION;
 
 /// One pass per level of fix nesting; a well-behaved upgrade settles in a few.
@@ -268,16 +270,29 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
         Opened::Ready(checking) => checking,
     };
     let catalog = CatalogSnapshot::load(&read_json_text(&checking.catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"))?;
+    let store = movements_slot::of_project(project, &std::env::vars().collect::<Vec<_>>())?;
     let (mut changed, mut left) = (0usize, 0usize);
     for file in &checking.files {
         let result = upgrade_source(&file.source, &catalog, options.all);
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
-            changed += 1;
             if options.check_only {
+                changed += 1;
                 writeln!(out, "{}", unified_diff(&file.source, &result.source, &shown).trim_end()).map_err(io)?;
             } else {
-                std::fs::write(&file.path, &result.source).map_err(|e| format!("{}: {e}", file.path.display()))?;
+                // Written at the version lf read, so a file edited since is reported, not overwritten.
+                match store.write(&format!("{}{MOVEMENT_EXTENSION}", file.name), &result.source, file.version.as_deref()) {
+                    Ok(Written::Written { .. }) => changed += 1,
+                    Ok(Written::Conflict { .. }) => {
+                        left += 1;
+                        writeln!(out, "{shown}: changed since lf read it; nothing written (run `lf upgrade` again)").map_err(io)?;
+                    }
+                    Err(refused @ WriteError::ReadOnly { .. }) => {
+                        eprintln!("lf: {}", refused.refusal());
+                        return Ok(2);
+                    }
+                    Err(WriteError::Failed(message)) => return Err(message),
+                }
             }
         }
         for d in &result.remaining {

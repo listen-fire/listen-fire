@@ -9,6 +9,8 @@ use std::path::Path;
 
 use movement_parser::version::LANGUAGE_VERSION;
 
+use crate::movements_slot::{self, WriteError, Written};
+
 const STARTER_MOVEMENT: &str = r#"# A movement is a program the host runs when something happens. This one runs
 # when you ask: `lf run hello`. `manual` and `cron` are the host's own, so they
 # need no import; to run on a schedule instead, write
@@ -36,17 +38,35 @@ const PROJECT_TAIL: &str = "# Who events act as on this machine (@user_name, @us
 ";
 
 /// What a project keeps out of version control: run state, and credentials.
+const FOLDERS: [&str; 2] = [".lf", "externals"];
+
 const IGNORED: &[&str] = &[".lf/", "secrets.yaml", ".env", ".env.*"];
 
+/// What `scaffold` did.
+#[derive(Debug)]
+enum Scaffolded {
+    Made(Vec<String>),
+    /// The movements module holds the files read-only: the refusal, with nothing else made.
+    Refused(String),
+}
+
 pub fn run(dir: &Path, out: &mut impl Write) -> Result<i32, String> {
-    let made = scaffold(dir)?;
+    let made = match scaffold(dir)? {
+        Scaffolded::Made(made) => made,
+        Scaffolded::Refused(refusal) => {
+            eprintln!("lf: {refusal}");
+            return Ok(2);
+        }
+    };
     let line = if made.is_empty() { "already a project".to_string() } else { format!("made {}", made.join(", ")) };
     writeln!(out, "{line}").map_err(|e| e.to_string())?;
     Ok(0)
 }
 
-fn scaffold(root: &Path) -> Result<Vec<String>, String> {
+fn scaffold(root: &Path) -> Result<Scaffolded, String> {
     let mut made = Vec::new();
+    // Loading the project (below) makes `.lf`, so what was there is noted first.
+    let had: Vec<bool> = FOLDERS.iter().map(|folder| root.join(folder).exists()).collect();
     let write = |relative: &str, content: &str, made: &mut Vec<String>| -> Result<(), String> {
         let path = root.join(relative);
         if path.exists() {
@@ -62,10 +82,23 @@ fn scaffold(root: &Path) -> Result<Vec<String>, String> {
     fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let project_file = format!("engine: {LANGUAGE_VERSION}\nmovements: movements\nexternals: externals\n{PROJECT_TAIL}");
     write("lf.yaml", &project_file, &mut made)?;
-    write("movements/hello.mvt", STARTER_MOVEMENT, &mut made)?;
-    for folder in [".lf", "externals"] {
+    // A project that names a movements module keeps its files there; otherwise they are this folder's.
+    if crate::project::named_core_module(root, "movements").is_some() {
+        let project = crate::project::load_project(root)?;
+        let store = movements_slot::of_project(&project, &std::env::vars().collect::<Vec<_>>())?;
+        match store.write("hello.mvt", STARTER_MOVEMENT, None) {
+            Ok(Written::Written { .. }) => made.push("movements/hello.mvt".to_string()),
+            // Already there, as when the file exists on disk.
+            Ok(Written::Conflict { .. }) => {}
+            Err(refused @ WriteError::ReadOnly { .. }) => return Ok(Scaffolded::Refused(refused.refusal())),
+            Err(WriteError::Failed(message)) => return Err(message),
+        }
+    } else {
+        write("movements/hello.mvt", STARTER_MOVEMENT, &mut made)?;
+    }
+    for (folder, had) in FOLDERS.iter().zip(had) {
         let path = root.join(folder);
-        if !path.exists() {
+        if !had {
             fs::create_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             made.push(format!("{folder}/"));
         }
@@ -80,22 +113,29 @@ fn scaffold(root: &Path) -> Result<Vec<String>, String> {
         fs::write(&gitignore, appended).map_err(|e| format!("{}: {e}", gitignore.display()))?;
         made.push(format!(".gitignore entries {}", missing.join(" ")));
     }
-    Ok(made)
+    Ok(Scaffolded::Made(made))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn made(root: &Path) -> Vec<String> {
+        match scaffold(root).unwrap() {
+            Scaffolded::Made(made) => made,
+            Scaffolded::Refused(refusal) => panic!("{refusal}"),
+        }
+    }
+
     #[test]
     fn a_fresh_folder_becomes_a_project_and_a_second_run_changes_nothing() {
         let root = std::env::temp_dir().join(format!("lf-init-{}", uuid::Uuid::new_v4())).join("nested");
-        assert!(!scaffold(&root).unwrap().is_empty());
+        assert!(!made(&root).is_empty());
         let project = crate::project::load_project(&root).unwrap();
         assert_eq!(project.engine, LANGUAGE_VERSION);
         let ignored = fs::read_to_string(root.join(".gitignore")).unwrap();
         assert!(ignored.lines().any(|l| l == ".lf/") && ignored.lines().any(|l| l == "secrets.yaml"));
-        assert!(scaffold(&root).unwrap().is_empty());
+        assert!(made(&root).is_empty());
         fs::remove_dir_all(root.parent().unwrap()).ok();
     }
 }

@@ -471,6 +471,44 @@ mod tests {
     }
 
     #[test]
+    fn the_folder_module_writes_by_compare_and_swap() {
+        let dir = temp("lf-folder-write");
+        let module = FolderMovements::at(&dir);
+        let Ok(Written::Written { version: first }) = module.write("lib/greet.mvt", "x = 1\n", None) else { panic!("a new file is created, its folder with it") };
+        assert_eq!(first, version_of("x = 1\n"));
+        assert_eq!(fs::read_to_string(dir.join("lib/greet.mvt")).unwrap(), "x = 1\n");
+        assert_eq!(module.write("lib/greet.mvt", "x = 2\n", None), Ok(Written::Conflict { current: Some(first.clone()) }), "None means nothing is there");
+        assert_eq!(fs::read_to_string(dir.join("lib/greet.mvt")).unwrap(), "x = 1\n");
+        let Ok(Written::Written { version: second }) = module.write("lib/greet.mvt", "x = 2\n", Some(&first)) else { panic!("the version read replaces the file") };
+        assert_eq!(second, version_of("x = 2\n"));
+        assert_ne!(first, second);
+        assert_eq!(module.write("lib/greet.mvt", "x = 3\n", Some(&first)), Ok(Written::Conflict { current: Some(second.clone()) }), "a stale version writes nothing");
+        assert_eq!(fs::read_to_string(dir.join("lib/greet.mvt")).unwrap(), "x = 2\n");
+        assert_eq!(module.write("lib/other.mvt", "x = 3\n", Some(&first)), Ok(Written::Conflict { current: None }), "a version where no file is");
+        assert!(!dir.join("lib/other.mvt").exists());
+        assert_eq!(module.write("../out.mvt", "x\n", None).err().map(|e| e.refusal().contains("is not a movement file's path")), Some(true));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_write_into_a_folder_that_cannot_be_made_fails_naming_the_path() {
+        let dir = temp("lf-folder-write-blocked");
+        fs::write(dir.join("lib"), "a file where the folder should be").unwrap();
+        let failed = FolderMovements::at(&dir).write("lib/greet.mvt", "x\n", None).unwrap_err();
+        let WriteError::Failed(message) = failed else { panic!("not a read-only refusal") };
+        assert!(message.starts_with(&dir.join("lib").display().to_string()), "{message}");
+        assert!(fs::read_to_string(dir.join("lib")).unwrap().starts_with("a file"), "nothing is written over it");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_module_refuses_by_name_and_reason() {
+        let refused = WriteError::ReadOnly { module: "acme_movements".into(), reason: "the platform keeps them".into() };
+        assert_eq!(refused.refusal(), "acme_movements holds the project's movements read-only: the platform keeps them. Change them where they live.");
+        assert_eq!(WriteError::Failed("a/b.mvt: boom".into()).refusal(), "a/b.mvt: boom");
+    }
+
+    #[test]
     fn a_version_is_stable_and_changes_with_the_text() {
         assert_eq!(version_of("x = 1\n"), version_of("x = 1\n"));
         assert_ne!(version_of("x = 1\n"), version_of("x = 1"));

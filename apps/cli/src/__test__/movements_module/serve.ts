@@ -18,6 +18,8 @@ export interface MovementsModule {
   held(): Record<string, string>;
   /** Each call, as `method path`: never a text. */
   calls: string[];
+  /** Each write request: the path and the version it expected, never a text. */
+  writes: Array<{ path: string; expectedVersion: string | null }>;
   /** The `tenant` setting each request carried, in order. */
   tenants: string[];
   close(): Promise<void>;
@@ -36,6 +38,7 @@ export async function serveMovementsModule(
   let toChange = options.changeBeforeWrite;
   const calls: string[] = [];
   const tenants: string[] = [];
+  const writes: MovementsModule['writes'] = [];
   const parse = <T>(shape: z.ZodType<T>, method: string, params: unknown): T => {
     const parsed = shape.safeParse(params);
     if (!parsed.success) throw new SlotRefusal('bad_request', `${method}: ${parsed.error.issues[0]?.message}`);
@@ -60,6 +63,7 @@ export async function serveMovementsModule(
         }
         case 'movements.write': {
           const { path, text, expectedVersion } = parse(MovementsWriteRequest, method, params);
+          writes.push({ path, expectedVersion });
           if (options.readOnly !== undefined) return { kind: 'read_only', reason: options.readOnly };
           if (toChange === path) {
             toChange = undefined;
@@ -81,6 +85,7 @@ export async function serveMovementsModule(
     url: served.address.baseUrl,
     calls,
     tenants,
+    writes,
     held: () => Object.fromEntries([...files].map(([path, { text }]) => [path, text])),
     close: () => served.close(),
   };
