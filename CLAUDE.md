@@ -60,7 +60,7 @@ Broad runs do not block the inner loop:
 **Standing prohibitions**:
 - Never build `packages/movement-lang` in place with `tsc`: emitted `.js` files shadow the `.ts` sources and break jest resolution.
 - Never wait on a long test run by polling its pid in a shell loop — use `run_in_background` and wait for the completion notification.
-- A worktree symlinks its `target` to the main checkout's target directory (never grows its own) and sets `CARGO_INCREMENTAL=0`; gates build the default and the cli-only feature sets only; `cargo clean` of stale artifacts is fine after a gate.
+- A worktree symlinks its `target` to the main checkout's target directory (never grows its own) and sets `CARGO_INCREMENTAL=0`; gates build the default and the cli-only feature sets only; `cargo clean` of stale artifacts is fine after a gate. An `LF_BIN` copy for a gate lives beside the original (`target/debug/lf-gate`): a workspace-built `lf` finds the bundled `@lf/*` modules by walking up from its own path to the repository, so a copy outside it cannot find them.
 
 ## CI philosophy
 
