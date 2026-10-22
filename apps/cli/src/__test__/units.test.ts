@@ -49,6 +49,18 @@ test('lf run <movement> hands the movement a manual invocation; a movement no ma
   assert.match(missing.out, /no listen fires 'nope' on manual/);
 });
 
+test('lf run <movement> --text gives the manual Invocation its Text; an event file takes no --text', () => {
+  const dir = initialised();
+  writeFileSync(join(dir, 'movements/echo.mvt'), 'function echo(run: <manual-[:Invocation]->>) {\n  return "Text: ${run.Text}"\n}\nlisten to manual fire echo\n');
+  const run = lf(dir, 'run', 'echo', '--text', 'Acme Robotics');
+  assert.equal(run.code, 0, run.out);
+  assert.match(run.out, /echo:echo completed/);
+  assert.match(run.out, /returned "Text: Acme Robotics"/);
+  const refused = lf(dir, 'run', '--event', 'nope.json', '--text', 'x');
+  assert.equal(refused.code, 2, refused.out);
+  assert.match(refused.out, /--text gives a manual run its text/);
+});
+
 test('a cron tick missed while no worker ran fires once on the next drain, never twice', () => {
   const dir = initialised();
   writeFileSync(join(dir, 'movements/tick.mvt'), TICK);

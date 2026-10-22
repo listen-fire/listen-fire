@@ -35,7 +35,7 @@ function backfill(run: <manual-[:Invocation]->>) { … }
 listen to manual fire backfill
 ```
 
-- `manual` fires when you ask: `lf run backfill` here, "Run now" on the platform.
+- `manual` fires when you ask: `lf run backfill` here (`--text "…"` gives the Invocation its `Text`), "Run now" on the platform.
 - `cron` fires on its schedule. `lf serve` and `lf drain` fire each due tick. A tick that came due while no worker ran fires once on the next drain (only the latest one missed), however many workers drain the store.
 
 ## Polled sources

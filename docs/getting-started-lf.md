@@ -114,6 +114,7 @@ This signs you in at the provider (OAuth) or asks for the module's fields, and s
 
 ```
 lf run hello                                   # run a movement a `listen to manual` fires
+lf run hello --text "Acme Robotics"            # …with its Invocation's Text (`run.Text`)
 lf run --event events/company_created.json     # route one event to the listens it matches
 lf run --event events/company_created.json --dry-run
 lf run --poll summarise                        # poll now the polled source of each listen that fires it

@@ -3,7 +3,7 @@
 //!
 //!   lf init [dir]                       scaffold a starter project
 //!   lf check [--dir <project>]          every diagnostic the project's files have
-//!   lf run <movement> [--dry-run]      run a movement a `listen to manual` fires
+//!   lf run <movement> [--text <text>] [--dry-run]  run a movement a `listen to manual` fires, its Invocation's Text given
 //!   lf run --event <file> [--dry-run]   route an event to its listens and run each
 //!   lf run --poll <movement>            poll now the polled sources of the listens that fire it
 //!   lf resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
@@ -156,7 +156,7 @@ pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
-       lf run <movement> [--dry-run]
+       lf run <movement> [--text <text>] [--dry-run]
        lf run --event <file.json> [--dry-run]
        lf run --poll <movement>
        lf run --webhook <external> --body <file> [--install <credential>] [--header k:v]...
@@ -183,7 +183,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|ser
   check     every diagnostic the project's movement files have (as `lf check`)
   catalog   the catalog snapshot the files are checked against, as JSON
   lsp       the language server (LSP over stdin/stdout): diagnostics, completion, hover, definitions and fixes for the movement files
-  run       run <movement>: one manual invocation, to the `listen to manual fire <movement>` listens; --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event
+  run       run <movement>: one manual invocation, to the `listen to manual fire <movement>` listens (--text: the Invocation's Text); --event: route the event file's event to the listens it matches and run each; --poll <movement>: poll now, once, the source of each listen that fires it on a polled source (its manifest declares `poll`), and run the listen on each new event
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace and park
@@ -223,6 +223,8 @@ struct Args {
     check_only: bool,
     all: bool,
     body: Option<PathBuf>,
+    /// `lf run <movement> --text`: the manual Invocation's Text.
+    text: Option<String>,
     install: Option<String>,
     headers: Vec<String>,
     port: Option<String>,
@@ -266,6 +268,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         check_only: false,
         all: false,
         body: None,
+        text: None,
         install: None,
         headers: Vec::new(),
         port: None,
@@ -306,6 +309,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--check" => args.check_only = true,
             "--all" => args.all = true,
             "--body" => args.body = Some(PathBuf::from(value("--body")?)),
+            "--text" => args.text = Some(value("--text")?),
             "--install" => args.install = Some(value("--install")?),
             "--header" => args.headers.push(value("--header")?),
             "--port" => args.port = Some(value("--port")?),
@@ -415,6 +419,10 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         "lsp" => lsp::run(&args.dir, &mut out).await,
         "upgrade" => upgrade::run(&load_with(project::load_project_to_upgrade)?, upgrade::UpgradeOptions { check_only: args.check_only, all: args.all }, &mut out).await,
         "run" => {
+            if args.text.is_some() && (args.event.is_some() || args.poll.is_some() || args.webhook.is_some()) {
+                eprintln!("lf run --text gives a manual run its text: lf run <movement> --text \"…\" (an event file carries its own payload)");
+                return Ok(2);
+            }
             if let (Some(external), Some(body)) = (&args.webhook, &args.body) {
                 let project = load()?;
                 let store = store_of(&args, &project)?;
@@ -436,7 +444,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let project = load()?;
                 let store = store_of(&args, &project)?;
                 let session = runs::open_session(project, args.ephemeral, &store).await?;
-                return report_fired(&session.run_manual(movement, None, args.dry_run).await?, args.json, &mut out);
+                return report_fired(&session.run_manual(movement, args.text.as_deref(), args.dry_run).await?, args.json, &mut out);
             };
             let project = load()?;
             let store = store_of(&args, &project)?;
