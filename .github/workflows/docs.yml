@@ -1,7 +1,7 @@
 name: docs
 
 # Publishes the versioned documentation site. Never runs on a branch push: a
-# `docs-v*` tag (cut when a language version's docs are ready) or a manual run.
+# `docs-v*` tag (cut when a release's docs are ready; they land under /docs/<compatibility key>/) or a manual run.
 # A tag with a pre-release suffix (`docs-v0.12.0-rc.1`) deploys under `/docs/next/`
 # and keeps the current docs (built from the newest unsuffixed `docs-v*` tag)
 # as the default; with no such tag yet, the root redirects to `/docs/next/`.
