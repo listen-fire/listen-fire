@@ -29,6 +29,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - `lf upgrade` and `lf init` write movement files through the movements slot, by version. A file changed between `lf upgrade`'s read and its write is reported (`changed since lf read it; nothing written`) and holds the pin, instead of being overwritten. A movements module that keeps the files read-only (`read_only` with a reason) makes both refuse by name, exit 2, writing nothing: `<module> holds the project's movements read-only: <reason>. Change them where they live.`
 - The movements slot's wire is written down in `docs/contracts/movements-slot.md`, with its conformance cases: `lf --contract-movements-slot --dir <project>` serves the project's movements module through lf's own client, and `movementsSlotCases` and `movementsReadOnlySlotCases` (movement-engine `public/module-wire`) hold any movements module to them. `MOVEMENTS_METHODS` joins the other slots' method lists in `engine-contracts/slots`.
 - Deploying (operators): a cloud deployment fills the movements slot with `core: { movements: <module> }` and feeds the module's own settings, the tenant among them, through `LF_SECRET__<MODULE>__<SETTING>` (`deploy/lf/README.md`).
+- The Evertrace, Dealroom and Gmail handbook sections taught the retired `pollIntervalSeconds` spelling in a `listen` line and its prose; they now teach `every: 10m`. A handbook test runs every fenced example in every public module's section through the checker and refuses a retired spelling.
 
 ## [0.12.0-rc.9] - 2026-10-22
 

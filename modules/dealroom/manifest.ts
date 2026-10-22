@@ -54,7 +54,7 @@ A round's \`Company\` is who raised. Its \`Investors\` are participations, not b
 listen to dealroom { rounds: ["SERIES A"], hq_locations: ["Europe"] } fire triage
 \`\`\`
 
-A listener fires once per round Dealroom RECORDED since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Funding Rounds\` when you want history. \`rounds\`, \`industries\` and \`hq_locations\` narrow delivery; \`pollIntervalSeconds\` overrides the ten-minute default. A round that is corrected afterwards does not fire again: recording is the only "new since" Dealroom offers.
+A listener fires once per round Dealroom RECORDED since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Funding Rounds\` when you want history. \`rounds\`, \`industries\` and \`hq_locations\` narrow delivery; \`every\` (for example \`every: 20m\`) overrides the ten-minute default. A round that is corrected afterwards does not fire again: recording is the only "new since" Dealroom offers.
 
 ### what is deliberately not here
 

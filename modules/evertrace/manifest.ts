@@ -29,10 +29,10 @@ Below a signal, \`Experiences\` and \`Educations\` are the rows of the person's 
 ### listening — being told about new ones
 
 \`\`\`
-listen to evertrace { search: "Stealth in Europe", pollIntervalSeconds: 600 } fire triage
+listen to evertrace { search: "Stealth in Europe", every: 10m } fire triage
 \`\`\`
 
-A listener fires once per signal created since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Signals\` when you want history. \`search\` names a saved search by its title or its id and narrows delivery to what that search matches; a date bound inside that search does not apply — the mark is what bounds delivery. \`pollIntervalSeconds\` overrides the five-minute default. A change to a signal that already exists does not fire — only a new one does. This is what a listener with no \`events\` delivers.
+A listener fires once per signal created since the last look. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Signals\` when you want history. \`search\` names a saved search by its title or its id and narrows delivery to what that search matches; a date bound inside that search does not apply — the mark is what bounds delivery. \`every\` (for example \`every: 10m\`) overrides the five-minute default. A change to a signal that already exists does not fire — only a new one does. This is what a listener with no \`events\` delivers.
 
 ### listening — a signal added to a list
 

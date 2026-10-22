@@ -15,7 +15,7 @@ const GMAIL_HANDBOOK_CONTENT = `Gmail is ONE connected mailbox — a real Google
 listen to gmail { query: "from:@acme.com" } fire triage
 \`\`\`
 
-A listener fires once per message that has arrived since the last look, a minute or so behind. \`query\` is a Gmail search written exactly as you would type it into Gmail's own search box, and it narrows what is delivered; \`pollIntervalSeconds\` overrides the one-minute default. \`labels\` says which arrivals count — mail landing in the inbox unless you say otherwise. Write \`labels: ["INBOX", "SPAM"]\` when mail you must not miss can land in Spam, such as cold inbound. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Messages\` when you want history.
+A listener fires once per message that has arrived since the last look, a minute or so behind. \`query\` is a Gmail search written exactly as you would type it into Gmail's own search box, and it narrows what is delivered; \`every\` (for example \`every: 5m\`) overrides the one-minute default. \`labels\` says which arrivals count — mail landing in the inbox unless you say otherwise. Write \`labels: ["INBOX", "SPAM"]\` when mail you must not miss can land in Spam, such as cold inbound. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Messages\` when you want history.
 
 ### reading the message
 
