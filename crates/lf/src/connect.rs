@@ -23,7 +23,7 @@ use crate::http_out::{hex, random_bytes};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::oauth2::Declaration;
-use crate::oauth_redirect::{loopback_redirect_uri, public_redirect_uri};
+use crate::oauth_redirect::{PUBLIC_CALLBACK_PATH, loopback_redirect_uri, public_redirect_uri};
 use crate::project::Project;
 use crate::prompt::{Ask, Prompter};
 use crate::secrets::{Binding, Credential, Credentials, Origin, Secrets, install_of};
@@ -170,6 +170,18 @@ pub fn public_url(project: &Project) -> Option<String> {
     let text = std::fs::read_to_string(project.root.join(crate::project::PROJECT_FILE)).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
     value.get("publicUrl")?.as_str().map(str::to_string)
+}
+
+/// lf.yaml's `oauth: { redirectUri }`: the redirect URI a public-mode sign-in sends
+/// the provider, when a relay stands between the provider and `lf serve`.
+pub fn oauth_redirect_uri(project: &Project) -> Result<Option<String>, String> {
+    let Ok(text) = std::fs::read_to_string(project.root.join(crate::project::PROJECT_FILE)) else { return Ok(None) };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&text) else { return Ok(None) };
+    let Some(uri) = value.get("oauth").and_then(|o| o.get("redirectUri")) else { return Ok(None) };
+    match uri.as_str() {
+        Some(uri) if crate::project::is_http_url(uri) => Ok(Some(uri.to_string())),
+        _ => Err(format!("{}: oauth.redirectUri: an http(s) URL, e.g. https://relay.example.com/oauth/callback", project.root.join(crate::project::PROJECT_FILE).display())),
+    }
 }
 
 /// An entry as written to a secrets file: its binding keys first (secrets.ts `entryContent`).
@@ -360,7 +372,9 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         } else {
             prompter.print(&format!("  {}   (lf credential add, and --headless)", loopback_redirect_uri(number as u16)));
         }
-        if let Some(public) = public_url(project) {
+        if let Some(relay) = oauth_redirect_uri(project)? {
+            prompter.print(&format!("  {relay}   (lf credential add --public, forwarded on to lf serve's {PUBLIC_CALLBACK_PATH})"));
+        } else if let Some(public) = public_url(project) {
             prompter.print(&format!("  {}   (lf credential add --public, through lf serve)", public_redirect_uri(&public)));
         }
     }

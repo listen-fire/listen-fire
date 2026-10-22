@@ -124,7 +124,7 @@ pub fn language_version_of_engine(engine: &str) -> Result<String, String> {
 }
 
 /// `http://` or `https://` and a host.
-fn is_http_url(text: &str) -> bool {
+pub fn is_http_url(text: &str) -> bool {
     let rest = text.strip_prefix("https://").or_else(|| text.strip_prefix("http://"));
     rest.is_some_and(|rest| rest.split(['/', '?', '#']).next().is_some_and(|host| !host.is_empty() && !host.contains(char::is_whitespace)))
 }

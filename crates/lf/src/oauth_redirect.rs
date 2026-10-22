@@ -12,7 +12,11 @@
 //!   public              the redirect URI is <publicUrl>/oauth/callback, which
 //!                       `lf serve` answers by leaving the redirect in .lf/oauth
 //!                       for the waiting command to pick up
-//!                       (`deliver_public_redirect`, which serve mounts).
+//!                       (`deliver_public_redirect`, which serve mounts). lf.yaml's
+//!                       `oauth: { redirectUri }` names another URI to send the
+//!                       provider instead: a relay (a platform whose registered
+//!                       callback receives the redirect) forwards the `code` and
+//!                       `state` query on to `lf serve`'s GET /oauth/callback.
 
 
 use std::path::PathBuf;
@@ -24,7 +28,8 @@ pub const PUBLIC_CALLBACK_PATH: &str = "/oauth/callback";
 pub enum RedirectMode {
     Loopback { port: u16, open_browser: bool },
     Headless { port: u16 },
-    Public { public_url: String, lf_dir: PathBuf },
+    /// `redirect_uri` is what the provider is sent and the code is exchanged under.
+    Public { redirect_uri: String, lf_dir: PathBuf },
 }
 
 pub fn loopback_redirect_uri(port: u16) -> String {

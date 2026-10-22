@@ -81,6 +81,7 @@ Every credential lf reads, refreshes and writes goes through the secrets slot.
 - A module that cannot persist (its credentials come from somewhere lf cannot write) answers those writes `read_only` with a reason. lf then refuses, exit 2, writing nothing: `<module> holds its credentials read-only: <reason>. Add it where it lives.` A webhook's registration adds `Register the webhook where the credentials live.` A token refresh is still written back; read-only is for whole entries only.
 - A secrets module's own settings never come from itself. They come from `LF_SECRET__…` or the secrets file, so run `lf connect <module>` before naming it in `core:`. A project naming a secrets module whose settings neither holds is refused as it loads.
 - Refreshing a token stays in lf. A module only stores.
+- Signing in for a credential against a provider (`lf credential add`) runs in lf whichever module stores the result, and the provider's OAuth app must have lf's redirect URI registered. Under `--public` that URI is `<publicUrl>/oauth/callback`, answered by `lf serve`. When something else holds the registered callback (a platform in front of the fleet), set `oauth: { redirectUri: https://… }` in `lf.yaml`: lf sends that URI at authorize and at the token exchange, and the relay forwards the provider's `code` and `state` query on to `lf serve`'s `GET /oauth/callback`, which matches the waiting command by `state`. `lf connect` prints the URI to register.
 
 ## The loop guard
 

@@ -236,6 +236,41 @@ test('lf credential add --public finishes through lf serve at publicUrl', async 
   }
 });
 
+test('lf credential add --public sends the relay URI lf.yaml names; the relay forwards code and state to lf serve', async () => {
+  const provider = await startFakeOAuthServer(CLIENT);
+  try {
+    const dir = freshProject(oauthDeclaration(provider));
+    const relay = 'https://relay.example.com/lf/oauth/callback';
+    writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}oauth:\n  redirectUri: ${relay}\n`);
+    const connected = await ok(lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
+    assert.ok(connected.includes(`  ${relay}   (lf credential add --public, forwarded on to lf serve's /oauth/callback)`), connected);
+    const serving = await served(dir);
+    try {
+      const adding = lf(dir, ['credential', 'add', '--module', 'acme_crm', 'dana_acme', '--public']);
+      const url = (await adding.line(AUTHORIZE)).trim();
+      assert.equal(new URL(url).searchParams.get('redirect_uri'), relay);
+      // The provider sends the person to the relay; the relay passes the query on to lf serve.
+      const consent = await fetch(url, { redirect: 'manual' });
+      const sent = new URL(consent.headers.get('location') ?? '');
+      assert.equal(`${sent.origin}${sent.pathname}`, relay);
+      const forwarded = await fetch(`http://127.0.0.1:${serving.port}/oauth/callback${sent.search}`);
+      assert.equal(forwarded.status, 200, await forwarded.clone().text());
+      await ok(adding);
+      assert.equal(secretsFile(dir).dana_acme?.access_token, 'access-1');
+      assert.equal(provider.calls[0]?.grant, 'authorization_code');
+      assert.equal(provider.calls[0]?.form.redirect_uri, relay, 'the exchange is made under the same URI');
+    } finally {
+      await serving.stop();
+    }
+    writeFileSync(join(dir, 'lf.yaml'), readFileSync(join(dir, 'lf.yaml'), 'utf8').replace(relay, 'not a url'));
+    const refused = await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'eve_acme', '--public']).done;
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /oauth\.redirectUri: an http\(s\) URL/);
+  } finally {
+    await provider.close();
+  }
+});
+
 test('lf credential add refuses a module not installed, and an OAuth module with no app set up', async () => {
   const provider = await startFakeOAuthServer(CLIENT);
   try {

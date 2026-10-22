@@ -20,11 +20,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::completion;
-use crate::connect::{CLIENT_ID_FIELD, CLIENT_SECRET_FIELD, ConnectOptions, REDIRECT_PORT_FIELD, connect_module, entry_content, find_external, known_modules, process_env, public_url, read_manifest};
+use crate::connect::{CLIENT_ID_FIELD, CLIENT_SECRET_FIELD, ConnectOptions, REDIRECT_PORT_FIELD, connect_module, entry_content, find_external, known_modules, oauth_redirect_uri, process_env, public_url, read_manifest};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::oauth2::{ClientApp, Declaration, DeclarationKind};
-use crate::oauth_redirect::{RedirectMode, authorize_at_provider};
+use crate::oauth_redirect::{RedirectMode, authorize_at_provider, public_redirect_uri};
 use crate::project::{Project, load_project};
 use crate::prompt::{Ask, Prompter};
 use crate::secrets::{Binding, Credential, Credentials, ENV_PREFIX, Secrets, install_of};
@@ -294,10 +294,14 @@ fn redirect_mode(project: &Project, choice: &RedirectChoice, install: Option<&Cr
         How::Loopback => Ok(RedirectMode::Loopback { port, open_browser: choice.open_browser }),
         How::Headless if port == 0 => Err("--headless needs the redirect port your app registered: --redirect-port <port>, or set it with lf connect".into()),
         How::Headless => Ok(RedirectMode::Headless { port }),
-        How::Public => match public_url(project) {
-            Some(public_url) => Ok(RedirectMode::Public { public_url, lf_dir: project.lf_dir.clone() }),
-            None => Err("--public needs lf.yaml's publicUrl, where lf serve is reached".into()),
-        },
+        How::Public => {
+            let redirect_uri = match (oauth_redirect_uri(project)?, public_url(project)) {
+                (Some(relay), _) => relay,
+                (None, Some(public)) => public_redirect_uri(&public),
+                (None, None) => return Err("--public needs lf.yaml's publicUrl, where lf serve is reached (or oauth.redirectUri, where a relay forwards the redirect from)".into()),
+            };
+            Ok(RedirectMode::Public { redirect_uri, lf_dir: project.lf_dir.clone() })
+        }
     }
 }
 
@@ -315,7 +319,7 @@ pub const USAGE: &str = "  lf connect [<module>] [--url <server url>]     set a 
   lf credential update <name> [--no-reauthorize]   sign in again and edit its fields
   lf credential delete <name>
   lf credential list [--json]
-    signing in: --redirect-port N (the port your app registered)  --no-browser  --headless (paste the redirect back)  --public (through lf serve at publicUrl)
+    signing in: --redirect-port N (the port your app registered)  --no-browser  --headless (paste the redirect back)  --public (through lf serve at publicUrl; oauth.redirectUri in lf.yaml names a relay's URI instead)
   lf completion <bash|zsh|fish>   a shell's tab completion for lf (subcommands, modules, credentials)";
 
 #[derive(Default)]

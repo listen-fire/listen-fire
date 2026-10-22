@@ -12,7 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::http_out::{base64url, hex, random_bytes};
 use crate::oauth2::{ClientApp, OAuth2Declaration};
 use crate::oauth2_flow::{begin, exchange_code};
-use crate::oauth_redirect::{LOOPBACK_CALLBACK_PATH, RedirectMode, loopback_redirect_uri, public_redirect_uri};
+use crate::oauth_redirect::{LOOPBACK_CALLBACK_PATH, RedirectMode, loopback_redirect_uri};
 use crate::prompt::{Ask, Prompter};
 use crate::secrets_family::Fields;
 
@@ -53,7 +53,7 @@ pub async fn authorize_at_provider(
     let redirect_uri = match (mode, &listener) {
         (RedirectMode::Loopback { .. }, Some(listener)) => loopback_redirect_uri(listener.local_addr().map_err(|e| e.to_string())?.port()),
         (RedirectMode::Loopback { port, .. } | RedirectMode::Headless { port }, _) => loopback_redirect_uri(*port),
-        (RedirectMode::Public { public_url, .. }, _) => public_redirect_uri(public_url),
+        (RedirectMode::Public { redirect_uri, .. }, _) => redirect_uri.clone(),
     };
     let state = base64url(&random_bytes(STATE_BYTES)?);
     let (url, attempt) = begin(oauth2, &client.client_id, &redirect_uri, &state)?;
