@@ -521,9 +521,9 @@ impl Session {
             dry_run,
         };
         let input = facts.to_js().to_json();
-        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input };
+        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: None };
         match receipt {
-            None => self.store.start_run(run_id, start.file, start.movement, start.started_at, start.input).map_err(|e| e.to_string())?,
+            None => self.store.start_run(&start).map_err(|e| e.to_string())?,
             Some((listen, key)) => {
                 if !self.store.start_event_run(listen, key, &start).map_err(|e| e.to_string())? {
                     return Ok(None);

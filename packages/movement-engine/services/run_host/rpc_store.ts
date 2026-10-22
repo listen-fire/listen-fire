@@ -49,6 +49,89 @@ const Claim: z.ZodType<CallbackClaim> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('expired'), callback: Callback }),
 ]);
 
+// ── Delivery receipts (`inbound.*`) ─────────────────────────────────────────
+// What a door keeps of one delivery: the events it produced, in the door's one
+// write. Only lf's doors call these, so they live on this client rather than
+// on `RunHostStore`.
+
+export const DELIVERY_SOURCES = ['webhook', 'hook', 'emit', 'cli'] as const;
+export type DeliverySource = (typeof DELIVERY_SOURCES)[number];
+
+/** `inbound.keepDelivery`'s `delivery`. */
+export interface NewDelivery {
+  id: string;
+  /** The provider's id for the delivery: a second one under it, at the same subscription, is kept out. */
+  externalId?: string | null;
+  receivedAt: string;
+  source: DeliverySource;
+  inline: boolean;
+  replayOf?: string | null;
+  events: unknown[];
+}
+
+/** A work row as `inbound.keepDelivery` queues it (`work.enqueue`'s input). */
+export interface NewWorkRow {
+  kind: string;
+  key: string;
+  payload: unknown;
+  dueAt?: string | null;
+  teamId?: string | null;
+}
+
+export interface DeliveryRun {
+  id: string;
+  status: string;
+}
+
+/** A kept delivery; `events` only from `inbound.delivery`. */
+export interface DeliveryRow {
+  id: string;
+  subscriptionId: string;
+  externalId: string | null;
+  receivedAt: string;
+  source: DeliverySource;
+  inline: boolean;
+  replayOf: string | null;
+  eventCount: number;
+  runs: DeliveryRun[];
+  events?: unknown[];
+}
+
+/** A run row as `runs.get` answers it. */
+export interface RunRow {
+  id: string;
+  file: string;
+  movement: string;
+  status: string;
+  startedAt: string;
+  input: string;
+  outcome: string | null;
+  deliveryId: string | null;
+}
+
+const Delivery: z.ZodType<DeliveryRow> = z.object({
+  id: z.string(),
+  subscriptionId: z.string(),
+  externalId: z.string().nullable(),
+  receivedAt: z.string(),
+  source: z.enum(DELIVERY_SOURCES),
+  inline: z.boolean(),
+  replayOf: z.string().nullable(),
+  eventCount: z.number(),
+  runs: z.array(z.object({ id: z.string(), status: z.string() })),
+  events: z.array(z.unknown()).optional(),
+});
+const Run: z.ZodType<RunRow> = z.object({
+  id: z.string(),
+  file: z.string(),
+  movement: z.string(),
+  status: z.string(),
+  startedAt: z.string(),
+  input: z.string(),
+  outcome: z.string().nullable(),
+  deliveryId: z.string().nullable(),
+});
+
 /** The work claim the server reads: no more than it needs, whatever the caller spreads in. */
 function claimOf(work: ClaimedWork & { dueAt?: string }): Record<string, unknown> {
   return { id: work.id, kind: work.kind, key: work.key, claim: work.claim, ...(work.dueAt !== undefined ? { dueAt: work.dueAt } : {}) };
@@ -91,9 +174,48 @@ export class RpcStoreBackend {
     }
   }
 
-  /** A run row the backend can park against (the contract's `newRun`). */
-  async startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string }): Promise<void> {
-    await this.call('runs.start', input, Nothing);
+  /** A run row the backend can park against (the contract's `newRun`);
+   *  `deliveryId` names the delivery whose event started it. */
+  async startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string; deliveryId?: string }): Promise<void> {
+    await this.call('runs.start', { ...input, deliveryId: input.deliveryId ?? null }, Nothing);
+  }
+
+  /** A run's row, or null (`runs.get`). */
+  runGet(input: { runId: string }): Promise<RunRow | null> {
+    return this.call('runs.get', input, Run.nullable());
+  }
+
+  /** The door's one write: the receipt, the cursor (absent: left as it is)
+   *  and the work rows; `kept: false`, and nothing written, for a duplicate. */
+  keepDelivery(input: { subscriptionId: string; checkpoint?: unknown; delivery: NewDelivery; work: NewWorkRow[] }): Promise<{ kept: boolean }> {
+    const { delivery, work } = input;
+    const params = {
+      subscriptionId: input.subscriptionId,
+      ...('checkpoint' in input ? { checkpoint: input.checkpoint } : {}),
+      delivery: { ...delivery, externalId: delivery.externalId ?? null, replayOf: delivery.replayOf ?? null },
+      work: work.map((row) => ({ ...row, dueAt: row.dueAt ?? null, teamId: row.teamId ?? null })),
+    };
+    return this.call('inbound.keepDelivery', params, z.object({ kept: z.boolean() }));
+  }
+
+  /** Kept deliveries, most recent first, without their events. */
+  deliveries(input: { subscriptionId?: string | null; since?: string | null; limit: number }): Promise<DeliveryRow[]> {
+    return this.call('inbound.deliveries', { subscriptionId: input.subscriptionId ?? null, since: input.since ?? null, limit: input.limit }, z.array(Delivery));
+  }
+
+  /** One kept delivery with its events, or null. */
+  delivery(input: { id: string }): Promise<DeliveryRow | null> {
+    return this.call('inbound.delivery', input, Delivery.nullable());
+  }
+
+  /** Forget settled deliveries received before `before`: how many went. */
+  sweepDeliveries(input: { before: string; limit: number }): Promise<number> {
+    return this.call('inbound.sweepDeliveries', input, z.number());
+  }
+
+  /** A subscription's saved pull cursor (`inbound.checkpoint`). */
+  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint: unknown } | null> {
+    return this.call('inbound.checkpoint', input, z.object({ checkpoint: z.unknown() }).nullable());
   }
 
   /** An operator asks to cancel the run (the records contract's `requestCancel`). */

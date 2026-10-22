@@ -32,6 +32,7 @@ The adapter protocol's ([the envelope](adapter-protocol.md#the-envelope), [the t
 - A failure is `ok: false` with an `error`. The code `run_lease_lost`, with `data: { runId }`, means a fenced write found the run's lease gone: lf treats it as losing the run. Any other code is a store failure.
 - lf calls a store one method at a time and waits for each answer.
 - A write that must not be torn by a crash is one method, which the store keeps as one transaction: all of it or none (`parks.commit`, `events.startRun`, `inbound.keepDelivery`, and `callbacks.record` with its body's row). A remote store cannot hold a transaction open across requests, so there is no method that opens one.
+- `inbound.keepDelivery` is also where a redelivery is kept out: its receipt is written first, unique on the subscription and the provider's delivery id, so a second delivery under that id, even one arriving while the first's work is still queued, writes nothing and answers `kept: false`.
 
 ## Methods
 
@@ -40,7 +41,9 @@ The first request is always `store.open`. The others are the run host's store fa
 | method | params | result |
 |---|---|---|
 | `store.open` | `{ settings: { [name]: string } }` | `{ tenant }`: the team id lf's own runs are kept under |
-| `runs.start` | `{ id, file, movement, startedAt, input }` | `null` |
+| `runs.start` | `{ id, file, movement, startedAt, input, deliveryId? }`; `deliveryId` names the delivery whose event started the run | `null` |
+| `runs.status` | `{ runId }` | the run's status, or `"missing"`: a contract suite helper, not called by lf |
+| `runs.complete` | `{ runId }` | `null`. The run settled `completed`: a contract suite helper, not called by lf |
 | `runs.lapsed` | `{ staleMs, limit }` | the ids of runs still `running` whose lease lapsed or was never taken, started more than `staleMs` ago, oldest first: their worker is gone (a live first firing holds its lease and renews it every third of its length) |
 | `runs.settle` | `{ runId, status, outcome, at }`; status `completed`, `parked`, `running` or `failed`; an ending revokes the run's live callbacks | `null` |
 | `runs.markParked` | `{ runId }` | `null` |
@@ -54,6 +57,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `runs.requestCancel` | `{ runId, reason }` | `null` |
 | `records.cancelRequest` | `{ runId }` | `{ reason }`, or `null` when none was asked |
 | `records.markFailed` | `{ runId, message }` | `null` |
+| `records.closeRun` | `{ runId }` | `null`. The run is over: its live callbacks are revoked (`callbacks.revokeRun`) |
 | `parks.putLeaf` | `{ runId, address, reason, wakeAt, state, fence }` | `null` |
 | `parks.claimLeaf` | `{ runId, address, reason }` | `{ reason, state }`, or `null` |
 | `parks.finishLeaf` | `{ runId, address, fence }` | `null` |
@@ -91,16 +95,25 @@ The first request is always `store.open`. The others are the run host's store fa
 | `callbacks.revokeRun` | `{ runId }` | `null` |
 | `inbound.checkpoint` | `{ subscriptionId }` | `{ checkpoint }`, or `null` |
 | `inbound.saveCheckpoint` | `{ subscriptionId, checkpoint }` | `null` |
-| `inbound.keepDelivery` | `{ subscriptionId, checkpoint?, work: [{ kind, key, payload, dueAt, teamId }] }` | `null`. One write: the cursor saved (absent: left as it is; `null` is a cursor to save) and each row queued as `work.enqueue` queues it |
+| `inbound.keepDelivery` | `{ subscriptionId, checkpoint?, delivery: { id, externalId?, receivedAt, source, inline, replayOf?, events }, work: [{ kind, key, payload, dueAt, teamId }] }`; `source` is `webhook`, `hook`, `emit` or `cli`; `events` are the events the delivery produced, never its raw body | `{ kept }`. One write: the delivery's receipt first, then the cursor saved (absent: left as it is; `null` is a cursor to save) and each row queued as `work.enqueue` queues it. `kept: false`, and nothing written (no cursor, no rows), when a delivery with the same `externalId` was kept at the subscription before, or one with the same `id`. Without an `externalId` a delivery is never a duplicate |
+| `inbound.deliveries` | `{ subscriptionId?, since?, limit }`; `since`: received at or after it | delivery rows without their events, most recent first, at most `limit` |
+| `inbound.delivery` | `{ id }` | a delivery row with its `events`, or `null` |
+| `inbound.sweepDeliveries` | `{ before, limit }` | how many went. Forgets at most `limit` deliveries received before `before` whose runs are all settled (none `running` or `parked`) and that no `fire_event` work row names (its `payload.deliveryId`) |
 | `processes.list` | `{}` | `{ processes, version }`: the module processes the hosts on this store started (an array of `{ pid, lf, machine, command }`), at its version; `{ processes: [], version: 0 }` for a list never written |
 | `processes.swap` | `{ version, processes }` | `true` when the list was still at `version` and is now `processes` at `version + 1`; `false` when another host wrote first (read again and retry) |
 | `events.claim` | `{ listen, key }` | `true` the first time this event key reaches this listen; `false` for a redelivery, which runs nothing |
-| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input }` | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery |
+| `events.startRun` | `{ listen, key, id, file, movement, startedAt, input, deliveryId? }` | `events.claim` and, when it is `true`, `runs.start`, as one write: `false`, and no run, for a redelivery |
 
 The rows:
 
 ```ts
-type RunRow = { id: string; file: string; movement: string; status: string; startedAt: string; input: string; outcome: string | null };
+type RunRow = { id: string; file: string; movement: string; status: string; startedAt: string; input: string; outcome: string | null; deliveryId: string | null };
+type DeliveryRow = {
+  id: string; subscriptionId: string; externalId: string | null; receivedAt: string;
+  source: 'webhook' | 'hook' | 'emit' | 'cli'; inline: boolean; replayOf: string | null;
+  eventCount: number; runs: { id: string; status: string }[];
+  events?: unknown[];  // inbound.delivery only
+};
 type CallbackRow = {
   id: string; teamId: string; runId: string; address: string;
   params: unknown; state: unknown; calls: unknown; singleUse: boolean;
@@ -113,6 +126,8 @@ A run's `outcome` is the JSON object lf settled it with: `{ writes, returned? }`
 `lf --contract-store <state.db|postgres://…>` serves these methods over lf's own stores, as a store module on a Unix socket. A module may forward to it, as the test module does (`apps/cli/src/__test__/store_module/forward.mjs`). `runs.status` and `runs.complete` are the contract suite's helpers and are not called by lf.
 
 ## Changes
+
+- **2026-10-22** (within adapter protocol 2; lf 0.12.0-rc.9 requires it): a delivery's receipt. `inbound.keepDelivery` takes the `delivery` (the events it produced) and answers `{ kept }`, `false` for a redelivery under the same `externalId` at the same subscription, which writes nothing. Every store module must take the new shape: lf treats a `null` answer as malformed. `inbound.deliveries`, `inbound.delivery` and `inbound.sweepDeliveries` list, read and forget kept deliveries. `runs.start` and `events.startRun` take `deliveryId`, and a run row answers it. `runs.status`, `runs.complete` and `records.closeRun`, served all along, are now in the table.
 
 - **2026-10-20** (within adapter protocol 2): a run's settled `outcome` may carry `returned`, what its movement returned. No method changed: a store that hands the outcome back as it was given keeps it.
 - **2026-10-20** (within adapter protocol 2): a crash never tears lf's state. `parks.commit`, `events.startRun` and `inbound.keepDelivery` each keep in one write what lf wrote in several; `runs.lapsed` finds the runs whose worker was lost, which lf fails; `work.claimDue`'s rows carry `attempts`, `work.release` says `why`, and `work.bury` keeps a row that gave up dead, so a failing row is no longer retried forever.

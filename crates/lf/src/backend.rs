@@ -23,7 +23,9 @@ use crate::json::Js;
 use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
-use crate::store::{BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, LeafRow, NewWork, Park, Release, Result, RunRow, RunStart, Store};
+use crate::store::{
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Result, RunRow, RunStart, Store,
+};
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
 pub const SQLITE_TENANT: &str = "local";
@@ -160,7 +162,7 @@ pub trait RunHostStore {
     fn tenant(&self) -> &str;
 
     // ── Run records ─────────────────────────────────────────────────────────
-    fn start_run(&self, id: &str, file: &str, movement: &str, started_at: &str, input: &str) -> Result<()>;
+    fn start_run(&self, run: &RunStart<'_>) -> Result<()>;
     /// Note the event's receipt on the listen (as `claim_event`) and start
     /// its run, as one write: false, and no run, for a redelivery. A crash
     /// never leaves a receipt whose run was never started.
@@ -256,10 +258,21 @@ pub trait RunHostStore {
     /// An install's saved pull cursor (a notify-then-pull source's), or None.
     fn inbound_checkpoint(&self, subscription_id: &str) -> Result<Option<Js>>;
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()>;
-    /// What one inbound delivery leaves, as one write: its pull cursor (when
-    /// it moved) and its work rows (its events, its wakes). A crash never
-    /// leaves a cursor past events that were never queued.
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, work: &[NewWork]) -> Result<()>;
+    /// What one inbound delivery leaves, as one write: its receipt, its pull
+    /// cursor (when it moved) and its work rows (its events, its wakes). A
+    /// crash never leaves a cursor past events its receipt does not hold.
+    /// False, and nothing written, for a duplicate: a delivery whose external
+    /// id was kept at its subscription before (a redelivery, even one whose
+    /// first's work is still queued).
+    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool>;
+    /// The kept deliveries the query names, most recent first, each with its
+    /// runs and without its events.
+    fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>>;
+    /// One kept delivery with its events and its runs, or None.
+    fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>>;
+    /// Forget at most `limit` deliveries received before `before` whose runs
+    /// are settled and whose `fire_event` rows are gone: how many went.
+    fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64>;
 
     // ── The module processes lf started ─────────────────────────────────────
     /// The list of module processes the lfs on this store started (so the
@@ -284,8 +297,8 @@ impl RunHostStore for Store {
         SQLITE_TENANT
     }
 
-    fn start_run(&self, id: &str, file: &str, movement: &str, started_at: &str, input: &str) -> Result<()> {
-        Store::start_run(self, id, file, movement, started_at, input)
+    fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
+        Store::start_run(self, run)
     }
     fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
         Store::start_event_run(self, listen, key, run)
@@ -452,8 +465,17 @@ impl RunHostStore for Store {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         Store::save_inbound_checkpoint(self, subscription_id, checkpoint)
     }
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, work: &[NewWork]) -> Result<()> {
-        Store::keep_delivery(self, subscription_id, checkpoint, work)
+    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
+        Store::keep_delivery(self, subscription_id, checkpoint, delivery, work)
+    }
+    fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
+        Store::deliveries(self, query)
+    }
+    fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>> {
+        Store::delivery(self, id)
+    }
+    fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        Store::sweep_deliveries(self, before, limit)
     }
 
     fn module_processes(&self) -> Result<ModuleProcesses> {

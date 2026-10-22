@@ -6,6 +6,7 @@
 // through a third-party store module filling a project's store slot
 // (`lf --contract-store-slot`): lf drives the module over the store wire,
 // and the module (store_module/forward.mjs) forwards to `lf --contract-store`.
+// The delivery receipt's cases (`inbound.*`) run over both bridges too.
 
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,9 @@ import { join } from 'node:path';
 import {
   callbackContractCases,
   cancelContractCases,
+  deliveryContractCases,
   runHostContractCases,
+  type DeliveryContractBackend,
   type RecordsContractBackend,
 } from 'movement-engine/services/run_host/contract';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
@@ -58,6 +61,31 @@ for (const contractCase of [...runHostContractCases, ...callbackContractCases, .
     };
     try {
       await contractCase.run(records);
+    } finally {
+      await backend.close();
+    }
+  });
+}
+
+for (const bridge of bridges)
+for (const contractCase of deliveryContractCases) {
+  test(`${bridge.over}: ${contractCase.name}`, async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lf-contract-')), 'state.db');
+    const backend = new RpcStoreBackend(lfBinary(), bridge.args(path));
+    const deliveries: DeliveryContractBackend = {
+      teamId: LOCAL_TENANT,
+      keepDelivery: (input) => backend.keepDelivery(input),
+      deliveries: (input) => backend.deliveries(input),
+      delivery: (input) => backend.delivery(input),
+      sweepDeliveries: (input) => backend.sweepDeliveries(input),
+      checkpoint: (input) => backend.checkpoint(input),
+      startRun: (input) => backend.startRun(input),
+      completeRun: (runId) => backend.completeRun(runId),
+      runGet: (input) => backend.runGet(input),
+      claimDue: (input) => backend.store.work.claimDue(input),
+    };
+    try {
+      await contractCase.run(deliveries);
     } finally {
       await backend.close();
     }

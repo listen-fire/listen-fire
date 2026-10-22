@@ -16,6 +16,7 @@
 //!   callbacks     lf.callback
 //!   pull cursors  lf.inbound_checkpoint
 //!   receipts      lf.event_receipt
+//!   deliveries    lf.delivery
 //!   lf's runs     lf.trigger_run (below)
 //!
 //! Held to the hosted backend's meaning by the run host's contract suite
@@ -49,8 +50,8 @@ use crate::backend::{CallbackClaim, CallbackRecord, MintCallback, RunHostStore};
 use crate::json::Js;
 use crate::obj;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, LeafRow, NewWork, Park, ParkKind, Release, Result, RunRow, RunStart, StoreError, WORK_KINDS,
-    timer_work_key, timer_work_payload,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind,
+    Release, Result, RunRow, RunStart, StoreError, WORK_KINDS, timer_work_key, timer_work_payload,
 };
 
 type Params<'a> = [&'a (dyn ToSql + Sync)];
@@ -130,6 +131,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, include_str!("pg_store_schema_4.sql")),
     (5, include_str!("pg_store_schema_5.sql")),
     (6, include_str!("pg_store_schema_6.sql")),
+    (7, include_str!("pg_store_schema_7.sql")),
 ];
 
 /// The advisory lock the migrations run under: "lf-store" as a number.
@@ -159,7 +161,7 @@ fn callback_of(row: &Row) -> Result<CallbackRecord> {
 const RUN_COLUMNS: &str = concat!(
     "id::text, trigger_payload->>'file', trigger_payload->>'movement', status, ",
     iso!("started_at"),
-    ", trigger_payload->>'facts', nodes_written::int8, failure_reason, returned::text"
+    ", trigger_payload->>'facts', nodes_written::int8, failure_reason, returned::text, delivery_id::text"
 );
 
 fn run_of(row: &Row) -> Result<RunRow> {
@@ -184,10 +186,13 @@ fn run_of(row: &Row) -> Result<RunRow> {
         input: lf_field(5, "facts")?,
         started_at: row.get(4),
         outcome: Some(outcome.to_json()),
+        delivery_id: row.get(9),
         status,
         id,
     })
 }
+
+const DELIVERY_COLUMNS: &str = concat!("id::text, subscription_id, external_id, ", iso!("received_at"), ", source, inline, replay_of::text, event_count::int8");
 
 /// A connection to a Postgres database, served from its own thread until the
 /// client drops: the store's, and any module of lf keeping its own tables there.
@@ -328,12 +333,38 @@ impl PgStore {
     fn start_run_row(&self, run: &RunStart<'_>) -> Result<()> {
         let trigger = format!("listen:{}:{}", run.file, run.movement);
         self.execute(
-            "insert into lf.trigger_run (id, team_id, trigger_id, trigger_type, status, started_at, trigger_payload)
+            "insert into lf.trigger_run (id, team_id, trigger_id, trigger_type, status, started_at, trigger_payload, delivery_id)
              values ($1::text::uuid, $2::text::uuid, $3::text, 'webhook', 'running', $4::text::timestamptz,
-                     jsonb_build_object('file', $5::text, 'movement', $6::text, 'facts', $7::text))",
-            &[&run.id, &self.tenant, &trigger, &run.started_at, &run.file, &run.movement, &run.input],
+                     jsonb_build_object('file', $5::text, 'movement', $6::text, 'facts', $7::text), $8::text::uuid)",
+            &[&run.id, &self.tenant, &trigger, &run.started_at, &run.file, &run.movement, &run.input, &run.delivery_id],
         )?;
         Ok(())
+    }
+
+    /// The delivery row read with `DELIVERY_COLUMNS` (and its events at 8,
+    /// when read), with its runs.
+    fn delivery_of(&self, row: &Row, events: Option<Vec<Js>>) -> Result<DeliveryRow> {
+        let id: String = row.get(0);
+        let runs = self
+            .query(
+                "select id::text, status from lf.trigger_run where team_id = $1::text::uuid and delivery_id = $2::text::uuid order by started_at, id",
+                &[&self.tenant, &id],
+            )?
+            .iter()
+            .map(|r| DeliveryRun { id: r.get(0), status: lf_status(r.get(1)) })
+            .collect();
+        Ok(DeliveryRow {
+            subscription_id: row.get(1),
+            external_id: row.get(2),
+            received_at: row.get(3),
+            source: DeliverySource::of_wire(row.get(4))?,
+            inline: row.get(5),
+            replay_of: row.get(6),
+            event_count: row.get(7),
+            runs,
+            events,
+            id,
+        })
     }
 
     fn enqueue_row(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: &str) -> Result<()> {
@@ -378,8 +409,8 @@ impl RunHostStore for PgStore {
 
     // ── lf's run records ────────────────────────────────────────────────────
 
-    fn start_run(&self, id: &str, file: &str, movement: &str, started_at: &str, input: &str) -> Result<()> {
-        self.start_run_row(&RunStart { id, file, movement, started_at, input })
+    fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
+        self.start_run_row(run)
     }
 
     fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
@@ -1095,16 +1126,86 @@ impl RunHostStore for PgStore {
         Ok(())
     }
 
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, work: &[NewWork]) -> Result<()> {
+    /// The receipt first: a duplicate (its external id kept at its
+    /// subscription before, even by a transaction still open, which the
+    /// unique index waits on) writes nothing.
+    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
+        let events = Js::Arr(delivery.events.clone()).to_json();
+        let event_count = i64::try_from(delivery.events.len()).unwrap_or(i64::MAX);
         self.transaction(|| {
+            let inserted = self.query_opt(
+                "insert into lf.delivery (id, team_id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count)
+                 values ($1::text::uuid, $2::text::uuid, $3::text, $4::text, $5::text::timestamptz, $6::text, $7::bool, $8::text::uuid, $9::text::jsonb, $10::int8)
+                 on conflict do nothing returning id",
+                &[
+                    &delivery.id,
+                    &self.tenant,
+                    &subscription_id,
+                    &delivery.external_id,
+                    &delivery.received_at,
+                    &delivery.source.wire(),
+                    &delivery.inline,
+                    &delivery.replay_of,
+                    &events,
+                    &event_count,
+                ],
+            )?;
+            if inserted.is_none() {
+                return Ok(false);
+            }
             if let Some(checkpoint) = checkpoint {
                 self.save_inbound_checkpoint(subscription_id, checkpoint)?;
             }
             for row in work {
                 self.enqueue_row(&row.kind, &row.key, &row.payload, row.due_at.as_deref(), row.team_id.as_deref().unwrap_or(&self.tenant))?;
             }
-            Ok(())
+            Ok(true)
         })
+    }
+
+    fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
+        self.query(
+            &format!(
+                "select {DELIVERY_COLUMNS} from lf.delivery
+                 where team_id = $1::text::uuid and ($2::text is null or subscription_id = $2::text) and ($3::text is null or received_at >= $3::text::timestamptz)
+                 order by received_at desc, id desc limit $4::int8"
+            ),
+            &[&self.tenant, &query.subscription_id, &query.since, &query.limit],
+        )?
+        .iter()
+        .map(|row| self.delivery_of(row, None))
+        .collect()
+    }
+
+    fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>> {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Ok(None);
+        }
+        let Some(row) = self.query_opt(
+            &format!("select {DELIVERY_COLUMNS}, events::text from lf.delivery where id = $1::text::uuid and team_id = $2::text::uuid"),
+            &[&id, &self.tenant],
+        )?
+        else {
+            return Ok(None);
+        };
+        let events = match parse_text(row.get(8))? {
+            Js::Arr(events) => events,
+            _ => return Err(StoreError::Invalid(format!("delivery {id}'s events are not a list"))),
+        };
+        self.delivery_of(&row, Some(events)).map(Some)
+    }
+
+    fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        let swept = self.execute(
+            "delete from lf.delivery where id in (
+               select d.id from lf.delivery d
+               where d.team_id = $1::text::uuid and d.received_at < $2::text::timestamptz
+                 and not exists (select 1 from lf.trigger_run r where r.team_id = d.team_id and r.delivery_id = d.id and r.status in ('running', 'parked'))
+                 and not exists (select 1 from lf.work w where w.team_id = d.team_id and w.kind = 'fire_event' and w.payload->>'deliveryId' = d.id::text)
+               order by d.received_at limit $3::int8)",
+            &[&self.tenant, &before, &limit],
+        )?;
+        Ok(i64::try_from(swept).unwrap_or(i64::MAX))
     }
 
     fn module_processes(&self) -> Result<crate::backend::ModuleProcesses> {

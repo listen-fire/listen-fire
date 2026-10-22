@@ -7,7 +7,9 @@
 use crate::backend::{CallbackClaim, CallbackRecord};
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::store::{BranchExport, ClaimedWork, CorrelatedAwait, LeafRow, NewWork, Park, ParkKind, RunRow, RunStart};
+use crate::store::{
+    BranchExport, ClaimedWork, CorrelatedAwait, DeliveryRow, DeliveryRun, DeliverySource, LeafRow, NewDelivery, NewWork, Park, ParkKind, RunRow, RunStart,
+};
 
 /// A row as the store wire carries it.
 pub trait Wire: Sized {
@@ -63,9 +65,11 @@ impl Wire for RunRow {
             "startedAt" => Js::str(&self.started_at),
             "input" => Js::str(&self.input),
             "outcome" => opt(self.outcome.as_deref()),
+            "deliveryId" => opt(self.delivery_id.as_deref()),
         })
     }
 
+    /// A module written before delivery receipts answers no `deliveryId`: none.
     fn from_wire(v: &Js) -> Option<Self> {
         Some(RunRow {
             id: text(v, "id")?,
@@ -75,6 +79,7 @@ impl Wire for RunRow {
             started_at: text(v, "startedAt")?,
             input: text(v, "input")?,
             outcome: opt_text(v, "outcome")?,
+            delivery_id: opt_text(v, "deliveryId")?,
         })
     }
 }
@@ -166,16 +171,103 @@ pub fn park_kind(value: &Js) -> Option<ParkKind<'_>> {
     })
 }
 
-/// `events.startRun`'s params.
-pub fn event_run_params(listen: &str, key: &str, run: &RunStart<'_>) -> Obj {
+/// `runs.start`'s params.
+pub fn run_start_params(run: &RunStart<'_>) -> Obj {
     obj! {
-        "listen" => Js::str(listen),
-        "key" => Js::str(key),
         "id" => Js::str(run.id),
         "file" => Js::str(run.file),
         "movement" => Js::str(run.movement),
         "startedAt" => Js::str(run.started_at),
         "input" => Js::str(run.input),
+        "deliveryId" => opt(run.delivery_id),
+    }
+}
+
+/// `events.startRun`'s params: `runs.start`'s, with the listen and the key.
+pub fn event_run_params(listen: &str, key: &str, run: &RunStart<'_>) -> Obj {
+    let mut params = obj! { "listen" => Js::str(listen), "key" => Js::str(key) };
+    params.extend(run_start_params(run));
+    params
+}
+
+/// `inbound.keepDelivery`'s `delivery`.
+pub fn delivery_params(delivery: &NewDelivery) -> Obj {
+    obj! {
+        "id" => Js::str(&delivery.id),
+        "externalId" => opt(delivery.external_id.as_deref()),
+        "receivedAt" => Js::str(&delivery.received_at),
+        "source" => Js::str(delivery.source.wire()),
+        "inline" => Js::Bool(delivery.inline),
+        "replayOf" => opt(delivery.replay_of.as_deref()),
+        "events" => Js::Arr(delivery.events.clone()),
+    }
+}
+
+/// `inbound.keepDelivery`'s `delivery`, read back; None when it is not one.
+pub fn new_delivery(v: &Js) -> Option<NewDelivery> {
+    Some(NewDelivery {
+        id: text(v, "id")?,
+        external_id: opt_text(v, "externalId")?,
+        received_at: text(v, "receivedAt")?,
+        source: DeliverySource::of_wire(v.get("source")?.as_str()?).ok()?,
+        inline: match v.get("inline")? {
+            Js::Bool(inline) => *inline,
+            _ => return None,
+        },
+        replay_of: opt_text(v, "replayOf")?,
+        events: v.get("events")?.as_array()?.to_vec(),
+    })
+}
+
+impl Wire for DeliveryRun {
+    fn to_wire(&self) -> Js {
+        Js::from(obj! { "id" => Js::str(&self.id), "status" => Js::str(&self.status) })
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(DeliveryRun { id: text(v, "id")?, status: text(v, "status")? })
+    }
+}
+
+/// `events` only when it was read (`inbound.delivery`).
+impl Wire for DeliveryRow {
+    fn to_wire(&self) -> Js {
+        let mut row = obj! {
+            "id" => Js::str(&self.id),
+            "subscriptionId" => Js::str(&self.subscription_id),
+            "externalId" => opt(self.external_id.as_deref()),
+            "receivedAt" => Js::str(&self.received_at),
+            "source" => Js::str(self.source.wire()),
+            "inline" => Js::Bool(self.inline),
+            "replayOf" => opt(self.replay_of.as_deref()),
+            "eventCount" => Js::Num(self.event_count.into()),
+            "runs" => to_rows(&self.runs),
+        };
+        if let Some(events) = &self.events {
+            row.insert("events".into(), Js::Arr(events.clone()));
+        }
+        Js::from(row)
+    }
+
+    fn from_wire(v: &Js) -> Option<Self> {
+        Some(DeliveryRow {
+            id: text(v, "id")?,
+            subscription_id: text(v, "subscriptionId")?,
+            external_id: opt_text(v, "externalId")?,
+            received_at: text(v, "receivedAt")?,
+            source: DeliverySource::of_wire(v.get("source")?.as_str()?).ok()?,
+            inline: match v.get("inline")? {
+                Js::Bool(inline) => *inline,
+                _ => return None,
+            },
+            replay_of: opt_text(v, "replayOf")?,
+            event_count: int(v.get("eventCount")?)?,
+            runs: rows(v.get("runs")?)?,
+            events: match v.get("events") {
+                None | Some(Js::Null) => None,
+                Some(events) => Some(events.as_array()?.to_vec()),
+            },
+        })
     }
 }
 
@@ -290,9 +382,10 @@ mod tests {
             started_at: "2026-10-17T00:00:00.000Z".into(),
             input: "{}".into(),
             outcome: None,
+            delivery_id: Some("d".into()),
         };
         let back = RunRow::from_wire(&run.to_wire()).unwrap();
-        assert_eq!((back.id, back.status, back.outcome), (run.id, run.status, None));
+        assert_eq!((back.id, back.status, back.outcome, back.delivery_id), (run.id, run.status, None, run.delivery_id));
         let callback = CallbackRecord {
             id: "c".into(),
             team_id: "t".into(),
@@ -327,5 +420,16 @@ mod tests {
             assert_eq!(params.get("park").and_then(park_kind).map(|k| k.reason()), Some(reason));
         }
         assert!(park_kind(&Js::from(obj! { "kind" => Js::str("timer") })).is_none(), "a timer park names its wake");
+        let delivery = NewDelivery {
+            id: "d".into(),
+            external_id: Some("x".into()),
+            received_at: "2026-10-22T00:00:00.000Z".into(),
+            source: DeliverySource::Emit,
+            inline: false,
+            replay_of: None,
+            events: vec![Js::str("e")],
+        };
+        let params = Js::from(delivery_params(&delivery));
+        assert_eq!(new_delivery(&params).map(|d| Js::from(delivery_params(&d))), Some(params));
     }
 }

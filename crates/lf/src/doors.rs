@@ -32,7 +32,7 @@ use crate::run_host::{await_wake_work, queue_await_wake};
 use crate::runs::{RunOutcome, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::backend::RunHostStore;
-use crate::store::{NewWork, Store, StoreError};
+use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
 
 /// The field of an install's credential that holds the webhook secret when
 /// the external declares `inbound` and `lf-external.yaml` names none.
@@ -255,6 +255,15 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// so a cursor is never kept past an event that never ran.
     async fn keep(&self, kept: Kept<'_>) -> Result<(), String> {
         let adapter_type = &kept.source.adapter_type;
+        let receipt = NewDelivery {
+            id: uuid::Uuid::new_v4().to_string(),
+            external_id: None,
+            received_at: iso(0),
+            source: DeliverySource::Webhook,
+            inline: matches!(self.sink, EventSink::Inline { .. }),
+            replay_of: None,
+            events: kept.receipts.clone(),
+        };
         let mut work = Vec::new();
         let mut failures = Vec::new();
         match &self.sink {
@@ -270,7 +279,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             }
         }
         work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
-        self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &work).map_err(|e| e.to_string())?;
+        self.store.keep_delivery(kept.subscription_id, kept.checkpoint, &receipt, &work).map_err(|e| e.to_string())?;
         crate::wake::queued_rows(&work);
         self.list(&work);
         if !failures.is_empty() {
@@ -460,16 +469,20 @@ impl Store {
         Ok(())
     }
 
-    /// crate::backend::RunHostStore::keep_delivery: one transaction.
-    pub fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, work: &[NewWork]) -> Result<(), StoreError> {
+    /// crate::backend::RunHostStore::keep_delivery: one transaction, the
+    /// receipt first. A duplicate writes nothing: no cursor, no rows.
+    pub fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool, StoreError> {
         self.transaction(|db| {
+            if !Store::insert_delivery_in(db, subscription_id, delivery)? {
+                return Ok(false);
+            }
             if let Some(checkpoint) = checkpoint {
                 Self::save_checkpoint_in(db, subscription_id, checkpoint)?;
             }
             for row in work {
                 Store::enqueue_in(db, &row.kind, &row.key, &row.payload, row.due_at.as_deref())?;
             }
-            Ok(())
+            Ok(true)
         })
     }
 }

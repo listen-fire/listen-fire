@@ -25,8 +25,8 @@ use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, NewWork, Park, Release, RunStart, StoreError, iso};
-use crate::store_wire::{Wire, num, opt, park_kind, rows, to_rows};
+use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, RunStart, StoreError, iso};
+use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
 pub const STORE_METHODS: &[&str] = &[
@@ -39,6 +39,7 @@ pub const STORE_METHODS: &[&str] = &[
     "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
+    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -135,6 +136,18 @@ impl Params<'_> {
         self.0.get(key).cloned().unwrap_or(Js::Null)
     }
 
+    /// `runs.start`'s run, as `events.startRun` carries it too.
+    fn run_start(&self) -> Result<RunStart<'_>, Failure> {
+        Ok(RunStart {
+            id: self.str("id")?,
+            file: self.str("file")?,
+            movement: self.str("movement")?,
+            started_at: self.str("startedAt")?,
+            input: self.str("input")?,
+            delivery_id: self.opt_str("deliveryId")?,
+        })
+    }
+
     fn strings(&self, key: &str) -> Result<Vec<String>, Failure> {
         self.0
             .get(key)
@@ -152,7 +165,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "store.open" => Ok(Js::from(obj! { "tenant" => Js::str(store.tenant()) })),
 
         "runs.start" => {
-            store.start_run(p.str("id")?, p.str("file")?, p.str("movement")?, p.str("startedAt")?, p.str("input")?)?;
+            store.start_run(&p.run_start()?)?;
             none
         }
         "runs.requestCancel" => {
@@ -330,10 +343,18 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             Some(checkpoint) => Js::from(obj! { "checkpoint" => checkpoint }),
         }),
         "inbound.keepDelivery" => {
+            let delivery = new_delivery(&p.value("delivery"))
+                .ok_or_else(|| Failure::Params("delivery: expected { id, externalId?, receivedAt, source, inline, replayOf?, events }".into()))?;
             let work: Vec<NewWork> = rows(&p.value("work")).ok_or_else(|| Failure::Params("work: expected a list of { kind, key, payload, dueAt, teamId }".into()))?;
-            store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &work)?;
-            none
+            let kept = store.keep_delivery(p.str("subscriptionId")?, p.0.get("checkpoint"), &delivery, &work)?;
+            Ok(Js::from(obj! { "kept" => Js::Bool(kept) }))
         }
+        "inbound.deliveries" => {
+            let query = DeliveryQuery { subscription_id: p.opt_str("subscriptionId")?, since: p.opt_str("since")?, limit: p.int("limit")? };
+            Ok(to_rows(&store.deliveries(&query)?))
+        }
+        "inbound.delivery" => Ok(store.delivery(p.str("id")?)?.as_ref().map(Wire::to_wire).unwrap_or(Js::Null)),
+        "inbound.sweepDeliveries" => Ok(Js::Num(store.sweep_deliveries(p.str("before")?, p.int("limit")?)?.into())),
         "inbound.saveCheckpoint" => {
             store.save_inbound_checkpoint(p.str("subscriptionId")?, &p.value("checkpoint"))?;
             none
@@ -346,10 +367,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "processes.swap" => Ok(Js::Bool(store.swap_module_processes(p.int("version")?, &p.value("processes"))?)),
 
         "events.claim" => Ok(Js::Bool(store.claim_event(p.str("listen")?, p.str("key")?)?)),
-        "events.startRun" => {
-            let run = RunStart { id: p.str("id")?, file: p.str("file")?, movement: p.str("movement")?, started_at: p.str("startedAt")?, input: p.str("input")? };
-            Ok(Js::Bool(store.start_event_run(p.str("listen")?, p.str("key")?, &run)?))
-        }
+        "events.startRun" => Ok(Js::Bool(store.start_event_run(p.str("listen")?, p.str("key")?, &p.run_start()?)?)),
 
         _ => Err(Failure::Unknown),
     }
@@ -358,8 +376,8 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{NewWork, Park, ParkKind, RunStart, Store};
-    use crate::store_wire::{event_run_params, park_params};
+    use crate::store::{DeliverySource, NewDelivery, NewWork, Park, ParkKind, RunStart, Store};
+    use crate::store_wire::{delivery_params, event_run_params, park_params};
 
     fn state_file() -> Store {
         let dir = std::env::temp_dir().join(format!("lf-contract-{}", uuid::Uuid::new_v4()));
@@ -376,8 +394,18 @@ mod tests {
     #[test]
     fn the_composite_writes_cross_the_store_wire() {
         let store = state_file();
-        let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(-120_000), input: "{}" };
+        let receipt = NewDelivery {
+            id: uuid::Uuid::new_v4().to_string(),
+            external_id: Some("x-1".into()),
+            received_at: iso(0),
+            source: DeliverySource::Webhook,
+            inline: false,
+            replay_of: None,
+            events: vec![Js::str("e-1")],
+        };
+        let run = RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(-120_000), input: "{}", delivery_id: Some(&receipt.id) };
         assert_eq!(call(&store, "events.startRun", event_run_params("listen:f:m", "d-1", &run)), Js::Bool(true));
+        assert_eq!(call(&store, "runs.get", obj! { "runId" => Js::str("run-1") }).get("deliveryId"), Some(&Js::str(&receipt.id)));
         assert_eq!(call(&store, "events.startRun", event_run_params("listen:f:m", "d-1", &run)), Js::Bool(false));
         assert_eq!(call(&store, "runs.lapsed", obj! { "staleMs" => Js::Num(60_000.into()), "limit" => Js::Num(10.into()) }), Js::strings(["run-1"]));
 
@@ -391,8 +419,26 @@ mod tests {
         assert_eq!(refused.code, crate::store_module::LEASE_LOST);
 
         let work = NewWork { kind: "wake_await".into(), key: "w".into(), payload: Js::Null, due_at: Some(iso(-1_000)), team_id: None };
-        call(&store, "inbound.keepDelivery", obj! { "subscriptionId" => Js::str("sub"), "checkpoint" => Js::str("c"), "work" => crate::store_wire::to_rows(&[work]) });
+        let keep = |checkpoint: &str, delivery: &NewDelivery, work: &[NewWork]| {
+            let params = obj! {
+                "subscriptionId" => Js::str("sub"),
+                "checkpoint" => Js::str(checkpoint),
+                "delivery" => Js::from(delivery_params(delivery)),
+                "work" => crate::store_wire::to_rows(work),
+            };
+            call(&store, "inbound.keepDelivery", params)
+        };
+        assert_eq!(keep("c", &receipt, std::slice::from_ref(&work)), Js::from(obj! { "kept" => Js::Bool(true) }));
+        let again = NewDelivery { id: uuid::Uuid::new_v4().to_string(), ..receipt.clone() };
+        let other_row = NewWork { key: "w2".into(), ..work.clone() };
+        assert_eq!(keep("c2", &again, &[other_row]), Js::from(obj! { "kept" => Js::Bool(false) }), "a redelivery under the same external id");
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c")));
+        let kept = call(&store, "inbound.delivery", obj! { "id" => Js::str(&receipt.id) });
+        assert_eq!(kept.get("events"), Some(&Js::Arr(vec![Js::str("e-1")])));
+        assert_eq!(kept.get("runs").and_then(|r| r.as_array()).map(<[Js]>::len), Some(1));
+        let listed = call(&store, "inbound.deliveries", obj! { "subscriptionId" => Js::str("sub"), "since" => Js::Null, "limit" => Js::Num(10.into()) });
+        assert_eq!(listed.as_array().map(<[Js]>::len), Some(1));
+        assert_eq!(listed.as_array().unwrap()[0].get("events"), None, "a listing carries no events");
         let claimed = call(&store, "work.claimDue", obj! { "limit" => Js::Num(10.into()), "leaseMs" => Js::Num(60_000.into()), "kinds" => Js::strings(["wake_await"]) });
         let row = claimed.as_array().unwrap()[0].clone();
         assert_eq!(row.get("attempts"), Some(&Js::Num(1.into())));
@@ -407,7 +453,16 @@ mod tests {
 
     #[test]
     fn every_method_served_is_listed() {
-        for method in ["events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery"] {
+        for method in [
+            "events.startRun",
+            "runs.lapsed",
+            "parks.commit",
+            "work.bury",
+            "inbound.keepDelivery",
+            "inbound.deliveries",
+            "inbound.delivery",
+            "inbound.sweepDeliveries",
+        ] {
             assert!(STORE_METHODS.contains(&method), "{method}");
         }
     }

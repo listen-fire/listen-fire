@@ -14,8 +14,10 @@ use crate::core::ProcessModule;
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::slot_client::SlotClient;
-use crate::store::{BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, LeafRow, NewWork, Park, Release, Result, RunRow, RunStart, StoreError};
-use crate::store_wire::{Wire, event_run_params, int, num, opt, park_params, rows, to_rows};
+use crate::store::{
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Result, RunRow, RunStart, StoreError,
+};
+use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, opt, park_params, rows, run_start_params, to_rows};
 
 /// The error code a fenced write answers when the run's lease is gone
 /// (`RunLeaseLost`), its `data` `{ runId }`.
@@ -96,8 +98,8 @@ impl RunHostStore for ProcessStore {
         &self.tenant
     }
 
-    fn start_run(&self, id: &str, file: &str, movement: &str, started_at: &str, input: &str) -> Result<()> {
-        self.unit("runs.start", obj! { "id" => s(id), "file" => s(file), "movement" => s(movement), "startedAt" => s(started_at), "input" => s(input) })
+    fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
+        self.unit("runs.start", run_start_params(run))
     }
     fn start_event_run(&self, listen: &str, key: &str, run: &RunStart<'_>) -> Result<bool> {
         self.flag("events.startRun", event_run_params(listen, key, run))
@@ -323,13 +325,30 @@ impl RunHostStore for ProcessStore {
     fn save_inbound_checkpoint(&self, subscription_id: &str, checkpoint: &Js) -> Result<()> {
         self.unit("inbound.saveCheckpoint", obj! { "subscriptionId" => s(subscription_id), "checkpoint" => checkpoint.clone() })
     }
-    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, work: &[NewWork]) -> Result<()> {
-        let mut params = obj! { "subscriptionId" => s(subscription_id), "work" => to_rows(work) };
+    fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
+        let mut params = obj! { "subscriptionId" => s(subscription_id), "delivery" => Js::from(delivery_params(delivery)), "work" => to_rows(work) };
         // Absent, not null: a null cursor is one to keep.
         if let Some(checkpoint) = checkpoint {
             params.insert("checkpoint".into(), checkpoint.clone());
         }
-        self.unit("inbound.keepDelivery", params)
+        // A module answering `null`, as one written before the receipt did,
+        // is not taken to have kept it.
+        let answer = self.call("inbound.keepDelivery", params)?;
+        match answer.get("kept") {
+            Some(Js::Bool(kept)) => Ok(*kept),
+            _ => Err(self.malformed("inbound.keepDelivery", &answer)),
+        }
+    }
+    fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
+        let params = obj! { "subscriptionId" => opt(query.subscription_id), "since" => opt(query.since), "limit" => Js::Num(query.limit.into()) };
+        self.rows("inbound.deliveries", params)
+    }
+    fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>> {
+        self.row("inbound.delivery", obj! { "id" => s(id) })
+    }
+    fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        let answer = self.call("inbound.sweepDeliveries", obj! { "before" => s(before), "limit" => Js::Num(limit.into()) })?;
+        int(&answer).ok_or_else(|| self.malformed("inbound.sweepDeliveries", &answer))
     }
 
     fn module_processes(&self) -> Result<crate::backend::ModuleProcesses> {

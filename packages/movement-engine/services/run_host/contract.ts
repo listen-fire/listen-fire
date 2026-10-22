@@ -10,6 +10,7 @@
 // failure (node:assert), so jest and node:test both wrap the same list.
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { RunLeaseLost } from '../movement_engine/errors';
 import { drainRun, wakeAwaits, type StepLeaf, type StepOutcome, type StepRequest } from './drain';
 import { cancelSubtrees, clearIfQuiescent, parkSources, runCompleteWithout, runParkSink, settleIfCancelRequested, abandonRun, type RunHost, type RunRecords } from './rules';
@@ -25,6 +26,7 @@ import {
   type CallbackBodyOutcome,
 } from './callbacks';
 import type { HeldRunLease } from './lease';
+import type { DeliveryRow, NewDelivery, NewWorkRow, RunRow } from './rpc_store';
 
 export interface ContractBackend {
   store: RunHostStore;
@@ -984,6 +986,203 @@ export const cancelContractCases: RecordsContractCase[] = [
       await backend.requestCancel({ runId: done, reason: 'too late' });
       await settleIfCancelRequested(host, { runId: done });
       assert.equal(await backend.runStatus(done), completed);
+    },
+  },
+];
+
+// ── Delivery receipts ───────────────────────────────────────────────────────
+//
+// What a door keeps of one delivery: the events it produced, kept with its
+// cursor and its work rows in the door's one write (`inbound.keepDelivery`),
+// a redelivery under the provider's delivery id kept out by that write. Their
+// own list over their own backend: the TypeScript `RunHostStore` (store.ts)
+// has no inbound family, since only lf's doors call it.
+
+export interface DeliveryContractBackend {
+  /** The tenant every row of the case belongs to. */
+  teamId: string;
+  keepDelivery(input: { subscriptionId: string; checkpoint?: unknown; delivery: NewDelivery; work: NewWorkRow[] }): Promise<{ kept: boolean }>;
+  deliveries(input: { subscriptionId?: string | null; since?: string | null; limit: number }): Promise<DeliveryRow[]>;
+  delivery(input: { id: string }): Promise<DeliveryRow | null>;
+  sweepDeliveries(input: { before: string; limit: number }): Promise<number>;
+  /** The subscription's saved pull cursor. */
+  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint: unknown } | null>;
+  startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string; deliveryId?: string }): Promise<void>;
+  completeRun(runId: string): Promise<void>;
+  runGet(input: { runId: string }): Promise<RunRow | null>;
+  claimDue(input: { limit: number; leaseMs: number; kinds?: readonly string[] }): Promise<ClaimedWork[]>;
+}
+
+export interface DeliveryContractCase {
+  name: string;
+  run(backend: DeliveryContractBackend): Promise<void>;
+}
+
+const DAYS = (days: number) => PAST(days * 24 * 60);
+
+function newDelivery(extra: Partial<NewDelivery> = {}): NewDelivery {
+  return {
+    id: randomUUID(),
+    externalId: null,
+    receivedAt: new Date().toISOString(),
+    source: 'webhook',
+    inline: false,
+    replayOf: null,
+    events: [{ external: 'crm', event: { n: 1 } }],
+    ...extra,
+  };
+}
+
+/** One of the delivery's events queued for the drain, as lf's doors queue it. */
+function fireRow(deliveryId: string, n: number): NewWorkRow {
+  return { kind: 'fire_event', key: uniqueKey('fire_event'), payload: { external: 'crm', event: { n }, deliveryId }, dueAt: PAST(1), teamId: null };
+}
+
+async function claimedKeys(backend: DeliveryContractBackend, keys: string[]): Promise<ClaimedWork[]> {
+  const claimed = await backend.claimDue({ limit: 1000, leaseMs: 60_000, kinds: ['fire_event'] });
+  return claimed.filter((w) => keys.includes(w.key));
+}
+
+async function startDeliveryRun(backend: DeliveryContractBackend, deliveryId: string | undefined): Promise<string> {
+  const id = randomUUID();
+  await backend.startRun({ id, file: 'f', movement: 'm', startedAt: new Date().toISOString(), input: '{}', ...(deliveryId !== undefined ? { deliveryId } : {}) });
+  return id;
+}
+
+/** A first delivery under `externalId`, then its redelivery (a new id, another
+ *  cursor, another row): the second is kept out and leaves nothing. */
+async function redelivered(backend: DeliveryContractBackend, opts: { claimBetween: boolean }): Promise<void> {
+  const subscriptionId = uniqueKey('sub');
+  const externalId = uniqueKey('delivery');
+  const first = newDelivery({ externalId });
+  const firstRow = fireRow(first.id, 1);
+  assert.deepEqual(await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery: first, work: [firstRow] }), { kept: true });
+  if (opts.claimBetween) {
+    const [claimed] = await claimedKeys(backend, [firstRow.key]);
+    assert.ok(claimed, "the first's row was queued");
+  }
+  const second = newDelivery({ externalId });
+  const secondRow = fireRow(second.id, 2);
+  assert.deepEqual(await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-2' }, delivery: second, work: [secondRow] }), { kept: false });
+  assert.deepEqual(await backend.checkpoint({ subscriptionId }), { checkpoint: { cursor: 'c-1' } }, "the cursor is still the first's");
+  assert.deepEqual(await claimedKeys(backend, [secondRow.key]), [], 'the redelivery queued nothing');
+  assert.equal(await backend.delivery({ id: second.id }), null);
+  assert.deepEqual((await backend.deliveries({ subscriptionId, limit: 10 })).map((d) => d.id), [first.id]);
+}
+
+export const deliveryContractCases: DeliveryContractCase[] = [
+  {
+    name: 'deliveries: a delivery is kept with its work as one write',
+    async run(backend) {
+      const subscriptionId = uniqueKey('sub');
+      const delivery = newDelivery({ externalId: uniqueKey('delivery'), events: [{ external: 'crm', event: { n: 1 } }, { external: 'crm', event: { n: 2 } }] });
+      const work = [fireRow(delivery.id, 1), fireRow(delivery.id, 2)];
+      assert.deepEqual(await backend.keepDelivery({ subscriptionId, checkpoint: { cursor: 'c-1' }, delivery, work }), { kept: true });
+      const keys = work.map((w) => w.key);
+      assert.deepEqual((await claimedKeys(backend, keys)).map((w) => w.key).sort(), [...keys].sort());
+      assert.deepEqual(await backend.checkpoint({ subscriptionId }), { checkpoint: { cursor: 'c-1' } });
+      assert.deepEqual(await backend.delivery({ id: delivery.id }), {
+        id: delivery.id,
+        subscriptionId,
+        externalId: delivery.externalId,
+        receivedAt: delivery.receivedAt,
+        source: 'webhook',
+        inline: false,
+        replayOf: null,
+        eventCount: 2,
+        runs: [],
+        events: delivery.events,
+      });
+    },
+  },
+  {
+    name: 'deliveries: a duplicate externalId is not kept, and writes nothing',
+    run: (backend) => redelivered(backend, { claimBetween: true }),
+  },
+  {
+    name: "deliveries: a redelivery while the first's work is still queued is kept out",
+    run: (backend) => redelivered(backend, { claimBetween: false }),
+  },
+  {
+    name: 'deliveries: the same externalId on another subscription, or none, is kept',
+    async run(backend) {
+      const [one, other] = [uniqueKey('sub'), uniqueKey('sub')];
+      const externalId = uniqueKey('delivery');
+      const keep = async (subscriptionId: string, delivery: NewDelivery) => (await backend.keepDelivery({ subscriptionId, delivery, work: [] })).kept;
+      const kept = [newDelivery({ externalId }), newDelivery({ externalId }), newDelivery(), newDelivery()];
+      assert.equal(await keep(one, kept[0]!), true);
+      assert.equal(await keep(other, kept[1]!), true, 'another subscription');
+      assert.equal(await keep(one, kept[2]!), true, 'no external id');
+      assert.equal(await keep(one, kept[3]!), true, 'no external id, again');
+      const listed = (await backend.deliveries({ limit: 100 })).map((d) => d.id);
+      for (const delivery of kept) assert.ok(listed.includes(delivery.id), delivery.id);
+    },
+  },
+  {
+    name: 'deliveries: a delivery lists its runs',
+    async run(backend) {
+      const subscriptionId = uniqueKey('sub');
+      const delivery = newDelivery();
+      await backend.keepDelivery({ subscriptionId, delivery, work: [] });
+      const running = await startDeliveryRun(backend, delivery.id);
+      const completed = await startDeliveryRun(backend, delivery.id);
+      const unnamed = await startDeliveryRun(backend, undefined);
+      await backend.completeRun(completed);
+      const [row] = await backend.deliveries({ subscriptionId, limit: 10 });
+      const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+      assert.deepEqual(
+        [...(row?.runs ?? [])].sort(byId),
+        [
+          { id: running, status: 'running' },
+          { id: completed, status: 'completed' },
+        ].sort(byId),
+      );
+      assert.equal(row?.events, undefined, 'a listing carries no events');
+      assert.equal((await backend.runGet({ runId: running }))?.deliveryId, delivery.id);
+      assert.equal((await backend.runGet({ runId: unnamed }))?.deliveryId, null);
+    },
+  },
+  {
+    name: 'deliveries: listing filters by subscription and since, most recent first, at most limit',
+    async run(backend) {
+      const [one, other] = [uniqueKey('sub'), uniqueKey('sub')];
+      const at = (minutesAgo: number) => newDelivery({ receivedAt: PAST(minutesAgo) });
+      const [oldest, middle, newest, elsewhere] = [at(30), at(20), at(10), at(5)];
+      for (const [subscriptionId, delivery] of [[one, oldest], [one, middle], [one, newest], [other, elsewhere]] as const) {
+        await backend.keepDelivery({ subscriptionId, delivery, work: [] });
+      }
+      const ids = async (input: { subscriptionId?: string; since?: string; limit: number }) => (await backend.deliveries(input)).map((d) => d.id);
+      assert.deepEqual(await ids({ subscriptionId: one, limit: 10 }), [newest.id, middle.id, oldest.id]);
+      assert.deepEqual(await ids({ subscriptionId: one, since: middle.receivedAt, limit: 10 }), [newest.id, middle.id]);
+      assert.deepEqual(await ids({ subscriptionId: one, limit: 1 }), [newest.id]);
+      const all = await ids({ limit: 100 });
+      assert.deepEqual(
+        all.filter((id) => [oldest.id, middle.id, newest.id, elsewhere.id].includes(id)),
+        [elsewhere.id, newest.id, middle.id, oldest.id],
+      );
+    },
+  },
+  {
+    name: 'deliveries: the sweep forgets settled old deliveries only',
+    async run(backend) {
+      const subscriptionId = uniqueKey('sub');
+      const old = async (work: (id: string) => NewWorkRow[] = () => []) => {
+        const delivery = newDelivery({ receivedAt: DAYS(30) });
+        await backend.keepDelivery({ subscriptionId, delivery, work: work(delivery.id) });
+        return delivery.id;
+      };
+      const settled = await old();
+      await backend.completeRun(await startDeliveryRun(backend, settled));
+      const running = await old();
+      await startDeliveryRun(backend, running);
+      const queued = await old((id) => [{ ...fireRow(id, 1), dueAt: FUTURE(60) }]);
+      const fresh = newDelivery();
+      await backend.keepDelivery({ subscriptionId, delivery: fresh, work: [] });
+      assert.equal(await backend.sweepDeliveries({ before: DAYS(14), limit: 100 }), 1);
+      assert.equal(await backend.delivery({ id: settled }), null, 'old, its run settled: forgotten');
+      assert.ok(await backend.delivery({ id: running }), 'its run is still running');
+      assert.ok(await backend.delivery({ id: queued }), 'a fire_event row still names it');
+      assert.ok(await backend.delivery({ id: fresh.id }), 'not old enough');
     },
   },
 ];

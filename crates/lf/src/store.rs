@@ -116,6 +116,19 @@ create table if not exists event_receipt (
   received_at text not null,
   primary key (listen, key)
 );
+create table if not exists delivery (
+  id text primary key,
+  subscription_id text not null,
+  external_id text,
+  received_at text not null,
+  source text not null,
+  inline integer not null,
+  replay_of text,
+  events text not null,
+  event_count integer not null
+);
+create unique index if not exists delivery_external on delivery (subscription_id, external_id) where external_id is not null;
+create index if not exists delivery_received on delivery (received_at);
 create table if not exists work (
   id integer primary key autoincrement,
   kind text not null,
@@ -139,7 +152,7 @@ pub const POLL_WORK_KIND: &str = "poll_listen";
 pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen"];
 
 /// Columns a state file written by an earlier lf lacks, added on open.
-const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason"];
+const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];
 const ADDED_WORK_COLUMNS: &[(&str, &str)] = &[("attempts", "integer not null default 0"), ("dead_at", "text"), ("dead_reason", "text")];
 
 #[derive(Debug)]
@@ -183,7 +196,11 @@ pub struct RunRow {
     /// The run's facts a resume needs, as JSON.
     pub input: String,
     pub outcome: Option<String>,
+    /// The delivery whose event started it, when one did.
+    pub delivery_id: Option<String>,
 }
+
+const RUN_COLUMNS: &str = "id, file, movement, status, started_at, input, outcome, delivery_id";
 
 fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
     Ok(RunRow {
@@ -194,6 +211,7 @@ fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
         started_at: r.get(4)?,
         input: r.get(5)?,
         outcome: r.get(6)?,
+        delivery_id: r.get(7)?,
     })
 }
 
@@ -329,6 +347,91 @@ pub struct RunStart<'a> {
     pub started_at: &'a str,
     /// The run's facts a resume needs, as JSON.
     pub input: &'a str,
+    /// The delivery whose event started it (`delivery.id`), when one did.
+    pub delivery_id: Option<&'a str>,
+}
+
+/// Where a delivery came in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DeliverySource {
+    /// A provider's webhook at its door.
+    Webhook,
+    /// lf's older `/hooks/<external>` door.
+    Hook,
+    /// An external's own push (`emit`).
+    Emit,
+    /// `lf run --webhook`, or a replay by `lf deliveries replay`.
+    Cli,
+}
+
+impl DeliverySource {
+    pub fn wire(self) -> &'static str {
+        match self {
+            DeliverySource::Webhook => "webhook",
+            DeliverySource::Hook => "hook",
+            DeliverySource::Emit => "emit",
+            DeliverySource::Cli => "cli",
+        }
+    }
+
+    pub fn of_wire(source: &str) -> Result<DeliverySource> {
+        match source {
+            "webhook" => Ok(DeliverySource::Webhook),
+            "hook" => Ok(DeliverySource::Hook),
+            "emit" => Ok(DeliverySource::Emit),
+            "cli" => Ok(DeliverySource::Cli),
+            other => Err(StoreError::Invalid(format!("not a delivery source: {other} (webhook, hook, emit or cli)"))),
+        }
+    }
+}
+
+/// A delivery's receipt, kept in the door's one write (`inbound.keepDelivery`):
+/// the events it produced, never its raw body, headers or signature.
+#[derive(Debug, Clone)]
+pub struct NewDelivery {
+    /// lf's own id for it.
+    pub id: String,
+    /// The provider's id for it, when the door has one: a second delivery
+    /// under it, at the same subscription, is kept out.
+    pub external_id: Option<String>,
+    pub received_at: String,
+    pub source: DeliverySource,
+    /// Its events ran inside the request rather than from the queue.
+    pub inline: bool,
+    /// The delivery it replays.
+    pub replay_of: Option<String>,
+    pub events: Vec<Js>,
+}
+
+/// A kept delivery, as `inbound.deliveries` and `inbound.delivery` read it.
+#[derive(Debug, Clone)]
+pub struct DeliveryRow {
+    pub id: String,
+    pub subscription_id: String,
+    pub external_id: Option<String>,
+    pub received_at: String,
+    pub source: DeliverySource,
+    pub inline: bool,
+    pub replay_of: Option<String>,
+    pub event_count: i64,
+    /// The runs its events started.
+    pub runs: Vec<DeliveryRun>,
+    /// Read by `inbound.delivery` only.
+    pub events: Option<Vec<Js>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryRun {
+    pub id: String,
+    pub status: String,
+}
+
+/// Which deliveries `inbound.deliveries` lists, most recent first.
+pub struct DeliveryQuery<'a> {
+    pub subscription_id: Option<&'a str>,
+    /// Received at or after this instant.
+    pub since: Option<&'a str>,
+    pub limit: i64,
 }
 
 pub struct CorrelatedAwait {
@@ -402,6 +505,7 @@ impl Store {
                 db.execute_batch(&format!("alter table run add column {column} text"))?;
             }
         }
+        db.execute_batch("create index if not exists run_delivery on run (delivery_id)")?;
         // Added to a state file written before the cost cap kept run spend.
         for column in SPEND_COLUMNS {
             if !columns.iter().any(|c| c == column) {
@@ -457,14 +561,14 @@ impl Store {
 
     // ── Runs ────────────────────────────────────────────────────────────────
 
-    pub fn start_run(&self, id: &str, file: &str, movement: &str, started_at: &str, input: &str) -> Result<()> {
-        Self::start_run_in(&self.db, &RunStart { id, file, movement, started_at, input })
+    pub fn start_run(&self, run: &RunStart<'_>) -> Result<()> {
+        Self::start_run_in(&self.db, run)
     }
 
     fn start_run_in(db: &Connection, run: &RunStart<'_>) -> Result<()> {
         db.execute(
-            "insert into run (id, file, movement, status, started_at, input) values (?, ?, ?, ?, ?, ?)",
-            params![run.id, run.file, run.movement, "running", run.started_at, run.input],
+            "insert into run (id, file, movement, status, started_at, input, delivery_id) values (?, ?, ?, ?, ?, ?, ?)",
+            params![run.id, run.file, run.movement, "running", run.started_at, run.input, run.delivery_id],
         )?;
         Ok(())
     }
@@ -552,12 +656,12 @@ impl Store {
     }
 
     pub fn run(&self, id: &str) -> Result<Option<RunRow>> {
-        Ok(self.db.query_row("select id, file, movement, status, started_at, input, outcome from run where id = ?", params![id], run_row).optional()?)
+        Ok(self.db.query_row(&format!("select {RUN_COLUMNS} from run where id = ?"), params![id], run_row).optional()?)
     }
 
     /// The most recent runs first.
     pub fn runs(&self, limit: i64) -> Result<Vec<RunRow>> {
-        let mut statement = self.db.prepare("select id, file, movement, status, started_at, input, outcome from run order by started_at desc limit ?")?;
+        let mut statement = self.db.prepare(&format!("select {RUN_COLUMNS} from run order by started_at desc limit ?"))?;
         Ok(statement.query_map(params![limit], run_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -990,6 +1094,88 @@ impl Store {
         Ok(self.db.query_row("select source from park_library_source where team_id = ? and hash = ?", params![team_id, hash], |r| r.get(0)).optional()?)
     }
 
+    // ── Deliveries ──────────────────────────────────────────────────────────
+
+    /// The delivery's receipt, inside the door's one write: false, and
+    /// nothing written, when its id, or its external id at its
+    /// subscription, was kept before.
+    pub(crate) fn insert_delivery_in(db: &Connection, subscription_id: &str, delivery: &NewDelivery) -> Result<bool> {
+        let inserted = db.execute(
+            "insert into delivery (id, subscription_id, external_id, received_at, source, inline, replay_of, events, event_count)
+             values (?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            params![
+                delivery.id,
+                subscription_id,
+                delivery.external_id,
+                delivery.received_at,
+                delivery.source.wire(),
+                delivery.inline,
+                delivery.replay_of,
+                Js::Arr(delivery.events.clone()).to_json(),
+                delivery.events.len(),
+            ],
+        )?;
+        Ok(inserted == 1)
+    }
+
+    /// crate::backend::RunHostStore::deliveries.
+    pub fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
+        let mut statement = self.db.prepare(&format!(
+            "select {DELIVERY_COLUMNS} from delivery
+             where (?1 is null or subscription_id = ?1) and (?2 is null or received_at >= ?2)
+             order by received_at desc, id desc limit ?3"
+        ))?;
+        let rows = statement.query_map(params![query.subscription_id, query.since, query.limit], delivery_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter().map(|row| self.delivery_of(row, None)).collect()
+    }
+
+    /// crate::backend::RunHostStore::delivery: with its events.
+    pub fn delivery(&self, id: &str) -> Result<Option<DeliveryRow>> {
+        let row = self
+            .db
+            .query_row(&format!("select {DELIVERY_COLUMNS}, events from delivery where id = ?"), params![id], |r| Ok((delivery_row(r)?, r.get::<_, String>(8)?)))
+            .optional()?;
+        row.map(|(row, events)| {
+            let events = match parse_text(&events)? {
+                Js::Arr(events) => events,
+                _ => return Err(StoreError::Invalid(format!("delivery {id}'s events are not a list"))),
+            };
+            self.delivery_of(row, Some(events))
+        })
+        .transpose()
+    }
+
+    fn delivery_of(&self, row: StoredDelivery, events: Option<Vec<Js>>) -> Result<DeliveryRow> {
+        let mut statement = self.db.prepare("select id, status from run where delivery_id = ? order by started_at, id")?;
+        let runs = statement.query_map(params![row.id], |r| Ok(DeliveryRun { id: r.get(0)?, status: r.get(1)? }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(DeliveryRow {
+            source: DeliverySource::of_wire(&row.source)?,
+            id: row.id,
+            subscription_id: row.subscription_id,
+            external_id: row.external_id,
+            received_at: row.received_at,
+            inline: row.inline,
+            replay_of: row.replay_of,
+            event_count: row.event_count,
+            runs,
+            events,
+        })
+    }
+
+    /// crate::backend::RunHostStore::sweep_deliveries.
+    pub fn sweep_deliveries(&self, before: &str, limit: i64) -> Result<i64> {
+        let swept = self.db.execute(
+            "delete from delivery where id in (
+               select d.id from delivery d
+               where d.received_at < ?1
+                 and not exists (select 1 from run r where r.delivery_id = d.id and r.status in ('running', 'parked'))
+                 and not exists (select 1 from work w where w.kind = 'fire_event' and json_extract(w.payload, '$.deliveryId') = d.id)
+               order by d.received_at limit ?2)",
+            params![before, limit],
+        )?;
+        Ok(i64::try_from(swept).unwrap_or(i64::MAX))
+    }
+
     /// crate::backend::RunHostStore::claim_event.
     pub fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
         Self::claim_event_in(&self.db, listen, key)
@@ -999,6 +1185,33 @@ impl Store {
         let inserted = db.execute("insert into event_receipt (listen, key, received_at) values (?, ?, ?) on conflict do nothing", params![listen, key, iso(0)])?;
         Ok(inserted == 1)
     }
+}
+
+const DELIVERY_COLUMNS: &str = "id, subscription_id, external_id, received_at, source, inline, replay_of, event_count";
+
+/// A delivery's row as the state file holds it, its runs not yet read.
+struct StoredDelivery {
+    id: String,
+    subscription_id: String,
+    external_id: Option<String>,
+    received_at: String,
+    source: String,
+    inline: bool,
+    replay_of: Option<String>,
+    event_count: i64,
+}
+
+fn delivery_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDelivery> {
+    Ok(StoredDelivery {
+        id: r.get(0)?,
+        subscription_id: r.get(1)?,
+        external_id: r.get(2)?,
+        received_at: r.get(3)?,
+        source: r.get(4)?,
+        inline: r.get(5)?,
+        replay_of: r.get(6)?,
+        event_count: r.get(7)?,
+    })
 }
 
 /// `Number(work.id)`: the row id a claim names.
@@ -1116,7 +1329,7 @@ mod tests {
     #[test]
     fn a_lapsed_run_lease_is_taken_by_another_process_with_the_abandoned_claim_parked_again() {
         let (store, path) = state_file();
-        store.start_run("run-1", "f", "m", &iso(0), "{}").unwrap();
+        store.start_run(&RunStart { id: "run-1", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         store.put_leaf("run-1", "s1", "timer", Some(&iso(-1_000)), &no_payload(), None).unwrap();
         let first = store.claim_lease("run-1", 60_000).unwrap().expect("the run was free");
         assert!(store.claim_leaf("run-1", "s1", None).unwrap().is_some());
@@ -1150,7 +1363,7 @@ mod tests {
     }
 
     fn running(store: &Store, run_id: &str) -> String {
-        store.start_run(run_id, "f", "m", &iso(0), "{}").unwrap();
+        store.start_run(&RunStart { id: run_id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: None }).unwrap();
         store.claim_lease(run_id, 60_000).unwrap().unwrap()
     }
 
@@ -1210,7 +1423,7 @@ mod tests {
     #[test]
     fn an_event_receipt_and_its_run_are_one_write() {
         let (store, _) = state_file();
-        let start = |id: &'static str| RunStart { id, file: "f", movement: "m", started_at: "2026-10-20T00:00:00.000Z", input: "{}" };
+        let start = |id: &'static str| RunStart { id, file: "f", movement: "m", started_at: "2026-10-20T00:00:00.000Z", input: "{}", delivery_id: None };
         // Before: the receipt was noted, then the crash, and the event never ran.
         failing(&store, "no_run", "before insert on run");
         assert!(store.start_event_run("listen:f:m", "delivery-1", &start("run-1")).is_err());
@@ -1221,30 +1434,117 @@ mod tests {
         assert!(store.run("run-2").unwrap().is_none(), "a redelivery starts no run");
     }
 
+    fn delivery(external_id: Option<&str>) -> NewDelivery {
+        NewDelivery {
+            id: uuid(),
+            external_id: external_id.map(str::to_string),
+            received_at: iso(0),
+            source: DeliverySource::Webhook,
+            inline: false,
+            replay_of: None,
+            events: vec![Js::str("e-1")],
+        }
+    }
+
+    fn fire_row(key: &str) -> NewWork {
+        NewWork { kind: "fire_event".into(), key: key.into(), payload: no_payload(), due_at: None, team_id: None }
+    }
+
     #[test]
     fn a_delivery_keeps_its_cursor_only_with_its_work() {
         let (store, _) = state_file();
         let cursor = Js::str("c-2");
-        let row = |key: &str| NewWork { kind: "fire_event".into(), key: key.into(), payload: no_payload(), due_at: None, team_id: None };
-        let work = [row("fire_event:1"), row("fire_event:2")];
+        let work = [fire_row("fire_event:1"), fire_row("fire_event:2")];
+        let first = delivery(None);
         // Before: the cursor moved past events that were then never queued.
         failing(&store, "no_work", "before insert on work");
-        assert!(store.keep_delivery("sub", Some(&cursor), &work).is_err());
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work).is_err());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), None);
+        assert!(store.delivery(&first.id).unwrap().is_none(), "its receipt went with the failed write");
         unfail(&store, "no_work");
-        store.keep_delivery("sub", Some(&cursor), &work).unwrap();
+        assert!(store.keep_delivery("sub", Some(&cursor), &first, &work).unwrap());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(cursor));
         assert_eq!(work_keys(&store), ["fire_event:1", "fire_event:2"]);
         // No cursor: the saved one stays.
-        store.keep_delivery("sub", None, &[row("fire_event:3")]).unwrap();
+        assert!(store.keep_delivery("sub", None, &delivery(None), &[fire_row("fire_event:3")]).unwrap());
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-2")));
+    }
+
+    #[test]
+    fn a_duplicate_on_a_second_connection_is_kept_out() {
+        let (store, path) = state_file();
+        let other = Store::open(&path).unwrap();
+        assert!(store.keep_delivery("sub", Some(&Js::str("c-1")), &delivery(Some("d-1")), &[fire_row("fire_event:1")]).unwrap());
+        // The first's work is still queued: the redelivery is kept out by the write, not the drain.
+        assert!(!other.keep_delivery("sub", Some(&Js::str("c-2")), &delivery(Some("d-1")), &[fire_row("fire_event:2")]).unwrap());
+        assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c-1")));
+        assert_eq!(work_keys(&store), ["fire_event:1"]);
+        let all = DeliveryQuery { subscription_id: None, since: None, limit: 10 };
+        assert_eq!(store.deliveries(&all).unwrap().len(), 1);
+        // Another subscription's, or none, is its own.
+        assert!(other.keep_delivery("other", None, &delivery(Some("d-1")), &[]).unwrap());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
+        assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
+        assert_eq!(store.deliveries(&all).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn the_sweep_forgets_settled_old_deliveries_only() {
+        let (store, _) = state_file();
+        let old = |store: &Store| {
+            let kept = NewDelivery { received_at: iso(-30 * 86_400_000), ..delivery(None) };
+            store.keep_delivery("sub", None, &kept, &[]).unwrap();
+            kept.id
+        };
+        let start = |id: &str, delivery_id: &str| {
+            store.start_run(&RunStart { id, file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(delivery_id) }).unwrap()
+        };
+        let (settled, running, queued) = (old(&store), old(&store), old(&store));
+        start("done", &settled);
+        store.settle_run("done", "completed", &Js::Null, &iso(0)).unwrap();
+        start("live", &running);
+        let payload = Js::Obj(crate::obj! { "deliveryId" => Js::str(&queued) });
+        store.enqueue("fire_event", "fire_event:q", &payload, None).unwrap();
+        let fresh = delivery(None);
+        store.keep_delivery("sub", None, &fresh, &[]).unwrap();
+        assert_eq!(store.sweep_deliveries(&iso(-14 * 86_400_000), 100).unwrap(), 1);
+        assert!(store.delivery(&settled).unwrap().is_none());
+        for kept in [&running, &queued, &fresh.id] {
+            assert!(store.delivery(kept).unwrap().is_some(), "{kept}");
+        }
+    }
+
+    #[test]
+    fn a_state_file_without_delivery_id_gains_it_on_open() {
+        let dir = std::env::temp_dir().join(format!("lf-state-{}", uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        // A run table as an lf before delivery receipts wrote it.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "create table run (id text primary key, file text not null, movement text not null, status text not null, started_at text not null,
+                   finished_at text, input text not null, outcome text, lease_token text, lease_until text);
+                 insert into run (id, file, movement, status, started_at, input) values ('old', 'f', 'm', 'completed', '2026-10-01T00:00:00.000Z', '{}');",
+            )
+            .unwrap();
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.run("old").unwrap().unwrap().delivery_id, None);
+        let first = delivery(None);
+        store.keep_delivery("sub", None, &first, &[]).unwrap();
+        store.start_run(&RunStart { id: "new", file: "f", movement: "m", started_at: &iso(0), input: "{}", delivery_id: Some(&first.id) }).unwrap();
+        assert_eq!(store.run("new").unwrap().unwrap().delivery_id.as_deref(), Some(first.id.as_str()));
+        let runs: Vec<String> = store.delivery(&first.id).unwrap().unwrap().runs.into_iter().map(|r| r.id).collect();
+        assert_eq!(runs, ["new"]);
+        let indexed: i64 = store.db.query_row("select count(*) from pragma_index_list('run') where name = 'run_delivery'", [], |r| r.get(0)).unwrap();
+        assert_eq!(indexed, 1);
     }
 
     #[test]
     fn a_run_is_lapsed_when_it_is_running_without_a_live_lease_a_lease_length_after_it_started() {
         let (store, _) = state_file();
         let long_ago = iso(-120_000);
-        let start = |id: &str, at: &str| store.start_run(id, "f", "m", at, "{}").unwrap();
+        let start = |id: &str, at: &str| store.start_run(&RunStart { id, file: "f", movement: "m", started_at: at, input: "{}", delivery_id: None }).unwrap();
         let lease_until = |id: &str, until: Option<String>| {
             store.db.execute("update run set lease_token = 't', lease_until = ? where id = ?", params![until, id]).unwrap();
         };

@@ -101,6 +101,9 @@ pub struct RunRow {
     pub started_at: String,
     pub input: String,
     pub outcome: Option<String>,
+    /// The delivery whose event started it (`runs.start`'s `deliveryId`).
+    #[serde(default)]
+    pub delivery_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +211,62 @@ pub struct NewWork {
     pub team_id: Option<String>,
 }
 
+/// Where a delivery came in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeliverySource {
+    Webhook,
+    Hook,
+    Emit,
+    Cli,
+}
+
+/// A delivery's receipt (`inbound.keepDelivery`'s `delivery`): the events it
+/// produced. A second one with the same `external_id` at the same
+/// subscription is a duplicate.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewDelivery {
+    pub id: String,
+    #[serde(default)]
+    pub external_id: Option<String>,
+    pub received_at: String,
+    pub source: DeliverySource,
+    pub inline: bool,
+    #[serde(default)]
+    pub replay_of: Option<String>,
+    pub events: Vec<Js>,
+}
+
+/// `inbound.keepDelivery`'s answer: `false` for a duplicate, which wrote nothing.
+#[derive(Debug, Clone, Serialize)]
+pub struct Kept {
+    pub kept: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeliveryRun {
+    pub id: String,
+    pub status: String,
+}
+
+/// A kept delivery: `events` only from `inbound.delivery`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryRow {
+    pub id: String,
+    pub subscription_id: String,
+    pub external_id: Option<String>,
+    pub received_at: String,
+    pub source: DeliverySource,
+    pub inline: bool,
+    pub replay_of: Option<String>,
+    pub event_count: i64,
+    pub runs: Vec<DeliveryRun>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<Js>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Minted {
     pub id: String,
@@ -267,10 +326,20 @@ slot! {
     pub trait Store served as StoreModule in slot "store" {
         /// Always the first request.
         "store.open" => fn open(StoreOpen { #[serde(default)] settings: BTreeMap<String, String> }) -> Opened;
-        "runs.start" => fn start_run(RunsStart { id: String, file: String, movement: String, started_at: String, input: String }) -> ();
+        "runs.start" => fn start_run(RunsStart { id: String, file: String, movement: String, started_at: String, input: String, #[serde(default)] delivery_id: Option<String> }) -> ();
         /// `runs.start` and `events.claim` as one write: `false`, and no run,
         /// for an event the listen has run before.
-        "events.startRun" => fn start_event_run(EventsStartRun { listen: String, key: String, id: String, file: String, movement: String, started_at: String, input: String }) -> bool;
+        "events.startRun" => fn start_event_run(EventsStartRun {
+            listen: String,
+            key: String,
+            id: String,
+            file: String,
+            movement: String,
+            started_at: String,
+            input: String,
+            #[serde(default)]
+            delivery_id: Option<String>,
+        }) -> bool;
         /// Runs still `running` whose lease lapsed or was never taken,
         /// started more than `stale_ms` ago; oldest first.
         "runs.lapsed" => fn lapsed_runs(RunsLapsed { stale_ms: i64, limit: i64 }) -> Vec<String>;
@@ -334,8 +403,25 @@ slot! {
         "callbacks.revokeRun" => fn revoke_run_callbacks(CallbacksRevokeRun { run_id: String }) -> ();
         "inbound.checkpoint" => fn inbound_checkpoint(InboundCheckpoint { subscription_id: String }) -> Option<Checkpoint>;
         "inbound.saveCheckpoint" => fn save_inbound_checkpoint(InboundSaveCheckpoint { subscription_id: String, checkpoint: Js }) -> ();
-        /// One write: the cursor (absent: left as it is) and the work rows.
-        "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery { subscription_id: String, #[serde(default, deserialize_with = "present")] checkpoint: Option<Js>, work: Vec<NewWork> }) -> ();
+        /// One write: the receipt first, then the cursor (absent: left as it
+        /// is) and the work rows. A duplicate (`delivery.external_id` kept at
+        /// this subscription before) writes nothing and answers `kept: false`.
+        "inbound.keepDelivery" => fn keep_delivery(InboundKeepDelivery {
+            subscription_id: String,
+            #[serde(default, deserialize_with = "present")]
+            checkpoint: Option<Js>,
+            delivery: NewDelivery,
+            work: Vec<NewWork>,
+        }) -> Kept;
+        /// Most recent first, each with its runs and without its events;
+        /// `since`: received at or after it.
+        "inbound.deliveries" => fn deliveries(InboundDeliveries { subscription_id: Option<String>, since: Option<String>, limit: i64 }) -> Vec<DeliveryRow>;
+        /// With its events and its runs; `None` when none is kept.
+        "inbound.delivery" => fn delivery(InboundDelivery { id: String }) -> Option<DeliveryRow>;
+        /// Forget at most `limit` deliveries received before `before` whose
+        /// runs are settled (none `running` or `parked`) and that no
+        /// `fire_event` row names (`payload.deliveryId`); how many went.
+        "inbound.sweepDeliveries" => fn sweep_deliveries(InboundSweepDeliveries { before: String, limit: i64 }) -> i64;
         /// The module processes the hosts on this store started (so the next
         /// stops what a killed one left), with the list's version.
         "processes.list" => fn module_processes(ProcessesList {}) -> ModuleProcesses;

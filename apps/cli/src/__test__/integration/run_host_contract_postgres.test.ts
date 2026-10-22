@@ -3,7 +3,8 @@
 // own `lf` schema), driven over its stdio JSON-RPC bridge
 // (`lf --contract-store postgres://… --team <uuid>`) by
 // `RpcStoreBackend`: the same cases the hosted Postgres backend and both
-// SQLite backends are held to, the callback and cancel cases included.
+// SQLite backends are held to, the callback, cancel and delivery receipt
+// cases included.
 // Every case's rows are one fresh team's, cleared after it.
 
 import { test } from 'node:test';
@@ -11,7 +12,9 @@ import { randomUUID } from 'node:crypto';
 import {
   callbackContractCases,
   cancelContractCases,
+  deliveryContractCases,
   runHostContractCases,
+  type DeliveryContractBackend,
   type RecordsContractBackend,
 } from 'movement-engine/services/run_host/contract';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
@@ -38,6 +41,31 @@ for (const contractCase of [...runHostContractCases, ...callbackContractCases, .
     };
     try {
       await contractCase.run(records);
+    } finally {
+      await backend.close();
+      clear();
+    }
+  });
+}
+
+for (const contractCase of deliveryContractCases) {
+  test(contractCase.name, async () => {
+    const { team, clear } = freshTeam();
+    const backend = new RpcStoreBackend(lfBinary(), ['--contract-store', POSTGRES_URL, '--team', team]);
+    const deliveries: DeliveryContractBackend = {
+      teamId: team,
+      keepDelivery: (input) => backend.keepDelivery(input),
+      deliveries: (input) => backend.deliveries(input),
+      delivery: (input) => backend.delivery(input),
+      sweepDeliveries: (input) => backend.sweepDeliveries(input),
+      checkpoint: (input) => backend.checkpoint(input),
+      startRun: (input) => backend.startRun(input),
+      completeRun: (runId) => backend.completeRun(runId),
+      runGet: (input) => backend.runGet(input),
+      claimDue: (input) => backend.store.work.claimDue(input),
+    };
+    try {
+      await contractCase.run(deliveries);
     } finally {
       await backend.close();
       clear();
