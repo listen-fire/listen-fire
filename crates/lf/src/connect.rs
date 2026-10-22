@@ -220,6 +220,9 @@ pub struct ConnectOptions<'a> {
     /// `--oauth-token-url`); empty clears them.
     pub oauth_authorize_url: Option<&'a str>,
     pub oauth_token_url: Option<&'a str>,
+    /// How the first sign-in goes back from the provider; None (`--yes`) asks
+    /// nothing more than the setup does.
+    pub sign_in: Option<&'a crate::credential_cmd::RedirectChoice>,
 }
 
 pub async fn connect_module(project: &Project, reference: &str, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<(), EntryError> {
@@ -246,8 +249,27 @@ pub async fn connect_module(project: &Project, reference: &str, prompter: &mut P
         // Installed as an adapter, as every package is until its manifest is
         // read: one that answers with plugins is a plugin external.
         Ok(facts) if created && facts.answer.get("plugins").is_some() => Ok(mark_plugin(&external)?),
-        Ok(_) => Ok(()),
+        Ok(facts) => match options.sign_in {
+            Some(redirect) if expects_one_sign_in(&facts) => offer_sign_in(project, &external.manifest.name, redirect, prompter).await,
+            _ => Ok(()),
+        },
     }
+}
+
+/// The module's only credential that must be had is one OAuth 2 sign-in.
+fn expects_one_sign_in(facts: &ManifestFacts) -> bool {
+    let mut required = facts.declarations.iter().filter(|d| !crate::catalog::optional_credential(d));
+    matches!((required.next(), required.next()), (Some(only), None) if only.oauth2().is_some())
+}
+
+/// The setup's last step: `lf credential add` for the first user, if they want it now.
+async fn offer_sign_in(project: &Project, module: &str, redirect: &crate::credential_cmd::RedirectChoice, prompter: &mut Prompter) -> Result<(), EntryError> {
+    if !prompter.confirm("Sign in now?").await? {
+        prompter.print(&format!("next, a user credential: lf credential add --module {module} <name>"));
+        return Ok(());
+    }
+    let input = crate::credential_cmd::AddInput { module, name: None, declared: None, redirect };
+    crate::credential_cmd::add_credential(project, input, prompter).await
 }
 
 /// Write `kind: plugin` into an external lf connect just installed.
@@ -392,7 +414,8 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         if !facts.declarations.is_empty() {
             prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: lf credential add --module {name} <name>"));
         }
-    } else {
+    } else if !(options.sign_in.is_some() && expects_one_sign_in(&facts)) {
+        // The offer to sign in now follows, and says it if declined.
         prompter.print(&format!("next, a user credential: lf credential add --module {name} <name>"));
     }
     Ok(facts)

@@ -5,10 +5,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { lf, lfCommand, served } from './example';
+import { wakeModuleProject } from './wake_module/project';
 import { COMPLETING, type DeliveryDoc, post, receiptProject, signedWebhook, UPDATES_ONLY } from './deliveries_fixture';
 
 /** The webhook, taken by `lf run --webhook` (a delivery of source cli). */
@@ -161,4 +164,49 @@ test('deliveries.retainDays forgets a settled delivery after its days', () => {
   const refused = lf(dir, 'deliveries');
   assert.equal(refused.code, 1);
   assert.match(refused.out, /lf\.yaml: deliveries\.retainDays: a whole number of days, at least 1 \(default 14\)/);
+});
+
+test("replaying a delivery wakes the project's wake module at once", async () => {
+  const dir = receiptProject();
+  const woken: string[] = [];
+  const worker = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      woken.push((JSON.parse(Buffer.concat(chunks).toString('utf8')) as { kind: string }).kind);
+      response.end();
+    });
+  });
+  await new Promise<void>((done) => worker.listen(0, '127.0.0.1', done));
+  const bound = worker.address();
+  assert.ok(bound !== null && typeof bound !== 'string');
+  try {
+    cpSync(join(wakeModuleProject(), 'externals/acme_wake'), join(dir, 'externals/acme_wake'), { recursive: true });
+    const config = readFileSync(join(dir, 'lf.yaml'), 'utf8');
+    assert.doesNotMatch(config, /^core:/m);
+    writeFileSync(join(dir, 'lf.yaml'), `${config}core:\n  wake: acme_wake\n`);
+    const env = { ...process.env, NODE_NO_WARNINGS: '1', LF_SECRET__ACME_WAKE__EXTERNAL: 'acme_wake', LF_SECRET__ACME_WAKE__TARGET: `http://127.0.0.1:${bound.port}/start` };
+    // Asynchronous: the worker endpoint is this process, and the wake module
+    // delivers to it before it answers lf.
+    const lfWithWake = async (...args: string[]) => {
+      const [binary, argv] = lfCommand(args);
+      return promisify(execFile)(binary, argv, { cwd: dir, encoding: 'utf8', env }).then((done) => ({ status: 0, ...done }));
+    };
+
+    const { signature } = signedWebhook(dir);
+    const taken = await lfWithWake('run', '--webhook', 'acme_crm', '--body', 'events/webhook_body.json', '--header', `x-listen-fire-signature:${signature}`);
+    assert.equal(taken.status, 0, `${taken.stdout}${taken.stderr}`);
+    const [original] = deliveriesOf(dir);
+    assert.ok(original);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const before = woken.length;
+
+    const replayed = await lfWithWake('deliveries', 'replay', original.id);
+    assert.equal(replayed.status, 0, `${replayed.stdout}${replayed.stderr}`);
+    assert.doesNotMatch(replayed.stderr, /wake slot was not told/, replayed.stderr);
+    await until('the wake module to be told', () => (woken.length > before ? true : undefined));
+    assert.equal(woken[before], 'fire_event');
+  } finally {
+    worker.close();
+  }
 });

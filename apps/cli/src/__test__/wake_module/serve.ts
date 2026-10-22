@@ -9,12 +9,21 @@
 import { WAKE_METHODS, WakeAtRequest, WakeNowRequest } from 'engine-contracts/slots';
 import { SlotRefusal, serveSlot } from 'movement-engine/public/module-wire';
 
-function deliverLater(target: string, kind: string, delayMs: number): void {
-  setTimeout(() => {
-    fetch(target, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind }) }).catch((error: unknown) => {
+function deliver(target: string, kind: string): Promise<void> {
+  return fetch(target, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind }) }).then(
+    () => undefined,
+    (error: unknown) => {
       process.stderr.write(`wake delivery to ${target} failed: ${String(error)}\n`);
-    });
-  }, Math.max(0, delayMs));
+    },
+  );
+}
+
+// A wake due now is delivered before the module answers, as a queue service
+// accepts a task before it acknowledges it: lf may stop the module the moment
+// it has its answer.
+async function deliverAfter(target: string, kind: string, delayMs: number): Promise<void> {
+  if (delayMs <= 0) return deliver(target, kind);
+  setTimeout(() => void deliver(target, kind), delayMs);
 }
 
 void serveSlot({
@@ -27,13 +36,13 @@ void serveSlot({
       case 'wake.now': {
         const wake = WakeNowRequest.safeParse(params);
         if (!wake.success) throw new SlotRefusal('bad_request', `wake.now: ${wake.error.issues[0]?.message}`);
-        deliverLater(target, wake.data.kind, 0);
+        await deliverAfter(target, wake.data.kind, 0);
         return null;
       }
       case 'wake.at': {
         const wake = WakeAtRequest.safeParse(params);
         if (!wake.success) throw new SlotRefusal('bad_request', `wake.at: ${wake.error.issues[0]?.message}`);
-        deliverLater(target, wake.data.kind, Date.parse(wake.data.at) - Date.now());
+        await deliverAfter(target, wake.data.kind, Date.parse(wake.data.at) - Date.now());
         return null;
       }
       default:

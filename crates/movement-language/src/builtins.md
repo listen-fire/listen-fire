@@ -518,13 +518,23 @@ File: File.from(digest, "text")
 
 ### pdf.render
 
-A PDF is drawn by the `@lf/pdf` plugin: `pdf.render(content)` → a `file` value, the PDF, always present. The content is drawn as plain text, line breaks preserved. `{ pageSize: "a4" | "letter", margin }` (points, from 0 to 200) is the settings record, last. A character the default writer has no glyph for (anything outside Latin-1 and the common punctuation) is drawn as `?` and the run is warned, naming `@lf/pdf`.
+A PDF is drawn by the `@lf/pdf` plugin: `pdf.render(content)` → a `file` value, the PDF, always present. The content is drawn as plain text, line breaks preserved. `{ pageSize: "a4" | "letter", margin, name }` is the settings record, last: `margin` in points from 0 to 200, `name` the file's name (`.pdf` is added when missing; the default is `movement-artifact.pdf`). A character the default writer has no glyph for (anything outside Latin-1 and the common punctuation) is drawn as `?` and the run is warned, naming `@lf/pdf`.
 
 ```
 import { `@lf/pdf` as pdf } from plugins
 
 File: pdf.render(digest)
-File: pdf.render(digest, { pageSize: "letter" })
+File: pdf.render(digest, { pageSize: "letter", name: "Q3 report" })
+```
+
+### web.render
+
+`web.render(content)` → a `file` value, the PDF, always present: the `@lf/web` plugin draws text or HTML with the host's browser, so HTML keeps its layout. It takes the same settings record as `pdf.render` (`{ pageSize, margin, name }`) and is refused on a host with no browser.
+
+```
+import { `@lf/web` as web } from plugins
+
+File: web.render(emailBody, { name: "Message" })
 ```
 
 ### File.read

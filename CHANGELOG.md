@@ -18,6 +18,12 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 - A limit of `calls: N, per: <window>` is a rolling window in every limiter (lf's built-in, the engine's in-process one and `@listen-fire/postgres-limiter`): no stretch of that length ever holds more than N calls. They were token buckets, which let a burst of N and then one call every window/N put nearly 2N in one window, so a module that declared fewer calls than its provider allows to make up for that can declare the real number now. A refusal's `retryAt` is when the oldest calls leave the window. `@listen-fire/postgres-limiter` keeps each call's instant in a `calls` table; opening it drops the old token columns, and each window starts empty after the upgrade. See `docs/contracts/limiter-slot.md`.
+- The built-ins reference names `pdf.render`'s and `web.render`'s `name` setting (and gains a `web.render` entry).
+- `web.render` (`@lf/web`) takes a `name` setting for its file like `pdf.render` (`web.render(html, { name: "Q3 report" })`; `.pdf` is added when missing). Without one the file is still `movement-artifact.pdf`.
+- `lf connect <module>` for a module that signs users in with OAuth and expects one user credential now ends by asking "Sign in now? [Y/n]" and, on yes, runs `lf credential add --module <module>` in the same command (it asks the credential's name; `--no-browser`, `--headless`, `--public` and `--redirect-port` apply). `--yes`, or input that has ended, skips the offer and prints the next-step line as before.
+- `lf deliveries replay` tells the project's wake module (`core: { wake: … }`) of the events it queued, as a door does, so a worker starts at once rather than at the next scheduled drain.
+
+- `lf`'s own Anthropic client throttles per API key, as the TypeScript module does: a 429 on one key no longer closes requests made with another, and the in-flight limit counts per key (the limiter sees a hash of the key, never the key).
 
 ## [0.12.0-rc.9] - 2026-10-22
 

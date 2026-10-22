@@ -57,7 +57,7 @@ describe('web.render', () => {
     const declared = webModule.plugins.map((p) => p.signature.name);
     expect(declared).toContain('render');
     const signature = webModule.plugins.find((p) => p.signature.name === 'render')?.signature;
-    expect(signature?.params.map((p) => p.name)).toEqual(['text', 'pageSize', 'margin']);
+    expect(signature?.params.map((p) => p.name)).toEqual(['text', 'pageSize', 'margin', 'name']);
   });
 
   it('answers the browser\'s PDF as a file for the host to store', async () => {
@@ -119,6 +119,15 @@ describe('web.render', () => {
     expect(drawn[1].pdf).toMatchObject({ format: 'A4', margin: { top: `${(30 / 72).toFixed(4)}in` } });
     await expect(render(slot, { text: 'x', pageSize: 'a3' })).rejects.toThrow('pageSize is "a4" or "letter"');
     await expect(render(slot, { text: 'x', margin: 201 })).rejects.toThrow('margin is a whole number of points');
+  });
+
+  it('names the file as the call says, adding ".pdf", and refuses a path', async () => {
+    const { slot } = fakeSlot();
+    expect((await render(slot, { text: 'x' })).files?.value?.name).toBe('movement-artifact.pdf');
+    expect((await render(slot, { text: 'x', name: 'Q3 report' })).files?.value?.name).toBe('Q3 report.pdf');
+    expect((await render(slot, { text: 'x', name: 'board.PDF' })).files?.value?.name).toBe('board.PDF');
+    await expect(render(slot, { text: 'x', name: '../etc/passwd' })).rejects.toThrow('name is a file name (no folders)');
+    await expect(render(slot, { text: 'x', name: '' })).rejects.toThrow('name is a file name');
   });
 
   it('is refused by name when the browser slot is empty, with no other writer to fall back on', async () => {
