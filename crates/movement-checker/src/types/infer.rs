@@ -69,8 +69,8 @@ pub trait TypeEnv {
     fn is_declared_graph(&self, _instance: &super::position::InstanceRef) -> bool {
         false
     }
-    /// `upgradingFrom`: the version a check for a move up starts from.
-    fn upgrading_from(&self) -> Option<u32> {
+    /// `upgradingFrom`: the release a check for a move up starts from.
+    fn upgrading_from(&self) -> Option<&str> {
         None
     }
     /// Whether the host's zone database knows `zone`; `None` for a typing
@@ -100,7 +100,6 @@ fn key(expr: &Expression) -> usize {
 
 pub struct Typing<'a> {
     pub env: &'a dyn TypeEnv,
-    pub version: u32,
     /// Where diagnostics point (one expression slot).
     pub span: Span,
     /// Hop aliases bound by the walks typed so far.
@@ -138,10 +137,9 @@ pub struct Typing<'a> {
 }
 
 impl<'a> Typing<'a> {
-    pub fn new(env: &'a dyn TypeEnv, version: u32, span: Span) -> Self {
+    pub fn new(env: &'a dyn TypeEnv, span: Span) -> Self {
         Typing {
             env,
-            version,
             span,
             locals: IndexMap::new(),
             awaited: false,

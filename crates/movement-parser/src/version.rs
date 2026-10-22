@@ -89,15 +89,6 @@ pub fn refusal(pin: &str, own: &str) -> Option<String> {
     refusal_message(pin, own, standing(pin, own))
 }
 
-/// The integer the wasm entries still take for this language. Task 2 removes.
-pub const LEGACY_PIN: u32 = 5;
-
-/// An integer pin as the ABI carries it, as a version the rule reads: 5 is
-/// this release, any other integer is not a version. Task 2 removes.
-pub fn legacy_pin_to_semver(pin: u32) -> String {
-    if pin == LEGACY_PIN { LANGUAGE_VERSION.to_string() } else { pin.to_string() }
-}
-
 /// The run host's units (Henry 2026-10-16): every file has these names in
 /// scope, each already connected — `listen to manual fire hello`,
 /// `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no import
@@ -152,9 +143,8 @@ mod tests {
     }
 
     #[test]
-    fn this_release_reads_its_own_version_and_the_legacy_pin_maps_onto_it() {
+    fn this_release_reads_its_own_version_and_no_integer() {
         assert!(compatible(LANGUAGE_VERSION, LANGUAGE_VERSION));
-        assert_eq!(legacy_pin_to_semver(LEGACY_PIN), LANGUAGE_VERSION);
-        assert_eq!(standing(&legacy_pin_to_semver(4), LANGUAGE_VERSION), Standing::Malformed);
+        assert_eq!(standing("5", LANGUAGE_VERSION), Standing::Malformed);
     }
 }

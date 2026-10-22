@@ -17,7 +17,6 @@
 // explainable from the entry itself.
 
 import {
-  LANGUAGE_VERSION,
   standardLibraryTable,
   type StandardBuiltin,
   type StandardBuiltinParam,
@@ -165,7 +164,7 @@ function writtenParams(entry: StandardBuiltin): readonly StandardBuiltinParam[] 
 
 /** A summary names built-ins as the author writes them. */
 export function builtinSummary(entry: StandardBuiltin): string {
-  return spellMessage(entry.summary, LANGUAGE_VERSION);
+  return spellMessage(entry.summary);
 }
 
 /** `Text.join(collection: any, separator?: text) → text` — generated, never written. */

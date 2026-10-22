@@ -6,15 +6,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-// Task 3 makes the project's pin lf.yaml's `engine:` itself; until then it is
-// the integer the engine's entries still carry.
-use movement_parser::version::LEGACY_PIN;
+use movement_parser::version::LANGUAGE_VERSION;
 use serde::Deserialize;
 
 pub const PROJECT_FILE: &str = "lf.yaml";
 
-/// The engine version this release runs (`ENGINE_VERSION` in
-/// packages/movement-engine/public/movement-engine.ts); a test holds the two equal.
+/// The engine version `lf init` pins a new project to, and the newest
+/// `engine:` this lf runs.
 pub const CURRENT_ENGINE_VERSION: &str = "0.12.0";
 
 /// lf runs on the Rust engine alone, which runs version 5 and later;
@@ -74,8 +72,8 @@ pub struct Project {
     /// The host's own folder: `<root>/.lf`.
     pub lf_dir: PathBuf,
     pub engine: String,
-    /// The language version the pinned engine runs.
-    pub language_version: u32,
+    /// The language version the pinned engine runs: a release's version.
+    pub language_version: String,
     pub movements_dir: PathBuf,
     pub externals_dir: PathBuf,
     /// The local acting identity lf.yaml names.
@@ -123,13 +121,13 @@ pub fn start_timeout_of(seconds: f64, from: &str) -> Result<Duration, String> {
 
 /// The language version an engine version runs. Every engine this release
 /// knows runs the current language version; a newer engine is refused.
-pub fn language_version_of_engine(engine: &str) -> Result<u32, String> {
+pub fn language_version_of_engine(engine: &str) -> Result<String, String> {
     if compare_semver(engine, CURRENT_ENGINE_VERSION) > 0 {
         return Err(format!(
             "lf.yaml pins engine {engine}, newer than this lf ({CURRENT_ENGINE_VERSION}); upgrade lf or lower the pin"
         ));
     }
-    Ok(LEGACY_PIN)
+    Ok(LANGUAGE_VERSION.to_string())
 }
 
 /// Refuses a pin lf does not run, before any engine sees it.
@@ -213,7 +211,6 @@ pub fn load_project(from: &Path) -> Result<Project, String> {
     };
     let core = crate::core::CoreChoice::of(&file.core, &installed, &path.display().to_string())?;
     let language_version = language_version_of_engine(&file.engine)?;
-    refuse_below_lf(language_version, &path.display().to_string(), "upgrade it to language version 5 on the platform (`lf upgrade` reads version 5 files only)")?;
     let lf_dir = dir.join(".lf");
     fs::create_dir_all(&lf_dir).map_err(|e| format!("{}: {e}", lf_dir.display()))?;
     Ok(Project {
@@ -240,8 +237,8 @@ mod tests {
     #[test]
     fn a_newer_engine_is_refused_and_an_older_one_runs_the_current_version() {
         assert!(language_version_of_engine("0.13.0").unwrap_err().contains("newer than this lf"));
-        assert_eq!(language_version_of_engine("0.6.0"), Ok(LEGACY_PIN));
-        assert_eq!(language_version_of_engine("0.11.0"), Ok(LEGACY_PIN));
+        assert_eq!(language_version_of_engine("0.6.0"), Ok(LANGUAGE_VERSION.to_string()));
+        assert_eq!(language_version_of_engine("0.11.0"), Ok(LANGUAGE_VERSION.to_string()));
     }
 
     #[test]
@@ -263,18 +260,19 @@ mod tests {
             );
         }
         assert_eq!(FIRST_LF_LANGUAGE_VERSION, 5);
-        for version in [5, LEGACY_PIN] {
-            assert!(refuse_below_lf(version, "lf.yaml", "").is_ok());
-        }
+        assert!(refuse_below_lf(5, "lf.yaml", "").is_ok());
     }
 
+    /// The crates and the TypeScript packages are one release: each reads its
+    /// own manifest's version (`LANGUAGE_VERSION` on both sides).
     #[test]
-    fn engine_version_is_the_engine_packages() {
-        let source = include_str!("../../../packages/movement-engine/public/movement-engine.ts");
-        let marker = "export const ENGINE_VERSION = '";
-        let start = source.find(marker).expect("the public entry declares ENGINE_VERSION") + marker.len();
-        let end = start + source[start..].find('\'').expect("ENGINE_VERSION ends");
-        assert_eq!(&source[start..end], CURRENT_ENGINE_VERSION);
+    fn the_crates_are_the_same_release_as_the_language_package() {
+        let manifest = include_str!("../../../packages/movement-lang/package.json");
+        let marker = "\"version\": \"";
+        let start = manifest.find(marker).expect("the language package names its version") + marker.len();
+        let end = start + manifest[start..].find('"').expect("the version ends");
+        assert_eq!(&manifest[start..end], env!("CARGO_PKG_VERSION"));
+        assert_eq!(LANGUAGE_VERSION, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

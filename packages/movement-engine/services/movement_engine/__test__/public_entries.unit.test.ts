@@ -33,7 +33,7 @@ describe('public entries', () => {
     expect(typeof engine.resumeMovement).toBe('function');
     expect(typeof engine.checkPinnedInRust).toBe('function');
     expect(typeof engine.programCheck.checkAnswerInRust).toBe('function');
-    expect(engine.ENGINE_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(engine.ENGINE_VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 
   it('the other entries carry their families', () => {

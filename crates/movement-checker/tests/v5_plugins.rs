@@ -16,14 +16,14 @@ const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{
 
 const HEAD5: &str = "import { fetchUrl, research, vcUrlRetrieval } from plugins\n\n";
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).collect()
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    check(source, version).into_iter().map(|d| d.code).collect()
+fn codes(source: &str) -> Vec<String> {
+    check(source).into_iter().map(|d| d.code).collect()
 }
 
 fn v5(body: &str) -> String {
@@ -54,51 +54,51 @@ fn apply_fixes(source: &str, diagnostics: &[Diagnostic]) -> String {
 #[test]
 fn a_plugin_takes_its_required_inputs_by_position_and_the_rest_in_a_settings_record() {
     let program = v5("  p = fetchUrl(u)\n  r = research(n, { context: s, questions: s })\n  v = vcUrlRetrieval(t, { email: u })\n  w = fetchUrl(u, { email: s })");
-    assert_eq!(check(&program, 5), Vec::<Diagnostic>::new());
+    assert_eq!(check(&program), Vec::<Diagnostic>::new());
     // A bare statement, a call as another's argument, and one nested in an expression.
     let nested = v5("  fetchUrl(u)
   r = research(fetchUrl(u), { context: s })
   x = Text.length(fetchUrl(u)) + 1");
-    assert_eq!(check(&nested, 5), Vec::<Diagnostic>::new());
-    assert_eq!(codes(&v5("  x = Text.upper(fetchUrl(u, s))"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(check(&nested), Vec::<Diagnostic>::new());
+    assert_eq!(codes(&v5("  x = Text.upper(fetchUrl(u, s))")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
 }
 
 #[test]
 fn the_bound_call_is_checked_as_the_named_one_is() {
     // Too many by position, a setting that is positional, an unknown setting,
     // a last extra argument that is no record, a missing input.
-    assert_eq!(codes(&v5("  p = fetchUrl(u, { url: s })"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n, { nope: s })"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  p = fetchUrl(u, s)"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  p = fetchUrl(u, { email: s }, s)"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  r = research()"), 5), vec!["MOV_THROUGH_ARG_MISSING".to_string()]);
-    let missing_fed = check(&v5("  v = vcUrlRetrieval()"), 5);
+    assert_eq!(codes(&v5("  p = fetchUrl(u, { url: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&v5("  r = research(n, { nope: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&v5("  p = fetchUrl(u, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&v5("  p = fetchUrl(u, { email: s }, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&v5("  r = research()")), vec!["MOV_THROUGH_ARG_MISSING".to_string()]);
+    let missing_fed = check(&v5("  v = vcUrlRetrieval()"));
     assert_eq!(missing_fed.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_PLUGIN_FED_BY_EXTRACTION"]);
     assert!(missing_fed[0].message.contains("`vcUrlRetrieval(text)`"), "{}", missing_fed[0].message);
     // Each value is held to the type declared for the parameter it binds.
-    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(r)"), 5), vec!["MOV_CALL_ARG_TYPE".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(u, { email: r })"), 5), vec!["MOV_CALL_ARG_TYPE".to_string()]);
-    let extra = check(&v5("  p = fetchUrl(u, s)"), 5);
+    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(r)")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(u, { email: r })")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    let extra = check(&v5("  p = fetchUrl(u, s)"));
     assert_eq!(extra[0].message, "'fetchUrl' takes one argument by position (url), then its settings as one record `{ name: value }` — this argument is past them");
     assert_eq!((extra[0].span.start.line, extra[0].span.start.col), (4, 19));
-    let past = check(&v5("  p = fetchUrl(u, { email: s }, s)"), 5);
+    let past = check(&v5("  p = fetchUrl(u, { email: s }, s)"));
     assert_eq!((past[0].span.start.col, past[0].span.end.col), (33, 34));
 }
 
 #[test]
 fn a_settings_entry_is_reported_where_it_is_written() {
-    let found = check(&v5("  r = research(n, { context: s, name: s })"), 5);
+    let found = check(&v5("  r = research(n, { context: s, name: s })"));
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].message, "'name' is an argument 'research' takes by position — write it in its place, not in the settings record");
     assert_eq!((found[0].span.start.line, found[0].span.start.col, found[0].span.end.col), (4, 33, 37));
-    let typed = check(&v5("  r = research(n)\n  q = research(n, { context: r })"), 5);
+    let typed = check(&v5("  r = research(n)\n  q = research(n, { context: r })"));
     assert_eq!(typed.iter().map(|d| (d.code.as_str(), d.span.start.line, d.span.start.col)).collect::<Vec<_>>(), vec![("MOV_CALL_ARG_TYPE", 5, 30)]);
 }
 
 #[test]
 fn the_named_form_under_5_is_rewritten_by_position_from_the_manifest() {
     let fixes_of = |source: &str| -> Vec<(Option<String>, bool)> {
-        check(source, 5)
+        check(source)
             .into_iter()
             .filter(|d| d.code == "MOV_V5_SPELLING")
             .map(|d| {
@@ -120,9 +120,9 @@ fn the_named_form_under_5_is_rewritten_by_position_from_the_manifest() {
 #[test]
 fn the_rewrite_applied_checks_clean() {
     let program = v5("  p = fetchUrl(url: u)\n  r = research(name: n, context: s, questions: t)\n  v = vcUrlRetrieval(text: t, email: u)");
-    let fixed = apply_fixes(&program, &check(&program, 5));
+    let fixed = apply_fixes(&program, &check(&program));
     assert!(fixed.contains("fetchUrl(u)") && fixed.contains("research(n, { context: s, questions: t })") && fixed.contains("vcUrlRetrieval(t, { email: u })"), "{fixed}");
-    assert_eq!(check(&fixed, 5), Vec::<Diagnostic>::new());
+    assert_eq!(check(&fixed), Vec::<Diagnostic>::new());
 }
 
 fn stage(through: &str) -> String {
@@ -138,14 +138,14 @@ fn stage_diagnostics(found: Vec<Diagnostic>) -> Vec<Diagnostic> {
 }
 
 fn stage_codes(source: &str) -> Vec<String> {
-    stage_diagnostics(check(source, 5)).into_iter().map(|d| d.code).collect()
+    stage_diagnostics(check(source)).into_iter().map(|d| d.code).collect()
 }
 
 #[test]
 fn a_through_stage_takes_its_arguments_by_position_too() {
-    assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment(2)"), 5)), Vec::<Diagnostic>::new());
-    assert_eq!(stage_diagnostics(check(&stage("research(n, { context: s })"), 5)), Vec::<Diagnostic>::new());
-    assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment"), 5)).iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_THROUGH_ARG_MISSING"]);
+    assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment(2)"))), Vec::<Diagnostic>::new());
+    assert_eq!(stage_diagnostics(check(&stage("research(n, { context: s })"))), Vec::<Diagnostic>::new());
+    assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment"))).iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_THROUGH_ARG_MISSING"]);
     // A stage is never fed by its author: the fed input is no positional parameter.
     assert_eq!(stage_codes(&stage("linkedinEnrichment(u, 2)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
     assert_eq!(stage_codes(&stage("research(n, { name: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
@@ -154,21 +154,21 @@ fn a_through_stage_takes_its_arguments_by_position_too() {
 #[test]
 fn a_through_stage_s_named_arguments_under_5_are_rewritten_by_position() {
     let program = stage("research(name: n, context: s)");
-    let found = stage_diagnostics(check(&program, 5));
+    let found = stage_diagnostics(check(&program));
     let fixes: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").map(|d| d.fix.as_ref().map(|f| f["edits"][0]["text"].clone())).collect();
     assert_eq!(fixes, vec![Some(serde_json::json!("n, { context: s }"))]);
-    assert_eq!(stage_diagnostics(check(&apply_fixes(&program, &found), 5)), Vec::<Diagnostic>::new());
+    assert_eq!(stage_diagnostics(check(&apply_fixes(&program, &found))), Vec::<Diagnostic>::new());
 }
 
-fn all(source: &str, version: u32) -> Vec<(String, bool, String)> {
+fn all(source: &str) -> Vec<(String, bool, String)> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code.clone(), d.is_error(), d.message)).collect()
 }
 
 #[test]
 fn a_record_value_handed_to_a_text_input_is_refused() {
-    let refused = all(&v5("  r = research({ context: s })"), 5);
+    let refused = all(&v5("  r = research({ context: s })"));
     assert_eq!(
         refused,
         vec![(
@@ -177,7 +177,7 @@ fn a_record_value_handed_to_a_text_input_is_refused() {
             "'research' takes text for 'name', and this is { context: text } — a record, not text, as in TypeScript. Pass the text it should read: one of its fields ('name: r.name'), or the text built from them".to_string()
         )]
     );
-    let may = codes(&v5("  r = research(n, { context: s == \"\" ? { a: 1 } : s })"), 5);
+    let may = codes(&v5("  r = research(n, { context: s == \"\" ? { a: 1 } : s })"));
     assert_eq!(may, vec!["MOV_CALL_ARG_MAYBE_RECORD".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n, { context: s })"), 5), Vec::<String>::new());
+    assert_eq!(codes(&v5("  r = research(n, { context: s })")), Vec::<String>::new());
 }

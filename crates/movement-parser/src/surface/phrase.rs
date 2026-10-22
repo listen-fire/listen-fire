@@ -120,7 +120,7 @@ fn expression(text: &str) -> Option<String> {
 fn statements(text: &str) -> Option<String> {
     let mut whole = format!("{BODY_OPEN}{text}{BODY_CLOSE}");
     for _ in 0..ROUNDS {
-        let program = crate::stmt::parse_program(&whole, 5, false).ok()?;
+        let program = crate::stmt::parse_program(&whole, false).ok()?;
         let src = Utf16::new(&whole);
         let edits: Vec<(usize, usize, String)> = program
             .spelling

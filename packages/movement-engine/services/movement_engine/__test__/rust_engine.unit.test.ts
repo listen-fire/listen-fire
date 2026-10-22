@@ -475,7 +475,7 @@ describe('the Rust engine shim', () => {
                 candidates: wire([]),
                 recordType: 'company',
                 constraints: wire({ any: [{ all: [{ field: 'name' }] }] }),
-                languageVersion: 3,
+                languageVersion: LANGUAGE_VERSION,
                 budget: { remainingMicrodollars: null },
               })),
             ],
@@ -537,10 +537,9 @@ describe('the Rust engine shim', () => {
     expect(readRunResult(reported, { context: charged, hostErrors: [] })).toMatchObject({ ran: { movementName: 'm' } });
     expect(() => readRunResult(reported, { context: context(), hostErrors: [] })).toThrow(RustShimError);
     expect(readRunResult({ declined: 'a shape' }, { context: context(), hostErrors: [] })).toEqual({ declined: 'a shape' });
-    expect(readRunResult({ refused: 'language_version_runs_on_typescript' }, { context: context(), hostErrors: [] })).toEqual({
-      refused: 'language_version_runs_on_typescript',
-    });
-    expect(() => readRunResult({ refused: 1 }, { context: context(), hostErrors: [] })).toThrow(RustShimError);
+    // The engine refuses nothing at its entry with a done shape of its own: a
+    // pin it does not read throws MOVENG_LANGUAGE_VERSION.
+    expect(() => readRunResult({ refused: 'a reason' }, { context: context(), hostErrors: [] })).toThrow(RustShimError);
     const original = new TypeError('the adapter broke');
     expect(() => readRunResult({ thrown: { hostError: 0 } }, { context: context(), hostErrors: [original] })).toThrow(original);
     expect(() =>
@@ -590,7 +589,7 @@ describe('the check host call', () => {
     adapters: { manual: { constructionArgs: [] } },
   });
   const SOURCE = ['import { manual } from adapters', 'go = connect manual', 'function m(e: <go>) {', '  x = 1', '}'].join('\n');
-  const check = (source: string) => request(1, 'check', 'program', { source, languageVersion: 5 });
+  const check = (source: string) => request(1, 'check', 'program', { source });
 
   it("answers check.program with the TypeScript checker's diagnostics, link and stamps", async () => {
     const { engine, answers } = scriptedEngine((seen) => (seen.length === 0 ? { pending: [check(SOURCE)] } : { done: {} }));
@@ -651,10 +650,7 @@ describe('the segment input', () => {
 });
 
 describe('a segment the Rust engine will not run', () => {
-  it.each([
-    ['refuses at its entry', { refused: 'language_version_runs_on_typescript' }],
-    ['declines after its check', { declined: 'test_decline' }],
-  ])('fails the run when the engine %s, counted by its reason, with no other engine to run it', async (_how, done) => {
+  it.each([['declines after its check', { declined: 'test_decline' }]])('fails the run when the engine %s, counted by its reason, with no other engine to run it', async (_how, done) => {
     const served = await hostWith({ adapters: { resolve: () => fakeAdapter() } });
     const input = { source: '', event: { payload: {} }, teamId: TEAM, catalog: EMPTY_CATALOG_SNAPSHOT, host: served.host } as unknown as RunMovementInput;
     const { engine } = scriptedEngine(() => ({ done }));

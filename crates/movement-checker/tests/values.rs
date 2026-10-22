@@ -14,7 +14,7 @@ fn field(raw: &str, semantics: Option<FieldWriteMode>) -> FieldEntry {
 }
 
 fn absence<'a>(field: &'a FieldEntry, value: &'a Ty, target: Option<&'a Ty>, identifies: bool) -> WriteFieldAbsence<'a> {
-    WriteFieldAbsence { field, spread: None, target_type: target, value_type: Some(value), root_description: "board.Lane", may_leave_unset: true, identifies, version: 5 }
+    WriteFieldAbsence { field, spread: None, target_type: target, value_type: Some(value), root_description: "board.Lane", may_leave_unset: true, identifies }
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn a_source_in_the_engines_text_form_is_not_formed_twice() {
     use movement_parser::catalog::types::CatalogSnapshot;
     use movement_parser::util::form::{external_text, form_of_text};
     let catalog = CatalogSnapshot::load(r#"{"adapters":{},"credentials":{},"plugins":{}}"#).unwrap();
-    let options = || CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = || CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let source = "movement m(nope: <text>) {\n  y = \"\u{FDD0}\" + nope\n}";
     let hint = |diagnostics: Vec<movement_checker::Diagnostic>| {
         diagnostics.into_iter().find(|d| d.code == "MOV_ARITH_NON_NUMERIC").map(|d| external_text(&d.message).into_owned()).unwrap()
@@ -46,11 +46,11 @@ fn a_source_in_the_engines_text_form_is_not_formed_twice() {
     assert_eq!(hint(check_form(&form_of_text(source), &catalog, options()).unwrap()), outside);
 }
 
-fn codes_of(source: &str, version: u32) -> Vec<(String, String)> {
+fn codes_of(source: &str) -> Vec<(String, String)> {
     use movement_checker::{CheckOptions, check_source};
     use movement_parser::catalog::types::CatalogSnapshot;
     let catalog = CatalogSnapshot::load(r#"{"adapters":{},"credentials":{},"plugins":{}}"#).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.message)).collect()
 }
 
@@ -58,7 +58,7 @@ fn codes_of(source: &str, version: u32) -> Vec<(String, String)> {
 /// so nothing says a presence test of it is constant.
 #[test]
 fn a_name_bound_to_null_is_not_always_present() {
-    let found = codes_of("movement m(s: <text>) {\n  blank = null\n  t = \"${EXISTS(s)} ${EXISTS(blank)}\"\n}", 5);
+    let found = codes_of("movement m(s: <text>) {\n  blank = null\n  t = \"${EXISTS(s)} ${EXISTS(blank)}\"\n}");
     let constant: Vec<_> = found.iter().filter(|(c, _)| c == "MOV_PRESENCE_TEST_CONSTANT").collect();
     assert_eq!(constant.len(), 1, "{found:?}");
     assert!(constant[0].1.starts_with("'s' always has a value"));
@@ -67,7 +67,7 @@ fn a_name_bound_to_null_is_not_always_present() {
 /// `...held.k` copies the keys of the map the path reads.
 #[test]
 fn a_graph_spread_through_a_path_carries_the_keys_it_reads() {
-    let found = codes_of("movement m(s: <text>) {\n  held = { k: { name: s } }\n  g = graph { ...held.k, stage: \"new\" }\n  x = g.name\n  y = g.nope\n}", 5);
+    let found = codes_of("movement m(s: <text>) {\n  held = { k: { name: s } }\n  g = graph { ...held.k, stage: \"new\" }\n  x = g.name\n  y = g.nope\n}");
     let unknown: Vec<_> = found.iter().filter(|(c, _)| c == "MOV_UNKNOWN_PROPERTY").collect();
     assert_eq!(unknown.len(), 1, "{found:?}");
     assert!(unknown[0].1.contains("'nope'"), "{found:?}");

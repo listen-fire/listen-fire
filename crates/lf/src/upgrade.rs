@@ -117,16 +117,16 @@ fn apply(source: &str, fixes: &[Fix]) -> String {
     String::from_utf16_lossy(&result)
 }
 
-/// Every diagnostic a check of `source` under the project's version reports.
-fn check_text(source: &str, catalog: &CatalogSnapshot, language_version: u32) -> Vec<Diagnostic> {
+/// Every diagnostic a check of `source` reports.
+fn check_text(source: &str, catalog: &CatalogSnapshot) -> Vec<Diagnostic> {
     let parse_refusal = |message: String, line: usize, col: usize| {
         let at = movement_parser::ast::Loc { line, col };
         vec![Diagnostic::error("MOV_PARSE", message, movement_parser::ast::Span { start: at, end: at })]
     };
-    if let Err(refused) = parse(source, language_version) {
+    if let Err(refused) = parse(source) {
         return parse_refusal(refused.message, refused.line, refused.column);
     }
-    let options = CheckOptions { language_version, upgrading_from: None, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &NativeZones };
     match movement_checker::check_source(source, catalog, options) {
         Ok(diagnostics) => diagnostics,
         Err(refusal) => parse_refusal(refusal.message, 1, 1),
@@ -139,10 +139,10 @@ struct Upgraded {
     settled: bool,
 }
 
-fn upgrade_source(source: &str, catalog: &CatalogSnapshot, language_version: u32, all: bool) -> Upgraded {
+fn upgrade_source(source: &str, catalog: &CatalogSnapshot, all: bool) -> Upgraded {
     let mut text = source.to_string();
     for _ in 0..MAX_PASSES {
-        let diagnostics = check_text(&text, catalog, language_version);
+        let diagnostics = check_text(&text, catalog);
         let fixes = fixes_to_apply(&diagnostics, all);
         let rewritten = apply(&text, &fixes);
         // A fix that rewrites to the same text would loop forever.
@@ -151,7 +151,7 @@ fn upgrade_source(source: &str, catalog: &CatalogSnapshot, language_version: u32
         }
         text = rewritten;
     }
-    let remaining = standing(check_text(&text, catalog, language_version));
+    let remaining = standing(check_text(&text, catalog));
     Upgraded { source: text, remaining, settled: false }
 }
 
@@ -239,7 +239,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     let catalog = CatalogSnapshot::load(&read_json_text(&checking.catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"))?;
     let (mut changed, mut left) = (0usize, 0usize);
     for file in &checking.files {
-        let result = upgrade_source(&file.source, &catalog, project.language_version, options.all);
+        let result = upgrade_source(&file.source, &catalog, options.all);
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
             changed += 1;

@@ -4,7 +4,7 @@
 
 import { BridgeError, RUN_HOST_UNITS, expressionOfSlot, unwrapCredentialArg } from 'movement-lang';
 
-import type { ImportStatement, ListenDeclaration, NamedArg, Program } from 'movement-lang';
+import type { ImportStatement, LanguageVersion, ListenDeclaration, NamedArg, Program } from 'movement-lang';
 
 /** One `listen` statement, with its instance's construction resolved. */
 export interface FileListener {
@@ -59,7 +59,7 @@ function configValueOf(arg: NamedArg): unknown {
  */
 export function collectFileListeners(
   program: Program,
-  options: { languageVersion?: number } = {},
+  options: { languageVersion?: LanguageVersion } = {},
 ): FileListener[] {
   const importOriginals = new Map<string, string>();
   const imported = new Set<string>();

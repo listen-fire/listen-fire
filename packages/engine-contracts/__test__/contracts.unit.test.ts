@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { LANGUAGE_VERSION, compatibilityKey, languageVersionDiagnostic, languageVersionStanding } from 'movement-lang';
+import { LANGUAGE_VERSION, compatibilityKey, languageStanding, languageVersionDiagnostic, languageVersionStanding } from 'movement-lang';
 
 import {
   CATALOG_SNAPSHOT_VERSION,
@@ -88,10 +88,9 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
 
 // The compatibility rule is one rule in two implementations, both held to
 // docs/contracts/language-versions.md: its table of standings runs through the
-// TypeScript, and its three refusals are the Rust's words and the TypeScript's.
-// TODO(PLAN-04 Task 2): run the table through the wasm's `language_standing`
-// entry too, for a true two-implementation run, instead of reading the Rust
-// source's message constants.
+// TypeScript and through the Rust (the movement artifact's `language_standing`,
+// which answers against the artifact's own release), and its three refusals
+// are the document's words in both.
 describe('the language versions document is the rule both implementations apply', () => {
   const docs = path.resolve(__dirname, '../../../docs/contracts');
   const doc = fs.readFileSync(path.join(docs, 'language-versions.md'), 'utf8');
@@ -109,25 +108,39 @@ describe('the language versions document is the rule both implementations apply'
     for (const { pin, own, standing } of rows) expect({ pin, own, standing: languageVersionStanding(pin, own) }).toEqual({ pin, own, standing });
   });
 
+  it('the Rust reads each pin as the document does, against a release of its own key', () => {
+    const ownKey = compatibilityKey(LANGUAGE_VERSION);
+    const ofThisKey = rows.filter(({ own }) => compatibilityKey(own) === ownKey);
+    expect(ofThisKey.length).toBeGreaterThan(0);
+    // A standing reads the release's key alone, so the artifact's own release
+    // stands in for the row's.
+    for (const { pin, own, standing } of ofThisKey) expect({ pin, own, standing: languageStanding(pin).standing }).toEqual({ pin, own, standing });
+  });
+
+  it('the Rust and the TypeScript answer every pin alike against this release', () => {
+    for (const { pin } of rows) {
+      expect({ pin, ...languageStanding(pin) }).toEqual({
+        pin,
+        standing: languageVersionStanding(pin),
+        message: languageVersionDiagnostic(pin)?.message ?? null,
+      });
+    }
+  });
+
   it('the three refusals are the document\'s, the Rust\'s and the TypeScript\'s', () => {
     const quoted = (label: string) => {
       const match = new RegExp(`^- \\*\\*${label}:\\*\\* "([^"]+)"$`, 'm').exec(doc);
       if (match === null) throw new Error(`language-versions.md no longer quotes the ${label} refusal as this test reads it`);
       return match[1];
     };
-    const constant = (name: string) => {
-      const match = new RegExp(`^const ${name}: &str =\\s*"([^"]+)";$`, 'm').exec(rust);
-      if (match === null) throw new Error(`version.rs no longer spells ${name} as this test reads it`);
-      return match[1];
-    };
     const fill = (template: string, pin: string, own: string) => template.replaceAll('{pin}', pin).replaceAll('{own}', own);
     const cases = [
-      { label: 'newer', name: 'NEWER_MESSAGE', pin: '0.13.0' },
-      { label: 'older key', name: 'OLDER_KEY_MESSAGE', pin: '0.11.0' },
-      { label: 'malformed', name: 'MALFORMED_MESSAGE', pin: 'banana' },
+      { label: 'newer', pin: '99.0.0' },
+      { label: 'older key', pin: '0.0.1' },
+      { label: 'malformed', pin: 'banana' },
     ];
-    for (const { label, name, pin } of cases) {
-      expect(constant(name)).toBe(quoted(label));
+    for (const { label, pin } of cases) {
+      expect(languageStanding(pin).message).toBe(fill(quoted(label), pin, LANGUAGE_VERSION));
       expect(languageVersionDiagnostic(pin, '0.12.0')).toEqual({
         code: 'MOV_LANGUAGE_VERSION_UNSUPPORTED',
         message: fill(quoted(label), pin, '0.12.0'),

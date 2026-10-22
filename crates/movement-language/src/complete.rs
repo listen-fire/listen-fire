@@ -357,7 +357,7 @@ fn local_of(tag: &str) -> String {
 fn library_exports(service: &Service, path: &str) -> Vec<Item> {
     use movement_parser::ast::Statement;
     let Some(file) = service.catalog.files.as_ref().and_then(|files| files.get(path)) else { return Vec::new() };
-    let Ok(program) = crate::recover::parse(&file.source, service.language_version) else { return Vec::new() };
+    let Ok(program) = crate::recover::parse(&file.source) else { return Vec::new() };
     program
         .statements
         .iter()

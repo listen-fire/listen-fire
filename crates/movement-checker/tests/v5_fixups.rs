@@ -7,14 +7,14 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{}}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 
-fn errors(source: &str, version: u32) -> Vec<String> {
-    check(source, version).into_iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect()
+fn errors(source: &str) -> Vec<String> {
+    check(source).into_iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect()
 }
 
 #[test]
@@ -27,10 +27,10 @@ fn a_namespace_member_bound_whole_reads_as_its_old_spelling_did() {
         r#"Currency.numberFromFigure("£1.2m")"#,
         r#"Text.slug("a b")"#,
     ] {
-        assert_eq!(errors(&format!("function f() {{\n  t = {call}\n  return t\n}}"), 5), Vec::<String>::new(), "{call}");
-        assert_eq!(errors(&format!("function f() {{\n  return {call}\n}}"), 5), Vec::<String>::new(), "{call}");
+        assert_eq!(errors(&format!("function f() {{\n  t = {call}\n  return t\n}}")), Vec::<String>::new(), "{call}");
+        assert_eq!(errors(&format!("function f() {{\n  return {call}\n}}")), Vec::<String>::new(), "{call}");
     }
-    let unknown = errors("function f() {\n  t = Date.tomorrow(\"UTC\")\n  return t\n}", 5);
+    let unknown = errors("function f() {\n  t = Date.tomorrow(\"UTC\")\n  return t\n}");
     assert!(unknown.iter().any(|e| e.starts_with("MOV_V5_UNKNOWN_MEMBER")), "{unknown:?}");
 }
 
@@ -46,11 +46,11 @@ fn a_callback_closure_with_parameters_calls_the_function_checked_as_one() {
     let program = |param: &str| {
         format!("function book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\nfunction offer() {{\n  pick = callback((day: {param}) => book(\"Acme\", day))\n  return pick.url\n}}")
     };
-    assert_eq!(errors(&program("<date>"), 5), Vec::<String>::new());
-    let mistyped = errors(&program("<number>"), 5);
+    assert_eq!(errors(&program("<date>")), Vec::<String>::new());
+    let mistyped = errors(&program("<number>"));
     assert!(mistyped.iter().any(|e| e.starts_with("MOV_CALL_ARG_TYPE")), "{mistyped:?}");
     let deferred = "function chase(name: <text>) {\n  return name\n}\n\nfunction offer() {\n  again = callback(() => chase(\"Acme\"))\n  return again.url\n}";
-    assert_eq!(errors(deferred, 5), Vec::<String>::new());
+    assert_eq!(errors(deferred), Vec::<String>::new());
 }
 
 #[test]
@@ -58,12 +58,12 @@ fn a_callback_closure_that_leaves_its_function_a_parameter_open_is_an_arity_erro
     let program = |subject: &str, keyword: &str| {
         format!("{keyword} book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\n{keyword} offer() {{\n  pick = callback({subject})\n  return pick.url\n}}")
     };
-    let open = errors(&program("() => book(\"Acme\")", "function"), 5);
+    let open = errors(&program("() => book(\"Acme\")", "function"));
     assert_eq!(
         open,
         vec!["MOV_CALL_ARITY: 'book' takes 2 arguments, got 1 — a callback's closure is called with nothing, so it passes every argument itself, and what the platform sends when it fires is a parameter the closure declares: callback((d: <date>) => book(…, d))".to_string()]
     );
-    assert_eq!(errors(&program("book", "function"), 5), Vec::<String>::new(), "a function named bare leaves its parameters to the platform");
+    assert_eq!(errors(&program("book", "function")), Vec::<String>::new(), "a function named bare leaves its parameters to the platform");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn the_arity_error_carries_the_closure_read_off_the_functions_signature() {
         format!("function book(name: <text>, day: <date>) {{\n  return \"${{name}} ${{day}}\"\n}}\n\nfunction offer() {{\n{prelude}  pick = callback({subject})\n  return pick.url\n}}")
     };
     let fix = |source: &str| {
-        let d = check(source, 5).into_iter().find(|d| d.code == "MOV_CALL_ARITY").expect("an arity error");
+        let d = check(source).into_iter().find(|d| d.code == "MOV_CALL_ARITY").expect("an arity error");
         let fix = d.fix.expect("a fix");
         (fix["edits"][0]["text"].as_str().unwrap().to_string(), fix.get("safe").is_some())
     };
@@ -83,7 +83,7 @@ fn the_arity_error_carries_the_closure_read_off_the_functions_signature() {
 #[test]
 fn length_and_exists_of_a_list_rewrite_to_count_marked_safe() {
     let source = "movement f(t: <text>) {\n  xs = [t, NULL]\n  n = LENGTH(xs)\n  ok = EXISTS(xs)\n  return n\n}";
-    let fixes: Vec<(String, bool)> = check(source, 5)
+    let fixes: Vec<(String, bool)> = check(source)
         .into_iter()
         .filter(|d| d.code == "MOV_V5_SPELLING")
         .filter_map(|d| d.fix)
@@ -97,14 +97,14 @@ fn length_and_exists_of_a_list_rewrite_to_count_marked_safe() {
 
 #[test]
 fn a_message_calls_a_declaration_a_function_from_5() {
-    let v5 = errors("function f() {\n  return nope(1)\n}", 5).join("\n");
+    let v5 = errors("function f() {\n  return nope(1)\n}").join("\n");
     assert!(v5.contains("a call names a function declared or imported here, or a built-in"), "{v5}");
 }
 
 #[test]
 fn a_member_read_off_an_index_binds_the_index_first_from_5() {
     for body in ["  r = [{ a: 1 }]\n  n = r[0].a", "  r = [[{ a: 1 }]]\n  n = r[0][0].a"] {
-        assert_eq!(errors(&format!("function f() {{\n{body}\n  return n\n}}"), 5), Vec::<String>::new(), "{body}");
+        assert_eq!(errors(&format!("function f() {{\n{body}\n  return n\n}}")), Vec::<String>::new(), "{body}");
     }
 }
 
@@ -113,8 +113,8 @@ fn a_negative_literal_index_reads_the_tuples_slot_as_at_did() {
     let program = |index: &str| {
         format!("function g(n: <number>) {{\n  return n\n}}\n\nfunction f() {{\n  t = [\"a\", 2]\n  c = t[{index}]\n  return g(c)\n}}")
     };
-    assert_eq!(errors(&program("-1"), 5), Vec::<String>::new());
-    let first = errors(&program("0"), 5);
+    assert_eq!(errors(&program("-1")), Vec::<String>::new());
+    let first = errors(&program("0"));
     assert!(first.iter().any(|e| e.starts_with("MOV_CALL_ARG_TYPE")), "{first:?}");
 }
 
@@ -127,7 +127,7 @@ fn a_targets_bare_field_is_respelled_through_the_alias_at_its_own_place() {
             "import {{ registry }} from adapters\nimport {{ public_registry }} from credentials\nreg = registry(credentials: public_registry)\nmovement main() {{\n{line}\n}}"
         );
         let catalog = CatalogSnapshot::load(REGISTRY).unwrap();
-        let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
         let found = check_source(&source, &catalog, options).unwrap();
         let d = found.into_iter().find(|d| d.code == "MOV_V5_SPELLING" && d.message.contains("hop's alias")).expect("a walk field respelling");
         d.fix.expect("a fix")["edits"]
@@ -154,7 +154,7 @@ fn sort_by_a_function_key_is_refused_where_sort_with_a_key_was() {
     let codes = |body: &str| -> Vec<String> {
         let source = format!("import {{ `@lf/slack` as slack }} from adapters\nchat = connect slack\n\nfunction m(c: <chat-[:channel]->>) {{\n{body}\n  return t\n}}");
         let catalog = CatalogSnapshot::load(MEMBERS).unwrap();
-        let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
         check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
     };
     let names = "  names = c-[p:Members]-> { return p.Name }\n";
@@ -171,7 +171,7 @@ const EVENTS: &str = r#"{"contractVersion":1,"adapters":{"kg":{"canFire":true,"c
 fn a_listens_pasteable_signature_joins_its_pins_with_the_v5_conjunction() {
     let source = "import { kg } from adapters\ngraph = connect kg\nfunction m(t: <graph-[:Ticket]->>) {\n}\nlisten to graph { type: \"Ticket\", events: [\"record.created\"] } fire m";
     let catalog = CatalogSnapshot::load(EVENTS).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source(source, &catalog, options).unwrap();
     let d = found.iter().find(|d| d.code == "MOV_LISTEN_PARAM_MISMATCH").expect("a mismatch");
     assert!(d.message.contains("'m(event: <graph-[e:`Change` WHERE e.action == \"record.created\" && e.type == \"Ticket\"]->>)'"), "{}", d.message);
@@ -182,7 +182,7 @@ fn includes_inside_walk_brackets_reads_as_the_contains_or_in_written_there() {
     let walk = |where_: &str| -> Vec<String> {
         let source = format!("import {{ registry }} from adapters\nimport {{ public_registry }} from credentials\nreg = connect registry using public_registry\n\nfunction f() {{\n  rows = reg-[e:entities WHERE {where_}]-> {{ return e }}\n  return rows\n}}");
         let catalog = CatalogSnapshot::load(REGISTRY).unwrap();
-        let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+        let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
         check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
     };
     for (everyday, caps) in [("Text.includes(e.City, \"a\")", "e.City CONTAINS \"a\""), ("List.includes([\"a\", \"b\"], e.City)", "e.City IN [\"a\", \"b\"]")] {

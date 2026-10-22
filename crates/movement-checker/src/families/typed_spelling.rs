@@ -159,7 +159,7 @@ impl Checker<'_> {
             let env = self.typing_env(scope);
             let mut kind_of = |e: &MExpr| -> Option<ValueKind> {
                 let lowered = movement_parser::lowering::lower_expression(e, &slot.raw).ok()?;
-                let ty = Typing::new(&env, self.version, slot.span).infer(&lowered)?;
+                let ty = Typing::new(&env, slot.span).infer(&lowered)?;
                 match strip_absent(&ty) {
                     Ty::List { .. } | Ty::Tuple { .. } => Some(ValueKind::List),
                     Ty::Text | Ty::Enum { .. } => Some(ValueKind::Text),
@@ -329,7 +329,7 @@ impl Checker<'_> {
         let unknown: IndexMap<String, bool> = {
             let env = self.typing_env(scope);
             movement_parser::lowering::lower_expression(tree, parsed).ok().map_or_else(IndexMap::new, |lowered| {
-                let mut typing = Typing::new(&env, self.version, place.span_of(tree.at()));
+                let mut typing = Typing::new(&env, place.span_of(tree.at()));
                 typing.infer(&lowered);
                 typing.bare_walk_names
             })

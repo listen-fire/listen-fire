@@ -81,20 +81,6 @@ export function languageVersionDiagnostic(pin: string, own: LanguageVersion = LA
   };
 }
 
-/** The integer the wasm entries still take for a pin: 5 for one this release
- *  reads, 0 (which the wasm refuses) for any other. Task 2 removes. */
-export function legacyPinOf(pin: LanguageVersion): number {
-  return compatible(pin) ? 5 : 0;
-}
-
-/** An integer pin as the wasm engine still sends it, as the version the rule
- *  reads: 5 is this release, any other integer is not a version
- *  (`legacy_pin_to_semver` in crates/movement-parser/src/version.rs). Task 2
- *  removes. */
-export function legacyPinToSemver(pin: number): LanguageVersion {
-  return pin === 5 ? LANGUAGE_VERSION : String(pin);
-}
-
 /** The run host's units (Henry 2026-10-16): every file has these names in
  *  scope, each already connected — `listen to manual fire hello`,
  *  `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no import

@@ -24,8 +24,8 @@ pub type Parsed = Result<Value, Value>;
 
 /// The `Program` exactly as parser/ast.ts types it: each slot is
 /// `{raw, span}` and nothing more, so its canonical hash is the pinned one.
-pub fn parse_program(source: &str, version: u32) -> Parsed {
-    let program = stmt::parse_program(source, version, false).map_err(|e| to_value(&e))?;
+pub fn parse_program(source: &str) -> Parsed {
+    let program = stmt::parse_program(source, false).map_err(|e| to_value(&e))?;
     Ok(to_value(&program))
 }
 
@@ -34,8 +34,8 @@ pub fn parse_program(source: &str, version: u32) -> Parsed {
 /// expression grammar's refusal), which is what reading the slot lazily
 /// would have produced. The slots are parsed after the statement parse, one
 /// at a time, so the two recursions never stack.
-pub fn parse_program_eager(source: &str, version: u32) -> Parsed {
-    let program = stmt::parse_program(source, version, true).map_err(|e| to_value(&e))?;
+pub fn parse_program_eager(source: &str) -> Parsed {
+    let program = stmt::parse_program(source, true).map_err(|e| to_value(&e))?;
     let mut value = to_value(&program);
     attach_slot_trees(&mut value);
     Ok(value)
@@ -67,11 +67,8 @@ fn attach_slot_trees(value: &mut Value) {
 }
 
 /// One expression text in the v5 surface, read into the canonical tree
-/// (crate::surface). A version this release does not read is refused.
-pub fn parse_expression(source: &str, version: u32) -> Parsed {
-    if let Some(message) = version::refusal(&version::legacy_pin_to_semver(version), version::LANGUAGE_VERSION) {
-        return Err(to_value(&lexer::SyntaxError { message, pos: 0 }));
-    }
+/// (crate::surface).
+pub fn parse_expression(source: &str) -> Parsed {
     let tree = expr::parse_expression(source).map_err(|e| to_value(&e))?;
     Ok(to_value(&tree))
 }
@@ -81,7 +78,6 @@ pub struct NestedCall {
     pub at_end: u32,
     pub origin_line: u32,
     pub origin_col: u32,
-    pub version: u32,
 }
 
 /// `parseNestedCall`: the call at `at_start..at_end` of a slot's `raw` read
@@ -91,9 +87,6 @@ pub struct NestedCall {
 /// program's do. Offsets are UTF-16 units, as the TypeScript caller has them.
 pub fn parse_nested_call(raw: &str, call: &NestedCall) -> Parsed {
     let head = util::utf16::Utf16::new(raw).text(0, call.at_end as usize);
-    if let Some(message) = version::refusal(&version::legacy_pin_to_semver(call.version), version::LANGUAGE_VERSION) {
-        return Err(to_value(&stmt::ParseError { message, loc: ast::Loc { line: 1, col: 1 } }));
-    }
     let origin = ast::Loc { line: call.origin_line as usize, col: call.origin_col as usize };
     let value = stmt::Parser::new(&head, origin, true).parse_nested_call_value(call.at_start as usize).map_err(|e| to_value(&e))?;
     let mut value = to_value(&value);
@@ -121,7 +114,7 @@ mod tests {
 
     #[test]
     fn eager_slots_carry_their_parse_and_nothing_else_does() {
-        let program = parse_program_eager("await sleep(2d)\nx = a +\ny = b", 5).unwrap();
+        let program = parse_program_eager("await sleep(2d)\nx = a +\ny = b").unwrap();
         let text = String::from_utf8(to_sorted_json(&program)).unwrap();
         assert!(!text.contains("__slot"), "{text}");
         // A duration literal is `{raw, span}` too, and is not an expression.
@@ -141,7 +134,7 @@ mod tests {
         // its columns are its own.
         let raw = "1 + f(x, () => {\n  y = 🌍x\n}) + 2";
         let end = crate::util::form::utf16_len(raw) - 4;
-        let call = NestedCall { at_start: 4, at_end: end as u32, origin_line: 3, origin_col: 5, version: 5 };
+        let call = NestedCall { at_start: 4, at_end: end as u32, origin_line: 3, origin_col: 5 };
         let value = parse_nested_call(raw, &call).unwrap();
         assert_eq!(value.pointer("/call/callee"), Some(&json!("f")));
         assert_eq!(value.pointer("/call/span"), Some(&json!({
@@ -161,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_nested_call_that_does_not_end_at_its_extent_is_refused() {
-        let call = NestedCall { at_start: 0, at_end: 6, origin_line: 2, origin_col: 3, version: 5 };
+        let call = NestedCall { at_start: 0, at_end: 6, origin_line: 2, origin_col: 3 };
         let error = parse_nested_call("f(x) y", &call).unwrap_err();
         assert_eq!(error, json!({
             "message": "Expected the call to end here, found 'y'",
@@ -177,7 +170,7 @@ mod tests {
         let source = format!("{}x = 1{}", "if a {\n".repeat(200), "\n}".repeat(200));
         let error = std::thread::Builder::new()
             .stack_size(256 << 20)
-            .spawn(move || parse_program(&source, 5).unwrap_err())
+            .spawn(move || parse_program(&source).unwrap_err())
             .unwrap()
             .join()
             .unwrap();

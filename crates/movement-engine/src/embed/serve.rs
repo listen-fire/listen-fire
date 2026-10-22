@@ -183,10 +183,7 @@ impl Session {
                     candidates: wire(args.get("candidates"), label)?,
                     record_type: text(args, "recordType", label)?.to_string(),
                     constraints: wire(args.get("constraints"), label)?,
-                    // Task 2 removes: the engine still asks with the integer pin.
-                    language_version: movement_parser::version::legacy_pin_to_semver(
-                        args.get("languageVersion").and_then(Json::as_u64).map_or(movement_parser::version::LEGACY_PIN, |v| v as u32),
-                    ),
+                    language_version: text(args, "languageVersion", label)?.to_string(),
                     budget: args.get("budget").cloned().unwrap_or(Json::Null),
                 });
                 then(verdict, |verdict| {

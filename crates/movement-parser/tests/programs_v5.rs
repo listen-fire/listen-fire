@@ -33,7 +33,7 @@ fn records() -> Vec<Record> {
 fn every_version_5_program_parses() {
     let refused: Vec<String> = records()
         .iter()
-        .filter_map(|record| movement_parser::parse_program(&record.source, 5).err().map(|e| format!("{}: {e}", record.origin)))
+        .filter_map(|record| movement_parser::parse_program(&record.source).err().map(|e| format!("{}: {e}", record.origin)))
         .collect();
     assert!(refused.is_empty(), "{} refused:\n{}", refused.len(), refused.join("\n"));
 }
@@ -46,8 +46,8 @@ fn every_version_5_program_parses() {
 fn the_eager_program_is_the_plain_one_with_every_slot_parsed() {
     let mut slots = 0usize;
     for record in records() {
-        let plain = movement_parser::parse_program(&record.source, 5).unwrap_or_else(|e| panic!("{}: {e}", record.origin));
-        let mut eager = movement_parser::parse_program_eager(&record.source, 5)
+        let plain = movement_parser::parse_program(&record.source).unwrap_or_else(|e| panic!("{}: {e}", record.origin));
+        let mut eager = movement_parser::parse_program_eager(&record.source)
             .unwrap_or_else(|e| panic!("{}: eager parse failed where the plain one did not: {e}", record.origin));
         slots += strip_slot_parses(&mut eager, None, &record.origin);
         assert_eq!(eager, plain, "{}", record.origin);

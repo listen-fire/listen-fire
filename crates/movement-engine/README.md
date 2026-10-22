@@ -45,7 +45,7 @@ the checker. The conformance corpora run on this engine for version 5.
 | `executor` | a single-threaded async runtime: the segment is one future; a `HostCall` future registers its request and yields; `join_all` keeps several in flight; `map_concurrent` runs a fan at most so many at a time (fans.ts `mapConcurrent`) |
 | `host` | one request builder per host call, each family spelled as host.ts's `HOST_FAMILIES` spells it (`adapters`, `llm`, `llm.client`, `llm.transforms`, `park`, `park.sink`, `park.callbacks`, `control.cancel`, `locks`, `trace`, `clock`, `files`, `ids`), plus the engine's own (`check`, `log`); every host request but those names the segment |
 | `ledger` | the run's spend account for one segment: the budget a priced call is sent, the cost each answers charged, the cap met (`exceeded`) once a budget refusal is charged, a priced plugin refused before the host is asked once the cap is spent (`plugin_refusal`), the charges handed back with `done` |
-| `abi` | the C ABI: `engine_start`, `engine_answer`, `engine_finish`; the checker's `check_program`, `check_answer`, `check_compatible`; `standard_library` `(out_ptr_ptr, out_len_ptr) -> 0`, no input: the built-in table as JSON (`[{name, params: [{name, type, optional?, rest?}], returns, summary}]`, movement_checker `types::stdlib::standard_library_json`), which the handbook's language search reads |
+| `abi` | the C ABI: `engine_start`, `engine_answer`, `engine_finish`; the checker's `check_program` and `check_answer` `(src_ptr, src_len, catalog_ptr, catalog_len, options_ptr, options_len, out_ptr_ptr, out_len_ptr) -> status` (options: `{"upgradingFrom": "0.11.0" \| null}`; no pin: the artifact checks in its own release's language), `check_compatible`; `standard_library` `(out_ptr_ptr, out_len_ptr) -> 0`, no input: the built-in table as JSON (`[{name, params: [{name, type, optional?, rest?}], returns, summary}]`, movement_checker `types::stdlib::standard_library_json`), which the handbook's language search reads; `language_version` `(out_ptr_ptr, out_len_ptr) -> 0`: the release's version as a JSON string, the language this artifact reads; `language_standing` `(pin_ptr, pin_len, out_ptr_ptr, out_len_ptr) -> status`: `{standing: "compatible" \| "newer" \| "olderKey" \| "malformed", message}` (the refusal's text, null when compatible), how a pin stands against this release |
 | `eval` | `evalMovementExpr`: the expression kinds, with their provenance rules and errors; the folds; what a walk, an `EXISTS` over a record, or a count needs asked of the run (`Reader`) |
 | `stdlib` | the 17 flat built-ins and all 15 namespaced members |
 | `run` | the `segment` entry: `runMovement` / `resumeMovement` for a version 5 program (below) |
@@ -266,7 +266,7 @@ The checker is the one gate. Before any run, run.ts checks the program
 it (MOVENG_LANGUAGE_VERSION, MOVENG_PARSE, MOVENG_CHECK) ends there and its
 host sees no request at all (`rustRunStats.endedAtCheck`). Past the check
 the engine refuses a run in three places, each below: before the run asks
-anything (`done` is `{refused}` or `{declined}`), when a resumed state does
+anything (`done` is `{declined}`), when a resumed state does
 not read, and mid-run, where a construct this engine has no case for fails
 the run with MOVENG_UNSUPPORTED naming it. Nothing runs a refused program
 another way: every refusal of a checked version 5 program is a checker or
@@ -278,7 +278,6 @@ Rust engine does not run this movement (<reason>)" and counts it in
 
 | reason | when | what closes it |
 |---|---|---|
-| `language_version_runs_on_typescript` | `{refused}`: the run is pinned below version 5, refused before the parse and before anything is asked | nothing: versions 1–4 run on the TypeScript engine by their pin (`engineRoute`), so the shim never sends one; an embedder that does gets this |
 | `event_does_not_cross` | the shim's, before the instance opens: an event, parked state, answer or callback's values that is not data (a function, a bigint, a symbol, a class instance, a value that holds itself, an array hole, a non-enumerable own key) | nothing a host sends: the event is data a webhook's or a poll's JSON made |
 | `catalog_does_not_load`, `event_does_not_read`, `instant_does_not_read`, `snapshot_models_do_not_read`, `check_answer_malformed` | `{declined}`: the input or the host's check answer does not read (the catalog snapshot, the event off the wire, `now` as an ISO 8601 instant, `snapshotModels` as a list of texts, the check answer or one of its stamps) | nothing: shim faults in all but name |
 | `source_does_not_parse` | `{declined}`: without `nativeCheck` only, a source this engine's parser refuses and the host's checker passes (with `nativeCheck` the engine's own parse fails the run with MOVENG_PARSE) | the grammar this engine lacks (none is known) |
@@ -447,7 +446,7 @@ TypeScript takes through its host is a host request here:
 | `adapters.call` `extractActor` | the first `@actor_*` a segment reads, when the source's `methods` list it | `host.adapters.call`; its answer kept for the segment, an error read as no actor (`resolveMovementActor`) |
 | `llm.client.call` (`AI()`) | each `AI(prompt[, tier])` an expression evaluates: `{system, userMessage, label: "movement-ai-expression", model, effort?, maxTokens?, budget}` at the tier's settings (ai_tiers.ts `aiExpressionSettings`, a fixed table: no deployment input) | `host.llm.client.call`; its cost charged; the reply read out of its envelope (`aiAnswer`), traced `{kind: "ai", prompt, hasValue}` |
 | `files.render` | each `FILE(content, type)`: `{segmentId, content, type}` | `host.files.render`, its descriptor back on the eval wire tagged as a file (`["F", descriptor]`) |
-| `check.compatible` | `x IS <Decl>` of the event, a handle or a landed record: `{source, languageVersion, declaration, schema, recordType}` (the instance schema the record's type is read in) | the checker's `surfaceMisfit` over `schemaSurface(schema, recordType)` and the file's declaration (run.ts `evaluateDeclaredNodeTest`): `{fits}`, or `{undescribed}`, which stops the run as "can't tell" |
+| `check.compatible` | `x IS <Decl>` of the event, a handle or a landed record: `{source, declaration, schema, recordType}` (the instance schema the record's type is read in) | the checker's `surfaceMisfit` over `schemaSurface(schema, recordType)` and the file's declaration (run.ts `evaluateDeclaredNodeTest`): `{fits}`, or `{undescribed}`, which stops the run as "can't tell" |
 | `adapters.call` `invokeFieldFunction` | a function a write's destination field advertises (`describe`'s `functions`), called in that field's value: `{recordType, fieldId, functionName, args: {instructions, data}}` (`bindMovementFieldFunctions`) | `host.adapters.call` |
 | `log.write` | the log lines the TypeScript engine writes (an extraction's skipped stage, a plugin's empty argument, a continued answer, a truncated file, a refinement kept), kept and sent as the statement's trace is handed over, so a line costs no yield inside a fan | the platform's logger, the run's id added; never the run's failure |
 
@@ -963,7 +962,7 @@ alone refuses it). What it writes is Unicode text, so it holds none.
 
 **The input** (`engine_start`): `{entry: "segment", source, languageVersion,
 movementName?, event, segmentId, credentialIds?, spend?, now,
-catalog, dryRun?, nativeCheck?, snapshotModels?, versionWarning?, resume?, fire?, settle?, limitPaused?, suspendAt?, serves,
+catalog, dryRun?, nativeCheck?, snapshotModels?, resume?, fire?, settle?, limitPaused?, suspendAt?, serves,
 extractionFileChars?, maxCallDepth?, extractionTiers?, limits?, recordsReturned?}`. `segmentId` is the segment the run host opened (`segment.open`),
 named on every host request; `credentialIds` maps an import's credential name
 to its id; `spend` is the run's account as the segment starts
@@ -972,13 +971,13 @@ rehearsal (writes captured, `sleep` fast-forwarded); `nativeCheck` makes the
 engine answer `check.program` with the Rust checker instead of asking the host
 (off by default; the host turns it on for every run segment);
 `snapshotModels` is, with `nativeCheck`, the run snapshot's own `models`
-(null: none) the check holds a written model to, and `versionWarning`
-(`{code, message}`) a deprecated pin's warning in the host release's words,
-which the run traces; `resume` is `{state,
+(null: none) the check holds a written model to; `resume` is `{state,
 reenter?}`, a `ParkedScopeState` (on the eval wire) to resume rather than a
 run to start; `limitPaused` says the run's pause holds, and `suspendAt` lists
 the addresses to suspend at (both "Parks" above). `languageVersion` is the pin,
-written out (the engine does not know the release's current one); `event`
+a release's version written out: one of another compatibility key than this
+engine's fails the run with MOVENG_LANGUAGE_VERSION, naming the pin and the
+remedy, before anything is asked; `event`
 is the `TriggerEvent` on the eval wire; `now` is the run's pinned instant as
 a `toISOString` text (`firedAt`, else when the run began); `catalog` is the
 `CatalogSnapshot`; `serves` lists every host method the run's host serves,
@@ -1011,7 +1010,7 @@ shape. Where `wire: true`, the values named cross on the eval wire.
 
 | request (family.method, args) | answer |
 |---|---|
-| `check.program {source, languageVersion, upgradingFrom?}` | `{diagnostics, link?, stamps, versionWarning?}` (below; `versionWarning: {code, message}` is the deprecated pin's warning the run traces, as the host's engine reads its release, not the checker's diagnostic); a program that fails its check gets no answer: the host ends the run with the check's error |
+| `check.program {source}` | `{diagnostics, link?, stamps}` (below), checked in the host's release's language: the run's pin was held to the rule at its entry; a program that fails its check gets no answer: the host ends the run with the check's error |
 | `adapters.resolve {segmentId, adapterType, credentialsId?, constructionArgs?, role: "source" \| "target", dryRun?: true}` | the instance as data: `{instance, adapterType, methods, capabilities, …}` |
 | `adapters.call {segmentId, instance, method, args, wire: true, positionRef?, position?}` | `{result}` (on the eval wire) or `{error: {kind: "call_ceiling" \| "adapter_error", message, name?, detail?, ref}}`; `ref` numbers the very error the engine's TypeScript twin raises for it. With `positionRef` the call's argument object is `{position, ...args}`: the position by handle (below) |
 | `llm.arbitrateEntities {segmentId, asserted, candidates, recordType, constraints, languageVersion, budget}` (the first four on the eval wire) | `{index: number \| null, judgeUnavailable?, cost?}`, or a budget refusal `{error: {kind: "budget", message}, cost?}` |
@@ -1068,12 +1067,10 @@ conjuncts' fields in order, a false one ending the reads.)
 - `{failed: {error, result}}`: the body failed, and `result` is what the run
   had when it did (the shim throws `MovementRunFailed`);
 - `{thrown: error}`: it failed before the body ran;
-- `{refused: reason}`: the pin is below version 5
-  (`language_version_runs_on_typescript`); nothing was asked of the host;
 - `{declined: reason}`: the input or the check's answer does not read;
   nothing the host can see has happened ("Refusals" above).
 
-The shim fails the run on either of the last two. Beside any of the first
+The shim fails the run on the last. Beside any of the first
 three, `cost: [{source, microdollars}]` is what the segment's priced calls
 spent, by source, for the run's account.
 
@@ -1170,8 +1167,8 @@ run's own snapshot, and a program that fails it ends with MOVENG_CHECK (or
 MOVENG_PARSE, MOVENG_LANGUAGE_VERSION) before anything else is asked. In
 process the run host has already checked it (run.ts `checkPinned`), so a
 program that fails has made no host request. Without `nativeCheck` the
-segment asks for the check: `check.program {source, languageVersion,
-upgradingFrom?}`, answered `{diagnostics, link?, stamps}` (lf-platform's apps/api
+segment asks for the check: `check.program {source}` (the run's pin was held
+to the rule at its entry), answered `{diagnostics, link?, stamps}` (lf-platform's apps/api
 program_check.ts); a program that fails it never gets an answer, and the
 host ends the run with the check's error. The request carries no segment,
 so an embedder may answer it, or check, before its own `segment.open`.

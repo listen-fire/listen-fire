@@ -134,8 +134,7 @@ impl Server {
     async fn open(project: Option<Project>, log: &mut Vec<String>) -> Server {
         let before = log.len();
         let catalog = catalog_of_project(project.as_ref(), log).await;
-        let version = project.as_ref().map_or(movement_parser::version::LEGACY_PIN, |p| p.language_version);
-        Server { service: Service::new(catalog, version), project, documents: HashMap::new(), due: HashMap::new(), reread_due: None, read_clean: log.len() == before }
+        Server { service: Service::new(catalog), project, documents: HashMap::new(), due: HashMap::new(), reread_due: None, read_clean: log.len() == before }
     }
 
     /// The catalog read again; the open buffers still stand for their files,

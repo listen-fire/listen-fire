@@ -1095,7 +1095,7 @@ impl Run<'_> {
                 candidates: self.encode(&Js::array(candidates.to_vec())).map_err(Stop::Thrown)?,
                 record_type,
                 constraints: self.encode(constraints).map_err(Stop::Thrown)?,
-                language_version: self.version(),
+                language_version: self.language_version(),
             },
             self.ledger.budget(),
         );

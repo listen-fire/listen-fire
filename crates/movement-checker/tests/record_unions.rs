@@ -17,13 +17,12 @@ struct Case {
     name: String,
     catalog: String,
     source: String,
-    version: u32,
     expected: Vec<String>,
 }
 
 fn diagnostics(case: &Case) -> Vec<String> {
     let catalog = CatalogSnapshot::load(&case.catalog).unwrap();
-    let options = CheckOptions { language_version: case.version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&case.source, &catalog, options)
         .unwrap()
         .into_iter()
@@ -46,7 +45,7 @@ fn every_case_answers_as_the_typescript_checker_does() {
     for case in &cases {
         let found = diagnostics(case);
         if found != case.expected {
-            failures.push(format!("{} / {} (version {}):\n  expected {:#?}\n  found    {:#?}", case.file, case.name, case.version, case.expected, found));
+            failures.push(format!("{} / {}:\n  expected {:#?}\n  found    {:#?}", case.file, case.name, case.expected, found));
         }
     }
     assert!(failures.is_empty(), "{} of {} cases differ:\n{}", failures.len(), cases.len(), failures.join("\n"));

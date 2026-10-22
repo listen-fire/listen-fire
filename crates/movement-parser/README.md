@@ -98,21 +98,27 @@ cargo would otherwise reuse dependencies built without the wrapper.
 |---|---|---|
 | `alloc` | `(len) -> ptr` | caller writes UTF-8 input here |
 | `dealloc` | `(ptr, len)` | frees an input or an output buffer |
-| `parse_program` | `(src_ptr, src_len, version, out_ptr_ptr, out_len_ptr) -> status` | the `Program` as ast.ts types it; slots are `{raw, span}` |
+| `parse_program` | `(src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the `Program` as ast.ts types it; slots are `{raw, span}` |
 | `parse_program_eager` | as `parse_program` | the same `Program`, each slot also carrying `tree` (its `MExpr`) or `error` (`{message, pos}`) |
-| `parse_expression` | `(src_ptr, src_len, version, out_ptr_ptr, out_len_ptr) -> status` | the v5 surface, read into the canonical tree; a version other than 5 is refused |
-| `spell_message` | as `parse_expression`, the message in | the message (a JSON string) naming built-ins as `version` spells them |
-| `spell_code` | as `parse_expression`, the code in | the program text (a JSON string) a diagnostic suggests, as `version` spells it |
+| `parse_expression` | `(src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the v5 surface, read into the canonical tree |
+| `spell_message` | as `parse_expression`, the message in | the message (a JSON string) naming built-ins as the language spells them |
+| `spell_code` | as `parse_expression`, the code in | the program text (a JSON string) a diagnostic suggests, as the language spells it |
 | `surface_table` | as `parse_expression`, input ignored | the spelling table (`surface::table::TABLE`) |
-| `parse_nested_call` | `(raw_ptr, raw_len, at_start, at_end, origin_line, origin_col, version, out_ptr_ptr, out_len_ptr) -> status` | |
+| `parse_nested_call` | `(raw_ptr, raw_len, at_start, at_end, origin_line, origin_col, out_ptr_ptr, out_len_ptr) -> status` | |
 | `lower_expression` | `(tree_ptr, tree_len, src_ptr, src_len, out_ptr_ptr, out_len_ptr) -> status` | the tree's JSON and its source text in; the `Expression`, or `{"error": {message, code?, class?}}` |
 | `lower_condition` | as `lower_expression` | the `MovementCondition` |
 | `catalog_query` | `(snapshot_ptr, snapshot_len, query_ptr, query_len, out_ptr_ptr, out_len_ptr) -> status` | one lookup (`{op: "instantiate" \| "adapter" \| "credential" \| "credentialNames" \| "plugin" \| "models" \| "constructionArgOptions", …}`) or helper call (`{op: "helper", name, args}`) against the snapshot; `{"value": …}`, `{}` for `undefined`, or `{"error": {message}}`; nothing is kept between calls |
 | `last_panic` | `(out_ptr_ptr, out_len_ptr)` | the last panic's message, in a static buffer (not freed) |
 
+No entry takes a language version: an artifact reads its own release's
+language (`version::LANGUAGE_VERSION`, the crate's version), and the host
+chooses the artifact by a movement's pin and applies the compatibility rule
+(`version::compatible`) before calling.
+
 The artifact also carries the engine's exports (`engine_start`, `engine_answer`,
-`engine_finish`) and the checker's (`check_program`, `check_answer`,
-`check_compatible`, `standard_library`), documented in crates/movement-engine/README.md.
+`engine_finish`), the checker's (`check_program`, `check_answer`,
+`check_compatible`, `standard_library`) and the pin's (`language_version`,
+`language_standing`), documented in crates/movement-engine/README.md.
 
 Status 0 means the output is the tree; 1 means it is `{"error": {…}}`. The
 output is UTF-8 JSON the caller must `dealloc`. Every value is an i32 on

@@ -181,31 +181,31 @@ fn handles_inside_values() {
     assert!(!mixes_record_with_value(Some(&Ty::Union(Rc::new(vec![Ty::Text, Ty::Number])))));
 }
 
-fn infer<'e>(source: &str, env: &'e dyn TypeEnv, version: u32) -> (Option<Ty>, Typing<'e>, movement_parser::lowering::expression::Expression) {
+fn infer<'e>(source: &str, env: &'e dyn TypeEnv) -> (Option<Ty>, Typing<'e>, movement_parser::lowering::expression::Expression) {
     let expr = expression_of_text(source).unwrap_or_else(|e| panic!("{source}: {}", e.message));
-    let mut typing = Typing::new(env, version, Span { start: Loc { line: 1, col: 1 }, end: Loc { line: 1, col: 1 } });
+    let mut typing = Typing::new(env, Span { start: Loc { line: 1, col: 1 }, end: Loc { line: 1, col: 1 } });
     let ty = typing.infer(&expr);
     (ty, typing, expr)
 }
 
-fn spelled(source: &str, env: &dyn TypeEnv, version: u32) -> String {
-    infer(source, env, version).0.as_ref().map_or("?".to_string(), describe_field_type)
+fn spelled(source: &str, env: &dyn TypeEnv) -> String {
+    infer(source, env).0.as_ref().map_or("?".to_string(), describe_field_type)
 }
 
 #[test]
 fn literals_and_operators() {
-    assert_eq!(spelled("1 + 2", &EmptyEnv, 5), "number");
-    assert_eq!(spelled("\"a\" == \"b\"", &EmptyEnv, 5), "boolean");
-    assert_eq!(spelled("NULL", &EmptyEnv, 5), "null");
-    assert_eq!(spelled("COALESCE(NULL, \"x\")", &EmptyEnv, 5), "text");
-    assert_eq!(spelled("IF TRUE THEN 1 ELSE 2 END", &EmptyEnv, 5), "number");
-    assert_eq!(spelled("IF TRUE THEN 1 ELSE \"x\" END", &EmptyEnv, 5), "number | text");
-    assert_eq!(spelled("[1, \"a\"]", &EmptyEnv, 5), "list of (number | text)");
-    assert_eq!(spelled("{ a: 1, b: 2 }", &EmptyEnv, 5), "{ a: number, b: number }");
-    assert_eq!(spelled("SPLIT(\"a,b\")", &EmptyEnv, 5), "list of text");
-    assert_eq!(spelled("DATE.PARSE(\"x\")", &EmptyEnv, 5), "date (or absent)");
-    assert_eq!(spelled("AT([1, \"a\"], 0)", &EmptyEnv, 5), "number");
-    assert_eq!(spelled("AT({ a: 1 }, \"a\")", &EmptyEnv, 5), "number");
+    assert_eq!(spelled("1 + 2", &EmptyEnv), "number");
+    assert_eq!(spelled("\"a\" == \"b\"", &EmptyEnv), "boolean");
+    assert_eq!(spelled("NULL", &EmptyEnv), "null");
+    assert_eq!(spelled("COALESCE(NULL, \"x\")", &EmptyEnv), "text");
+    assert_eq!(spelled("IF TRUE THEN 1 ELSE 2 END", &EmptyEnv), "number");
+    assert_eq!(spelled("IF TRUE THEN 1 ELSE \"x\" END", &EmptyEnv), "number | text");
+    assert_eq!(spelled("[1, \"a\"]", &EmptyEnv), "list of (number | text)");
+    assert_eq!(spelled("{ a: 1, b: 2 }", &EmptyEnv), "{ a: number, b: number }");
+    assert_eq!(spelled("SPLIT(\"a,b\")", &EmptyEnv), "list of text");
+    assert_eq!(spelled("DATE.PARSE(\"x\")", &EmptyEnv), "date (or absent)");
+    assert_eq!(spelled("AT([1, \"a\"], 0)", &EmptyEnv), "number");
+    assert_eq!(spelled("AT({ a: 1 }, \"a\")", &EmptyEnv), "number");
 }
 
 #[derive(Default)]
@@ -230,14 +230,14 @@ fn names_walks_and_narrowing() {
     env.roots.insert("crm".to_string(), Position::Meta { instance: crm.clone() });
     env.roots.insert("co".to_string(), position_ref_in(&crm, "Company").unwrap());
     env.scalars.insert("n".to_string(), maybe_absent(Ty::Number));
-    assert_eq!(spelled("co.Name", &env, 5), "text");
-    assert_eq!(spelled("co.Size", &env, 5), "number (or absent)");
-    assert_eq!(spelled("crm-[:companies]->", &env, 5), "list of crm.company");
-    assert_eq!(spelled("COUNT(co-[:people]->)", &env, 5), "number");
-    assert_eq!(spelled("FIRST(co-[:people]->)", &env, 5), "crm.Person (or absent)");
-    assert_eq!(spelled("IF n != NULL THEN n ELSE 0 END", &env, 5), "number", "the guard narrows the then arm");
-    assert_eq!(spelled("IF co.Size != NULL THEN co.Size ELSE 0 END", &env, 5), "number");
-    assert_eq!(spelled("co", &env, 5), "crm.company");
+    assert_eq!(spelled("co.Name", &env), "text");
+    assert_eq!(spelled("co.Size", &env), "number (or absent)");
+    assert_eq!(spelled("crm-[:companies]->", &env), "list of crm.company");
+    assert_eq!(spelled("COUNT(co-[:people]->)", &env), "number");
+    assert_eq!(spelled("FIRST(co-[:people]->)", &env), "crm.Person (or absent)");
+    assert_eq!(spelled("IF n != NULL THEN n ELSE 0 END", &env), "number", "the guard narrows the then arm");
+    assert_eq!(spelled("IF co.Size != NULL THEN co.Size ELSE 0 END", &env), "number");
+    assert_eq!(spelled("co", &env), "crm.company");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn a_choice_may_hold_a_record() {
     let crm = crm();
     let mut env = Env::default();
     env.roots.insert("co".to_string(), position_ref_in(&crm, "Company").unwrap());
-    let (ty, typing, expr) = infer("COALESCE(co, \"none\")", &env, 5);
+    let (ty, typing, expr) = infer("COALESCE(co, \"none\")", &env);
     assert!(ty.is_none(), "a record and a value share no kind");
     let held = typing.may_hold_type(&expr).unwrap();
     assert!(mixes_record_with_value(Some(&held)));

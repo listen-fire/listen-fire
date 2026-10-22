@@ -32,7 +32,7 @@ listen to manual fire hello
 ";
 
 fn service() -> Service {
-    Service::new(CatalogSnapshot::load(CATALOG).unwrap(), 5)
+    Service::new(CatalogSnapshot::load(CATALOG).unwrap())
 }
 
 /// The position just after the `n`th (0-based) occurrence of `marker` in `source`.

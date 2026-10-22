@@ -15,10 +15,10 @@ use movement_parser::catalog::types::CatalogSnapshot;
 const CATALOG: &str = r#"{"contractVersion":1,"adapters":{},"credentials":{},"plugins":{}}"#;
 
 /// Each error `body` draws under `version`, as (code, message).
-fn diagnostics(body: &str, version: u32) -> Vec<(String, String)> {
+fn diagnostics(body: &str) -> Vec<(String, String)> {
     let source = format!("function go(t: <text>, xs: <number[]>) {{\n{body}\n}}");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| (d.code, d.message)).collect()
 }
@@ -26,7 +26,7 @@ fn diagnostics(body: &str, version: u32) -> Vec<(String, String)> {
 /// The absence refusals a sum over `filter(ns, <fn>)` draws, `ns` a list
 /// that may hold an absent member.
 fn summed(function: &str) -> Vec<String> {
-    diagnostics(&format!("  ns = map(xs, (x) => Number.parse(t))\n  ys = filter(ns, {function})\n  s = List.sum(ys)"), 5)
+    diagnostics(&format!("  ns = map(xs, (x) => Number.parse(t))\n  ys = filter(ns, {function})\n  s = List.sum(ys)"))
         .into_iter()
         .filter(|(code, _)| code == "MOV_ABSENT_REQUIRED")
         .map(|(_, message)| message)
@@ -49,7 +49,7 @@ fn under_5_a_test_that_keeps_only_present_members_narrows() {
 
 #[test]
 fn under_5_the_filter_written_inside_the_fold_clears_it_too() {
-    assert_eq!(diagnostics("  ns = map(xs, (x) => Number.parse(t))\n  s = List.sum(filter(ns, (n) => n != null)) + 1", 5), Vec::new());
+    assert_eq!(diagnostics("  ns = map(xs, (x) => Number.parse(t))\n  s = List.sum(filter(ns, (n) => n != null)) + 1"), Vec::new());
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn under_5_the_folds_remedy_offers_the_filter_form() {
 
 #[test]
 fn under_5_the_list_the_filter_answers_is_a_list_of_present_members() {
-    let found: Vec<String> = diagnostics("  ns = map(xs, (x) => Number.parse(t))\n  ys = filter(ns, (n) => n != null)\n  u = Text.upper(ys)", 5)
+    let found: Vec<String> = diagnostics("  ns = map(xs, (x) => Number.parse(t))\n  ys = filter(ns, (n) => n != null)\n  u = Text.upper(ys)")
         .into_iter()
         .filter(|(code, _)| code == "MOV_BUILTIN_ARG_TYPE")
         .map(|(_, message)| message)

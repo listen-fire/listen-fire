@@ -18,17 +18,17 @@ fn catalog() -> CatalogSnapshot {
     CatalogSnapshot::load(CATALOG).unwrap()
 }
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+fn check(source: &str) -> Vec<Diagnostic> {
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog(), options).unwrap()
 }
 
-fn errors(source: &str, version: u32) -> Vec<Diagnostic> {
-    check(source, version).into_iter().filter(|d| d.is_error()).collect()
+fn errors(source: &str) -> Vec<Diagnostic> {
+    check(source).into_iter().filter(|d| d.is_error()).collect()
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    errors(source, version).into_iter().map(|d| d.code).collect()
+fn codes(source: &str) -> Vec<String> {
+    errors(source).into_iter().map(|d| d.code).collect()
 }
 
 fn v5(body: &str) -> String {
@@ -45,30 +45,30 @@ fn the_record_a_stage_fed_is_the_one_positional_parameter_from_5() {
 #[test]
 fn version_5_calls_it_with_the_record_and_types_what_it_hands_back() {
     let program = v5("  p = { name: n, company: { name: c } }\n  found = linkedinEnrichment(p)\n  url = coalesce(found.linkedin_url, \"\")");
-    assert_eq!(errors(&program, 5), Vec::<Diagnostic>::new());
+    assert_eq!(errors(&program), Vec::<Diagnostic>::new());
 }
 
 #[test]
 fn version_5_refuses_a_call_without_the_record_naming_the_call_to_write() {
-    let missing = errors(&v5("  found = linkedinEnrichment()"), 5);
+    let missing = errors(&v5("  found = linkedinEnrichment()"));
     assert_eq!(missing.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_PLUGIN_FED_BY_EXTRACTION"]);
     assert!(missing[0].message.contains("`linkedinEnrichment(record)`"), "{}", missing[0].message);
 }
 
 #[test]
 fn version_5_takes_nothing_past_the_record_but_a_settings_record() {
-    assert_eq!(codes(&v5("  p = { name: n }\n  found = linkedinEnrichment(p, n)"), 5), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&v5("  p = { name: n }\n  found = linkedinEnrichment(p, n)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
 }
 
 #[test]
 fn version_5_reads_no_field_it_did_not_declare() {
-    assert_ne!(codes(&v5("  p = { name: n }\n  found = linkedinEnrichment(p)\n  x = found.nope"), 5), Vec::<String>::new());
+    assert_ne!(codes(&v5("  p = { name: n }\n  found = linkedinEnrichment(p)\n  x = found.nope")), Vec::<String>::new());
 }
 
 #[test]
 fn the_extraction_keywords_hand_rewrite_points_at_the_call() {
     let program = "import { linkedinEnrichment } from plugins\n\nfunction go(u: <text>) {\n  found = extract from [u] {\n    name: \"the name\"\n  } through [linkedinEnrichment] {\n    detail: \"more\"\n  }\n}\n";
-    let retired: Vec<String> = check(program, 5).into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").map(|d| d.message).collect();
+    let retired: Vec<String> = check(program).into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").map(|d| d.message).collect();
     assert_eq!(retired.len(), 1);
     assert!(
         retired[0].contains("map over the records calling each plugin ('linkedinEnrichment(record)'), extractOne over the content"),
@@ -83,7 +83,7 @@ fn the_extraction_keywords_hand_rewrite_points_at_the_call() {
 #[test]
 fn a_plugin_that_has_not_declared_its_row_or_output_is_an_ordinary_call_from_5() {
     let v5 = "import { hiddenRow, noOutput } from plugins\n\nfunction go(n: <text>) {\n  hiddenRow(n)\n  noOutput(n)\n}\n";
-    assert_eq!(codes(v5, 5), Vec::<String>::new());
+    assert_eq!(codes(v5), Vec::<String>::new());
     let bound = "import { hiddenRow, noOutput } from plugins\n\nfunction go(n: <text>) {\n  a = hiddenRow(n)\n  b = noOutput(n)\n}\n";
-    assert_eq!(codes(bound, 5), vec!["MOV_PLUGIN_OUTPUT_UNDECLARED", "MOV_PLUGIN_OUTPUT_UNDECLARED"]);
+    assert_eq!(codes(bound), vec!["MOV_PLUGIN_OUTPUT_UNDECLARED", "MOV_PLUGIN_OUTPUT_UNDECLARED"]);
 }

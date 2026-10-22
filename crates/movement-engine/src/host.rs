@@ -351,7 +351,7 @@ pub mod llm {
         pub candidates: Json,
         pub record_type: &'a str,
         pub constraints: Json,
-        pub language_version: u32,
+        pub language_version: &'a str,
     }
 }
 
@@ -606,12 +606,10 @@ pub mod check {
     /// `{diagnostics, link?, stamps}` (crate::program reads it). A program
     /// that fails its check never gets an answer: the host ends the run with
     /// MOVENG_CHECK, as the TypeScript engine does before it runs anything.
-    pub fn program(source: &str, language_version: u32, upgrading_from: Option<u32>) -> Request {
-        let mut args = json!({ "source": source, "languageVersion": language_version });
-        if let Some(from) = upgrading_from {
-            args["upgradingFrom"] = json!(from);
-        }
-        Request { family: Family::Check, method: "program".into(), args }
+    /// The host checks it under its own release: the run's pin was held to
+    /// the rule before the run began.
+    pub fn program(source: &str) -> Request {
+        Request { family: Family::Check, method: "program".into(), args: json!({ "source": source }) }
     }
 
     /// `x IS <Decl>` of a record a system describes: does `schema`'s
@@ -623,9 +621,8 @@ pub mod check {
     /// declared edges from the declaration's root to the node the record is
     /// compared with (a record a synthesised node's edge holds); empty, the
     /// root, and the request carries none.
-    #[allow(clippy::too_many_arguments)]
-    pub fn compatible(source: &str, language_version: u32, file: Option<&str>, declaration: &str, schema: Json, record_type: &str, path: &[String]) -> Request {
-        let mut args = json!({ "source": source, "languageVersion": language_version, "declaration": declaration, "schema": schema, "recordType": record_type });
+    pub fn compatible(source: &str, file: Option<&str>, declaration: &str, schema: Json, record_type: &str, path: &[String]) -> Request {
+        let mut args = json!({ "source": source, "declaration": declaration, "schema": schema, "recordType": record_type });
         if let Some(file) = file {
             args["file"] = json!(file);
         }
@@ -698,9 +695,9 @@ mod tests {
         assert_eq!(clock::instant_of(Some(&json!({ "nowIso": "2026-01-01T00:00:01.000Z" }))), Some(1_767_225_601_000.0));
         assert_eq!(clock::instant_of(Some(&json!({ "nowIso": "soon" }))), None);
         assert_eq!(clock::instant_of(Some(&json!({ "now": "2026-01-01T00:00:01.000Z" }))), None);
-        let check = check::program("src", 3, None);
+        let check = check::program("src");
         assert_eq!((check.family.as_str(), check.method.as_str()), ("check", "program"));
-        assert_eq!(check.args, json!({ "source": "src", "languageVersion": 3 }));
+        assert_eq!(check.args, json!({ "source": "src" }));
     }
 
     #[test]

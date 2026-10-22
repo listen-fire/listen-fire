@@ -6,14 +6,14 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-fn check(source: &str, version: u32) -> Vec<movement_checker::Diagnostic> {
+fn check(source: &str) -> Vec<movement_checker::Diagnostic> {
     let catalog = CatalogSnapshot::load(r#"{"adapters":{},"credentials":{},"plugins":{}}"#).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    check(source, version).into_iter().map(|d| d.code).collect()
+fn codes(source: &str) -> Vec<String> {
+    check(source).into_iter().map(|d| d.code).collect()
 }
 
 const V5: &str = "function go(t: <text>, n: <number>) {\n  a = Text.upper(Text.trim(t))\n  b = n > 1 && n < 5 ? Number.round(n) : 0\n  if (a != null || !(n == 2)) {\n    c = Text.length(a)\n  }\n}";
@@ -21,12 +21,12 @@ const OLD: &str = "movement go(t: <text>, n: <number>) {\n  a = UPPER(TRIM(t))\n
 
 #[test]
 fn the_everyday_spelling_checks() {
-    assert_eq!(codes(V5, 5), ["MOV_PRESENCE_TEST_CONSTANT"]);
+    assert_eq!(codes(V5), ["MOV_PRESENCE_TEST_CONSTANT"]);
 }
 
 #[test]
 fn an_old_spelling_under_5_is_refused_with_its_rewrite() {
-    let found = check(OLD, 5);
+    let found = check(OLD);
     let spelling: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert!(spelling.len() >= 8, "{spelling:#?}");
     assert!(spelling.iter().all(|d| d.fix.is_some()));
@@ -37,13 +37,13 @@ fn an_old_spelling_under_5_is_refused_with_its_rewrite() {
 
 #[test]
 fn a_message_names_a_built_in_in_the_program_s_spelling() {
-    let v5: Vec<String> = check("function go(n: <number>) {\n  a = Text.upper(n)\n}", 5).into_iter().map(|d| d.message).collect();
+    let v5: Vec<String> = check("function go(n: <number>) {\n  a = Text.upper(n)\n}").into_iter().map(|d| d.message).collect();
     assert_eq!(v5, ["Text.upper's 'text' takes text, and this is number — Text.upper(text)"]);
 }
 
 #[test]
 fn a_message_suggests_the_surface_of_its_program_s_version() {
-    let v5: Vec<String> = check("function go() {\n  f = () => 1\n  x = !f\n  y = f && f\n}", 5).into_iter().map(|d| d.message).collect();
+    let v5: Vec<String> = check("function go() {\n  f = () => 1\n  x = !f\n  y = f && f\n}").into_iter().map(|d| d.message).collect();
     assert!(v5[0].starts_with("a value negated by '!' is a closure"), "{v5:?}");
     assert!(v5[1].starts_with("a value joined by '&&' is a closure"), "{v5:?}");
 }
@@ -54,7 +54,7 @@ const PDF_V5: &str = "function go(t: <text>) {\n  f = File.from(t, \"pdf\")\n}";
 #[test]
 fn a_pdf_is_the_pdf_plugin_s_from_version_5() {
     for (source, written) in [(PDF_OLD, "FILE"), (PDF_V5, "File.from")] {
-        let found = check(source, 5);
+        let found = check(source);
         let pdf: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING" && d.message.contains("@lf/pdf")).collect();
         assert_eq!(pdf.len(), 1, "{written}: {found:#?}");
         assert_eq!(pdf[0].fix.as_ref().unwrap()["edits"][0]["text"], "pdf.render(t)", "{written}");
@@ -65,7 +65,7 @@ fn a_pdf_is_the_pdf_plugin_s_from_version_5() {
 
 #[test]
 fn text_is_a_file_kind() {
-    assert!(codes("function go(t: <text>) {\n  f = File.from(t, \"text\")\n}", 5).is_empty());
+    assert!(codes("function go(t: <text>) {\n  f = File.from(t, \"text\")\n}").is_empty());
 }
 
 const PDF_CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{"render":{"args":["text"],"priced":false,"argTypes":{"text":"text"},"requiredArgs":["text"],"effects":{},"output":{"kind":"value","type":"file"},"package":"@lf/pdf"}}}"#;
@@ -73,7 +73,7 @@ const PDF_CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{"render"
 #[test]
 fn the_pdf_package_used_with_no_import_offers_its_import_line() {
     let catalog = CatalogSnapshot::load(PDF_CATALOG).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source("function go(t: <text>) {\n  f = pdf.render(t)\n}", &catalog, options).unwrap();
     let unresolved: Vec<_> = found.iter().filter(|d| d.code == "MOV_NAME_UNRESOLVED").collect();
     assert_eq!(unresolved.len(), 1, "{found:#?}");

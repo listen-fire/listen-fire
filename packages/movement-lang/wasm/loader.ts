@@ -65,7 +65,7 @@ type CatalogFunction = 'catalog_query';
 type WasmFunction = ParserFunction | LoweringFunction | CatalogFunction;
 
 /** The Rust checker's exports, which only the engine's artifact carries. */
-type CheckerFunction = 'check_program' | 'check_answer' | 'check_compatible' | 'standard_library';
+type CheckerFunction = 'check_program' | 'check_answer' | 'check_compatible' | 'standard_library' | 'language_version' | 'language_standing';
 
 interface ParserExports extends BufferExports {
   call(fn: WasmFunction, args: number[]): number;
@@ -179,22 +179,28 @@ export function callCatalog(snapshotJson: string, queryJson: string): { ok: bool
   return call('catalog_query', [snapshotJson, queryJson], []);
 }
 
+/** What a check is asked with besides the source and snapshot
+ *  (crates/movement-checker/src/abi.rs `AskedOptions`). The artifact checks
+ *  in its own release's language and takes no pin. */
+export interface CheckCallOptions {
+  /** The release a move up starts from. */
+  upgradingFrom?: string;
+}
+
+function optionsJson(options: CheckCallOptions): string {
+  return JSON.stringify({ upgradingFrom: options.upgradingFrom ?? null });
+}
+
 /**
  * The Rust checker over `source` (crates/movement-checker/src/abi.rs
  * `check_program`), on the parser's instance: the snapshot as JSON, the
- * version checked under and the one upgraded from (0: none), and the reply —
- * `{diagnostics}`, or `{error}` for a source that does not parse or a
- * snapshot that does not load.
+ * options, and the reply — `{diagnostics}`, or `{error}` for a source that
+ * does not parse or a snapshot that does not load.
  *
  * @internal Used by the Rust checker's wrapper (checker/rust_checker.ts).
  */
-export function callCheckProgram(
-  source: string,
-  snapshotJson: string,
-  languageVersion: number,
-  upgradingFrom: number,
-): { ok: boolean; json: unknown } {
-  return callChecker('check_program', [source, snapshotJson], [languageVersion, upgradingFrom]);
+export function callCheckProgram(source: string, snapshotJson: string, options: CheckCallOptions): { ok: boolean; json: unknown } {
+  return callChecker('check_program', [source, snapshotJson, optionsJson(options)], []);
 }
 
 /**
@@ -205,13 +211,8 @@ export function callCheckProgram(
  *
  * @internal Used by the Rust checker's wrapper (checker/rust_checker.ts).
  */
-export function callCheckAnswer(
-  source: string,
-  snapshotJson: string,
-  languageVersion: number,
-  upgradingFrom: number,
-): { ok: boolean; json: unknown } {
-  return callChecker('check_answer', [source, snapshotJson], [languageVersion, upgradingFrom]);
+export function callCheckAnswer(source: string, snapshotJson: string, options: CheckCallOptions): { ok: boolean; json: unknown } {
+  return callChecker('check_answer', [source, snapshotJson, optionsJson(options)], []);
 }
 
 /**
@@ -234,6 +235,26 @@ export function callCheckCompatible(requestJson: string): { ok: boolean; json: u
  */
 export function callStandardLibrary(): { ok: boolean; json: unknown } {
   return callChecker('standard_library', [], []);
+}
+
+/**
+ * The language the engine's artifact reads (crates/movement-engine/src/abi.rs
+ * `language_version`): its release's version, as a JSON string.
+ *
+ * @internal Used by the Rust checker's wrapper (checker/rust_checker.ts).
+ */
+export function callLanguageVersion(): { ok: boolean; json: unknown } {
+  return callChecker('language_version', [], []);
+}
+
+/**
+ * How `pin` stands against the engine's artifact (crates/movement-engine/src/
+ * abi.rs `language_standing`): `{standing, message}`.
+ *
+ * @internal Used by the Rust checker's wrapper (checker/rust_checker.ts).
+ */
+export function callLanguageStanding(pin: string): { ok: boolean; json: unknown } {
+  return callChecker('language_standing', [pin], []);
 }
 
 function callChecker(fn: CheckerFunction, inputs: string[], extra: number[]): { ok: boolean; json: unknown } {
@@ -489,7 +510,7 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     catalog_query: exported('catalog_query'),
   };
   const checker: ParserExports['checker'] = {};
-  for (const fn of ['check_program', 'check_answer', 'check_compatible', 'standard_library'] as const) {
+  for (const fn of ['check_program', 'check_answer', 'check_compatible', 'standard_library', 'language_version', 'language_standing'] as const) {
     if (typeof raw[fn] !== 'function') continue;
     const call = exported(fn);
     checker[fn] = (...args) => number(call(...args), fn);

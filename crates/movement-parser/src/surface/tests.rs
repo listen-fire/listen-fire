@@ -278,25 +278,25 @@ fn wrong_case_and_unknown_members() {
     assert_eq!(f[0].message, "`Text` has no member `Upper` — did you mean `Text.upper`?");
 }
 
-fn program(source: &str, version: u32) -> crate::ast::Program {
-    crate::stmt::parse_program(source, version, false).unwrap_or_else(|e| panic!("{source}: {e:?}"))
+fn program(source: &str) -> crate::ast::Program {
+    crate::stmt::parse_program(source, false).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }
 
 /// The program with its spelling findings set aside, as JSON.
-fn statements(source: &str, version: u32) -> Value {
-    serde_json::to_value(&program(source, version).statements).unwrap()
+fn statements(source: &str) -> Value {
+    serde_json::to_value(&program(source).statements).unwrap()
 }
 
 fn spelling(source: &str) -> Vec<(String, String)> {
-    program(source, 5).spelling.into_iter().map(|f| (f.message, f.fix.map(|f| f.edits[0].text.clone()).unwrap_or_default())).collect()
+    program(source).spelling.into_iter().map(|f| (f.message, f.fix.map(|f| f.edits[0].text.clone()).unwrap_or_default())).collect()
 }
 
 #[test]
 fn adapter_setup_is_connect() {
     let new = "import { `@lf/attio` as attio } from adapters\nimport { acme_main as acme } from credentials\ncrm = connect attio using acme { dryRun: true }\ninbox = connect email\n";
     let old = "import { attio } from adapters\nimport { acme_main as acme } from credentials\ncrm = attio(credentials: acme, dry_run: true)\ninbox = email()\n";
-    assert!(program(new, 5).spelling.is_empty(), "{:?}", program(new, 5).spelling);
-    let (n, o) = (statements(new, 5), statements(old, 5));
+    assert!(program(new).spelling.is_empty(), "{:?}", program(new).spelling);
+    let (n, o) = (statements(new), statements(old));
     assert_eq!(n.pointer("/0/names/0/name"), o.pointer("/0/names/0/name"));
     assert_eq!(n.pointer("/2/value/construct/callee"), o.pointer("/2/value/construct/callee"));
     let args = |v: &Value| v.pointer("/2/value/construct/args").unwrap().as_array().unwrap().iter().map(|a| (a["name"].clone(), a["value"]["raw"].clone())).collect::<Vec<_>>();
@@ -322,8 +322,8 @@ fn declarations_conditions_and_errors() {
 fn until_takes_its_cadence_as_a_setting() {
     let new = "function f(a: <number>) {\n  await until(a > 1, { every: 1h })\n}\n";
     let old = "movement f(a: <number>) {\n  await until(a > 1, every: 1h)\n}\n";
-    assert!(program(new, 5).spelling.is_empty());
-    assert_eq!(serde_json::to_value(&program(new, 5).statements).unwrap().pointer("/0/body/0/await/source/every/raw"), Some(&serde_json::json!("1h")));
+    assert!(program(new).spelling.is_empty());
+    assert_eq!(serde_json::to_value(&program(new).statements).unwrap().pointer("/0/body/0/await/source/every/raw"), Some(&serde_json::json!("1h")));
     assert_eq!(spelling(old)[1].1, "{ every: 1h }");
 }
 
@@ -351,9 +351,9 @@ fn bang_binds_as_typescript_s_unary_operator() {
 
 #[test]
 fn fail_is_the_error_statement() {
-    let new = program("function f() {\n  fail(\"no\")\n}\n", 5);
+    let new = program("function f() {\n  fail(\"no\")\n}\n");
     assert!(new.spelling.is_empty(), "{:?}", new.spelling);
-    let (n, o) = (serde_json::to_value(&new.statements).unwrap(), statements("movement f() {\n  ERROR(\"no\")\n}\n", 5));
+    let (n, o) = (serde_json::to_value(&new.statements).unwrap(), statements("movement f() {\n  ERROR(\"no\")\n}\n"));
     assert!(n.pointer("/0/body/0").is_some(), "{n}");
     assert_eq!(n.pointer("/0/body/0").map(|s| s.as_object().unwrap().keys().cloned().collect::<Vec<_>>()), o.pointer("/0/body/0").map(|s| s.as_object().unwrap().keys().cloned().collect::<Vec<_>>()));
     assert_eq!(spelling("function f() {\n  ERROR(\"no\")\n}\n"), vec![("`ERROR` is written `fail` from language version 5".to_string(), "fail".to_string())]);
@@ -365,18 +365,18 @@ fn a_block_closure_inside_an_expression_is_read_for_old_spellings() {
     // closure inside it are read by the statement grammar only when the
     // nested call is (long after the parse).
     let source = "function go(xs) {\n  if (count(filter(xs, (r) => {\n    return LENGTH(r) > 0\n  })) > 0) {\n    y = 1\n  }\n}\n";
-    let found = program(source, 5).spelling;
+    let found = program(source).spelling;
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].message, "`LENGTH` is written `Text.length` from language version 5");
     assert_eq!((found[0].span.start.line, found[0].span.start.col), (3, 12));
     // Nested a level deeper, and placed in the file.
     let deeper = "function go(xs) {\n  n = Text.length(Text.trim(f(xs, (r) => {\n    m = Text.trim(g((s) => {\n      return UPPER(s)\n    }))\n    return m\n  })))\n}\n";
-    let found = program(deeper, 5).spelling;
+    let found = program(deeper).spelling;
     assert_eq!(found.iter().map(|f| (f.span.start.line, f.span.start.col)).collect::<Vec<_>>(), vec![(4, 14)], "{found:?}");
     // A block closure the statement grammar reads at once (a call written
     // as a statement) is reported once, not again through its slot.
     let statement = "function go(xs) {\n  ys = map(xs, (r) => {\n    return UPPER(r)\n  })\n}\n";
-    assert_eq!(program(statement, 5).spelling.len(), 1);
+    assert_eq!(program(statement).spelling.len(), 1);
 }
 
 #[test]

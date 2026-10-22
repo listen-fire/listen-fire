@@ -26,13 +26,11 @@ pub use diagnostic::{Diagnostic, Severity};
 use movement_parser::ast::Program;
 use movement_parser::catalog::types::CatalogSnapshot;
 use movement_parser::util::form::form_of_text;
-use movement_parser::version::{LANGUAGE_VERSION, compatible};
 
 #[derive(Clone, Copy)]
 pub struct CheckOptions<'a> {
-    pub language_version: u32,
-    /// Checking for a move up from this version (`upgradingFrom`).
-    pub upgrading_from: Option<u32>,
+    /// Checking for a move up from this release (`upgradingFrom`).
+    pub upgrading_from: Option<&'a str>,
     /// The host's zone database (`host`): a cron listen's `timezone`, a
     /// standard-library zone argument.
     pub zones: &'a dyn host::ZoneLookup,
@@ -44,21 +42,12 @@ pub fn check_program(program: &Program, catalog: &CatalogSnapshot, options: Chec
 }
 
 /// `check_program`, and the walk it made: what it settled on nodes and the
-/// link it resolved imports through (crate::answer). A version this release
-/// does not support is refused with its standing diagnostic alone, the
-/// program unwalked.
+/// link it resolved imports through (crate::answer). The checker reads its
+/// own release's language: a pin is the host's to hold to the rule before
+/// asking (`language_version_diagnostic`).
 pub(crate) fn run_check<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: CheckOptions<'c>) -> (Vec<Diagnostic>, checker::Checker<'c>) {
-    let pin = pin_of(options.language_version);
-    if !compatible(&pin, LANGUAGE_VERSION) {
-        let checker = checker::Checker::new(catalog, &options, catalog.files.is_some());
-        return (version::standing_diagnostic(&pin).into_iter().collect(), checker);
-    }
-    run_check_here(program, catalog, options)
-}
-
-fn run_check_here<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: CheckOptions<'c>) -> (Vec<Diagnostic>, checker::Checker<'c>) {
     let resolves_files = catalog.files.is_some();
-    let mut link = resolves_files.then(|| families::imports::link_imports(program, catalog, options.language_version));
+    let mut link = resolves_files.then(|| families::imports::link_imports(program, catalog));
     let problems = link.as_mut().map(|l| std::mem::take(&mut l.problems)).unwrap_or_default();
     let mut checker = checker::Checker::new(catalog, &options, resolves_files);
     checker.imports = families::imports::ImportState::new(link);
@@ -80,9 +69,8 @@ fn run_check_here<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: 
             })
         })
         .collect();
-    let diagnostics = version::standing_diagnostic(&pin_of(options.language_version))
+    let diagnostics = spelling
         .into_iter()
-        .chain(spelling)
         .chain(std::mem::take(&mut checker.imports.spelling))
         .chain(problems)
         .chain(found.into_iter().map(version::with_handbook_pointer).map(diagnostic::in_spelling_of))
@@ -94,12 +82,6 @@ fn run_check_here<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: 
 /// one this release does not read, nothing for one it does.
 pub fn language_version_diagnostic(pin: &str) -> Option<Diagnostic> {
     version::standing_diagnostic(pin)
-}
-
-/// The integer pin the wasm entries still carry, as the version the rule
-/// reads. Task 2 removes.
-fn pin_of(language_version: u32) -> String {
-    movement_parser::version::legacy_pin_to_semver(language_version)
 }
 
 /// A source the parser refuses: its message and where.
@@ -120,19 +102,9 @@ pub fn check_source(source: &str, catalog: &CatalogSnapshot, options: CheckOptio
 /// Its diagnostics quote the source in that form; a writer for a reader
 /// outside undoes it (`external_text`).
 pub fn check_form(source: &str, catalog: &CatalogSnapshot, options: CheckOptions) -> Result<Vec<Diagnostic>, ParseRefusal> {
-    let program = parsed_unless_refused(source, options.language_version)
+    let program = movement_parser::stmt::parse_program(source, false)
         .map_err(|e| ParseRefusal { message: format!("{} at line {}, column {}", e.message, e.loc.line, e.loc.col) })?;
     Ok(check_program(&program, catalog, options))
-}
-
-/// The program, or none for a version this release does not support: its
-/// check is the standing diagnostic alone (`run_check`), never the parser's
-/// refusal of the same pin.
-fn parsed_unless_refused(source: &str, version: u32) -> Result<Program, movement_parser::stmt::ParseError> {
-    if !compatible(&pin_of(version), LANGUAGE_VERSION) {
-        return Ok(Program { statements: Vec::new(), spelling: Vec::new() });
-    }
-    movement_parser::stmt::parse_program(source, version, false)
 }
 
 /// The check as JSON: `{diagnostics}`, or `{error}` for a source that does
@@ -157,7 +129,7 @@ pub fn check_answer_json(source: &str, catalog_json: &str, options: CheckOptions
         Ok(catalog) => catalog,
         Err(message) => return serde_json::json!({ "error": { "message": message } }),
     };
-    match parsed_unless_refused(&form_of_text(source), options.language_version) {
+    match movement_parser::stmt::parse_program(&form_of_text(source), false) {
         Ok(program) => answer::check_answer(&program, &catalog, options).to_json(),
         Err(e) => serde_json::json!({ "error": { "message": format!("{} at line {}, column {}", e.message, e.loc.line, e.loc.col) } }),
     }

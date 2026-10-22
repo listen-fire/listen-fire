@@ -32,7 +32,6 @@ const SCALAR_TYPE_NAMES: &[&str] = &["text", "number", "boolean", "date", "datet
 
 pub struct Checker<'c> {
     pub catalog: &'c CatalogSnapshot,
-    pub version: u32,
     /// Whether file imports resolve (the snapshot carries files).
     pub resolves_files: bool,
     pub scopes: Scopes,
@@ -55,7 +54,7 @@ pub struct Checker<'c> {
     /// keyed as `bound_callees`: its fix is not marked safe there.
     pub bound_sort_keys: std::cell::RefCell<std::collections::HashSet<(Option<String>, usize, usize)>>,
     /// Checking for a move up from this version (`upgradingFrom`).
-    pub upgrading_from: Option<u32>,
+    pub upgrading_from: Option<&'c str>,
     /// The host's zone database.
     pub zones: &'c dyn crate::host::ZoneLookup,
     /// Each movement's parameter names, by its symbol (`ScopeSymbol.movement`).
@@ -241,7 +240,6 @@ impl<'c> Checker<'c> {
     pub fn new(catalog: &'c CatalogSnapshot, options: &crate::CheckOptions<'c>, resolves_files: bool) -> Self {
         Checker {
             catalog,
-            version: options.language_version,
             zones: options.zones,
             resolves_files,
             scopes: Scopes::default(),
@@ -613,7 +611,7 @@ impl<'c> Checker<'c> {
             self.type_function_values([trimmed], scope);
             let bound = {
                 let env = self.typing_env(scope);
-                Typing::new(&env, self.version, slot.span).bare_name_type(trimmed)
+                Typing::new(&env, slot.span).bare_name_type(trimmed)
             };
             let may_hold = self.typing_env(scope).resolve_may_hold(trimmed);
             // A name on the record plane with no value type (an instance) is
@@ -648,7 +646,7 @@ impl<'c> Checker<'c> {
         self.type_function_values(names.distinct_refs(), scope);
         let (ty, may_hold, held, diagnostics, watchable) = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             let ty = if holds_value { typing.infer_exact(&parsed) } else { typing.infer(&parsed) };
             let may_hold = typing.may_hold_type(&parsed);
             let held = slot_held_walk(held_takes, inspect_held, ty.as_ref().or(may_hold.as_ref()))
@@ -724,7 +722,7 @@ impl<'c> Checker<'c> {
         let Ok(expr) = crate::slots::expression_of_slot(slot) else { return };
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             crate::types::narrowing::proofs_after(&expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, scope);
@@ -736,7 +734,7 @@ impl<'c> Checker<'c> {
         let Ok(MovementCondition::Expr { expr }) = condition_of_slot(slot) else { return };
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             negative_presence_proofs(&expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, narrow_into);
@@ -760,7 +758,7 @@ impl<'c> Checker<'c> {
     pub(crate) fn narrow_presence(&mut self, expr: &movement_parser::lowering::expression::Expression, scope: ScopeId, narrow_into: ScopeId, span: Span) {
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, span);
+            let mut typing = Typing::new(&env, span);
             presence_proofs(expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, narrow_into);
@@ -803,7 +801,7 @@ impl<'c> Checker<'c> {
                 self.type_function_values(names.distinct_refs(), scope);
                 let (ty, diagnostics, watchable) = {
                     let env = self.typing_env(scope);
-                    let mut typing = Typing::new(&env, self.version, slot.span);
+                    let mut typing = Typing::new(&env, slot.span);
                     let ty = typing.infer(expr);
                     (ty, typing.diagnostics, typing.watchable_reads)
                 };

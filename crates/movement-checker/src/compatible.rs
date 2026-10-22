@@ -20,7 +20,6 @@ use crate::types::declared::{MisfitOptions, inherit_declaration, inherit_schema,
 struct Request {
     /// The file that declares `declaration` (the run's source, or a library's).
     source: String,
-    language_version: u32,
     declaration: String,
     schema: InstanceSchema,
     record_type: String,
@@ -49,7 +48,7 @@ fn refusal(message: String) -> Json {
 }
 
 fn compatible(request: &Request) -> Result<Json, String> {
-    let program = movement_parser::stmt::parse_program(&form_of_text(&request.source), request.language_version, false)
+    let program = movement_parser::stmt::parse_program(&form_of_text(&request.source), false)
         .map_err(|e| format!("{} (line {}, col {})", e.message, e.loc.line, e.loc.col))?;
     // Asked in the order the TypeScript shim asked it: what the record offers
     // first, then the declaration.
@@ -82,7 +81,7 @@ fn compatible(request: &Request) -> Result<Json, String> {
     let Some((position, seen)) = declared_position_at(&schema, &declaration.name, &request.path)? else {
         return Ok(json!({ "fits": true }));
     };
-    let options = MisfitOptions { absent_may_be_missing: false, version: request.language_version };
+    let options = MisfitOptions { absent_may_be_missing: false };
     Ok(json!({ "fits": surface_misfit_from(Some(&supplied), &schema, &position, options, seen).is_none() }))
 }
 

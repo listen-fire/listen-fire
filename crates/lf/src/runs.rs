@@ -113,7 +113,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         return Err(missing.iter().map(|m| format!("{}:{}:{} {}", m.file.display(), m.line, m.column, m.message)).collect::<Vec<_>>().join("\n"));
     }
     let registered = |e: &crate::externals::External| crate::subscriptions::has_registered_webhook(&credentials, &e.manifest.name);
-    let externals = needed_externals(scan_externals(&project)?, &files, project.language_version, registered);
+    let externals = needed_externals(scan_externals(&project)?, &files, registered);
     let loop_guard = crate::loop_guard::of_project(&project, &env)?;
     crate::wake::install(crate::wake::of_project(&project, &credentials)?);
     // Before any call: the manifest calls below ask it too.
@@ -144,7 +144,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
     let catalog = catalog_of(&running, &schemas, &credentials, &files);
-    let listens = collect_listens(&files, project.language_version);
+    let listens = collect_listens(&files);
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let public_url = project
         .public_url
@@ -213,7 +213,7 @@ struct Tally {
 /// The facts a run keeps so it can be resumed against the same program (`RunFacts`).
 struct RunFacts {
     source: String,
-    language_version: u32,
+    language_version: String,
     event: Js,
     movement_name: String,
     fired_at: String,
@@ -223,7 +223,7 @@ impl RunFacts {
     fn to_js(&self) -> Js {
         Js::Obj(obj! {
             "source" => Js::str(&self.source),
-            "languageVersion" => Js::Num(self.language_version.into()),
+            "languageVersion" => Js::str(&self.language_version),
             "event" => self.event.clone(),
             "movementName" => Js::str(&self.movement_name),
             "firedAt" => Js::str(&self.fired_at),
@@ -235,10 +235,16 @@ impl RunFacts {
         let facts = Js::parse(input.as_bytes()).map_err(|e| format!("run {run_id}: its facts are not JSON: {e}"))?;
         let text = |k: &str| facts.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("run {run_id}: its facts have no {k}"));
         let language_version = match facts.get("languageVersion") {
-            Some(Js::Num(n)) => n.as_u64().ok_or_else(|| format!("run {run_id}: languageVersion is a whole number"))? as u32,
+            Some(Js::Str(pin)) => pin.to_string(),
+            // A store from before pins were versions: an integer lf ran is
+            // this release's language.
+            Some(Js::Num(n)) => {
+                let integer = n.as_u64().ok_or_else(|| format!("run {run_id}: languageVersion is a whole number"))? as u32;
+                refuse_below_lf(integer, &format!("run {run_id}"), "it cannot resume; upgrade its movement to language version 5 on the platform and fire it again")?;
+                movement_parser::version::LANGUAGE_VERSION.to_string()
+            }
             _ => return Err(format!("run {run_id}: its facts have no languageVersion")),
         };
-        refuse_below_lf(language_version, &format!("run {run_id}"), "it cannot resume; upgrade its movement to language version 5 on the platform and fire it again")?;
         Ok(RunFacts {
             source: text("source")?,
             language_version,
@@ -482,7 +488,7 @@ impl Session {
         let fired_at = iso(0);
         let facts = RunFacts {
             source: file.source.clone(),
-            language_version: self.project.language_version,
+            language_version: self.project.language_version.clone(),
             event,
             movement_name: listen.movement_name.clone(),
             fired_at: fired_at.clone(),
@@ -594,7 +600,7 @@ impl Session {
         });
         let input = SegmentInput {
             source: &facts.source,
-            language_version: facts.language_version,
+            language_version: &facts.language_version,
             movement_name: &facts.movement_name,
             event: &facts.event,
             fired_at: &facts.fired_at,

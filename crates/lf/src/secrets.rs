@@ -267,7 +267,7 @@ pub fn missing_credentials(
     let mut missing = Vec::new();
     for file in files {
         // `lf check` reports a file that does not parse.
-        let Ok(program) = crate::check::parse(&file.source, project.language_version) else { continue };
+        let Ok(program) = crate::check::parse(&file.source) else { continue };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
             if !matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {

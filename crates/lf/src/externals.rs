@@ -367,10 +367,10 @@ async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, meth
 /// import no external is named for is found in a plugin external's
 /// manifest, so then every plugin external is needed. `also`: any other
 /// external the caller needs.
-pub fn needed_externals(externals: Vec<External>, files: &[MovementFile], language_version: u32, also: impl Fn(&External) -> bool) -> Vec<External> {
+pub fn needed_externals(externals: Vec<External>, files: &[MovementFile], also: impl Fn(&External) -> bool) -> Vec<External> {
     let mut imported = Vec::new();
     for file in files {
-        let Ok(program) = crate::check::parse(&file.source, language_version) else { continue };
+        let Ok(program) = crate::check::parse(&file.source) else { continue };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
             if let ImportSource::Builtin { namespace } = &import.source
@@ -736,7 +736,7 @@ mod tests {
             root: root.to_path_buf(),
             lf_dir: root.join(".lf"),
             engine: String::new(),
-            language_version: 5,
+            language_version: movement_parser::version::LANGUAGE_VERSION.to_string(),
             movements_dir: root.join("movements"),
             externals_dir: root.join("externals"),
             user: (None, None),
@@ -768,13 +768,13 @@ mod tests {
         };
         let names = |needed: Vec<External>| needed.into_iter().map(|e| e.manifest.name).collect::<Vec<_>>();
         let attio = file("import { `@lf/attio` as attio } from adapters\n");
-        assert_eq!(names(needed_externals(all(), &[attio], 5, |_| false)), ["attio", "cron"]);
+        assert_eq!(names(needed_externals(all(), &[attio], |_| false)), ["attio", "cron"]);
         let by_module = file("import { `@lf/pdf` as pdf } from plugins\n");
-        assert_eq!(names(needed_externals(all(), &[by_module], 5, |_| false)), ["cron", "pdf"]);
+        assert_eq!(names(needed_externals(all(), &[by_module], |_| false)), ["cron", "pdf"]);
         // A plugin package named in no install: the plugin externals answer it.
         let package = file("import { `@acme/words` as words } from plugins\n");
-        assert_eq!(names(needed_externals(all(), &[package], 5, |_| false)), ["cron", "words", "pdf"]);
-        assert_eq!(names(needed_externals(all(), &[], 5, |e| e.manifest.name == "acme_crm")), ["acme_crm", "cron"]);
+        assert_eq!(names(needed_externals(all(), &[package], |_| false)), ["cron", "words", "pdf"]);
+        assert_eq!(names(needed_externals(all(), &[], |e| e.manifest.name == "acme_crm")), ["acme_crm", "cron"]);
     }
 
     #[test]

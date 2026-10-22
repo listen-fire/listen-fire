@@ -91,7 +91,7 @@ pub enum Entry {
 /// What a segment runs: the run's facts and how it is entered.
 pub struct SegmentInput<'a> {
     pub source: &'a str,
-    pub language_version: u32,
+    pub language_version: &'a str,
     pub movement_name: &'a str,
     /// The trigger event, as data.
     pub event: &'a Js,

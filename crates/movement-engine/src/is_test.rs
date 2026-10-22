@@ -193,7 +193,7 @@ impl Run<'_> {
             crate::program::DeclaringFile::Root => None,
         };
         let name = declaration.declared.declaration.name.as_str();
-        let request = crate::host::check::compatible(&self.input.source, self.version(), file, name, schema, record_type, path);
+        let request = crate::host::check::compatible(&self.input.source, file, name, schema, record_type, path);
         Ok(self.ask(request).await?.unwrap_or(serde_json::Value::Null))
     }
 

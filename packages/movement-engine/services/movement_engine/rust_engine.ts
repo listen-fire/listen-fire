@@ -14,7 +14,7 @@
 // program in the repository to that (rust_reachability.unit.test.ts). Each
 // segment is logged once (`noteEngine`) and counted (`rustRunStats`).
 
-import { languageVersionDiagnostic, legacyPinOf, openEngineSegment, type LanguageVersion } from 'movement-lang';
+import { openEngineSegment } from 'movement-lang';
 
 import { RunCostCapExceeded } from '../../lib/run_cost';
 import { extractionTierAssignments, runChatModels } from './ai_tiers';
@@ -193,7 +193,6 @@ async function segmentInRust(
     throw error;
   }
   rustRunStats.segments += 1;
-  if ('refused' in outcome) throw unsupportedInRust(input, outcome.refused);
   if ('declined' in outcome) throw unsupportedInRust(input, outcome.declined);
   noteEngine(input, RAN);
   return outcome.ran;
@@ -506,15 +505,12 @@ function segmentInput(
       // The engine checks the program itself (the Rust checker): a run on
       // this engine is held to it, and the host is never asked.
       // It checks against the snapshot's own `models`, as the host's checker
-      // does, not the run's list sent on the catalog below. A deprecated
-      // pin's warning is the release's, which is this host's, as the host's
-      // check answer's is (rust_host.ts `check.program`).
+      // does, not the run's list sent on the catalog below.
       nativeCheck: true,
       snapshotModels: input.catalog.models ?? null,
-      ...versionWarningOf(context.languageVersion),
-      // The pin the run is under, written out: the engine cannot know this
-      // release's current version. Task 2 removes the integer (`legacyPinOf`).
-      languageVersion: legacyPinOf(context.languageVersion),
+      // The pin the run is under, written out (absent on the input, this
+      // release's): the engine holds it to the rule again at its entry.
+      languageVersion: context.languageVersion,
       ...(input.movementName !== undefined ? { movementName: input.movementName } : {}),
       event,
       // The segment the run host opened: every host request names it.
@@ -558,29 +554,21 @@ function segmentInput(
   );
 }
 
-/** The pin's standing warning as this release words it (`languageVersionDiagnostic`). */
-function versionWarningOf(languageVersion: LanguageVersion): { versionWarning?: { code: string; message: string } } {
-  const warning = languageVersionDiagnostic(languageVersion);
-  return warning !== undefined ? { versionWarning: { code: warning.code, message: warning.message } } : {};
-}
-
-/** What a segment ended in: its result, a refusal at its entry (nothing ran
- *  but its parse), or a decline after its check (nothing the host can see
- *  happened). */
-type RunOutcome = { ran: MovementRunResult } | { refused: string } | { declined: string };
+/** What a segment ended in: its result, or a decline after its check
+ *  (nothing the host can see happened). */
+type RunOutcome = { ran: MovementRunResult } | { declined: string };
 
 /**
  * The segment's `done` (crates/movement-engine/src/run.rs says its shapes):
  * the run's result, the error it failed with (a body's failure wrapped in
  * `MovementRunFailed`, carrying what the run did, as the interpreter wraps
- * it), or that it refused or declined.
+ * it), or that it declined.
  */
 export function readRunResult(
   done: unknown,
   run: { context: Pick<RunContext, 'trace' | 'ledger'>; hostErrors: unknown[]; wire?: WireOut },
 ): RunOutcome {
   const outcome = record(done, 'the Rust engine result');
-  if ('refused' in outcome) return { refused: string(outcome.refused, 'the Rust engine refused') };
   if ('declined' in outcome) return { declined: string(outcome.declined, 'the Rust engine declined') };
   // What the segment's priced calls spent was charged to the run's account
   // as each answer passed through the shim (rust_host.ts), so a fault cannot

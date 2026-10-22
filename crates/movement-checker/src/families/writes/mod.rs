@@ -322,7 +322,6 @@ impl Checker<'_> {
                     root_description: &root_description,
                     may_leave_unset,
                     identifies,
-                    version: self.version,
                 }) {
                     self.push(diagnostic);
                 }
@@ -561,7 +560,7 @@ impl Checker<'_> {
         }
         let (parent, parent_locals) = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, span);
+            let mut typing = Typing::new(&env, span);
             let parent = typing.walk_steps(Some(root_type), &steps[..steps.len() - 1], false);
             (parent, typing.locals)
         };
@@ -716,7 +715,7 @@ impl Checker<'_> {
             let landing = crate::types::position::position_ref_in(&instance, &written);
             let diagnostics = {
                 let env = self.typing_env(scope);
-                let mut typing = Typing::new(&env, self.version, span);
+                let mut typing = Typing::new(&env, span);
                 typing.locals = parent_locals;
                 if let Some(alias) = &link_step.alias {
                     typing.locals.insert(alias.clone(), landing.clone());
@@ -1195,7 +1194,7 @@ impl Checker<'_> {
         let Ok(expr) = crate::slots::expression_of_slot(hoisted.as_ref().unwrap_or(slot)) else { return (None, None) };
         let (ty, held, refused) = {
             let env = self.typing_env(scope);
-            let mut typing = crate::types::Typing::new(&env, self.version, slot.span);
+            let mut typing = crate::types::Typing::new(&env, slot.span);
             typing.write_target = target.map(|t| (t.clone(), path));
             let ty = typing.infer(&expr);
             // Read off the parts of a value the expression builds, where the

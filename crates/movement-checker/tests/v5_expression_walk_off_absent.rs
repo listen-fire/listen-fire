@@ -13,12 +13,12 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"contractVersion":1,"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text","stage":"text","domain":"text","summary":"text","employees":"number"},"edges":{"deals":{"target":"deal"}}},"deal":{"properties":{"title":"text","amount":"number"},"edges":{}},"note":{"properties":{"body":"text","title":"text","payload":"json"},"edges":{}}},"collections":{"companies":{"target":"company"},"notes":{"target":"note"}},"writableRoots":{"note":{"fields":{"body":"text","title":"text","payload":"json"},"resultShape":{"externalId":"text"}},"company":{"fields":{"name":"text","stage":"text","domain":"text","summary":"text","employees":"number"},"resultShape":{"externalId":"text","name":"text"},"fuzzyResolution":true}},"supportsInPlaceUpdate":true}}}},"credentials":{"crm_cred":{"adapters":["attio"]}},"plugins":{}}"#;
 
-fn found(body: &str, version: u32, upgrading_from: Option<u32>) -> Vec<(String, &'static str, String)> {
+fn found(body: &str, upgrading_from: Option<&str>) -> Vec<(String, &'static str, String)> {
     let source = format!(
         "import {{ attio }} from adapters\nimport {{ crm_cred }} from credentials\ncrm = connect attio using crm_cred\nnode Found: \"the companies named\" {{\n  node co: \"each company\" {{\n    name: <text> \"its name\"\n  }}\n}}\nfunction go(t: <text>) {{\n  found = extractOne([t], Found)\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()
@@ -47,17 +47,17 @@ const POSITIONS: [(&str, &str); 6] = [
 #[test]
 fn under_5_an_expression_walk_is_refused_unguarded_and_passes_guarded() {
     for (position, body) in POSITIONS {
-        assert_eq!(found(body, 5, None), vec![refused("found")], "{position}");
-        assert_eq!(found(&format!("  if (found != null) {{\n{body}\n  }}"), 5, None), vec![], "{position}, guarded");
+        assert_eq!(found(body, None), vec![refused("found")], "{position}");
+        assert_eq!(found(&format!("  if (found != null) {{\n{body}\n  }}"), None), vec![], "{position}, guarded");
     }
 }
 
 #[test]
 fn exists_of_the_name_alone_has_no_hop_and_is_no_walk() {
-    assert_eq!(found("  has = exists(found)", 5, None), vec![]);
+    assert_eq!(found("  has = exists(found)", None), vec![]);
 }
 
 #[test]
 fn a_name_proven_present_by_an_and_guard_is_walked_freely() {
-    assert_eq!(found("  ok = found != null and count(found-[c:co]->) > 0", 5, None), vec![]);
+    assert_eq!(found("  ok = found != null and count(found-[c:co]->) > 0", None), vec![]);
 }

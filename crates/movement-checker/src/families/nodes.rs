@@ -607,7 +607,7 @@ impl Checker<'_> {
             return None;
         }
         let surface = crate::types::declared::schema_surface(&instance.schema, position)?;
-        let options = crate::types::declared::MisfitOptions { absent_may_be_missing: false, version: self.version };
+        let options = crate::types::declared::MisfitOptions { absent_may_be_missing: false };
         Some(crate::types::declared::surface_misfit(Some(&surface), schema, &declared.instance.name, options).is_none())
     }
 
@@ -840,7 +840,7 @@ impl Checker<'_> {
         let Ok(Expression::Traverse { steps, .. }) = crate::slots::expression_of_text(&probe) else { return None };
         let (landed, diagnostics) = {
             let env = self.typing_env(scope);
-            let mut typing = crate::types::Typing::new(&env, self.version, type_.span);
+            let mut typing = crate::types::Typing::new(&env, type_.span);
             let landed = typing.walk_steps(Some(start), &steps, false);
             (landed, std::mem::take(&mut typing.diagnostics))
         };
@@ -907,13 +907,13 @@ fn empty_local(label: &str) -> Position {
 
 /// `structuralMisfit`: what a supplied record lacks that the required
 /// position (or every variant of a required union) declares.
-pub fn structural_misfit(supplied: &Position, required: &Position, version: u32) -> Option<String> {
+pub fn structural_misfit(supplied: &Position, required: &Position) -> Option<String> {
     match required {
-        Position::Position(p) => node_misfit_against(supplied, &p.instance.schema, &p.position, version),
+        Position::Position(p) => node_misfit_against(supplied, &p.instance.schema, &p.position),
         Position::Union(u) => {
             let mut misfits = Vec::new();
             for variant in &u.variants {
-                let misfit = node_misfit_against(supplied, &u.instance.schema, variant, version)?;
+                let misfit = node_misfit_against(supplied, &u.instance.schema, variant)?;
                 misfits.push(format!("{variant} ({misfit})"));
             }
             (!misfits.is_empty()).then(|| format!("it fits none of {}", or_list(&misfits)))
@@ -923,8 +923,8 @@ pub fn structural_misfit(supplied: &Position, required: &Position, version: u32)
     }
 }
 
-fn node_misfit_against(supplied: &Position, schema: &InstanceSchema, position: &str, version: u32) -> Option<String> {
-    surface_misfit(supplied_surface(supplied).as_ref(), schema, position, MisfitOptions { absent_may_be_missing: false, version })
+fn node_misfit_against(supplied: &Position, schema: &InstanceSchema, position: &str) -> Option<String> {
+    surface_misfit(supplied_surface(supplied).as_ref(), schema, position, MisfitOptions { absent_may_be_missing: false })
 }
 
 /// `orList`: `a`, `a or b`, `a, b, or c`.
@@ -1343,7 +1343,7 @@ impl Checker<'_> {
     /// `checkGraphReferenceFits`: do the records a reference entry holds carry
     /// what the shape's child node needs?
     fn check_graph_reference_fits(&mut self, name: &str, records: &Position, required: &Required, span: Span) {
-        let Some(misfit) = surface_misfit(record_surface(records).as_ref(), &required.schema, &required.position, MisfitOptions { absent_may_be_missing: true, version: self.version }) else { return };
+        let Some(misfit) = surface_misfit(record_surface(records).as_ref(), &required.schema, &required.position, MisfitOptions { absent_may_be_missing: true }) else { return };
         self.report(
             codes::GRAPH_REFERENCE_SHAPE,
             format!(
@@ -1401,7 +1401,7 @@ impl Checker<'_> {
         let (Some(to_type), Some(target)) = (to_type, edge.target.as_ref()) else { return };
         let local_to = matches!(to_type, Position::Local(_));
         if (edge.structural || local_to)
-            && let Some(misfit) = structural_misfit(&to_type, target, self.version)
+            && let Some(misfit) = structural_misfit(&to_type, target)
         {
             self.report(codes::NODE_LINK_SHAPE, format!("'{}' lands on {}, and {misfit}", link.edge, describe_position(target)), link.span);
             return;
@@ -1417,8 +1417,8 @@ impl Checker<'_> {
 }
 
 /// `declaredParamMisfit`: what a record lacks that a declared-node parameter needs.
-pub(crate) fn declared_param_misfit(arg: &Position, param: &crate::types::position::RecordPosition, version: u32) -> Option<String> {
-    let options = MisfitOptions { absent_may_be_missing: false, version };
+pub(crate) fn declared_param_misfit(arg: &Position, param: &crate::types::position::RecordPosition) -> Option<String> {
+    let options = MisfitOptions { absent_may_be_missing: false };
     let schema = &param.instance.schema;
     match arg {
         Position::Union(u) => {
@@ -1432,7 +1432,7 @@ pub(crate) fn declared_param_misfit(arg: &Position, param: &crate::types::positi
             None
         }
         Position::OneOf(members) => members.iter().find_map(|member| {
-            declared_param_misfit(member, param, version).map(|misfit| format!("{}, one of what this argument may be, does not fit: {misfit}", describe_position(member)))
+            declared_param_misfit(member, param).map(|misfit| format!("{}, one of what this argument may be, does not fit: {misfit}", describe_position(member)))
         }),
         Position::Meta { .. } | Position::Closure(_) => Some(format!("this argument is {}, not a record", describe_position(arg))),
         _ => surface_misfit(record_surface(arg).as_ref(), schema, &param.position, options),
@@ -1741,7 +1741,7 @@ impl Checker<'_> {
             }
             let Some((_, landing)) = supplied.edges.iter().find(|(k, _)| k == name) else { continue };
             let landed = landing.as_ref().and_then(|thunk| thunk());
-            if let Some(misfit) = surface_misfit(landed.as_ref(), &required.schema, &edge.target, MisfitOptions { absent_may_be_missing: true, version: self.version }) {
+            if let Some(misfit) = surface_misfit(landed.as_ref(), &required.schema, &edge.target, MisfitOptions { absent_may_be_missing: true }) {
                 self.report(
                     codes::GRAPH_COPY_SHAPE,
                     format!(

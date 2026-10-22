@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- Breaking for embedders of the wasm artifacts (0.12 pre-release line): no entry takes a language version any more. An artifact reads its own release's language, and the host applies the compatibility rule before calling. The parse and spelling entries lose their `version` argument; `check_program` and `check_answer` take an options JSON (`{"upgradingFrom": "0.11.0" | null}`) in place of the two integers; the engine's segment input carries `languageVersion` as a version string; and two new entries, `language_version` and `language_standing`, name the artifact's release and how a pin stands against it. Movement source is unchanged. movement.wasm 4,077,914 → 4,066,321 bytes; movement_parser.wasm 1,308,180 → 1,300,654.
+
 ## [0.12.0-rc.6] - 2026-10-22
 
 - The hosted platform (the api, the web app, the dev loop and the deploy images) now lives in its own repository, `lf-platform`; this repository is the language.

@@ -38,7 +38,6 @@ use crate::executor::{ProtocolError, Step};
 /// The language this engine reads: the toolchain release. A movement pinned
 /// to a release of another compatibility key is refused by name.
 pub use movement_parser::version::LANGUAGE_VERSION;
-use movement_parser::version::LEGACY_PIN;
 
 /// The host families a run may ask, each one optional.
 #[derive(Default)]
@@ -184,8 +183,7 @@ pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Pro
     if let Some(refusal) = movement_checker::language_version_diagnostic(language_version) {
         return vec![Problem { code: refusal.code, message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }];
     }
-    // Task 2 removes: the checker still takes the integer pin.
-    let options = movement_checker::CheckOptions { language_version: LEGACY_PIN, upgrading_from: None, zones: &NativeZones };
+    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &NativeZones };
     match movement_checker::check_source(source, &catalog.snapshot, options) {
         Err(refusal) => vec![Problem { code: "MOV_PARSE".into(), message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }],
         Ok(diagnostics) => diagnostics
@@ -223,8 +221,7 @@ pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, Stri
         return Err(refusal);
     }
     let form = movement_parser::util::form::form_of_text(source);
-    // Task 2 removes: the parser still takes the integer pin.
-    let program = movement_parser::stmt::parse_program(&form, LEGACY_PIN, true)
+    let program = movement_parser::stmt::parse_program(&form, true)
         .map_err(|e| format!("{} (line {}, col {})", movement_parser::util::form::external_text(&e.message), e.loc.line, e.loc.col))?;
     let mut aliases = std::collections::HashMap::new();
     let mut instances = std::collections::HashMap::new();
@@ -333,9 +330,9 @@ impl Event {
 #[derive(Debug, Clone)]
 pub struct RunInput {
     pub source: String,
-    /// The integer pin the engine's segment input still carries; Task 2
-    /// makes it the release's version.
-    pub language_version: u32,
+    /// The release the movement was written against (`LANGUAGE_VERSION`
+    /// for one written today); a run refuses a pin this release does not read.
+    pub language_version: String,
     /// The function the event fires (a `listen … fire <function>`); `None`
     /// runs the file's one movement.
     pub function: Option<String>,
@@ -353,7 +350,7 @@ impl RunInput {
     pub fn new(source: impl Into<String>, event: Event, now: impl Into<String>) -> RunInput {
         RunInput {
             source: source.into(),
-            language_version: LEGACY_PIN,
+            language_version: LANGUAGE_VERSION.to_string(),
             function: None,
             event,
             now: now.into(),

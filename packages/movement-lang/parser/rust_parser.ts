@@ -6,7 +6,7 @@
 
 import { ExpressionSyntaxError } from '../expression/error';
 import { slotTrees } from '../expression/slot_trees';
-import { LANGUAGE_VERSION, legacyPinOf, type LanguageVersion } from '../language_version';
+import { LANGUAGE_VERSION, languageVersionDiagnostic, type LanguageVersion } from '../language_version';
 import { callParser } from '../wasm/loader';
 import type { ExprSlot, Loc, Program, RValue } from './ast';
 import type { MExpr } from './expression/tree';
@@ -29,46 +29,42 @@ export type ParserCall = (
 ) => { ok: boolean; json: unknown };
 
 /** The parse entry points over one artifact, its JSON read back as the
- *  TypeScript AST types. */
+ *  TypeScript AST types. An artifact reads its own release's language and
+ *  takes no version. */
 export interface RustParser {
-  program(source: string, languageVersion: number): StatementParse<Program>;
-  nestedCall(slot: ExprSlot, at: { start: number; end: number }, languageVersion: number): StatementParse<RValue>;
+  program(source: string): StatementParse<Program>;
+  nestedCall(slot: ExprSlot, at: { start: number; end: number }): StatementParse<RValue>;
   /** Throws `ExpressionSyntaxError`. */
-  expression(source: string, languageVersion: number): MExpr;
+  expression(source: string): MExpr;
 }
 
 /**
  * The parse entry points over the artifact `call` reaches. This package's
  * are over its own artifact (below); the platform builds another over the
- * parser it keeps for the versions this release no longer serves.
+ * parser it keeps for the versions this release no longer serves, whose
+ * `call` supplies whatever that artifact takes beyond `extra`.
  *
  * @internal
  */
 export function parserOver(call: ParserCall): RustParser {
   return {
-    program(source, languageVersion) {
-      const { ok, json } = call('parse_program_eager', source, [languageVersion]);
+    program(source) {
+      const { ok, json } = call('parse_program_eager', source, []);
       if (!ok) return { ok: false, refusal: statementRefusal(json) };
       if (!isProgram(json)) throw malformed('parse_program_eager', json);
       absorbSlotTrees(json);
       return { ok: true, value: json };
     },
-    nestedCall(slot, at, languageVersion) {
+    nestedCall(slot, at) {
       const origin = slot.span.start;
-      const { ok, json } = call('parse_nested_call', slot.raw, [
-        at.start,
-        at.end,
-        origin.line,
-        origin.col,
-        languageVersion,
-      ]);
+      const { ok, json } = call('parse_nested_call', slot.raw, [at.start, at.end, origin.line, origin.col]);
       if (!ok) return { ok: false, refusal: statementRefusal(json) };
       if (!isRValue(json)) throw malformed('parse_nested_call', json);
       absorbSlotTrees(json);
       return { ok: true, value: json };
     },
-    expression(source, languageVersion) {
-      const { ok, json } = call('parse_expression', source, [languageVersion]);
+    expression(source) {
+      const { ok, json } = call('parse_expression', source, []);
       if (!ok) throw expressionError(json, 'parse_expression');
       if (!isTree(json)) throw malformed('parse_expression', json);
       return json;
@@ -79,10 +75,18 @@ export function parserOver(call: ParserCall): RustParser {
 // Called through, not captured, so a test's spy on the loader sees each call.
 const live = parserOver((fn, input, extra) => callParser(fn, input, extra));
 
-// The wasm entries still take the integer pin (`legacyPinOf`); Task 2 removes it.
+// The artifact reads this release's language: a pin it does not read is
+// refused here, by name, before the artifact is asked.
+
+/** Why this release does not read `languageVersion`; none when it does. */
+function pinRefusal(languageVersion: LanguageVersion): string | undefined {
+  return languageVersionDiagnostic(languageVersion)?.message;
+}
 
 export function rustParseProgram(source: string, languageVersion: LanguageVersion): StatementParse<Program> {
-  return live.program(source, legacyPinOf(languageVersion));
+  const refusal = pinRefusal(languageVersion);
+  if (refusal !== undefined) return { ok: false, refusal: { message: refusal, loc: { line: 1, col: 1 } } };
+  return live.program(source);
 }
 
 export function rustParseNestedCall(
@@ -90,7 +94,9 @@ export function rustParseNestedCall(
   at: { start: number; end: number },
   languageVersion: LanguageVersion,
 ): StatementParse<RValue> {
-  return live.nestedCall(slot, at, legacyPinOf(languageVersion));
+  const refusal = pinRefusal(languageVersion);
+  if (refusal !== undefined) return { ok: false, refusal: { message: refusal, loc: { line: 1, col: 1 } } };
+  return live.nestedCall(slot, at);
 }
 
 /** Throws `ExpressionSyntaxError`. A text read here is not a program's slot
@@ -99,7 +105,9 @@ export function rustParseNestedCall(
  *  that program's `languageVersion` (an engine probing a block head's hops,
  *  a checker reading a type's hops), which reads as its slots did. */
 export function rustParseExpression(source: string, languageVersion: LanguageVersion = LANGUAGE_VERSION): MExpr {
-  return live.expression(source, legacyPinOf(languageVersion));
+  const refusal = pinRefusal(languageVersion);
+  if (refusal !== undefined) throw new ExpressionSyntaxError(refusal, 0);
+  return live.expression(source);
 }
 
 /**

@@ -617,7 +617,7 @@ impl Checker<'_> {
         let (Some(arg), Some(param)) = (arg, param) else { return };
         let place = describe_arg_place(fit);
         if matches!(arg, Position::Local(_)) {
-            if let Some(misfit) = crate::families::nodes::structural_misfit(arg, param, self.version) {
+            if let Some(misfit) = crate::families::nodes::structural_misfit(arg, param) {
                 self.report(codes::NODE_ARG_SHAPE, format!("'{}' expects {}{place}, and {misfit}", fit.callee, describe_position(param)), span);
             }
             return;
@@ -627,7 +627,7 @@ impl Checker<'_> {
         if let Position::Position(p) = param
             && p.instance.declared.is_some()
         {
-            if let Some(misfit) = crate::families::nodes::declared_param_misfit(arg, p, self.version) {
+            if let Some(misfit) = crate::families::nodes::declared_param_misfit(arg, p) {
                 self.report(codes::CALL_ARG_TYPE, format!("'{}' expects a <{}> record{place}, and {misfit}", fit.callee, p.position), span);
             }
             return;

@@ -1408,8 +1408,6 @@ pub struct WriteFieldAbsence<'a> {
     pub may_leave_unset: bool,
     /// The field is part of the write's `unique by` identity.
     pub identifies: bool,
-    /// The program's language version: the repair is spelled as it reads.
-    pub version: u32,
 }
 
 /// `checkWrite`'s require-present rule for one field: a value that may be

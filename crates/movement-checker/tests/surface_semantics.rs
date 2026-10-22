@@ -11,14 +11,14 @@ const CATALOG: &str = r#"{"adapters":{"slack":{"constructionArgs":[],"schemas":{
   "message":{"properties":{"Text":"text","Tags":{"kind":"list","of":"text"}},"edges":{}}},
   "collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).collect()
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    check(source, version).into_iter().map(|d| d.code).collect()
+fn codes(source: &str) -> Vec<String> {
+    check(source).into_iter().map(|d| d.code).collect()
 }
 
 fn offset(source: &str, line: usize, col: usize) -> usize {
@@ -30,7 +30,7 @@ fn offset(source: &str, line: usize, col: usize) -> usize {
 fn upgraded(source: &str) -> String {
     let mut text = source.to_string();
     for _ in 0..8 {
-        let refused: Vec<Diagnostic> = check(&text, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+        let refused: Vec<Diagnostic> = check(&text).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
         if refused.is_empty() {
             return text;
         }
@@ -65,12 +65,12 @@ const HEAD5: &str = "import { `@lf/slack` as slack } from adapters\nchat = conne
 #[test]
 fn bang_binds_as_typescript_s_unary_operator() {
     let v5 = format!("{HEAD5}function go(a: <boolean>, b: <boolean>) {{\n  if (!a == b) {{\n    x = 1\n  }}\n}}");
-    let refused: Vec<_> = check(&v5, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let refused: Vec<_> = check(&v5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(refused.len(), 1, "{refused:#?}");
     assert_eq!(refused[0].fix.as_ref().unwrap()["edits"][0]["text"], "!(a == b)");
     let fixed = upgraded(&v5);
     assert!(fixed.contains("if (!(a == b)) {"), "{fixed}");
-    assert_eq!(codes(&fixed, 5), Vec::<String>::new());
+    assert_eq!(codes(&fixed), Vec::<String>::new());
 }
 
 const CHAT: &str = r#"{"adapters":{"chat":{"constructionArgs":[],"schemas":{"":{"positions":{
@@ -82,7 +82,7 @@ const CHAT: &str = r#"{"adapters":{"chat":{"constructionArgs":[],"schemas":{"":{
 fn chat_codes(body: &str) -> Vec<String> {
     let source = format!("import {{ `@lf/chat` as chat }} from adapters\nc = connect chat\n\nfunction go() {{\n{body}\n}}");
     let catalog = CatalogSnapshot::load(CHAT).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap().into_iter().filter(|d| d.is_error()).map(|d| d.code).collect()
 }
 
@@ -113,7 +113,7 @@ fn narrowing_on_null_tests_is_what_exists_and_isnull_gave() {
 }
 
 fn fixes_of(source: &str) -> Vec<String> {
-    check(source, 5)
+    check(source)
         .into_iter()
         .filter(|d| d.code == "MOV_V5_SPELLING" || d.code == "MOV_BUILTIN_ARG_TYPE")
         .map(|d| d.fix.map(|f| f["edits"][0]["text"].as_str().unwrap().to_string()).unwrap_or_default())
@@ -125,7 +125,7 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
     let fn5 = |body: &str| format!("{HEAD5}function go(xs: <text[]>, t: <text>, s: <text>) {{\n{body}\n}}");
     assert_eq!(fixes_of(&fn5("  a = LENGTH(xs)")), ["count(xs)"]);
     assert_eq!(fixes_of(&fn5("  a = LENGTH(t)")), ["Text.length"]);
-    assert_eq!(codes(&upgraded(&fn5("  a = LENGTH(xs)\n  b = LENGTH(t)")), 5), Vec::<String>::new());
+    assert_eq!(codes(&upgraded(&fn5("  a = LENGTH(xs)\n  b = LENGTH(t)"))), Vec::<String>::new());
     assert_eq!(fixes_of(&fn5("  c = xs CONTAINS s")), ["List.includes(xs, s)"]);
     assert_eq!(fixes_of(&fn5("  d = t CONTAINS s")), ["Text.includes(t, s)"]);
     assert_eq!(fixes_of(&fn5("  d = t CONTAINS \"x\"")), ["Text.includes(t, \"x\")"]);
@@ -136,7 +136,7 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
     assert_eq!(fixes_of(&fn5("  a = Text.length(xs)")), ["count(xs)"]);
     assert_eq!(fixes_of(&fn5("  c = Text.includes(xs, s)")), ["List.includes(xs, s)"]);
     assert_eq!(fixes_of(&fn5("  c = List.includes(t, s)")), ["Text.includes(t, s)"]);
-    assert_eq!(codes(&fn5("  a = count(xs)\n  b = Text.length(t)\n  c = List.includes(xs, s)\n  d = Text.includes(t, s)"), 5), Vec::<String>::new());
+    assert_eq!(codes(&fn5("  a = count(xs)\n  b = Text.length(t)\n  c = List.includes(xs, s)\n  d = Text.includes(t, s)")), Vec::<String>::new());
     let walk = format!("{HEAD5}function go(c: <chat-[:channel]->>) {{\n  ms = c-[m:Messages WHERE m.Tags CONTAINS \"x\" AND LENGTH(m.Text) > 2]->\n}}");
     assert_eq!(fixes_of(&walk), Vec::<String>::new());
 }
@@ -144,18 +144,18 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
 #[test]
 fn a_walk_s_fields_are_read_through_the_hop_s_alias() {
     let v5 = |body: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>, cutoff: <text>) {{\n{body}\n}}");
-    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC LIMIT 3]->"), 5), Vec::<String>::new());
-    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Nope == cutoff]->"), 5), ["MOV_UNKNOWN_PROPERTY"]);
-    let found: Vec<_> = check(&v5("  ms = c-[m:Messages WHERE Text == cutoff]->"), 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC LIMIT 3]->")), Vec::<String>::new());
+    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Nope == cutoff]->")), ["MOV_UNKNOWN_PROPERTY"]);
+    let found: Vec<_> = check(&v5("  ms = c-[m:Messages WHERE Text == cutoff]->")).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].fix.as_ref().unwrap()["edits"][0]["text"], "m.Text");
     assert!(upgraded(&v5("  ms = c-[m:Messages WHERE Text == cutoff ORDER BY Text DESC]->")).contains("c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC]->"));
     let fixed = upgraded(&v5("  ms = c-[:Messages WHERE Text == cutoff AND `Text` != \"x\"]->"));
     assert!(fixed.contains("c-[m:Messages WHERE m.Text == cutoff AND m.`Text` != \"x\"]->"), "{fixed}");
-    assert_eq!(codes(&fixed, 5), Vec::<String>::new());
+    assert_eq!(codes(&fixed), Vec::<String>::new());
     let fixed = upgraded(&v5("  if (EXISTS(c-[:Messages]-> WHERE Text CONTAINS \"pdf\")) {\n    x = 1\n  }"));
     assert!(fixed.contains("if (exists(c-[m:Messages WHERE m.Text CONTAINS \"pdf\"]->)) {"), "{fixed}");
-    assert_eq!(codes(&fixed, 5), Vec::<String>::new());
+    assert_eq!(codes(&fixed), Vec::<String>::new());
     let fixed = upgraded(&v5("  c-[m:Messages WHERE Text == cutoff]-> {\n    x = 1\n  }"));
     assert!(fixed.contains("c-[m:Messages WHERE m.Text == cutoff]-> {"), "{fixed}");
 }
@@ -164,15 +164,15 @@ fn a_walk_s_fields_are_read_through_the_hop_s_alias() {
 fn named_arguments_become_positional_in_the_callee_s_order() {
     let lib5 = "function label(name: <text>, tags: <text[]>) {\n  return name\n}\n\n";
     let v5 = format!("{HEAD5}{lib5}function go(n: <text>, ts: <text[]>) {{\n  x = label(tags: ts, name: n)\n}}");
-    let found: Vec<_> = check(&v5, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let found: Vec<_> = check(&v5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].fix.as_ref().unwrap()["edits"][0]["text"], "n, ts");
     let fixed = upgraded(&v5);
     assert!(fixed.contains("x = label(n, ts)"), "{fixed}");
-    assert_eq!(codes(&fixed, 5), Vec::<String>::new());
+    assert_eq!(codes(&fixed), Vec::<String>::new());
     // A name that is no parameter: refused as before, the spelling without a fix.
     let wrong = format!("{HEAD5}{lib5}function go(n: <text>, ts: <text[]>) {{\n  x = label(nope: ts, name: n)\n}}");
-    let spelled: Vec<_> = check(&wrong, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let spelled: Vec<_> = check(&wrong).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(spelled.len(), 1);
     assert!(spelled[0].fix.is_none());
 }

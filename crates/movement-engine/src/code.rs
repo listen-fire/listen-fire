@@ -360,7 +360,7 @@ mod tests {
             let file = format!("{prelude}{}", program["file"].as_str().unwrap());
             let libraries = program["files"].as_object().into_iter().flatten().map(|(_, f)| f["source"].as_str().unwrap().to_string());
             for source in std::iter::once(file).chain(libraries) {
-                let parsed = movement_parser::stmt::parse_program(&source, 5, false);
+                let parsed = movement_parser::stmt::parse_program(&source, false);
                 if refused && parsed.is_err() {
                     continue;
                 }

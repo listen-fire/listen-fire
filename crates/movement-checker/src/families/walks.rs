@@ -910,7 +910,7 @@ impl crate::checker::Checker<'_> {
         let start = self.head_root_type(head, scope)?;
         let (walk, diagnostics, watchable) = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, head.span);
+            let mut typing = Typing::new(&env, head.span);
             let landed = typing.walk_steps(Some(start), &steps, awaited);
             let walk = HeadWalk {
                 locals: typing.locals.clone(),
