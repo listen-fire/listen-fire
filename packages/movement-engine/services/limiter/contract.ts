@@ -40,6 +40,23 @@ function refusedUntil(grant: LimitGrant): number {
   return at;
 }
 
+/** A grant, with the instants either side of the request: the limiter
+ *  counted the call somewhere between them. */
+async function granted(limiter: Limiter, at: LimitRequest): Promise<{ before: number; after: number }> {
+  const before = Date.now();
+  permitOf(await limiter.acquire(at));
+  return { before, after: Date.now() };
+}
+
+/** `instant` is `call` plus `windowMs`, within the call's request (a
+ *  millisecond of slack for a limiter rounding to whole milliseconds). */
+function assertBetween(instant: number, call: { before: number; after: number }, windowMs: number, message: string): void {
+  assert.ok(
+    instant >= call.before + windowMs - 1 && instant <= call.after + windowMs + 1,
+    `${message}: retryAt is ${instant - call.before - windowMs}ms after the call's request plus the window, expected within ${call.after - call.before}ms`,
+  );
+}
+
 export const limiterContractCases: LimiterContractCase[] = [
   {
     name: 'a call under no limit is granted, and releasing a permit twice, or one never given, changes nothing',
@@ -72,6 +89,31 @@ export const limiterContractCases: LimiterContractCase[] = [
       assert.ok(retryAt > before && retryAt <= before + 650, `room within the window (retryAt ${retryAt - before}ms on)`);
       await sleep(retryAt - Date.now() + 20);
       permitOf(await limiter.acquire(at));
+    },
+  },
+  {
+    // A token bucket refills while the window still holds the burst, so a
+    // burst then a trickle puts nearly twice the calls in one window. Calls
+    // are spaced well apart so the wire's latency cannot blur which have left.
+    name: 'a rolling window never holds more than the declared calls',
+    async run(limiter) {
+      const at = request([{ key: key('rolling'), calls: 3, perMs: 1_000 }]);
+      const first = await granted(limiter, at);
+      await sleep(300);
+      const second = await granted(limiter, at);
+      await granted(limiter, at);
+      await sleep(first.before + 500 - Date.now());
+      // The bucket would have refilled one call by now; the window still holds three.
+      const oldestLeaves = refusedUntil(await limiter.acquire(at));
+      assertBetween(oldestLeaves, first, 1_000, 'refused until the oldest call leaves the window');
+      await sleep(oldestLeaves - Date.now() + 20);
+      const fourth = await granted(limiter, at);
+      const nextLeaves = refusedUntil(await limiter.acquire(at));
+      assertBetween(nextLeaves, second, 1_000, 'exactly one call left, so one more; then refused until the next leaves');
+      await sleep(nextLeaves - Date.now() + 20);
+      await granted(limiter, at);
+      await granted(limiter, at);
+      assertBetween(refusedUntil(await limiter.acquire(at)), fourth, 1_000, 'two left, so two more, and no third');
     },
   },
   {

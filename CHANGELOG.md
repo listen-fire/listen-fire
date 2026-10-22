@@ -17,6 +17,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- A limit of `calls: N, per: <window>` is a rolling window in every limiter (lf's built-in, the engine's in-process one and `@listen-fire/postgres-limiter`): no stretch of that length ever holds more than N calls. They were token buckets, which let a burst of N and then one call every window/N put nearly 2N in one window, so a module that declared fewer calls than its provider allows to make up for that can declare the real number now. A refusal's `retryAt` is when the oldest calls leave the window. `@listen-fire/postgres-limiter` keeps each call's instant in a `calls` table; opening it drops the old token columns, and each window starts empty after the upgrade. See `docs/contracts/limiter-slot.md`.
 
 ## [0.12.0-rc.9] - 2026-10-22
 

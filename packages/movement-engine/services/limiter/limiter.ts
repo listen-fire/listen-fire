@@ -19,7 +19,7 @@ export { vendorWaitMs } from 'module-runtime/vendor_wait';
 /** One limit a request is under, resolved to the bucket it counts in. */
 export interface LimitBucket {
   key: string;
-  /** At most `calls` per `perMs`; the two go together. */
+  /** At most `calls` in any `perMs` (a rolling window); the two go together. */
   calls?: number;
   perMs?: number;
   concurrent?: number;
@@ -168,6 +168,40 @@ export function installLimiter(limiter: Limiter): void {
   slot = limiter;
 }
 
+// ── The rolling window ──────────────────────────────────────────────────────
+
+/** One call counted in a rate limit's window: when it was granted, and for how much. */
+export interface WindowCall {
+  at: number;
+  cost: number;
+}
+
+/** What one call counts for in a window of `calls`: a call costing more
+ *  than the whole window takes all of it, so it waits for an empty one. */
+export function windowCost(cost: number, calls: number): number {
+  return Math.min(cost, calls);
+}
+
+/** The calls still in the window at `now`: a call granted at `at` leaves it at `at + perMs`. */
+export function inWindow(calls: readonly WindowCall[], perMs: number, now: number): WindowCall[] {
+  return calls.filter((call) => call.at + perMs > now);
+}
+
+/** When a call costing `cost` fits a window of `limit.calls` per `limit.perMs`
+ *  already holding `window` (in it at `now`, oldest first): undefined if it
+ *  fits now, else the instant enough of the oldest calls have left. */
+export function windowRetryAt(window: readonly WindowCall[], limit: { calls: number; perMs: number }, cost: number): number | undefined {
+  let held = window.reduce((sum, call) => sum + call.cost, 0);
+  const needed = windowCost(cost, limit.calls);
+  if (held + needed <= limit.calls) return undefined;
+  for (const call of window) {
+    held -= call.cost;
+    if (held + needed <= limit.calls) return call.at + limit.perMs;
+  }
+  // Unreachable while every call in the window costs at most `limit.calls`.
+  return undefined;
+}
+
 // ── @lf/memory-limiter ──────────────────────────────────────────────────────
 
 /** How soon a call refused for concurrency asks again, if no release wakes
@@ -175,14 +209,14 @@ export function installLimiter(limiter: Limiter): void {
 const CONCURRENCY_RECHECK_MS = 1_000;
 
 interface BucketState {
-  tokens: number;
-  filledAt: number;
+  /** A rate limit's calls in its window, oldest first. */
+  calls: WindowCall[];
   held: number;
 }
 
-/** The limits kept in this process: a token bucket per `calls`/`perMs` limit
- *  (full at first, refilled evenly), a count of held permits per
- *  `concurrent` one, and the throttles providers reported. */
+/** The limits kept in this process: the calls in each `calls`/`perMs`
+ *  limit's rolling window, a count of held permits per `concurrent` one,
+ *  and the throttles providers reported. */
 export class MemoryLimiter implements Limiter {
   private readonly buckets = new Map<string, BucketState>();
   private readonly permits = new Map<string, { holds: string[]; lapsesAt: number }>();
@@ -200,14 +234,11 @@ export class MemoryLimiter implements Limiter {
     let retryAt: number | undefined;
     const later = (at: number) => (retryAt = retryAt === undefined ? at : Math.max(retryAt, at));
     for (const limit of request.limits) {
-      const bucket = this.bucket(limit, now);
+      const bucket = this.bucket(limit);
       if (limit.calls !== undefined && limit.perMs !== undefined) {
-        const rate = limit.calls / limit.perMs;
-        bucket.tokens = Math.min(limit.calls, bucket.tokens + (now - bucket.filledAt) * rate);
-        bucket.filledAt = now;
-        // A call costing more than the whole window waits for a full one.
-        const cost = Math.min(request.cost, limit.calls);
-        if (bucket.tokens < cost) later(now + Math.ceil((cost - bucket.tokens) / rate));
+        bucket.calls = inWindow(bucket.calls, limit.perMs, now);
+        const room = windowRetryAt(bucket.calls, { calls: limit.calls, perMs: limit.perMs }, request.cost);
+        if (room !== undefined) later(room);
       }
       if (limit.concurrent !== undefined && bucket.held >= limit.concurrent) {
         const soonestLapse = Math.min(...[...this.permits.values()].map((p) => p.lapsesAt));
@@ -217,8 +248,8 @@ export class MemoryLimiter implements Limiter {
     if (retryAt !== undefined) return { granted: false, retryAt: new Date(retryAt).toISOString() };
     const holds: string[] = [];
     for (const limit of request.limits) {
-      const bucket = this.bucket(limit, now);
-      if (limit.calls !== undefined) bucket.tokens -= Math.min(request.cost, limit.calls);
+      const bucket = this.bucket(limit);
+      if (limit.calls !== undefined && limit.perMs !== undefined) bucket.calls.push({ at: now, cost: windowCost(request.cost, limit.calls) });
       if (limit.concurrent !== undefined) {
         bucket.held += 1;
         holds.push(limit.key);
@@ -246,10 +277,10 @@ export class MemoryLimiter implements Limiter {
     return { wait, stop: () => this.waiters.delete(wake) };
   }
 
-  private bucket(limit: LimitBucket, now: number): BucketState {
+  private bucket(limit: LimitBucket): BucketState {
     let bucket = this.buckets.get(limit.key);
     if (bucket === undefined) {
-      bucket = { tokens: limit.calls ?? 0, filledAt: now, held: 0 };
+      bucket = { calls: [], held: 0 };
       this.buckets.set(limit.key, bucket);
     }
     return bucket;

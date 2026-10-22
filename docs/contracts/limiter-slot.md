@@ -46,7 +46,8 @@ No method waits. A refusal says when to ask again; the host does the waiting.
 
 - **`acquire`** is granted only when every one of `limits` has room and `key` is not throttled. Then the call counts in all of them at once. A refused call counts in none, so it spends no quota anywhere.
 - **`limits[].key`** names the bucket a limit counts in. The host makes it from the module, the limit's scope and the scope's value (which credential, install or team). A limiter treats it as opaque.
-- **`calls` per `perMs`**: at most that many calls (counting `cost` each) in any window of that length. The two go together.
+- **`calls` per `perMs`**: at most that many calls (counting `cost` each) in any window of that length. The window is rolling: a call counts from the instant it is granted until `perMs` later, so no stretch of `perMs` ever holds more than `calls`, however the calls are spaced. (A token bucket refilled evenly would let a burst of `calls`, then one call every `perMs / calls`, put nearly twice `calls` in one window; a limiter may not do that.) A call costing more than `calls` counts as `calls`, so it waits for an empty window. The two go together.
+- **`retryAt`** on a refusal is the earliest instant the call could be granted: for a rate limit, when enough of the oldest calls in the window have left it (for a call costing one in a full window, the oldest call's grant plus `perMs`); for a throttle, its end; for a concurrency limit, the soonest permit's lapse, or sooner when the limiter rechecks. Where several refuse, the latest stands. It is advice: a call asked again then may meet calls granted meanwhile.
 - **`concurrent`**: at most that many permits held at once in the bucket.
 - **`key`** (the request's own) is who the call is made as: where a provider's throttle lands.
 - **`holdMs`**: a permit never released lapses after this long, so a crashed host frees its places.
@@ -60,6 +61,7 @@ No method waits. A refusal says when to ask again; the host does the waiting.
 
 ## Changes
 
+- **2026-10-22** (within adapter protocol 2): `calls` per `perMs` is a rolling window in every limiter (lf's built-in, `@lf/memory-limiter` in the engine, `@listen-fire/postgres-limiter`), not a token bucket; `retryAt` is when enough of the oldest calls leave the window. The contract suite holds a limiter to it (`a rolling window never holds more than the declared calls`). The slot's methods are unchanged.
 - **2026-10-22** (within adapter protocol 2): `throttle` is named as the intake for a vendor's wait, and the key's granularity is the caller's. `@lf/anthropic`, `@lf/affinity` and `@lf/web` throttle on a 429. The slot's methods are unchanged.
 - **2026-10-20** (within adapter protocol 2): a module that declares `hostLimits` is counted per provider request at the host's limits door, not per call. The slot's methods are unchanged.
 - **2026-10-19** (within adapter protocol 2): the methods ride adapter protocol 2's HTTP; the stdin/stdout JSON-RPC wire is retired.

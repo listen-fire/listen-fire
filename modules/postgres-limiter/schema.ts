@@ -20,9 +20,17 @@ export function schemaStatements(schema: string): string[] {
   const s = schemaIdentifier(schema);
   return [
     `create schema if not exists ${s}`,
-    // One row per limit bucket: a rate limit's tokens, and the row concurrent
-    // acquires lock on to count held permits without racing.
-    `create table if not exists ${s}.buckets (key text primary key, tokens double precision not null, filled_at double precision not null)`,
+    // One row per limit bucket: the row acquires lock on to count its calls
+    // and held permits without racing.
+    `create table if not exists ${s}.buckets (key text primary key)`,
+    // Before the rolling window a bucket kept a token count; its calls were
+    // never recorded, so its window starts empty.
+    `alter table ${s}.buckets drop column if exists tokens, drop column if exists filled_at`,
+    // A call counted in a rate limit's rolling window. An acquire deletes the
+    // calls that have left the windows it names, so a bucket keeps at most its
+    // `calls` rows.
+    `create table if not exists ${s}.calls (bucket text not null, at double precision not null, cost double precision not null)`,
+    `create index if not exists calls_bucket_at on ${s}.calls (bucket, at)`,
     // A place held in a bucket; a permit holds one row per concurrent bucket.
     // Held places are counted from these rows (never a stored counter), so a
     // holder that crashes frees its places when `lapses_at` passes.

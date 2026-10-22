@@ -6,9 +6,9 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import type { LimitGrant, Limiter, LimitRequest } from 'movement-engine/public/limiter';
+import type { LimitGrant, Limiter, LimitRequest, WindowCall } from 'movement-engine/public/limiter';
 import { NOW_MS, schemaIdentifier, schemaStatements } from './schema';
-import { decide, freshTokens, type BucketState, type HeldState } from './windowing';
+import { decide, type HeldState } from './windowing';
 
 export class PostgresLimiter implements Limiter {
   private readonly s: string;
@@ -32,18 +32,8 @@ export class PostgresLimiter implements Limiter {
     return this.transaction(async (db) => {
       // One row per distinct bucket, locked in key order; the upsert both
       // creates a missing bucket and takes the lock, so no read-then-write gap.
-      const stored = new Map<string, BucketState>();
-      const limitOf = new Map(request.limits.map((limit) => [limit.key, limit]));
-      for (const key of [...limitOf.keys()].sort()) {
-        const limit = limitOf.get(key);
-        if (limit === undefined) continue;
-        const row = await db.query<{ tokens: number; filled_at: number }>(
-          `insert into ${this.s}.buckets (key, tokens, filled_at) values ($1, $2, ${NOW_MS})
-           on conflict (key) do update set key = excluded.key returning tokens, filled_at`,
-          [key, freshTokens(limit)],
-        );
-        const bucket = row.rows[0];
-        if (bucket !== undefined) stored.set(key, { tokens: bucket.tokens, filledAt: bucket.filled_at });
+      for (const key of [...new Set(request.limits.map((limit) => limit.key))].sort()) {
+        await db.query(`insert into ${this.s}.buckets (key) values ($1) on conflict (key) do update set key = excluded.key`, [key]);
       }
 
       // After the locks: waiting for them must not age the instant decided on.
@@ -66,15 +56,17 @@ export class PostgresLimiter implements Limiter {
         for (const row of counts.rows) held.set(row.bucket, { count: Number(row.count), soonestLapse: row.soonest });
       }
 
-      const decision = decide({ request, buckets: stored, held, now });
+      const windows = await this.windows(db, request, now);
+      const decision = decide({ request, windows, held, now });
       if (!decision.granted) return refused(decision.retryAt);
 
-      const keys = [...decision.buckets.keys()];
-      await db.query(
-        `update ${this.s}.buckets b set tokens = u.tokens, filled_at = u.filled_at
-         from unnest($1::text[], $2::float8[], $3::float8[]) as u(key, tokens, filled_at) where b.key = u.key`,
-        [keys, keys.map((key) => decision.buckets.get(key)?.tokens ?? 0), keys.map((key) => decision.buckets.get(key)?.filledAt ?? now)],
-      );
+      if (decision.counted.length > 0) {
+        await db.query(`insert into ${this.s}.calls (bucket, at, cost) select * from unnest($1::text[], $2::float8[], $3::float8[])`, [
+          decision.counted.map((counted) => counted.bucket),
+          decision.counted.map((counted) => counted.call.at),
+          decision.counted.map((counted) => counted.call.cost),
+        ]);
+      }
       const permit = randomUUID();
       if (decision.holds.length > 0) {
         await db.query(`insert into ${this.s}.permits (permit, bucket, lapses_at) select $1, bucket, $3 from unnest($2::text[]) as bucket`, [
@@ -103,6 +95,29 @@ export class PostgresLimiter implements Limiter {
       );
       await db.query(`delete from ${this.s}.throttles where until_at <= ${NOW_MS}`);
     });
+  }
+
+  /** The calls in each rate limit's window at `now`, oldest first; the calls
+   *  that have left those windows are deleted. */
+  private async windows(db: PoolClient, request: LimitRequest, now: number): Promise<Map<string, WindowCall[]>> {
+    const windows = new Map<string, WindowCall[]>();
+    const rated = request.limits.flatMap((limit) => (limit.calls !== undefined && limit.perMs !== undefined ? [{ key: limit.key, since: now - limit.perMs }] : []));
+    if (rated.length === 0) return windows;
+    const keys = rated.map((limit) => limit.key);
+    await db.query(
+      `delete from ${this.s}.calls c using unnest($1::text[], $2::float8[]) as w(bucket, since) where c.bucket = w.bucket and c.at <= w.since`,
+      [keys, rated.map((limit) => limit.since)],
+    );
+    const rows = await db.query<{ bucket: string; at: number; cost: number }>(
+      `select bucket, at, cost from ${this.s}.calls where bucket = any($1::text[]) order by bucket, at`,
+      [keys],
+    );
+    for (const row of rows.rows) {
+      const window = windows.get(row.bucket) ?? [];
+      window.push({ at: row.at, cost: row.cost });
+      windows.set(row.bucket, window);
+    }
+    return windows;
   }
 
   private async now(db: PoolClient): Promise<number> {

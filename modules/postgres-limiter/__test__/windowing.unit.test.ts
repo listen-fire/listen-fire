@@ -1,5 +1,5 @@
-import type { LimitRequest } from 'movement-engine/public/limiter';
-import { decide, type BucketState, type HeldState } from '../windowing';
+import type { LimitRequest, WindowCall } from 'movement-engine/public/limiter';
+import { decide, type HeldState } from '../windowing';
 import { schemaIdentifier } from '../schema';
 
 const NOW = 1_000_000;
@@ -8,45 +8,36 @@ function request(limits: LimitRequest['limits'], cost = 1): LimitRequest {
   return { key: 'caller', cost, limits, holdMs: 60_000 };
 }
 
-function run(limits: LimitRequest['limits'], options: { buckets?: [string, BucketState][]; held?: [string, HeldState][]; cost?: number; now?: number } = {}) {
-  return decide({ request: request(limits, options.cost), buckets: new Map(options.buckets), held: new Map(options.held), now: options.now ?? NOW });
+function run(limits: LimitRequest['limits'], options: { windows?: [string, WindowCall[]][]; held?: [string, HeldState][]; cost?: number; now?: number } = {}) {
+  return decide({ request: request(limits, options.cost), windows: new Map(options.windows), held: new Map(options.held), now: options.now ?? NOW });
 }
+
+const calls = (...ats: number[]): WindowCall[] => ats.map((at) => ({ at, cost: 1 }));
 
 describe('rate windows', () => {
   const rate = { key: 'r', calls: 4, perMs: 1_000 };
 
-  test('a new bucket starts full and the call is counted', () => {
-    const decision = run([rate]);
-    expect(decision).toMatchObject({ granted: true, holds: [] });
-    if (decision.granted) expect(decision.buckets.get('r')).toEqual({ tokens: 3, filledAt: NOW });
+  test('an empty window grants and counts the call now', () => {
+    expect(run([rate])).toEqual({ granted: true, counted: [{ bucket: 'r', call: { at: NOW, cost: 1 } }], holds: [] });
   });
 
-  test('an empty bucket refuses and says when one call has refilled', () => {
-    const decision = run([rate], { buckets: [['r', { tokens: 0, filledAt: NOW }]] });
-    expect(decision).toEqual({ granted: false, retryAt: NOW + 250 });
+  test('a full window refuses until its oldest call leaves', () => {
+    const windows: [string, WindowCall[]][] = [['r', calls(NOW - 900, NOW - 100, NOW - 50, NOW)]];
+    expect(run([rate], { windows })).toEqual({ granted: false, retryAt: NOW + 100 });
   });
 
-  test('elapsed time refills the bucket, never past full', () => {
-    const half = run([rate], { buckets: [['r', { tokens: 0, filledAt: NOW - 500 }]] });
-    if (half.granted) expect(half.buckets.get('r')?.tokens).toBeCloseTo(1);
-    const long = run([rate], { buckets: [['r', { tokens: 0, filledAt: NOW - 60_000 }]] });
-    if (long.granted) expect(long.buckets.get('r')?.tokens).toBe(3);
+  test('a call that has left the window counts for nothing', () => {
+    expect(run([rate], { windows: [['r', calls(NOW - 1_000, NOW - 100, NOW - 50, NOW)]] })).toMatchObject({ granted: true });
   });
 
-  test('a cost counts for that many calls, and waits as long as the shortfall', () => {
-    const buckets: [string, BucketState][] = [['r', { tokens: 1, filledAt: NOW }]];
-    expect(run([rate], { buckets, cost: 3 })).toEqual({ granted: false, retryAt: NOW + 500 });
+  test('a cost waits until enough of the oldest calls have left', () => {
+    const windows: [string, WindowCall[]][] = [['r', calls(NOW - 900, NOW - 600, NOW - 300)]];
+    expect(run([rate], { windows, cost: 3 })).toEqual({ granted: false, retryAt: NOW + 400 });
   });
 
-  test('a cost above the whole window waits for a full bucket, then takes it all', () => {
-    expect(run([rate], { cost: 10, buckets: [['r', { tokens: 1, filledAt: NOW }]] })).toEqual({ granted: false, retryAt: NOW + 750 });
-    const decision = run([rate], { cost: 10 });
-    if (decision.granted) expect(decision.buckets.get('r')?.tokens).toBe(0);
-  });
-
-  test('a clock that stands still or steps back refills nothing', () => {
-    const decision = run([rate], { buckets: [['r', { tokens: 2, filledAt: NOW + 5_000 }]] });
-    if (decision.granted) expect(decision.buckets.get('r')?.tokens).toBe(1);
+  test('a cost above the whole window waits for an empty one, then takes it all', () => {
+    expect(run([rate], { cost: 10, windows: [['r', calls(NOW - 900, NOW - 200)]] })).toEqual({ granted: false, retryAt: NOW + 800 });
+    expect(run([rate], { cost: 10 })).toMatchObject({ granted: true, counted: [{ bucket: 'r', call: { at: NOW, cost: 4 } }] });
   });
 });
 
@@ -74,7 +65,7 @@ describe('several limits at once', () => {
 
   test('the latest retry among the refusals stands', () => {
     const decision = run([{ key: 'r', calls: 1, perMs: 1_000 }, { key: 'c', concurrent: 1 }], {
-      buckets: [['r', { tokens: 0, filledAt: NOW }]],
+      windows: [['r', calls(NOW)]],
       held: [['c', { count: 1, soonestLapse: NOW + 100 }]],
     });
     expect(decision).toEqual({ granted: false, retryAt: NOW + 1_000 });
@@ -82,8 +73,7 @@ describe('several limits at once', () => {
 
   test('a grant counts in every limit', () => {
     const decision = run([{ key: 'r', calls: 5, perMs: 1_000 }, { key: 'c', concurrent: 1 }]);
-    expect(decision).toMatchObject({ granted: true, holds: ['c'] });
-    if (decision.granted) expect(decision.buckets.get('r')?.tokens).toBe(4);
+    expect(decision).toEqual({ granted: true, counted: [{ bucket: 'r', call: { at: NOW, cost: 1 } }], holds: ['c'] });
   });
 });
 

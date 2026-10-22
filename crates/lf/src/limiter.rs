@@ -13,7 +13,7 @@
 //! reads a manifest. lf's built-in, `@lf/memory-limiter`, keeps them in
 //! process (MemoryLimiter); a process module is crate::limiter_module.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -56,7 +56,7 @@ impl Scope {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclaredLimit {
     pub scope: Scope,
-    /// At most `calls` per `per_ms`.
+    /// At most `calls` in any `per_ms` (a rolling window).
     pub calls: Option<(u64, u64)>,
     pub concurrent: Option<u64>,
 }
@@ -302,9 +302,9 @@ pub fn of_project(project: &crate::project::Project, credentials: &crate::secret
 /// it first (a permit lapsing frees a slot with no release).
 const CONCURRENCY_RECHECK_MS: i64 = 1_000;
 
-/// The limits kept in this process: a token bucket per `calls`/`per`
-/// limit (full at first, refilled evenly), a count of held permits per
-/// `concurrent` one, and the throttles providers reported.
+/// The limits kept in this process: the calls in each `calls`/`per`
+/// limit's rolling window, a count of held permits per `concurrent` one,
+/// and the throttles providers reported.
 #[derive(Default)]
 pub struct MemoryLimiter {
     state: Mutex<State>,
@@ -319,10 +319,38 @@ struct State {
     next_permit: u64,
 }
 
+#[derive(Default)]
 struct BucketState {
-    tokens: f64,
-    filled_at_ms: i64,
+    /// A rate limit's calls in its window, oldest first: (granted at, cost).
+    calls: VecDeque<(i64, u64)>,
     held: u64,
+}
+
+impl BucketState {
+    /// When a call costing `cost` fits a window of `calls` per `per_ms` at
+    /// `now`: None if it fits now, else the instant enough of the oldest
+    /// calls have left. A call granted at `at` leaves at `at + per_ms`.
+    fn window_retry_at(&mut self, (calls, per_ms): (u64, u64), cost: u64, now: i64) -> Option<i64> {
+        let per_ms = i64::try_from(per_ms).unwrap_or(i64::MAX);
+        while self.calls.front().is_some_and(|(at, _)| at.saturating_add(per_ms) <= now) {
+            self.calls.pop_front();
+        }
+        let needed = window_cost(cost, calls);
+        let mut held: u64 = self.calls.iter().map(|(_, cost)| cost).sum();
+        if held + needed <= calls {
+            return None;
+        }
+        self.calls.iter().find_map(|(at, cost)| {
+            held -= cost;
+            (held + needed <= calls).then(|| at.saturating_add(per_ms))
+        })
+    }
+}
+
+/// What one call counts for in a window of `calls`: a call costing more
+/// than the whole window takes all of it, so it waits for an empty one.
+fn window_cost(cost: u64, calls: u64) -> u64 {
+    cost.min(calls)
 }
 
 struct PermitState {
@@ -350,35 +378,23 @@ impl State {
     }
 }
 
-impl Limiter for MemoryLimiter {
-    fn acquire(&self, request: &Acquire) -> Result<Grant, String> {
-        let now = now_ms();
+impl MemoryLimiter {
+    fn acquire_at(&self, request: &Acquire, now: i64) -> Grant {
         let mut guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let state = &mut *guard;
         state.lapse_permits(now);
         if let Some(until) = state.throttles.get(&request.key).copied() {
             if until > now {
-                return Ok(Grant::Refused { retry_at_ms: until });
+                return Grant::Refused { retry_at_ms: until };
             }
             state.throttles.remove(&request.key);
         }
         let mut retry_at_ms: Option<i64> = None;
         let mut later = |at: i64| retry_at_ms = Some(retry_at_ms.map_or(at, |r| r.max(at)));
         for limit in &request.limits {
-            let bucket = state.buckets.entry(limit.key.clone()).or_insert_with(|| BucketState {
-                tokens: limit.calls.map_or(0.0, |(calls, _)| calls as f64),
-                filled_at_ms: now,
-                held: 0,
-            });
-            if let Some((calls, per_ms)) = limit.calls {
-                let rate = calls as f64 / per_ms as f64;
-                bucket.tokens = (bucket.tokens + (now - bucket.filled_at_ms) as f64 * rate).min(calls as f64);
-                bucket.filled_at_ms = now;
-                // A call costing more than the whole window waits for a full one.
-                let cost = (request.cost as f64).min(calls as f64);
-                if bucket.tokens < cost {
-                    later(now + ((cost - bucket.tokens) / rate).ceil() as i64);
-                }
+            let bucket = state.buckets.entry(limit.key.clone()).or_default();
+            if let Some(room) = limit.calls.and_then(|window| bucket.window_retry_at(window, request.cost, now)) {
+                later(room);
             }
             if limit.concurrent.is_some_and(|most| bucket.held >= most) {
                 let soonest_lapse = state.permits.values().map(|p| p.lapses_at_ms).min().unwrap_or(i64::MAX);
@@ -386,13 +402,13 @@ impl Limiter for MemoryLimiter {
             }
         }
         if let Some(retry_at_ms) = retry_at_ms {
-            return Ok(Grant::Refused { retry_at_ms });
+            return Grant::Refused { retry_at_ms };
         }
         let mut holds = Vec::new();
         for limit in &request.limits {
             let bucket = state.buckets.get_mut(&limit.key).expect("each bucket was made above");
             if let Some((calls, _)) = limit.calls {
-                bucket.tokens -= (request.cost as f64).min(calls as f64);
+                bucket.calls.push_back((now, window_cost(request.cost, calls)));
             }
             if limit.concurrent.is_some() {
                 bucket.held += 1;
@@ -405,7 +421,13 @@ impl Limiter for MemoryLimiter {
             let lapses_at_ms = now.saturating_add(i64::try_from(request.hold_ms).unwrap_or(i64::MAX));
             state.permits.insert(permit.clone(), PermitState { holds, lapses_at_ms });
         }
-        Ok(Grant::Granted { permit })
+        Grant::Granted { permit }
+    }
+}
+
+impl Limiter for MemoryLimiter {
+    fn acquire(&self, request: &Acquire) -> Result<Grant, String> {
+        Ok(self.acquire_at(request, now_ms()))
     }
 
     fn release(&self, permit: &str) -> Result<(), String> {
@@ -486,6 +508,25 @@ mod tests {
         assert!(retry_at_ms > now_ms());
         limiter.release(&permit).unwrap();
         assert!(matches!(limiter.acquire(&request).unwrap(), Grant::Granted { .. }));
+    }
+
+    #[test]
+    fn a_rolling_window_never_holds_more_than_the_declared_calls() {
+        let limiter = MemoryLimiter::default();
+        let request = caller().request(&[DeclaredLimit { scope: Scope::Module, calls: Some((3, 1_000)), concurrent: None }]);
+        let at = |now: i64| limiter.acquire_at(&request, now);
+        let granted = |grant: Grant| matches!(grant, Grant::Granted { .. });
+        assert!(granted(at(0)) && granted(at(0)) && granted(at(0)));
+        // A token bucket would have refilled one and a half calls by now.
+        assert_eq!(at(500), Grant::Refused { retry_at_ms: 1_000 });
+        assert!(granted(at(1_000)) && granted(at(1_000)) && granted(at(1_000)), "the three at 0 have left together");
+        assert_eq!(at(1_500), Grant::Refused { retry_at_ms: 2_000 });
+        assert!(granted(at(2_100)));
+        assert!(granted(at(2_400)) && granted(at(2_400)));
+        assert_eq!(at(2_500), Grant::Refused { retry_at_ms: 3_100 }, "the oldest in the window is the call at 2100");
+        let costly = Acquire { cost: 2, ..request.clone() };
+        assert_eq!(limiter.acquire_at(&costly, 3_100), Grant::Refused { retry_at_ms: 3_400 }, "a cost of two waits for two places");
+        assert!(granted(limiter.acquire_at(&costly, 3_400)));
     }
 
     #[tokio::test]
