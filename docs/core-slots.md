@@ -72,16 +72,19 @@ Before every call to a module and every model request, the host asks the limiter
 
 ## The secrets module
 
-Every credential lf reads, refreshes and writes goes through the secrets slot.
+Every credential lf reads, refreshes and writes goes through the secrets slot. The wire a module of your own speaks, and the cases it must pass: [secrets-slot.md](contracts/secrets-slot.md).
 
 - `@lf/file-secrets` is the secrets file as it always was: `LF_SECRETS_FILE`, else `.lf/secrets.yaml`, else `~/.config/lf/secrets.yaml`; a SOPS file is read with `sops -d`. A refreshed token is written back in place, comments kept. Two lf processes take turns through the file's lock file.
 - A module filling the slot holds them instead, over its wire: lf lists what it holds, reads and writes one back by version, and takes a lease on one while a refresh spends its token. Two lf processes on one module refresh a token once between them.
 - `LF_SECRET__<CREDENTIAL>__<FIELD>` lies over what any module holds, field by field.
 - `lf connect`, `lf credential` and a webhook's registration write whole entries through the module.
 - A module that cannot persist (its credentials come from somewhere lf cannot write) answers those writes `read_only` with a reason. lf then refuses, exit 2, writing nothing: `<module> holds its credentials read-only: <reason>. Add it where it lives.` A webhook's registration adds `Register the webhook where the credentials live.` A token refresh is still written back; read-only is for whole entries only.
+- `lf credential add` and `update` ask the module whether entries can be changed (`secrets.assertWritable`) before the provider's sign-in, so a read-only module refuses before the person is sent anywhere.
 - A secrets module's own settings never come from itself. They come from `LF_SECRET__…` or the secrets file, so run `lf connect <module>` before naming it in `core:`. A project naming a secrets module whose settings neither holds is refused as it loads.
 - Refreshing a token stays in lf. A module only stores.
 - Signing in for a credential against a provider (`lf credential add`) runs in lf whichever module stores the result, and the provider's OAuth app must have lf's redirect URI registered. Under `--public` that URI is `<publicUrl>/oauth/callback`, answered by `lf serve`. When something else holds the registered callback (a platform in front of the fleet), set `oauth: { redirectUri: https://… }` in `lf.yaml`: lf sends that URI at authorize and at the token exchange, and the relay forwards the provider's `code` and `state` query on to `lf serve`'s `GET /oauth/callback`, which matches the waiting command by `state`. `lf connect` prints the URI to register.
+- In a cloud deployment the module and its settings come from the environment, never a file: `core: { secrets: <module> }` in `lf.yaml`, `LF_SECRET__<MODULE>__EXTERNAL=<module>` and its settings as `LF_SECRET__<MODULE>__<SETTING>` ([deploy/lf](../deploy/lf/README.md#the-secrets-module)). The credentials themselves then live in the module, and `LF_SECRET__<CREDENTIAL>__<FIELD>` still lies over them.
+- `lf --contract-secrets-slot --dir <project>` serves the project's secrets slot as a module for the conformance cases, as `--contract-wake-slot` does for the wake slot.
 
 ## The loop guard
 

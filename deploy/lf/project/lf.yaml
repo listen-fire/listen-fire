@@ -34,3 +34,14 @@ core:
 #   LF_SECRET__DOCUMENT_AI__PROJECT=… __LOCATION=eu __PROCESSOR_ID=…
 #   LF_SECRET__DOCUMENT_AI__BUCKET=…  (files past 15 pages or 20 MB)
 #   LF_SECRET__MODELS_OCR__EXTERNAL=models_ocr  (the models settings again, as __VENDOR=gemini, …)
+# Credentials shared by every worker, in a vault rather than the environment and
+# the secrets file (the secrets slot, `@lf/file-secrets` by default). A module
+# of your own fills it; its own settings come from the environment, never
+# from the vault it opens:
+#   core:
+#     store: "@lf/postgres-store"
+#     secrets: acme_vault          # externals/acme_vault/lf-external.yaml, kind: core, slot: secrets
+#   LF_SECRET__ACME_VAULT__EXTERNAL=acme_vault
+#   LF_SECRET__ACME_VAULT__<SETTING>=…   (each setting its manifest declares)
+# A token one worker refreshes is kept for all, and two workers refresh it once.
+# `LF_SECRET__<CREDENTIAL>__<FIELD>` still lies over what the vault holds.
