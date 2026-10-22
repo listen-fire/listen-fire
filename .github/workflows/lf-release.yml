@@ -132,3 +132,111 @@ jobs:
           gh release create "$GITHUB_REF_NAME" artifacts/lf-*.tar.gz artifacts/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --title "lf ${GITHUB_REF_NAME#lf-v}" --generate-notes \
             $(case "$GITHUB_REF_NAME" in *-*) echo --prerelease ;; esac)
+
+  homebrew:
+    # Pre-releases bump the tap too: it serves whatever the newest release is.
+    if: startsWith(github.ref, 'refs/tags/lf-v')
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # `secrets` cannot be read in a job-level `if`, so the first step turns
+      # its presence into an output the later steps test.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Tap token present
+        id: token
+        run: |
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the Homebrew tap was not bumped"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.ready == 'true'
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.ready == 'true'
+        with:
+          repository: listen-fire/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Render the formula
+        if: steps.token.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The whole formula is generated here, in the shape of
+        # deploy/homebrew/lf.rb, rather than edited by line number or pattern:
+        # each hash is looked up by its tarball's name in SHA256SUMS.
+        run: |
+          version="${GITHUB_REF_NAME#lf-v}"
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          sha() {
+            hash="$(awk -v f="lf-v${version}-$1.tar.gz" '$2 == f { print $1 }' SHA256SUMS)"
+            if [ -z "$hash" ]; then
+              echo "::error::SHA256SUMS has no entry for lf-v${version}-$1.tar.gz"
+              exit 1
+            fi
+            echo "$hash"
+          }
+          base="https://github.com/listen-fire/listen-fire/releases/download/${GITHUB_REF_NAME}/${GITHUB_REF_NAME}"
+          mac_arm="$(sha aarch64-apple-darwin)"
+          mac_intel="$(sha x86_64-apple-darwin)"
+          linux_arm="$(sha aarch64-unknown-linux-musl)"
+          linux_intel="$(sha x86_64-unknown-linux-musl)"
+          mkdir -p tap/Formula
+          cat > tap/Formula/lf.rb <<RUBY
+          class Lf < Formula
+            desc "Listen-Fire: the movement language and its local runner"
+            homepage "https://github.com/listen-fire/listen-fire"
+            version "${version}"
+            license "Apache-2.0"
+
+            # The built-in modules are TypeScript and need Node once a system is connected.
+            depends_on "node"
+
+            on_macos do
+              on_arm do
+                url "${base}-aarch64-apple-darwin.tar.gz"
+                sha256 "${mac_arm}"
+              end
+              on_intel do
+                url "${base}-x86_64-apple-darwin.tar.gz"
+                sha256 "${mac_intel}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "${base}-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "${linux_arm}"
+              end
+              on_intel do
+                url "${base}-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${linux_intel}"
+              end
+            end
+
+            def install
+              # bin/ and share/ stay together: lf finds its modules at <prefix>/share/lf/modules.
+              prefix.install Dir["*"]
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/lf --version")
+            end
+          end
+          RUBY
+      - name: Commit and push the tap
+        if: steps.token.outputs.ready == 'true'
+        run: |
+          cd tap
+          if git diff --quiet -- Formula/lf.rb && [ -z "$(git ls-files --others --exclude-standard Formula)" ]; then
+            echo "Formula/lf.rb is unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lf.rb
+          git commit -m "lf ${GITHUB_REF_NAME#lf-v}"
+          git push

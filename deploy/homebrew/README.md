@@ -1,17 +1,18 @@
-# Homebrew tap (drafted, not yet live)
+# Homebrew tap
 
-`lf.rb` is the formula for a tap named `listen-fire/tap`, pinned to rc.4.
+The tap is live: `brew install listen-fire/tap/lf`.
 
-Create the tap once:
+`lf.rb` is the reference shape of the formula. The live one is
+`Formula/lf.rb` in `listen-fire/homebrew-tap`, and the `homebrew` job in
+`.github/workflows/lf-release.yml` renders it, not this file.
 
-1. Create a public repository `listen-fire/homebrew-tap` (the `homebrew-` prefix is what makes `brew tap listen-fire/tap` work).
-2. Copy `lf.rb` to `Formula/lf.rb` in it and push.
-3. Users then run `brew install listen-fire/tap/lf`.
+On every `lf-v*` tag (pre-releases included) that job waits for the release, reads
+the four tarball hashes from its `SHA256SUMS`, writes the formula with that
+version and those hashes, and pushes it to the tap. It changes nothing when the
+formula is unchanged.
 
-The release workflow does not bump the formula yet. The job to add to `lf-release.yml`:
+To enable it, set the repository secret `HOMEBREW_TAP_TOKEN` on
+`listen-fire/listen-fire`: a fine-grained token with contents read/write on
+`listen-fire/homebrew-tap`. Without it the job prints a notice and skips.
 
-- Trigger: an `lf-v*` tag, `needs:` the job that uploads the release assets.
-- Download `SHA256SUMS` from the new release and read the four tarball hashes.
-- Template `lf.rb`: the version in the URLs and the four `sha256` lines.
-- Check out `listen-fire/homebrew-tap` with a token that can push to it (a repository secret, e.g. `TAP_TOKEN`).
-- Commit `Formula/lf.rb` and push to its default branch.
+If you change the formula's shape, change both this file and the job's template.
