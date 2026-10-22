@@ -19,6 +19,7 @@ named in [`RELEASING.md`](RELEASING.md).
 <!-- add merged PRs here -->
 
 - Secrets are a core slot (`core: { secrets: … }`). The default, `@lf/file-secrets`, is the secrets file, SOPS and `LF_SECRET__…` exactly as before, so a project that names none behaves as it did. A secrets module holds credentials elsewhere (a vault a fleet of `lf` workers shares): a token one worker refreshes is kept for all, and two workers refresh it once. A secrets module's own settings come from `LF_SECRET__…` or the secrets file only; a project naming one whose settings neither holds is refused as it loads.
+- A secrets module can answer `lf connect`, `lf credential add|update|delete` and a webhook's registration with `read_only` and a reason. `lf` refuses by name (`<module> holds its credentials read-only: <reason>. Add it where it lives.`, exit 2, nothing written); a token refresh is still written back. `lf credential update` now changes the entry in one write instead of a write-back followed by a second write.
 
 ## [0.12.0-rc.8] - 2026-10-22
 

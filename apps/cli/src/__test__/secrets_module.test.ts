@@ -168,3 +168,106 @@ test('two lf processes on one secrets module refresh an expiring token once, and
     await provider.close();
   }
 });
+
+/** The example external declaring an OAuth 2 credential at the fake provider. */
+const oauth = (provider: FakeOAuthServer) => [
+  { name: 'acme', kind: 'oauth2', fields: [], oauth2: { authorizeUrl: provider.authorizeUrl, tokenUrl: provider.tokenUrl, scopes: ['crm.read'], pkce: true } },
+];
+
+test('lf connect writes the install and lf credential add signs in and writes the grant through the secrets module; a second lf process lists both', async () => {
+  const provider = await startFakeOAuthServer(CLIENT);
+  const vault = await serveSecretsModule({ listen: 0 });
+  try {
+    const dir = project(vault, { credentials: oauth(provider) });
+    const connected = await lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }).done;
+    assert.equal(connected.code, 0, connected.out);
+    const adding = lf(dir, ['credential', 'add', '--module', 'acme_crm', 'alice_acme', '--no-browser']);
+    const url = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/authorize\?/)).trim();
+    const page = await fetch(url);
+    assert.equal(page.status, 200, await page.clone().text());
+    const added = await adding.done;
+    assert.equal(added.code, 0, added.out);
+
+    const held = await vault.held();
+    assert.equal(held.acme_crm?.binding, 'install');
+    assert.equal(held.acme_crm?.fields.client_id, CLIENT.clientId);
+    assert.deepEqual(held.alice_acme?.binding, { credential: 'acme' });
+    assert.equal(held.alice_acme?.fields.access_token, 'access-1');
+    assert.equal(held.alice_acme?.fields.refresh_token, provider.currentRefreshToken());
+    assert.ok(vault.calls.includes('secrets.replace acme_crm'), vault.calls.join('\n'));
+    assert.ok(vault.calls.includes('secrets.create alice_acme'), vault.calls.join('\n'));
+    assert.deepEqual(vault.leased(), []);
+    assert.equal(readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8'), LOCAL, 'nothing is written beside the module');
+
+    // Another lf process finds both, by listing the module.
+    const listed = await lf(dir, ['credential', 'list', '--json']).done;
+    assert.equal(listed.code, 0, listed.out);
+    const credentials = (JSON.parse(listed.out) as { credentials: Array<{ name: string; kept: string[]; binding: string }> }).credentials;
+    for (const name of ['acme_crm', 'alice_acme']) assert.deepEqual(credentials.find((c) => c.name === name)?.kept, ['the secrets module acme_vault'], name);
+    assert.doesNotMatch(listed.out, new RegExp(`access-1|${CLIENT.clientSecret}|dev-acme-token`), 'no value is listed');
+  } finally {
+    await vault.close();
+    await provider.close();
+  }
+});
+
+const READ_ONLY = (reason: string) => `acme_vault holds its credentials read-only: ${reason}. Add it where it lives.`;
+
+test('a read-only secrets module makes lf connect, lf credential add, update and delete refuse by name, writing nothing and leaving no lease', async () => {
+  const reason = 'it is filled from the platform';
+  const vault = await serveSecretsModule({
+    listen: 0,
+    readOnly: reason,
+    seed: { ...acme({ access_token: 'vault-token' }), bob: { external: 'acme_crm', binding: { credential: 'acme_key' }, fields: { api_key: 'bob-key' } } },
+  });
+  try {
+    const dir = project(vault, { credentials: STATIC });
+    const before = await vault.held();
+    const refused = [
+      await lf(dir, ['connect', '@lf/anthropic'], { answers: ['sk-test-key', ''] }).done,
+      await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'ada'], { answers: ['ada-key', ''] }).done,
+      await lf(dir, ['credential', 'update', 'bob'], { answers: ['new-key', ''] }).done,
+      await lf(dir, ['credential', 'delete', 'bob']).done,
+    ];
+    for (const run of refused) {
+      assert.equal(run.code, 2, run.out);
+      assert.ok(run.out.includes(READ_ONLY(reason)), run.out);
+      assert.doesNotMatch(run.out, /sk-test-key|ada-key|new-key|bob-key|vault-token/, 'no secret reaches lf’s output');
+    }
+    assert.deepEqual(await vault.held(), before, 'the vault is unchanged');
+    assert.deepEqual(vault.leased(), [], 'no lease is left held');
+    assert.equal(readFileSync(join(dir, '.lf/secrets.yaml'), 'utf8'), LOCAL, 'nothing is written beside the module');
+  } finally {
+    await vault.close();
+  }
+});
+
+test('a token refresh is still written back to a read-only secrets module: read-only is whole entries only', async () => {
+  const provider = await startFakeOAuthServer({ ...CLIENT, clientAuth: 'body' });
+  const granted = await signedIn(provider);
+  const vault = await serveSecretsModule({
+    listen: 0,
+    readOnly: 'it is filled from the platform',
+    seed: acme({
+      access_token: granted.access_token,
+      refresh_token: granted.refresh_token,
+      token_url: provider.tokenUrl,
+      client_id: CLIENT.clientId,
+      client_secret: CLIENT.clientSecret,
+      expires_at: '2000-01-01T00:00:00Z',
+    }),
+  });
+  try {
+    const dir = project(vault);
+    const run = await lf(dir, ['run', '--event', EVENT]).done;
+    assert.equal(run.code, 0, run.out);
+    assert.equal(authLog(dir).at(-1), 'Bearer access-2');
+    const refreshed = (await vault.held()).acme?.fields;
+    assert.equal(refreshed?.access_token, 'access-2');
+    assert.equal(refreshed?.refresh_token, provider.currentRefreshToken());
+    assert.deepEqual(vault.leased(), []);
+  } finally {
+    await vault.close();
+    await provider.close();
+  }
+});

@@ -78,6 +78,7 @@ Every credential lf reads, refreshes and writes goes through the secrets slot.
 - A module filling the slot holds them instead, over its wire: lf lists what it holds, reads and writes one back by version, and takes a lease on one while a refresh spends its token. Two lf processes on one module refresh a token once between them.
 - `LF_SECRET__<CREDENTIAL>__<FIELD>` lies over what any module holds, field by field.
 - `lf connect`, `lf credential` and a webhook's registration write whole entries through the module.
+- A module that cannot persist (its credentials come from somewhere lf cannot write) answers those writes `read_only` with a reason. lf then refuses, exit 2, writing nothing: `<module> holds its credentials read-only: <reason>. Add it where it lives.` A webhook's registration adds `Register the webhook where the credentials live.` A token refresh is still written back; read-only is for whole entries only.
 - A secrets module's own settings never come from itself. They come from `LF_SECRET__…` or the secrets file, so run `lf connect <module>` before naming it in `core:`. A project naming a secrets module whose settings neither holds is refused as it loads.
 - Refreshing a token stays in lf. A module only stores.
 

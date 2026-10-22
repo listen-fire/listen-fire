@@ -42,7 +42,12 @@ const Unlock = Ref.extend({ token: z.string() });
 const BindingShape = z.union([z.literal('install'), z.literal('legacy'), z.object({ credential: z.string().min(1) })]);
 const Entry = Ref.extend({ external: z.string().min(1), binding: BindingShape, fields: Fields });
 
-export async function serveSecretsModule(options: { seed?: Record<string, Seeded>; listen?: string | number; print?: boolean } = {}): Promise<SecretsModule> {
+/** `readOnly` (or the `SECRETS_READ_ONLY` environment variable, for the module run as a script) is the reason this vault gives for
+ *  not changing whole entries: it answers `read_only` to create, replace and delete, and still resolves, lists, locks and writes back. */
+export async function serveSecretsModule(
+  options: { seed?: Record<string, Seeded>; listen?: string | number; print?: boolean; readOnly?: string } = {},
+): Promise<SecretsModule> {
+  const readOnly = options.readOnly ?? (process.env.SECRETS_READ_ONLY || undefined);
   const vault = createMemoryVault();
   const bindings = new Map<string, { external: string; binding: Binding }>();
   const leases = new Map<string, { token: string; until: number }>();
@@ -103,17 +108,20 @@ export async function serveSecretsModule(options: { seed?: Record<string, Seeded
           return null;
         case 'secrets.create': {
           const { ref, ...entry } = parse(Entry, method, params);
+          if (readOnly !== undefined) return { kind: 'read_only', reason: readOnly };
           if (bindings.has(ref)) throw new SlotRefusal('exists', `the vault already has an entry "${ref}"`);
           put(ref, entry);
           return null;
         }
         case 'secrets.replace': {
           const { ref, ...entry } = parse(Entry, method, params);
+          if (readOnly !== undefined) return { kind: 'read_only', reason: readOnly };
           put(ref, entry);
           return null;
         }
         case 'secrets.delete': {
           const { ref } = parse(Ref, method, params);
+          if (readOnly !== undefined) return { kind: 'read_only', reason: readOnly };
           if (!bindings.delete(ref)) throw new SlotRefusal('missing', `the vault has no entry "${ref}"`);
           return null;
         }

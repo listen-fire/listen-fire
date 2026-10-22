@@ -27,9 +27,9 @@ use crate::oauth2::{ClientApp, Declaration, DeclarationKind};
 use crate::oauth_redirect::{RedirectMode, authorize_at_provider};
 use crate::project::{Project, load_project};
 use crate::prompt::{Ask, Prompter};
-use crate::secret_stores::secrets_of;
 use crate::secrets::{Binding, Credential, Credentials, ENV_PREFIX, Secrets, install_of};
 use crate::secrets_family::Fields;
+use crate::secrets_slot::EntryError;
 
 /// How the provider sends the person back, as the command line asked.
 pub struct RedirectChoice {
@@ -65,16 +65,16 @@ pub struct AddInput<'a> {
     pub redirect: &'a RedirectChoice,
 }
 
-pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &mut Prompter) -> Result<(), String> {
+pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &mut Prompter) -> Result<(), EntryError> {
     let secrets = Secrets::open(project, &process_env())?;
     let credentials = secrets.credentials();
     let Some(external) = find_external(project, input.module)? else {
-        return Err(format!("module \"{}\" is not installed here; set it up first: lf connect {}", input.module, input.module));
+        return Err(format!("module \"{}\" is not installed here; set it up first: lf connect {}", input.module, input.module).into());
     };
     let module = external.manifest.name.clone();
     let install = install_of(credentials, &module);
     if install.is_none() && external.manifest.auth.is_some() {
-        return Err(format!("module \"{module}\" is not set up here (its server secret): lf connect {module}"));
+        return Err(format!("module \"{module}\" is not set up here (its server secret): lf connect {module}").into());
     }
     let facts = read_manifest(project, &external, install).await?;
     let declaration = choose_declared(&module, &facts.declarations, input.declared)?;
@@ -87,10 +87,10 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
         }
     };
     if !is_name(&name) {
-        return Err(format!("\"{name}\" cannot be a credential name: letters, digits and _ (a movement imports it by this name)"));
+        return Err(format!("\"{name}\" cannot be a credential name: letters, digits and _ (a movement imports it by this name)").into());
     }
     if credentials.iter().any(|c| c.name == name) {
-        return Err(format!("there is already a credential \"{name}\"; change it with lf credential update {name}"));
+        return Err(format!("there is already a credential \"{name}\"; change it with lf credential update {name}").into());
     }
     let mut fields: Vec<(String, String)> = ask_fields(declaration, &Fields::new(), prompter).await?.into_iter().filter(|(_, v)| !v.is_empty()).collect();
     if let DeclarationKind::OAuth2(oauth2) = &declaration.kind {
@@ -114,19 +114,20 @@ pub struct UpdateInput<'a> {
     pub redirect: &'a RedirectChoice,
 }
 
-pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompter: &mut Prompter) -> Result<(), String> {
+pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompter: &mut Prompter) -> Result<(), EntryError> {
     let name = input.name;
     let secrets = Secrets::open(project, &process_env())?;
     let credentials = secrets.credentials();
     let credential = writable(credentials, name)?;
     if credential.binding == Binding::Install {
-        return Err(format!("\"{name}\" is the install of {}; change it with lf connect {}", credential.external, credential.external));
+        return Err(format!("\"{name}\" is the install of {}; change it with lf connect {}", credential.external, credential.external).into());
     }
     let Some(external) = find_external(project, &credential.external)? else {
         return Err(format!(
             "\"{name}\" is for module \"{}\", which is not installed here (lf connect {})",
             credential.external, credential.external
-        ));
+        )
+        .into());
     };
     let install = install_of(credentials, &credential.external);
     let facts = read_manifest(project, &external, install).await?;
@@ -145,10 +146,6 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
         let grant = authorize_at_provider(oauth2, &client, &mode, prompter, &format!("\"{name}\" ({})", credential.external)).await?;
         edited.extend(grant);
     }
-    // Through the family: the same lock and write a refresh takes.
-    if !edited.is_empty() {
-        secrets_of(credential).update(name, &edited).await?;
-    }
     let bound = Binding::Credential(declaration.name.clone());
     let cleared: Vec<&str> = declaration
         .fields
@@ -156,13 +153,16 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
         .filter(|f| f.optional == Some(true) && edited.get(&f.name).is_some_and(String::is_empty))
         .map(|f| f.name.as_str())
         .collect();
+    // One write of the whole entry, under the store's lock as a refresh's is: a store that
+    // keeps its entries read-only refuses it before anything is changed.
     let next = |stored: Option<Vec<(String, String)>>| -> Result<Vec<(String, String)>, String> {
         let stored = stored.ok_or_else(|| format!("\"{name}\" was deleted meanwhile"))?;
         let kept: Vec<(String, String)> = stored
             .into_iter()
             .filter(|(k, _)| !["external", "module", "credential"].contains(&k.as_str()) && !cleared.contains(&k.as_str()))
             .collect();
-        Ok(entry_content(&credential.external, &bound, &kept))
+        let changed = edited.iter().filter(|(k, _)| !cleared.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+        Ok(entry_content(&credential.external, &bound, &crate::connect::spread(kept, changed)))
     };
     secrets.store().replace(name, &next).await?;
     let recorded = if credential.binding == Binding::Legacy { "; its binding is now recorded" } else { "" };
@@ -170,11 +170,11 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
     Ok(())
 }
 
-pub async fn delete_credential(project: &Project, name: &str, prompter: &mut Prompter) -> Result<(), String> {
+pub async fn delete_credential(project: &Project, name: &str, prompter: &mut Prompter) -> Result<(), EntryError> {
     let secrets = Secrets::open(project, &process_env())?;
     let credential = writable(secrets.credentials(), name)?;
     if credential.binding == Binding::Install {
-        return Err(format!("\"{name}\" is the install of {}, not a user credential", credential.external));
+        return Err(format!("\"{name}\" is the install of {}, not a user credential", credential.external).into());
     }
     secrets.store().delete(name).await?;
     prompter.print(&format!("deleted {name} ({})", credential.external));
@@ -412,10 +412,21 @@ async fn run(argv: &[String]) -> Result<i32, String> {
                 oauth_authorize_url: line.oauth_authorize_url.as_deref(),
                 oauth_token_url: line.oauth_token_url.as_deref(),
             };
-            connect_module(&project, reference, &mut Prompter::terminal(), &options).await?;
-            Ok(0)
+            refused(connect_module(&project, reference, &mut Prompter::terminal(), &options).await)
         }
         _ => credential(&line, rest).await,
+    }
+}
+
+/// A module that keeps its credentials read-only is a refusal of the request (exit 2), not a fault.
+fn refused(done: Result<(), EntryError>) -> Result<i32, String> {
+    match done {
+        Ok(()) => Ok(0),
+        Err(refusal @ EntryError::ReadOnly { .. }) => {
+            eprintln!("lf: {}", refusal.refusal());
+            Ok(2)
+        }
+        Err(EntryError::Failed(message)) => Err(message),
     }
 }
 
@@ -463,21 +474,20 @@ async fn credential(line: &Line, rest: &[String]) -> Result<i32, String> {
                 return Ok(2);
             };
             let input = AddInput { module, name, declared: line.credential.as_deref(), redirect: &redirect };
-            add_credential(&project, input, &mut prompter).await?;
+            refused(add_credential(&project, input, &mut prompter).await)
         }
         (Some("update"), Some(name)) => {
             let input = UpdateInput { name, declared: line.credential.as_deref(), reauthorize: !line.no_reauthorize, redirect: &redirect };
-            update_credential(&project, input, &mut prompter).await?;
+            refused(update_credential(&project, input, &mut prompter).await)
         }
-        (Some("delete"), Some(name)) => delete_credential(&project, name, &mut prompter).await?,
+        (Some("delete"), Some(name)) => refused(delete_credential(&project, name, &mut prompter).await),
         (Some(action @ ("update" | "delete")), None) => {
             eprintln!("lf credential {action} needs a credential name");
-            return Ok(2);
+            Ok(2)
         }
         (other, _) => {
             eprintln!("lf credential: add, update, delete or list, not \"{}\"", other.unwrap_or_default());
-            return Ok(2);
+            Ok(2)
         }
     }
-    Ok(0)
 }

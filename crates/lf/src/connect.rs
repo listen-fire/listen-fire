@@ -27,6 +27,7 @@ use crate::oauth_redirect::{loopback_redirect_uri, public_redirect_uri};
 use crate::project::Project;
 use crate::prompt::{Ask, Prompter};
 use crate::secrets::{Binding, Credential, Credentials, Origin, Secrets, install_of};
+use crate::secrets_slot::EntryError;
 
 /// The install's fields for the OAuth app at the provider.
 pub const CLIENT_ID_FIELD: &str = "client_id";
@@ -209,7 +210,7 @@ pub struct ConnectOptions<'a> {
     pub oauth_token_url: Option<&'a str>,
 }
 
-pub async fn connect_module(project: &Project, reference: &str, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<(), String> {
+pub async fn connect_module(project: &Project, reference: &str, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<(), EntryError> {
     let url = options.url;
     if let Some(module) = crate::core::builtin(reference) {
         return connect_core(project, module, prompter).await;
@@ -232,7 +233,7 @@ pub async fn connect_module(project: &Project, reference: &str, prompter: &mut P
         }
         // Installed as an adapter, as every package is until its manifest is
         // read: one that answers with plugins is a plugin external.
-        Ok(facts) if created && facts.answer.get("plugins").is_some() => mark_plugin(&external),
+        Ok(facts) if created && facts.answer.get("plugins").is_some() => Ok(mark_plugin(&external)?),
         Ok(_) => Ok(()),
     }
 }
@@ -245,14 +246,14 @@ fn mark_plugin(external: &External) -> Result<(), String> {
     std::fs::write(&path, marked).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-async fn set_up(project: &Project, external: &External, secrets: &Secrets, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<ManifestFacts, String> {
+async fn set_up(project: &Project, external: &External, secrets: &Secrets, prompter: &mut Prompter, options: &ConnectOptions<'_>) -> Result<ManifestFacts, EntryError> {
     let credentials = secrets.credentials();
     let name = &external.manifest.name;
     let existing = install_of(credentials, name).filter(|c| !matches!(c.binding, Binding::Credential(_)));
     if let Some(existing) = existing
         && (existing.origin.slot_ref.is_none() || !existing.origin.env_fields.is_empty())
     {
-        return Err(format!("the install of \"{name}\" (\"{}\") comes from the environment, which lf cannot write; change it there", existing.name));
+        return Err(format!("the install of \"{name}\" (\"{}\") comes from the environment, which lf cannot write; change it there", existing.name).into());
     }
     let mut fields: Vec<(String, String)> = existing.map(|c| c.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
     let mut cleared: BTreeSet<String> = BTreeSet::new();
@@ -283,7 +284,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
                 cleared.insert(field.to_string());
             }
             Some(url) if url::Url::parse(url).is_ok_and(|u| u.scheme() == "http" || u.scheme() == "https") => put(&mut fields, field, url.to_string()),
-            Some(url) => return Err(format!("{flag} must be an http(s) URL, not \"{url}\"")),
+            Some(url) => return Err(format!("{flag} must be an http(s) URL, not \"{url}\"").into()),
         }
     }
     if let Some(url) = current(&fields, BASE_URL_OVERRIDE_FIELD) {
@@ -348,7 +349,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
         let registered = fields.iter().find(|(k, _)| k == REDIRECT_PORT_FIELD).map(|(_, v)| v.clone()).unwrap_or_else(|| "0".into());
         let port = prompter.ask("the loopback port your app registered for its redirect (0: any port)", Ask { default: Some(&registered), ..Ask::default() }).await?;
         let number = port.parse::<u32>().ok().filter(|p| *p <= 65535 && port.chars().all(|c| c.is_ascii_digit()));
-        let Some(number) = number else { return Err(format!("the redirect port must be a number from 0 to 65535, not \"{port}\"")) };
+        let Some(number) = number else { return Err(format!("the redirect port must be a number from 0 to 65535, not \"{port}\"").into()) };
         put(&mut fields, REDIRECT_PORT_FIELD, port.clone());
         prompter.print("register these redirect URIs with the provider:");
         if number == 0 {
@@ -385,7 +386,7 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
 
 /// A built-in core module (crate::core): its settings asked for and written
 /// to its install entry, then its setup run (a store's schema created).
-async fn connect_core(project: &Project, module: &crate::core::CoreModule, prompter: &mut Prompter) -> Result<(), String> {
+async fn connect_core(project: &Project, module: &crate::core::CoreModule, prompter: &mut Prompter) -> Result<(), EntryError> {
     let env = process_env();
     // A secrets module's own settings are kept where it is not (crate::secrets_slot).
     let secrets = match module.slot {

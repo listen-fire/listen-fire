@@ -182,9 +182,11 @@ fn writable(credential: &Credential) -> Result<std::rc::Rc<dyn SecretsStore>, St
 
 /// The credential's entry, its other fields kept.
 async fn keep(credential: &Credential, fields: Vec<(String, String)>) -> Result<(), String> {
-    writable(credential)?.replace(&credential.name, &|stored| Ok(spread(stored.unwrap_or_default(), fields.clone()))).await
+    let replaced = writable(credential)?.replace(&credential.name, &|stored| Ok(spread(stored.unwrap_or_default(), fields.clone()))).await;
+    replaced.map_err(|e| e.refusal_for_webhook())
 }
 
 async fn forget(credential: &Credential, names: &[&str]) -> Result<(), String> {
-    writable(credential)?.replace(&credential.name, &|stored| Ok(stored.unwrap_or_default().into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect())).await
+    let replaced = writable(credential)?.replace(&credential.name, &|stored| Ok(stored.unwrap_or_default().into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect())).await;
+    replaced.map_err(|e| e.refusal_for_webhook())
 }

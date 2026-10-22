@@ -18,6 +18,9 @@
 //!   secrets.create | secrets.replace { ref, external, binding, fields }
 //!   secrets.delete { ref }
 //!
+//! The three entry methods answer null, or `{ kind: "read_only", reason }` from
+//! a module that cannot persist; lf then refuses by name (`EntryError`).
+//!
 //! Whichever module fills the slot, `LF_SECRET__<CREDENTIAL>__<FIELD>` lies
 //! over what it holds (crate::secrets). The module's own settings cannot come
 //! from itself: they are read from the environment and the secrets file only
@@ -56,6 +59,46 @@ pub struct Stored {
     pub fields: Fields,
 }
 
+/// Why a whole entry was not changed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryError {
+    /// The module keeps its credentials where lf cannot change them.
+    ReadOnly { module: String, reason: String },
+    Failed(String),
+}
+
+impl EntryError {
+    /// The refusal `lf connect`, `lf credential` and webhook registration give.
+    pub const REGISTER_WHERE_IT_LIVES: &'static str = "Register the webhook where the credentials live.";
+
+    pub fn refusal(&self) -> String {
+        match self {
+            EntryError::ReadOnly { module, reason } => format!("{module} holds its credentials read-only: {reason}. Add it where it lives."),
+            EntryError::Failed(message) => message.clone(),
+        }
+    }
+
+    /// `refusal`, a webhook's registration saying where to register instead.
+    pub fn refusal_for_webhook(&self) -> String {
+        match self {
+            EntryError::ReadOnly { .. } => format!("{} {}", self.refusal(), EntryError::REGISTER_WHERE_IT_LIVES),
+            EntryError::Failed(message) => message.clone(),
+        }
+    }
+}
+
+impl From<String> for EntryError {
+    fn from(message: String) -> EntryError {
+        EntryError::Failed(message)
+    }
+}
+
+impl From<EntryError> for String {
+    fn from(error: EntryError) -> String {
+        error.refusal()
+    }
+}
+
 /// What fills the secrets slot: the family's store (resolve, write back by
 /// version, lease, writable) plus what lf reads the whole list by and
 /// changes whole entries with.
@@ -76,10 +119,10 @@ pub trait SecretsStore: SecretsBackend {
         Ok(entries)
     }
     /// A new entry; refused when it exists.
-    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), String>>;
+    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), EntryError>>;
     /// The entry replaced by what `next` makes of it as stored now (None: there is none), under its lock.
-    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), String>>;
-    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), String>>;
+    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), EntryError>>;
+    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), EntryError>>;
 }
 
 // ── @lf/file-secrets ────────────────────────────────────────────────────────
@@ -220,19 +263,19 @@ impl SecretsStore for FileSecretsModule {
         Ok(entries)
     }
 
-    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), String>> {
-        Box::pin(async move { change_entry(&self.file_for_writes()?, reference, EntryChange::Create(entry)).await })
+    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), EntryError>> {
+        Box::pin(async move { Ok(change_entry(&self.file_for_writes()?, reference, EntryChange::Create(entry)).await?) })
     }
 
-    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), String>> {
-        Box::pin(async move { change_entry(&self.file_for_writes()?, reference, EntryChange::Replace(next)).await })
+    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), EntryError>> {
+        Box::pin(async move { Ok(change_entry(&self.file_for_writes()?, reference, EntryChange::Replace(next)).await?) })
     }
 
-    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), String>> {
+    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), EntryError>> {
         Box::pin(async move {
             match self.file()? {
-                Some(file) => change_entry(&file.file, reference, EntryChange::Delete).await,
-                None => Err(format!("{} has no entry \"{reference}\"", self.label())),
+                Some(file) => Ok(change_entry(&file.file, reference, EntryChange::Delete).await?),
+                None => Err(format!("{} has no entry \"{reference}\"", self.label()).into()),
             }
         })
     }
@@ -242,12 +285,13 @@ impl SecretsStore for FileSecretsModule {
 
 /// A secrets module spoken to over the slot's methods (crate::slot_client).
 pub struct ProcessSecrets {
+    name: String,
     client: SlotClient,
 }
 
 impl ProcessSecrets {
     pub fn start(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessSecrets, String> {
-        Ok(ProcessSecrets { client: SlotClient::start("secrets", name, process, settings)? })
+        Ok(ProcessSecrets { name: name.to_string(), client: SlotClient::start("secrets", name, process, settings)? })
     }
 
     fn call(&self, method: &str, params: Obj) -> Result<Js, String> {
@@ -256,6 +300,20 @@ impl ProcessSecrets {
 
     fn unexpected(&self, method: &str, answer: &Js) -> String {
         format!("{}: {method} answered {}, not the slot's shape", self.client.label, shape_of(answer))
+    }
+
+    /// An entry method's answer: null when changed, `{ kind: "read_only", reason }`
+    /// when the module keeps its credentials where lf cannot change them.
+    fn changed(&self, method: &str, params: Obj) -> Result<(), EntryError> {
+        let answer = self.call(method, params)?;
+        match (&answer, answer.get("kind").and_then(Js::as_str)) {
+            (Js::Null, _) => Ok(()),
+            (_, Some("read_only")) => {
+                let reason = answer.get("reason").and_then(Js::as_str).ok_or_else(|| self.unexpected(method, &answer))?;
+                Err(EntryError::ReadOnly { module: self.name.clone(), reason: reason.to_string() })
+            }
+            _ => Err(self.unexpected(method, &answer).into()),
+        }
     }
 
     /// The entry as stored now, its binding keys first (crate::connect::entry_content).
@@ -327,24 +385,24 @@ impl SecretsStore for ProcessSecrets {
         listed.iter().map(|one| listed_of(one).ok_or_else(|| self.unexpected("secrets.list", &answer))).collect()
     }
 
-    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), String>> {
-        Box::pin(async move { self.call("secrets.create", entry_params(reference, &entry)?).map(drop) })
+    fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), EntryError>> {
+        Box::pin(async move { self.changed("secrets.create", entry_params(reference, &entry)?) })
     }
 
-    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), String>> {
+    fn replace<'a>(&'a self, reference: &'a str, next: &'a dyn Fn(Option<Entry>) -> Result<Entry, String>) -> LocalFuture<'a, Result<(), EntryError>> {
         Box::pin(async move {
             let lease = self.lock(reference, crate::secrets_family::LEASE_TTL_MS).await?;
             let replaced = (|| {
                 let entry = next(self.current_entry(reference)?)?;
-                self.call("secrets.replace", entry_params(reference, &entry)?).map(drop)
+                self.changed("secrets.replace", entry_params(reference, &entry)?)
             })();
             self.unlock(reference, lease);
             replaced
         })
     }
 
-    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), String>> {
-        Box::pin(async move { self.call("secrets.delete", obj! { "ref" => Js::str(reference) }).map(drop) })
+    fn delete<'a>(&'a self, reference: &'a str) -> LocalFuture<'a, Result<(), EntryError>> {
+        Box::pin(async move { self.changed("secrets.delete", obj! { "ref" => Js::str(reference) }) })
     }
 }
 
@@ -531,14 +589,25 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_refusal_names_the_module_and_its_reason_and_the_remedy_of_the_command() {
+        let read_only = EntryError::ReadOnly { module: "acme_vault".into(), reason: "it is filled from the platform".into() };
+        assert_eq!(String::from(read_only.clone()), "acme_vault holds its credentials read-only: it is filled from the platform. Add it where it lives.");
+        assert_eq!(
+            read_only.refusal_for_webhook(),
+            "acme_vault holds its credentials read-only: it is filled from the platform. Add it where it lives. Register the webhook where the credentials live."
+        );
+        assert_eq!(EntryError::Failed("boom".into()).refusal_for_webhook(), "boom");
+    }
+
+    #[test]
     fn the_file_modules_entry_methods_keep_the_files_comments() {
         let (path, module) = file_with("# keep\nacme:\n  external: acme_crm\n  token: t\n");
         block_on(async {
             module.create("ada", vec![("module".into(), "hubspot".into()), ("credential".into(), "oauth".into()), ("access_token".into(), "a".into())]).await.unwrap();
-            assert!(module.create("ada", Vec::new()).await.unwrap_err().contains("already has an entry \"ada\""));
+            assert!(String::from(module.create("ada", Vec::new()).await.unwrap_err()).contains("already has an entry \"ada\""));
             module.replace("acme", &|stored| Ok(crate::connect::spread(stored.unwrap(), vec![("token".into(), "t2".into())]))).await.unwrap();
             module.delete("ada").await.unwrap();
-            assert!(module.delete("ada").await.unwrap_err().contains("has no entry \"ada\""));
+            assert!(String::from(module.delete("ada").await.unwrap_err()).contains("has no entry \"ada\""));
         });
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# keep\nacme:\n  external: acme_crm\n  token: t2\n");
     }
