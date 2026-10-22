@@ -17,6 +17,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- `web.render` (`@lf/web`) takes a `name` setting for its file like `pdf.render` (`web.render(html, { name: "Q3 report" })`; `.pdf` is added when missing). Without one the file is still `movement-artifact.pdf`.
 - `lf connect <module>` for a module that signs users in with OAuth and expects one user credential now ends by asking "Sign in now? [Y/n]" and, on yes, runs `lf credential add --module <module>` in the same command (it asks the credential's name; `--no-browser`, `--headless`, `--public` and `--redirect-port` apply). `--yes`, or input that has ended, skips the offer and prints the next-step line as before.
 - `lf deliveries replay` tells the project's wake module (`core: { wake: … }`) of the events it queued, as a door does, so a worker starts at once rather than at the next scheduled drain.
 

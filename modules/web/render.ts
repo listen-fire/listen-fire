@@ -41,6 +41,18 @@ function marginOf(value: unknown): number {
   return value;
 }
 
+/** The file's name when the call names none. */
+export const DEFAULT_NAME = 'movement-artifact.pdf';
+
+function nameOf(value: unknown): string {
+  if (value === undefined || value === null) return DEFAULT_NAME;
+  if (typeof value !== 'string' || value.trim() === '' || /[/\\]/.test(value)) {
+    throw new Error(`@lf/web: name is a file name (no folders), not ${JSON.stringify(value)}`);
+  }
+  const name = value.trim();
+  return name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`;
+}
+
 // A whole document, or markup a page is made of. A text that merely contains
 // a "<" (a comparison, an address in angle brackets) is not HTML.
 const HTML_DOCUMENT = /^\s*(<!doctype\s+html|<html[\s>])/i;
@@ -82,6 +94,7 @@ export async function renderPlugin(browser: BrowserSlot, config: Record<string, 
   const { text } = config;
   if (typeof text !== 'string') throw new Error('@lf/web: render takes the text or HTML to draw');
   const pageSize = pageSizeOf(config.pageSize);
+  const name = nameOf(config.name);
   const margin = `${(marginOf(config.margin) / POINTS_PER_INCH).toFixed(4)}in`;
   if (browser.emptyBecause !== undefined) throw new BrowserSlotEmptyForRender(browser.emptyBecause);
   const pdf = await browser.withPage(async (page) => {
@@ -92,5 +105,5 @@ export async function renderPlugin(browser: BrowserSlot, config: Record<string, 
       margin: { top: margin, right: margin, bottom: margin, left: margin },
     });
   });
-  return { files: { value: { name: 'movement-artifact.pdf', contentType: 'application/pdf', base64: pdf.toString('base64') } } };
+  return { files: { value: { name, contentType: 'application/pdf', base64: pdf.toString('base64') } } };
 }

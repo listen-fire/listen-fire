@@ -540,6 +540,11 @@ const WEB_RENDER_SIGNATURE: TransformSignature = {
       description: 'The page: "a4" (the default) or "letter".',
     },
     { name: 'margin', type: { kind: 'number' }, description: 'The margin on every side, in points (a whole number from 0 to 200). The default is 30.' },
+    {
+      name: 'name',
+      type: { kind: 'string' },
+      description: 'The file\'s name, as the system it is written to shows it: ".pdf" is added when it does not end with it. The default is "movement-artifact.pdf".',
+    },
   ],
   dataDependency: 'none',
   // The browser may load the images and styles an HTML page names.
