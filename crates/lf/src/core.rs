@@ -27,7 +27,10 @@
 //! is refused saying so (crate::ocr, docs/contracts/ocr-slot.md). The
 //! secrets slot (where credentials are kept) defaults to @lf/file-secrets,
 //! the secrets file; a secrets module's own settings come from the
-//! environment and that file, never from itself (crate::secrets_slot).
+//! environment and that file, never from itself (crate::secrets_slot). The
+//! movements slot (the project's movement files, by name) defaults to
+//! @lf/folder-movements, the movements folder lf.yaml names; its module's
+//! own settings come from the same two places (crate::movements_slot).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -49,10 +52,11 @@ pub enum Slot {
     Wake,
     Ocr,
     Secrets,
+    Movements,
 }
 
 impl Slot {
-    pub const ALL: [Slot; 10] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::LoopGuard, Slot::Browser, Slot::Wake, Slot::Ocr, Slot::Secrets];
+    pub const ALL: [Slot; 11] = [Slot::Models, Slot::Judge, Slot::Store, Slot::Files, Slot::Limiter, Slot::LoopGuard, Slot::Browser, Slot::Wake, Slot::Ocr, Slot::Secrets, Slot::Movements];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -66,6 +70,7 @@ impl Slot {
             Slot::Wake => "wake",
             Slot::Ocr => "ocr",
             Slot::Secrets => "secrets",
+            Slot::Movements => "movements",
         }
     }
 
@@ -83,6 +88,7 @@ impl Slot {
             Slot::Files => LOCAL_FILES,
             Slot::Limiter => MEMORY_LIMITER,
             Slot::Secrets => FILE_SECRETS,
+            Slot::Movements => FOLDER_MOVEMENTS,
             Slot::LoopGuard | Slot::Browser | Slot::Wake | Slot::Ocr => return None,
         };
         Some(builtin(name).expect("a slot's default is a built-in"))
@@ -152,6 +158,7 @@ pub const LOCAL_FILES: &str = "@lf/local-files";
 pub const MEMORY_LIMITER: &str = "@lf/memory-limiter";
 pub const FINGERPRINT_GUARD: &str = "@lf/fingerprint-guard";
 pub const FILE_SECRETS: &str = "@lf/file-secrets";
+pub const FOLDER_MOVEMENTS: &str = "@lf/folder-movements";
 
 const ANTHROPIC_SETTINGS: &[Setting] = &[
     setting("api_key", "your Anthropic API key", true, false),
@@ -177,6 +184,8 @@ pub const BUILTIN: &[CoreModule] = &[
     built_in(FINGERPRINT_GUARD, Slot::LoopGuard, FINGERPRINT_GUARD_SETTINGS),
     // The secrets file (plain or SOPS) and its lock file: lf's secrets as they always were.
     built_in(FILE_SECRETS, Slot::Secrets, &[]),
+    // The movements folder lf.yaml names, walked as it always was.
+    built_in(FOLDER_MOVEMENTS, Slot::Movements, &[]),
 ];
 
 pub fn builtin(name: &str) -> Option<&'static CoreModule> {
@@ -200,6 +209,7 @@ pub struct CoreChoice {
     /// None: a file with no text layer is unreadable, saying the slot is empty.
     pub ocr: Option<CoreModule>,
     pub secrets: CoreModule,
+    pub movements: CoreModule,
 }
 
 impl Default for CoreChoice {
@@ -215,6 +225,7 @@ impl Default for CoreChoice {
             wake: None,
             ocr: None,
             secrets: Slot::Secrets.default_module().expect("secrets has a default").clone(),
+            movements: Slot::Movements.default_module().expect("movements has a default").clone(),
         }
     }
 }
@@ -269,6 +280,7 @@ impl CoreChoice {
                 Slot::Wake => choice.wake = Some(module),
                 Slot::Ocr => choice.ocr = Some(module),
                 Slot::Secrets => choice.secrets = module,
+                Slot::Movements => choice.movements = module,
             }
         }
         Ok(choice)
@@ -311,7 +323,7 @@ pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String
         crate::limiter_module::ProcessLimiter::start(&module.name, process, settings)?;
         return Ok(vec![format!("{} answered as a limiter", module.name)]);
     }
-    if let (Some(process), slot @ (Slot::Models | Slot::Judge | Slot::Files | Slot::Browser | Slot::Wake | Slot::Ocr | Slot::Secrets)) = (&module.process, module.slot) {
+    if let (Some(process), slot @ (Slot::Models | Slot::Judge | Slot::Files | Slot::Browser | Slot::Wake | Slot::Ocr | Slot::Secrets | Slot::Movements)) = (&module.process, module.slot) {
         let client = crate::slot_client::SlotClient::start(slot.name(), &module.name, process, settings)?;
         let manifest = client.call_text("manifest", Default::default())?;
         let answered = manifest.get("slot").and_then(crate::json::Js::as_str);
@@ -394,6 +406,19 @@ mod tests {
         );
         assert_eq!(choice.loop_guard, None, "no guard runs unless lf.yaml names one");
         assert_eq!(choice.secrets.name, FILE_SECRETS, "credentials are kept in the secrets file unless lf.yaml names a module");
+        assert_eq!(choice.movements.name, FOLDER_MOVEMENTS, "movement files are read from the movements folder unless lf.yaml names a module");
+    }
+
+    #[test]
+    fn the_movements_slot_takes_a_movements_module() {
+        assert_eq!(Slot::of("movements"), Some(Slot::Movements));
+        assert_eq!(CoreChoice::of(&BTreeMap::new(), &[], "lf.yaml").unwrap().movements.name, FOLDER_MOVEMENTS);
+        let installed = [process_module("acme_movements", Slot::Movements)];
+        assert_eq!(CoreChoice::of(&named(&[("movements", "acme_movements")]), &installed, "lf.yaml").unwrap().movements, installed[0]);
+        let refused = CoreChoice::of(&named(&[("movements", "@lf/git-movements")]), &[], "lf.yaml").unwrap_err();
+        assert!(refused.contains("built-in movements modules (@lf/folder-movements)"), "{refused}");
+        let refused = CoreChoice::of(&named(&[("store", FOLDER_MOVEMENTS)]), &[], "lf.yaml").unwrap_err();
+        assert!(refused.contains("fills the movements slot"), "{refused}");
     }
 
     #[test]

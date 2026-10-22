@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn a_listen_is_read_with_its_construction_and_static_config() {
         let source = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n\nfunction welcome(company: <crm-[:Company]->>) {\n  write crm-[:Company]-> { Name: \"x\" }\n}\n\nlisten to crm { events: [\"company.created\"] } fire welcome\n";
-        let files = vec![MovementFile { name: "companies".into(), path: PathBuf::from("companies.mvt"), source: source.into() }];
+        let files = vec![MovementFile { name: "companies".into(), path: PathBuf::from("companies.mvt"), source: source.into(), version: None }];
         let listens = collect_listens(&files);
         assert_eq!(listens.len(), 1);
         let listen = &listens[0];

@@ -157,10 +157,11 @@ pub fn load_project(from: &Path) -> Result<Project, String> {
     load_project_with(from, &std::env::vars().collect::<Vec<_>>())
 }
 
-/// `load_project` under `env`: where a secrets module's own settings may come from.
+/// `load_project` under `env`: where a secrets or movements module's own settings may come from.
 pub fn load_project_with(from: &Path, env: &[(String, String)]) -> Result<Project, String> {
     let project = load_pinned(from, false)?;
     crate::secrets_slot::refuse_unbootstrapped(&project, env).map_err(|why| format!("{}: {why}", project.root.join(PROJECT_FILE).display()))?;
+    crate::movements_slot::refuse_unbootstrapped(&project, env).map_err(|why| format!("{}: {why}", project.root.join(PROJECT_FILE).display()))?;
     Ok(project)
 }
 
@@ -291,6 +292,18 @@ mod tests {
         assert_eq!(cost_cap_of(0.25, "lf.yaml"), Ok(250_000.0));
         assert!(cost_cap_of(0.0, "lf.yaml").unwrap_err().contains("maxRunCostUsd"));
         assert!(cost_cap_of(-1.0, "lf.yaml").is_err());
+    }
+
+    /// lf's slots are the protocol's: `CORE_SLOTS` names `Slot::ALL`, in order.
+    #[test]
+    fn the_core_slots_are_the_protocols() {
+        let protocol = include_str!("../../../packages/engine-contracts/protocol.ts");
+        let marker = "export const CORE_SLOTS = [";
+        let start = protocol.find(marker).expect("protocol.ts declares CORE_SLOTS") + marker.len();
+        let end = start + protocol[start..].find(']').expect("the list ends");
+        let named: Vec<&str> = protocol[start..end].split(',').map(|s| s.trim().trim_matches('\'')).filter(|s| !s.is_empty()).collect();
+        let slots: Vec<&str> = crate::core::Slot::ALL.iter().map(|s| s.name()).collect();
+        assert_eq!(named, slots);
     }
 
     /// The crates and the TypeScript packages are one release: each reads its

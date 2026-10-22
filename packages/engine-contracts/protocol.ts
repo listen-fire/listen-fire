@@ -875,8 +875,10 @@ export type WireModuleKindShape = z.infer<typeof WireModuleKind>;
  *  (a scanned file is refused, saying the slot is empty). `secrets` is
  *  where credentials are kept (`lf`'s default: its secrets file); a secrets
  *  module's own settings come from the environment or that file, never
- *  from itself. */
-export const CORE_SLOTS = ['models', 'judge', 'store', 'files', 'limiter', 'loopGuard', 'browser', 'wake', 'ocr', 'secrets'] as const;
+ *  from itself. `movements` answers the project's movement files by name
+ *  (`lf`'s default: the movements folder); its module's own settings come
+ *  from the same two places. */
+export const CORE_SLOTS = ['models', 'judge', 'store', 'files', 'limiter', 'loopGuard', 'browser', 'wake', 'ocr', 'secrets', 'movements'] as const;
 export const WireCoreSlot = z.enum(CORE_SLOTS);
 export type WireCoreSlotShape = z.infer<typeof WireCoreSlot>;
 

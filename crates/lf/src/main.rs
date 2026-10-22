@@ -112,6 +112,7 @@ mod lsp;
 mod models;
 mod module_hosts;
 mod module_transport;
+mod movements_slot;
 mod oauth2;
 #[cfg(feature = "oauth")]
 mod oauth2_flow;

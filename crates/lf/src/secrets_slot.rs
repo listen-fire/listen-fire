@@ -442,7 +442,7 @@ impl SecretsStore for ProcessSecrets {
 // ── The wire's shapes, both ways (crate::contract_secrets answers them) ─────
 
 /// An answer named by its shape, never its values: a store's answer carries secrets.
-fn shape_of(answer: &Js) -> String {
+pub(crate) fn shape_of(answer: &Js) -> String {
     match answer {
         Js::Null => "null".into(),
         Js::Bool(_) => "a boolean".into(),
@@ -579,7 +579,14 @@ fn local_credentials(project: &Project, env: &[(String, String)]) -> Result<Cred
 /// A project whose secrets module needs settings neither the environment
 /// nor the secrets file holds is refused as it loads.
 pub fn refuse_unbootstrapped(project: &Project, env: &[(String, String)]) -> Result<(), String> {
-    let module = &project.core.secrets;
+    refuse_unbootstrapped_module(project, env, &project.core.secrets, "the module")
+}
+
+/// The bootstrap rule for a slot whose module lf needs before it can ask
+/// the secrets slot (the secrets module itself, the movements module):
+/// settings it requires that neither the environment nor the secrets file
+/// holds refuse the project. `not_from` names where they cannot come from.
+pub(crate) fn refuse_unbootstrapped_module(project: &Project, env: &[(String, String)], module: &CoreModule, not_from: &str) -> Result<(), String> {
     let Some(process) = &module.process else { return Ok(()) };
     let needs = module.settings.iter().any(|s| !s.optional) || process.auth_field.is_some();
     if !needs || install_of(&local_credentials(project, env)?, &module.name).is_some() {
@@ -587,7 +594,8 @@ pub fn refuse_unbootstrapped(project: &Project, env: &[(String, String)]) -> Res
     }
     let entry = crate::connect::core_entry_name(&module.name).to_uppercase();
     Err(format!(
-        "core.secrets: {name}: the secrets module's own settings come from {ENV_PREFIX}… or the secrets file, not from the module; neither holds {name}'s install (run `lf connect {name}` before naming it in lf.yaml, or set {ENV_PREFIX}{entry}__EXTERNAL={name} and its settings as {ENV_PREFIX}{entry}__<SETTING>)",
+        "core.{slot}: {name}: the {slot} module's own settings come from {ENV_PREFIX}… or the secrets file, not from {not_from}; neither holds {name}'s install (run `lf connect {name}` before naming it in lf.yaml, or set {ENV_PREFIX}{entry}__EXTERNAL={name} and its settings as {ENV_PREFIX}{entry}__<SETTING>)",
+        slot = module.slot.name(),
         name = module.name
     ))
 }

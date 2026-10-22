@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn only_the_imported_externals_are_needed() {
-        let file = |source: &str| MovementFile { name: "m".into(), path: PathBuf::from("m.mvt"), source: source.into() };
+        let file = |source: &str| MovementFile { name: "m".into(), path: PathBuf::from("m.mvt"), source: source.into(), version: None };
         let all = || {
             vec![
                 installed("attio", "adapter", Some("@lf/attio")),

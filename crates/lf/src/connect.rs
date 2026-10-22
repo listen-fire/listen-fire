@@ -425,9 +425,10 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
 /// to its install entry, then its setup run (a store's schema created).
 async fn connect_core(project: &Project, module: &crate::core::CoreModule, prompter: &mut Prompter) -> Result<(), EntryError> {
     let env = process_env();
-    // A secrets module's own settings are kept where it is not (crate::secrets_slot).
+    // A secrets or movements module's own settings are kept where it is not
+    // (crate::secrets_slot, crate::movements_slot).
     let secrets = match module.slot {
-        crate::core::Slot::Secrets => Secrets::local(project, &env)?,
+        crate::core::Slot::Secrets | crate::core::Slot::Movements => Secrets::local(project, &env)?,
         _ => Secrets::open(project, &env)?,
     };
     let credentials = secrets.credentials();
@@ -483,6 +484,7 @@ async fn connect_core(project: &Project, module: &crate::core::CoreModule, promp
         crate::core::Slot::Wake => project.core.wake.as_ref(),
         crate::core::Slot::Ocr => project.core.ocr.as_ref(),
         crate::core::Slot::Secrets => Some(&project.core.secrets),
+        crate::core::Slot::Movements => Some(&project.core.movements),
     };
     if filling.is_none_or(|filling| filling.name != module.name) {
         prompter.print(&format!("to use it, name it in lf.yaml: core: {{ {}: \"{}\" }}", module.slot.name(), module.name));

@@ -21,6 +21,7 @@ core:
 | `wake` | told when work is due, so whatever starts lf's workers starts one then ([wake-slot.md](contracts/wake-slot.md)) | none: nobody is told, and work waits for a scheduled `lf drain` | none in lf; a cloud queue module (Google Cloud Tasks) ships separately |
 | `ocr` | the text of a scanned PDF or an image, for `extract(…)`, `File.read` and a plugin's `ctx.ocr` ([ocr-slot.md](contracts/ocr-slot.md)) | none: a file with no text layer is unreadable, saying the slot is empty | none in lf; `@listen-fire/document-ai` (Google Document AI) and `@listen-fire/models` on Gemini fill it |
 | `secrets` | where credentials are kept: the ones a movement imports, each module's install, each core module's settings | `@lf/file-secrets` (the secrets file, plain or SOPS, and its lock file) | none in lf; a vault module (the platform's credential store, a cloud secret manager) fills it |
+| `movements` | the project's movement files, by name | `@lf/folder-movements` (the movements folder `lf.yaml` names) | none in lf; the platform's per-tenant store fills it |
 
 A slot accepts only a module of its own kind; `lf check` and `lf run` refuse anything else, naming the slots.
 
@@ -85,6 +86,15 @@ Every credential lf reads, refreshes and writes goes through the secrets slot. T
 - Signing in for a credential against a provider (`lf credential add`) runs in lf whichever module stores the result, and the provider's OAuth app must have lf's redirect URI registered. Under `--public` that URI is `<publicUrl>/oauth/callback`, answered by `lf serve`. When something else holds the registered callback (a platform in front of the fleet), set `oauth: { redirectUri: https://… }` in `lf.yaml`: lf sends that URI at authorize and at the token exchange, and the relay forwards the provider's `code` and `state` query on to `lf serve`'s `GET /oauth/callback`, which matches the waiting command by `state`. `lf connect` prints the URI to register.
 - In a cloud deployment the module and its settings come from the environment, never a file: `core: { secrets: <module> }` in `lf.yaml`, `LF_SECRET__<MODULE>__EXTERNAL=<module>` and its settings as `LF_SECRET__<MODULE>__<SETTING>` ([deploy/lf](../deploy/lf/README.md#the-secrets-module)). The credentials themselves then live in the module, and `LF_SECRET__<CREDENTIAL>__<FIELD>` still lies over them.
 - `lf --contract-secrets-slot --dir <project>` serves the project's secrets slot as a module for the conformance cases, as `--contract-wake-slot` does for the wake slot.
+
+## The movements module
+
+Every movement file lf reads goes through the movements slot. `lf.yaml` and the externals folder stay local files.
+
+- `@lf/folder-movements` is the movements folder `lf.yaml` names, read as it always was: every `.mvt` under it, each folder's entries in sorted order, folders depth first.
+- A module filling the slot answers the files by their path under that folder (`orders/sync.mvt`): lf lists them, then reads each. No movements folder need exist on disk; messages still name each file as if it were in it.
+- lf reads the files when a command opens its project, and nothing is polled. A file whose listed version lf already holds is not read again, so one command reads each file once. `lf serve` and `lf drain` keep the files they started with until they restart.
+- A movements module's own settings come from `LF_SECRET__…` or the secrets file, never from the secrets slot. A project naming a movements module whose settings neither holds is refused as it loads.
 
 ## The loop guard
 
