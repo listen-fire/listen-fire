@@ -18,10 +18,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.0-rc.9] - 2026-10-22
+
 - Every delivery a door takes is kept as a receipt holding the events it produced (not its body, headers or signature), written in the door's one write; `lf runs show` names the delivery a run came from. `lf deliveries` lists them (`--subscription`, `--since`, `--json`), `lf deliveries show <id>` prints one with its events and runs, and `lf deliveries replay <id>` queues its events again as a delivery of its own, for `lf serve` or `lf drain` to run against the project as it is now. The drain forgets a delivery after `lf.yaml`'s `deliveries: { retainDays: 14 }` days once its runs are settled and its events are no longer queued. `--ephemeral` keeps its receipts only for the session. A project with no `deliveries:` and no delivery id behaves as before; the state file gains a `delivery` table and `run.delivery_id`.
 - A provider's repeated delivery is kept out at the door: an external's `lf-external.yaml` `webhook: { deliveryIdHeader: x-github-delivery }` (or a manifest's `inbound.deliveryId: { header }`, a module's `checkInbound` answer `deliveryId`, an `emit` body's `deliveryId`) names the provider's id, and a second delivery under it at the same subscription is answered `duplicate: true` and runs nothing. Without an id nothing changes. An inline delivery that fails now keeps its pull cursor with its receipt, so its events are recovered by replay rather than by the sender's retry.
 - Store modules (a change to the store slot, protocol release rc.9): `inbound.keepDelivery` takes a `delivery` receipt and answers `{ kept }` (false: a duplicate, nothing written), and there are four new methods, `inbound.deliveries`, `inbound.delivery`, `inbound.sweepDeliveries` and `inbound.forgetDeliveryId`; `runs.start` and `events.startRun` take `deliveryId?` and `RunRow` answers it. Every store module must take the wider `keepDelivery` in rc.9; `lf` treats a `null` answer as malformed. A Postgres store gains `lf.delivery` and `lf.trigger_run.delivery_id` (migration 7). See `docs/contracts/store-slot.md`.
-
 - Secrets are a core slot (`core: { secrets: … }`). The default, `@lf/file-secrets`, is the secrets file, SOPS and `LF_SECRET__…` exactly as before, so a project that names none behaves as it did. A secrets module holds credentials elsewhere (a vault a fleet of `lf` workers shares): a token one worker refreshes is kept for all, and two workers refresh it once. A secrets module's own settings come from `LF_SECRET__…` or the secrets file only; a project naming one whose settings neither holds is refused as it loads.
 - A secrets module can answer `lf connect`, `lf credential add|update|delete` and a webhook's registration with `read_only` and a reason. `lf` refuses by name (`<module> holds its credentials read-only: <reason>. Add it where it lives.`, exit 2, nothing written); a token refresh is still written back. `lf credential update` now changes the entry in one write instead of a write-back followed by a second write.
 - `lf.yaml`'s `oauth: { redirectUri: <url> }` is the redirect URI `lf credential add --public` sends the provider (at authorize and at the token exchange) instead of `<publicUrl>/oauth/callback`, for a relay that holds the registered callback and forwards `code` and `state` to `lf serve`'s `GET /oauth/callback`. `lf connect` prints it among the URIs to register. Unset, nothing changes.
@@ -30,6 +31,9 @@ named in [`RELEASING.md`](RELEASING.md).
 - Deploying (operators): a cloud deployment fills the secrets slot with `core: { secrets: <module> }` and feeds the module's own settings through `LF_SECRET__<MODULE>__<SETTING>`, as for the other slot modules (`deploy/lf/README.md`).
 - `@lf/anthropic`: a 429 reaches the throttle at once. The keyed provider's SDK client no longer retries a 429 itself (it slept on Retry-After, twice, inside the held permit); the client's own backoff still retries 5xx and network failures. The throttle and the concurrency ceiling of 8 are now per API key (the caller carries a hash of the key, never the key), so a 429 on one key no longer closes calls made under another.
 - The engine's zone database moved to tz 2026e (jiff-tzdb 0.1.9), the data Node 22.23 carries. A run across the zones whose rules changed (Africa/Casablanca, Africa/El_Aaiun, America/Inuvik, America/Tijuana, Europe/Chisinau, EST5EDT) may convert differently. The wasm artifacts are rebuilt.
+- Node is pinned to 22.23.4 (the eMudhra CA fix) and `engines.node` is a range, `>=22.23.4 <23`, so a later patch keeps the optional modules installed. The dependency audit is clean at high severity, and CI runs `pnpm audit --prod --audit-level high` as its own job.
+- The light build (`lf` without `serve`, `--no-default-features --features cli`) builds again, and CI builds it.
+- Debug and test builds carry line tables only (`[profile.dev]` and `[profile.test]` in the workspace `Cargo.toml`), so a build directory holds smaller test binaries. The release profile, and so the wasm, is unchanged.
 
 ## [0.12.0-rc.8] - 2026-10-22
 
@@ -2201,7 +2205,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...HEAD
+[0.12.0-rc.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...v0.12.0-rc.9
 [0.12.0-rc.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.7...v0.12.0-rc.8
 [0.12.0-rc.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.6...v0.12.0-rc.7
 [0.12.0-rc.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.5...v0.12.0-rc.6

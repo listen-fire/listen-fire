@@ -2,9 +2,9 @@
 
 This repository releases the language: the crates on crates.io, the `@listen-fire/*` packages on npm, the `lf` binaries and the documentation site. The platform's images are released from `lf-platform`, in the same GitHub organisation, under its own `v*` tags. The two version numbers were aligned once, at 0.12.0, and are independent from then on.
 
-## Pre-release 0.12.0-rc.8 (run in this order, from a clean `main`)
+## Pre-release 0.12.0-rc.9 (run in this order, from a clean `main`)
 
-Every crate and every `@listen-fire/*` package is at `0.12.0-rc.8`.
+Every crate and every `@listen-fire/*` package is at `0.12.0-rc.9`.
 A suffixed tag never moves npm `latest` or the default docs.
 
 0. After bumping the version (and before anything below), rebuild the committed
@@ -21,8 +21,8 @@ A suffixed tag never moves npm `latest` or the default docs.
    ```
 2. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the pre-release GitHub release; `docs-v*` publishes the docs under `/docs/next/`.
    ```sh
-   git tag v0.12.0-rc.8 && git tag lf-v0.12.0-rc.8 && git tag docs-v0.12.0-rc.8
-   git push origin v0.12.0-rc.8 lf-v0.12.0-rc.8 docs-v0.12.0-rc.8
+   git tag v0.12.0-rc.9 && git tag lf-v0.12.0-rc.9 && git tag docs-v0.12.0-rc.9
+   git push origin v0.12.0-rc.9 lf-v0.12.0-rc.9 docs-v0.12.0-rc.9
    ```
 3. Publish the crates, in dependency order (wait a minute between each for the index).
    ```sh
@@ -34,7 +34,7 @@ A suffixed tag never moves npm `latest` or the default docs.
    cargo publish -p listen-fire
    cargo publish -p listen-fire-module-kit
    ```
-   A pre-release version is never picked by `cargo install listen-fire` without `--version 0.12.0-rc.8`.
+   A pre-release version is never picked by `cargo install listen-fire` without `--version 0.12.0-rc.9`.
 4. Publish the npm packages; each has `publishConfig.tag: "next"`, so none takes `latest`.
    ```sh
    pnpm -r build
@@ -47,7 +47,7 @@ A suffixed tag never moves npm `latest` or the default docs.
    for f in $(git ls-files '*/package.json' | grep -vE '^(apps/|examples/)'); do
      n=$(node -e "const j=require('./$f'); if(!j.private&&j.name) console.log(j.name)");
      [ -z "$n" ] && continue
-     npm view "$n@0.12.0-rc.8" version >/dev/null 2>&1 || echo "MISSING $n"
+     npm view "$n@0.12.0-rc.9" version >/dev/null 2>&1 || echo "MISSING $n"
    done
    pnpm -r --filter <missing-name> publish --tag next --access public --no-git-checks
    ```
@@ -59,6 +59,6 @@ A suffixed tag never moves npm `latest` or the default docs.
 3. Repeat the steps above with plain tags (`v0.12.0`, `lf-v0.12.0`, `docs-v0.12.0`): the GitHub release is a full release, docs become the default.
 4. npm: publish without `--tag next`, or move `latest` explicitly: `npm dist-tag add @listen-fire/<name>@0.12.0 latest`. Remove `publishConfig.tag` from the packages before publishing, otherwise they still take `next`.
 
-Note: `0.12.0-rc.8` sorts above the released `0.11.0` and below `0.12.0`. The docs stay under `/docs/next/` until the plain `docs-v0.12.0` tag publishes `/docs/0.12/` (and the language server's links switch with the crate version).
+Note: `0.12.0-rc.9` sorts above the released `0.11.0` and below `0.12.0`. The docs stay under `/docs/next/` until the plain `docs-v0.12.0` tag publishes `/docs/0.12/` (and the language server's links switch with the crate version).
 
 A release's language version is its own semver; its CHANGELOG entry says which pins it no longer reads. The platform adopts a language release by raising the versions of the `@listen-fire/*` packages it installs.
