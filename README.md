@@ -18,24 +18,19 @@ flowchart LR
   F --> E
 ```
 
-1. **An agent writes a program.** A program is a plain text file with a `.mvt` extension, in a small language made for moving data between systems. The handbook that teaches the language is written for agents: a front page of where it differs from TypeScript, then chapters looked up on demand. A person can write one too, and review one in a pull request.
-2. **The engine runs it on every event.** The program says what it listens for (`listen to inbox … fire …`). The engine (Rust, also compiled to WebAssembly) checks the program against the real shape of the connected systems, then runs it the same way every time. No model is needed to run a program; a program may call one for a single step, `ai(…)` to draft text or `extract(…)` to pull fields from a document.
-3. **It waits for a person when the program says so.** A program can post a message with a button, wait for the tap, and resume where it stopped, minutes or days later, holding nothing open in between. It can also sleep until a time, or wait on a condition. Every run is recorded: what it wrote, and where it paused.
-
-**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([the full table](#what-you-can-connect)).
-
-**Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
+1. **An agent writes a program**: a plain text `.mvt` file in a small language made for moving data between systems, learned from a handbook written for agents. A person can write or review one too.
+2. **The engine runs it on every event** the program listens for, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
+3. **It waits for a person when the program says so**: post a button, park, and resume on the tap minutes or days later, holding nothing open in between. Every run is recorded.
 
 ## Fastest path to a first run
 
-Get the `lf` command one of three ways:
+Install the `lf` command (macOS or Linux; it verifies the download and keeps the binary and its modules together):
 
-- Download a prebuilt archive for macOS or Linux from the [releases page](https://github.com/listen-fire/listen-fire/releases); `bin/lf` inside it is the command.
-- Or from crates.io:
-  ```sh
-  cargo install listen-fire --version 0.12.0-rc.6
-  ```
-- Or from a clone: `cargo build --release -p listen-fire` puts it at `target/release/lf`.
+```sh
+curl -fsSL https://raw.githubusercontent.com/listen-fire/listen-fire/main/scripts/install.sh | sh
+```
+
+The archives it installs are on the [releases page](https://github.com/listen-fire/listen-fire/releases) if you would rather unpack one yourself; `cargo install listen-fire --version 0.12.0-rc.6` and, from a clone, `cargo build --release -p listen-fire` work too.
 
 Then:
 
@@ -54,6 +49,10 @@ run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
 `lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account and no key. `lf runs` lists every run and `lf runs show <run-id>` opens one.
 
 [Getting started with `lf`](docs/getting-started-lf.md) goes on to connect a system (`lf connect @lf/attio`), add a credential, route a recorded event through your programs (`lf run --event …`) and serve webhooks (`lf serve`).
+
+**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([the full table](#what-you-can-connect)).
+
+**Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
 
 ## The example program
 

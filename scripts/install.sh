@@ -58,6 +58,15 @@ fi
 
 name="lf-v$version-$target"
 base="https://github.com/$REPO/releases/download/lf-v$version"
+root="${LF_INSTALL_ROOT:-$HOME/.lf}"
+bindir="${LF_BIN_DIR:-$HOME/.local/bin}"
+dest="$root/$version"
+link="$bindir/lf"
+
+if [ -e "$link" ] && [ ! -L "$link" ]; then
+  die "$link exists and is not a symlink; move it aside and re-run"
+fi
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
@@ -69,15 +78,6 @@ expected="$(awk -v f="$name.tar.gz" '$2 == f { print $1 }' "$tmp/SHA256SUMS")"
 [ -n "$expected" ] || die "SHA256SUMS has no entry for $name.tar.gz"
 actual="$(sha256 "$tmp/$name.tar.gz")"
 [ "$expected" = "$actual" ] || die "checksum mismatch for $name.tar.gz (expected $expected, got $actual); nothing installed"
-
-root="${LF_INSTALL_ROOT:-$HOME/.lf}"
-bindir="${LF_BIN_DIR:-$HOME/.local/bin}"
-dest="$root/$version"
-link="$bindir/lf"
-
-if [ -e "$link" ] && [ ! -L "$link" ]; then
-  die "$link exists and is not a symlink; move it aside and re-run"
-fi
 
 mkdir -p "$dest" "$bindir"
 tar -xzf "$tmp/$name.tar.gz" -C "$dest" --strip-components=1
