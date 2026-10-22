@@ -19,7 +19,7 @@ flowchart LR
 ```
 
 1. **An agent writes a program**: a short text file (`.mvt`) in a language made for moving data between systems. A person can write or review one too.
-2. **The engine runs it every time that thing happens**, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
+2. **The engine runs it whenever that happens**, the same way each time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
 3. **Every run is recorded**: the event it started from, what it read, and what it wrote.
 
 ## Fastest path to a first run
