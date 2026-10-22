@@ -1,6 +1,6 @@
 //! The movement language service (docs/contracts/language-service.md): what
 //! a position in a movement file answers, from one check of it by the Rust
-//! checker. Written for language version 5; `lf lsp` serves it.
+//! checker. Written for the current language; `lf lsp` serves it.
 
 mod builtins;
 mod complete;
@@ -26,10 +26,10 @@ use crate::text::{Text, loc_of, range_of};
 /// The code a file that does not parse is reported under.
 pub const PARSE_CODE: &str = "MOV_PARSE";
 
-/// A project's catalog and language version: what every answer is checked against.
+/// A project's catalog: what every answer is checked against, in this
+/// release's language.
 pub struct Service {
     pub catalog: CatalogSnapshot,
-    pub language_version: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,18 +78,18 @@ pub(crate) struct Analyzed {
 }
 
 impl Service {
-    pub fn new(catalog: CatalogSnapshot, language_version: u32) -> Self {
-        Service { catalog, language_version }
+    pub fn new(catalog: CatalogSnapshot) -> Self {
+        Service { catalog }
     }
 
     fn options(&self) -> CheckOptions<'static> {
-        CheckOptions { language_version: self.language_version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+        CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
     }
 
     /// The file checked, repaired around `cursor` (a 0-based line) when it
     /// does not parse as written.
     pub(crate) fn analyze(&self, source: &str, cursor: Option<u32>) -> Option<Analyzed> {
-        let parsed = recover::parse_recovering(source, self.language_version, cursor)?;
+        let parsed = recover::parse_recovering(source, cursor)?;
         let analysis = analyze(&parsed.program, &self.catalog, self.options());
         Some(Analyzed { analysis })
     }
@@ -97,7 +97,7 @@ impl Service {
     /// Every diagnostic the file has: its parse refusal alone when it does
     /// not parse, else the checker's.
     pub fn diagnostics(&self, source: &str) -> Vec<Diag> {
-        let program = match recover::parse(source, self.language_version) {
+        let program = match recover::parse(source) {
             Ok(program) => program,
             Err(refused) => {
                 let at = text::pos_of(refused.loc);

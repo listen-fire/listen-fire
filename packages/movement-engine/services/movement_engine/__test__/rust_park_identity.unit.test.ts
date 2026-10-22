@@ -14,9 +14,10 @@
 //     reference and parks by name (`fileClosure`), so a park stays small
 //     however many a file declares.
 
-import { spelledForVersion5 } from './combinator_spelling';
+import { spelledWithFunctionArms } from './combinator_spelling';
 import { spelledFor } from './surface_spelling';
 import {
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   type CatalogSnapshot,
   type InstanceSchema,
@@ -244,7 +245,7 @@ async function runOn(c: Case) {
   // Written once in the spelling versions 1–4 read; the run reads it as the upgrade tool respells it.
   const withFiles = c.files !== undefined ? { ...catalog, files: c.files } : catalog;
   const spell = (text: string) =>
-    spelledFor(5, text, withFiles);
+    spelledFor(LANGUAGE_VERSION, text, withFiles);
   const files =
     c.files === undefined
       ? undefined
@@ -267,7 +268,7 @@ async function runOn(c: Case) {
     credentialIds: credentialIdsFor(snapshot, (name: string) => `cred-${name}`),
     firedAt: '2026-05-01T09:00:00.000Z',
     movementName: 'm',
-    languageVersion: 5,
+    languageVersion: LANGUAGE_VERSION,
     host: makeTestHost({
       adapters: { resolve: (r) => (r.adapterType === 'attio' ? attio : email) },
       park: { sink: store.sink },
@@ -384,9 +385,9 @@ describe('one write handle two names hold, across a park (B7)', () => {
 
   it('inside a branch that completes on the resume: its export is one park, #return first', async () => {
     // Arm 0 parks before its return; arm 1 completes. Arm 0 completing on
-    // the resume writes its whole scope as its export. `parallel` is retired
-    // from version 5, where `all` is the same join.
-    const spelled = spelledForVersion5;
+    // the resume writes its whole scope as its export. `parallel` is retired;
+    // `all` is the same join.
+    const spelled = spelledWithFunctionArms;
     const { resumed } = await parkAndResume({
       source: spelled(
         movement(
@@ -761,8 +762,8 @@ describe('a reference read before its descriptor, and names like a descriptor me
   });
 });
 
-// B16: an `all` receipt's slot holding the record an arm handed back: from
-// version 5 `AT(r, i)` reads that record, as it does off a list literal.
+// B16: an `all` receipt's slot holding the record an arm handed back:
+// `AT(r, i)` reads that record, as it does off a list literal.
 describe("a combinator receipt's record slot (B16)", () => {
   const arms = (park: boolean) => [
     '  r = all(',

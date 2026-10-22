@@ -639,8 +639,8 @@ export function instanceSchemaFromDescriptors(input: {
       // A system's own edge and its reserved resources reference may share a
       // name (a team's ontology edge called `Resources`): the system's own
       // edge is the one the name walks, whichever the describe listed first.
-      // The reserved reference stays reachable by its address (versions
-      // 1–4's `_resources`).
+      // The reserved reference stays reachable by its address (the older
+      // language's `_resources`).
       const existing = edges[edge];
       if (
         existing === undefined ||
@@ -698,7 +698,7 @@ export function instanceSchemaFromDescriptors(input: {
           // The system's resources edge (the reserved `_resources` reference,
           // walked by its own name — the knowledge graph's `Resources`). The
           // read wrapper sends a walk of it by its reserved fieldId (its
-          // address, not its name), and since language version 5 the checker's
+          // address, not its name), and the checker's
           // refusal of `x-[f:_resources]->` off a record names it.
           ...(ref.fieldId === RESOURCES_REFERENCE_FIELD_ID ? { resources: true as const } : {}),
           ...(edgeDescription !== undefined ? { description: edgeDescription } : {}),
@@ -738,7 +738,7 @@ export function instanceSchemaFromDescriptors(input: {
         ...(writeOnlyProperties.length > 0 ? { writeOnlyProperties } : {}),
         ...(ambiguousProperties.length > 0 ? { ambiguousProperties } : {}),
         // The system removes a record of this type (its `deleteRecord`) — the
-        // promise `delete x` is checked against since language version 5.
+        // promise `delete x` is checked against.
         ...(descriptor.deletable === true ? { deletable: true } : {}),
         // The adapter's own words for the type and its fields, which the
         // language service's hover leads with.

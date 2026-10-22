@@ -1,21 +1,21 @@
-//! Spine gaps of language version 5's surface (plans/naming-rethink-2026-10-14/
+//! Spine gaps of the current language's surface (plans/naming-rethink-2026-10-14/
 //! 5_design.md), each through the Rust checker: the old form is
 //! MOV_V5_SPELLING with a fix, and applying the fixes gives text that checks
-//! as the v5 form does.
+//! as the current form does.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"Acme CRM":{"positions":{"company":{"properties":{"name":"text","score":"number"},"edges":{}}},"collections":{"companies":{"target":"company"}},"writableRoots":{"companies":{"fields":{"name":"text"},"resultShape":{"externalId":"text","name":"text"}}}}}}},"credentials":{"Acme CRM":{"adapters":["attio"]}},"plugins":{}}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    let mut codes: Vec<String> = check(source, version).into_iter().map(|d| d.code).collect();
+fn codes(source: &str) -> Vec<String> {
+    let mut codes: Vec<String> = check(source).into_iter().map(|d| d.code).collect();
     codes.sort();
     codes
 }
@@ -30,7 +30,7 @@ fn offset(source: &str, at: &serde_json::Value) -> usize {
 fn upgraded(source: &str) -> String {
     let mut text = source.to_string();
     for _ in 0..8 {
-        let found: Vec<Diagnostic> = check(&text, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+        let found: Vec<Diagnostic> = check(&text).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
         if found.is_empty() {
             return text;
         }
@@ -55,23 +55,23 @@ fn upgraded(source: &str) -> String {
 const HEAD_V5: &str = "import { `@lf/attio` as attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = connect attio using `Acme CRM`\n";
 const HEAD_OLD: &str = "import { attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = attio(credentials: `Acme CRM`)\n";
 
-fn v5(body: &str) -> String {
+fn current_form(body: &str) -> String {
     format!("{HEAD_V5}function go(t: <text>, xs: <text[]>, co: <crm-[:company]->>) {{\n{body}\n}}\n")
 }
 fn old_form(body: &str) -> String {
     format!("{HEAD_OLD}movement go(t: <text>, xs: <text[]>, co: <crm-[:company]->>) {{\n{body}\n}}\n")
 }
 
-/// The old form is refused with fixes, and the fixed text checks as the v5
+/// The old form is refused with fixes, and the fixed text checks as the current
 /// form does.
 fn same(new: &str, old: &str) {
-    let (new, old) = (v5(new), old_form(old));
-    let want = codes(&new, 5);
+    let (new, old) = (current_form(new), old_form(old));
+    let want = codes(&new);
     assert!(want.iter().all(|c| !c.starts_with("MOV_UNKNOWN")), "{new}: {want:?}");
-    let refused = check(&old, 5);
+    let refused = check(&old);
     assert!(refused.iter().any(|d| d.code == "MOV_V5_SPELLING"), "{old}");
     let fixed = upgraded(&old);
-    assert_eq!(codes(&fixed, 5), want, "{old}\nupgraded to\n{fixed}\n{:#?}", check(&fixed, 5));
+    assert_eq!(codes(&fixed), want, "{old}\nupgraded to\n{fixed}\n{:#?}", check(&fixed));
 }
 
 #[test]
@@ -79,11 +79,11 @@ fn fail_is_the_error_statement() {
     same("  if (t == null) {\n    fail(\"no text\")\n  }\n  y = Text.upper(t)", "  if t == NULL {\n    ERROR(\"no text\")\n  }\n  y = UPPER(t)");
     same("  fail(\"always\")", "  ERROR(\"always\")");
     same("  if (t == null) { fail(\"no text\") }", "  if t == NULL { ERROR(\"no text\") }");
-    let refused = check(&old_form("  ERROR(\"x\")"), 5);
+    let refused = check(&old_form("  ERROR(\"x\")"));
     let error = refused.iter().find(|d| d.message.contains("`ERROR`")).unwrap();
     assert_eq!(error.fix.as_ref().unwrap()["edits"][0]["text"], "fail");
     // Inside an expression it is a value that never arrives (v5_never_sort).
-    assert!(!codes(&v5("  x = coalesce(t, fail(\"no\"))"), 5).contains(&"MOV_V5_NOT_YET".to_string()));
+    assert!(!codes(&current_form("  x = coalesce(t, fail(\"no\"))")).contains(&"MOV_V5_NOT_YET".to_string()));
 }
 
 #[test]
@@ -143,6 +143,6 @@ fn a_backticked_credential_after_using() {
     same("  y = 1", "  y = 1");
     // The fix keeps a hyphenated adapter's backticks.
     let old = "import { `my-crm` } from adapters\nimport { `Acme CRM` } from credentials\ncrm = `my-crm`(credentials: `Acme CRM`)\n";
-    let fix = check(old, 5).into_iter().find(|d| d.message.contains("connect")).map(|d| d.fix.unwrap()["edits"][0]["text"].clone());
+    let fix = check(old).into_iter().find(|d| d.message.contains("connect")).map(|d| d.fix.unwrap()["edits"][0]["text"].clone());
     assert_eq!(fix, Some(serde_json::json!("connect `my-crm` using `Acme CRM`")));
 }

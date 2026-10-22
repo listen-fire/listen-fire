@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(iso_of("2026-03-05T10:00").as_deref(), Some("2026-03-05T10:00:00.000Z"));
     }
 
-    /// Version 5 reads ISO / RFC 3339 only: V8's legacy forms, a day its
+    /// This language reads ISO / RFC 3339 only: V8's legacy forms, a day its
     /// month does not have and the hour 24 are no date (V8 read `"Mar 5,
     /// 2024"`, `"item 3"`, `"2026-02-30"` and `T24:00`).
     #[test]

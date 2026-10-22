@@ -233,7 +233,7 @@ export function makeMemoryParkSources(): { sources: ParkSources; texts: Map<stri
 // ── How a Rust run ended ──────────────────────────────────────────────────────
 
 /**
- * What the Rust run's counts (`rustRunStats`) say of how one version-5 run
+ * What the Rust run's counts (`rustRunStats`) say of how one current run
  * that threw `error` (none for a run that returned) ended: at its check
  * (`isCheckFailure`) with no segment opened; or in one segment, run to its
  * end (its own failure included), with no engine refusal and no shim fault.

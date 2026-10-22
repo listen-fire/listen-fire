@@ -1,6 +1,5 @@
 // The run host's units in lf: `manual` (fired by `lf run <movement>`) and
-// `cron` (ticks fired by `lf serve` and `lf drain`), in scope with no import
-// from language version 5 — and `lf init`'s starter, which needs nothing else.
+// `cron` (ticks fired by `lf serve` and `lf drain`), in scope with no import — and `lf init`'s starter, which needs nothing else.
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

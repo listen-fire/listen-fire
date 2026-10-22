@@ -9,7 +9,6 @@ use crate::codes;
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{Ty, describe_field_type, strip_absent, union_members};
 use crate::types::position::{InstanceRef, Position, describe_position, display_name_of, instance_of_ref, position_schema_of_ref};
-use crate::version;
 
 #[derive(Clone, Copy)]
 pub enum LinkVerb {
@@ -41,8 +40,7 @@ impl Checker<'_> {
         self.report(
             codes::LINK_MATCH_BODY_RETIRED,
             format!(
-                "a 'link' no longer finds its record in its own body since {}: find it first and test it — `to = match … {{ … }}` then `{}`",
-                version::describe(4),
+                "a 'link' no longer finds its record in its own body: find it first and test it — `to = match … {{ … }}` then `{}`",
                 self.code(&format!("if to != null {{ link {} -[:{}]-> to }}", link.from, link.edge))
             ),
             span,

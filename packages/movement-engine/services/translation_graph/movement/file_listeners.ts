@@ -2,9 +2,9 @@
 // routing table every shell derives from source (the hosted product stores one
 // trigger row per listen; the command line routes from them directly).
 
-import { BridgeError, CURRENT_LANGUAGE_VERSION, expressionOfSlot, runHostUnits, unwrapCredentialArg } from 'movement-lang';
+import { BridgeError, RUN_HOST_UNITS, expressionOfSlot, unwrapCredentialArg } from 'movement-lang';
 
-import type { ImportStatement, ListenDeclaration, NamedArg, Program } from 'movement-lang';
+import type { ImportStatement, LanguageVersion, ListenDeclaration, NamedArg, Program } from 'movement-lang';
 
 /** One `listen` statement, with its instance's construction resolved. */
 export interface FileListener {
@@ -59,7 +59,7 @@ function configValueOf(arg: NamedArg): unknown {
  */
 export function collectFileListeners(
   program: Program,
-  options: { languageVersion?: number } = {},
+  options: { languageVersion?: LanguageVersion } = {},
 ): FileListener[] {
   const importOriginals = new Map<string, string>();
   const imported = new Set<string>();
@@ -77,7 +77,7 @@ export function collectFileListeners(
   };
   // A run host unit (`listen to manual fire …`) the file does not bind itself
   // is the host's own, credential-free and argument-free.
-  const units = runHostUnits(options.languageVersion ?? CURRENT_LANGUAGE_VERSION);
+  const units = RUN_HOST_UNITS;
   const unitConstruction = (name: string) => (units.includes(name) && !imported.has(name) ? { adapter: name } : undefined);
   const original = (local: string): string => importOriginals.get(local) ?? local;
 

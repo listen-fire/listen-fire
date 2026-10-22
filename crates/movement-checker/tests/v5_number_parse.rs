@@ -1,4 +1,4 @@
-//! From version 5 `Number.parse(text)` answers nothing for text that is no
+//! `Number.parse(text)` answers nothing for text that is no
 //! number (the engine's `NUMBER("")` is null), so it is `number | absent`: a
 //! required value must come from a `!= null` guard, a guard clause that always
 //! leaves, or a fallback (MOV_ABSENT_REQUIRED).
@@ -10,10 +10,10 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"contractVersion":1,"adapters":{"crm":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text","employees":"number"},"edges":{}}},"collections":{"companies":{"target":"company"}},"writableRoots":{"company":{"fields":{"name":"text","employees":"number"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{"crm_cred":{"adapters":["crm"]}},"plugins":{}}"#;
 
-fn absent(body: &str, version: u32) -> Vec<String> {
+fn absent(body: &str) -> Vec<String> {
     let source = format!("import {{ crm }} from adapters\nimport {{ crm_cred }} from credentials\nc = connect crm using crm_cred\nfunction go(t: <text>) {{\n{body}\n}}\n");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics.into_iter().filter(|d| d.code == "MOV_ABSENT_REQUIRED").map(|d| d.message).collect()
 }
@@ -28,14 +28,14 @@ fn refused(shown: &str) -> String {
 
 #[test]
 fn under_5_a_required_field_refuses_the_parse_direct_or_through_a_name() {
-    assert_eq!(absent(&write("Number.parse(t)"), 5), vec![refused("Number.parse(t)")]);
-    assert_eq!(absent(&format!("  n = Number.parse(t)\n{}", write("n")), 5), vec![refused("n")]);
+    assert_eq!(absent(&write("Number.parse(t)")), vec![refused("Number.parse(t)")]);
+    assert_eq!(absent(&format!("  n = Number.parse(t)\n{}", write("n"))), vec![refused("n")]);
 }
 
 #[test]
 fn under_5_a_guard_a_guard_clause_that_leaves_and_a_fallback_each_satisfy_it() {
-    assert_eq!(absent(&format!("  n = Number.parse(t)\n  if (n != null) {{\n  {}\n  }}", write("n")), 5), Vec::<String>::new());
-    assert_eq!(absent(&format!("  n = Number.parse(t)\n  if (n == null) {{\n    fail(\"no number\")\n  }}\n{}", write("n")), 5), Vec::<String>::new());
-    assert_eq!(absent(&write("coalesce(Number.parse(t), 0)"), 5), Vec::<String>::new());
-    assert_eq!(absent("  write c-[:companies]-> { name: \"x\", employees ?: Number.parse(t) }", 5), Vec::<String>::new());
+    assert_eq!(absent(&format!("  n = Number.parse(t)\n  if (n != null) {{\n  {}\n  }}", write("n"))), Vec::<String>::new());
+    assert_eq!(absent(&format!("  n = Number.parse(t)\n  if (n == null) {{\n    fail(\"no number\")\n  }}\n{}", write("n"))), Vec::<String>::new());
+    assert_eq!(absent(&write("coalesce(Number.parse(t), 0)")), Vec::<String>::new());
+    assert_eq!(absent("  write c-[:companies]-> { name: \"x\", employees ?: Number.parse(t) }"), Vec::<String>::new());
 }

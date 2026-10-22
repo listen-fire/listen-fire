@@ -1,4 +1,4 @@
-//! Nested calls (language version 3), as run.ts `stageNestedCalls` runs
+//! Nested calls, as run.ts `stageNestedCalls` runs
 //! them (movement-lang checker/nested_calls.ts): a call written inside an
 //! expression that the shared evaluator cannot run — a function the program
 //! declares, `extract`, a collection op — is read as the right-hand side of
@@ -295,7 +295,7 @@ struct Staging<'s> {
 }
 
 /// `web.fetchUrl` where an expression calls it: a package's member, as the
-/// one dotted name the package import bound it to (version 5). A local
+/// one dotted name the package import bound it to. A local
 /// binding is never a package, so a head the scope binds is none.
 pub(crate) fn package_member_callee(callee: &MExpr, scope: &Scope) -> Option<String> {
     let MExpr::Member { object, property, .. } = callee else { return None };
@@ -311,7 +311,7 @@ type Settled<'s> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Bin
 
 impl Run<'_> {
     /// `runsAsCall`: a function the program declares (bound exactly, or
-    /// from version 3 a function in any letter case), or a built-in that is
+    /// a function in any letter case), or a built-in that is
     /// no value.
     pub(crate) fn runs_as_call(&self, call: &MExpr, scope: &Scope) -> bool {
         let MExpr::Call { callee, .. } = call else { return false };

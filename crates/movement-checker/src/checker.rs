@@ -32,7 +32,6 @@ const SCALAR_TYPE_NAMES: &[&str] = &["text", "number", "boolean", "date", "datet
 
 pub struct Checker<'c> {
     pub catalog: &'c CatalogSnapshot,
-    pub version: u32,
     /// Whether file imports resolve (the snapshot carries files).
     pub resolves_files: bool,
     pub scopes: Scopes,
@@ -46,7 +45,7 @@ pub struct Checker<'c> {
     /// The resolved file imports, and each library once checked.
     pub imports: crate::families::imports::ImportState,
     /// Where a call is written with a bare name the program binds there
-    /// (language version 5), by file (none for the root) and line and column:
+    ///, by file (none for the root) and line and column:
     /// a spelling finding about that name does not stand there
     /// (crate::families::names, `spelling_stands`).
     pub bound_callees: std::cell::RefCell<std::collections::HashSet<(Option<String>, usize, usize)>>,
@@ -55,13 +54,13 @@ pub struct Checker<'c> {
     /// keyed as `bound_callees`: its fix is not marked safe there.
     pub bound_sort_keys: std::cell::RefCell<std::collections::HashSet<(Option<String>, usize, usize)>>,
     /// Checking for a move up from this version (`upgradingFrom`).
-    pub upgrading_from: Option<u32>,
+    pub upgrading_from: Option<&'c str>,
     /// The host's zone database.
     pub zones: &'c dyn crate::host::ZoneLookup,
     /// Each movement's parameter names, by its symbol (`ScopeSymbol.movement`).
     /// The bodies being walked, innermost last, each collecting its `return`s.
     pub return_stack: Vec<crate::families::returns::ReturnCollector>,
-    /// The file-level value being checked (version 5), while its right-hand
+    /// The file-level value being checked, while its right-hand
     /// side is: a call the engine would run inside it is refused where it is
     /// written (`hoist_nested_calls`, crate::families::file_values).
     pub file_value: Option<String>,
@@ -71,7 +70,7 @@ pub struct Checker<'c> {
     /// Each function's record parameters' need cells (`FieldsNeed`).
     pub param_needs: std::cell::RefCell<std::collections::HashMap<crate::binding_types::NeedOwner, std::collections::HashMap<String, crate::types::position::NeedRef>>>,
     /// Functions declared with a name, typed as the closures they are when
-    /// read as values (version 5).
+    /// read as values.
     pub function_values: std::collections::HashMap<crate::scope::SymbolId, crate::types::position::ClosureType>,
     /// Closures that call themselves by name without declaring what they return.
     pub selves: crate::families::closures::Selves,
@@ -88,7 +87,7 @@ pub struct Checker<'c> {
     /// them instead (families::typed_spelling).
     pub respelled: std::collections::HashMap<(usize, usize, usize, usize), (String, serde_json::Value)>,
     /// A call with named arguments to a function or a plugin whose parameters
-    /// are known (version 5): its parameters in order, by where its first
+    /// are known: its parameters in order, by where its first
     /// argument's value starts — what the parser's finding for it needs for
     /// its fix.
     pub named_orders: std::collections::HashMap<(usize, usize), crate::families::typed_spelling::ArgOrder>,
@@ -105,7 +104,7 @@ pub struct Checker<'c> {
     /// where a rewrite hoists a declaration, and the names it may not take.
     pub file_statement_spans: Vec<Span>,
     pub file_names: std::collections::HashSet<String>,
-    /// Each plugin package imported (version 5), by its local name: the
+    /// Each plugin package imported, by its local name: the
     /// members it binds as `web.fetchUrl` (crate::families::names).
     pub packages: std::collections::HashMap<String, Vec<movement_parser::catalog::packages::PackageMember>>,
     /// Each scope a body of the program checked opens, with the text it
@@ -241,7 +240,6 @@ impl<'c> Checker<'c> {
     pub fn new(catalog: &'c CatalogSnapshot, options: &crate::CheckOptions<'c>, resolves_files: bool) -> Self {
         Checker {
             catalog,
-            version: options.language_version,
             zones: options.zones,
             resolves_files,
             scopes: Scopes::default(),
@@ -613,7 +611,7 @@ impl<'c> Checker<'c> {
             self.type_function_values([trimmed], scope);
             let bound = {
                 let env = self.typing_env(scope);
-                Typing::new(&env, self.version, slot.span).bare_name_type(trimmed)
+                Typing::new(&env, slot.span).bare_name_type(trimmed)
             };
             let may_hold = self.typing_env(scope).resolve_may_hold(trimmed);
             // A name on the record plane with no value type (an instance) is
@@ -648,7 +646,7 @@ impl<'c> Checker<'c> {
         self.type_function_values(names.distinct_refs(), scope);
         let (ty, may_hold, held, diagnostics, watchable) = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             let ty = if holds_value { typing.infer_exact(&parsed) } else { typing.infer(&parsed) };
             let may_hold = typing.may_hold_type(&parsed);
             let held = slot_held_walk(held_takes, inspect_held, ty.as_ref().or(may_hold.as_ref()))
@@ -724,7 +722,7 @@ impl<'c> Checker<'c> {
         let Ok(expr) = crate::slots::expression_of_slot(slot) else { return };
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             crate::types::narrowing::proofs_after(&expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, scope);
@@ -736,7 +734,7 @@ impl<'c> Checker<'c> {
         let Ok(MovementCondition::Expr { expr }) = condition_of_slot(slot) else { return };
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, slot.span);
+            let mut typing = Typing::new(&env, slot.span);
             negative_presence_proofs(&expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, narrow_into);
@@ -760,7 +758,7 @@ impl<'c> Checker<'c> {
     pub(crate) fn narrow_presence(&mut self, expr: &movement_parser::lowering::expression::Expression, scope: ScopeId, narrow_into: ScopeId, span: Span) {
         let proofs = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, span);
+            let mut typing = Typing::new(&env, span);
             presence_proofs(expr, &mut |o| typing.infer(o))
         };
         self.declare_presence(&proofs, scope, narrow_into);
@@ -803,7 +801,7 @@ impl<'c> Checker<'c> {
                 self.type_function_values(names.distinct_refs(), scope);
                 let (ty, diagnostics, watchable) = {
                     let env = self.typing_env(scope);
-                    let mut typing = Typing::new(&env, self.version, slot.span);
+                    let mut typing = Typing::new(&env, slot.span);
                     let ty = typing.infer(expr);
                     (ty, typing.diagnostics, typing.watchable_reads)
                 };

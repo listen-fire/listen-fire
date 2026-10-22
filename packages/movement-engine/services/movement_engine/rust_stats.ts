@@ -47,7 +47,7 @@ export function resetRustRunStats(): void {
 // ── Which engine ran a run ────────────────────────────────────────────────────
 
 /** The engine that ran one segment of a run. A resume reads it back
- *  (`parkedOnEngine`) to refuse a version-5 park the TypeScript engine
+ *  (`parkedOnEngine`) to refuse a current park the TypeScript engine
  *  wrote. */
 export interface RunEngineRecord {
   runId: string;

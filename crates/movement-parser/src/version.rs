@@ -1,36 +1,92 @@
-//! The language versions the grammar reads. This crate serves language
-//! version 5 only: versions 1–4 are the platform's (packages/legacy-lang,
-//! with a frozen parser wasm), and every grammar entry refuses them by name.
+//! The language version is the toolchain release: the one semver every crate
+//! and package carries. A movement's pin is the release it was written
+//! against, and a release reads a pin whose compatibility key is its own
+//! (docs/contracts/language-versions.md). The same rule is
+//! packages/movement-lang/language_version.ts; a test holds the two equal.
 
-pub const CURRENT_LANGUAGE_VERSION: u32 = 5;
+/// This release's version, and so the language it reads.
+pub const LANGUAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The versions this release parses, checks and runs.
-pub const SUPPORTED_LANGUAGE_VERSIONS: &[u32] = &[5];
+/// How a pin stands against a release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    Compatible,
+    Newer,
+    OlderKey,
+    Malformed,
+}
 
-/// Every version's name, the unsupported ones included, so a refusal can
-/// say which version a movement is pinned to.
-pub const LANGUAGE_VERSION_NAMES: &[(u32, &str)] =
-    &[(1, "Quiet Heron"), (2, "Bright Otter"), (3, "Steady Lynx"), (4, "Luminous Owl"), (5, "Dancing Wren")];
+// The refusals, with `{pin}` and `{own}` to fill. The contract doc quotes
+// them and the TypeScript words them the same; a test reads them here.
+const NEWER_MESSAGE: &str = "this automation pins language {pin}, newer than this release ({own}); upgrade the engine";
+const OLDER_KEY_MESSAGE: &str =
+    "this automation pins language {pin}, which this release ({own}) does not read; validate it under {own} and upgrade it";
+const MALFORMED_MESSAGE: &str = "this automation pins language {pin}, which is not a version; a pin is a release's version, such as {own}";
 
-/// `"Bright Otter" (2)`, or `version 99` for a version the table lacks.
-pub fn describe(version: u32) -> String {
-    match LANGUAGE_VERSION_NAMES.iter().find(|(v, _)| *v == version) {
-        Some((v, name)) => format!("\"{name}\" ({v})"),
-        None => format!("version {version}"),
+/// `MAJOR.MINOR.PATCH[-pre]`, each number without a leading zero.
+fn parse(version: &str) -> Option<(u64, u64, u64)> {
+    let (release, pre) = match version.split_once('-') {
+        Some((release, pre)) => (release, Some(pre)),
+        None => (version, None),
+    };
+    let pre_is_valid = |pre: &str| {
+        pre.split('.').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    };
+    if pre.is_some_and(|pre| !pre_is_valid(pre)) {
+        return None;
+    }
+    let number = |part: &str| {
+        let digits = !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+        if !digits || (part.len() > 1 && part.starts_with('0')) {
+            return None;
+        }
+        part.parse::<u64>().ok()
+    };
+    let mut parts = release.split('.');
+    let (major, minor, patch) = (number(parts.next()?)?, number(parts.next()?)?, number(parts.next()?)?);
+    parts.next().is_none().then_some((major, minor, patch))
+}
+
+/// The part of a version a pin must share with a release: the minor under
+/// 0.x (`0.12`), the major from 1.0 (`1`).
+pub fn compatibility_key(version: &str) -> Result<String, String> {
+    match parse(version) {
+        Some((0, minor, _)) => Ok(format!("0.{minor}")),
+        Some((major, _, _)) => Ok(major.to_string()),
+        None => Err(format!("{version} is not a version (MAJOR.MINOR.PATCH, with an optional -pre-release)")),
     }
 }
 
-/// Why a movement pinned to `version` is not read, or `None` when it is;
-/// the text of the checker's standing diagnostic.
-pub fn unsupported_message(version: u32) -> Option<String> {
-    if SUPPORTED_LANGUAGE_VERSIONS.contains(&version) {
-        return None;
+/// How `pin` stands against the release `own`.
+pub fn standing(pin: &str, own: &str) -> Standing {
+    let (Some(pinned), Some(release)) = (parse(pin), parse(own)) else {
+        return Standing::Malformed;
+    };
+    if compatibility_key(pin) == compatibility_key(own) {
+        return Standing::Compatible;
     }
-    let current = describe(CURRENT_LANGUAGE_VERSION);
-    Some(format!(
-        "this automation is written in language version {}, which this release does not support, so it will not validate or run. To fix: validate it under {current}, repair what that reports, and upgrade it to {current}.",
-        describe(version)
-    ))
+    if (pinned.0, pinned.1) > (release.0, release.1) { Standing::Newer } else { Standing::OlderKey }
+}
+
+/// Whether the release `own` reads a movement pinned to `pin`.
+pub fn compatible(pin: &str, own: &str) -> bool {
+    standing(pin, own) == Standing::Compatible
+}
+
+/// Why `own` does not read `pin`, by its standing; none when it does.
+pub fn refusal_message(pin: &str, own: &str, standing: Standing) -> Option<String> {
+    let template = match standing {
+        Standing::Compatible => return None,
+        Standing::Newer => NEWER_MESSAGE,
+        Standing::OlderKey => OLDER_KEY_MESSAGE,
+        Standing::Malformed => MALFORMED_MESSAGE,
+    };
+    Some(template.replace("{pin}", pin).replace("{own}", own))
+}
+
+/// `refusal_message` under the pin's own standing.
+pub fn refusal(pin: &str, own: &str) -> Option<String> {
+    refusal_message(pin, own, standing(pin, own))
 }
 
 /// The run host's units (Henry 2026-10-16): every file has these names in
@@ -38,3 +94,57 @@ pub fn unsupported_message(version: u32) -> Option<String> {
 /// `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no import
 /// and no `connect`. A file's own binding of the name replaces it.
 pub const RUN_HOST_UNITS: &[&str] = &["cron", "manual"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pin_is_read_when_its_compatibility_key_is_the_releases() {
+        let table = [
+            ("0.12.3", "0.12.0", Standing::Compatible),
+            ("0.13.0", "0.12.0", Standing::Newer),
+            ("0.11.0", "0.12.0", Standing::OlderKey),
+            ("1.4.0", "1.0.0", Standing::Compatible),
+            ("2.0.0", "1.9.0", Standing::Newer),
+            ("0.12.0-rc.6", "0.12.0", Standing::Compatible),
+            ("banana", "0.12.0", Standing::Malformed),
+        ];
+        for (pin, own, expected) in table {
+            assert_eq!(standing(pin, own), expected, "{pin} against {own}");
+            assert_eq!(compatible(pin, own), expected == Standing::Compatible, "{pin} against {own}");
+        }
+    }
+
+    #[test]
+    fn the_key_is_the_minor_under_zero_and_the_major_from_one() {
+        assert_eq!(compatibility_key("0.12.0-rc.6"), Ok("0.12".to_string()));
+        assert_eq!(compatibility_key("1.4.2"), Ok("1".to_string()));
+        for malformed in ["banana", "5", "0.12", "0.12.0.1", "01.2.3", "0.12.0-", "0.12.0-rc..1", ""] {
+            assert!(compatibility_key(malformed).is_err(), "{malformed}");
+        }
+    }
+
+    #[test]
+    fn each_refusal_names_the_pin_the_release_and_the_remedy() {
+        assert_eq!(refusal("0.12.1", "0.12.0"), None);
+        assert_eq!(
+            refusal("0.13.0", "0.12.0").unwrap(),
+            "this automation pins language 0.13.0, newer than this release (0.12.0); upgrade the engine"
+        );
+        assert_eq!(
+            refusal("0.11.0", "0.12.0").unwrap(),
+            "this automation pins language 0.11.0, which this release (0.12.0) does not read; validate it under 0.12.0 and upgrade it"
+        );
+        assert_eq!(
+            refusal("banana", "0.12.0").unwrap(),
+            "this automation pins language banana, which is not a version; a pin is a release's version, such as 0.12.0"
+        );
+    }
+
+    #[test]
+    fn this_release_reads_its_own_version_and_no_integer() {
+        assert!(compatible(LANGUAGE_VERSION, LANGUAGE_VERSION));
+        assert_eq!(standing("5", LANGUAGE_VERSION), Standing::Malformed);
+    }
+}

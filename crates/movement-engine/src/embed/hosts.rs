@@ -263,7 +263,8 @@ pub struct Arbitration {
     pub candidates: Data,
     pub record_type: String,
     pub constraints: Data,
-    pub language_version: u32,
+    /// The asking run's pin (a release's version).
+    pub language_version: String,
     pub budget: serde_json::Value,
 }
 

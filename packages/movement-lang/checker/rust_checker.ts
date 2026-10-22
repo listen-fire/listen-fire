@@ -8,16 +8,18 @@
 // It loads with the engine artifact, which a browser never downloads: the
 // editor's live diagnostics stay on the TypeScript checker.
 
-import { callCheckAnswer, callCheckCompatible, callCheckProgram } from '../wasm/loader';
+import { callCheckAnswer, callCheckCompatible, callCheckProgram, callLanguageStanding, callLanguageVersion } from '../wasm/loader';
 import type { Loc, Span } from '../parser/ast';
-import type { LanguageVersion } from '../language_version';
+import { languageVersionDiagnostic, type LanguageVersion, type LanguageVersionStanding } from '../language_version';
 import type { CatalogSnapshot } from '../service/snapshot';
 import type { Diagnostic } from './diagnostic';
 import type { DiagnosticFix, SourceEdit } from './fixes';
 
 export interface RustCheckOptions {
+  /** The movement's pin, held to the rule before the artifact is asked: the
+   *  artifact checks in its own release's language. */
   languageVersion: LanguageVersion;
-  /** Checking for a move up from this version (`CheckOptions.upgradingFrom`). */
+  /** Checking for a move up from this release (`CheckOptions.upgradingFrom`). */
   upgradingFrom?: LanguageVersion;
 }
 
@@ -30,10 +32,36 @@ export class RustCheckRefused extends Error {
   }
 }
 
+/** The language the artifact reads: its release's version. */
+export function languageVersion(): LanguageVersion {
+  const reply = callLanguageVersion();
+  if (!reply.ok || typeof reply.json !== 'string') throw new Error(`language_version: ${JSON.stringify(reply.json)}`);
+  return reply.json;
+}
+
+/** How `pin` stands against the artifact's release, and the refusal's text
+ *  when it does not read it (the rule in Rust: the drift test holds it equal
+ *  to `languageVersionStanding`). */
+export function languageStanding(pin: string): { standing: LanguageVersionStanding; message: string | null } {
+  const reply = callLanguageStanding(pin);
+  const json = reply.json;
+  if (!reply.ok || !isRecord(json) || !isStanding(json.standing) || (json.message !== null && typeof json.message !== 'string')) {
+    throw new Error(`language_standing: ${JSON.stringify(json)}`);
+  }
+  return { standing: json.standing, message: json.message };
+}
+
+function isStanding(value: unknown): value is LanguageVersionStanding {
+  return value === 'compatible' || value === 'newer' || value === 'olderKey' || value === 'malformed';
+}
+
 /** Every diagnostic the Rust checker reports for `source` against
- *  `snapshot`, warnings and info included. */
+ *  `snapshot`, warnings and info included. A pin this release does not read
+ *  is its standing diagnostic alone, the artifact not asked. */
 export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, options: RustCheckOptions): Diagnostic[] {
-  const reply = callCheckProgram(source, JSON.stringify(snapshot), options.languageVersion, options.upgradingFrom ?? 0);
+  const refusal = languageVersionDiagnostic(options.languageVersion);
+  if (refusal !== undefined) return [refusal];
+  const reply = callCheckProgram(source, JSON.stringify(snapshot), callOptions(options));
   const json: unknown = reply.json;
   if (!reply.ok) throw refused(json);
   const diagnostics = isRecord(json) ? json.diagnostics : undefined;
@@ -85,7 +113,9 @@ export interface CheckAnswer {
 
 /** `checkSourceInRust` as data (crates/movement-checker/src/answer.rs). */
 export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, options: RustCheckOptions): CheckAnswer {
-  const reply = callCheckAnswer(source, JSON.stringify(snapshot), options.languageVersion, options.upgradingFrom ?? 0);
+  const refusal = languageVersionDiagnostic(options.languageVersion);
+  if (refusal !== undefined) return { diagnostics: [refusal], stamps: [] };
+  const reply = callCheckAnswer(source, JSON.stringify(snapshot), callOptions(options));
   const json: unknown = reply.json;
   if (!reply.ok) throw refused(json);
   if (!isRecord(json) || !Array.isArray(json.diagnostics) || !Array.isArray(json.stamps)) {
@@ -104,7 +134,6 @@ export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, opt
  *  when the schema enumerates nothing at the record type. */
 export function compatibleInRust(request: {
   source: string;
-  languageVersion: LanguageVersion;
   declaration: string;
   schema: unknown;
   recordType: string;
@@ -116,6 +145,10 @@ export function compatibleInRust(request: {
   if (isRecord(json) && json.undescribed === true) return { undescribed: true };
   if (isRecord(json) && typeof json.fits === 'boolean') return { fits: json.fits };
   throw new Error(`the Rust checker answered check.compatible with ${JSON.stringify(json)}`);
+}
+
+function callOptions(options: RustCheckOptions): { upgradingFrom?: string } {
+  return options.upgradingFrom === undefined ? {} : { upgradingFrom: options.upgradingFrom };
 }
 
 function refused(json: unknown): RustCheckRefused {

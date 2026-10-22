@@ -89,10 +89,6 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
   // runs, not what it runs on.
   const fedByExtraction =
     signature.dataDependency === 'extracted_context' && authorParams.length === 0;
-  const earlierOutputs = (signature.output?.previously ?? []).map((entry) => ({
-    before: entry.before,
-    output: pluginOutputOf(entry.output),
-  }));
   // Every argument's declared type, the auto-fed ones included: a plain call
   // writes those itself.
   const argTypes = Object.fromEntries(
@@ -107,7 +103,6 @@ export function pluginSpecOf(declaration: PluginDeclaration): PluginSpec {
     ...(fedArgs.length ? { fedArgs } : {}),
     ...(fedByExtraction ? { fedByExtraction: true } : {}),
     ...(signature.output !== undefined ? { output: pluginOutputOf(signature.output) } : {}),
-    ...(earlierOutputs.length > 0 ? { earlierOutputs } : {}),
     // The author's words, which the language service's hover leads with.
     ...(signature.description !== undefined && signature.description.length > 0 ? { description: signature.description } : {}),
   };

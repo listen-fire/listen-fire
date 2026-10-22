@@ -261,7 +261,7 @@ export type BindingShape =
       kind: 'closure';
       closure: ClosureExpression;
       captured: Map<string, Binding>;
-      /** The name it was bound to (`f = (n) => …`, language version 3), by
+      /** The name it was bound to (`f = (n) => …`), by
        *  which its own body may call it: the capture is a snapshot taken
        *  before the name was bound, so the name is handed to each call
        *  instead (`invokeClosure`). */
@@ -437,7 +437,7 @@ export class Environment {
   /**
    * The declared name of a FUNCTION in scope (a movement, a plugin, an
    * import, a name bound to a closure) written `name` in another letter case
-   * — function names are case-insensitive from language version 3. The
+   * — function names are case-insensitive. The
    * checker refuses two functions whose names differ only by case, so at most
    * one answers.
    */

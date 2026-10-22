@@ -39,7 +39,6 @@ use crate::types::field::{
 use crate::types::position::{HandlePosition, InstanceRef, Position, describe_position, position_schema_of_ref};
 use crate::types::scope_env::SymbolTypes;
 use crate::types::Typing;
-use crate::version;
 
 /// What a target path is for: a write creates along the edge, a match only
 /// looks along it.
@@ -322,7 +321,6 @@ impl Checker<'_> {
                     root_description: &root_description,
                     may_leave_unset,
                     identifies,
-                    version: self.version,
                 }) {
                     self.push(diagnostic);
                 }
@@ -561,7 +559,7 @@ impl Checker<'_> {
         }
         let (parent, parent_locals) = {
             let env = self.typing_env(scope);
-            let mut typing = Typing::new(&env, self.version, span);
+            let mut typing = Typing::new(&env, span);
             let parent = typing.walk_steps(Some(root_type), &steps[..steps.len() - 1], false);
             (parent, typing.locals)
         };
@@ -716,7 +714,7 @@ impl Checker<'_> {
             let landing = crate::types::position::position_ref_in(&instance, &written);
             let diagnostics = {
                 let env = self.typing_env(scope);
-                let mut typing = Typing::new(&env, self.version, span);
+                let mut typing = Typing::new(&env, span);
                 typing.locals = parent_locals;
                 if let Some(alias) = &link_step.alias {
                     typing.locals.insert(alias.clone(), landing.clone());
@@ -1195,7 +1193,7 @@ impl Checker<'_> {
         let Ok(expr) = crate::slots::expression_of_slot(hoisted.as_ref().unwrap_or(slot)) else { return (None, None) };
         let (ty, held, refused) = {
             let env = self.typing_env(scope);
-            let mut typing = crate::types::Typing::new(&env, self.version, slot.span);
+            let mut typing = crate::types::Typing::new(&env, slot.span);
             typing.write_target = target.map(|t| (t.clone(), path));
             let ty = typing.infer(&expr);
             // Read off the parts of a value the expression builds, where the
@@ -1372,8 +1370,7 @@ impl Checker<'_> {
         self.report(
             codes::MATCH_UNNAMED,
             format!(
-                "'match … {{ }}' on its own gates nothing since {}: a miss is absent, not the end of the scope. Bind it and test the name — `existing = match … {{ … }}` then `{}`",
-                version::describe(4),
+                "'match … {{ }}' on its own gates nothing: a miss is absent, not the end of the scope. Bind it and test the name — `existing = match … {{ … }}` then `{}`",
                 self.code("if existing != null { … }")
             ),
             span,

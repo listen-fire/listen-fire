@@ -198,7 +198,7 @@ pub fn refuse_record_key(typing: &mut Typing, operand: &Expression, index: &Expr
     true
 }
 
-/// `refuseFileInText` (language version 5): a file, or one arm that may be
+/// `refuseFileInText`: a file, or one arm that may be
 /// one, has no text form but the one READ gives.
 fn refuse_file_in_text(typing: &mut Typing, part: &Expression, ty: Option<&Ty>) {
     let may = typing.may_hold_type(part);
@@ -372,7 +372,7 @@ pub enum NumberReader<'a> {
     Param { builtin: &'a str, param: &'a str },
 }
 
-/// `absentNumberMessage`: from version 5 a number that may be absent is
+/// `absentNumberMessage`: a number that may be absent is
 /// refused wherever a number is computed from it, as TypeScript refuses
 /// `n + 1` on `number | undefined` — the engine reads an absent value as 0
 /// there (or answers nothing), so the run would compute a number nobody
@@ -411,8 +411,8 @@ fn absent_members_message(element: &Ty, source: Option<&str>, builtin: &str) -> 
     )
 }
 
-/// `refuseAbsentNumber`: from version 5, a number computed from a value that
-/// may be absent is refused; versions 1–4 read the absent value as 0, and a
+/// `refuseAbsentNumber`: a number computed from a value that
+/// may be absent is refused; the older language reads the absent value as 0, and a
 /// move up across 5 is warned of.
 pub fn refuse_absent_number(typing: &mut Typing, operand: &Expression, ty: Option<&Ty>, reader: &NumberReader) {
     let Some(ty @ (Ty::MaybeAbsent(_) | Ty::Absent)) = ty else { return };
@@ -1408,8 +1408,6 @@ pub struct WriteFieldAbsence<'a> {
     pub may_leave_unset: bool,
     /// The field is part of the write's `unique by` identity.
     pub identifies: bool,
-    /// The program's language version: the repair is spelled as it reads.
-    pub version: u32,
 }
 
 /// `checkWrite`'s require-present rule for one field: a value that may be

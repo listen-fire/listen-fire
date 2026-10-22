@@ -1,4 +1,4 @@
-//! A plugin package (language version 5, design §2.10, §4.3): a tag a
+//! A plugin package (design §2.10, §4.3): a tag a
 //! plugin's spec declares as its `package`, matched exactly and never
 //! parsed. ``import { `@lf/web` as web } from plugins`` binds each member
 //! under the dotted local name `web.fetchUrl`, so a call of it is an
@@ -30,7 +30,7 @@ pub enum FoundPlugin<'p> {
 }
 
 /// The entry keyed by exactly `name` (a package member's key), else the one
-/// entry whose program name it is (a bare import, as versions 1 to 4 write
+/// entry whose program name it is (a bare import, as the older language writes
 /// it). The TypeScript twin is `findPlugin`.
 pub fn find_plugin<'p>(plugins: &'p JsMap<PluginSpec>, name: &str) -> FoundPlugin<'p> {
     if let Some((key, spec)) = plugins.get_key_value(name) {

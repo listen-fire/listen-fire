@@ -51,7 +51,7 @@ const QUESTION = {
   ],
   recordType: 'Company',
   constraints: { any: [{ all: [{ field: 'name', fuzzy: true }] }] },
-  languageVersion: 5,
+  languageVersion: '0.12.0',
 };
 
 let door: FakeDoor;

@@ -11,12 +11,12 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"contractVersion":1,"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"crm_cred":{"positions":{"company":{"properties":{"name":"text","stage":"text","domain":"text","summary":"text","employees":"number"},"edges":{"deals":{"target":"deal"}}},"deal":{"properties":{"title":"text","amount":"number"},"edges":{}},"note":{"properties":{"body":"text","title":"text","payload":"json"},"edges":{}}},"collections":{"companies":{"target":"company"},"notes":{"target":"note"}},"writableRoots":{"note":{"fields":{"body":"text","title":"text","payload":"json"},"resultShape":{"externalId":"text"}},"company":{"fields":{"name":"text","stage":"text","domain":"text","summary":"text","employees":"number"},"resultShape":{"externalId":"text","name":"text"},"fuzzyResolution":true}},"supportsInPlaceUpdate":true}}}},"credentials":{"crm_cred":{"adapters":["attio"]}},"plugins":{}}"#;
 
-fn found(body: &str, version: u32, upgrading_from: Option<u32>) -> Vec<(String, &'static str, String)> {
+fn found(body: &str, upgrading_from: Option<&str>) -> Vec<(String, &'static str, String)> {
     let source = format!(
         "import {{ attio }} from adapters\nimport {{ crm_cred }} from credentials\ncrm = connect attio using crm_cred\nnode Found: \"the companies named\" {{\n  node co: \"each company\" {{\n    name: <text> \"its name\"\n  }}\n}}\nfunction go(t: <text>) {{\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()
@@ -38,13 +38,13 @@ const MATCHED: &str = "  co = match crm-[:companies]-> { unique by (`name`), nam
 
 #[test]
 fn under_5_a_block_off_an_extract_one_answer_or_a_match_is_refused_unguarded() {
-    assert_eq!(found(EXTRACTED, 5, None), vec![refused("found")]);
-    assert_eq!(found(MATCHED, 5, None), vec![refused("co")]);
+    assert_eq!(found(EXTRACTED, None), vec![refused("found")]);
+    assert_eq!(found(MATCHED, None), vec![refused("co")]);
 }
 
 #[test]
 fn under_5_an_expression_root_that_may_be_absent_is_refused_asking_for_a_name() {
-    let refusal = found("  rows = [extractOne([t], Found)]\n  rows[0]-[c:co]-> {\n    write crm-[:notes]-> { body: c.name }\n  }", 5, None);
+    let refusal = found("  rows = [extractOne([t], Found)]\n  rows[0]-[c:co]-> {\n    write crm-[:notes]-> { body: c.name }\n  }", None);
     assert_eq!(
         refusal,
         vec![(
@@ -57,6 +57,6 @@ fn under_5_an_expression_root_that_may_be_absent_is_refused_asking_for_a_name() 
 
 #[test]
 fn under_5_a_guard_proves_the_record_there() {
-    assert_eq!(found("  found = extractOne([t], Found)\n  if (found != null) {\n    found-[c:co]-> {\n      write crm-[:notes]-> { body: c.name }\n    }\n  }", 5, None), vec![]);
-    assert_eq!(found("  co = match crm-[:companies]-> { unique by (`name`), name: t }\n  if (co != null) {\n    co-[d:deals]-> {\n      write crm-[:notes]-> { body: d.title }\n    }\n  }", 5, None), vec![]);
+    assert_eq!(found("  found = extractOne([t], Found)\n  if (found != null) {\n    found-[c:co]-> {\n      write crm-[:notes]-> { body: c.name }\n    }\n  }", None), vec![]);
+    assert_eq!(found("  co = match crm-[:companies]-> { unique by (`name`), name: t }\n  if (co != null) {\n    co-[d:deals]-> {\n      write crm-[:notes]-> { body: d.title }\n    }\n  }", None), vec![]);
 }

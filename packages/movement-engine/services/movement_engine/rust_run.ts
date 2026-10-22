@@ -1,18 +1,11 @@
 // The engine's run entry: run a movement, resume a parked one, settle a race
 // frame, fire a callback's body. Each opens one segment (`inRunContext`) and
-// runs it on the Rust engine (rust_engine.ts). The engine runs language
-// version 5 and later; a run pinned earlier is refused at the entry, by name,
-// in the words a release uses for a version it does not support. Saved
-// movements pinned below 5 run where they were saved, on a platform that
-// keeps an engine for them.
+// runs it on the Rust engine (rust_engine.ts). The engine runs a pin that
+// shares this release's compatibility key; any other is refused at the
+// entry, by name, with the remedy. Saved movements of an older language run
+// where they were saved, on a platform that keeps an engine for them.
 
-import {
-  CURRENT_LANGUAGE_VERSION,
-  THIS_RELEASE,
-  languageVersionDiagnostic,
-  type LanguageRelease,
-  type LanguageVersion,
-} from 'movement-lang';
+import { LANGUAGE_VERSION, languageVersionDiagnostic } from 'movement-lang';
 import {
   refuseUnsupportedParkStateVersion,
   type CallbackBodyInput,
@@ -33,16 +26,6 @@ import {
 } from './rust_engine';
 import type { MovementRunResult, ResumeMovementInput, RunMovementInput } from './run_types';
 import { inRunContext } from './segment_context';
-
-/** The first language version this engine runs. */
-const FIRST_ENGINE_LANGUAGE_VERSION: LanguageVersion = 5;
-
-/** This release as the engine answers for it: the versions it supports, from
- *  the first one the engine runs. */
-const ENGINE_RELEASE: LanguageRelease = {
-  ...THIS_RELEASE,
-  supported: new Set([...THIS_RELEASE.supported].filter((version) => version >= FIRST_ENGINE_LANGUAGE_VERSION)),
-};
 
 export async function runMovement(given: RunMovementInput): Promise<MovementRunResult> {
   const input = withIsoEvent(given);
@@ -94,24 +77,18 @@ export async function fireCallbackBody(given: CallbackBodyInput & { host: Engine
 }
 
 /**
- * A run pinned below the first version this engine runs is refused, in the
- * words a release uses for a version it does not support. A run pinned to a
- * version the engine runs that the TypeScript engine parked (under the
- * retired MOVEMENT_ENGINE_V5_ON_TS switch) has no engine to resume on.
+ * A run pinned to a language this release does not read is refused, by the
+ * pin's standing. A run the TypeScript engine parked (under the retired
+ * MOVEMENT_ENGINE_V5_ON_TS switch) has no engine to resume on.
  */
 function refuseEarlierPin(input: RunInput & { parkedOnEngine?: 'ts' | 'rust' }): void {
-  const languageVersion = input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
-  if (languageVersion < FIRST_ENGINE_LANGUAGE_VERSION) {
-    const refusal = languageVersionDiagnostic(languageVersion, ENGINE_RELEASE);
-    throw new MovementEngineError(
-      'MOVENG_LANGUAGE_VERSION',
-      refusal?.message ?? `this engine runs language version ${FIRST_ENGINE_LANGUAGE_VERSION} and later`,
-    );
-  }
+  const languageVersion = input.languageVersion ?? LANGUAGE_VERSION;
+  const refusal = languageVersionDiagnostic(languageVersion);
+  if (refusal !== undefined) throw new MovementEngineError('MOVENG_LANGUAGE_VERSION', refusal.message);
   if (input.parkedOnEngine === 'ts') {
     throw new MovementEngineError(
       'MOVENG_UNSUPPORTED',
-      `this run is pinned to language version ${languageVersion}, which runs only on the Rust engine, but the TypeScript engine parked it: it cannot resume`,
+      `this run is pinned to language ${languageVersion}, which runs only on the Rust engine, but the TypeScript engine parked it: it cannot resume`,
       { reason: PARKED_ON_TYPESCRIPT },
     );
   }

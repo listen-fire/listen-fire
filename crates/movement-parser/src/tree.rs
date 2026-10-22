@@ -350,7 +350,7 @@ pub enum MExpr {
     Name {
         name: Name,
         at: At,
-        /// From language version 5, a hop's alias read (`m.email` inside the
+        /// A hop's alias read (`m.email` inside the
         /// hop's WHERE or ORDER BY): always the field of the record the hop
         /// lands on, never a variable. A name written bare is only ever a
         /// variable, so `m.email == email` compares the field with the
@@ -502,7 +502,7 @@ impl MExpr {
 }
 
 /// Every name `tree` reads as a value: a bare name anywhere but as the
-/// callee a call names (language version 5 reads a function's name as the
+/// callee a call names (the current language reads a function's name as the
 /// function itself, `g = one`, `[twice, twice]`), a closure's concise body
 /// included.
 pub fn names_read(tree: &MExpr) -> Vec<String> {

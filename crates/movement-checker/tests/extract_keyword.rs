@@ -1,4 +1,4 @@
-//! The extraction keyword under language version 5: MOV_EXTRACT_KEYWORD_RETIRED
+//! The extraction keyword in the current language: MOV_EXTRACT_KEYWORD_RETIRED
 //! with the same rewrite the TypeScript checker writes
 //! (lf-platform's packages/legacy-lang/checker/__test__/extract_keyword_retired.unit.test.ts).
 
@@ -7,9 +7,9 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{"slack":{"constructionArgs":[],"schemas":{"":{"positions":{"message":{"properties":{"Text":"text"},"edges":{}},"note":{"properties":{"Body":"text"},"edges":{}}},"collections":{"note":{"target":"note"}},"writableRoots":{"note":{"fields":{"Body":"text"},"resultShape":{"Body":"text"},"edges":{}}}}}}},"credentials":{},"plugins":{"fetchUrl":{"args":["url"],"priced":true,"output":{"kind":"value","type":"text"}}}}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").collect()
 }
 
@@ -20,7 +20,7 @@ fn the_keyword_is_refused_with_the_typescripts_rewrite() {
     let source = format!(
         "{PRELUDE}function go(m: <chat-[:message]->>) {{\n  found = extract \"careful\" from [m.Text, \"the subject\"] {{\n    node company: \"each company named\" {{\n      name: <text> \"its name\"\n      node person: \"each person\" {{ name: \"their name\" }}\n    }}\n  }}\n}}\n"
     );
-    let found = check(&source, 5);
+    let found = check(&source);
     assert_eq!(found.len(), 1);
     assert!(found[0].message.contains("writes 'found = extractOne(content, FoundShape, { tier: \"careful\" })'"), "{}", found[0].message);
     assert!(found[0].message.ends_with("(see handbook: front#extraction)"), "{}", found[0].message);
@@ -37,7 +37,7 @@ fn the_keyword_is_refused_with_the_typescripts_rewrite() {
 #[test]
 fn a_through_stage_has_no_rewrite() {
     let source = format!("import {{ fetchUrl }} from plugins\n{PRELUDE}function go(m: <chat-[:message]->>) {{\n  found = extract from [m.Text] through [fetchUrl(m.Text)] {{ summary: \"s\" }}\n}}\n");
-    let found = check(&source, 5);
+    let found = check(&source);
     assert_eq!(found.len(), 1);
     assert!(found[0].fix.is_none());
     assert!(found[0].message.contains("No rewrite keeps a 'through […]' stage's meaning"));

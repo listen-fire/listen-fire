@@ -7,13 +7,13 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{"registry":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"public_registry":{"positions":{"entity":{"properties":{"Name":"text","City":"text","Stage":{"kind":"enum","options":["Seed","Growth"]}},"edges":{"Holdings":{"target":"holding"}}},"holding":{"properties":{"Amount":"number"},"edges":{}}},"collections":{"entities":{"target":"entity"}},"writableRoots":{"entities":{"fields":{"Name":"text","Founded":"date","Stage":{"kind":"enum","options":["Seed","Growth"]}},"resultShape":{"Name":"text"}}}}}}},"credentials":{"public_registry":{"adapters":["registry"]}},"plugins":{"lookup":{"args":["q"],"priced":false,"requiredArgs":["q"]}},"models":["claude-opus-5"]}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options)
         .unwrap()
         .into_iter()
-        .filter(|d| d.code != "MOV_LISTEN_MISSING" && d.code != "MOV_LANGUAGE_VERSION_DEPRECATED")
+        .filter(|d| d.code != "MOV_LISTEN_MISSING")
         .collect()
 }
 
@@ -43,7 +43,7 @@ function main(e: <reg-[:entity]->>) {
 
 #[test]
 fn stages_calls_and_annotations_say_what_the_typescript_says() {
-    let found = check(STAGES, 5);
+    let found = check(STAGES);
     let places: Vec<_> = found.iter().map(at).collect();
     assert_eq!(
         places,

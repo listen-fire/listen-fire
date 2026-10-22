@@ -443,7 +443,7 @@ impl Run<'_> {
     }
 
     /// The collection op a member frame names, in its statement: written
-    /// as an op, or a call of one (version 3), by its span.
+    /// as an op, or a call of one, by its span.
     fn op_in_statement(&self, statement: &Statement, path: &str, op_json: &Js, scope: &Rc<Scope>) -> Result<Option<(movement_parser::ast::CollectionOpExpression, OpOrigin)>, Stop> {
         let span = crate::record::get(op_json, "span").ok().and_then(|s| crate::code::span_json(&s)).map(|(span, _)| span);
         let (value, value_path) = match statement {

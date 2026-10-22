@@ -3,7 +3,7 @@
 - [`getting-started-lf.md`](getting-started-lf.md): running movements from a project folder with the `lf` command. [`core-slots.md`](core-slots.md): the modules `lf.yaml`'s `core:` chooses (models, judge, store, files). [`embedding.md`](embedding.md): running the engine inside your own product.
 - [`editor-zed.md`](editor-zed.md): highlighting and the language server for `.mvt` files in the Zed editor.
 - [`contracts/`](contracts/README.md): the versioned contracts the movement core speaks, with an index of the versions each release supports and deprecates. The catalog snapshot, the parked run state, the host families (the boundary between the engine and the code that runs it, and the entry points), the adapter protocol a remote adapter serves, and the language versions.
-- [`language/dancing-wren-migration.md`](language/dancing-wren-migration.md): migrating an automation to language version 5, Dancing Wren. This repository serves version 5 only; upgrading an older automation is the platform's.
+- [`language/migrating-to-0.12.md`](language/migrating-to-0.12.md): migrating an automation written before 0.12 (the integer versions 1–4). This repository serves 0.12 only; upgrading an older automation is the platform's.
 
 The reference for the movement language itself is the handbook the authoring agents read, in [`packages/handbook`](../packages/handbook), its chapters under [`chapters`](../packages/handbook/chapters).
 
@@ -23,8 +23,8 @@ The hosted platform that runs movements for teams (the API, the web app, the adm
 
 URL scheme (stable; the language server links to it):
 
-- `/docs/v<N>/<page>#<anchor>`, where `N` is the language version (`/docs/v5/` is version 5, Dancing Wren).
-- `<page>` is a handbook chapter id (`foundations`, `anatomy`, `expressions`, `writes`, `traversal`, `extraction`, `branching`, `listeners`, `asks`, `patterns`, `use-cases`, `runs`, `reference`, `builtins`), a guide (`getting-started-lf`, `core-slots`, `embedding`, `adapter-protocol`, `dancing-wren-migration`), or `contracts` and `contracts-<name>`.
+- `/docs/<key>/<page>#<anchor>`, where `<key>` is the compatibility key of the release (`0.12` for every 0.12.x; `1` from 1.0). A pre-release is published under `/docs/next/` instead. Links from before the key scheme (`/docs/v5/<page>#<anchor>`) redirect to the same page and anchor under the key.
+- `<page>` is a handbook chapter id (`foundations`, `anatomy`, `expressions`, `writes`, `traversal`, `extraction`, `branching`, `listeners`, `asks`, `patterns`, `use-cases`, `runs`, `reference`, `builtins`), a guide (`getting-started-lf`, `core-slots`, `embedding`, `adapter-protocol`, `migrating-to-0.12`), or `contracts` and `contracts-<name>`.
 - `<anchor>` is the heading's GitHub style slug: the handbook's `###` section names (`writes#identity`) are the same anchors the in-app handbook routes use.
-- Pages are files, so `.html` also works (`/docs/v5/writes.html#identity`).
-- A new language version adds an entry to `VERSIONS` in the generator; the older sections stay at their URLs.
+- Pages are files, so `.html` also works (`/docs/0.12/writes.html#identity`).
+- A new compatibility key appears in the selector from the Cargo version; the older sections stay at their URLs.

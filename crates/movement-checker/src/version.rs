@@ -1,39 +1,21 @@
-//! The language version table as the checker reports it
-//! (packages/movement-lang/language_version.ts), and the handbook pointers a
-//! fixed set of codes append (checker/handbook_pointers.ts).
+//! A pin's standing as the checker reports it (the rule is
+//! movement_parser::version; packages/movement-lang/language_version.ts words
+//! it the same), and the handbook pointers a fixed set of codes append
+//! (checker/handbook_pointers.ts).
 
 use movement_parser::ast::{Loc, Span};
-use movement_parser::version::{CURRENT_LANGUAGE_VERSION, unsupported_message};
+use movement_parser::version::{LANGUAGE_VERSION, refusal};
 
 use crate::codes;
 use crate::diagnostic::Diagnostic;
 
-/// Versions this release still runs but will remove: none today.
-const DEPRECATED: &[u32] = &[];
-
-pub use movement_parser::version::describe;
-
-/// What a movement pinned to `version` is told before anything else.
-pub fn standing_diagnostic(version: u32) -> Option<Diagnostic> {
+/// What a movement pinned to `pin` is told before anything else: an error
+/// when this release does not read it, nothing when it does. (A deprecation
+/// is the CHANGELOG's to announce: a compatible pin runs as written.)
+pub fn standing_diagnostic(pin: &str) -> Option<Diagnostic> {
     let at = Loc { line: 1, col: 1 };
-    let span = Span { start: at, end: at };
-    let current = describe(CURRENT_LANGUAGE_VERSION);
-    if let Some(message) = unsupported_message(version) {
-        return Some(Diagnostic::error(codes::LANGUAGE_VERSION_UNSUPPORTED, message, span));
-    }
-    if DEPRECATED.contains(&version) {
-        let mut warning = Diagnostic::error(
-            codes::LANGUAGE_VERSION_DEPRECATED,
-            format!(
-                "this automation is written in language version {}, which is deprecated and will be removed in a future release. Validate it under {current}, repair what that reports, and upgrade it to {current} before then.",
-                describe(version)
-            ),
-            span,
-        );
-        warning.severity = Some(crate::diagnostic::Severity::Warning);
-        return Some(warning);
-    }
-    None
+    refusal(pin, LANGUAGE_VERSION)
+        .map(|message| Diagnostic::error(codes::LANGUAGE_VERSION_UNSUPPORTED, message, Span { start: at, end: at }))
 }
 
 /// The handbook anchor a code's message ends with (`HANDBOOK_POINTER_BY_CODE`).

@@ -6,6 +6,7 @@
 // so the order of an argument object's keys is held too).
 
 import {
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   parseMovementExpression,
   refinementKey,
@@ -74,19 +75,18 @@ const emailSchema: InstanceSchema = {
 const MASTER = 'List Entry — Portfolio';
 const HANDOVER = 'List Entry — Watchlist';
 const NARROWED = '`listName` == "Portfolio"';
-/** The same WHERE as version 5 spells it: a field is read through the hop's alias. */
-const NARROWED_V5 = 'le.`listName` == "Portfolio"';
+/** The same WHERE as the language spells it: a field is read through the hop's alias. */
+const NARROWED_ALIASED = 'le.`listName` == "Portfolio"';
 /** The steps of a traversal path, as the editor's selector parses one. */
 function parseTraversalPath(path: string, languageVersion?: LanguageVersion) {
   const parsed = parseMovementExpression(`__movement_path_root__${path}.\`__movement_path_probe__\``, languageVersion);
   return parsed.type === 'traverse' ? parsed.steps : undefined;
 }
 
-function selectionKey(where: string, version?: 5): string {
-  const steps =
-    version === 5
-      ? parseTraversalPath(`-[le:list_entries WHERE ${where}]->`, 5)
-      : parseTraversalPath(`-[:list_entries WHERE ${where}]->`);
+function selectionKey(where: string, aliased = false): string {
+  const steps = aliased
+    ? parseTraversalPath(`-[le:list_entries WHERE ${where}]->`, LANGUAGE_VERSION)
+    : parseTraversalPath(`-[:list_entries WHERE ${where}]->`);
   const filter = steps?.[0]?.type === 'edge' ? steps[0].expressionFilter : undefined;
   if (!filter) throw new Error(`test setup: no filter parsed out of \`${where}\``);
   return refinementKey({ type: 'list_entry', filter });
@@ -122,9 +122,9 @@ const graphSchema: InstanceSchema = {
   },
   refinements: {
     [selectionKey(NARROWED)]: 'list_entry "Portfolio"',
-    [selectionKey(NARROWED_V5, 5)]: 'list_entry "Portfolio"',
+    [selectionKey(NARROWED_ALIASED, true)]: 'list_entry "Portfolio"',
   },
-  selectedMembers: { [selectionKey(NARROWED)]: MASTER, [selectionKey(NARROWED_V5, 5)]: MASTER },
+  selectedMembers: { [selectionKey(NARROWED)]: MASTER, [selectionKey(NARROWED_ALIASED, true)]: MASTER },
 };
 
 const catalog = mockCatalogSnapshot({
@@ -141,15 +141,14 @@ const catalog = mockCatalogSnapshot({
   credentials: { dealflow_inbox: { adapters: ['email'] }, graph_main: { adapters: ['graph'] } },
 });
 
-/** The program as `version` spells it: one text, written in the spelling
- *  versions 1–4 read, respelled by the upgrade tool for a version-5 run. */
+/** The program as `version` spells it: one text, written in the old
+ *  spelling and respelled by the upgrade tool. */
 const programFor = (
   version: LanguageVersion,
   body: string,
-  v5Edits: ReadonlyArray<readonly [string, string]> = [],
+  respellings: ReadonlyArray<readonly [string, string]> = [],
 ): string => {
-  const edited =
-    version >= 5 ? v5Edits.reduce((text, [from, to]) => text.replace(from, to), body) : body;
+  const edited = respellings.reduce((text, [from, to]) => text.replace(from, to), body);
   return spelledFor(
     version,
     `${PRELUDE}movement m(msg: <inbox-[:message]->>) {\n${edited}\n}`,
@@ -387,9 +386,9 @@ interface Case {
   suspendAt?: readonly string[];
   /** A fresh hold for each run (see `holdingRead`). */
   hold?: () => HeldRead;
-  /** Text the upgrade tool cannot respell, written for version 5 instead:
-   *  each pair replaces the first occurrence in the body before a version-5 run. */
-  v5Edits?: ReadonlyArray<readonly [string, string]>;
+  /** Text the upgrade tool cannot respell, written in the current spelling instead:
+   *  each pair replaces the first occurrence in the body before the run. */
+  respellings?: ReadonlyArray<readonly [string, string]>;
 }
 
 interface HeldRead {
@@ -465,7 +464,7 @@ async function runOn(c: Case): Promise<Outcome> {
   });
   try {
     const run = runMovement({
-      source: programFor(5, c.body, c.v5Edits),
+      source: programFor(LANGUAGE_VERSION, c.body, c.respellings),
       event: c.event ?? webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,
@@ -538,7 +537,7 @@ const calls = (o: Outcome, which: 'graph' | 'email' = 'graph') =>
 
 const BRACKET = 'company WHERE `stage` == "Seed" ORDER BY `revenue` DESC LIMIT 2';
 /** The same bracket, as the run's version-5 text quotes it in its trace. */
-const BRACKET_V5 = 'company WHERE c.`stage` == "Seed" ORDER BY c.`revenue` DESC LIMIT 2';
+const BRACKET_ALIASED = 'company WHERE c.`stage` == "Seed" ORDER BY c.`revenue` DESC LIMIT 2';
 const NOTE_PER_COMPANY = (bracket: string) =>
   `  kg-[c:${bracket}]-> {\n    write kg-[:note]-> { text: c.\`name\` }\n  }`;
 
@@ -564,7 +563,7 @@ describe('traversal blocks in the Rust engine', () => {
     });
     expect(rust.trace).toContainEqual({
       kind: 'block',
-      root: `kg-[c:${BRACKET_V5}]->`,
+      root: `kg-[c:${BRACKET_ALIASED}]->`,
       positions: 2,
     });
   });
@@ -1034,8 +1033,8 @@ describe('the expression tail, on both engines', () => {
           '  if EXISTS(kg-[c:company]->-[d:deals WHERE `stage` == "won"]->) { write kg-[:note]-> { text: "won" } }',
           '  if EXISTS(msg-[:attachments]->) { write kg-[:note]-> { text: "files" } }',
         ].join('\n'),
-        // Version 5 writes a walk's filter inside its last hop, whole.
-        v5Edits: [
+        // The language writes a walk's filter inside its last hop, whole.
+        respellings: [
           [
             'kg-[c:company WHERE `stage` == "Late"]-> WHERE `revenue` > 40',
             'kg-[c:company WHERE `stage` == "Late" AND `revenue` > 40]->',
@@ -1081,8 +1080,8 @@ describe('the expression tail, on both engines', () => {
         '  pair = [null, 5]',
         '  write kg-[:note]-> { text: "${r0.n}${r1.n}${r2.n} ${ONLY(pair)}" }',
       ].join('\n'),
-      // Version 5 refuses SUM, AVG and MAX over a list that may hold an absent member.
-      v5Edits: [
+      // The checker refuses SUM, AVG and MAX over a list that may hold an absent member.
+      respellings: [
         ['${SUM(xs)} ${AVG(xs)}', '${SUM(filter(xs, (x) => x != null))} ${AVG(filter(xs, (x) => x != null))}'],
         ['${MAX(xs)}', '${MAX(filter(xs, (x) => x != null))}'],
       ],
@@ -1130,8 +1129,8 @@ describe('the expression tail, on both engines', () => {
         '  write kg-[:note]-> { text: JOIN(MAP(byRevenue, (c) => c.`name`), ",") }',
         '  write kg-[:note]-> { text: JOIN(MAP(ranked, (r) => r.n), ",") }',
       ].join('\n'),
-      // Version 5 gives SORT its key as a function.
-      v5Edits: [
+      // The language gives SORT its key as a function.
+      respellings: [
         [
           'SORT(cs, LOWER(`name`), DESC)',
           'sort(cs, (c) => Text.lower(c.`name`), { order: "desc" })',
@@ -1177,8 +1176,8 @@ describe('the expression tail, on both engines', () => {
     const park = makeFakeParkSink();
     const graph = fakeGraph();
     await runMovement({
-      source: programFor(5, body),
-      languageVersion: 5,
+      source: programFor(LANGUAGE_VERSION, body),
+      languageVersion: LANGUAGE_VERSION,
       event: webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,
@@ -1219,8 +1218,8 @@ describe('the expression tail, on both engines', () => {
 
     const body = [...before, '  await sleep(1h)', ...after].join('\n');
     const base = {
-      source: programFor(5, body),
-      languageVersion: 5 as const,
+      source: programFor(LANGUAGE_VERSION, body),
+      languageVersion: LANGUAGE_VERSION,
       event: webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,

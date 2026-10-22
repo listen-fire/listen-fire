@@ -57,7 +57,7 @@ pub struct ImportState {
     link: Option<Rc<ProgramLink>>,
     current_file: Option<Rc<LinkedFile>>,
     checked: HashMap<String, IndexMap<String, SymbolId>>,
-    /// The old spellings (language version 5) of the libraries the file
+    /// The old spellings of the libraries the file
     /// being checked imports, each at the import that pulled its library in.
     /// Kept apart from the walk's diagnostics: a finding's message names the
     /// old spelling, which the program's own spelling must not rewrite.
@@ -164,7 +164,6 @@ const SPAN_FALLBACK: Span = Span { start: Loc { line: 1, col: 1 }, end: Loc { li
 
 struct Linker<'c> {
     catalog: &'c CatalogSnapshot,
-    version: u32,
     /// `null` for a path that failed to load, so it fails once.
     files: IndexMap<String, Option<Rc<LinkedFile>>>,
     loading: Vec<String>,
@@ -205,7 +204,7 @@ impl Linker<'_> {
             self.files.insert(path.to_string(), None);
             return None;
         };
-        let program = match movement_parser::stmt::parse_program(&form_of_text(&source), self.version, false) {
+        let program = match movement_parser::stmt::parse_program(&form_of_text(&source), false) {
             Ok(program) => program,
             Err(e) => {
                 let message = format!(
@@ -259,8 +258,8 @@ impl Linker<'_> {
 /// `linkImports`: a program's file imports, resolved transitively against
 /// the snapshot's files. Never fails: each failure is a problem attributed
 /// to an import of the root program, and its names stay unresolved.
-pub fn link_imports(program: &Program, catalog: &CatalogSnapshot, version: u32) -> ProgramLink {
-    let mut linker = Linker { catalog, version, files: IndexMap::new(), loading: Vec::new(), problems: Vec::new() };
+pub fn link_imports(program: &Program, catalog: &CatalogSnapshot) -> ProgramLink {
+    let mut linker = Linker { catalog, files: IndexMap::new(), loading: Vec::new(), problems: Vec::new() };
     let mut imports = IndexMap::new();
     linker.link_file_level(program, &mut imports, Site { root_span: None, within: None });
     let files = linker.files.into_iter().filter_map(|(path, file)| file.map(|f| (path, f))).collect();

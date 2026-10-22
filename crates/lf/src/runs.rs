@@ -18,7 +18,8 @@ use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
 use crate::externals::{RunningExternal, needed_externals, rpc, scan_externals, start_externals};
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::project::{Project, refuse_below_lf};
+use crate::project::Project;
+use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
 use crate::routing::{Listen, collect_listens, event_matches_trigger_scope, trigger_event_of};
 use crate::run_host::{
@@ -113,7 +114,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         return Err(missing.iter().map(|m| format!("{}:{}:{} {}", m.file.display(), m.line, m.column, m.message)).collect::<Vec<_>>().join("\n"));
     }
     let registered = |e: &crate::externals::External| crate::subscriptions::has_registered_webhook(&credentials, &e.manifest.name);
-    let externals = needed_externals(scan_externals(&project)?, &files, project.language_version, registered);
+    let externals = needed_externals(scan_externals(&project)?, &files, registered);
     let loop_guard = crate::loop_guard::of_project(&project, &env)?;
     crate::wake::install(crate::wake::of_project(&project, &credentials)?);
     // Before any call: the manifest calls below ask it too.
@@ -144,7 +145,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
     let catalog = catalog_of(&running, &schemas, &credentials, &files);
-    let listens = collect_listens(&files, project.language_version);
+    let listens = collect_listens(&files);
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let public_url = project
         .public_url
@@ -213,7 +214,7 @@ struct Tally {
 /// The facts a run keeps so it can be resumed against the same program (`RunFacts`).
 struct RunFacts {
     source: String,
-    language_version: u32,
+    language_version: String,
     event: Js,
     movement_name: String,
     fired_at: String,
@@ -223,7 +224,7 @@ impl RunFacts {
     fn to_js(&self) -> Js {
         Js::Obj(obj! {
             "source" => Js::str(&self.source),
-            "languageVersion" => Js::Num(self.language_version.into()),
+            "languageVersion" => Js::str(&self.language_version),
             "event" => self.event.clone(),
             "movementName" => Js::str(&self.movement_name),
             "firedAt" => Js::str(&self.fired_at),
@@ -235,10 +236,25 @@ impl RunFacts {
         let facts = Js::parse(input.as_bytes()).map_err(|e| format!("run {run_id}: its facts are not JSON: {e}"))?;
         let text = |k: &str| facts.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("run {run_id}: its facts have no {k}"));
         let language_version = match facts.get("languageVersion") {
-            Some(Js::Num(n)) => n.as_u64().ok_or_else(|| format!("run {run_id}: languageVersion is a whole number"))? as u32,
+            Some(Js::Str(pin)) => {
+                let own = LANGUAGE_VERSION;
+                match standing(pin, own) {
+                    Standing::Compatible => pin.to_string(),
+                    Standing::Newer => return Err(format!("run {run_id}: pinned to language {pin}, newer than this lf ({own}); upgrade lf")),
+                    Standing::OlderKey | Standing::Malformed => {
+                        return Err(format!("run {run_id}: pinned to language {pin}, which this lf ({own}) does not read; it cannot resume: upgrade its movement and fire it again"));
+                    }
+                }
+            }
+            // A store from before pins were versions wrote the integer 5 (the
+            // only integer lf ever ran): read it once as this release, so a
+            // parked run still resumes.
+            Some(Js::Num(n)) if n.as_u64().is_some_and(|n| n >= 5) => LANGUAGE_VERSION.to_string(),
+            Some(Js::Num(n)) => {
+                return Err(format!("run {run_id}: pinned to the integer {n}, from before pins were releases, which lf does not run; it cannot resume: upgrade its movement and fire it again"));
+            }
             _ => return Err(format!("run {run_id}: its facts have no languageVersion")),
         };
-        refuse_below_lf(language_version, &format!("run {run_id}"), "it cannot resume; upgrade its movement to language version 5 on the platform and fire it again")?;
         Ok(RunFacts {
             source: text("source")?,
             language_version,
@@ -427,7 +443,7 @@ impl Session {
     }
 
     /// A `poll_listen` row: poll its listen, and say when it is next due — the
-    /// listen's `every` (`pollIntervalSeconds` before language version 5), else its source's interval. A row whose
+    /// listen's `every` (`pollIntervalSeconds` in the older language), else its source's interval. A row whose
     /// listen is gone is done, and its checkpoint forgotten.
     async fn poll_row(&self, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
         let Some((listen, running, _)) = self.polled_listens().find(|(_, _, s)| s == subscription) else {
@@ -438,7 +454,7 @@ impl Session {
         for line in &fired.redelivered {
             eprintln!("lf: {line}");
         }
-        // `every: 5m` from language version 5, `pollIntervalSeconds: 300` before.
+        // `every: 5m` now, `pollIntervalSeconds: 300` before.
         let every = listen.config.get("every").and_then(Js::as_str).and_then(movement_engine::park::duration_ms).filter(|ms| *ms >= 1000.0).map(|ms| (ms / 1000.0) as u64);
         let seconds = every.or(match listen.config.get("pollIntervalSeconds") {
             Some(Js::Num(n)) => n.as_u64().filter(|s| *s > 0),
@@ -482,7 +498,7 @@ impl Session {
         let fired_at = iso(0);
         let facts = RunFacts {
             source: file.source.clone(),
-            language_version: self.project.language_version,
+            language_version: self.project.language_version.clone(),
             event,
             movement_name: listen.movement_name.clone(),
             fired_at: fired_at.clone(),
@@ -594,7 +610,7 @@ impl Session {
         });
         let input = SegmentInput {
             source: &facts.source,
-            language_version: facts.language_version,
+            language_version: &facts.language_version,
             movement_name: &facts.movement_name,
             event: &facts.event,
             fired_at: &facts.fired_at,
@@ -1243,6 +1259,20 @@ fn poll_params(listen: &Listen, state: Option<&Js>) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    fn facts_with(pin: &str) -> String {
+        format!(r#"{{"source":"s","languageVersion":{pin},"movementName":"m","firedAt":"t"}}"#)
+    }
+
+    #[test]
+    fn a_stored_pin_resumes_by_its_standing_and_an_old_integer_is_read_once() {
+        let version = |pin: &str| RunFacts::of_row("r", &facts_with(pin)).map(|f| f.language_version);
+        assert_eq!(version(&format!("\"{LANGUAGE_VERSION}\"")), Ok(LANGUAGE_VERSION.to_string()));
+        assert_eq!(version("5"), Ok(LANGUAGE_VERSION.to_string()));
+        assert!(version("\"0.13.0\"").unwrap_err().contains("newer than this lf"));
+        assert!(version("\"0.11.0\"").unwrap_err().contains("upgrade its movement and fire it again"));
+        assert!(version("4").unwrap_err().contains("upgrade its movement and fire it again"));
+    }
+
     use super::*;
 
     fn polled(config: Obj) -> Listen {

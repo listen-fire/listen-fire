@@ -1,7 +1,7 @@
-//! The v5 surface read into the canonical tree. From language version 5 an
+//! The current surface read into the canonical tree. An
 //! expression is written in the everyday spelling (`Text.upper(x)`, `a && b`,
 //! `c ? a : b`, `map(xs, f, settings)`); the tree every checker and engine
-//! reads is the one versions 1–4 parse (`UPPER(x)`, `a AND b`, `IF … END`,
+//! reads is the one the older language parses (`UPPER(x)`, `a AND b`, `IF … END`,
 //! `MAP(xs, settings, f)`). This pass rewrites the first into the second, so
 //! nothing downstream learns a second spelling, and reports every old
 //! spelling it meets as a finding carrying the exact rewrite.
@@ -62,9 +62,9 @@ fn is_ident(text: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// From version 5 a hop's WHERE and ORDER BY read its record's fields
+/// A hop's WHERE and ORDER BY read its record's fields
 /// through its alias (`c.Name`, design §2.5); the canonical tree reads them
-/// bare, as versions 1–4 wrote them, so the gates and the pushdown see the
+/// bare, as the older language wrote them, so the gates and the pushdown see the
 /// field they always saw. The bare name keeps the alias read's extent and is
 /// marked as only ever the field (`MExpr::Name::field`), so neither a checker
 /// nor an engine reads it as a variable of the same name; a name written bare
@@ -89,7 +89,7 @@ fn through_alias(e: &mut MExpr, alias: &str) {
     }
 }
 
-/// The `!` an expression tighter than `&&` begins with, when versions 1–4
+/// The `!` an expression tighter than `&&` begins with, when the older language
 /// would have read that `!` over the whole of it.
 fn bang_on_left(e: &MExpr) -> Option<At> {
     let left = match e {
@@ -161,7 +161,7 @@ impl<'s> Canon<'s> {
     }
 
     /// `at` is the whole text, or all that is inside a pair of parentheses
-    /// (an `if` condition from version 5, a group, a call's one argument): a
+    /// (an `if` condition a group, a call's one argument): a
     /// rewrite there needs no parentheses of its own.
     fn whole(&self, at: At) -> bool {
         let before = self.text(At { start: 0, end: at.start });
@@ -231,7 +231,7 @@ impl<'s> Canon<'s> {
 
     // ── `!` binds as TypeScript's unary operator ──
 
-    /// `!a == b` is `(!a) == b` from version 5; versions 1–4 read the `!`
+    /// `!a == b` is `(!a) == b`; the older language reads the `!`
     /// over the whole comparison, `!(a == b)`. The meaning changed, not the
     /// spelling, so the text is refused and the fix writes the old reading
     /// out: an upgrade keeps what the movement did, and a new author writes
@@ -242,13 +242,13 @@ impl<'s> Canon<'s> {
         let at = e.at();
         let rest = self.text(At { start: bang.start + 1, end: at.end });
         let message = format!(
-            "from language version 5 `!` applies to the operand beside it: `{}` is `(!{}) …`, where versions 1–4 read `!({})` — write the parentheses",
+            "`!` applies to the operand beside it: `{}` is `(!{}) …`, where the older reading was `!({})` — write the parentheses",
             self.text(at),
             self.text(At { start: bang.start + 1, end: bang.end }).trim_start(),
             rest.trim_start()
         );
         let finding = Finding { code: SPELLING_CODE, message, at, edits: Some(vec![Edit { at, text: format!("!({})", rest.trim_start()) }]), unless_bound: None, safe: true, unsafe_if_bound: Vec::new() };
-        let same_bang = |f: &Finding| f.code == SPELLING_CODE && f.at.start == bang.start && f.message.starts_with("from language version 5 `!`");
+        let same_bang = |f: &Finding| f.code == SPELLING_CODE && f.at.start == bang.start && f.message.starts_with("`!`");
         match self.findings.iter_mut().find(|f| same_bang(f)) {
             Some(inner) => *inner = finding,
             None => self.findings.push(finding),
@@ -275,7 +275,7 @@ impl<'s> Canon<'s> {
         // `Text.includes(t, v)` and `List.includes(xs, v)` read inside the
         // brackets as they read outside: the `t CONTAINS v` and `v IN xs`
         // written there.
-        if let Some(row) = table::by_v5(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes)) {
+        if let Some(row) = table::by_current(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes)) {
             self.rewrite(row, e);
         }
     }
@@ -392,8 +392,8 @@ impl<'s> Canon<'s> {
         };
         let Some(written) = written else { return };
 
-        // A PDF is not a file kind from version 5: `@lf/pdf` draws it. The old
-        // spelling's finding is this one alone; the v5 spelling's call is still
+        // A PDF is not a file kind: `@lf/pdf` draws it. The old
+        // spelling's finding is this one alone; the current spelling's call is still
         // read into the canonical tree below.
         if (written == "File.from" || written == "FILE") && self.is_pdf_file(args) {
             self.pdf_plugin(args, at);
@@ -401,8 +401,8 @@ impl<'s> Canon<'s> {
                 return;
             }
         }
-        // A v5 spelling, exactly as written: read into the canonical call.
-        if let Some(row) = table::by_v5(&written) {
+        // A current spelling, exactly as written: read into the canonical call.
+        if let Some(row) = table::by_current(&written) {
             if self.is_old_shape(row, args) {
                 self.old_call(row, &written, args, at, callee_at);
                 return;
@@ -414,12 +414,12 @@ impl<'s> Canon<'s> {
         if let Some((ns, member)) = written.split_once('.')
             && table::NAMESPACES.contains(&ns)
         {
-            let near = table::SPELLINGS.iter().find(|s| !s.old_only && s.v5.eq_ignore_ascii_case(&written));
+            let near = table::SPELLINGS.iter().find(|s| !s.old_only && s.current.eq_ignore_ascii_case(&written));
             let message = match near {
-                Some(s) => format!("`{ns}` has no member `{member}` — did you mean `{}`?", s.v5),
+                Some(s) => format!("`{ns}` has no member `{member}` — did you mean `{}`?", s.current),
                 None => format!("`{ns}` has no member `{member}`"),
             };
-            let edits = near.map(|s| vec![Edit { at: callee_at, text: s.v5.to_string() }]);
+            let edits = near.map(|s| vec![Edit { at: callee_at, text: s.current.to_string() }]);
             // A did-you-mean is a guess at what was meant, never safe.
             self.findings.push(Finding { code: UNKNOWN_MEMBER_CODE, message, at: callee_at, edits, unless_bound: None, safe: false, unsafe_if_bound: Vec::new() });
             return;
@@ -430,13 +430,13 @@ impl<'s> Canon<'s> {
             return;
         }
         // A core word or a namespace in the wrong letter case.
-        if let Some(row) = table::SPELLINGS.iter().find(|s| !s.old_only && s.v5.eq_ignore_ascii_case(&written)) {
-            let message = format!("`{written}` — did you mean `{}`?", row.v5);
-            self.old(callee_at, message, Some(Edit { at: callee_at, text: row.v5.to_string() }));
+        if let Some(row) = table::SPELLINGS.iter().find(|s| !s.old_only && s.current.eq_ignore_ascii_case(&written)) {
+            let message = format!("`{written}` — did you mean `{}`?", row.current);
+            self.old(callee_at, message, Some(Edit { at: callee_at, text: row.current.to_string() }));
         }
     }
 
-    /// A v5 name written with the old call's arguments (`callback(f(x))`,
+    /// A current-spelling name written with the old call's arguments (`callback(f(x))`,
     /// `exists(value)`): the name is right, the shape is not.
     fn is_old_shape(&self, row: &Spelling, args: &[CallArg]) -> bool {
         match row.shape {
@@ -451,12 +451,12 @@ impl<'s> Canon<'s> {
         args.len() == 2 && matches!(self.arg_text(args, 1).trim(), "\"pdf\"" | "'pdf'")
     }
 
-    /// A PDF from version 5 is the `@lf/pdf` plugin's: `pdf.render(text)`.
+    /// A PDF is the `@lf/pdf` plugin's: `pdf.render(text)`.
     /// The rewrite is not marked safe, because the program must also import the
     /// package, which an expression's edit cannot add.
     fn pdf_plugin(&mut self, args: &[CallArg], at: At) {
         let text = self.arg_text(args, 0);
-        let message = "from language version 5 a PDF is drawn by the `@lf/pdf` plugin: `pdf.render(text)`, with ``import { `@lf/pdf` as pdf } from plugins``".to_string();
+        let message = "a PDF is drawn by the `@lf/pdf` plugin: `pdf.render(text)`, with ``import { `@lf/pdf` as pdf } from plugins``".to_string();
         let edit = Edit { at, text: format!("pdf.render({text})") };
         self.findings.push(Finding { code: SPELLING_CODE, message, at, edits: Some(vec![edit]), unless_bound: None, safe: false, unsafe_if_bound: Vec::new() });
     }
@@ -468,18 +468,18 @@ impl<'s> Canon<'s> {
     /// The finding for an old spelling, with the rewrite its shape gives.
     fn old_call(&mut self, row: &Spelling, written: &str, args: &[CallArg], at: At, callee_at: At) {
         let a = |i: usize| self.arg_text(args, i);
-        let rename = Edit { at: callee_at, text: row.v5.to_string() };
+        let rename = Edit { at: callee_at, text: row.current.to_string() };
         let (message, edit) = match row.shape {
-            Shape::Same | Shape::Contains | Shape::ListIncludes => (format!("`{written}` is written `{}` from language version 5", row.v5), Some(rename)),
+            Shape::Same | Shape::Contains | Shape::ListIncludes => (format!("the retired spelling `{written}` is written `{}`", row.current), Some(rename)),
             Shape::SettingsLast if args.len() == 3 => {
-                (format!("`{written}` is written `{}`, its settings last", row.v5), Some(Edit { at, text: format!("{}({}, {}, {})", row.v5, a(0), a(2), a(1)) }))
+                (format!("`{written}` is written `{}`, its settings last", row.current), Some(Edit { at, text: format!("{}({}, {}, {})", row.current, a(0), a(2), a(1)) }))
             }
-            Shape::SettingsLast => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::SettingsLast => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::ReduceOrder if args.len() == 3 => (
-                format!("`{written}` is written `{}`, its function before its start", row.v5),
-                Some(Edit { at, text: format!("{}({}, {}, {})", row.v5, a(0), a(2), a(1)) }),
+                format!("`{written}` is written `{}`, its function before its start", row.current),
+                Some(Edit { at, text: format!("{}({}, {}, {})", row.current, a(0), a(2), a(1)) }),
             ),
-            Shape::ReduceOrder => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::ReduceOrder => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::SortKey => {
                 let direction = |e: &MExpr| match e {
                     MExpr::Name { name, .. } if name.text.eq_ignore_ascii_case("ASC") || name.text.eq_ignore_ascii_case("DESC") => {
@@ -498,31 +498,31 @@ impl<'s> Canon<'s> {
                     [_, MExpr::Name { name, .. }] => Some(Some(format!("(r) => r.{}", field_source(&name.text)))),
                     _ => None,
                 };
-                let message = format!("`{written}` is written `{}`, its key a function", row.v5);
+                let message = format!("`{written}` is written `{}`, its key a function", row.current);
                 match key {
                     Some(key) => {
                         let text = [Some(a(0)), key, order].into_iter().flatten().collect::<Vec<_>>().join(", ");
-                        (message, Some(Edit { at, text: format!("{}({text})", row.v5) }))
+                        (message, Some(Edit { at, text: format!("{}({text})", row.current) }))
                     }
                     None => (message, None),
                 }
             }
             Shape::AiTier if args.len() == 2 => (
-                format!("`{written}` is written `{}`, its tier a setting", row.v5),
-                Some(Edit { at, text: format!("{}({}, {{ tier: {} }})", row.v5, a(0), a(1)) }),
+                format!("`{written}` is written `{}`, its tier a setting", row.current),
+                Some(Edit { at, text: format!("{}({}, {{ tier: {} }})", row.current, a(0), a(1)) }),
             ),
-            Shape::AiTier => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::AiTier => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::CallbackClosure => (
-                "`callback(f(x))` is written `callback(() => f(x))` from language version 5".into(),
+                "the retired spelling `callback(f(x))` is written `callback(() => f(x))`".into(),
                 Some(Edit { at, text: format!("callback(() => {})", a(0)) }),
             ),
             Shape::JsonStringify => {
                 let format = args.get(1).map(|f| self.text(f.value.at()).trim_matches(['"', '\'']).to_ascii_uppercase());
-                let message = format!("`{written}` is written `{}`", row.v5);
-                if format.as_deref() == Some("JSON") { (message, Some(Edit { at, text: format!("{}({})", row.v5, a(0)) })) } else { (message, None) }
+                let message = format!("`{written}` is written `{}`", row.current);
+                if format.as_deref() == Some("JSON") { (message, Some(Edit { at, text: format!("{}({})", row.current, a(0)) })) } else { (message, None) }
             }
             Shape::NullTest => (
-                format!("`{written}(x)` is written `x == null` from language version 5"),
+                format!("the retired spelling `{written}(x)` is written `x == null`"),
                 Some(Edit { at, text: self.grouped(at, format!("{} == null", a(0))) }),
             ),
             // Always `x[k]`, which reads back into `AT(x, k)`: `x.k` is a
@@ -536,7 +536,7 @@ impl<'s> Canon<'s> {
                     _ => a(0),
                 };
                 let text = format!("{object}[{}]", a(1));
-                (format!("`{written}(x, i)` is written `x[i]` from language version 5"), Some(Edit { at, text }))
+                (format!("the retired spelling `{written}(x, i)` is written `x[i]`"), Some(Edit { at, text }))
             }
             Shape::ExistsWalk => match args.first() {
                 Some(arg) if is_walk(&arg.value) => (format!("`{written}` is written `exists`"), Some(rename)),
@@ -567,7 +567,7 @@ impl<'s> Canon<'s> {
         self.findings.push(Finding { code: SPELLING_CODE, message, at, edits: edit.map(|e| vec![e]), unless_bound: None, safe, unsafe_if_bound });
     }
 
-    /// Reads a v5 call into the canonical one.
+    /// Reads a current-spelling call into the canonical one.
     fn rewrite(&mut self, row: &Spelling, e: &mut MExpr) {
         let MExpr::Call { callee, args, at } = e else { return };
         let at = *at;

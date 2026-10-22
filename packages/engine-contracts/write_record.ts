@@ -108,7 +108,7 @@ export interface WriteRecord {
    *  target system computed that the author never wrote. In-memory
    *  handle-read surface only. */
   resultData?: Record<string, unknown>;
-  /** What the record held when the write found it (version 4 on): the values
+  /** What the record held when the write found it: the values
    *  the handle reads for fields its write neither sent nor got back. Kept
    *  apart from `resultData` because a handle that parents a later write
    *  hands the adapter only what its own write got back (`ParentLink.data`),
@@ -124,7 +124,7 @@ export interface WriteRecord {
     edgeName: string;
     toRecordType: string;
     toExternalId: string;
-    /** Version 1's link body: the to side was FOUND by the body's criteria
+    /** The earlier language's link body: the to side was FOUND by the body's criteria
      *  in the same statement — never created, never written — rather than a
      *  bound handle. */
     foundTarget?: boolean;
@@ -157,8 +157,8 @@ export interface WriteRecord {
    */
   note?: string;
   /**
-   * This record is a SNAPSHOT — a record as it once stood (`-[:@old]->`,
-   * version 4 on), not a live position — so it has no address: it is equal
+   * This record is a SNAPSHOT — a record as it once stood (`-[:@old]->`),
+   * not a live position — so it has no address: it is equal
    * only to itself, never to the live handle that shares its id.
    */
   snapshot?: true;

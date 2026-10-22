@@ -37,7 +37,7 @@ impl Diagnostic {
     }
 }
 
-/// An old spelling under language version 5 (`Program.spelling`): refused,
+/// An old spelling (`Program.spelling`): refused,
 /// its rewrite as the fix.
 pub fn of_spelling(finding: &movement_parser::surface::SpellingFinding) -> Diagnostic {
     Diagnostic {

@@ -113,7 +113,7 @@ pub fn observe(typing: &mut Typing, expr: &Expression, _position: Option<&Positi
     }
 }
 
-/// `refuseClosureOperands` for a built-in's arguments (language version 5):
+/// `refuseClosureOperands` for a built-in's arguments:
 /// a closure handed where a value is read. A `function` parameter takes one.
 fn refuse_closure_operands(typing: &mut Typing, builtin: &Builtin, whole: &Expression, args: &[Expression], operands: &[Option<Ty>]) -> bool {
     let read: Vec<(&Expression, Option<&Ty>)> = args
@@ -989,10 +989,10 @@ impl TreeAt<'_> {
 }
 
 /// `children` (expression/lower.ts): every sub-expression of a node.
-/// `KG_VALUE(…)` / `KG_EXISTS(…)` (version 5): a query text no engine runs.
+/// `KG_VALUE(…)` / `KG_EXISTS(…)`: a query text no engine runs.
 fn kg_query_retired_message(retired: &str) -> String {
     format!(
-        "'{retired}(…)' is retired — it ran a query text against the knowledge graph, and no engine runs one from version 5. Walk the graph instead: connect it ('kg = connect graph'), then read along its edges ('kg-[c:Company WHERE …]->')"
+        "'{retired}(…)' is retired — it ran a query text against the knowledge graph, and no engine runs one. Walk the graph instead: connect it ('kg = connect graph'), then read along its edges ('kg-[c:Company WHERE …]->')"
     )
 }
 

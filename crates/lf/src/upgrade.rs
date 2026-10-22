@@ -1,5 +1,5 @@
-//! `lf upgrade`: the project's movement files rewritten into the language
-//! version the project's engine runs, by the Rust checker's own fixes (the
+//! `lf upgrade`: the project's movement files rewritten into the language of
+//! this release, by the Rust checker's own fixes (the
 //! loop of lf-platform's packages/legacy-lang/checker/upgrade.ts). Check, take the fixes that do
 //! not overlap, apply them, check again, until nothing fixable is left. Only
 //! fixes marked safe are applied unless `--all`; the rest are listed with their
@@ -15,7 +15,8 @@ use movement_parser::util::form::{external_text, read_json_text};
 use serde_json::Value;
 
 use crate::check::{Opened, open_checking, parse};
-use crate::project::Project;
+use crate::project::{PROJECT_FILE, Project};
+use movement_parser::version::LANGUAGE_VERSION;
 
 /// One pass per level of fix nesting; a well-behaved upgrade settles in a few.
 const MAX_PASSES: usize = 16;
@@ -117,16 +118,16 @@ fn apply(source: &str, fixes: &[Fix]) -> String {
     String::from_utf16_lossy(&result)
 }
 
-/// Every diagnostic a check of `source` under the project's version reports.
-fn check_text(source: &str, catalog: &CatalogSnapshot, language_version: u32) -> Vec<Diagnostic> {
+/// Every diagnostic a check of `source` reports.
+fn check_text(source: &str, catalog: &CatalogSnapshot) -> Vec<Diagnostic> {
     let parse_refusal = |message: String, line: usize, col: usize| {
         let at = movement_parser::ast::Loc { line, col };
         vec![Diagnostic::error("MOV_PARSE", message, movement_parser::ast::Span { start: at, end: at })]
     };
-    if let Err(refused) = parse(source, language_version) {
+    if let Err(refused) = parse(source) {
         return parse_refusal(refused.message, refused.line, refused.column);
     }
-    let options = CheckOptions { language_version, upgrading_from: None, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &NativeZones };
     match movement_checker::check_source(source, catalog, options) {
         Ok(diagnostics) => diagnostics,
         Err(refusal) => parse_refusal(refusal.message, 1, 1),
@@ -139,10 +140,10 @@ struct Upgraded {
     settled: bool,
 }
 
-fn upgrade_source(source: &str, catalog: &CatalogSnapshot, language_version: u32, all: bool) -> Upgraded {
+fn upgrade_source(source: &str, catalog: &CatalogSnapshot, all: bool) -> Upgraded {
     let mut text = source.to_string();
     for _ in 0..MAX_PASSES {
-        let diagnostics = check_text(&text, catalog, language_version);
+        let diagnostics = check_text(&text, catalog);
         let fixes = fixes_to_apply(&diagnostics, all);
         let rewritten = apply(&text, &fixes);
         // A fix that rewrites to the same text would loop forever.
@@ -151,7 +152,7 @@ fn upgrade_source(source: &str, catalog: &CatalogSnapshot, language_version: u32
         }
         text = rewritten;
     }
-    let remaining = standing(check_text(&text, catalog, language_version));
+    let remaining = standing(check_text(&text, catalog));
     Upgraded { source: text, remaining, settled: false }
 }
 
@@ -224,6 +225,36 @@ fn severity_word(d: &Diagnostic) -> &'static str {
     }
 }
 
+/// `lf.yaml`'s text with its top-level `engine:` line set to `to`, comments
+/// and layout kept; none when the line already says it.
+fn with_engine_pin(text: &str, to: &str) -> Result<Option<String>, String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let at = lines.iter().position(|l| l.strip_prefix("engine:").is_some()).ok_or("lf.yaml has no top-level `engine:` line to set")?;
+    let line = format!("engine: {to}");
+    if lines[at].trim_end() == line {
+        return Ok(None);
+    }
+    lines[at] = line;
+    Ok(Some(lines.join("\n")))
+}
+
+enum PinStep {
+    /// The project already pins the current release.
+    Current,
+    /// The project validates clean under the current release: its `lf.yaml` with the new pin.
+    Set(String),
+    /// Fixes remain for the author, so the movements still read as the old release.
+    Held { remaining: usize },
+}
+
+/// The pin moves only when the rewritten project validates clean under the
+/// current release; otherwise a later `lf run` would read movements the
+/// current release still refuses.
+fn pin_step(lf_yaml: &str, remaining: usize) -> Result<PinStep, String> {
+    let Some(repinned) = with_engine_pin(lf_yaml, LANGUAGE_VERSION)? else { return Ok(PinStep::Current) };
+    Ok(if remaining == 0 { PinStep::Set(repinned) } else { PinStep::Held { remaining } })
+}
+
 pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     let checking = match open_checking(project).await? {
@@ -239,7 +270,7 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
     let catalog = CatalogSnapshot::load(&read_json_text(&checking.catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"))?;
     let (mut changed, mut left) = (0usize, 0usize);
     for file in &checking.files {
-        let result = upgrade_source(&file.source, &catalog, project.language_version, options.all);
+        let result = upgrade_source(&file.source, &catalog, options.all);
         let shown = relative(&project.root, &file.path);
         if result.source != file.source {
             changed += 1;
@@ -263,6 +294,21 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
             writeln!(out, "{shown}: the rewrite did not settle — a fix keeps rewriting its own output (a bug; please report it)").map_err(io)?;
         }
     }
+    let pin_file = project.root.join(PROJECT_FILE);
+    let pinned = std::fs::read_to_string(&pin_file).map_err(|e| format!("{}: {e}", pin_file.display()))?;
+    match pin_step(&pinned, left)? {
+        PinStep::Current => {}
+        PinStep::Set(_) if options.check_only => {
+            writeln!(out, "{PROJECT_FILE}: would set engine: {LANGUAGE_VERSION} (the pin is {})", project.engine).map_err(io)?;
+        }
+        PinStep::Set(repinned) => {
+            std::fs::write(&pin_file, repinned).map_err(|e| format!("{}: {e}", pin_file.display()))?;
+            writeln!(out, "{PROJECT_FILE}: engine: {LANGUAGE_VERSION} (was {})", project.engine).map_err(io)?;
+        }
+        PinStep::Held { remaining } => {
+            writeln!(out, "{PROJECT_FILE}: engine: left at {} until the {remaining} remaining diagnostic(s) are fixed; run `lf upgrade` again", project.engine).map_err(io)?;
+        }
+    }
     let verb = if options.check_only { "would be rewritten" } else { "rewritten" };
     writeln!(out, "{} file(s), {changed} {verb}, {left} left to change by hand", checking.files.len()).map_err(io)?;
     Ok(if left > 0 || (options.check_only && changed > 0) { 1 } else { 0 })
@@ -280,6 +326,23 @@ fn relative(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pin_is_set_on_the_engine_line_and_nothing_else_moves() {
+        let text = "# the project\nengine: 0.11.0\nmovements: movements\n";
+        assert_eq!(with_engine_pin(text, "0.12.0").unwrap().unwrap(), "# the project\nengine: 0.12.0\nmovements: movements\n");
+        assert_eq!(with_engine_pin("engine: 0.12.0\n", "0.12.0").unwrap(), None);
+        assert!(with_engine_pin("movements: m\n", "0.12.0").is_err());
+    }
+
+    #[test]
+    fn the_pin_moves_only_when_nothing_is_left_to_fix() {
+        let old = "engine: 0.11.0\nmovements: m\n";
+        let PinStep::Set(text) = pin_step(old, 0).unwrap() else { panic!("a clean project is repinned") };
+        assert_eq!(text, format!("engine: {LANGUAGE_VERSION}\nmovements: m\n"));
+        assert!(matches!(pin_step(old, 3).unwrap(), PinStep::Held { remaining: 3 }));
+        assert!(matches!(pin_step(&text, 3).unwrap(), PinStep::Current));
+    }
 
     #[test]
     fn a_diff_marks_the_changed_line_with_context() {

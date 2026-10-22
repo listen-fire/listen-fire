@@ -1,14 +1,14 @@
-// Language version 5 spells the combinators `race(f, g)` / `all(f, g)`: the
+// The language spells the combinators `race(f, g)` / `all(f, g)`: the
 // arms are the call's arguments (a closure is not data, so there is no list
 // of them), there is no `await`, and `parallel` is `all`. A both-engine case
-// written once for every version runs under 5 as this rewrites it.
+// written once for every spelling runs as this rewrites it.
 
 const WRITTEN_ARMS = /await (race|parallel)\(\s*\[/g;
 
 /** `source` with every `await race([…])` / `await parallel([…])` whose arms
- *  are written down spelled as version 5 spells it. Arms built at run time
- *  (`await race(arms)`) are left as written: version 5 has no such form. */
-export function spelledForVersion5(source: string): string {
+ *  are written down spelled as the language spells it. Arms built at run time
+ *  (`await race(arms)`) are left as written: the language has no such form. */
+export function spelledWithFunctionArms(source: string): string {
   let out = '';
   let from = 0;
   for (const match of source.matchAll(WRITTEN_ARMS)) {

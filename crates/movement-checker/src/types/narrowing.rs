@@ -240,13 +240,13 @@ pub fn negative_presence_proofs(expr: &Expression, type_of: &mut dyn FnMut(&Expr
     }
 }
 
-/// `fail("…")` written as a value (language version 5): its canonical call.
+/// `fail("…")` written as a value: its canonical call.
 pub fn is_fail(expr: &Expression) -> bool {
     matches!(expr, Expression::Function { fn_, .. } if fn_ == "error")
 }
 
 /// `proofsAfter`: what an expression proves present once its value has
-/// arrived (language version 5) — an arm that only fails never arrives, so
+/// arrived — an arm that only fails never arrives, so
 /// the code after `x != null ? x : fail("…")` knows `x` present, as the code
 /// after `if (x == null) { fail("…") }` does; and `coalesce(x, fail("…"))`
 /// arrives only with `x` present.

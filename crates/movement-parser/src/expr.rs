@@ -8,12 +8,12 @@
 //!   where    = or ('WHERE' or)?                — a filter, inside a call's parens
 //!   or       = and ('OR' and)*
 //!   and      = not ('AND' not)*
-//!   not      = ('NOT' | '!') not | compare     — from version 5 `!` is unary's
+//!   not      = ('NOT' | '!') not | compare     — `!` is unary's
 //!   compare  = add (cmp add | 'CONTAINS' add | 'IN' add | 'EXISTS'
 //!                   | 'WITHIN' duration | 'IS' type)?          — never chains
 //!   add      = mul (('+' | '-') mul)*
 //!   mul      = unary (('*' | '/' | '%') unary)*
-//!   unary    = '-' unary | '!' unary (from version 5) | postfix
+//!   unary    = '-' unary | '!' unary | postfix
 //!   postfix  = primary ('.' name | '(' args ')' | hop+ | '[' where ']')*
 //!   primary  = '(' where ')' | closure | IF | literal | string | name | '@…'
 //!            | hop+ | list | map | '<' type '>' | node | graph | declaration
@@ -45,7 +45,7 @@ pub fn parse_expression(text: &str) -> Result<MExpr, SyntaxError> {
     Ok(tree)
 }
 
-/// The tree as written, before a v5 text is read into the canonical one.
+/// The tree as written, before a current-spelling text is read into the canonical one.
 pub fn parse_expression_raw(text: &str) -> Result<MExpr, SyntaxError> {
     let src = Utf16::new(text);
     let tree = ExpressionParser::new(&src, 0, src.len(), 0).parse_whole()?;
@@ -298,7 +298,7 @@ impl<'a> ExpressionParser<'a> {
         Ok(source)
     }
 
-    /// Version 5's `c ? a : b`, loosest of all: the `IF c THEN a ELSE b END`
+    /// The `c ? a : b`, loosest of all: the `IF c THEN a ELSE b END`
     /// tree, so nothing downstream reads a second conditional.
     fn try_conditional(&mut self, start: usize, condition: MExpr) -> PResult<MExpr> {
         let tok = self.peek()?;
@@ -351,7 +351,7 @@ impl<'a> ExpressionParser<'a> {
 
     fn parse_not(&mut self) -> PResult<MExpr> {
         let tok = self.peek()?;
-        // From version 5 `!` is TypeScript's unary operator (`parse_unary`):
+        // `!` is TypeScript's unary operator (`parse_unary`):
         // `!a == b` is `(!a) == b`. `NOT` keeps its reach in every version.
         if tok.is_keyword("NOT") && !is_bang(&tok) {
             self.advance()?;

@@ -583,7 +583,7 @@ impl Checker<'_> {
         if matches!(op.op, CollectionOp::Groupby | CollectionOp::Keyby) {
             let diagnostics = {
                 let env = self.typing_env(scope);
-                let mut typing = crate::types::Typing::new(&env, self.version, arm_span(&op.r#fn));
+                let mut typing = crate::types::Typing::new(&env, arm_span(&op.r#fn));
                 crate::families::values::require_dict_key(&mut typing, returned.as_ref(), &format!("filed under by '{spelling}'"));
                 typing.diagnostics
             };

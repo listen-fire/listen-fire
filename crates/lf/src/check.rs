@@ -34,8 +34,8 @@ pub struct ParseError {
 
 /// The program, parsed as the TypeScript `parseProgram` parses it (eagerly,
 /// over the engine's text form).
-pub fn parse(source: &str, language_version: u32) -> Result<Program, ParseError> {
-    movement_parser::stmt::parse_program(&form_of_text(source), language_version, true).map_err(|e| ParseError {
+pub fn parse(source: &str) -> Result<Program, ParseError> {
+    movement_parser::stmt::parse_program(&form_of_text(source), true).map_err(|e| ParseError {
         message: format!("{} (line {}, col {})", external_text(&e.message), e.loc.line, e.loc.col),
         line: e.loc.line,
         column: e.loc.col,
@@ -55,8 +55,8 @@ pub struct FileDiagnostic {
 }
 
 /// Every diagnostic one file has. A file that does not parse has one, its parse refusal.
-pub fn check_file(file: &MovementFile, catalog: &CatalogSnapshot, language_version: u32) -> Result<Vec<FileDiagnostic>, String> {
-    if let Err(refused) = parse(&file.source, language_version) {
+pub fn check_file(file: &MovementFile, catalog: &CatalogSnapshot) -> Result<Vec<FileDiagnostic>, String> {
+    if let Err(refused) = parse(&file.source) {
         return Ok(vec![FileDiagnostic {
             line: refused.line,
             column: refused.column,
@@ -68,7 +68,7 @@ pub fn check_file(file: &MovementFile, catalog: &CatalogSnapshot, language_versi
             fix: None,
         }]);
     }
-    let options = CheckOptions { language_version, upgrading_from: None, zones: &NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &NativeZones };
     let diagnostics = movement_checker::check_source(&file.source, catalog, options)
         .map_err(|refusal| format!("the Rust checker refused {}: {}", file.path.display(), refusal.message))?;
     Ok(diagnostics
@@ -115,7 +115,7 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     }
     // A check starts only what the files import: a third-party graph is
     // read live, so its module runs for the check.
-    let externals = needed_externals(scan_externals(project)?, &files, project.language_version, |_| false);
+    let externals = needed_externals(scan_externals(project)?, &files, |_| false);
     let running = start_externals(project, &externals, &credentials, LOCAL_TENANT).await?;
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
@@ -194,7 +194,7 @@ pub async fn run(project: &Project, json: bool, out: &mut impl Write) -> Result<
     let mut errors = 0;
     let mut checked = Vec::new();
     for file in &checking.files {
-        let diagnostics = check_file(file, &catalog, project.language_version)?;
+        let diagnostics = check_file(file, &catalog)?;
         errors += diagnostics.iter().filter(|d| d.severity == "error").count();
         if !json {
             for d in &diagnostics {

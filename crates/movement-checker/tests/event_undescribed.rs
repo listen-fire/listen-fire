@@ -9,16 +9,16 @@ use movement_parser::catalog::types::CatalogSnapshot;
 const UNDESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{}}"#;
 const DESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{"":{"positions":{"Invocation":{"properties":{"text":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}}"#;
 
-const V5: &str = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) {\n  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n}\nlisten to runs {} fire recap";
+const CURRENT_FORM: &str = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) {\n  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n}\nlisten to runs {} fire recap";
 
-fn check(source: &str, version: u32, manual: &str) -> Vec<Diagnostic> {
-    check_with(source, version, manual, None, "{}")
+fn check(source: &str, manual: &str) -> Vec<Diagnostic> {
+    check_with(source, manual, None, "{}")
 }
 
-fn check_with(source: &str, version: u32, manual: &str, upgrading_from: Option<u32>, files: &str) -> Vec<Diagnostic> {
+fn check_with(source: &str, manual: &str, upgrading_from: Option<&str>, files: &str) -> Vec<Diagnostic> {
     let snapshot = format!(r#"{{"adapters":{{{manual}}},"credentials":{{}},"plugins":{{}},"files":{files}}}"#);
     let catalog = CatalogSnapshot::load(&snapshot).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap()
 }
 
@@ -29,7 +29,7 @@ fn found(diagnostics: &[Diagnostic]) -> Vec<(&str, String, usize)> {
 
 #[test]
 fn version_5_refuses_a_field_read_and_a_walk_off_an_undescribed_event_each_where_it_is() {
-    let diagnostics = check(V5, 5, UNDESCRIBED);
+    let diagnostics = check(CURRENT_FORM, UNDESCRIBED);
     assert_eq!(found(&diagnostics), [("MOV_EVENT_UNDESCRIBED", "None".to_string(), 4), ("MOV_EVENT_UNDESCRIBED", "None".to_string(), 5)]);
     assert_eq!(
         diagnostics[0].message,
@@ -39,10 +39,10 @@ fn version_5_refuses_a_field_read_and_a_walk_off_an_undescribed_event_each_where
 
 #[test]
 fn a_described_event_a_parameter_nothing_reads_and_an_unknown_adapter_are_silent() {
-    let unread = V5.replace("  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n", "  return go\n");
-    let unknown = V5.replace("manual", "nope");
-    for (source, manual) in [(V5, DESCRIBED), (unread.as_str(), UNDESCRIBED), (unknown.as_str(), UNDESCRIBED)] {
-        let diagnostics = check(source, 5, manual);
+    let unread = CURRENT_FORM.replace("  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n", "  return go\n");
+    let unknown = CURRENT_FORM.replace("manual", "nope");
+    for (source, manual) in [(CURRENT_FORM, DESCRIBED), (unread.as_str(), UNDESCRIBED), (unknown.as_str(), UNDESCRIBED)] {
+        let diagnostics = check(source, manual);
         assert!(!diagnostics.iter().any(|d| d.code == "MOV_EVENT_UNDESCRIBED"), "{source}: {diagnostics:?}");
     }
 }
@@ -50,13 +50,13 @@ fn a_described_event_a_parameter_nothing_reads_and_an_unknown_adapter_are_silent
 #[test]
 fn version_5_refuses_a_read_off_a_closures_parameter_typed_as_the_event() {
     let source = "import { manual } from adapters\nruns = connect manual\nfunction recap(n: <number>) {\n  subject = (go: <runs-[:Invocation]->>) => go.`text`\n  return n\n}";
-    assert_eq!(found(&check(source, 5, UNDESCRIBED)), [("MOV_EVENT_UNDESCRIBED", "None".to_string(), 4)]);
+    assert_eq!(found(&check(source, UNDESCRIBED)), [("MOV_EVENT_UNDESCRIBED", "None".to_string(), 4)]);
 }
 
 #[test]
 fn version_5_refuses_a_read_off_a_library_functions_parameter_at_the_import() {
     let library = r#"{"lib/recap":{"source":"import { manual } from adapters\nruns = connect manual\nexport function recap(go: <runs-[:Invocation]->>) {\n  return go.`text`\n}"}}"#;
-    let diagnostics = check_with("import { recap } from \"lib/recap\"\nx = 1", 5, UNDESCRIBED, None, library);
+    let diagnostics = check_with("import { recap } from \"lib/recap\"\nx = 1", UNDESCRIBED, None, library);
     assert_eq!(diagnostics.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_EVENT_UNDESCRIBED"]);
     assert!(diagnostics[0].message.starts_with("\"lib/recap\" line 4: "), "{}", diagnostics[0].message);
 }
@@ -84,7 +84,7 @@ mod held_as_a_value {
         .collect::<Vec<_>>()
         .join("\n");
         let files = serde_json::json!({ "lib/mk": { "source": LIBRARY } }).to_string();
-        check_with(&source, 5, &format!("{UNDESCRIBED},{KG}"), None, &files).into_iter().map(|d| d.code).collect()
+        check_with(&source, &format!("{UNDESCRIBED},{KG}"), None, &files).into_iter().map(|d| d.code).collect()
     }
 
     #[test]

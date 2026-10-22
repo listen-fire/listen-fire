@@ -6,7 +6,7 @@
 // received, in order and key for key — held to the recorded snapshot.
 
 import {
-  CURRENT_LANGUAGE_VERSION,
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   type InstanceSchema,
 } from 'movement-lang';
@@ -52,7 +52,7 @@ const emailSchema: InstanceSchema = {
 };
 
 // The system deletes a record of any of its types, and says so as a describe
-// would (`deletable`, which version 5 checks a `delete` against).
+// would (`deletable`, which the checker checks a `delete` against).
 const crmSchema: InstanceSchema = {
   positions: {
     company: {
@@ -314,7 +314,7 @@ async function runOn(c: Case): Promise<Outcome> {
   try {
     const result = await runMovement({
       source: spelledFor(
-        CURRENT_LANGUAGE_VERSION,
+        LANGUAGE_VERSION,
         `${PRELUDE}movement m(msg: <inbox-[:message]->>) {\n${c.body}\n}`,
         catalog,
       ),

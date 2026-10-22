@@ -12,7 +12,7 @@ jest.mock('movement-engine/public/log', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-import { CURRENT_LANGUAGE_VERSION, checkSourceInRust, type CatalogSnapshot } from 'movement-lang';
+import { LANGUAGE_VERSION, checkSourceInRust, type CatalogSnapshot } from 'movement-lang';
 
 import type { FileRef } from 'movement-engine/public/adapter';
 import type { ResolveEntityInput } from 'movement-engine/public/adapter';
@@ -2230,7 +2230,7 @@ function sync() {
 ${body}
   }
 }`;
-    return checkSourceInRust(source, await affinitySnapshot(), { languageVersion: CURRENT_LANGUAGE_VERSION })
+    return checkSourceInRust(source, await affinitySnapshot(), { languageVersion: LANGUAGE_VERSION })
       .filter((d) => (d.severity ?? 'error') === 'error')
       .map((d) => ({ code: d.code, message: d.message }));
   }

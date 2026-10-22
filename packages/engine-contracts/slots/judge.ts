@@ -17,8 +17,8 @@ export const JudgeArbitrateRequest = z.object({
   candidates: z.array(z.record(z.string(), z.unknown())),
   recordType: z.string(),
   constraints: WireUniquenessConstraints,
-  /** The asking run's language version: whether a blank key is a key. */
-  languageVersion: z.number().int().positive(),
+  /** The asking run's pin (a release's version): whether a blank key is a key. */
+  languageVersion: z.string(),
 });
 export type JudgeArbitrateRequestShape = z.infer<typeof JudgeArbitrateRequest>;
 

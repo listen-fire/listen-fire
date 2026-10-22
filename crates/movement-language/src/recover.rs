@@ -14,14 +14,14 @@ pub struct Parsed {
     pub refused: Option<ParseError>,
 }
 
-pub fn parse(source: &str, version: u32) -> Result<Program, ParseError> {
-    movement_parser::stmt::parse_program(&form_of_text(source), version, false)
+pub fn parse(source: &str) -> Result<Program, ParseError> {
+    movement_parser::stmt::parse_program(&form_of_text(source), false)
 }
 
 /// The program `source` is, or the nearest repaired copy that parses.
 /// `cursor`: the 0-based line being edited, when there is one.
-pub fn parse_recovering(source: &str, version: u32, cursor: Option<u32>) -> Option<Parsed> {
-    let refused = match parse(source, version) {
+pub fn parse_recovering(source: &str, cursor: Option<u32>) -> Option<Parsed> {
+    let refused = match parse(source) {
         Ok(program) => return Some(Parsed { program, refused: None }),
         Err(refused) => refused,
     };
@@ -38,7 +38,7 @@ pub fn parse_recovering(source: &str, version: u32, cursor: Option<u32>) -> Opti
         candidates.push(closed_above(source, line));
     }
     candidates.push(closed_above(source, error_line));
-    candidates.into_iter().find_map(|text| parse(&text, version).ok()).map(|program| Parsed { program, refused: Some(refused) })
+    candidates.into_iter().find_map(|text| parse(&text).ok()).map(|program| Parsed { program, refused: Some(refused) })
 }
 
 /// `source` with each of `lines` (0-based) written as spaces, its braces and

@@ -9,7 +9,7 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const SNAPSHOT: &str = r#"{"adapters":{"kg":{"constructionArgs":[],"schemas":{"":{"positions":{"note":{"properties":{"text":"text"},"edges":{}}},"collections":{"notes":{"target":"note"}},"writableRoots":{"note":{"fields":{"text":"text"},"resultShape":{"externalId":"text"}}}}}}},"credentials":{},"plugins":{"echo":{"args":["q"],"requiredArgs":["q"],"output":{"kind":"value","type":"text"}}},"files":FILES}"#;
 
-fn check(lines: &[&str], version: u32, library: Option<&str>) -> Vec<Diagnostic> {
+fn check(lines: &[&str], library: Option<&str>) -> Vec<Diagnostic> {
     let head = "import { kg } from adapters\nimport { echo } from plugins\ngraph = connect kg";
     let source = format!("{head}\n{}", lines.join("\n"));
     let files = match library {
@@ -17,12 +17,12 @@ fn check(lines: &[&str], version: u32, library: Option<&str>) -> Vec<Diagnostic>
         None => "{}".to_string(),
     };
     let catalog = CatalogSnapshot::load(&SNAPSHOT.replace("FILES", &files)).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(&source, &catalog, options).unwrap()
 }
 
 fn refused(lines: &[&str]) -> Vec<usize> {
-    check(lines, 5, None).iter().filter(|d| d.code == "MOV_FILE_VALUE_RUNS").map(|d| d.span.start.line).collect()
+    check(lines, None).iter().filter(|d| d.code == "MOV_FILE_VALUE_RUNS").map(|d| d.span.start.line).collect()
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn refuses_what_is_not_a_value() {
 
 #[test]
 fn says_what_the_value_holds() {
-    let diagnostics = check(&["said = { page: echo(\"x\") }"], 5, None);
+    let diagnostics = check(&["said = { page: echo(\"x\") }"], None);
     let found = diagnostics.iter().find(|d| d.code == "MOV_FILE_VALUE_RUNS").expect("refused");
     assert_eq!(
         found.message,
@@ -52,7 +52,7 @@ fn says_what_the_value_holds() {
 #[test]
 fn accepts_a_value() {
     for lines in [&["n = { a: 1, b: [2, 3] }"][..], &["n = coalesce(null, \"x\")"], &["f = (q: <text>) => echo(q)"]] {
-        assert!(check(lines, 5, None).is_empty(), "{lines:?}: {:?}", check(lines, 5, None));
+        assert!(check(lines, None).is_empty(), "{lines:?}: {:?}", check(lines, None));
     }
 }
 
@@ -60,6 +60,6 @@ fn accepts_a_value() {
 fn refuses_one_in_a_library_at_the_import() {
     let library = "import { echo } from plugins\nsaid = echo(\"x\")\nexport function f(n: <number>) {\n  return n\n}";
     let found: Vec<(String, String)> =
-        check(&["import { f } from \"lib/vals\""], 5, Some(library)).into_iter().map(|d| (d.code, d.message.chars().take(18).collect())).collect();
+        check(&["import { f } from \"lib/vals\""], Some(library)).into_iter().map(|d| (d.code, d.message.chars().take(18).collect())).collect();
     assert_eq!(found, [("MOV_FILE_VALUE_RUNS".to_string(), "\"lib/vals\" line 2:".to_string())]);
 }

@@ -1,14 +1,14 @@
 //! The spelling table: every built-in as the tree names it (the spelling of
-//! language versions 1–4, which the checkers and engines read) beside its
-//! spelling from language version 5 (plans/naming-rethink-2026-10-14/
-//! 5_design.md §2). It is the one source of truth: the v5 grammar reads new
+//! the older language, which the checkers and engines read) beside its
+//! spelling (plans/naming-rethink-2026-10-14/
+//! 5_design.md §2). It is the one source of truth: the current grammar reads new
 //! spellings through it, the refusals of old spellings write their fixes from
 //! it, both checkers name built-ins in a program's own spelling through it,
 //! and the TypeScript reads it through the WASM (`surface_table`).
 
 use serde::Serialize;
 
-/// How a v5 call's arguments map onto the canonical call's.
+/// How a current-spelling call's arguments map onto the canonical call's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Shape {
@@ -31,9 +31,9 @@ pub enum Shape {
     ListIncludes,
     /// `Json.stringify(v)` is `TEXT.SERIALISE(v, "JSON")`.
     JsonStringify,
-    /// No v5 call: `ISNULL(x)` is `x == null`.
+    /// No current-spelling call: `ISNULL(x)` is `x == null`.
     NullTest,
-    /// No v5 call: `AT(xs, i)` is `xs[i]`.
+    /// No current-spelling call: `AT(xs, i)` is `xs[i]`.
     Index,
     /// `exists` takes a walk; `EXISTS(value)` is `value != null`.
     ExistsWalk,
@@ -43,38 +43,38 @@ pub enum Shape {
 pub struct Spelling {
     /// The built-in as the tree names it: `UPPER`, `DATE.TODAY`.
     pub canonical: &'static str,
-    /// Its spelling from version 5, outside walk brackets: `Text.upper`,
-    /// `map`. A v5 spelling that is not a call (`== null`, `xs[i]`) is
+    /// Its spelling outside walk brackets: `Text.upper`,
+    /// `map`. A current spelling that is not a call (`== null`, `xs[i]`) is
     /// written as the shape shows it.
-    pub v5: &'static str,
+    pub current: &'static str,
     pub shape: Shape,
     /// Only the old spelling reads this row (a second old name for one new
-    /// function, or a built-in whose v5 form is not a call).
+    /// function, or a built-in whose current-spelling form is not a call).
     #[serde(rename = "oldOnly")]
     pub old_only: bool,
-    /// Only the new spelling reads this row (a v5 function whose canonical
+    /// Only the new spelling reads this row (a current-spelling function whose canonical
     /// form is an operator or another call's special case).
     #[serde(rename = "newOnly")]
     pub new_only: bool,
 }
 
-const fn row(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: false, new_only: false }
+const fn row(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: false, new_only: false }
 }
 
-const fn old(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: true, new_only: false }
+const fn old(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: true, new_only: false }
 }
 
-const fn new(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: false, new_only: true }
+const fn new(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: false, new_only: true }
 }
 
 use Shape::*;
 
-/// The tree's name for `sort` by a function key (language version 5): a
-/// collection op like `GROUPBY`. No version reads it as written — under 5 it
-/// is an old spelling of `sort`, and before 5 no built-in has the name.
+/// The tree's name for `sort` by a function key: a
+/// collection op like `GROUPBY`. The language does not read it as written; it is an
+/// old spelling of `sort`.
 pub const SORT_BY: &str = "SORTBY";
 
 /// §2.1 core words and §2.2 namespaces, in the design's order.
@@ -146,7 +146,7 @@ pub const SPELLINGS: &[Spelling] = &[
     // File
     row("FILE", "File.from", Same),
     row("READ", "File.read", Same),
-    // Not calls from version 5.
+    // Not calls.
     old("ISNULL", "== null", NullTest),
     old("AT", "[]", Index),
 ];
@@ -160,7 +160,7 @@ pub const CORE_WORDS: &[&str] = &[
     "extract", "extractOne", "members", "fail",
 ];
 
-/// What a name a program binds hides from version 5 (§4.2), exactly as
+/// What a name a program binds hides (§4.2), exactly as
 /// written: a core word or a standard namespace. Letter case counts:
 /// `upper` hides nothing (`Text.upper` is the function), nor does `Map`.
 pub fn hidden_by(name: &str) -> Option<String> {
@@ -194,16 +194,16 @@ pub const WALK_CAPS: &[(&str, &str)] = &[
     ("EXISTS", "exists"),
 ];
 
-/// Words spelled differently outside walk brackets from version 5 (§2.3).
+/// Words spelled differently outside walk brackets (§2.3).
 pub const OPERATORS: &[(&str, &str)] =
     &[("AND", "&&"), ("OR", "||"), ("NOT", "!"), ("TRUE", "true"), ("FALSE", "false"), ("NULL", "null"), ("IS", "is")];
 
-/// Statement words retired or respelled from version 5 (§2.11, §2.12).
+/// Statement words retired or respelled (§2.11, §2.12).
 pub const STATEMENT_WORDS: &[(&str, &str)] = &[("movement", "function")];
 
-/// A plugin's name from version 5 (§2.10): its registry name in camelCase,
+/// A plugin's name (§2.10): its registry name in camelCase,
 /// one spelling, matched exactly. The registry writes `fetch-url`; the catalog
-/// keys it `fetch_url` (the name versions 1–4 import); version 5 imports
+/// keys it `fetch_url` (the name the older language imports); the current language imports
 /// `fetchUrl`. Either key reads here.
 pub fn plugin_name(registry: &str) -> String {
     let mut out = String::with_capacity(registry.len());
@@ -221,7 +221,7 @@ pub fn plugin_name(registry: &str) -> String {
     out
 }
 
-/// The catalog's key of the plugin version 5 imports as `written`
+/// The catalog's key of the plugin the current language imports as `written`
 /// (`fetchUrl` → `fetch_url`): the key whose `plugin_name` is exactly
 /// `written`. None when no key spells that way (`fetch_url`, `FetchUrl`).
 pub fn plugin_key(written: &str) -> Option<String> {
@@ -238,13 +238,13 @@ pub fn plugin_key(written: &str) -> Option<String> {
     (starts_lower && written.chars().all(|c| c.is_ascii_alphanumeric()) && plugin_name(&key) == written).then_some(key)
 }
 
-/// The row a v5 spelling (`Text.upper`, `map`) reads as, exactly as written.
-pub fn by_v5(written: &str) -> Option<&'static Spelling> {
-    SPELLINGS.iter().find(|s| !s.old_only && s.v5 == written)
+/// The row a current spelling (`Text.upper`, `map`) reads as, exactly as written.
+pub fn by_current(written: &str) -> Option<&'static Spelling> {
+    SPELLINGS.iter().find(|s| !s.old_only && s.current == written)
 }
 
-/// The row of a built-in as the tree names it, in any letter case (versions
-/// 1–4 read built-in names case-insensitively).
+/// The row of a built-in as the tree names it, in any letter case (the older
+/// language read built-in names case-insensitively).
 pub fn by_canonical(name: &str) -> Option<&'static Spelling> {
     SPELLINGS.iter().find(|s| !s.new_only && s.canonical.eq_ignore_ascii_case(name))
 }
@@ -256,7 +256,7 @@ pub fn spell(canonical: &str) -> String {
     if let Some(s) = by_canonical(canonical)
         && !s.old_only
     {
-        return s.v5.to_string();
+        return s.current.to_string();
     }
     canonical.to_string()
 }
@@ -300,7 +300,7 @@ fn spell_declarations(message: &str) -> String {
 }
 
 /// Rewrites every built-in a message names (`UPPER`, `UPPER(text)`,
-/// `DATE.TODAY`: a word in capitals the table holds) into the v5 spelling,
+/// `DATE.TODAY`: a word in capitals the table holds) into the current spelling,
 /// and calls a declaration a function: the one place both
 /// checkers route a message through, so a message's wording never carries
 /// its own copy of a spelling.
@@ -343,7 +343,7 @@ pub fn spell_message(message: &str) -> String {
             trailing = ".";
         }
         match by_canonical(word) {
-            Some(s) if !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.v5),
+            Some(s) if !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.current),
             _ => out.push_str(word),
         }
         out.push_str(trailing);
@@ -382,7 +382,7 @@ mod tests {
             let member = everyday.rsplit('.').next().unwrap();
             let namespace = everyday.split('.').next().unwrap();
             assert!(member.to_ascii_uppercase() == *caps || namespace.to_ascii_uppercase() == *caps, "{caps} / {everyday}");
-            assert!(by_v5(everyday).is_some(), "{everyday} has a row");
+            assert!(by_current(everyday).is_some(), "{everyday} has a row");
         }
     }
 
@@ -390,7 +390,7 @@ mod tests {
     fn no_two_new_spellings_collide() {
         let mut seen = std::collections::HashSet::new();
         for s in SPELLINGS.iter().filter(|s| !s.old_only) {
-            assert!(seen.insert(s.v5), "{} twice", s.v5);
+            assert!(seen.insert(s.current), "{} twice", s.current);
         }
     }
 
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn spelling_is_the_v5_one() {
+    fn spelling_is_the_current_one() {
         assert_eq!(spell("UPPER"), "Text.upper");
         assert_eq!(spell("date.today"), "Date.today");
         assert_eq!(spell("my_function"), "my_function");

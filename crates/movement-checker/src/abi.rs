@@ -8,9 +8,32 @@ use movement_parser::abi::{install_panic_hook, utf8, write_out};
 
 use crate::CheckOptions;
 
-/// `check_program(source, catalog snapshot JSON, version, upgrading_from)`
-/// against the host's zone database: writes `{diagnostics}` and returns 0,
-/// or writes `{error}` and returns 1. `upgrading_from` is 0 for none. The
+/// The options a check is asked with, as JSON: `{ "upgradingFrom": "0.11.0"
+/// | null }` (the release a move up starts from). A check reads its own
+/// release's language and takes no pin: the host holds a pin to the rule
+/// before asking.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AskedOptions {
+    #[serde(default)]
+    upgrading_from: Option<String>,
+}
+
+/// The inputs a check reads: source, catalog and options, each as text.
+///
+/// # Safety
+/// Each range must be readable.
+unsafe fn inputs<'a>(source: (*const u8, u32), catalog: (*const u8, u32), options: (*const u8, u32)) -> Result<(&'a str, &'a str, AskedOptions), serde_json::Value> {
+    let source = unsafe { utf8(source.0, source.1, "source") }?;
+    let catalog = unsafe { utf8(catalog.0, catalog.1, "catalog") }?;
+    let options = unsafe { utf8(options.0, options.1, "options") }?;
+    let options = serde_json::from_str(options).map_err(|e| serde_json::json!({ "message": format!("the check's options do not read: {e}") }))?;
+    Ok((source, catalog, options))
+}
+
+/// `check_program(source, catalog snapshot JSON, options JSON)` against the
+/// host's zone database: writes `{diagnostics}` and returns 0, or writes
+/// `{error}` and returns 1. The
 /// artifact's C export is the engine's (`movement_engine::abi`), which
 /// supplies its own environment services as the zone database.
 ///
@@ -23,30 +46,22 @@ pub unsafe fn check_program_with(
     src_len: u32,
     catalog_ptr: *const u8,
     catalog_len: u32,
-    version: u32,
-    upgrading_from: u32,
+    options_ptr: *const u8,
+    options_len: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let inputs = unsafe { utf8(src_ptr, src_len, "source") }
-        .and_then(|source| unsafe { utf8(catalog_ptr, catalog_len, "catalog") }.map(|catalog| (source, catalog)));
-    let answer = match inputs {
-        Ok((source, catalog)) => crate::check_json(
-            source,
-            catalog,
-            CheckOptions { language_version: version, upgrading_from: (upgrading_from != 0).then_some(upgrading_from), zones },
-        ),
+    let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
+        Ok((source, catalog, options)) => {
+            crate::check_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+        }
         Err(error) => serde_json::json!({ "error": error }),
     };
-    let status = u32::from(answer.get("error").is_some());
-    // Out as `JSON.stringify` writes: the engine's text form undone.
-    let bytes = movement_parser::util::form::external_bytes(movement_parser::to_sorted_json(&answer));
-    unsafe { write_out(bytes, out_ptr_ptr, out_len_ptr) };
-    status
+    write_answer(&answer, out_ptr_ptr, out_len_ptr)
 }
 
-/// `check_answer(source, catalog snapshot JSON, version, upgrading_from)`:
+/// `check_answer(source, catalog snapshot JSON, options JSON)`:
 /// `check_program_with`'s inputs, answered `{diagnostics, stamps, link?}`
 /// (crate::answer) and 0, or `{error}` and 1. What a host answers the
 /// engine's `check.program` request with.
@@ -60,20 +75,16 @@ pub unsafe fn check_answer_with(
     src_len: u32,
     catalog_ptr: *const u8,
     catalog_len: u32,
-    version: u32,
-    upgrading_from: u32,
+    options_ptr: *const u8,
+    options_len: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let inputs = unsafe { utf8(src_ptr, src_len, "source") }
-        .and_then(|source| unsafe { utf8(catalog_ptr, catalog_len, "catalog") }.map(|catalog| (source, catalog)));
-    let answer = match inputs {
-        Ok((source, catalog)) => crate::check_answer_json(
-            source,
-            catalog,
-            CheckOptions { language_version: version, upgrading_from: (upgrading_from != 0).then_some(upgrading_from), zones },
-        ),
+    let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
+        Ok((source, catalog, options)) => {
+            crate::check_answer_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+        }
         Err(error) => serde_json::json!({ "error": error }),
     };
     write_answer(&answer, out_ptr_ptr, out_len_ptr)

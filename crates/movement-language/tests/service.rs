@@ -1,4 +1,4 @@
-//! Each query of the language service on small v5 programs, whole and half-typed.
+//! Each query of the language service on small programs, whole and half-typed.
 
 use movement_language::{DiagSeverity, Item, ItemKind, Pos, Range, Service};
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -32,7 +32,7 @@ listen to manual fire hello
 ";
 
 fn service() -> Service {
-    Service::new(CatalogSnapshot::load(CATALOG).unwrap(), 5)
+    Service::new(CatalogSnapshot::load(CATALOG).unwrap())
 }
 
 /// The position just after the `n`th (0-based) occurrence of `marker` in `source`.
@@ -136,7 +136,7 @@ fn record_types_follow_an_instance_in_a_type() {
 }
 
 #[test]
-fn a_namespace_offers_its_functions_as_v5_spells_them() {
+fn a_namespace_offers_its_functions_as_the_language_spells_them() {
     let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  z = Text.");
     let items = service().complete(&text, pos);
     let names = labels(&items);
@@ -224,7 +224,7 @@ fn a_built_in_s_card_is_the_reference_s_own_line() {
     let service = service();
     let hover = service.hover(HOVERED, after(HOVERED, "return cou", 0)).unwrap();
     assert!(hover.contents.contains("`count(list | walk)` → `number`, always present"), "{}", hover.contents);
-    assert!(!hover.contents.contains("before version 5") && !hover.contents.contains("follows from its arguments"), "{}", hover.contents);
+    assert!(!hover.contents.contains("before this release") && !hover.contents.contains("follows from its arguments"), "{}", hover.contents);
 }
 
 #[test]

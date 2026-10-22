@@ -517,7 +517,7 @@ mod tests {
             r#"{"bindings":{
                 "x":{"value":["o",[["b",null],["a",1]]],"provenance":{"origins":[0],"direct":0}},
                 "y":{"value":["l",[["o",[]],2]],"many":true}
-            },"origins":1,"languageVersion":5}"#,
+            },"origins":1}"#,
         )
         .unwrap();
         let x = &envelope.env.resolve("x").unwrap().value;

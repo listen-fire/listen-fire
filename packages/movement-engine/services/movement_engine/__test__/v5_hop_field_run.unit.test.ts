@@ -1,4 +1,4 @@
-// A hop's alias read under language version 5 (`c.email` inside the hop's
+// A hop's alias read in the current language (`c.email` inside the hop's
 // brackets) is the field of the record the hop lands on, even where a
 // variable of the same name is in scope; a bare name there is the variable.
 // So `-[c:contacts WHERE c.email == email]->` keeps only the contacts whose
@@ -6,7 +6,7 @@
 // and Rust), ORDER BY included, and the source is still asked for the field
 // test (`where`, `orderBy`).
 
-import { mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
+import { LANGUAGE_VERSION, mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
 import { tenantIdOf } from 'engine-contracts';
 
 import type { Adapter, GetRelatedInput } from '../../translation_graph/adapter';
@@ -116,7 +116,7 @@ function fakeInbox({ asked, notes }: Seen): Adapter {
   };
 }
 
-const V5 = (...body: string[]) =>
+const CURRENT = (...body: string[]) =>
   [
     'import { `@lf/email` as mail } from adapters',
     'import { dealflow_inbox } from credentials',
@@ -134,7 +134,7 @@ async function onRust(source: string): Promise<Seen> {
   resetRustRunStats();
   await runMovement({
     source,
-    languageVersion: 5,
+    languageVersion: LANGUAGE_VERSION,
     event,
     teamId: TEAM_ID,
     catalog,
@@ -156,10 +156,10 @@ const emailIsTheVariable = {
   right: { type: 'static', value: 'b@acme.test' },
 };
 
-describe("a hop's alias read under version 5 is the landed record's field", () => {
+describe("a hop's alias is the landed record's field", () => {
   it('`c.email == email` keeps only the contacts whose email is the variable', async () => {
     const { notes, asked } = await onRust(
-      V5(
+      CURRENT(
         '  msg-[c:contacts WHERE c.email == email]-> {',
         '    write inbox-[:note]-> { body: c.`name` }',
         '  }',
@@ -173,7 +173,7 @@ describe("a hop's alias read under version 5 is the landed record's field", () =
 
   it('the same walk bound to a name reads the field', async () => {
     const { notes, asked } = await onRust(
-      V5(
+      CURRENT(
         '  found = msg-[c:contacts WHERE c.email == email && c.score > 2]->',
         '  write inbox-[:note]-> { body: "${count(found)}" }',
       ),
@@ -184,7 +184,7 @@ describe("a hop's alias read under version 5 is the landed record's field", () =
 
   it('ORDER BY an alias read sorts by the field, the source asked to sort by it', async () => {
     const { notes, asked } = await onRust(
-      V5(
+      CURRENT(
         '  score = 0',
         '  msg-[c:contacts WHERE c.email == email ORDER BY c.score DESC LIMIT 1]-> {',
         '    write inbox-[:note]-> { body: "${c.`name`} ${score}" }',

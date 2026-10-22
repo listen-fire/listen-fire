@@ -20,6 +20,7 @@ import { BridgeError } from '../../expression/error';
 import { neverAsAny } from '../../never';
 import { callLowering } from '../../wasm/loader';
 import { isMapSpread, type Hop, type MExpr } from './tree';
+import type { LanguageVersion } from '../../language_version';
 import { parseExpression } from './parse_expression';
 
 /** A tree the lowering has no reading for. A built-in call's static shape
@@ -30,7 +31,7 @@ export class LoweringError extends BridgeError {
     message: string,
     code?: string,
     /** A closure written where it would be kept as data — a list's element
-     *  or a map's value. From language version 5 a closure is a value, and
+     *  or a map's value. A closure is a value, and
      *  the checker refuses it there because a closure is not data. */
     readonly heldAsData?: 'list' | 'map',
   ) {
@@ -113,12 +114,12 @@ export function lowerCondition(tree: MExpr, source: string): MovementCondition {
 
 /** Parse and lower one expression text, part of a program under
  *  `languageVersion` where given (`parseExpression`). */
-export function lowerMovementExpression(raw: string, languageVersion?: number): Expression {
+export function lowerMovementExpression(raw: string, languageVersion?: LanguageVersion): Expression {
   return lowerExpression(parseExpression(raw, languageVersion), raw);
 }
 
 /** Parse and lower one condition text. */
-export function lowerMovementCondition(raw: string, languageVersion?: number): MovementCondition {
+export function lowerMovementCondition(raw: string, languageVersion?: LanguageVersion): MovementCondition {
   return lowerCondition(parseExpression(raw, languageVersion), raw);
 }
 
@@ -202,8 +203,8 @@ export function endingHop(hop: Hop): 'resources' | 'linked' | undefined {
 
 /** `-[t:#transform { plugin: … }]->` — the one meta hop whose `{ … }`
  *  settings are read. On any other hop the lowering has nowhere to put them.
- *  Language version 3 retires the hop (the checker's
- *  MOV_TRANSFORM_HOP_RETIRED), and with it every hop's settings. */
+ *  The checker refuses the hop
+ *  (MOV_TRANSFORM_HOP_RETIRED), and with it every hop's settings. */
 export function isTransformHop(hop: Hop): boolean {
   return hop.label.text === '#transform';
 }

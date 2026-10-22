@@ -30,12 +30,12 @@ pub struct Listen {
 
 /// `configValueOf`: a listen config value, statically evaluated; anything
 /// that does not reduce to a static value keeps its raw text.
-fn config_value_of(arg: &NamedArg, language_version: u32) -> Js {
+fn config_value_of(arg: &NamedArg) -> Js {
     let raw = external_text(&arg.value.raw).into_owned();
     if arg.is_type == Some(true) {
         return Js::Str(raw.trim().to_string());
     }
-    let lowered = movement_parser::parse_expression(&arg.value.raw, language_version)
+    let lowered = movement_parser::parse_expression(&arg.value.raw)
         .ok()
         .and_then(|tree| movement_parser::lowering::lower_expression_json(&tree, &arg.value.raw).ok());
     let Some(lowered) = lowered else { return Js::Str(raw.trim().to_string()) };
@@ -77,10 +77,10 @@ fn external_js(value: &Json) -> Js {
 
 /// `collectListens`: every listen across the files. A file that does not
 /// parse routes nothing (`check` says why).
-pub fn collect_listens(files: &[MovementFile], language_version: u32) -> Vec<Listen> {
+pub fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
     let mut listens = Vec::new();
     for (index, file) in files.iter().enumerate() {
-        let Ok(program) = parse(&file.source, language_version) else { continue };
+        let Ok(program) = parse(&file.source) else { continue };
         let mut originals: HashMap<String, String> = HashMap::new();
         // Each instance's adapter, by the instance's name. (The construction's
         // credential is not part of a local listen: the run resolves it.)
@@ -111,7 +111,7 @@ pub fn collect_listens(files: &[MovementFile], language_version: u32) -> Vec<Lis
             let Some(adapter) = constructions.get(&listen.instance).cloned().or(unit) else { continue };
             let mut config = Obj::new();
             for arg in &listen.config {
-                config.insert(arg.name.clone(), config_value_of(arg, language_version));
+                config.insert(arg.name.clone(), config_value_of(arg));
             }
             listens.push(Listen {
                 file: index,
@@ -226,7 +226,7 @@ mod tests {
     fn a_listen_is_read_with_its_construction_and_static_config() {
         let source = "import { acme_crm as crm_kind } from adapters\nimport { acme } from credentials\n\ncrm = connect crm_kind using acme\n\nfunction welcome(company: <crm-[:Company]->>) {\n  write crm-[:Company]-> { Name: \"x\" }\n}\n\nlisten to crm { events: [\"company.created\"] } fire welcome\n";
         let files = vec![MovementFile { name: "companies".into(), path: PathBuf::from("companies.mvt"), source: source.into() }];
-        let listens = collect_listens(&files, 5);
+        let listens = collect_listens(&files);
         assert_eq!(listens.len(), 1);
         let listen = &listens[0];
         assert_eq!((listen.adapter.as_str(), listen.movement_name.as_str()), ("acme_crm", "welcome"));

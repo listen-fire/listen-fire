@@ -1,5 +1,5 @@
 // The tests that read a date text with no offset (rust_run) must answer the
-// same in every zone the process may run in: a version 5 date-time with no
+// same in every zone the process may run in: a date-time with no
 // offset is UTC, never the process's zone. Jest hands every suite a copy of
 // the environment, so a test assigning `TZ` moves no clock, and a process's
 // zone is fixed when it starts: each zone is a jest of its own, `TZ` set.

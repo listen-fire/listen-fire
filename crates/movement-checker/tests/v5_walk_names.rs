@@ -1,4 +1,4 @@
-//! One diagnostic per misspelled bare name in a version 5 walk's WHERE: a
+//! One diagnostic per misspelled bare name in a walk's WHERE: a
 //! bare name inside a hop's brackets is a variable from outside the walk. A
 //! field of the hop written bare is the old spelling (MOV_V5_SPELLING, its fix
 //! the alias read); a name that is neither a variable nor a field of the
@@ -17,7 +17,7 @@ fn check(body: &str) -> Vec<(String, String)> {
         "import {{ `@lf/attio` as attio }} from adapters\nimport {{ `Acme CRM` }} from credentials\ncrm = connect attio using `Acme CRM`\nfunction go(cutoff: <number>) {{\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics: Vec<Diagnostic> = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics.into_iter().filter(|d| d.severity.is_none()).map(|d| (d.code, d.message)).collect()
 }

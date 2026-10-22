@@ -1,10 +1,10 @@
-# Migrating to Dancing Wren (5)
+# Migrating to 0.12
 
-Language version 5, **Dancing Wren**, follows Luminous Owl (4). The [changelog entry](../../CHANGELOG.md) lists each change in a line; this guide carries the full detail. Every rule here that says "under Dancing Wren (5)" applies only to an automation pinned to version 5. Quiet Heron (1), Bright Otter (2), Steady Lynx (3) and Luminous Owl (4) keep their old behaviour exactly (proved by the version 4 conformance corpus).
+This guide is for movements written before 0.12, the integer versions 1–4 (Quiet Heron, Bright Otter, Steady Lynx, Luminous Owl). From 0.12 a movement's pin is the release version it was written against, and a release reads every pin that shares its compatibility key (`0.12`). The [changelog entry](../../CHANGELOG.md) lists each change in a line; this guide carries the full detail. Every rule here that says "under 0.12" applies only to an automation pinned to 0.12. The integer versions 1 to 4 keep their old behaviour exactly (proved by their conformance corpora).
 
 Section 2 respells the whole surface; nothing in it changes what a program means. The four changes after it share one idea: there is no engine-side store and there are no meta edges. Everything a movement reads or writes is an edge or a record that a system declares, and a plugin is a function.
 
-> **Preview.** Dancing Wren ships as a preview in the 0.12.0 pre-release. Existing automations keep their version 1 to 4 pins and run unchanged; version 5 is opt-in, through the explicit upgrade only.
+> **Preview.** 0.12 ships as a preview in the 0.12.0 pre-release. Existing automations keep their integer pins (1 to 4) and run unchanged; 0.12 is opt-in, through the explicit upgrade only.
 
 ## Contents
 
@@ -30,25 +30,25 @@ Section 2 respells the whole surface; nothing in it changes what a program means
 
 ## 1. How the pin moves
 
-- A new automation is written in Dancing Wren (5). An existing automation moves up to it only when someone upgrades it; a release's deploy check reports which ones validate cleanly there, and moves none.
-- Every change below is a refusal under version 5, not a move-up warning: an automation that uses a retired form has an error under 5, so its pin cannot move. It stays on its version, shows **Review**, lists the diagnostics, and runs exactly as before. Rewrite each form as below, then upgrade (`lf upgrade`, or `upgradeAutomation` through the API). The respellings of [section 2](#2-the-everyday-spelling) carry their rewrite, so the upgrade applies them itself.
+- A new automation is written in 0.12. An existing automation moves up to it only when someone upgrades it; a release's deploy check reports which ones validate cleanly there, and moves none.
+- Every change below is a refusal under 0.12, not a move-up warning: an automation that uses a retired form has an error under 0.12, so its pin cannot move. It stays on its version, shows **Review**, lists the diagnostics, and runs exactly as before. Rewrite each form as below, then upgrade (`lf upgrade`, or `upgradeAutomation` through the API). The respellings of [section 2](#2-the-everyday-spelling) carry their rewrite, so the upgrade applies them itself.
 
 ## 2. The everyday spelling
 
-- Under Dancing Wren (5) a program has two kinds of code, and each reads like what it is:
+- Under 0.12 a program has two kinds of code, and each reads like what it is:
   - a walk's brackets (`-[…]->`) and a write's `unique by` are a query the source system may run itself, so they read like SQL: CAPS words, `AND` / `OR` / `NOT`;
   - everything else runs here, step by step, so it reads like TypeScript: `&&`, `? :`, lower-case core words, functions in namespaces, exact letter case.
 - Why: a model or a person who writes TypeScript writes the second kind right first time, and the first kind is honest about what the source system runs.
-- Every old spelling is `MOV_V5_SPELLING` under 5, and the diagnostic carries the exact rewrite as its fix. It changes spelling, never meaning: the new spelling reads into the same program the old one did under 4.
+- Every old spelling is `MOV_V5_SPELLING` under 0.12, and the diagnostic carries the exact rewrite as its fix. It changes spelling, never meaning: the new spelling reads into the same program the old one did under 4.
 - Versions 1 to 4 read exactly as before. Under them the new spelling is not read at all.
 
 ### Upgrading
 
 - An upgrade runs only when someone asks for it: `lf upgrade <file>` (the CLI), the API's upgrade (`upgradeAutomation`), or the agent tool. It applies the fixes marked safe (they provably keep the meaning), checks again, and repeats until no fix is left. Every other fix is listed with its rewrite; `lf upgrade --all` (the API's `applyAllFixes`) applies those too. An outer rewrite is written from the original text, so a fix inside it comes round on the next pass.
-- The result is checked under 5. The pin moves only when it checks clean; otherwise the automation stays on its version, runs as before, and lists what is left.
-- A release's deploy check never rewrites an automation and never moves a pin. It reports an automation whose text, as written, is already clean under 5 as ready to upgrade; for one in an older spelling, the team is told that an upgrade can rewrite it.
+- The result is checked under 0.12. The pin moves only when it checks clean; otherwise the automation stays on its version, runs as before, and lists what is left.
+- A release's deploy check never rewrites an automation and never moves a pin. It reports an automation whose text, as written, is already clean under 0.12 as ready to upgrade; for one in an older spelling, the team is told that an upgrade can rewrite it.
 - Check a few rewrites by hand, because the right one depends on what the value is:
-  - `LENGTH(x)` is rewritten to `Text.length(x)`. On a list, write `count(x)`. Under 5 a text's length counts characters: an emoji is 1 (under 4 and earlier it was 2, its UTF-16 units). `Text.split(t, "")` and `Text.chunks` count and cut the same way, so an emoji is never cut in two.
+  - `LENGTH(x)` is rewritten to `Text.length(x)`. On a list, write `count(x)`. Under 0.12 a text's length counts characters: an emoji is 1 (under the integer versions 1 to 4 it was 2, its UTF-16 units). `Text.split(t, "")` and `Text.chunks` count and cut the same way, so an emoji is never cut in two.
   - `x CONTAINS v` outside brackets is rewritten to `Text.includes(x, v)` when `v` is a text literal, else to `List.includes(x, v)`. Check that it matches what `x` is.
   - `SORT(xs, key)` whose key is anything but one field has no fix yet (`MOV_V5_NOT_YET`). Write `sort(xs, (r) => …)`.
   - A WHERE that calls out (`AI(…)` per record, a plugin, your own function) moves to `filter(walk, (r) => …)`, then `map` over what it kept.
@@ -113,8 +113,8 @@ ok = true
 
 - An `if` condition is parenthesised. `rec IS <T>` is `rec is <T>` outside brackets.
 - `exists(…)` takes a walk only. On a value it is refused with the `!= null` rewrite. `x != null` narrows `x` inside the arm, and `if (x == null) { fail(…) }` narrows it after, as before.
-- `count(xs)` counts every item of a list, an empty one (null) included, as TypeScript's `.length` does; under 4 and earlier `COUNT` skipped empty items. A move up across 5 warns a count of a list that may hold an empty item (`MOV_COUNT_COUNTS_EMPTY`). To count only the items that are there: `count(filter(xs, (x) => x != null))`.
-- One answer changes. `found != null` on the records a block returned (`found = c-[m:Messages]-> { return m }`) says whether the block returned any, as `EXISTS(found)` did. Under 4 and earlier those records always counted as present, so `found != NULL` was always true. A move up across 5 warns each such test (`MOV_PRESENCE_OF_RETURNED`): if the program relied on the old answer, change it, then upgrade.
+- `count(xs)` counts every item of a list, an empty one (null) included, as TypeScript's `.length` does; under the integer versions 1 to 4 `COUNT` skipped empty items. A move up across 0.12 warns a count of a list that may hold an empty item (`MOV_COUNT_COUNTS_EMPTY`). To count only the items that are there: `count(filter(xs, (x) => x != null))`.
+- One answer changes. `found != null` on the records a block returned (`found = c-[m:Messages]-> { return m }`) says whether the block returned any, as `EXISTS(found)` did. Under the integer versions 1 to 4 those records always counted as present, so `found != NULL` was always true. A move up across 0.12 warns each such test (`MOV_PRESENCE_OF_RETURNED`): if the program relied on the old answer, change it, then upgrade.
 - Unchanged: `== != < <= > >=`, arithmetic, `"${…}"`, `[a, ...xs]`, `{ k: v }`, durations, `@` fields, and `Owner ?: x` in a write.
 
 ### Walk brackets
@@ -132,7 +132,7 @@ crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.`Created At` DESC L
 exists(m-[a:Attachments WHERE a.Name CONTAINS "pdf"]->)
 ```
 
-- One answer changes. `ORDER BY` and `LIMIT` on a hop over records the run already holds (an extraction's entities, a `node { … }` or `graph { … }` literal's entries, a run-built node's landings) are read from 5. Under 4 and earlier they were ignored there: every record came back, in the order held. A move up across 5 warns each such hop (`MOV_IN_MEMORY_HOP_ORDER`): if the program relied on the old answer, change it, then upgrade.
+- One answer changes. `ORDER BY` and `LIMIT` on a hop over records the run already holds (an extraction's entities, a `node { … }` or `graph { … }` literal's entries, a run-built node's landings) are read from 0.12. Under the integer versions 1 to 4 they were ignored there: every record came back, in the order held. A move up across 0.12 warns each such hop (`MOV_IN_MEMORY_HOP_ORDER`): if the program relied on the old answer, change it, then upgrade.
 - Writes keep their statement words and modifiers. `unique by (Domain)` and `FUZZY` follow walk rules. Field values are everyday expressions: `Name: Text.upper(m.Subject)`.
 
 ### Systems and imports
@@ -158,7 +158,7 @@ inbox = connect email
 
 ## 3. `write … bind` is retired
 
-- Under Dancing Wren (5) a `bind` clause on a write is `MOV_WRITE_BIND_RETIRED`. Why: `bind` kept the correspondence between two systems' records in a store the engine owned and no system held, so nothing outside a run could see it, and the next system to need the link could not find it.
+- Under 0.12 a `bind` clause on a write is `MOV_WRITE_BIND_RETIRED`. Why: `bind` kept the correspondence between two systems' records in a store the engine owned and no system held, so nothing outside a run could see it, and the next system to need the link could not find it.
 - Store the link explicitly, in the system that holds it: a field carrying the other record's identity, which the next write finds the record by (`unique by`), or an edge there.
 
 ```
@@ -169,13 +169,13 @@ write crm-[:Companies]-> bind deal { Name: deal.Name }
 write crm-[:Companies]-> { unique by (`Deal ID`), `Deal ID`: deal.id, Name: deal.Name }
 ```
 
-- The version 4 rules on a bound write (and `MOV_TARGET_WHERE_BIND`) are quiet under 5: the retirement is the one refusal. The retired `#linked` hop's message no longer suggests `bind` under 5.
+- The version 4 rules on a bound write (and `MOV_TARGET_WHERE_BIND`) are quiet under 0.12: the retirement is the one refusal. The retired `#linked` hop's message no longer suggests `bind` under 0.12.
 
 ## 4. `#` hops are retired; a plugin is a function
 
-- Under Dancing Wren (5) a hop whose edge name starts with `#` is refused: `-[:#name]->`, `-[#name]->` and `` -[:`#name`]-> ``, on a walk, a block head, a write or match target, or in a type's address. Why: there are no meta edges, only the edges a system declares. The engine handed a `#` name to the system as one of its own references; on a system that described its edges it was an unknown edge, and on one that did not, or in a parameter's type, it said nothing at all.
+- Under 0.12 a hop whose edge name starts with `#` is refused: `-[:#name]->`, `-[#name]->` and `` -[:`#name`]-> ``, on a walk, a block head, a write or match target, or in a type's address. Why: there are no meta edges, only the edges a system declares. The engine handed a `#` name to the system as one of its own references; on a system that described its edges it was an unknown edge, and on one that did not, or in a parameter's type, it said nothing at all.
 
-| Form | Under 5 | Write instead |
+| Form | Under 0.12 | Write instead |
 | --- | --- | --- |
 | `-[:#name]->`, `-[#name]->`, `` -[:`#name`]-> `` | `MOV_META_HOP_RETIRED` | an edge the record has, or the plugin called as a function |
 | `-[f:#resources]->` | `MOV_META_HOP_RETIRED` | `-[f:_resources]->` off an extraction's result, or the system's file edge ([section 6](#6-_resources-only-on-an-extractions-result)) |
@@ -193,23 +193,23 @@ import { vcUrlRetrieval } from plugins
 pages = vcUrlRetrieval(msg.Body)
 ```
 
-- A plugin that only an extraction can feed (one with no call form, such as `linkedinEnrichment`) stays a stage: `extract from [ … ] through [linkedinEnrichment] { … }`. The `through [ … ]` stage is not a hop; under 5 it takes its arguments by position, as a call does.
+- A plugin that only an extraction can feed (one with no call form, such as `linkedinEnrichment`) stays a stage: `extract from [ … ] through [linkedinEnrichment] { … }`. The `through [ … ]` stage is not a hop; under 0.12 it takes its arguments by position, as a call does.
 - Not retired: the `#` prefix on the engine's own binding names (`MOV_RESERVED_NAME`), which keeps `#return` uncollidable. `-[:#extract]->` was never accepted.
 
 ## 5. `delete` only where the system declares it
 
 - A system's `describe` now says, per type, whether its `deleteRecord` removes a record of that type (`deletable: true`; absent means no). The in-process adapters declare it where they delete: Attio objects; Affinity organisations, people, notes and a named list's entries; Airtable rows; Evertrace searches, lists and list entries; every knowledge-graph node; the Valuations entities. Slack, Telegram, Dropbox, Google Drive, Sheets, Ask, email, Gmail and WhatsApp declare none.
-- Under Dancing Wren (5) the checker refuses `delete x`:
+- Under 0.12 the checker refuses `delete x`:
   - `MOV_DELETE_NOT_DECLARED` where `x`'s type does not declare deletion. A union is deletable only when every member is.
   - `MOV_DELETE_NOT_RECORD` where `x` is not one stored record: a value, a name that may hold one (a list of records, `c ? r : "a"`), an extraction's root or an extracted node (a transient graph nothing stores), a record on a node the run built, the instance itself, a closure or a local node.
 - Why: under version 4 each of these passed the save and failed (or did nothing) at run time, after everything before the `delete` had already run.
 - A name bound to a conditional (`c ? a : b`) or a `coalesce` is checked as the union of its operands: every operand a deletable record passes, an operand whose type does not declare deletion is `MOV_DELETE_NOT_DECLARED`, and an operand that is not a record (`null`, a value) is `MOV_DELETE_NOT_RECORD`.
 - A system that describes nothing, or a type not yet described, says nothing, so nothing is refused there. Change the record instead (`write x { … }`), or delete it in a system that can.
-- A remote (protocol) adapter written before `deletable` existed declares no type deletable, so under version 5 every `delete` of its records is refused. This is accepted: the field is additive and the protocol version is unchanged, but version 5 requires it. The adapter's author adds `"deletable": true` to the types its `deleteRecord` removes (see the adapter handbook's protocol chapter); movements pinned to version 4 or earlier are unaffected.
+- A remote (protocol) adapter written before `deletable` existed declares no type deletable, so under 0.12 every `delete` of its records is refused. This is accepted: the field is additive and the protocol version is unchanged, but 0.12 requires it. The adapter's author adds `"deletable": true` to the types its `deleteRecord` removes (see the adapter handbook's protocol chapter); movements pinned to version 4 or earlier are unaffected.
 
 ## 6. `_resources` only on an extraction's result
 
-- Under Dancing Wren (5) `x-[f:_resources]->` is `MOV_RESOURCES_NOT_EXTRACTED` unless `x` is provably an extraction's result: its root or an extracted node, where `_resources` is the source content the extraction read. The rule needs no schema, so a root nothing proves to be one is refused too: a record of a system that describes nothing, or a name bound to a conditional whose arms are not all extractions' results. A rootless `-[:_resources]->` (the event's record) is refused too. Why: off a system's record, `_resources` was a reserved reference the engine resolved through the event's adapter, whatever system the record belonged to. Email, Gmail, WhatsApp and Slack had already retired the bundle it read, so there it read nothing useful; on the knowledge graph it duplicated an edge the graph declares.
+- Under 0.12 `x-[f:_resources]->` is `MOV_RESOURCES_NOT_EXTRACTED` unless `x` is provably an extraction's result: its root or an extracted node, where `_resources` is the source content the extraction read. The rule needs no schema, so a root nothing proves to be one is refused too: a record of a system that describes nothing, or a name bound to a conditional whose arms are not all extractions' results. A rootless `-[:_resources]->` (the event's record) is refused too. Why: off a system's record, `_resources` was a reserved reference the engine resolved through the event's adapter, whatever system the record belonged to. Email, Gmail, WhatsApp and Slack had already retired the bundle it read, so there it read nothing useful; on the knowledge graph it duplicated an edge the graph declares.
 - A record reaches its files over an edge its system declares, and the diagnostic names it:
 
 | System | Write instead of `x-[f:_resources]->` |
@@ -226,23 +226,23 @@ pages = vcUrlRetrieval(msg.Body)
 deck = extract from [msg-[:Attachments]->.File] { … }
 deck-[f:_resources]-> { write drive-[:files]-> { name: f.name, data: f.file } }
 
-# before (a record: refused under 5)
+# before (a record: refused under 0.12)
 msg-[f:_resources]-> { … }
 
 # after
 msg-[f:Attachments]-> { … f.File … }
 ```
 
-- The engine follows the checker: under version 5 the movement engine never resolves the reserved reference for a system's record. Versions 1 to 4 keep it, including its quirk of reading another system's record through the event's adapter.
+- The engine follows the checker: under 0.12 the movement engine never resolves the reserved reference for a system's record. Versions 1 to 4 keep it, including its quirk of reading another system's record through the event's adapter.
 
 ## 7. A file is never joined into text
 
-- Under Dancing Wren (5) a file (or a value that may be one, such as `coalesce(f, "none")`) inside an interpolated text is `MOV_FILE_IN_TEXT`: `"Attached: ${f}"`.
+- Under 0.12 a file (or a value that may be one, such as `coalesce(f, "none")`) inside an interpolated text is `MOV_FILE_IN_TEXT`: `"Attached: ${f}"`.
 - Why: a file is a byte channel, not text, and has no text form but the one `File.read` gives. Under version 4 and earlier the engine joined the file's description in, and the text read `Attached: [object Object]`. A record in the same place has been refused on every version (`MOV_RECORD_NOT_A_VALUE`).
-- Versions 1 to 4 keep the old behaviour. The error under 5 keeps such an automation on its version until the text is rewritten.
+- Versions 1 to 4 keep the old behaviour. The error under 0.12 keeps such an automation on its version until the text is rewritten.
 
 ```
-# before (refused under 5)
+# before (refused under 0.12)
 write crm-[:notes]-> { title: "Attached: ${f}" }
 
 # after: the file's text
@@ -254,18 +254,18 @@ write crm-[:notes]-> { title: "Attached", upload: f }
 
 ## 8. A declared return takes what the body may return
 
-- Under Dancing Wren (5) a closure's declared return type that does not take what a return may hand back is `MOV_RETURN_TYPE` at the declaration: `c = (): <text> => coalesce(org, "x")` (a record may come back where text was declared; TypeScript's `Org | string` is no `string`).
+- Under 0.12 a closure's declared return type that does not take what a return may hand back is `MOV_RETURN_TYPE` at the declaration: `c = (): <text> => coalesce(org, "x")` (a record may come back where text was declared; TypeScript's `Org | string` is no `string`).
 - A named function's declaration is held to the same rule (`function f(): <text> { return coalesce(org, "x") }`), and under 3 and 4 its call holds what the body may return, a call back into it from its own body carrying nothing for that edge.
-- Why: a call is typed by what it declares, so the declaration is the last place the record or file is seen. Versions 3 and 4 ran such a program while the call was unused or only compared, so the refusal is new under 5 only. Under 3 and 4 the declaration is clean, and the call still holds what the body may return: a use that reaches data (a graph entry, a written field, a plugin argument) is refused at the use, on every version.
+- Why: a call is typed by what it declares, so the declaration is the last place the record or file is seen. Versions 3 and 4 ran such a program while the call was unused or only compared, so the refusal is new under 0.12 only. Under 3 and 4 the declaration is clean, and the call still holds what the body may return: a use that reaches data (a graph entry, a written field, a plugin argument) is refused at the use, on every version.
 - Return a field off the record (`org.name`), or declare the type the body returns.
 
 ## 9. A value that may be a record is no record parameter
 
-- Under Dancing Wren (5) a value that MAY be a record and may be something else, handed to a parameter that takes a record position, is `MOV_CALL_ARG_MAYBE_RECORD`: `v = coalesce(org, "x")` then `hp(v)`, `hp(cond ? org : "x")`, or a function or closure whose returns are a record on one path and text on another.
+- Under 0.12 a value that MAY be a record and may be something else, handed to a parameter that takes a record position, is `MOV_CALL_ARG_MAYBE_RECORD`: `v = coalesce(org, "x")` then `hp(v)`, `hp(cond ? org : "x")`, or a function or closure whose returns are a record on one path and text on another.
 - Why: TypeScript's `Org | string` is no `Org`. The value that is not a record has nowhere to go, and the engine refuses it by name at run time, which a checked program could reach.
 - Narrow it to the record with `is` before passing it, handle the case where it is not one, or fill the other arm with a record. A union of records alone (`coalesce(org, other)`) is one record and passes. Versions 1 to 4 are unchanged.
 - The same value handed to a parameter typed as a VALUE (`function f(n: <number>)`, then `f(coalesce(org, 1))`, `f(cond ? org : 1)`, or a name bound to either) is `MOV_CALL_ARG_MAYBE_RECORD` too, through a function by name, a closure in a variable, or a list handed to `<number[]>`.
-- Why: `Org | number` is no `number`. Under versions 3 and 4 the check said nothing and the call ran: the record arrived where the number was typed, and a sum over it came out `NaN`. So under 3 and 4 it is a warning that blocks the move up, and the refusal is new under 5.
+- Why: `Org | number` is no `number`. Under versions 3 and 4 the check said nothing and the call ran: the record arrived where the number was typed, and a sum over it came out `NaN`. So under 3 and 4 it is a warning that blocks the move up, and the refusal is new under 0.12.
 - Narrow it to the record with `is` and pass a field off it (`f(coalesce(org.size, 1))`), or fill every arm with a value.
 - A built-in whose argument takes a value is held to the same rule: `Number.round(coalesce(org, 1))` and `Text.upper(coalesce(org, "b"))` are `MOV_CALL_ARG_MAYBE_RECORD`. Under 3 and 4 the built-in ran on the record as it was (`ROUND` gave `NaN`, `UPPER` gave `"[OBJECT OBJECT]"`), so there it is a warning that blocks the move up.
 - A plugin's text input is held to it for a record value (`{ … }`) as well: `research({ context: s })`, or a value that may be one, is `MOV_CALL_ARG_MAYBE_RECORD`. Under 3 and 4 the record was passed through as it was, so there it is a warning that blocks the move up.
@@ -273,9 +273,9 @@ write crm-[:notes]-> { title: "Attached", upload: f }
 
 ## 10. A record a combinator arm hands back reads as itself
 
-- Under Dancing Wren (5) a slot of a `race` receipt that holds the record an arm returned reads as that record: `r[0].name`, `h = r[0]` then `h.name`, and `r[0] == null` (false). It is the reading `[a, 2][0]` already had on a list. `parallel` is retired under 5 ([section 15](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await)); the `all` that replaces it reads its slots the same way.
+- Under 0.12 a slot of a `race` receipt that holds the record an arm returned reads as that record: `r[0].name`, `h = r[0]` then `h.name`, and `r[0] == null` (false). It is the reading `[a, 2][0]` already had on a list. `parallel` is retired under 0.12 ([section 15](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await)); the `all` that replaces it reads its slots the same way.
 - Why: the check accepted the field read, and the run read null. A program that checked clean silently read nothing.
-- Under Luminous Owl (4) and earlier the slot still reads null. A move up across 5 warns every read of a receipt one of whose arms returns a record (`MOV_RECEIPT_RECORD_SLOT`): if the program relied on the null, change it, then upgrade.
+- Under the integer versions 1 to 4 the slot still reads null. A move up across 0.12 warns every read of a receipt one of whose arms returns a record (`MOV_RECEIPT_RECORD_SLOT`): if the program relied on the null, change it, then upgrade.
 
 ```
 r = await parallel([
@@ -288,16 +288,16 @@ r = await parallel([
 write crm-[:notes]-> { title: AT(r, 0).name }   # 4 and earlier: null
 ```
 
-Under 5 the same join is `r = all(() => { … }, () => 2)`, and `r[0].name` reads "Acme".
+Under 0.12 the same join is `r = all(() => { … }, () => 2)`, and `r[0].name` reads "Acme".
 
 ## 11. A write handle's unsent file is not a file
 
-- Under Dancing Wren (5) a write handle's file field that the write did not send, used as a file, is `MOV_HANDLE_FILE_NOT_SENT`: `File.read(h.doc)`, `ocr(doc: h.doc)`, or `h.doc` into another write's file field, after `h = write d-[:docs]-> { name: "a" }`.
+- Under 0.12 a write handle's file field that the write did not send, used as a file, is `MOV_HANDLE_FILE_NOT_SENT`: `File.read(h.doc)`, `ocr(doc: h.doc)`, or `h.doc` into another write's file field, after `h = write d-[:docs]-> { name: "a" }`.
 - Why: the system answers a write with its own description of the file, a dict, not a file the run can read. `File.read` failed with "reads a file, and this is object" though the program had validated. A file field the write did send (`doc: f`) is the program's own file and stays usable.
 - Versions 1 to 4 keep the old behaviour. Read the record back through its edge to get the file, as a walk read does, or send the file in the write.
 
 ```
-# before (refused under 5)
+# before (refused under 0.12)
 h = write d-[:docs]-> { name: "a" }
 text = File.read(h.doc)
 
@@ -307,17 +307,17 @@ text = File.read(first(h-[:Files]->).File)
 
 ## 12. A closure is not data
 
-- Under Dancing Wren (5) a closure is a value, as TypeScript's functions are, but it is never data. It lives in exactly three places:
+- Under 0.12 a closure is a value, as TypeScript's functions are, but it is never data. It lives in exactly three places:
   - a variable: `g = label`, `g = () => { … }`, or a call that answers one (`h = mk()`);
   - a parameter, including one typed as a closure (`handler: <(c: <Company>) => <text>>`, [section 14](#14-a-closures-type-is-written-params--return));
   - an argument to a parameter that takes one: `map(xs, (x) => …)`, `race(a, b)`, `all(a, b)`, `run(label)`.
 - It is never an operand of a value expression (`MOV_CLOSURE_NOT_DATA`): `c ? a : b` or `coalesce(a, b)` choosing between closures, a comparison (`a == b`), interpolation (`"${a}"`), arithmetic, `!`/`&&`/`||`, a condition (`if (a) { … }`), or a built-in's argument that is not its function (`Text.upper(a)`). Choose with a statement instead: `if (c) { v = a() } else { v = b() }`.
 - Anywhere a value would be kept as data it is `MOV_CLOSURE_NOT_DATA`: a list's element (`[label]`, `[() => { … }]`), a record or map's value (`{ g: label }`, `{ g: () => 1 }`), a field written, a spread, a `map` whose function returns a closure, `List.groupBy` or `List.keyBy` over closures, a `race` or `all` arm that returns a closure, and a type whose list element or record key is a closure (`<() => <text>>[]`, `<{ run: <() => <text>> }>`).
 - Why: a closure stored as data is a function that outlives the scope that made it, travels through records and lists, and has to be called back through whatever holds it. Kept in a variable or passed as an argument, every call of it is visible where it is written.
-- Under Luminous Owl (4) and earlier a closure is no value at all: written in a list it stays `MOV_EXPR_CLOSURE_POSITION` (bind it to a name first).
+- Under the integer versions 1 to 4 a closure is no value at all: written in a list it stays `MOV_EXPR_CLOSURE_POSITION` (bind it to a name first).
 
 ```
-# refused under 5: closures kept as data
+# refused under 0.12: closures kept as data
 fs = [label, () => { return "x" }]   # MOV_CLOSURE_NOT_DATA
 box = { g: label }                   # MOV_CLOSURE_NOT_DATA
 
@@ -329,7 +329,7 @@ r = all(label, () => { return "x" })
 
 ## 13. A value that is a closure is called
 
-- Under Dancing Wren (5) a name whose VALUE is a closure is called as TypeScript calls one. The value may come from anywhere a closure may be ([section 12](#12-a-closure-is-not-data)):
+- Under 0.12 a name whose VALUE is a closure is called as TypeScript calls one. The value may come from anywhere a closure may be ([section 12](#12-a-closure-is-not-data)):
   - a bound closure (`g = () => { … }` then `g()`);
   - a function declared with a name, read as a value: bound (`g = made` then `g()`) or handed back (`() => made`, `return made`, a function that returns one, then `h = mk()` and `h()`);
   - a closure a closure returns in place (`mk = () => { return () => { … } }`);
@@ -356,11 +356,11 @@ write crm-[:notes]-> { title: v }   # a record: MOV_WRITE_FIELD_TYPE
 ### No methods
 
 - There are no methods: a dot on a record or map always reads a field, and a closure is never under a key ([section 12](#12-a-closure-is-not-data)). Why: a closure under a key made `box.g()` a second way to call a function, and `box.g` mean two things.
-- Under Dancing Wren (5), a dotted call of a function that is no built-in (`o.nope()`, `box.g()`) is `MOV_FUNCTION_UNKNOWN`. The engine reads `o.f(…)` as `f` run in `o`'s scope, and outside a write field there is no such function to run, so the run always failed where it reached the call; the checker now says so where it is written. Versions 1–4 are unchanged (a saved movement never breaks). A function inside a write field, which the target may advertise, is unchanged; under 5 it is a member of the adapter's package. A built-in in a record's scope (`o.UPPER(name)`) is gone under 5 ([section 2](#2-the-everyday-spelling)).
+- Under 0.12, a dotted call of a function that is no built-in (`o.nope()`, `box.g()`) is `MOV_FUNCTION_UNKNOWN`. The engine reads `o.f(…)` as `f` run in `o`'s scope, and outside a write field there is no such function to run, so the run always failed where it reached the call; the checker now says so where it is written. Versions 1–4 are unchanged (a saved movement never breaks). A function inside a write field, which the target may advertise, is unchanged; under 0.12 it is a member of the adapter's package. A built-in in a record's scope (`o.UPPER(name)`) is gone under 0.12 ([section 2](#2-the-everyday-spelling)).
 
 ## 14. A closure's type is written `<(params) => <return>>`
 
-- Under Dancing Wren (5) a closure's type is written as TypeScript's function type, in angle brackets: `<(params) => <return>>`. Each parameter is typed as a function's is, and the return is written as a function's return annotation is.
+- Under 0.12 a closure's type is written as TypeScript's function type, in angle brackets: `<(params) => <return>>`. Each parameter is typed as a function's is, and the return is written as a function's return annotation is.
 
 ```
 function run(handler: <(c: <crm-[:company]->>) => <text>>) { … }   # a parameter
@@ -373,11 +373,11 @@ function pick(): <() => <text>> { … }                               # a declar
 - A callback's closure is held to the same rule: `callback(() => f(x))` takes nothing, so it passes every argument of `f` itself, and a parameter left open is `MOV_CALL_ARITY`. What the platform sends when it fires is a parameter the closure declares: `callback((d: <date>) => f(x, d))`. A function named bare (`callback(f)`) still leaves every parameter to the platform.
 - A closure fits a closure type as TypeScript's assignability says. Parameters are contravariant: each of the closure's parameters takes what the type's hands it. Returns are covariant: what the closure returns, what it may hold included, is what the type's returns. A closure that takes fewer parameters fits, and the extra arguments are dropped; one that takes more does not. A misfit is `MOV_CALL_ARG_TYPE` (or `MOV_RETURN_TYPE` for a declared return), naming what the closure returns.
 - A closure written in place is an argument to a closure-typed parameter: `run((c) => c.name)`. Its untyped parameters are typed by the closure type (contextual typing).
-- Under Quiet Heron (1) to Luminous Owl (4) the syntax is a parse error that names version 5, because a closure is not a value there.
+- Under the integer versions 1 to 4 the syntax is a parse error that names 0.12, because a closure is not a value there.
 
 ## 15. `parallel` is retired for `all`; combinators take arguments and no `await`
 
-- Under Dancing Wren (5) every `parallel` form is `MOV_PARALLEL_RETIRED`. `all(f, g, …)` is the same join, as TypeScript's `Promise.all` is: every arm runs, at once, and the answer is the list of what each returned, in argument order. Why: a closure is not data ([section 12](#12-a-closure-is-not-data)), so the arms are passed as arguments, not in a list.
+- Under 0.12 every `parallel` form is `MOV_PARALLEL_RETIRED`. `all(f, g, …)` is the same join, as TypeScript's `Promise.all` is: every arm runs, at once, and the answer is the list of what each returned, in argument order. Why: a closure is not data ([section 12](#12-a-closure-is-not-data)), so the arms are passed as arguments, not in a list.
 - For arms written down the diagnostic carries the exact rewrite, which a tool applies:
 
 ```
@@ -393,11 +393,11 @@ r = all(a, () => { … })
 - `race` takes its arms as arguments too: `race([q, t])` is `MOV_COMBINATOR_ARMS_ARE_ARGUMENTS` (`all([…])` as well), and the fix drops the brackets: `race(q, t)`. `race` takes no settings.
 - No `await` on `race` or `all`: `await` marks only the suspension itself, where the run parks (`await sleep(…)`, `await until(…)`, reading an answer with `await first(q-[:Response]->)`). A combinator does not park by itself; its arms may, and the run parks where they do. `await race(…)` and `await all(…)` are `MOV_COMBINATOR_NO_AWAIT`, and the fix removes the `await`. An arrow body that awaits one, `g = () => await parallel([…])`, gets the same fixes: `g = () => all(…)`.
 - Arms built at run time (`parallel(fs)`) have no fix: name each function as an argument, `all(f, g)`.
-- The refusal of the `parallel { … }` block points at `all` under 5. Under 4 and earlier `await race([…])` and `await parallel([…])` are unchanged, and `all` is still a retired name.
+- The refusal of the `parallel { … }` block points at `all` under 0.12. Under the integer versions 1 to 4 `await race([…])` and `await parallel([…])` are unchanged, and `all` is still a retired name.
 
 ## 16. The extraction keyword is retired
 
-- Under Dancing Wren (5) the keyword `x = extract from […] { … }` is `MOV_EXTRACT_KEYWORD_RETIRED`, with its inline node shapes and its `through […]` stages. An extraction is the call over a declared node shape: `extract(content, Shape, { tier })` hands back each record the content holds, and `extractOne(content, Shape, { tier })` the one it describes, or nothing. A plugin is a function you call. Why: one way to extract, whose shape is an ordinary declaration you can reuse, spread into a graph and pass around.
+- Under 0.12 the keyword `x = extract from […] { … }` is `MOV_EXTRACT_KEYWORD_RETIRED`, with its inline node shapes and its `through […]` stages. An extraction is the call over a declared node shape: `extract(content, Shape, { tier })` hands back each record the content holds, and `extractOne(content, Shape, { tier })` the one it describes, or nothing. A plugin is a function you call. Why: one way to extract, whose shape is an ordinary declaration you can reuse, spread into a graph and pass around.
 - Where the rewrite is mechanical the diagnostic carries it. It declares the tree as a node shape named after the binding (`found` is `FoundShape`; a name the file already holds gets the next number, `FoundShape2`), and calls `extractOne` over the same content and tier:
 
 ```
@@ -420,11 +420,11 @@ node FoundShape: "the relevant information in the content" {
 found = extractOne([m.Body], FoundShape, { tier: "careful" })
 ```
 
-- `found` is the one record the keyword's result was: its fields read off it (`found.summary`) and its nodes walk from it as before, inside a guard (`if (found != null) { found-[c:company]-> { … } }`): the call's record may be absent, and a block's walk off a record that is not there fails the run, so from 5 the unguarded walk is refused (`MOV_ABSENT_REQUIRED`). The same holds for a `match` that may find nothing and an unguarded pick (`only(…)`, `rows[0]`); a move up across 5 is an upgrade warning. A walk inside an expression is refused the same way (`count(found-[c:company]->)`, `exists(found-[c:company]->)`, a hop read in a write field); `exists(found)` has no hop and is allowed. A node that took a declaration (`node lead: <Lead>`) is written out in place, its words the use site's. A declaration whose words interpolate a value of the body (`"the topic of ${m.Subject}"`) stays in the body, where they are read; any other goes before the function at file level.
+- `found` is the one record the keyword's result was: its fields read off it (`found.summary`) and its nodes walk from it as before, inside a guard (`if (found != null) { found-[c:company]-> { … } }`): the call's record may be absent, and a block's walk off a record that is not there fails the run, so from 0.12 the unguarded walk is refused (`MOV_ABSENT_REQUIRED`). The same holds for a `match` that may find nothing and an unguarded pick (`only(…)`, `rows[0]`); a move up across 0.12 is an upgrade warning. A walk inside an expression is refused the same way (`count(found-[c:company]->)`, `exists(found-[c:company]->)`, a hop read in a write field); `exists(found)` has no hop and is allowed. A node that took a declaration (`node lead: <Lead>`) is written out in place, its words the use site's. A declaration whose words interpolate a value of the body (`"the topic of ${m.Subject}"`) stays in the body, where they are read; any other goes before the function at file level.
 - The fix is offered, never applied on its own. Check three things: the record may be absent where the keyword's result never was, so a field read off it where a value is needed is `MOV_ABSENT_REQUIRED` (write `coalesce(found.summary, "")`, which that diagnostic offers); a field written without a type becomes `<text>`; and the model is asked through the call's prompt, which lays out the content for the prompt cache.
 - A `through […]` stage has no fix. It hands each record's plugin answers to a further extraction of that record and merges what that finds into it; plugins called as functions hand back values of their own, so no rewrite is provably the same. Write the composition out: declare the shape, `extract` it, `map` over the records calling each plugin, `extractOne` over the content plus what the plugin returned, and merge the two with a spread into `graph<Shape> { ...c, ...details }`. The handbook's enrichment example is exactly this.
-- A null test on a `<text>` field of the call's record is refused (`MOV_PRESENCE_TEST_ON_TEXT`), as it was on the keyword's result: `if (found.website != null)` always answers true, since a text the model did not find is `""`. Annotate the field `<text | null>` to keep the test, or test `found.website != ""`. Under 3 and 4 the call's test runs as before; a move up across 5 is an upgrade warning.
-- The Rust engine does not run the keyword on any version, and runs no version below 5. A Quiet Heron (1) to Luminous Owl (4) automation that holds one runs on the TypeScript engine by its version, exactly as before. `lf` runs only version 5 and refuses such a project; the platform upgrades a pin below 5 to version 5.
+- A null test on a `<text>` field of the call's record is refused (`MOV_PRESENCE_TEST_ON_TEXT`), as it was on the keyword's result: `if (found.website != null)` always answers true, since a text the model did not find is `""`. Annotate the field `<text | null>` to keep the test, or test `found.website != ""`. Under 3 and 4 the call's test runs as before; a move up across 0.12 is an upgrade warning.
+- The Rust engine does not run the keyword on any version, and runs no version below 0.12. An automation pinned to an integer version 1 to 4 that holds one runs on the TypeScript engine by its version, exactly as before. `lf` runs only 0.12 and refuses such a project; the platform upgrades an integer pin to 0.12.
 
 ## 17. A value that may be one of several records reads only what every one offers
 
@@ -444,7 +444,7 @@ write who { Domains: ["a.com"] }  # refused: People has no Domains
 - No arm is preferred. Only what every arm proved counts: a field a guard proved present (`if a.Email == "x"`), a field a write set. Before, an `IF` of two records of one type took its `THEN` arm's proof.
 - A function returning a Person on one path and a Company on another is their union. Before, it was its first return's type, so a field only People have checked clean and read null when the call returned the Company.
 - A list `[lead, co]` holds the union. Before, a member was a record nobody could name, and nothing was checked.
-- Why: each of these ran unchecked under 4 and earlier. `.nope` read null; `.name + 1` was NaN; an `IF` whose `ELSE` arm had no Email wrote a missing value into a required field.
+- Why: each of these ran unchecked under the integer versions 1 to 4. `.nope` read null; `.name + 1` was NaN; an `IF` whose `ELSE` arm had no Email wrote a missing value into a required field.
 - Under 3 and 4 each refusal the rule adds is an upgrade warning; the program runs as before.
 - The fix: read the field where you know which record you hold (inside the arm, or after an `IS` test), or read a field every member has.
 - Writing in place to a union (`write who { … }`) is held to every member on every version: a field one member lacks is `MOV_WRITE_UNKNOWN_FIELD`, said of that member. Before, it was an internal error, so it never ran.
@@ -466,7 +466,7 @@ s = List.sum(filter(ys, (y) => y != null))   # or keep only the present ones
 - It covers `+ - * / %`, unary `-`, a built-in's number parameter (`Number.round(n)`, `Date.addDays(d, n)`), and `List.sum`, `List.avg`, `List.min` and `List.max` over a list that may hold an absent member.
 - Why: the engine reads an absent value as 0 there. `n + 1` answered 1 for a number that was never found, and `List.avg` counted an absent member as 0. Nothing said so.
 - The fix: guard the value, give it a fallback with `coalesce`, or drop (`List.compact`, or a `filter` whose test keeps only present members) or fill (`map(xs, (x) => coalesce(x, 0))`) a list's absent members. The diagnostic writes the guard and the fallback from your own operand.
-- Under 1 to 4 the program runs as before; a move up across 5 is an upgrade warning.
+- Under 1 to 4 the program runs as before; a move up across 0.12 is an upgrade warning.
 
 ## 19. Diagnostic code index
 
@@ -477,31 +477,31 @@ s = List.sum(filter(ys, (y) => y != null))   # or keep only the present ones
 | `MOV_CALL_ARG_TYPE` | [A closure's type is written `<(params) => <return>>`](#14-a-closures-type-is-written-params--return) (a closure that does not fit a closure type); [A value that is a closure is called](#13-a-value-that-is-a-closure-is-called) (two of several closures whose parameters share no argument); [A value that may be a record is no record parameter](#9-a-value-that-may-be-a-record-is-no-record-parameter) (a collection op's member against its function's parameter) |
 | `MOV_CALL_CLOSURE_RETURNS` | [A value that is a closure is called](#13-a-value-that-is-a-closure-is-called) (warning under 3 and 4: a later closure may hand back a record the first does not) |
 | `MOV_CALL_NOT_MOVEMENT` | [A value that is a closure is called](#13-a-value-that-is-a-closure-is-called) (a value that may not be a closure, or whose type nothing shows) |
-| `MOV_CLOSURE_NOT_DATA` | [A closure is not data](#12-a-closure-is-not-data) (a closure as a list element, a record or map value, a field, an op's or a combinator's answer, or a type's list element or key; since 5) |
+| `MOV_CLOSURE_NOT_DATA` | [A closure is not data](#12-a-closure-is-not-data) (a closure as a list element, a record or map value, a field, an op's or a combinator's answer, or a type's list element or key; since 0.12) |
 | `MOV_COMBINATOR_ARM_NOT_FUNCTION` | [`all` and `race`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (an argument that is no function) |
-| `MOV_COMBINATOR_ARMS_ARE_ARGUMENTS` | [`all` and `race`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (arms in a list; the fix drops the brackets; since 5) |
-| `MOV_COMBINATOR_NO_AWAIT` | [`all` and `race`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (`await race(…)`, `await all(…)`; the fix drops the `await`; since 5) |
+| `MOV_COMBINATOR_ARMS_ARE_ARGUMENTS` | [`all` and `race`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (arms in a list; the fix drops the brackets; since 0.12) |
+| `MOV_COMBINATOR_NO_AWAIT` | [`all` and `race`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (`await race(…)`, `await all(…)`; the fix drops the `await`; since 0.12) |
 | `MOV_DELETE_NOT_DECLARED` | [`delete` only where the system declares it](#5-delete-only-where-the-system-declares-it) |
-| `MOV_COUNT_COUNTS_EMPTY` | [Operators, conditionals and presence](#operators-conditionals-and-presence) (warning, on a move up across 5: a count of a list that may hold an empty item) |
+| `MOV_COUNT_COUNTS_EMPTY` | [Operators, conditionals and presence](#operators-conditionals-and-presence) (warning, on a move up across 0.12: a count of a list that may hold an empty item) |
 | `MOV_DELETE_NOT_RECORD` | [`delete` only where the system declares it](#5-delete-only-where-the-system-declares-it) |
-| `MOV_EXPR_CLOSURE_POSITION` | [A closure is not data](#12-a-closure-is-not-data) (under 4 and earlier; under 5 a closure written in a list or map is `MOV_CLOSURE_NOT_DATA`) |
+| `MOV_EXPR_CLOSURE_POSITION` | [A closure is not data](#12-a-closure-is-not-data) (under the integer versions 1 to 4; under 0.12 a closure written in a list or map is `MOV_CLOSURE_NOT_DATA`) |
 | `MOV_EXTRACT_KEYWORD_RETIRED` | [The extraction keyword is retired](#16-the-extraction-keyword-is-retired) (the rewrite to `extractOne` over a declared shape where it is mechanical; none for a `through […]` stage) |
-| `MOV_FUNCTION_UNKNOWN` | [No methods](#no-methods) (a dotted call of no built-in, `box.g()` included; version 5) |
+| `MOV_FUNCTION_UNKNOWN` | [No methods](#no-methods) (a dotted call of no built-in, `box.g()` included; 0.12) |
 | `MOV_FILE_IN_TEXT` | [A file is never joined into text](#7-a-file-is-never-joined-into-text) |
 | `MOV_HANDLE_FILE_NOT_SENT` | [A write handle's unsent file is not a file](#11-a-write-handles-unsent-file-is-not-a-file) |
 | `MOV_META_HOP_RETIRED` | [`#` hops are retired](#4--hops-are-retired-a-plugin-is-a-function) |
 | `MOV_PARALLEL_RETIRED` | [`parallel` is retired for `all`](#15-parallel-is-retired-for-all-combinators-take-arguments-and-no-await) (with the `all` rewrite for arms written down) |
-| `MOV_ABSENT_REQUIRED` | [The extraction keyword is retired](#16-the-extraction-keyword-is-retired) (a block's walk off a record that may be absent: an `extractOne` answer, a `match`, an unguarded pick; since 5, an upgrade warning on a move up across 5); [arithmetic on a value that may be absent](#18-arithmetic-needs-a-number-that-is-there) |
-| `MOV_PRESENCE_TEST_ON_TEXT` | [The extraction keyword is retired](#16-the-extraction-keyword-is-retired) (a null test on a `<text>` field of an `extract` or `extractOne` record; since 5, an upgrade warning on a move up across 5) |
-| `MOV_PRESENCE_OF_RETURNED` | [Operators, conditionals and presence](#operators-conditionals-and-presence) (warning, on a move up across 5: a null test on a block's returned records) |
-| `MOV_IN_MEMORY_HOP_ORDER` | [Walk brackets](#walk-brackets) (warning, on a move up across 5: `ORDER BY` or `LIMIT` on a hop over records the run already holds, which 4 ignored) |
-| `MOV_RECEIPT_RECORD_SLOT` | [A record a combinator arm hands back reads as itself](#10-a-record-a-combinator-arm-hands-back-reads-as-itself) (warning, on a move up across 5) |
-| `MOV_RETURN_TYPE` | [A declared return takes what the body may return](#8-a-declared-return-takes-what-the-body-may-return) (a body's returns that may hold a record or file; since 5) |
+| `MOV_ABSENT_REQUIRED` | [The extraction keyword is retired](#16-the-extraction-keyword-is-retired) (a block's walk off a record that may be absent: an `extractOne` answer, a `match`, an unguarded pick; since 0.12, an upgrade warning on a move up across 0.12); [arithmetic on a value that may be absent](#18-arithmetic-needs-a-number-that-is-there) |
+| `MOV_PRESENCE_TEST_ON_TEXT` | [The extraction keyword is retired](#16-the-extraction-keyword-is-retired) (a null test on a `<text>` field of an `extract` or `extractOne` record; since 0.12, an upgrade warning on a move up across 0.12) |
+| `MOV_PRESENCE_OF_RETURNED` | [Operators, conditionals and presence](#operators-conditionals-and-presence) (warning, on a move up across 0.12: a null test on a block's returned records) |
+| `MOV_IN_MEMORY_HOP_ORDER` | [Walk brackets](#walk-brackets) (warning, on a move up across 0.12: `ORDER BY` or `LIMIT` on a hop over records the run already holds, which 4 ignored) |
+| `MOV_RECEIPT_RECORD_SLOT` | [A record a combinator arm hands back reads as itself](#10-a-record-a-combinator-arm-hands-back-reads-as-itself) (warning, on a move up across 0.12) |
+| `MOV_RETURN_TYPE` | [A declared return takes what the body may return](#8-a-declared-return-takes-what-the-body-may-return) (a body's returns that may hold a record or file; since 0.12) |
 | `MOV_RESOURCES_NOT_EXTRACTED` | [`_resources` only on an extraction's result](#6-_resources-only-on-an-extractions-result) |
 | `MOV_UNKNOWN_PROPERTY` | [A value that may be one of several records reads only what every one offers](#17-a-value-that-may-be-one-of-several-records-reads-only-what-every-one-offers) (a field the type does not have, read off one; warning under 3 and 4) |
-| `MOV_TRANSFORM_HOP_RETIRED` | [`#` hops are retired](#4--hops-are-retired-a-plugin-is-a-function) (since 3; under 5 the message shows the function form) |
+| `MOV_TRANSFORM_HOP_RETIRED` | [`#` hops are retired](#4--hops-are-retired-a-plugin-is-a-function) (since 3; under 0.12 the message shows the function form) |
 | `MOV_V5_IMPORT_NEEDS_ALIAS` | [The everyday spelling](#2-the-everyday-spelling) (a package of plugins imported without `as`; the fix adds the name) |
 | `MOV_V5_NOT_YET` | [The everyday spelling](#2-the-everyday-spelling) (an old spelling whose rewrite needs a person, such as a `SORT` key that is not one field) |
-| `MOV_V5_SPELLING` | [The everyday spelling](#2-the-everyday-spelling) (an old spelling under 5; the fix is the rewrite) |
+| `MOV_V5_SPELLING` | [The everyday spelling](#2-the-everyday-spelling) (an old spelling under 0.12; the fix is the rewrite) |
 | `MOV_V5_UNKNOWN_MEMBER` | [The everyday spelling](#2-the-everyday-spelling) (a namespace member that does not exist, with a did-you-mean) |
 | `MOV_WRITE_BIND_RETIRED` | [`write … bind` is retired](#3-write--bind-is-retired) |

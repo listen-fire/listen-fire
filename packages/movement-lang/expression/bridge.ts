@@ -14,6 +14,7 @@
 
 import type { Expression } from './types';
 import type { ExprSlot } from '../parser/ast';
+import type { LanguageVersion } from '../language_version';
 import {
   lowerCondition,
   lowerExpression,
@@ -29,11 +30,11 @@ import { slotTrees } from './slot_trees';
 export { BridgeError } from './error';
 export { POSITION_SENTINEL, type MovementCondition } from '../parser/expression/lower';
 
-export function parseMovementExpression(raw: string, languageVersion?: number): Expression {
+export function parseMovementExpression(raw: string, languageVersion?: LanguageVersion): Expression {
   return lowerMovementExpression(raw, languageVersion);
 }
 
-export function parseMovementCondition(raw: string, languageVersion?: number): MovementCondition {
+export function parseMovementCondition(raw: string, languageVersion?: LanguageVersion): MovementCondition {
   return lowerMovementCondition(raw, languageVersion);
 }
 
@@ -50,7 +51,7 @@ export function parseMovementCondition(raw: string, languageVersion?: number): M
 // its program's pin, or the current version when none is given. A reader that
 // runs or checks a program passes its pin.
 
-function treeOf(slot: ExprSlot, languageVersion: number | undefined): MExpr {
+function treeOf(slot: ExprSlot, languageVersion: LanguageVersion | undefined): MExpr {
   let tree = slotTrees.get(slot);
   if (tree === undefined) {
     try {
@@ -68,7 +69,7 @@ function treeOf(slot: ExprSlot, languageVersion: number | undefined): MExpr {
 /** The slot's tree as the grammar read it, before lowering decides what any
  *  name in it means — what call resolution walks. Throws the slot's syntax
  *  error, as the lowerings below do. */
-export function treeOfSlot(slot: ExprSlot, languageVersion?: number): MExpr {
+export function treeOfSlot(slot: ExprSlot, languageVersion?: LanguageVersion): MExpr {
   return treeOf(slot, languageVersion);
 }
 
@@ -102,12 +103,12 @@ export function originalSlot(slot: ExprSlot): ExprSlot {
 }
 
 /** The slot as a value expression. */
-export function expressionOfSlot(slot: ExprSlot, languageVersion?: number): Expression {
+export function expressionOfSlot(slot: ExprSlot, languageVersion?: LanguageVersion): Expression {
   return lowerExpression(treeOf(slot, languageVersion), slot.raw);
 }
 
 /** The slot as an `if` condition. */
-export function conditionOfSlot(slot: ExprSlot, languageVersion?: number): MovementCondition {
+export function conditionOfSlot(slot: ExprSlot, languageVersion?: LanguageVersion): MovementCondition {
   return lowerCondition(treeOf(slot, languageVersion), slot.raw);
 }
 

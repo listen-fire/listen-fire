@@ -1,6 +1,8 @@
 // The engine's front door: run a movement, resume a parked one, check a
-// program. The engine runs language version 5 and later on the Rust engine;
-// an earlier pin is refused by name.
+// program. The engine runs a pin that shares this release's compatibility
+// key; any other is refused by name, with the remedy.
+
+import { LANGUAGE_VERSION } from 'movement-lang';
 
 export { fireCallbackBody, resumeMovement, runMovement, settleRaceFrame } from '../services/movement_engine/rust_run';
 export { MovementRunFailed, RunCancelledSignal, runFailureCause } from '../services/movement_engine/errors';
@@ -34,6 +36,7 @@ export {
 } from '../services/movement_engine/program_check';
 export { checkInputOf } from '../services/movement_engine/rust_run';
 
-/** This release of the engine. `lf` pins a new project to it and refuses a pin
- *  newer than it; lf's copy is held equal to this one by a cargo test. */
-export const ENGINE_VERSION = '0.12.0';
+/** This release of the engine, which is the language it reads
+ *  (`LANGUAGE_VERSION`): a run pinned to a release of another compatibility
+ *  key is refused by name. */
+export const ENGINE_VERSION: string = LANGUAGE_VERSION;

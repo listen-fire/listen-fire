@@ -7,7 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::project::CURRENT_ENGINE_VERSION;
+use movement_parser::version::LANGUAGE_VERSION;
 
 const STARTER_MOVEMENT: &str = r#"# A movement is a program the host runs when something happens. This one runs
 # when you ask: `lf run hello`. `manual` and `cron` are the host's own, so they
@@ -60,7 +60,7 @@ fn scaffold(root: &Path) -> Result<Vec<String>, String> {
         Ok(())
     };
     fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let project_file = format!("engine: {CURRENT_ENGINE_VERSION}\nmovements: movements\nexternals: externals\n{PROJECT_TAIL}");
+    let project_file = format!("engine: {LANGUAGE_VERSION}\nmovements: movements\nexternals: externals\n{PROJECT_TAIL}");
     write("lf.yaml", &project_file, &mut made)?;
     write("movements/hello.mvt", STARTER_MOVEMENT, &mut made)?;
     for folder in [".lf", "externals"] {
@@ -92,7 +92,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("lf-init-{}", uuid::Uuid::new_v4())).join("nested");
         assert!(!scaffold(&root).unwrap().is_empty());
         let project = crate::project::load_project(&root).unwrap();
-        assert_eq!(project.engine, CURRENT_ENGINE_VERSION);
+        assert_eq!(project.engine, LANGUAGE_VERSION);
         let ignored = fs::read_to_string(root.join(".gitignore")).unwrap();
         assert!(ignored.lines().any(|l| l == ".lf/") && ignored.lines().any(|l| l == "secrets.yaml"));
         assert!(scaffold(&root).unwrap().is_empty());

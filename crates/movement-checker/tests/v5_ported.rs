@@ -1,5 +1,5 @@
-//! Tests written at versions 1 to 4 whose rule does not depend on the
-//! version, restated in version 5's surface: scoping, calls, nodes and
+//! Tests written for earlier releases whose rule does not depend on the
+//! release, restated in the current surface: scoping, calls, nodes and
 //! shaped graphs, walks, listens and their time zones, library imports, a
 //! write's absent field, and a retired read of a resource.
 
@@ -13,7 +13,7 @@ const EMPTY: &str = r#"{"adapters":{},"credentials":{"crm_cred":{"adapters":["at
 
 fn run(source: &str, catalog: &str) -> Vec<(String, String)> {
     let catalog = CatalogSnapshot::load(catalog).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.message)).collect()
 }
 
@@ -239,7 +239,7 @@ impl movement_checker::host::ZoneLookup for OneZone {
 fn a_cron_time_zone_is_the_hosts_to_recognise() {
     let source = "import { cron } from adapters\nt = connect cron\nfunction digest(e: <t-[:Tick]->>) {}\nlisten to t { schedule: \"0 9 * * 1\", timezone: \"Narnia/Cair\" } fire digest";
     let catalog = CatalogSnapshot::load(&cron_catalog()).unwrap();
-    let with = |zones: &dyn movement_checker::host::ZoneLookup| check_source(source, &catalog, CheckOptions { language_version: 5, upgrading_from: None, zones }).unwrap();
+    let with = |zones: &dyn movement_checker::host::ZoneLookup| check_source(source, &catalog, CheckOptions { upgrading_from: None, zones }).unwrap();
     let refused = with(&movement_checker::host::native::NativeZones);
     assert_eq!(refused.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_LISTEN_BAD_CONFIG"]);
     assert!(refused[0].message.starts_with("'Narnia/Cair' is not a recognised IANA time zone"), "{}", refused[0].message);
@@ -253,7 +253,7 @@ fn a_library_is_checked_once_and_its_errors_surface_at_the_import() {
     let catalog = r#"{"adapters":{},"credentials":{},"plugins":{},"files":{"lib/a":{"source":"export function helper(n: <number>) {\n  x = nowhere\n}"}}}"#;
     let source = "import { helper } from \"lib/a\"\nimport { nope } from \"lib/a\"\nfunction m(n: <number>) {\n  helper(n)\n}";
     let catalog = CatalogSnapshot::load(catalog).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found = check_source(source, &catalog, options).unwrap();
     assert_eq!(found.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_IMPORT_NOT_EXPORTED", "MOV_NAME_UNRESOLVED"]);
     assert!(found[0].message.starts_with("\"lib/a\" does not export 'nope'"), "{}", found[0].message);
@@ -267,7 +267,7 @@ fn a_library_is_checked_once_and_its_errors_surface_at_the_import() {
 fn a_retired_resource_read_is_refused_inside_a_head_with_the_bare_field_and_outside_it_with_a_walk() {
     let source = "import { registry } from adapters\nimport { public_registry as pr } from credentials\nreg = connect registry using pr\nnode Company: \"each company\" {\n  name: <text> \"its name\"\n}\nfunction main(e: <reg-[:entity]->>) {\n  found = extractOne([e.`Name`], Company)\n  found-[r:_resources WHERE @resource.url != \"\"]-> { u = r.url }\n  x = @resource.url\n}\n";
     let catalog = CatalogSnapshot::load(EXTRACT_CATALOG).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<_> = check_source(source, &catalog, options).unwrap().into_iter().filter(|d| d.code != "MOV_LISTEN_MISSING").collect();
     assert_eq!(found.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["MOV_RESOURCE_READ_RETIRED", "MOV_RESOURCE_READ_RETIRED"]);
     assert_eq!(found[0].message, "'@resource.url' is retired — inside a -[:_resources WHERE …]-> filter, write the field's bare name: 'url'");
@@ -286,7 +286,7 @@ fn field(raw: &str) -> FieldEntry {
 }
 
 fn absence<'a>(field: &'a FieldEntry, value: &'a Ty, target: Option<&'a Ty>, identifies: bool) -> WriteFieldAbsence<'a> {
-    WriteFieldAbsence { field, spread: None, target_type: target, value_type: Some(value), root_description: "board.Lane", may_leave_unset: true, identifies, version: 5 }
+    WriteFieldAbsence { field, spread: None, target_type: target, value_type: Some(value), root_description: "board.Lane", may_leave_unset: true, identifies }
 }
 
 #[test]

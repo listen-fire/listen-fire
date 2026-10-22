@@ -63,7 +63,7 @@ impl Checker<'_> {
     pub fn type_of_slot(&self, slot: &ExprSlot, scope: ScopeId) -> Option<(Expression, Option<Ty>, Option<Ty>)> {
         let expr = expression_of_slot(slot).ok()?;
         let env = self.typing_env(scope);
-        let mut typing = Typing::new(&env, self.version, slot.span);
+        let mut typing = Typing::new(&env, slot.span);
         let ty = typing.infer(&expr);
         let may_hold = typing.may_hold_type(&expr);
         Some((expr, ty, may_hold))
@@ -124,7 +124,7 @@ impl Checker<'_> {
         }
         let expr = expression_of_slot(slot).ok()?;
         let env = self.typing_env(scope);
-        let mut typing = Typing::new(&env, self.version, slot.span);
+        let mut typing = Typing::new(&env, slot.span);
         if let Some((root, steps)) = aggregated_bare_path(&expr) {
             let start = root.and_then(|r| env.resolve_root(r));
             if let Some(start) = start {

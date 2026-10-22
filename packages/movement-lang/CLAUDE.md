@@ -1,6 +1,6 @@
 # Working on the language
 
-> **Where the TypeScript checker went.** The TypeScript parser, checker, editor service, story, cron, timezone and the conformance corpora (versions 1 to 4) are `packages/legacy-lang` (`@listen-fire/legacy-lang`, platform, private). This package is the wasm, its bindings, the version table, the expression AST and the catalog types the contracts name (`catalog/types.ts`). Anything below that describes the TypeScript checker, its `since`/`before` conditionals or the conformance runs describes the platform's copy; nothing here may import it.
+> **Where the TypeScript checker went.** The TypeScript parser, checker, editor service, story, cron, timezone and the conformance corpora (of the earlier integer-pinned languages) are `packages/legacy-lang` (`@listen-fire/legacy-lang`, platform, private). This package is the wasm, its bindings, the version rule, the expression AST and the catalog types the contracts name (`catalog/types.ts`). Anything below that describes the TypeScript checker, its `since`/`before` conditionals or the conformance runs describes the platform's copy; nothing here may import it.
 
 
 Read this before changing the parser, the checker, or the type model.
@@ -77,13 +77,11 @@ up in everyone's movements."* Weighing churn against correctness is weighing the
 wrong thing. Never leave a conflation in place to avoid updating fixtures.
 
 ### Be right, then break — behind a version conditional
-A breaking change is still welcome, but a saved movement never sees it: it lands as a
-`since`/`before` conditional on the context's `languageVersion` at the point of
-difference (parser, checker, engine, plugin), the old behaviour is proved by the
-older version's own test corpus run under that version, and any construct whose
-meaning changed gets a diagnostic under the new version. Cleanup of a retired
-version is the deletion of its conditionals and fixtures. Repo CLAUDE.md,
-"Language versions", carries the full rule.
+A breaking change is still welcome, but a saved movement never sees it: it ships
+in a release of a new compatibility key (the pin is the toolchain's semver, and
+a release refuses a pin of another key, by name, with the remedy), and any
+construct whose meaning changed gets a diagnostic under the new key. Repo
+CLAUDE.md, "Language versions", carries the full rule.
 
 ## Before you build a mechanism
 

@@ -142,9 +142,9 @@ export function memberPathBindingName(expr: ExprSlot): string | undefined {
 
 export interface Program {
   statements: Statement[];
-  /** Every old spelling a version 5 program is written in, with its rewrite
-   *  (parser/surface.ts). Absent under versions 1–4 and for a program in the
-   *  v5 surface. */
+  /** Every old spelling a current program is written in, with its rewrite
+   *  (parser/surface.ts). Absent under the older language and for a program in the
+   *  current surface. */
   spelling?: SpellingFinding[];
 }
 
@@ -186,8 +186,8 @@ export interface ReturnStatement {
   kind: 'return';
   value: RValue;
   span: Span;
-  /** A concise closure body that is one call (`(f) => f()`, language version
-   *  5): TypeScript's `() => g()`, which hands back what `g` returns — and,
+  /** A concise closure body that is one call (`(f) => f()`):
+   * TypeScript's `() => g()`, which hands back what `g` returns — and,
    *  when `g` returns nothing, nothing. */
   concise?: true;
 }
@@ -240,7 +240,7 @@ export type RValue =
   | { kind: 'link'; link: FindingLink }
   | { kind: 'extract'; extract: ExtractExpression }
   /** `companies = extract(content, Company, { tier: 'careful' })` — the
-   *  extraction CALL (language version 3 on). */
+   *  extraction CALL. */
   | { kind: 'extractCall'; extractCall: ExtractCallExpression }
   | { kind: 'block'; block: TraversalBlock }
   | { kind: 'await'; await: AwaitExpression }
@@ -400,11 +400,10 @@ export type MatchTarget = Extract<WriteTarget, { kind: 'linked' | 'tuple' }>;
  * `existing = match crm-[:companies]-> { unique by (FUZZY \`name\`), name: n }`
  * — the identity half of a write, on its own: resolve candidates by the
  * `unique by` clauses (OR across clauses) and arbitrate, then bind the record
- * found. It never creates and never writes. What a miss does depends on the
- * program's language version: since 4 the name is absent (`T | absent`, as
- * FIRST's is) and the block carries on, so the author tests it; before 4 the
- * ENCLOSING SCOPE ended quietly, so inside the scope the handle was always a
- * real record.
+ * found. It never creates and never writes. A miss leaves the name absent
+ * (`T | absent`, as FIRST's is) and the block carries on, so the author tests
+ * it (the earlier language ended the ENCLOSING SCOPE quietly, so inside the
+ * scope the handle was always a real record).
  *
  * The body's fields are ASSERTIONS — the values identity compares against and
  * the judge reads — so they take `:` only; there is nothing to fill or append.
@@ -416,8 +415,8 @@ export interface MatchExpression {
   span: Span;
 }
 
-/** A match used as a statement. Before language version 4, a gate — the rest
- *  of the scope runs only when the record exists. Since 4 the checker refuses
+/** A match used as a statement. It used to be a gate — the rest
+ *  of the scope runs only when the record exists. Now the checker refuses
  *  it (a miss no longer ends anything, so it decides nothing); it still parses
  *  for programs pinned earlier. */
 export interface MatchStatement {
@@ -671,7 +670,7 @@ export type NodeEntry =
  * `...v` in a graph literal — a computed MAP (plugin output, JSON, a dict)
  * converted into the graph: each key a field, and a nested map (or a list of
  * them) a child node. With a shape, the shape decides which keys are children;
- * without one, every nested map is. From language version 3 it is
+ * without one, every nested map is. It is
  * TypeScript's object spread: members take effect in the order written, a
  * later one winning, and a key written before a spread that always supplies
  * it is refused. Before version 3 a written entry won over a spread's key
@@ -953,13 +952,12 @@ export interface AwaitStatement {
 export interface CombinatorExpression {
   kind: CombinatorKind;
   arms: CombinatorArms;
-  /** `all(f, g, { concurrency: 2 })` — the settings record, written last
-   *  (language version 5): MAP's `concurrency` and `onError`. */
+  /** `all(f, g, { concurrency: 2 })` — the settings record, written last: MAP's `concurrency` and `onError`. */
   settings?: ExprSlot;
   span: Span;
 }
 
-/** `all` is language version 5's join, which replaced `parallel`. */
+/** `all` is the join, which replaced `parallel`. */
 export type CombinatorKind = 'race' | 'parallel' | 'all';
 
 /**
@@ -969,8 +967,7 @@ export type CombinatorKind = 'race' | 'parallel' | 'all';
  */
 export type CombinatorArms =
   | { kind: 'literal'; arms: ArmExpression[]; span: Span }
-  /** `race(q, () => { … })` — the arms are the call's arguments (language
-   *  version 5), as written down as a bracket's. */
+  /** `race(q, () => { … })` — the arms are the call's arguments, as written down as a bracket's. */
   | { kind: 'arguments'; arms: ArmExpression[]; span: Span }
   | { kind: 'dynamic'; expr: ExprSlot; span: Span };
 
@@ -1066,8 +1063,7 @@ export interface CollectionStatement {
  */
 export interface ClosureExpression {
   params: MovementParam[];
-  /** `(n: <number>): <number> => …` — what it declares it returns (language
-   *  version 3). Required when the closure calls itself by its own name. */
+  /** `(n: <number>): <number> => …` — what it declares it returns. Required when the closure calls itself by its own name. */
   returnType?: ParamTypeRef;
   body: Statement[];
   span: Span;
@@ -1174,20 +1170,20 @@ export type CallArg =
    * the expression plane can hold one.
    *
    * Recognised by the NAMED-argument form (`f(x: …)`), or by a POSITIONAL
-   * invocation (`f(x)`). From language version 3 a positional one may name a
+   * invocation (`f(x)`). A positional one may name a
    * built-in (`f(UPPER(x))`): resolution reads it as the value it computes,
    * an ordinary expression argument (`checker/calls.ts`).
    */
   | { kind: 'call'; name?: string; call: CallStatement }
   /**
-   * A function written in place — `MAP(xs, (x) => { … })` (language version 3).
+   * A function written in place — `MAP(xs, (x) => { … })`.
    * Only a built-in that takes a function (`MAP`, `FILTER`, `REDUCE`,
    * `GROUPBY`, `KEYBY`) accepts one; anywhere else it is refused by name,
    * because a function is not yet a value an argument can carry.
    */
   | { kind: 'closure'; name?: string; closure: ClosureExpression; span: Span }
   /**
-   * A type — `MEMBERS(<Thesis>)` (language version 3). The annotation as
+   * A type — `MEMBERS(<Thesis>)`. The annotation as
    * written, unbracketed, as `MembersExpression.type` holds it. Only a
    * built-in that takes a type accepts one.
    */
@@ -1222,7 +1218,7 @@ export function isPositionalCall(args: readonly CallArg[]): boolean {
  * (a callee that returns nothing is a statement and nothing else).
  *
  * The parser records the call and decides nothing about what the callee IS.
- * From language version 3 that includes a built-in: `n = UPPER(m.Subject)`,
+ * That includes a built-in: `n = UPPER(m.Subject)`,
  * `xs = MAP(items, f)` and `doc = email_to_doc(m)` are all this node, and
  * resolution (`checker/calls.ts`) reads each one once its callee is looked up
  * — a movement or plugin runs, a built-in is read as the value, collection op
@@ -1361,7 +1357,7 @@ export type ValueTypeRef =
   | { kind: 'list'; of: ValueTypeMember; span: Span }
   | { kind: 'record'; keys: ValueTypeKey[]; span: Span }
   /**
-   * `<(c: <Company>) => <text>>` — a CLOSURE type (language version 5),
+   * `<(c: <Company>) => <text>>` — a CLOSURE type,
    * TypeScript's function type: what each parameter takes and what calling it
    * hands back. Written in its own angle brackets wherever it appears — a
    * parameter or a return. A closure is not data, so the checker refuses one
@@ -1438,7 +1434,7 @@ export interface MovementDeclaration {
   params: MovementParam[];
   /**
    * `movement f(n: <number>): <number> { … }` — the type the body declares it
-   * returns, as TypeScript writes it (language version 3). Optional, except on
+   * returns, as TypeScript writes it. Optional, except on
    * a function in a call cycle (one that calls itself, directly or through
    * others): there what the body returns cannot be inferred from a body that
    * needs its own answer, so it is written. Where it is written, every
@@ -1655,7 +1651,7 @@ export type ExtractCallShape =
 export interface PluginCall {
   plugin: string;
   args: NamedArg[];
-  /** From version 5: the arguments written by position, the settings record
+  /** The arguments written by position, the settings record
    *  among them, bound to the plugin's parameters where its spec is known
    *  (`bindStageArgs`). */
   positional?: ExprSlot[];

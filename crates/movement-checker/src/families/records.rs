@@ -23,7 +23,7 @@ use crate::types::narrowing::bare_name;
 use crate::types::position::{InstanceRef, Position};
 use crate::types::stdlib::Builtin;
 
-/// `RETIRED_HANDLE_FIELDS`: what a write's handle no longer carries from version 4.
+/// `RETIRED_HANDLE_FIELDS`: what a write's handle no longer carries.
 pub fn is_retired_handle_field(property: &str) -> bool {
     matches!(property, "created" | "committed")
 }
@@ -32,8 +32,7 @@ pub fn report_handle_field_retired(typing: &mut Typing, property: &str) {
     typing.report(
         codes::HANDLE_FIELD_RETIRED,
         format!(
-            "'{property}' is no longer a field of a write's handle since {} — ask the record before the write instead: `EXISTS(h-[:{OLD_EDGE}]->)` is {} when this write created the record; `FIRST(h-[:{OLD_EDGE}]->) == h` when it was only rehearsed; compare fields against `FIRST(h-[:{OLD_EDGE}]->)` for what changed",
-            crate::version::describe(4),
+            "'{property}' is no longer a field of a write's handle — ask the record before the write instead: `EXISTS(h-[:{OLD_EDGE}]->)` is {} when this write created the record; `FIRST(h-[:{OLD_EDGE}]->) == h` when it was only rehearsed; compare fields against `FIRST(h-[:{OLD_EDGE}]->)` for what changed",
             typing.code("FALSE")
         ),
     );

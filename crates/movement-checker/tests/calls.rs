@@ -5,9 +5,9 @@
 use movement_checker::{CheckOptions, check_source};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-fn codes(source: &str, version: u32) -> Vec<(String, String)> {
+fn codes(source: &str) -> Vec<(String, String)> {
     let catalog = CatalogSnapshot::load(r#"{"adapters":{},"credentials":{},"plugins":{}}"#).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.message)).collect()
 }
 
@@ -28,7 +28,7 @@ fn a_chain_of_closures_returning_the_last_twice_checks_in_linear_time() {
     }
     source += &format!("  g = graph {{ n: f{links}() }}\n}}\n");
     let started = std::time::Instant::now();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<String> = check_source(&source, &catalog, options).unwrap().into_iter().map(|d| d.code).collect();
     assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     assert_eq!(found, ["MOV_GRAPH_ENTRY_RECORD"]);
@@ -38,7 +38,7 @@ fn a_chain_of_closures_returning_the_last_twice_checks_in_linear_time() {
 fn a_closure_is_not_held_as_data_under_version_5() {
     let not_data = |line: &str| {
         let source = format!("function m(c: <boolean>) {{\n  label = (x: <number>) => \"x\"\n  {line}\n}}");
-        codes(&source, 5).into_iter().filter(|(c, _)| c == "MOV_CLOSURE_NOT_DATA").map(|(_, m)| m).collect::<Vec<_>>()
+        codes(&source).into_iter().filter(|(c, _)| c == "MOV_CLOSURE_NOT_DATA").map(|(_, m)| m).collect::<Vec<_>>()
     };
     assert_eq!(not_data("fs = [label]").len(), 1);
     assert!(not_data("box = { g: label }")[0].starts_with("'g' holds a closure"));
@@ -56,7 +56,7 @@ fn a_closure_is_not_held_as_data_under_version_5() {
 fn a_call_handed_to_a_plugin_that_returns_nothing_is_refused() {
     let catalog = CatalogSnapshot::load(r#"{"adapters":{},"credentials":{},"plugins":{"relay":{"args":["data"],"output":{"kind":"value","type":"text"}}}}"#).unwrap();
     let source = "import { relay } from plugins\nfunction none(n: <text>) {\n  x = 1\n}\nfunction m(s: <text>) {\n  r = relay({ data: none(n: \"x\") })\n}";
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let found: Vec<(String, String)> = check_source(source, &catalog, options).unwrap().into_iter().map(|d| (d.code, d.message)).collect();
     assert!(found.iter().any(|(c, m)| c == "MOV_CALL_RETURNS_NOTHING" && m.starts_with("'none' returns nothing")), "{found:?}");
 }

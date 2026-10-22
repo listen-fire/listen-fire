@@ -1,4 +1,4 @@
-import { CURRENT_LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
+import { LANGUAGE_VERSION, checkSourceInRust } from 'movement-lang';
 
 import type { ChapterId } from '../types';
 
@@ -178,7 +178,7 @@ function orderCheck(body: string): Array<{ code: string; message: string }> {
 function m(evt: <crm-[:\`Webhook Event\`]->>) {
 ${body}
 }`;
-  return checkSourceInRust(probe, HANDBOOK_CATALOG, { languageVersion: CURRENT_LANGUAGE_VERSION })
+  return checkSourceInRust(probe, HANDBOOK_CATALOG, { languageVersion: LANGUAGE_VERSION })
     .filter((d) => (d.severity ?? 'error') === 'error')
     .map((d) => ({ code: d.code, message: d.message }));
 }

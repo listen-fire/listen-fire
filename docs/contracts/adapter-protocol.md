@@ -299,8 +299,7 @@ reads every declaration from it, the listen declarations included.
   also quoted when an automation tries to read it, so say there where the
   value can be read instead.
 - `deletable` (optional, on the type): `true` says your `deleteRecord`
-  removes a record of this type. Absent means no. Under language version 5
-  (Dancing Wren) a `delete` of a type that does not say `"deletable": true`
+  removes a record of this type. Absent means no. A `delete` of a type that does not say `"deletable": true`
   is refused before the automation is saved (`MOV_DELETE_NOT_DECLARED`);
   automations pinned to an earlier version are unaffected.
 - `edgesFrom` (optional) replaces `describe` for nested systems: `{ position, cursor? }`
@@ -408,7 +407,7 @@ The `createRecord` input plus `externalId` →
 `{ "recordType": "Company", "externalId": "company-1", "mutationContext": { … } }` → `{}` (optionally `{ "events": [] }`).
 
 Asked only for a type whose descriptor says `"deletable": true`: under
-language version 5 an automation cannot delete any other.
+an automation cannot delete any other.
 
 ### Optional methods
 
@@ -1417,7 +1416,7 @@ from the root, so no automation can walk the collection.
   - A webhook subscription must return a secret, and deliveries are signed.
   - Clarified within version 2 (no bump; the reference adapter declares no file field, and conformance is unchanged for it): a file is read only at a field the catalog declares `kind: "file"` or in a resource's `fileRef`; a file ref anywhere else is data. File refs Listen-Fire sends (in a write, a position's resources, evidence) name no credential. The CLI gains `files-declared`.
 - **`inbound.secretIssuedBy`** (within version 2, no bump; additive, absent means `installer`). A module says whether the installer sets its webhook signing secret or the provider issues it at registration; for `provider`, `lf connect` asks for none ([Declared inbound signatures](#declared-inbound-signatures)).
-- **`deletable` on a type** (within version 2, no bump; language version 5, Dancing Wren). A type's `describe` may say `"deletable": true` when `deleteRecord` removes one. The field is additive: an older server that never sends it still installs, speaks version 2 and passes conformance, and an automation pinned to language version 4 or earlier deletes as before. The ruling: no protocol version bump. Under language version 5 an adapter that omits it has every `delete` of its types refused when the automation is checked (`MOV_DELETE_NOT_DECLARED`); declare it to allow them.
+- **`deletable` on a type** (within version 2, no bump; since 0.12). A type's `describe` may say `"deletable": true` when `deleteRecord` removes one. The field is additive: an older server that never sends it still installs, speaks version 2 and passes conformance, and an automation pinned to an earlier language deletes as before. The ruling: no protocol version bump. An adapter that omits it has every `delete` of its types refused when the automation is checked (`MOV_DELETE_NOT_DECLARED`); declare it to allow them.
 - **Modules** (within version 2, no bump). The manifest may declare
   `credentials`, `inbound`, `poll` and `periodic`; a request may carry
   `credential`, and a response `credentialUpdate`; three optional methods,

@@ -12,9 +12,10 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn every_hover_link_resolves_in_the_built_site() {
-    // A pre-release build links under `next`, a plain version under `v5`.
+    // A pre-release build links under `next`, a plain version under its compatibility key.
     let prerelease = env!("CARGO_PKG_VERSION").contains('-');
-    assert_eq!(DOCS_SLUG, if prerelease { "next" } else { "v5" });
+    let key = movement_parser::version::compatibility_key(env!("CARGO_PKG_VERSION")).unwrap();
+    assert_eq!(DOCS_SLUG, if prerelease { "next" } else { key.as_str() });
     assert_eq!(docs_base(), format!("{DOCS_SITE}/docs/{DOCS_SLUG}"));
     let root = repo_root();
     let built = Command::new("node").arg("scripts/docs/build.mjs").current_dir(&root).output().expect("node is needed to build the docs site");

@@ -163,7 +163,7 @@ const QUESTION = {
   candidates: [{ recordType: 'Company', externalId: 'c1', data: { name: 'ACME Inc' } }, { recordType: 'Company', externalId: 'c2', data: { name: 'Acme Ltd' } }],
   recordType: 'Company',
   constraints: { any: [{ all: [{ field: 'name', fuzzy: true }] }] },
-  languageVersion: 5,
+  languageVersion: '0.12.0',
 };
 
 /** The judge slot. */

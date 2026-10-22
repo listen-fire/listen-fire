@@ -3,7 +3,7 @@
 // is the TypeScript surface over it. Expression positions come back as ExprSlot
 // spans whose trees the bridge reads (expression/bridge.ts).
 
-import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
+import { LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import type { ExprSlot, Loc, Program, RValue } from './ast';
 import { originalSlot } from '../expression/bridge';
 import { rustParseNestedCall, rustParseProgram, type StatementParse } from './rust_parser';
@@ -20,20 +20,21 @@ export class MovementParseError extends Error {
 
 /** The compile context a parse runs under. */
 export interface ParseOptions {
-  /** The language version the source is written against — what a version
-   *  conditional in the grammar reads. Absent ⇒ the current version. */
+  /** The release the source is written against. A release that does not read
+   *  that pin refuses the parse by name; the grammar itself does not vary with
+   *  it. Absent ⇒ this release. */
   languageVersion?: LanguageVersion;
 }
 
 export function parseProgram(source: string, options?: ParseOptions): Program {
-  const languageVersion = options?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const languageVersion = options?.languageVersion ?? LANGUAGE_VERSION;
   return refusedAsError(rustParseProgram(source, languageVersion));
 }
 
 /**
  * A call written inside an expression — `f(x)` in `f(x) + 1`, `extract(c, S)`
  * in `ONLY(extract(c, S))` — read as the right-hand side of a binding, which
- * is what it means (language version 3): the expression is the same as binding
+ * is what it means: the expression is the same as binding
  * the call to a fresh name first and reading the name. `at` is the call's
  * extent in `slot.raw`, as the expression grammar found it; the statement
  * grammar reads it because a call's arguments are its own (a closure's

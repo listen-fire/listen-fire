@@ -1,16 +1,16 @@
-// Language version 5, Dancing Wren, on the Rust engine (the version-5
-// reference): the result or the error, every call the adapters received, and
+// The reserved `_resources` reference on the Rust engine: the result or the error, every call the adapters received, and
 // how the Rust run ended.
 //
-// - `_resources` off an adapter's record: under 5 the checker refuses the
+// - `_resources` off an adapter's record: the checker refuses the
 //   hop, and an engine that meets it anyway refuses it before the host is
 //   asked for the reserved reference.
 // - The knowledge graph's `Resources` edge: an ordinary edge, walked by its
 //   name and sent to the adapter by its reserved field id (kg.ts
 //   `surfaceReadAdapter`), its landing's `Name` / `URL` / `Type` read through
-//   `getFieldValue` — on every version.
+//   `getFieldValue`.
 
 import {
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   type InstanceSchema,
   type LanguageVersion,
@@ -319,14 +319,14 @@ const messageOf = (error: unknown) => {
  *  check). */
 async function onRust(source: string): Promise<Outcome> {
   resetRustRunStats();
-  const rust = await runOn(source, 5);
+  const rust = await runOn(source, LANGUAGE_VERSION);
   expect(rustRunStats).toMatchObject(endedInRust(rust.error));
   return rust;
 }
 
 afterEach(() => mockCheckerMisses.clear());
 
-describe('`_resources` off an adapter record, by language version', () => {
+describe('`_resources` off an adapter record', () => {
   const source = movement(
     '  names = msg-[f:_resources]-> {',
     '    return f.`name`',
@@ -334,24 +334,24 @@ describe('`_resources` off an adapter record, by language version', () => {
     '  return names',
   );
 
-  it('version 5 ends at the check (MOV_RESOURCES_NOT_EXTRACTED)', async () => {
+  it('ends at the check (MOV_RESOURCES_NOT_EXTRACTED)', async () => {
     const rust = await onRust(source);
     expect(isCheckFailure(rust.error)).toBe(true);
     expect(messageOf(rust.error)).toContain('MOV_RESOURCES_NOT_EXTRACTED');
     expect(rust.calls).toEqual([]);
   });
 
-  it('version 5, past a checker that missed it: the engine refuses, and never asks for the reserved reference', async () => {
+  it('past a checker that missed it: the engine refuses, and never asks for the reserved reference', async () => {
     mockCheckerMisses.add('MOV_RESOURCES_NOT_EXTRACTED');
     resetRustRunStats();
-    const rust = await runOn(source, 5);
+    const rust = await runOn(source, LANGUAGE_VERSION);
     const cause = runFailureCause(rust.error);
     expect(cause).toBeInstanceOf(MovementEngineError);
     expect(cause instanceof MovementEngineError ? cause.code : undefined).toBe(
       'MOVENG_UNSUPPORTED',
     );
     expect(messageOf(rust.error)).toContain(
-      "'-[:_resources]->' is read only off an extraction's result since language version 5",
+      "'-[:_resources]->' is read only off an extraction's result",
     );
     expect(rust.calls.filter(([method]) => method === 'email.getRelated')).toEqual([]);
     expect(rustRunStats.segments).toBe(1);

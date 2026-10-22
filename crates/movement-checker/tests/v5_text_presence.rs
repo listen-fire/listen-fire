@@ -11,12 +11,12 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{}}"#;
 
-fn check(body: &str, version: u32, upgrading_from: Option<u32>) -> Vec<(String, &'static str, String)> {
+fn check(body: &str, upgrading_from: Option<&str>) -> Vec<(String, &'static str, String)> {
     let source = format!(
         "node Found: \"the extraction\" {{\n  title: <text> \"the title\"\n  maybe: <text | null> \"a title, if any\"\n  size: <number> \"how many\"\n  node item: \"each item\" {{\n    label: <text> \"its label\"\n  }}\n}}\nfunction go(t: <text>) {{\n  r = extractOne([t], Found)\n{body}\n}}\n"
     );
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from, zones: &movement_checker::host::native::NativeZones };
     let diagnostics: Vec<Diagnostic> = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()
@@ -42,21 +42,21 @@ fn error(message: String) -> (String, &'static str, String) {
 
 #[test]
 fn under_5_a_null_test_on_a_text_field_is_refused_naming_the_emptiness_test() {
-    assert_eq!(check("  if (r != null) {\n    if (r.title != null) { }\n  }", 5, None), vec![error(refused("r.title", "always true", "`r.title != \"\"` (or `Text.length(r.title) > 0`)"))]);
-    assert_eq!(check("  if (r != null) {\n    if (r.title == null) { }\n  }", 5, None), vec![error(refused("r.title", "always false", "`r.title == \"\"`"))]);
+    assert_eq!(check("  if (r != null) {\n    if (r.title != null) { }\n  }", None), vec![error(refused("r.title", "always true", "`r.title != \"\"` (or `Text.length(r.title) > 0`)"))]);
+    assert_eq!(check("  if (r != null) {\n    if (r.title == null) { }\n  }", None), vec![error(refused("r.title", "always false", "`r.title == \"\"`"))]);
 }
 
 #[test]
 fn under_5_a_nested_nodes_text_field_is_refused_the_same_way() {
-    assert_eq!(check("  if (r != null) {\n    r-[i:item]-> { if (i.label == null) { } }\n  }", 5, None), vec![error(refused("i.label", "always false", "`i.label == \"\"`"))]);
+    assert_eq!(check("  if (r != null) {\n    r-[i:item]-> { if (i.label == null) { } }\n  }", None), vec![error(refused("i.label", "always false", "`i.label == \"\"`"))]);
 }
 
 #[test]
 fn under_5_a_nullable_text_field_and_a_typed_one_may_still_be_tested() {
-    assert_eq!(check("  if (r != null) {\n    if (r.maybe != null) { }\n    if (r.size == null) { }\n  }", 5, None), vec![]);
+    assert_eq!(check("  if (r != null) {\n    if (r.maybe != null) { }\n    if (r.size == null) { }\n  }", None), vec![]);
 }
 
 #[test]
 fn a_test_on_a_record_that_may_not_be_there_says_something_and_is_let_through() {
-    assert_eq!(check("  if (r.title != null) { }", 5, None), vec![]);
+    assert_eq!(check("  if (r.title != null) { }", None), vec![]);
 }

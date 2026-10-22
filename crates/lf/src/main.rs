@@ -7,7 +7,7 @@
 //!   lf run --event <file> [--dry-run]   route an event to its listens and run each
 //!   lf run --poll <movement>            poll now the polled sources of the listens that fire it
 //!   lf resume [<run-id>]                step a parked run, or drain due work and every parked run
-//!   lf upgrade [--check] [--all]        rewrite the movement files into the current language version
+//!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
 //!   lf runs [show <run-id>]             the runs, most recent first; one run in full
 //!   --json                              (check, catalog, run, resume, runs, call, cancel, connect, credential list) one JSON document
 //!   lf drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
@@ -384,13 +384,14 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
         writeln!(out, "{}", USAGE.replace("{CREDENTIAL_USAGE}", credential_cmd::USAGE)).map_err(|e| e.to_string())?;
         return Ok(if args.help { 0 } else { 2 });
     };
-    let load = || -> Result<project::Project, String> {
-        let mut project = project::load_project(&args.dir)?;
+    let load_with = |loader: fn(&std::path::Path) -> Result<project::Project, String>| -> Result<project::Project, String> {
+        let mut project = loader(&args.dir)?;
         if let Some(waited) = args.start_timeout {
             project.start_timeout = waited;
         }
         Ok(project)
     };
+    let load = || load_with(project::load_project);
     match command.as_str() {
         "init" => init::run(&args.rest.first().map(PathBuf::from).unwrap_or_else(|| args.dir.clone()), &mut out),
         "check" => check::run(&load()?, args.json, &mut out).await,
@@ -410,7 +411,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
         },
         "lsp" => lsp::run(&args.dir, &mut out).await,
-        "upgrade" => upgrade::run(&load()?, upgrade::UpgradeOptions { check_only: args.check_only, all: args.all }, &mut out).await,
+        "upgrade" => upgrade::run(&load_with(project::load_project_to_upgrade)?, upgrade::UpgradeOptions { check_only: args.check_only, all: args.all }, &mut out).await,
         "run" => {
             if let (Some(external), Some(body)) = (&args.webhook, &args.body) {
                 let project = load()?;

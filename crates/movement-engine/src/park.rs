@@ -213,7 +213,7 @@ pub(crate) fn serialize_alone_plain(run: &Run<'_>, binding: &Binding) -> Result<
     })
 }
 
-/// One member's answer from version 5 (run.ts `memberAnswerPark`): a park
+/// One member's answer (run.ts `memberAnswerPark`): a park
 /// that names the live scopes the op's statement runs in (`chain`, its
 /// file's left out) by their place in it rather than copying them — a
 /// closure the member returns holds its scope by reference, so a copy
@@ -1381,15 +1381,15 @@ mod tests {
     #[test]
     fn a_picked_record_parks_as_the_typescript_writes_it() {
         let input: crate::run::SegmentInput = serde_json::from_value(serde_json::json!({
-            "source": "function m(msg: <inbox-[:message]->>) {\n  x = 1\n}", "languageVersion": 5, "event": null,
+            "source": "function m(msg: <inbox-[:message]->>) {\n  x = 1\n}", "languageVersion": movement_parser::version::LANGUAGE_VERSION, "event": null,
             "segmentId": "g1", "serves": [], "now": "2026-03-12T12:00:00.000Z",
             "catalog": { "adapters": {}, "credentials": {}, "plugins": {} },
         }))
         .unwrap();
         let ledger = crate::ledger::Ledger::new(&input.spend);
         let host = crate::executor::Host::default();
-        let root = crate::program::parse(&input.source, 5).unwrap();
-        let checked = crate::program::join_check(root, &serde_json::json!({ "diagnostics": [], "stamps": [] }), 5).unwrap();
+        let root = crate::program::parse(&input.source).unwrap();
+        let checked = crate::program::join_check(root, &serde_json::json!({ "diagnostics": [], "stamps": [] })).unwrap();
         let run = Run {
             host: &host,
             input: &input,

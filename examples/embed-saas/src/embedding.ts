@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { tenantIdOf, type RunInput } from '@listen-fire/engine-contracts';
-import { runMovement, resumeMovement, settleRaceFrame, checkPinnedInRust, parsePinned, type MovementRunResult } from '@listen-fire/engine/public/movement-engine';
+import { ENGINE_VERSION, runMovement, resumeMovement, settleRaceFrame, checkPinnedInRust, parsePinned, type MovementRunResult } from '@listen-fire/engine/public/movement-engine';
 import { inProcessHost, introspectAdapter, collectFileListeners, memoryRunHostStore, pricedModels, type FileListener, type ModelClient } from '@listen-fire/engine/public/embed';
 import {
   armTimerWake,
@@ -30,8 +30,9 @@ import { adapterInProcess, memoryKv, refusingFiles, secretsCredential, type Modu
 
 import { CompanyStore, crmModule } from './crm';
 
-/** The language version every customer's movement is pinned to. */
-export const LANGUAGE_VERSION = 5;
+/** The language version every customer's movement is pinned to: the
+ *  engine's release. */
+export const LANGUAGE_VERSION = ENGINE_VERSION;
 
 /** The one connection a customer's movement imports: its CRM workspace. */
 export const CREDENTIAL = 'workspace';

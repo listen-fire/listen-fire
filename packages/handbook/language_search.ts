@@ -17,7 +17,6 @@
 // explainable from the entry itself.
 
 import {
-  CURRENT_LANGUAGE_VERSION,
   standardLibraryTable,
   type StandardBuiltin,
   type StandardBuiltinParam,
@@ -139,7 +138,7 @@ const CORE_SPELLING: Record<string, string> = { EXTRACT: 'extract', EXTRACTONE: 
 
 /** `Text.join` for `JOIN` — the name an author writes. */
 export function builtinName(entry: StandardBuiltin): string {
-  return spelling(entry)?.v5 ?? CORE_SPELLING[entry.name] ?? entry.name;
+  return spelling(entry)?.current ?? CORE_SPELLING[entry.name] ?? entry.name;
 }
 
 const settingsParam = (keys: string): StandardBuiltinParam => ({ name: `settings { ${keys} }`, type: 'options', optional: true });
@@ -165,7 +164,7 @@ function writtenParams(entry: StandardBuiltin): readonly StandardBuiltinParam[] 
 
 /** A summary names built-ins as the author writes them. */
 export function builtinSummary(entry: StandardBuiltin): string {
-  return spellMessage(entry.summary, CURRENT_LANGUAGE_VERSION);
+  return spellMessage(entry.summary);
 }
 
 /** `Text.join(collection: any, separator?: text) → text` — generated, never written. */

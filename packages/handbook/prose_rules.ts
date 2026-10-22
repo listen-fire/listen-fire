@@ -64,7 +64,7 @@ const NOT_RECOMMENDED: Array<{ pattern: RegExp; label: string }> = [
     label: 'a `movement` declaration — declare with `function`',
   },
   { pattern: /\bONLY\(\s*extract\(/i, label: '`only(extract(…))` — write `extractOne(…)`' },
-  // Language version 5's surface: the spellings it replaced, outside walk brackets.
+  // The current surface: the spellings it replaced, outside walk brackets.
   { pattern: /\bERROR\(/, label: '`ERROR(…)` — write `fail(…)`' },
   { pattern: /\(credentials:/, label: 'an adapter construction — write `connect attio using acme`' },
   { pattern: /\bIF\b[^\n]*\bTHEN\b/, label: '`IF … THEN … ELSE … END` — write `c ? a : b`' },

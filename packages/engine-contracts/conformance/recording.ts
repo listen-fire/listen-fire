@@ -52,7 +52,7 @@ const stateSchema = z.custom<ParkedScopeState>(
   (value) => isObject(value) && typeof value.address === 'string',
   'a parked scope state',
 );
-const languageVersionSchema = z.number().int();
+const languageVersionSchema = z.string();
 
 const runInputSchema = z.object({
   source: z.string(),

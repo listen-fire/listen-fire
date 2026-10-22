@@ -111,8 +111,8 @@ pub unsafe extern "C" fn check_program(
     src_len: u32,
     catalog_ptr: *const u8,
     catalog_len: u32,
-    version: u32,
-    upgrading_from: u32,
+    options_ptr: *const u8,
+    options_len: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -123,8 +123,8 @@ pub unsafe extern "C" fn check_program(
             src_len,
             catalog_ptr,
             catalog_len,
-            version,
-            upgrading_from,
+            options_ptr,
+            options_len,
             out_ptr_ptr,
             out_len_ptr,
         )
@@ -143,8 +143,8 @@ pub unsafe extern "C" fn check_answer(
     src_len: u32,
     catalog_ptr: *const u8,
     catalog_len: u32,
-    version: u32,
-    upgrading_from: u32,
+    options_ptr: *const u8,
+    options_len: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -155,8 +155,8 @@ pub unsafe extern "C" fn check_answer(
             src_len,
             catalog_ptr,
             catalog_len,
-            version,
-            upgrading_from,
+            options_ptr,
+            options_len,
             out_ptr_ptr,
             out_len_ptr,
         )
@@ -179,6 +179,50 @@ pub unsafe extern "C" fn check_compatible(request_ptr: *const u8, request_len: u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn standard_library(out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
     unsafe { movement_checker::abi::standard_library_with(out_ptr_ptr, out_len_ptr) }
+}
+
+/// `language_version()`: the language this artifact reads, which is its
+/// release's version (`movement_parser::version::LANGUAGE_VERSION`), as a
+/// JSON string, and 0.
+///
+/// # Safety
+/// The out slots must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn language_version(out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    unsafe { write_out(to_sorted_json(&json!(movement_parser::version::LANGUAGE_VERSION)), out_ptr_ptr, out_len_ptr) };
+    OK
+}
+
+/// `language_standing(pin)`: how a pin stands against this artifact's
+/// release, `{standing: "compatible" | "newer" | "olderKey" | "malformed",
+/// message}` (the refusal's text, null when compatible), and 0; `{error}`
+/// and 1 for a pin that is not text. A host asks this before choosing
+/// whether to run a movement on this artifact.
+///
+/// # Safety
+/// The input range must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn language_standing(pin_ptr: *const u8, pin_len: u32, out_ptr_ptr: *mut usize, out_len_ptr: *mut usize) -> u32 {
+    install_panic_hook();
+    let (status, answer) = match unsafe { utf8(pin_ptr, pin_len, "the pin") } {
+        Ok(pin) => (OK, standing_json(pin)),
+        Err(error) => (ERROR, json!({ "error": error })),
+    };
+    unsafe { write_out(to_sorted_json(&answer), out_ptr_ptr, out_len_ptr) };
+    status
+}
+
+fn standing_json(pin: &str) -> serde_json::Value {
+    use movement_parser::version::{LANGUAGE_VERSION, Standing, refusal_message, standing};
+    let standing = standing(pin, LANGUAGE_VERSION);
+    let name = match standing {
+        Standing::Compatible => "compatible",
+        Standing::Newer => "newer",
+        Standing::OlderKey => "olderKey",
+        Standing::Malformed => "malformed",
+    };
+    json!({ "standing": name, "message": refusal_message(pin, LANGUAGE_VERSION, standing) })
 }
 
 #[cfg(test)]
@@ -286,6 +330,27 @@ mod tests {
                 "summary": "text cut into its trimmed, non-empty parts",
             })
         );
+    }
+
+    #[test]
+    fn the_artifact_names_its_language_and_how_a_pin_stands_against_it() {
+        let own = movement_parser::version::LANGUAGE_VERSION;
+        let (mut out_ptr, mut out_len) = (0usize, 0usize);
+        assert_eq!(unsafe { language_version(&mut out_ptr, &mut out_len) }, OK);
+        assert_eq!(output(out_ptr, out_len), json!(own));
+        let standing_of = |pin: &str| {
+            let (ptr, len) = input(pin);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { language_standing(ptr, len, &mut out_ptr, &mut out_len) };
+            unsafe { dealloc(ptr, len) };
+            (status, output(out_ptr, out_len))
+        };
+        assert_eq!(standing_of(own), (OK, json!({ "standing": "compatible", "message": null })));
+        let (status, newer) = standing_of("99.0.0");
+        assert_eq!((status, &newer["standing"]), (OK, &json!("newer")));
+        assert_eq!(newer["message"], json!(format!("this automation pins language 99.0.0, newer than this release ({own}); upgrade the engine")));
+        assert_eq!(standing_of("0.11.0").1["standing"], json!("olderKey"));
+        assert_eq!(standing_of("5").1["standing"], json!("malformed"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! From version 5 a number computed from a value that may be absent is refused
+//! A number computed from a value that may be absent is refused
 //! (MOV_ABSENT_REQUIRED): `+ - * / %`, unary minus, a built-in's number
 //! parameter (`Number.round(n)`), and a fold over a list that may hold an
 //! absent member (`List.sum`, `List.avg`, `List.min`, `List.max`). The engine
@@ -21,7 +21,7 @@ const MAYBE: &str = "number (or absent)";
 fn absent(body: &str) -> Vec<(&'static str, String)> {
     let source = format!("import {{ crm }} from adapters\nimport {{ crm_cred }} from credentials\nc = connect crm using crm_cred\nfunction go(t: <text>, xs: <number[]>) {{\n{body}\n}}");
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: 5, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     let diagnostics = check_source(&source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     diagnostics
         .into_iter()

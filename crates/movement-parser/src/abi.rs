@@ -7,10 +7,10 @@
 //! Out pointers are `usize` rather than `u32` so the native test build can
 //! exercise the same functions; on wasm32 the two are the same width.
 //!
-//! Every text entry takes `(text, version)`, the one shape the loader calls.
-//! The parse entries refuse a version this release does not read; the
-//! spelling entries (`spell_message`, `plugin_name`, `spell_code`,
-//! `surface_table`) read only the version 5 surface and ignore it.
+//! Every text entry takes `(text)`, the one shape the loader calls. A wasm
+//! reads its own release's language and takes no version: the host chooses
+//! the artifact by a movement's pin and applies the rule before calling
+//! (crate::version).
 
 use std::alloc::Layout;
 use std::fmt::Write;
@@ -62,12 +62,11 @@ pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: u32) {
 pub unsafe extern "C" fn parse_program(
     src_ptr: *const u8,
     src_len: u32,
-    version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_program(&form::form_of_text(src), version));
+    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_program(&form::form_of_text(src)));
     unsafe { emit(parsed, out_ptr_ptr, out_len_ptr) }
 }
 
@@ -79,12 +78,11 @@ pub unsafe extern "C" fn parse_program(
 pub unsafe extern "C" fn parse_program_eager(
     src_ptr: *const u8,
     src_len: u32,
-    version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_program_eager(&form::form_of_text(src), version));
+    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_program_eager(&form::form_of_text(src)));
     unsafe { emit(parsed, out_ptr_ptr, out_len_ptr) }
 }
 
@@ -94,16 +92,15 @@ pub unsafe extern "C" fn parse_program_eager(
 pub unsafe extern "C" fn parse_expression(
     src_ptr: *const u8,
     src_len: u32,
-    version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_expression(&form::form_of_text(src), version));
+    let parsed = unsafe { utf8(src_ptr, src_len, "source") }.and_then(|src| crate::parse_expression(&form::form_of_text(src)));
     unsafe { emit(parsed, out_ptr_ptr, out_len_ptr) }
 }
 
-/// A diagnostic's message with every built-in it quotes in the version 5
+/// A diagnostic's message with every built-in it quotes in the current spelling
 /// spelling (crate::surface::table::spell_message), as a JSON string.
 ///
 /// # Safety
@@ -112,7 +109,6 @@ pub unsafe extern "C" fn parse_expression(
 pub unsafe extern "C" fn spell_message(
     src_ptr: *const u8,
     src_len: u32,
-    _version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -122,7 +118,7 @@ pub unsafe extern "C" fn spell_message(
     unsafe { emit(spelled, out_ptr_ptr, out_len_ptr) }
 }
 
-/// A plugin's name from version 5 (crate::surface::table::plugin_name): the
+/// A plugin's name (crate::surface::table::plugin_name): the
 /// registry name or catalog key in camelCase, as a JSON string.
 ///
 /// # Safety
@@ -131,7 +127,6 @@ pub unsafe extern "C" fn spell_message(
 pub unsafe extern "C" fn plugin_name(
     src_ptr: *const u8,
     src_len: u32,
-    _version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -141,7 +136,7 @@ pub unsafe extern "C" fn plugin_name(
     unsafe { emit(spelled, out_ptr_ptr, out_len_ptr) }
 }
 
-/// Program text a diagnostic suggests, in the version 5 spelling
+/// Program text a diagnostic suggests, in the current spelling
 /// (crate::surface::phrase::spell_code), as a JSON string.
 ///
 /// # Safety
@@ -150,7 +145,6 @@ pub unsafe extern "C" fn plugin_name(
 pub unsafe extern "C" fn spell_code(
     src_ptr: *const u8,
     src_len: u32,
-    _version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -169,7 +163,6 @@ pub unsafe extern "C" fn spell_code(
 pub unsafe extern "C" fn surface_table(
     _src_ptr: *const u8,
     _src_len: u32,
-    _version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
@@ -189,12 +182,11 @@ pub unsafe extern "C" fn parse_nested_call(
     at_end: u32,
     origin_line: u32,
     origin_col: u32,
-    version: u32,
     out_ptr_ptr: *mut usize,
     out_len_ptr: *mut usize,
 ) -> u32 {
     install_panic_hook();
-    let call = NestedCall { at_start, at_end, origin_line, origin_col, version };
+    let call = NestedCall { at_start, at_end, origin_line, origin_col };
     let parsed = unsafe { utf8(raw_ptr, raw_len, "source") }.and_then(|raw| crate::parse_nested_call(&form::form_of_text(raw), &call));
     unsafe { emit(parsed, out_ptr_ptr, out_len_ptr) }
 }
@@ -401,7 +393,7 @@ mod tests {
         let src = alloc(len);
         unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), src, source.len()) };
         let (mut out_ptr, mut out_len) = (0usize, 0usize);
-        let status = unsafe { parse_expression(src, len, 5, &mut out_ptr, &mut out_len) };
+        let status = unsafe { parse_expression(src, len, &mut out_ptr, &mut out_len) };
         unsafe { dealloc(src, len) };
         let out = unsafe { std::slice::from_raw_parts(out_ptr as *const u8, out_len) }.to_vec();
         unsafe { dealloc(out_ptr as *mut u8, u32::try_from(out_len).unwrap()) };
@@ -527,7 +519,7 @@ mod tests {
         let src = alloc(3);
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), src, 3) };
         let (mut out_ptr, mut out_len) = (0usize, 0usize);
-        let status = unsafe { parse_program(src, 3, 5, &mut out_ptr, &mut out_len) };
+        let status = unsafe { parse_program(src, 3, &mut out_ptr, &mut out_len) };
         let out = unsafe { std::slice::from_raw_parts(out_ptr as *const u8, out_len) }.to_vec();
         unsafe {
             dealloc(src, 3);

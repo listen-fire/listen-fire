@@ -7,14 +7,14 @@
 // it, in the shapes docs/contracts/host-families.md freezes, and the shim forwards each one
 // to the run's `EngineHost` (rust_host.ts).
 //
-// This engine runs language version 5 and later (rust_run.ts refuses an
+// This engine runs the current language (rust_run.ts refuses an
 // earlier pin at the entry). There is no fallback: whatever the Rust engine
 // refuses or declines fails the run (MOVENG_UNSUPPORTED). The checker is the one gate that keeps a
-// saved program from reaching such a refusal, and a test holds every version-5
+// saved program from reaching such a refusal, and a test holds every current
 // program in the repository to that (rust_reachability.unit.test.ts). Each
 // segment is logged once (`noteEngine`) and counted (`rustRunStats`).
 
-import { languageVersionDiagnostic, openEngineSegment, type LanguageVersion } from 'movement-lang';
+import { openEngineSegment } from 'movement-lang';
 
 import { RunCostCapExceeded } from '../../lib/run_cost';
 import { extractionTierAssignments, runChatModels } from './ai_tiers';
@@ -65,13 +65,13 @@ export interface EngineProtocol {
 const RETIRED_ENGINE_SETTINGS = ['MOVEMENT_ENGINE', 'MOVEMENT_ENGINE_FALLBACK', 'MOVEMENT_ENGINE_DRY_RUN_EVERY', 'MOVEMENT_ENGINE_V5_ON_TS'] as const;
 
 /** For a process's boot: a retired engine setting fails startup. Ignoring
- *  it would silently drop what an operator asked for (a version-5 run on the
+ *  it would silently drop what an operator asked for (a current run on the
  *  TypeScript engine, say). */
 export function assertEngineConfigured(env: Record<string, string | undefined> = process.env): void {
   const set = RETIRED_ENGINE_SETTINGS.filter((name) => env[name] !== undefined && env[name] !== '');
   if (set.length === 0) return;
   throw new Error(
-    `${set.join(', ')} ${set.length === 1 ? 'is' : 'are'} retired: a run's engine follows its pinned language version (5 and later the Rust engine, 1–4 the TypeScript engine), with no fallback between them. Remove ${set.length === 1 ? 'it' : 'them'} from the environment.`,
+    `${set.join(', ')} ${set.length === 1 ? 'is' : 'are'} retired: a run's engine follows its pinned language version (this release's language on the Rust engine, the platform's earlier integer-pinned languages on its TypeScript engine), with no fallback between them. Remove ${set.length === 1 ? 'it' : 'them'} from the environment.`,
   );
 }
 
@@ -193,14 +193,13 @@ async function segmentInRust(
     throw error;
   }
   rustRunStats.segments += 1;
-  if ('refused' in outcome) throw unsupportedInRust(input, outcome.refused);
   if ('declined' in outcome) throw unsupportedInRust(input, outcome.declined);
   noteEngine(input, RAN);
   return outcome.ran;
 }
 
 /** A segment the Rust engine (or this shim, on its behalf) would not run:
- *  counted by reason, and the run fails. No other engine runs a version-5
+ *  counted by reason, and the run fails. No other engine runs a current
  *  program, so this is never a slow path: a checked program that reaches it
  *  is a checker or engine bug. */
 function unsupportedInRust(input: Pick<RunMovementInput, 'runId' | 'dryRun'>, reason: string): MovementEngineError {
@@ -506,14 +505,11 @@ function segmentInput(
       // The engine checks the program itself (the Rust checker): a run on
       // this engine is held to it, and the host is never asked.
       // It checks against the snapshot's own `models`, as the host's checker
-      // does, not the run's list sent on the catalog below. A deprecated
-      // pin's warning is the release's, which is this host's, as the host's
-      // check answer's is (rust_host.ts `check.program`).
+      // does, not the run's list sent on the catalog below.
       nativeCheck: true,
       snapshotModels: input.catalog.models ?? null,
-      ...versionWarningOf(context.languageVersion),
-      // The pin the run is under, written out: the engine cannot know this
-      // release's current version.
+      // The pin the run is under, written out (absent on the input, this
+      // release's): the engine holds it to the rule again at its entry.
       languageVersion: context.languageVersion,
       ...(input.movementName !== undefined ? { movementName: input.movementName } : {}),
       event,
@@ -543,7 +539,7 @@ function segmentInput(
       // deployment's, read here so the engine reads no environment; the
       // number as written, a fraction included, which the marker prints.
       extractionFileChars: maxFileChars(),
-      // How many named calls deep the run may nest (version 3): the
+      // How many named calls deep the run may nest: the
       // deployment's, read here for the same reason.
       maxCallDepth: maxCallDepth(),
       // What one segment may consume (docs/contracts/run-limits.md): the
@@ -558,29 +554,21 @@ function segmentInput(
   );
 }
 
-/** The pin's standing warning as this release words it (`languageVersionDiagnostic`). */
-function versionWarningOf(languageVersion: LanguageVersion): { versionWarning?: { code: string; message: string } } {
-  const warning = languageVersionDiagnostic(languageVersion);
-  return warning !== undefined ? { versionWarning: { code: warning.code, message: warning.message } } : {};
-}
-
-/** What a segment ended in: its result, a refusal at its entry (nothing ran
- *  but its parse), or a decline after its check (nothing the host can see
- *  happened). */
-type RunOutcome = { ran: MovementRunResult } | { refused: string } | { declined: string };
+/** What a segment ended in: its result, or a decline after its check
+ *  (nothing the host can see happened). */
+type RunOutcome = { ran: MovementRunResult } | { declined: string };
 
 /**
  * The segment's `done` (crates/movement-engine/src/run.rs says its shapes):
  * the run's result, the error it failed with (a body's failure wrapped in
  * `MovementRunFailed`, carrying what the run did, as the interpreter wraps
- * it), or that it refused or declined.
+ * it), or that it declined.
  */
 export function readRunResult(
   done: unknown,
   run: { context: Pick<RunContext, 'trace' | 'ledger'>; hostErrors: unknown[]; wire?: WireOut },
 ): RunOutcome {
   const outcome = record(done, 'the Rust engine result');
-  if ('refused' in outcome) return { refused: string(outcome.refused, 'the Rust engine refused') };
   if ('declined' in outcome) return { declined: string(outcome.declined, 'the Rust engine declined') };
   // What the segment's priced calls spent was charged to the run's account
   // as each answer passed through the shim (rust_host.ts), so a fault cannot

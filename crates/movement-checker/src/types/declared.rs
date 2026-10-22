@@ -250,8 +250,6 @@ pub fn surface_misfit_from(supplied: Option<&Surface>, schema: &InstanceSchema, 
 pub struct MisfitOptions {
     /// A `T | absent` member may be missing outright (a graph literal's copy).
     pub absent_may_be_missing: bool,
-    /// The program's language version: the repair is spelled as it reads.
-    pub version: u32,
 }
 
 fn misfit_at(supplied: Option<&Surface>, schema: &InstanceSchema, position: &str, options: MisfitOptions, path: &str, seen: &mut Vec<String>) -> Option<String> {

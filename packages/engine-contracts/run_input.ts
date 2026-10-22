@@ -89,13 +89,13 @@ export interface RunInput {
    */
   credentialIds?: Readonly<Record<string, string>>;
   /** What each segment of the run may consume (docs/contracts/run-limits.md).
-   *  Absent ⇒ the engine's defaults. Version 5 and later (the Rust engine). */
+   *  Absent ⇒ the engine's defaults. (The Rust engine.) */
   limits?: SegmentLimits;
   /** How long each segment may take, waits on the host included, in whole
    *  seconds. The host keeps it, not the engine: past it, the requests already
    *  at the host finish, nothing more is served, and the segment fails with
    *  MOVENG_LIMIT_WALL_CLOCK. Absent ⇒ the deployment's
-   *  MOVEMENT_MAX_SEGMENT_SECONDS, else 900. Version 5 and later. */
+   *  MOVEMENT_MAX_SEGMENT_SECONDS, else 900. */
   maxSegmentSeconds?: number;
 }
 

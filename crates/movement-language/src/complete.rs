@@ -155,7 +155,7 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
     match context {
         Context::Member { namespace } => {
             let prefix = format!("{namespace}.");
-            builtins::v5_builtins()
+            builtins::current_builtins()
                 .into_iter()
                 .filter_map(|b| b.name.strip_prefix(&prefix).map(|member| Item::new(member, ItemKind::Function, Some(b.signature()))))
                 .collect()
@@ -285,7 +285,7 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
                     items.push(Item { insert: Some(written_name(&v.symbol.name)).filter(|w| *w != v.symbol.name), ..Item::new(v.symbol.name.clone(), kind, detail) });
                 }
             }
-            for b in builtins::v5_builtins().into_iter().filter(|b| !b.name.contains('.')) {
+            for b in builtins::current_builtins().into_iter().filter(|b| !b.name.contains('.')) {
                 items.push(Item::new(b.name, ItemKind::Function, Some(b.signature())));
             }
             items.extend(builtins::grammar_words().map(|w| Item::new(w, ItemKind::Keyword, None)));
@@ -357,7 +357,7 @@ fn local_of(tag: &str) -> String {
 fn library_exports(service: &Service, path: &str) -> Vec<Item> {
     use movement_parser::ast::Statement;
     let Some(file) = service.catalog.files.as_ref().and_then(|files| files.get(path)) else { return Vec::new() };
-    let Ok(program) = crate::recover::parse(&file.source, service.language_version) else { return Vec::new() };
+    let Ok(program) = crate::recover::parse(&file.source) else { return Vec::new() };
     program
         .statements
         .iter()

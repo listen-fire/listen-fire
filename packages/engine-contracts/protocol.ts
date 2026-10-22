@@ -433,7 +433,7 @@ export const WireSchemaTypeDescriptor = z
     references: z.array(WireSchemaReferenceDescriptor),
     /** The type's records can be removed by `deleteRecord` (absent ⇒ no) —
      *  named because it is the one promise `delete` is checked against
-     *  (language version 5); it is optional, so an older server is unchanged. */
+     *  ; it is optional, so an older server is unchanged. */
     deletable: z.boolean().optional(),
   })
   .passthrough();
@@ -827,7 +827,6 @@ export const WirePluginSpec = z.object({
   fedArgs: z.array(z.object({ name: z.string(), required: z.literal(true).optional() })).optional(),
   fedByExtraction: z.literal(true).optional(),
   output: z.record(z.string(), z.unknown()).optional(),
-  earlierOutputs: z.array(z.object({ before: z.number().int().positive(), output: z.record(z.string(), z.unknown()) })).optional(),
   /** What the plugin does, in its author's words: shown when an author hovers a call. */
   description: z.string().optional(),
 });

@@ -143,6 +143,6 @@ lf serve [--port N] [--doors-only]
 
 ## 7. Upgrade a project
 
-> Language version 5 (Dancing Wren) is a **preview** in the 0.12.0 pre-release. Existing projects keep their version 1 to 4 pins and run unchanged; moving to 5 is opt-in, by this explicit upgrade.
+> `engine:` in `lf.yaml` is the language version the project is pinned to: a release's version, such as `0.12.0`. This lf reads every pin of its own compatibility key (under 0.x, the minor: `0.12`). A newer pin is refused with "upgrade lf"; an older key is refused with "run `lf upgrade`".
 
-`lf upgrade --check` prints what would change; `lf upgrade` rewrites the movement files into the current language version.
+`lf upgrade --check` prints what would change; `lf upgrade` rewrites the movement files into the current language version and sets `engine:` in `lf.yaml` to it.

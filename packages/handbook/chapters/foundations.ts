@@ -22,20 +22,32 @@ something reads like a special case, look for the position and the edge.
 
 ### language-versions
 
-Read the two-word name on an automation — "Quiet Heron", "Bright Otter", the current "Dancing Wren" — as
-the version of this language its text is written in. The automation validates,
-saves and runs as that version, and an edit never changes it; a new automation
-is written in the current version. So check an edit to an existing automation
-as the version it is written in, not as the current one.
+An automation is pinned to the language release its text was written against,
+a version such as \`0.12.0\`. The automation validates, saves and runs under that
+pin, and an edit never changes it; a new automation is pinned to the current
+release. So check an edit to an existing automation under the release it is
+pinned to, not the current one.
 
-A warning on an automation says something keeps it on an older version: the
-current version reports errors for its text, or marks a construct whose meaning
-differs between the two versions, which blocks the move as surely as an error.
+A release reads a pin that has its own compatibility key (the minor while the
+version starts with 0, so \`0.12.0\` and \`0.12.3\` read alike; the major from 1.0)
+and refuses any other by name:
+
+- a pin newer than the engine is refused; upgrade the engine
+- a pin of an older key is refused; validate the text under the current release,
+  then upgrade it
+
+An \`lf\` project pins in \`lf.yaml\`'s \`engine:\` (\`lf init\` writes the current
+release; \`lf upgrade\` moves it). An embedder pins with the run input's
+\`languageVersion\`; absent means the engine's own release.
+
+A warning on an automation says something keeps it on an older release: the
+current release reports errors for its text, or marks a construct whose meaning
+differs between the two releases, which blocks the move as surely as an error.
 Other warnings, such as cost notes, never block. The automation keeps running as
 it always has.
 
-To upgrade one, repair what the current version reports — in text that still
-validates as the older version — then upgrade it: the check runs again, shows
+To upgrade one, repair what the current release reports — in text that still
+validates under the older pin — then upgrade it: the check runs again, shows
 what it finds, and moves the automation only when that is clean and the move is
 confirmed. Only an upgrade someone requests moves an automation; a new release
 never does.

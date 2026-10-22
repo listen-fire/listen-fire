@@ -108,7 +108,7 @@ pub enum Scalar {
     Json,
     Absent,
     /// What a value that never arrives has (`fail("…")` inside an
-    /// expression, from language version 5): TypeScript's `never`.
+    /// expression): TypeScript's `never`.
     Never,
 }
 
@@ -342,7 +342,7 @@ pub struct PositionSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ambiguous_properties: Option<Vec<String>>,
     /// The system removes a record of this type (its describe's
-    /// `deletable: true`); since language version 5 the checker refuses a
+    /// `deletable: true`); the checker refuses a
     /// `delete` of a type that does not say so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletable: Option<bool>,
@@ -609,13 +609,6 @@ pub enum PluginOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EarlierOutput {
-    pub before: u32,
-    pub output: PluginOutput,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginSpec {
     pub args: Vec<String>,
@@ -638,8 +631,6 @@ pub struct PluginSpec {
     pub fed_args: Option<Vec<PluginFedArg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<PluginOutput>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub earlier_outputs: Option<Vec<EarlierOutput>>,
     /// The package tag it is a member of (`@lf/web`), matched exactly
     /// (crate::catalog::packages); absent when it is in none.
     #[serde(default, skip_serializing_if = "Option::is_none")]

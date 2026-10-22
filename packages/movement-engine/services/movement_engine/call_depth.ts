@@ -1,6 +1,6 @@
-// The maximum CALL DEPTH of a movement run (language version 3).
+// The maximum CALL DEPTH of a movement run.
 //
-// From version 3 a function may call itself, directly or through others. A
+// A function may call itself, directly or through others. A
 // recursion that never reaches its base case would otherwise run until the
 // process ran out of stack — or, where every level makes a priced call, until
 // the cost cap stopped it, having spent the cap. The depth limit stops it

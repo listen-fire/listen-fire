@@ -18,7 +18,7 @@
 
 import {
   compatibleInRust,
-  languageVersionDiagnostic,
+  type LanguageVersion,
   RustCheckRefused,
   type CatalogSnapshot,
   type InstanceSchema,
@@ -40,7 +40,7 @@ import { ADAPTER_METHODS, type AdapterCall, type AdapterMethod, type EngineHost 
 import { hostCallFailure, isoDates } from './host_adapter';
 import { checkAnswerInRust, checkPinnedInRust, parsePinned } from './program_check';
 import type { MovementRunResult } from './run_types';
-import { pluginOutputUnder, pluginSpecNamed, publishTrace, runLogFields, withDeclaredFiles, type RunContext } from './segment_context';
+import { pluginSpecNamed, publishTrace, runLogFields, withDeclaredFiles, type RunContext } from './segment_context';
 import type { HostAnswer, HostRequest } from './rust_engine';
 import { rustRunStats } from './rust_stats';
 import {
@@ -100,36 +100,16 @@ export const ENGINE_OWN_ROUTES: Readonly<Record<string, string>> = {
 const ROUTES: Record<string, Route> = {
   /** The Rust checker over the pinned source (program_check.ts
    *  `checkAnswerInRust`): every diagnostic, the import link and the
-   *  checker's AST stamps as data, and the run's version warning for a
-   *  deprecated pin. A program that fails its check ends the run with the
-   *  check's error, as the run's own check throws it. */
+   *  checker's AST stamps as data. The request names no pin: the run's own
+   *  was held to the rule at its entry. A program that fails its check ends
+   *  the run with the check's error, as the run's own check throws it. */
   async 'check.program'(request, context) {
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('check.program languageVersion must be a number');
-    const upgradingFrom = request.upgradingFrom;
-    if (upgradingFrom !== undefined && typeof upgradingFrom !== 'number') {
-      throw new RustShimError('check.program upgradingFrom must be a number');
-    }
     const source = string(request.source, 'check.program source');
-    let answer;
     try {
-      answer = checkAnswerInRust({
-        source,
-        catalog: context.catalog,
-        languageVersion,
-        ...(upgradingFrom !== undefined ? { upgradingFrom } : {}),
-      });
+      return checkAnswerInRust({ source, catalog: context.catalog, languageVersion: context.context.languageVersion });
     } catch (error) {
       throw new RunAborted(error);
     }
-    // The run's own version warning, read as the TypeScript engine reads it
-    // (run.ts, before the body): the release the engine runs under, not the
-    // checker's own view of it, which a host may hold apart.
-    const versionWarning = languageVersionDiagnostic(languageVersion);
-    return {
-      ...answer,
-      ...(versionWarning !== undefined ? { versionWarning: { code: versionWarning.code, message: versionWarning.message } } : {}),
-    };
   },
   /** `x IS <Decl>` of a record a system describes (the event, a handle, a
    *  landed record): does the schema's `recordType` carry everything the
@@ -141,8 +121,7 @@ const ROUTES: Record<string, Route> = {
    *  there as `surfaceMisfit` compares a landing across an edge. With
    *  `file`, the declaration is a library's, checked as its own file. */
   async 'check.compatible'(request, context) {
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('check.compatible languageVersion must be a number');
+    const languageVersion = context.context.languageVersion;
     // The declaration's own file: a library's, by its path in the snapshot.
     const file = optionalString(request.file, 'check.compatible file');
     const source = file === undefined ? string(request.source, 'check.compatible source') : context.catalog.files?.[file]?.source;
@@ -154,7 +133,7 @@ const ROUTES: Record<string, Route> = {
     if (!isInstanceSchemaShaped(schema)) throw new RustShimError('check.compatible schema is an instance schema');
     const path = optionalStringList(request.path, 'check.compatible path');
     try {
-      return compatibleInRust({ source, languageVersion, declaration, schema, recordType, ...(path !== undefined ? { path } : {}) });
+      return compatibleInRust({ source, declaration, schema, recordType, ...(path !== undefined ? { path } : {}) });
     } catch (error) {
       if (error instanceof RustCheckRefused) throw new RustShimError(error.message);
       throw error;
@@ -229,8 +208,7 @@ const ROUTES: Record<string, Route> = {
     if (!Array.isArray(candidates)) throw new RustShimError('llm.arbitrateEntities candidates is a list');
     const constraints = wire.read(request.constraints);
     if (!isUniquenessConstraints(constraints)) throw new RustShimError('llm.arbitrateEntities constraints are {any: [{all}]}');
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('llm.arbitrateEntities languageVersion is a number');
+    const languageVersion = string(request.languageVersion, 'llm.arbitrateEntities languageVersion');
     const answer = await host.llm.arbitrateEntities({
       asserted,
       candidates,
@@ -322,7 +300,7 @@ const ROUTES: Record<string, Route> = {
     // The files the plugin's output declares, made here (as the TypeScript
     // engine's priced invoker makes them): the engine is handed handles.
     const spec = pluginSpecNamed(catalog.plugins, string(request.plugin, 'llm.transforms.invoke plugin'));
-    const output = spec !== undefined ? pluginOutputUnder(spec, context.languageVersion) : undefined;
+    const output = spec?.output;
     const typed = 'error' in answer ? answer : withDeclaredFiles(answer, output);
     return new Plain(wired(wire, typed, 'llm.transforms.invoke'));
   },
@@ -637,13 +615,13 @@ export function shimRoutePaths(): string[] {
 /** The segment a forwarded request names (`serve` has held it to the one
  *  the run host opened). */
 /** A program's key in `RouteContext.checked`: its source under its pin. */
-export function checkedKey(source: string, languageVersion: number): string {
+export function checkedKey(source: string, languageVersion: LanguageVersion): string {
   return JSON.stringify([source, languageVersion]);
 }
 
 /** The program `check.compatible` asks about, checked once per segment
  *  against the segment's own catalog (`RouteContext.checked`). */
-export function checkedProgram(context: Pick<RouteContext, 'catalog' | 'checked'>, source: string, languageVersion: number): Program {
+export function checkedProgram(context: Pick<RouteContext, 'catalog' | 'checked'>, source: string, languageVersion: LanguageVersion): Program {
   const key = checkedKey(source, languageVersion);
   let program = context.checked.get(key);
   if (program === undefined) {

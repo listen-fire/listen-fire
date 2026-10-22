@@ -17,9 +17,9 @@ describe('the parser loader', () => {
   });
 
   it('round-trips source through every parse export', () => {
-    expect(callJson('parse_expression', "'héllo 🌍'", [5])).toEqual(ROUND_TRIP);
-    expect(callJson('parse_program', '', [5])).toEqual({ statements: [] });
-    expect(callJson('parse_program_eager', 'x = 1', [5])).toEqual({
+    expect(callJson('parse_expression', "'héllo 🌍'", [])).toEqual(ROUND_TRIP);
+    expect(callJson('parse_program', '', [])).toEqual({ statements: [] });
+    expect(callJson('parse_program_eager', 'x = 1', [])).toEqual({
       statements: [
         {
           kind: 'assign',
@@ -36,8 +36,8 @@ describe('the parser loader', () => {
         },
       ],
     });
-    expect(callJson('parse_nested_call', 'f(x)', [0, 4, 1, 1, 5])).toMatchObject({ kind: 'call', call: { callee: 'f' } });
-    const tree = JSON.stringify(callJson('parse_expression', "'héllo 🌍'", [5]));
+    expect(callJson('parse_nested_call', 'f(x)', [0, 4, 1, 1])).toMatchObject({ kind: 'call', call: { callee: 'f' } });
+    const tree = JSON.stringify(callJson('parse_expression', "'héllo 🌍'", []));
     expect(callLowering('lower_expression', tree, "'héllo 🌍'")).toEqual({
       ok: true,
       json: { type: 'static', value: 'héllo 🌍' },
@@ -49,7 +49,7 @@ describe('the parser loader', () => {
   });
 
   it('accepts bytes as input', () => {
-    expect(callJson('parse_expression', new Uint8Array([0x61]), [5])).toEqual({
+    expect(callJson('parse_expression', new Uint8Array([0x61]), [])).toEqual({
       kind: 'name',
       name: { text: 'a', quoted: false, at: { start: 0, end: 1 } },
       at: { start: 0, end: 1 },
@@ -95,7 +95,7 @@ describe('the parser loader', () => {
     it('in a browser, throws MovementParserNotReady telling the caller to await initParser(), until it does', async () => {
       const loader = loadWithout('node');
       expect(loader.isParserReady()).toBe(false);
-      const thrown = thrownBy(() => loader.callJson('parse_program', '', [5]));
+      const thrown = thrownBy(() => loader.callJson('parse_program', '', []));
       expect(thrown).toBeInstanceOf(loader.MovementParserNotReady);
       expect(thrown).toMatchObject({
         name: 'MovementParserNotReady',
@@ -104,14 +104,14 @@ describe('the parser loader', () => {
 
       await loader.initParser(committedArtifact());
       expect(loader.isParserReady()).toBe(true);
-      expect(loader.callJson('parse_program', '', [5])).toEqual({ statements: [] });
+      expect(loader.callJson('parse_program', '', [])).toEqual({ statements: [] });
     });
 
     it("in a browser, loads the parser's own artifact: it parses, lowers and checks, and runs no movement", async () => {
       const loader = loadWithout('node');
       await loader.initParser(committedArtifact('movement_parser.wasm'));
-      expect(loader.callJson('parse_program', '', [5])).toEqual({ statements: [] });
-      expect(loader.callLowering('lower_expression', JSON.stringify(loader.callJson('parse_expression', 'a', [5])), 'a').ok).toBe(true);
+      expect(loader.callJson('parse_program', '', [])).toEqual({ statements: [] });
+      expect(loader.callLowering('lower_expression', JSON.stringify(loader.callJson('parse_expression', 'a', [])), 'a').ok).toBe(true);
       expect(() => loader.openEngineSegment()).toThrow();
     });
 
@@ -123,7 +123,7 @@ describe('the parser loader', () => {
         message: expect.stringMatching(/^the movement parser did not load: .*getBuiltinModule/),
         cause: expect.any(Error),
       });
-      expect(String(thrownBy(() => loader.callJson('parse_program', '', [5])))).toBe(String(atBoot));
+      expect(String(thrownBy(() => loader.callJson('parse_program', '', [])))).toBe(String(atBoot));
     });
 
     it('passes the boot check once loaded', () => {
@@ -143,12 +143,12 @@ describe('the parser loader', () => {
 
     it('throws with the panic message, then serves the next call from a fresh instance', async () => {
       await initParser(trappingModule());
-      expect(callJson('parse_expression', 'ok', [5])).toEqual({ ok: true });
+      expect(callJson('parse_expression', 'ok', [])).toEqual({ ok: true });
       const before = parserGeneration();
-      expect(() => callJson('parse_expression', 'T', [5])).toThrow(
+      expect(() => callJson('parse_expression', 'T', [])).toThrow(
         /^movement parser crashed in parse_expression: RuntimeError: unreachable: panicked at src\/lib\.rs:1:1:\nboom$/,
       );
-      expect(callJson('parse_expression', 'ok', [5])).toEqual({ ok: true });
+      expect(callJson('parse_expression', 'ok', [])).toEqual({ ok: true });
       expect(parserGeneration()).toBe(before + 1);
     });
   });
@@ -189,7 +189,7 @@ function trappingModule(): Uint8Array {
   const types = vec([
     [0x60, 1, I32, 1, I32], // alloc(len) -> ptr
     [0x60, 2, I32, I32, 0], // dealloc(ptr, len)
-    [0x60, 5, I32, I32, I32, I32, I32, 1, I32], // parse(src, len, version, out_ptr, out_len) -> status
+    [0x60, 4, I32, I32, I32, I32, 1, I32], // parse(src, len, out_ptr, out_len) -> status
     [0x60, 6, I32, I32, I32, I32, I32, I32, 1, I32], // lower(tree, len, src, len, out_ptr, out_len) -> status
   ]);
   const exports = vec([
@@ -216,8 +216,8 @@ function trappingModule(): Uint8Array {
     body([]),
     body([
       ...[0x20, 0, 0x2d, 0, 0, 0x41, 0xd4, 0x00, 0x46, 0x04, 0x40, 0x00, 0x0b], // if src[0] == 'T' { unreachable }
-      ...[0x20, 3, 0x41, JSON_AT, 0x36, 2, 0], // *out_ptr = JSON_AT
-      ...[0x20, 4, 0x41, json.length, 0x36, 2, 0], // *out_len = json.length
+      ...[0x20, 2, 0x41, JSON_AT, 0x36, 2, 0], // *out_ptr = JSON_AT
+      ...[0x20, 3, 0x41, json.length, 0x36, 2, 0], // *out_len = json.length
       ...[0x41, 0], // status 0
     ]),
     body([

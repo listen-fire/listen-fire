@@ -39,9 +39,9 @@ pub struct ScopeEnv<'s> {
     pub scope: ScopeId,
     pub zones: &'s dyn crate::host::ZoneLookup,
     pub nodes: &'s crate::families::nodes::NodeState,
-    pub upgrading_from: Option<u32>,
-    /// Each function declared with a name read as a value (version 5,
-    /// `functionAsValue`), typed before the typing that reads it.
+    pub upgrading_from: Option<&'s str>,
+    /// Each function declared with a name read as a value
+    /// (`functionAsValue`), typed before the typing that reads it.
     pub function_values: &'s std::collections::HashMap<crate::scope::SymbolId, super::position::ClosureType>,
 }
 
@@ -59,7 +59,7 @@ impl TypeEnv for ScopeEnv<'_> {
         instance.declared.is_some_and(|symbol| self.nodes.is_local(symbol))
     }
 
-    fn upgrading_from(&self) -> Option<u32> {
+    fn upgrading_from(&self) -> Option<&str> {
         self.upgrading_from
     }
 

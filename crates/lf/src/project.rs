@@ -6,18 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use movement_parser::version::CURRENT_LANGUAGE_VERSION;
+use movement_parser::version::{LANGUAGE_VERSION, Standing, refusal_message, standing};
 use serde::Deserialize;
 
 pub const PROJECT_FILE: &str = "lf.yaml";
-
-/// The engine version this release runs (`ENGINE_VERSION` in
-/// packages/movement-engine/public/movement-engine.ts); a test holds the two equal.
-pub const CURRENT_ENGINE_VERSION: &str = "0.12.0";
-
-/// lf runs on the Rust engine alone, which runs version 5 and later;
-/// versions 1–4 run only on the hosted TypeScript engine.
-pub const FIRST_LF_LANGUAGE_VERSION: u32 = 5;
 
 // Unknown keys are ignored, so a newer lf.yaml still loads.
 #[derive(Deserialize)]
@@ -72,8 +64,8 @@ pub struct Project {
     /// The host's own folder: `<root>/.lf`.
     pub lf_dir: PathBuf,
     pub engine: String,
-    /// The language version the pinned engine runs.
-    pub language_version: u32,
+    /// The release the project is pinned to: `engine:`, a release's version.
+    pub language_version: String,
     pub movements_dir: PathBuf,
     pub externals_dir: PathBuf,
     /// The local acting identity lf.yaml names.
@@ -119,42 +111,16 @@ pub fn start_timeout_of(seconds: f64, from: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(seconds))
 }
 
-/// The language version an engine version runs. Every engine this release
-/// knows runs the current language version; a newer engine is refused.
-pub fn language_version_of_engine(engine: &str) -> Result<u32, String> {
-    if compare_semver(engine, CURRENT_ENGINE_VERSION) > 0 {
-        return Err(format!(
-            "lf.yaml pins engine {engine}, newer than this lf ({CURRENT_ENGINE_VERSION}); upgrade lf or lower the pin"
-        ));
+/// The language an `engine:` pin asks for: the pin itself when this lf reads
+/// it, else the rule's refusal with the remedy for lf.yaml.
+pub fn language_version_of_engine(engine: &str) -> Result<String, String> {
+    let own = LANGUAGE_VERSION;
+    match standing(engine, own) {
+        Standing::Compatible => Ok(engine.to_string()),
+        Standing::Newer => Err(format!("lf.yaml pins engine {engine}, newer than this lf ({own}); upgrade lf")),
+        Standing::OlderKey => Err(format!("lf.yaml pins engine {engine}, which this lf ({own}) does not read; run `lf upgrade`")),
+        Standing::Malformed => Err(refusal_message(engine, own, Standing::Malformed).unwrap_or_default()),
     }
-    Ok(CURRENT_LANGUAGE_VERSION)
-}
-
-/// Refuses a pin lf does not run, before any engine sees it.
-pub fn refuse_below_lf(language_version: u32, pinned: &str, remedy: &str) -> Result<(), String> {
-    if language_version >= FIRST_LF_LANGUAGE_VERSION {
-        return Ok(());
-    }
-    Err(format!(
-        "{pinned} is pinned to language version {language_version}, which lf does not run (lf runs language version {FIRST_LF_LANGUAGE_VERSION} and later): {remedy}"
-    ))
-}
-
-fn compare_semver(a: &str, b: &str) -> i64 {
-    let parts = |s: &str| s.split('.').map(|p| p.parse::<i64>().unwrap_or(0)).collect::<Vec<_>>();
-    let (pa, pb) = (parts(a), parts(b));
-    for i in 0..3 {
-        let d = pa.get(i).copied().unwrap_or(0) - pb.get(i).copied().unwrap_or(0);
-        if d != 0 {
-            return d;
-        }
-    }
-    0
-}
-
-fn is_semver(text: &str) -> bool {
-    let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `http://` or `https://` and a host.
@@ -165,6 +131,16 @@ fn is_http_url(text: &str) -> bool {
 
 /// The project whose `lf.yaml` is at `from` or the nearest folder above it.
 pub fn load_project(from: &Path) -> Result<Project, String> {
+    load_pinned(from, false)
+}
+
+/// The same, for `lf upgrade`: a pin of an older key loads (the upgrade is
+/// what moves it), checked in this release's language.
+pub fn load_project_to_upgrade(from: &Path) -> Result<Project, String> {
+    load_pinned(from, true)
+}
+
+fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let mut dir = std::path::absolute(from).map_err(|e| format!("{}: {e}", from.display()))?;
     while !dir.join(PROJECT_FILE).exists() {
         match dir.parent() {
@@ -178,9 +154,6 @@ pub fn load_project(from: &Path) -> Result<Project, String> {
     let value: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let value = if value.is_null() { serde_yaml::Value::Mapping(Default::default()) } else { value };
     let file: ProjectFile = serde_yaml::from_value(value).map_err(|e| format!("{}: {e}", path.display()))?;
-    if !is_semver(&file.engine) {
-        return Err(format!("{}: engine: a semver version, e.g. 0.12.0", path.display()));
-    }
     if let Some(url) = &file.public_url
         && !is_http_url(url)
     {
@@ -210,8 +183,10 @@ pub fn load_project(from: &Path) -> Result<Project, String> {
         false => crate::externals::core_modules_in(&externals_dir)?,
     };
     let core = crate::core::CoreChoice::of(&file.core, &installed, &path.display().to_string())?;
-    let language_version = language_version_of_engine(&file.engine)?;
-    refuse_below_lf(language_version, &path.display().to_string(), "upgrade it to language version 5 on the platform (`lf upgrade` reads version 5 files only)")?;
+    let language_version = match standing(&file.engine, LANGUAGE_VERSION) {
+        Standing::OlderKey if older_key_loads => LANGUAGE_VERSION.to_string(),
+        _ => language_version_of_engine(&file.engine)?,
+    };
     let lf_dir = dir.join(".lf");
     fs::create_dir_all(&lf_dir).map_err(|e| format!("{}: {e}", lf_dir.display()))?;
     Ok(Project {
@@ -233,13 +208,35 @@ pub fn load_project(from: &Path) -> Result<Project, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_older_key_pin_loads_only_to_be_upgraded() {
+        let root = std::env::temp_dir().join(format!("lf-pin-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(PROJECT_FILE), "engine: 0.11.0\n").unwrap();
+        assert!(load_project(&root).unwrap_err().contains("run `lf upgrade`"));
+        let project = load_project_to_upgrade(&root).unwrap();
+        assert_eq!((project.engine.as_str(), project.language_version.as_str()), ("0.11.0", LANGUAGE_VERSION));
+        fs::write(root.join(PROJECT_FILE), "engine: 0.13.0\n").unwrap();
+        assert!(load_project_to_upgrade(&root).unwrap_err().contains("newer than this lf"));
+        fs::remove_dir_all(&root).ok();
+    }
+
     use super::*;
 
     #[test]
-    fn a_newer_engine_is_refused_and_an_older_one_runs_the_current_version() {
-        assert!(language_version_of_engine("0.13.0").unwrap_err().contains("newer than this lf"));
-        assert_eq!(language_version_of_engine("0.6.0"), Ok(CURRENT_LANGUAGE_VERSION));
-        assert_eq!(language_version_of_engine("0.11.0"), Ok(CURRENT_LANGUAGE_VERSION));
+    fn an_engine_pin_is_read_by_its_standing_against_this_release() {
+        assert_eq!(language_version_of_engine("0.12.0"), Ok("0.12.0".to_string()));
+        assert_eq!(language_version_of_engine(LANGUAGE_VERSION), Ok(LANGUAGE_VERSION.to_string()));
+        assert_eq!(
+            language_version_of_engine("0.13.0"),
+            Err(format!("lf.yaml pins engine 0.13.0, newer than this lf ({LANGUAGE_VERSION}); upgrade lf"))
+        );
+        assert_eq!(
+            language_version_of_engine("0.11.0"),
+            Err(format!("lf.yaml pins engine 0.11.0, which this lf ({LANGUAGE_VERSION}) does not read; run `lf upgrade`"))
+        );
+        let malformed = language_version_of_engine("5").unwrap_err();
+        assert!(malformed.contains("pins language 5, which is not a version"), "{malformed}");
     }
 
     #[test]
@@ -250,35 +247,15 @@ mod tests {
         assert!(cost_cap_of(-1.0, "lf.yaml").is_err());
     }
 
+    /// The crates and the TypeScript packages are one release: each reads its
+    /// own manifest's version (`LANGUAGE_VERSION` on both sides).
     #[test]
-    fn a_pin_below_version_5_is_refused_saying_what_to_do() {
-        for version in 1..=4 {
-            assert_eq!(
-                refuse_below_lf(version, "lf.yaml", "upgrade it to language version 5 on the platform (`lf upgrade` reads version 5 files only)"),
-                Err(format!(
-                    "lf.yaml is pinned to language version {version}, which lf does not run (lf runs language version 5 and later): upgrade it to language version 5 on the platform (`lf upgrade` reads version 5 files only)"
-                ))
-            );
-        }
-        assert_eq!(FIRST_LF_LANGUAGE_VERSION, 5);
-        for version in [5, CURRENT_LANGUAGE_VERSION] {
-            assert!(refuse_below_lf(version, "lf.yaml", "").is_ok());
-        }
-    }
-
-    #[test]
-    fn engine_version_is_the_engine_packages() {
-        let source = include_str!("../../../packages/movement-engine/public/movement-engine.ts");
-        let marker = "export const ENGINE_VERSION = '";
-        let start = source.find(marker).expect("the public entry declares ENGINE_VERSION") + marker.len();
-        let end = start + source[start..].find('\'').expect("ENGINE_VERSION ends");
-        assert_eq!(&source[start..end], CURRENT_ENGINE_VERSION);
-    }
-
-    #[test]
-    fn semver_is_three_numbers() {
-        assert!(is_semver("0.12.0"));
-        assert!(!is_semver("0.11"));
-        assert!(!is_semver("0.11.x"));
+    fn the_crates_are_the_same_release_as_the_language_package() {
+        let manifest = include_str!("../../../packages/movement-lang/package.json");
+        let marker = "\"version\": \"";
+        let start = manifest.find(marker).expect("the language package names its version") + marker.len();
+        let end = start + manifest[start..].find('"').expect("the version ends");
+        assert_eq!(&manifest[start..end], env!("CARGO_PKG_VERSION"));
+        assert_eq!(LANGUAGE_VERSION, env!("CARGO_PKG_VERSION"));
     }
 }

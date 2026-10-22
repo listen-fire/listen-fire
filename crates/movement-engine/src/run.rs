@@ -30,8 +30,8 @@
 //! - `{failed: {error, result}}`: the body failed (`MovementRunFailed`,
 //!   which carries what the run did before it);
 //! - `{thrown: error}`: it failed before the body ran;
-//! - `{refused: reason}`: the pin is below version 5 (those versions run on
-//!   the TypeScript engine), before any host request;
+//! - `{refused: reason}`: the pin is one this release does not read (the compatibility
+//!   rule), before any host request;
 //! - `{declined: reason}`: before anything the host can see happened, the
 //!   run's input or the check's answer did not read.
 //!
@@ -71,32 +71,18 @@ use crate::stdlib::Surroundings;
 use crate::trace::{FlowTrace, TraceEntry};
 use crate::{env_services, js_date};
 
-/// The first language version this engine runs; every earlier one runs on
-/// the TypeScript engine, and a segment pinned below it is refused by
-/// BELOW_FIRST_VERSION before anything is asked.
-pub const FIRST_VERSION: u32 = 5;
-
-/// Why a segment pinned below FIRST_VERSION is refused (`{refused}`).
-pub const BELOW_FIRST_VERSION: &str = "language_version_runs_on_typescript";
-
 /// The slot a `return` binds its value into (run.ts `RETURN_SLOT`): a name
 /// the grammar cannot spell.
 pub(crate) const RETURN_SLOT: &str = "#return";
-
-/// A pin's standing warning: `{code, message}`, the check answer's `versionWarning`.
-#[derive(Deserialize, Clone)]
-pub struct VersionWarning {
-    pub code: String,
-    pub message: String,
-}
 
 /// What the shim sends (rust_engine.ts `segmentInput`).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentInput {
     pub source: String,
-    /// The pin the run is under, written out by the shim.
-    pub language_version: u32,
+    /// The pin the run is under, written out by the shim: a release's
+    /// version, held to this release's by the rule (movement_parser::version).
+    pub language_version: String,
     #[serde(default)]
     pub movement_name: Option<String>,
     /// The trigger event, on the eval wire (its payload's key order is the
@@ -135,12 +121,6 @@ pub struct SegmentInput {
     /// the catalog's.
     #[serde(default, deserialize_with = "present")]
     pub snapshot_models: Option<Json>,
-    /// With `native_check`: the pin's standing warning (a deprecated
-    /// version) as the run's release words it (`languageVersionDiagnostic`).
-    /// The release is the host's, so its answer is the one the run traces,
-    /// as the host's check answer's would be. Absent: this engine's own table.
-    #[serde(default)]
-    pub version_warning: Option<VersionWarning>,
     /// Resume a parked run from its state (crate::park), rather than run it.
     #[serde(default)]
     pub resume: Option<crate::park::ResumeInput>,
@@ -172,7 +152,7 @@ pub struct SegmentInput {
     /// the deployment wrote it, a fraction included (positive and finite).
     #[serde(default = "default_file_chars")]
     pub extraction_file_chars: f64,
-    /// How many named calls deep one run may nest from version 3
+    /// How many named calls deep one run may nest
     /// (call_depth.ts `maxCallDepth`, a deployment's
     /// `MOVEMENT_MAX_CALL_DEPTH`): the shim reads it, so the engine reads no
     /// environment.
@@ -232,7 +212,6 @@ pub async fn segment(host: Host, input: SegmentInput) -> Json {
     let ledger = crate::ledger::Ledger::new(&input.spend);
     let mut done = match run(&host, &input, &ledger).await {
         Ok(result) => json!({ "result": result }),
-        Err(Stop::Refused(reason)) => return json!({ "refused": reason }),
         Err(Stop::Declined(reason)) => return json!({ "declined": reason }),
         Err(Stop::Thrown(failure)) => json!({ "thrown": failure.to_json() }),
         Err(Stop::Failed(failure, result)) => json!({ "failed": { "error": failure.to_json(), "result": result } }),
@@ -255,19 +234,17 @@ pub async fn segment(host: Host, input: SegmentInput) -> Json {
     done
 }
 
-/// The extraction keyword (versions 1–4), which this engine runs on no
-/// version: version 5's checker refuses it (MOV_EXTRACT_KEYWORD_RETIRED).
+/// The extraction keyword, which this engine runs on no
+/// version: the checker refuses it (MOV_EXTRACT_KEYWORD_RETIRED).
 fn legacy_extraction() -> Failure {
     Failure::unsupported(
         "the extraction keyword ('x = extract from […] { … }')",
-        "legacy_extraction: this engine does not run it on any version; version 5 writes 'extract(content, Shape)', and a version 1–4 program runs on the TypeScript engine",
+        "legacy_extraction: this engine does not run it on any version; it is written 'extract(content, Shape)'",
     )
 }
 
 /// How a run stops early.
 pub(crate) enum Stop {
-    /// Not run, before anything was asked: a pin below FIRST_VERSION.
-    Refused(String),
     /// Before any host-visible effect, the run's input turned out to be
     /// one this engine cannot read.
     Declined(String),
@@ -507,15 +484,10 @@ pub(crate) struct Run<'a> {
 }
 
 async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) -> Result<Json, Stop> {
-    let version = input.language_version;
-    // Language versions 1–4 run on the TypeScript engine, never here.
-    if version < FIRST_VERSION {
-        return Err(Stop::Refused(BELOW_FIRST_VERSION.into()));
+    if let Some(refusal) = movement_parser::version::refusal(&input.language_version, movement_parser::version::LANGUAGE_VERSION) {
+        return Err(Stop::Thrown(Failure::engine("MOVENG_LANGUAGE_VERSION", refusal)));
     }
-    if let Some(pin) = movement_checker::language_version_diagnostic(version).filter(|d| d.is_error()) {
-        return Err(Stop::Thrown(Failure::engine("MOVENG_LANGUAGE_VERSION", pin.message)));
-    }
-    let root = match program::parse(&input.source, version) {
+    let root = match program::parse(&input.source) {
         Ok(root) => root,
         Err(refusal) if input.native_check => return Err(native_unparsed(&refusal)),
         Err(_) => return Err(unparsed(host, input).await),
@@ -549,12 +521,12 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
         match snapshot_models {
             Some(models) if models != catalog.models => {
                 let checked_against = CatalogSnapshot { models, ..catalog.clone() };
-                native_check(&root.program, &checked_against, version, input.version_warning.as_ref())?
+                native_check(&root.program, &checked_against)?
             }
-            _ => native_check(&root.program, &catalog, version, input.version_warning.as_ref())?,
+            _ => native_check(&root.program, &catalog)?,
         }
     } else {
-        host.request(host::check::program(&input.source, version, None))
+        host.request(host::check::program(&input.source))
             .await
             .map_err(|e| Stop::Thrown(Failure::Host(e)))?
             .ok_or_else(|| Stop::Declined("check_answer_malformed".into()))?
@@ -563,7 +535,7 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
     // the plugins they are; the check above read it as written.
     let mut root = root;
     movement_parser::catalog::packages::expand_package_imports(&mut root.program, &catalog.plugins);
-    let mut checked = program::join_check(root, &answer, version).map_err(|_| Stop::Declined("check_answer_malformed".into()))?;
+    let mut checked = program::join_check(root, &answer).map_err(|_| Stop::Declined("check_answer_malformed".into()))?;
     for (file, _) in checked.files.values_mut() {
         movement_parser::catalog::packages::expand_package_imports(&mut file.program, &catalog.plugins);
     }
@@ -620,11 +592,6 @@ async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) 
         stored_sources: RefCell::new(stored_sources),
         meter: Default::default(),
     };
-    // A deprecated pin runs, and says so on the run's own record (the check
-    // answer's version warning; an unsupported pin never got an answer).
-    if let Some((code, message)) = run.checked.version_warning.clone() {
-        run.trace(TraceEntry::Warning { code, message });
-    }
     let outcome = run.execute().await;
     // What the segment traced after its last statement's hand-over (a park,
     // a failure, a body that never ran). The TypeScript hands it over as its
@@ -663,16 +630,13 @@ async fn pin_libraries(host: &Host, input: &SegmentInput, state: &Json, catalog:
 
 /// The Rust checker's answer to `check.program` (`SegmentInput::native_check`),
 /// on the program as this engine parsed it, shaped as the host's
-/// (rust_host.ts): `{diagnostics, stamps, link?, versionWarning?}`. A
-/// program it refuses ends as the host ends one (program_check.ts
-/// `checkPinned`): a pin this release cannot honour with
-/// MOVENG_LANGUAGE_VERSION, else MOVENG_CHECK listing the blocking
-/// diagnostics — errors only, and a retired write form that still runs does
-/// not block.
-fn native_check(program: &ast::Program, catalog: &CatalogSnapshot, version: u32, release_warning: Option<&VersionWarning>) -> Result<Json, Stop> {
-    // An error pin never gets here (the run's entry refused it).
-    let pin = movement_checker::language_version_diagnostic(version);
-    let options = movement_checker::CheckOptions { language_version: version, upgrading_from: None, zones: &crate::env_services::EnvZones };
+/// (rust_host.ts): `{diagnostics, stamps, link?}`. A program it refuses
+/// ends as the host ends one (program_check.ts `checkPinned`): MOVENG_CHECK
+/// listing the blocking diagnostics — errors only, and a retired write form
+/// that still runs does not block. A pin this release does not read never
+/// gets here: the run's entry refused it.
+fn native_check(program: &ast::Program, catalog: &CatalogSnapshot) -> Result<Json, Stop> {
+    let options = movement_checker::CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
     let blocking: Vec<String> = answer
         .diagnostics
@@ -683,15 +647,7 @@ fn native_check(program: &ast::Program, catalog: &CatalogSnapshot, version: u32,
     if !blocking.is_empty() {
         return Err(Stop::Thrown(Failure::engine("MOVENG_CHECK", format!("the movement program failed checking:\n{}", blocking.join("\n")))));
     }
-    let mut json = answer.to_json();
-    // The run's own version warning, as the host reads it (run.ts, before
-    // the body): a deprecated pin runs, and says so — in the release's words
-    // when the host sent them.
-    let warning = release_warning.map(|w| (w.code.clone(), w.message.clone())).or(pin.map(|d| (d.code, d.message)));
-    if let Some((code, message)) = warning {
-        json["versionWarning"] = json!({ "code": code, "message": message });
-    }
-    Ok(json)
+    Ok(answer.to_json())
 }
 
 /// A source this engine's parser refuses, under the native check: the
@@ -707,15 +663,16 @@ fn native_unparsed(refusal: &Json) -> Stop {
 /// check's own MOVENG_PARSE). A check that passes where the parser did not
 /// is a grammar this engine lacks: declined, before anything the host sees.
 async fn unparsed(host: &Host, input: &SegmentInput) -> Stop {
-    match host.request(host::check::program(&input.source, input.language_version, None)).await {
+    match host.request(host::check::program(&input.source)).await {
         Ok(_) => Stop::Declined("source_does_not_parse".into()),
         Err(error) => Stop::Thrown(Failure::Host(error)),
     }
 }
 
 impl Run<'_> {
-    pub(crate) fn version(&self) -> u32 {
-        self.input.language_version
+    /// The pin the run is under.
+    pub(crate) fn language_version(&self) -> &str {
+        &self.input.language_version
     }
 
     /// The segment every host request names.
@@ -1419,7 +1376,7 @@ impl Run<'_> {
             // `return <value>`: the same right-hand side, bound into a slot
             // the grammar cannot spell, and the body ends.
             Statement::Return(ret) => {
-                // `(f) => f()` (language version 5): the closure hands back
+                // `(f) => f()`: the closure hands back
                 // what the call returns — and, when it returns nothing,
                 // nothing (`conciseCall`).
                 if ret.concise
@@ -1510,7 +1467,7 @@ impl Run<'_> {
                 let built = self.synthesise_node(node, scope, &format!("{path}/value/node")).await?;
                 scope.declare(name, Binding::Node(built));
             }
-            // Version 5's checker refuses it: no checked program reaches here.
+            // The checker refuses it: no checked program reaches here.
             RValue::Extract { .. } => return Err(Stop::Thrown(legacy_extraction())),
             // A call like any other: re-running its statement takes the
             // value it already extracted instead of paying for it again.
@@ -1673,7 +1630,7 @@ impl Run<'_> {
     }
 
     /// `aliasedNodeBinding`'s kinds: a bare name of one is a second name for
-    /// the binding itself (a shape's from version 3); of any other, the
+    /// the binding itself (a shape's); of any other, the
     /// value it reads as.
     fn aliases(&self, binding: &Binding) -> bool {
         match binding {
@@ -2806,7 +2763,7 @@ mod tests {
     /// A segment's input, its event an email webhook with `payload`.
     fn segment_input(source: &str, payload: Json, serves: &[&str]) -> Json {
         json!({
-            "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": serves,
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": serves,
             "now": "2026-03-12T12:00:00.000Z",
             "event": env::encode_plain(&env::decode(&json!(["o", [
                 ["pipelineInputId", "p"], ["adapterType", "email"], ["triggerType", "webhook"], ["payload", payload],
@@ -2864,7 +2821,7 @@ mod tests {
     }
 
     /// The pinned instant with no offset is UTC, whatever zone the host
-    /// names (the run reads no zone of its own from version 5): 00:30 on 15 July is
+    /// names (the run reads no zone of its own): 00:30 on 15 July is
     /// the 15th.
     #[test]
     fn the_pinned_instant_with_no_offset_is_utc() {
@@ -2947,17 +2904,20 @@ mod tests {
         }
     }
 
-    /// A segment pinned below version 5 is refused by name before anything
-    /// is asked: those versions run on the TypeScript engine.
+    /// A segment pinned to a release this one does not read throws
+    /// MOVENG_LANGUAGE_VERSION naming the pin and the remedy, before anything
+    /// is asked.
     #[test]
-    fn a_run_pinned_below_five_is_refused_by_name_and_asks_nothing() {
+    fn a_run_pinned_to_a_version_this_release_does_not_read_is_refused_by_name_and_asks_nothing() {
         let source = "import { email } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  s = 1\n}";
-        for version in 1..FIRST_VERSION {
+        for pin in ["0.11.0", "99.0.0", "banana"] {
             let mut input = segment_input(source, json!(["o", []]), &[]);
-            input["languageVersion"] = json!(version);
+            input["languageVersion"] = json!(pin);
             let (done, seen) = drive_input(input, plain_host(json!({})));
-            assert_eq!(done, json!({ "refused": BELOW_FIRST_VERSION }), "v{version}");
-            assert!(seen.is_empty(), "v{version}: {seen:?}");
+            let refusal = movement_parser::version::refusal(pin, movement_parser::version::LANGUAGE_VERSION).unwrap();
+            assert_eq!(done["thrown"]["code"], json!("MOVENG_LANGUAGE_VERSION"), "{pin}: {done}");
+            assert!(done["thrown"]["message"].as_str().unwrap().ends_with(&refusal), "{pin}: {done}");
+            assert!(seen.is_empty(), "{pin}: {seen:?}");
         }
     }
 
@@ -2991,24 +2951,17 @@ mod tests {
     /// line behind it.
     #[test]
     fn a_null_test_of_a_credential_is_refused_not_answered() {
-        {
-            let version = 5;
-            for test in ["acme == null", "acme != null"] {
-                let source = format!("import {{ email }} from adapters\nimport {{ acme }} from credentials\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {{\n  if {test} {{ return 1 }}\n  return 2\n}}");
-                let mut input = segment_input(&source, json!(["o", []]), &[]);
-                input["languageVersion"] = json!(version);
-                let (done, _) = drive_input(input, plain_host(json!({})));
-                let error = if done.get("thrown").is_some() { &done["thrown"] } else { &done["failed"]["error"] };
-                assert_eq!(error["code"], json!("MOVENG_UNSUPPORTED"), "v{version} {test}: {done}");
-                assert_eq!(error["message"], json!("reading 'acme' (an import) as a bare value is not supported by the movement engine yet"), "v{version} {test}: {done}");
-            }
-            let source = "import { email, attio } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  if attio != null {\n    ERROR(\"present\")\n  }\n}";
-            let mut input = segment_input(source, json!(["o", []]), &[]);
-            input["languageVersion"] = json!(version);
-            let (done, _) = drive_input(input, plain_host(json!({})));
-            let message = done["thrown"]["message"].as_str().or_else(|| done["failed"]["error"]["message"].as_str()).unwrap_or_default();
-            assert!(message.contains("present"), "v{version}: {done}");
+        for test in ["acme == null", "acme != null"] {
+            let source = format!("import {{ email }} from adapters\nimport {{ acme }} from credentials\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {{\n  if {test} {{ return 1 }}\n  return 2\n}}");
+            let (done, _) = drive_input(segment_input(&source, json!(["o", []]), &[]), plain_host(json!({})));
+            let error = if done.get("thrown").is_some() { &done["thrown"] } else { &done["failed"]["error"] };
+            assert_eq!(error["code"], json!("MOVENG_UNSUPPORTED"), "{test}: {done}");
+            assert_eq!(error["message"], json!("reading 'acme' (an import) as a bare value is not supported by the movement engine yet"), "{test}: {done}");
         }
+        let source = "import { email, attio } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  if attio != null {\n    ERROR(\"present\")\n  }\n}";
+        let (done, _) = drive_input(segment_input(source, json!(["o", []]), &[]), plain_host(json!({})));
+        let message = done["thrown"]["message"].as_str().or_else(|| done["failed"]["error"]["message"].as_str()).unwrap_or_default();
+        assert!(message.contains("present"), "{done}");
     }
 
     /// A credential import parks as any import does, as the TypeScript
@@ -3296,12 +3249,12 @@ mod tests {
         for (state, reason) in [
             (json!({ "version": 2, "address": "s0", "suspended": false }), "resume_state_suspended"),
             // Version 1 names its code by its tree: the TypeScript engine's,
-            // for versions 1–4, which this engine never resumes.
+            // for the older language, which this engine never resumes.
             (json!({ "version": 1, "address": "s0" }), "resume_state_version"),
             (json!({ "version": 2, "address": "s0", "scopeChain": scope(json!({ "kind": "blockMeta", "edges": [] })) }), "resume_state_kind:blockMeta"),
         ] {
             let input = json!({
-                "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": [],
+                "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
                 "now": "2026-03-12T12:00:00.000Z", "event": wire(json!({})), "catalog": serde_json::from_str::<Json>(CATALOG).unwrap(),
                 "resume": { "state": wire(state) },
             });
@@ -3349,7 +3302,7 @@ mod tests {
             json!({ "kind": "lazyWalk", "walk": { "head": "/statements/9/body/0", "captured": {} } }),
         ] {
             let input = json!({
-                "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": [],
+                "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
                 "now": "2026-03-12T12:00:00.000Z", "event": wire(json!({})), "catalog": serde_json::from_str::<Json>(CATALOG).unwrap(),
                 "resume": { "state": wire(state(binding.clone())) }, "nativeCheck": true,
             });
@@ -3396,7 +3349,7 @@ mod tests {
         ] });
         assert_eq!(crate::park::resume_refusal(&wire(state.clone())), None);
         let input = json!({
-            "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": [],
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-03-12T12:00:00.000Z", "event": wire(json!({ "adapterType": "email", "triggerType": "webhook", "payload": {} })),
             "catalog": serde_json::from_str::<Json>(CATALOG).unwrap(), "resume": { "state": wire(state) },
         });
@@ -3431,7 +3384,7 @@ mod tests {
         });
         let source = "import { email, attio } from adapters\ninbox = email()\ncrm = attio()\nmovement m(msg: <inbox-[:message]->>) {\n  co = write crm-[:companies]-> {\n    unique by (`name`)\n    name: msg.`subject`\n  }\n}";
         let input = json!({
-            "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": [],
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-03-12T12:00:00.000Z",
             "event": ["o", [["adapterType", "email"], ["triggerType", "webhook"], ["payload", ["o", [["subject", "Acme"]]]]]],
             "catalog": catalog,
@@ -3504,7 +3457,7 @@ mod tests {
         });
         let source = "import { email, attio } from adapters\ninbox = email()\ncrm = attio()\nmovement m(msg: <inbox-[:message]->>) {\n  co = write crm-[:companies]-> {\n    unique by (FUZZY `name`)\n    name: msg.`subject`\n  }\n}";
         let input = json!({
-            "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": ["park.sink.commitLimitPause"],
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": ["park.sink.commitLimitPause"],
             "now": "2026-03-12T12:00:00.000Z",
             "event": ["o", [["adapterType", "email"], ["triggerType", "webhook"], ["payload", ["o", [["subject", "Acme"]]]]]],
             "catalog": catalog,
@@ -3648,7 +3601,7 @@ mod tests {
             "credentials": {}, "plugins": {},
         });
         let input = json!({
-            "entry": "segment", "source": source, "languageVersion": 5, "segmentId": "g1", "serves": [],
+            "entry": "segment", "source": source, "languageVersion": movement_parser::version::LANGUAGE_VERSION, "segmentId": "g1", "serves": [],
             "now": "2026-03-12T12:00:00.000Z",
             "event": ["o", [["adapterType", "email"], ["triggerType", "webhook"], ["payload", ["o", []]]]],
             "catalog": catalog,
@@ -3674,16 +3627,11 @@ mod tests {
 
     /// A date-typed event field runs (Henry's ruling, PLAN-08A group F′):
     /// the host hands the engine its ISO text, never a `Date`, so nothing
-    /// is declined after the check, and the version warning is traced.
+    /// is declined after the check.
     #[test]
     fn a_dated_read_runs_past_the_check() {
-        let deprecated = json!({
-            "diagnostics": [{ "code": "MOV_LANGUAGE_VERSION_DEPRECATED", "message": "old" }],
-            "stamps": [],
-            "versionWarning": { "code": "MOV_LANGUAGE_VERSION_DEPRECATED", "message": "old" },
-        });
         let source = "import { email, attio } from adapters\ninbox = email()\ncrm = attio()\nmovement m(msg: <inbox-[:message]->>) {\n  write crm-[:companies]-> { name: msg.`when` }\n}";
-        let (_, seen) = dated_run(source, deprecated);
+        let (_, seen) = dated_run(source, json!({ "diagnostics": [], "stamps": [] }));
         assert_eq!(seen[1], "adapters.resolve");
         let source = "import { email, attio } from adapters\ninbox = email()\ncrm = attio()\nmovement m(msg: <inbox-[:message]->>) {\n  write crm-[:companies]-> { ...msg }\n}";
         let stamp = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/3/body/0/write/spreads/0", "spreadFields": ["subject", "when"] }] });

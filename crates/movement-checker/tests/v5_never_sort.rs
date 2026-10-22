@@ -1,4 +1,4 @@
-//! Language version 5: `fail(…)` inside an expression (a value that never
+//! `fail(…)` inside an expression (a value that never
 //! arrives, TypeScript's `never`) and `sort` by a function key, through the
 //! Rust checker.
 
@@ -7,14 +7,14 @@ use movement_parser::catalog::types::CatalogSnapshot;
 
 const CATALOG: &str = r#"{"adapters":{"attio":{"canFire":true,"constructionArgs":[{"name":"credentials","kind":"credential","required":true}],"schemas":{"Acme CRM":{"positions":{"company":{"properties":{"name":"text","score":"number"},"edges":{}}},"collections":{"companies":{"target":"company"}},"writableRoots":{"companies":{"fields":{"name":"text"},"resultShape":{"externalId":"text","name":"text"}}}}}}},"credentials":{"Acme CRM":{"adapters":["attio"]}},"plugins":{}}"#;
 
-fn check(source: &str, version: u32) -> Vec<Diagnostic> {
+fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
-    let options = CheckOptions { language_version: version, upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
     check_source(source, &catalog, options).unwrap_or_else(|e| panic!("{source}: {e:?}"))
 }
 
-fn codes(source: &str, version: u32) -> Vec<String> {
-    let mut codes: Vec<String> = check(source, version).into_iter().map(|d| d.code).collect();
+fn codes(source: &str) -> Vec<String> {
+    let mut codes: Vec<String> = check(source).into_iter().map(|d| d.code).collect();
     codes.sort();
     codes
 }
@@ -29,7 +29,7 @@ fn offset(source: &str, at: &serde_json::Value) -> usize {
 fn upgraded(source: &str) -> String {
     let mut text = source.to_string();
     for _ in 0..8 {
-        let found: Vec<Diagnostic> = check(&text, 5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+        let found: Vec<Diagnostic> = check(&text).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
         if found.is_empty() {
             return text;
         }
@@ -54,7 +54,7 @@ fn upgraded(source: &str) -> String {
 const HEAD_V5: &str = "import { `@lf/attio` as attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = connect attio using `Acme CRM`\n";
 const HEAD_OLD: &str = "import { attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = attio(credentials: `Acme CRM`)\n";
 
-fn v5(body: &str) -> String {
+fn current_form(body: &str) -> String {
     format!("{HEAD_V5}function need(s: <text>) {{\n  return s\n}}\nfunction go(t: <text>, xs: <text[]>, co: <crm-[:company]->>) {{\n{body}\n}}\n")
 }
 fn old_form(body: &str) -> String {
@@ -64,17 +64,17 @@ fn old_form(body: &str) -> String {
 
 /// A body with `m` a text that may be absent.
 fn with_m(body: &str) -> String {
-    v5(&format!("  m = first(xs)\n{body}"))
+    current_form(&format!("  m = first(xs)\n{body}"))
 }
 
 fn clean(body: &str) {
     let source = with_m(body);
-    assert_eq!(codes(&source, 5), Vec::<String>::new(), "{source}\n{:#?}", check(&source, 5));
+    assert_eq!(codes(&source), Vec::<String>::new(), "{source}\n{:#?}", check(&source));
 }
 
 fn refused(body: &str, code: &str) {
     let source = with_m(body);
-    assert!(codes(&source, 5).contains(&code.to_string()), "{source}\n{:#?}", check(&source, 5));
+    assert!(codes(&source).contains(&code.to_string()), "{source}\n{:#?}", check(&source));
 }
 
 const WRITE: &str = "  need(x)";
@@ -105,7 +105,7 @@ fn code_after_an_arm_that_only_fails_knows_the_condition() {
 
 #[test]
 fn fail_inside_an_expression_is_not_refused_as_not_yet_read() {
-    let refused = codes(&v5("  x = coalesce(t, fail(\"no\"))"), 5);
+    let refused = codes(&current_form("  x = coalesce(t, fail(\"no\"))"));
     assert!(refused.is_empty(), "{refused:?}");
 }
 
@@ -114,7 +114,7 @@ const ROWS: &str = "  rows = List.from(crm-[:companies]->)";
 
 /// The safe marker on the fix of the first finding with `code`.
 fn fix_safe(source: &str) -> bool {
-    let found = check(source, 5);
+    let found = check(source);
     let finding = found.iter().find(|d| d.code == "MOV_V5_SPELLING" && d.message.contains("its key a function")).unwrap_or_else(|| panic!("{source}\n{found:#?}"));
     finding.fix.as_ref().unwrap()["safe"] == serde_json::Value::Bool(true)
 }
@@ -150,7 +150,7 @@ fn the_old_field_key_upgrades_to_a_function_safe_only_where_no_variable_hides_th
     let old = old_form("  rows = COLLECT(crm-[:companies]->)\n  x = SORT(rows, `score`, DESC)");
     let fixed = upgraded(&old);
     assert!(fixed.contains("sort(rows, (r) => r.score, { order: \"desc\" })"), "{fixed}");
-    assert_eq!(codes(&fixed, 5), Vec::<String>::new(), "{fixed}");
+    assert_eq!(codes(&fixed), Vec::<String>::new(), "{fixed}");
     assert!(fix_safe(&old));
     // An outer `score` was what the old key read: the rewrite reads the field.
     assert!(!fix_safe(&old_form("  score = 3\n  rows = COLLECT(crm-[:companies]->)\n  x = SORT(rows, `score`, DESC)")));

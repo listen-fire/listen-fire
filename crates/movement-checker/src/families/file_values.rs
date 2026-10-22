@@ -1,4 +1,4 @@
-//! A file-level value, from version 5 (`fileValueRefusal`,
+//! A file-level value (`fileValueRefusal`,
 //! `reportFileValue` and the file-value half of `hoistNestedCalls` in
 //! checker/check.ts). The file's values are worked out before every run of
 //! every function in it, with no event in scope, and again on every resume:

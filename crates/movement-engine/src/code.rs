@@ -3,7 +3,7 @@
 //!
 //! A path is a JSON Pointer through the program's tree as the parser writes
 //! it, so this walks the typed AST by the same keys its serialized form has.
-//! Through a nested call (language version 3) a path reads the call again
+//! Through a nested call a path reads the call again
 //! from its slot's text (`<slot>/nested/<start>-<end>/value`), as the run
 //! that parked it read it.
 
@@ -36,7 +36,7 @@ pub(crate) fn span_js(span: Span) -> Js {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CodeAt {
     Closure(ClosureExpression),
-    /// A movement read as a value (language version 5).
+    /// A movement read as a value.
     Movement(MovementDeclaration),
     Head(PathHead),
     Literal(NodeLiteral),
@@ -340,7 +340,7 @@ mod tests {
     use super::*;
 
     /// Every piece of code a park can name, at every place the language's
-    /// version 5 corpus (the engine's pattern programs, their library files
+    /// The corpus (the engine's pattern programs, their library files
     /// too) writes one, nested calls read too, reads back as the node the
     /// tree holds there.
     #[test]
@@ -352,7 +352,8 @@ mod tests {
         let mut read = 0;
         for case in corpus["cases"].as_array().unwrap() {
             let program = &case["program"];
-            if program["version"] != 5 {
+            // This case pins a release the parser has nothing to say about.
+            if case["pattern"] == "language_version_unsupported" {
                 continue;
             }
             // A case the parser refuses ends in MOVENG_PARSE; it has no tree to read.
@@ -360,7 +361,7 @@ mod tests {
             let file = format!("{prelude}{}", program["file"].as_str().unwrap());
             let libraries = program["files"].as_object().into_iter().flatten().map(|(_, f)| f["source"].as_str().unwrap().to_string());
             for source in std::iter::once(file).chain(libraries) {
-                let parsed = movement_parser::stmt::parse_program(&source, 5, false);
+                let parsed = movement_parser::stmt::parse_program(&source, false);
                 if refused && parsed.is_err() {
                     continue;
                 }
@@ -370,7 +371,7 @@ mod tests {
                 read += 1;
             }
         }
-        assert!(read >= 390, "the corpus holds its version 5 programs: {read}");
+        assert!(read >= 390, "the corpus holds its programs: {read}");
         for kind in ["closure", "movement", "head", "literal", "shape", "nested"] {
             assert!(found.get(kind).copied().unwrap_or(0) > 0, "the corpus reaches no {kind}: {found:?}");
         }

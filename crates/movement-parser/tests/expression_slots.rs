@@ -25,7 +25,7 @@ fn every_expression_text_parses_without_panicking() {
     let (mut trees, mut errors) = (0usize, 0usize);
     let mut panicked = Vec::new();
     for slot in &slots {
-        match catch_unwind(AssertUnwindSafe(|| movement_parser::parse_expression(&slot.raw, 5))) {
+        match catch_unwind(AssertUnwindSafe(|| movement_parser::parse_expression(&slot.raw))) {
             Ok(Ok(_)) => trees += 1,
             Ok(Err(_)) => errors += 1,
             Err(_) => panicked.push(serde_json::to_string(&slot.raw).unwrap()),

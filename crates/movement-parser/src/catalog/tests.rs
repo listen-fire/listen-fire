@@ -451,7 +451,7 @@ fn either_credential_form_refuses_a_member_it_does_not_declare() {
     }
 }
 
-// ── language version 5's members (docs/contracts/catalog-snapshot.md) ──
+// ── the current language's members (docs/contracts/catalog-snapshot.md) ──
 
 /// A snapshot carrying a type's `deletable` and an edge's `resources` loads
 /// (the reader refuses an undeclared member), and neither is stripped on the

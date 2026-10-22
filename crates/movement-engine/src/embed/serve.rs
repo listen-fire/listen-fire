@@ -183,7 +183,7 @@ impl Session {
                     candidates: wire(args.get("candidates"), label)?,
                     record_type: text(args, "recordType", label)?.to_string(),
                     constraints: wire(args.get("constraints"), label)?,
-                    language_version: args.get("languageVersion").and_then(Json::as_u64).unwrap_or(5) as u32,
+                    language_version: text(args, "languageVersion", label)?.to_string(),
                     budget: args.get("budget").cloned().unwrap_or(Json::Null),
                 });
                 then(verdict, |verdict| {

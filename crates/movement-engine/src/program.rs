@@ -24,7 +24,7 @@ use movement_parser::ast;
 use serde_json::{Value as Json, json};
 
 /// The node at `path` in `file`'s tree. A call nested in an expression
-/// (language version 3) has a place of its own, through the slot it is
+/// has a place of its own, through the slot it is
 /// written in: `<slot>/nested/<start>-<end>` is `{ value: <the right-hand
 /// side the call reads as> }`, `start` and `end` its extent in the slot's
 /// text (program_check.ts), re-read from the slot as the TypeScript read it
@@ -92,9 +92,6 @@ pub struct File {
     pub program: ast::Program,
     pub tree: Json,
     pub stamps: BTreeMap<String, Stamp>,
-    /// The language version it was parsed under: what its nested calls are
-    /// re-read under (`node_at`).
-    pub version: u32,
 }
 
 /// A name the program (or a library) imports from a file, its declaration
@@ -117,9 +114,6 @@ pub struct Checked {
     pub files: BTreeMap<String, (File, Vec<Import>)>,
     /// Every diagnostic: none blocks (the host ended the run for those).
     pub diagnostics: Vec<Json>,
-    /// The run's warning for a deprecated pin (`{code, message}`), as the
-    /// host's engine reads its release.
-    pub version_warning: Option<(String, String)>,
     /// What the root file declares, and the shapes it imports.
     pub declarations: Declarations,
 }
@@ -290,29 +284,22 @@ fn declaration_at<'p>(program: &'p ast::Program, path: &str) -> Option<&'p ast::
 
 /// `parseProgram`: the typed AST and its JSON, or the parser's refusal as
 /// `{message, loc}`.
-pub fn parse(source: &str, language_version: u32) -> Result<File, Json> {
-    let program = movement_parser::stmt::parse_program(source, language_version, false).map_err(|e| json!(e))?;
+pub fn parse(source: &str) -> Result<File, Json> {
+    let program = movement_parser::stmt::parse_program(source, false).map_err(|e| json!(e))?;
     let tree = serde_json::to_value(&program).expect("an AST is always JSON");
-    Ok(File { program, tree, stamps: BTreeMap::new(), version: language_version })
+    Ok(File { program, tree, stamps: BTreeMap::new() })
 }
 
-/// The program joined with the check's answer: its link's files parsed under
-/// the program's version, and every stamp placed.
-pub fn join_check(root: File, answer: &Json, language_version: u32) -> Result<Checked, String> {
+/// The program joined with the check's answer: its link's files parsed, and
+/// every stamp placed.
+pub fn join_check(root: File, answer: &Json) -> Result<Checked, String> {
     let diagnostics = answer.get("diagnostics").and_then(Json::as_array).cloned().ok_or("the check answer has no diagnostics")?;
-    let version_warning = match answer.get("versionWarning") {
-        None => None,
-        Some(warning) => {
-            let text = |key: &str| warning.get(key).and_then(Json::as_str).map(String::from);
-            Some((text("code").ok_or("a version warning has no code")?, text("message").ok_or("a version warning has no message")?))
-        }
-    };
-    let mut checked = Checked { root, imports: Vec::new(), files: BTreeMap::new(), diagnostics, version_warning, declarations: Declarations::default() };
+    let mut checked = Checked { root, imports: Vec::new(), files: BTreeMap::new(), diagnostics, declarations: Declarations::default() };
     if let Some(link) = answer.get("link") {
         checked.imports = imports_of(link.get("imports"))?;
         for file in link.get("files").and_then(Json::as_array).ok_or("the link has no files")? {
             let path = text(file, "path")?;
-            let parsed = parse(&text(file, "source")?, language_version)
+            let parsed = parse(&text(file, "source")?)
                 .map_err(|e| format!("the library \"{path}\" does not parse as it did for the check: {e}"))?;
             checked.files.insert(path, (parsed, imports_of(file.get("imports"))?));
         }
@@ -392,7 +379,7 @@ mod tests {
     #[test]
     fn a_call_nested_in_an_expression_has_a_place_of_its_own() {
         let source = "function m() {\n  x = first(map([1], (v) => {\n    g = graph { ...v }\n    return g\n  }))\n}";
-        let root = parse(source, 5).unwrap();
+        let root = parse(source).unwrap();
         let slot = "/statements/0/body/0/value/call/expression";
         let raw = root.tree.pointer(&format!("{slot}/raw")).and_then(Json::as_str).unwrap().to_string();
         let nested = format!("{slot}/nested/6-{}", raw.encode_utf16().count() - 1);
@@ -402,7 +389,7 @@ mod tests {
         // The checker's stamp on it lands there, and a park names the
         // closure by the same place.
         let answer = json!({ "diagnostics": [], "stamps": [{ "path": spread, "copy": { "kind": "map" } }] });
-        let checked = join_check(root, &answer, 5).unwrap();
+        let checked = join_check(root, &answer).unwrap();
         assert_eq!(checked.root.stamps.get(&spread), Some(&Stamp::Copy(json!({ "kind": "map" }))));
         assert!(matches!(checked.code(&format!("{nested}/value/call/args/1/closure")), Some(crate::code::CodeAt::Closure(_))));
         // An extent that is no call there is no node.
@@ -411,13 +398,13 @@ mod tests {
 
     #[test]
     fn stamps_land_on_the_nodes_their_paths_name() {
-        let root = parse(SOURCE, 5).unwrap();
+        let root = parse(SOURCE).unwrap();
         assert_eq!(root.tree.pointer("/statements/2/body/0/write/spreads/0/source"), Some(&json!("d")));
         let answer = json!({
             "diagnostics": [{ "code": "MOV_X", "severity": "warning" }],
             "stamps": [{ "path": "/statements/2/body/0/write/spreads/0", "spreadFields": ["name", "stage"] }],
         });
-        let checked = join_check(root, &answer, 5).unwrap();
+        let checked = join_check(root, &answer).unwrap();
         assert_eq!(
             checked.root.stamps.get("/statements/2/body/0/write/spreads/0"),
             Some(&Stamp::SpreadFields(vec!["name".into(), "stage".into()]))
@@ -430,20 +417,20 @@ mod tests {
         let source = "import { attio } from adapters\ncrm = connect attio\nfunction m(e: <crm>) {\n  if (1 == 1) {\n    g = graph { owner: e }\n  }\n}";
         let path = "/statements/2/body/0/arms/0/body/0/value/node/entries/0";
         let answer = json!({ "diagnostics": [], "stamps": [{ "path": path, "reference": true }] });
-        let checked = join_check(parse(source, 5).unwrap(), &answer, 5).unwrap();
+        let checked = join_check(parse(source).unwrap(), &answer).unwrap();
         assert_eq!(checked.root.stamps.get(path), Some(&Stamp::Reference));
         let spread = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/arms/0/body/0/value/node", "reference": true }] });
-        assert!(join_check(parse(source, 5).unwrap(), &spread, 5).unwrap_err().contains("does not fit"));
+        assert!(join_check(parse(source).unwrap(), &spread).unwrap_err().contains("does not fit"));
     }
 
     #[test]
     fn a_stamp_that_does_not_fit_is_refused() {
         let wrong_kind = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/2/body/0/write/spreads/0", "copy": {} }] });
-        assert!(join_check(parse(SOURCE, 5).unwrap(), &wrong_kind, 5).unwrap_err().contains("does not fit"));
+        assert!(join_check(parse(SOURCE).unwrap(), &wrong_kind).unwrap_err().contains("does not fit"));
         let nowhere = json!({ "diagnostics": [], "stamps": [{ "path": "/statements/9", "spreadFields": [] }] });
-        assert_eq!(join_check(parse(SOURCE, 5).unwrap(), &nowhere, 5).unwrap_err(), "no node at /statements/9");
+        assert_eq!(join_check(parse(SOURCE).unwrap(), &nowhere).unwrap_err(), "no node at /statements/9");
         let unlinked = json!({ "diagnostics": [], "stamps": [{ "file": "lib", "path": "", "spreadFields": [] }] });
-        assert!(join_check(parse(SOURCE, 5).unwrap(), &unlinked, 5).unwrap_err().contains("unlinked file"));
+        assert!(join_check(parse(SOURCE).unwrap(), &unlinked).unwrap_err().contains("unlinked file"));
     }
 
     #[test]
@@ -456,7 +443,7 @@ mod tests {
             },
             "stamps": [],
         });
-        let checked = join_check(parse(SOURCE, 5).unwrap(), &answer, 5).unwrap();
+        let checked = join_check(parse(SOURCE).unwrap(), &answer).unwrap();
         assert_eq!(checked.imports[0].declaration, "/statements/0");
         let (deals, _) = &checked.files["deals"];
         assert_eq!(deals.tree.pointer("/statements/0/name"), Some(&json!("Deal")));
@@ -471,7 +458,7 @@ mod tests {
     #[test]
     fn the_declarations_are_the_files_shapes_types_and_plugins_by_local_name() {
         let source = "import { attio } from adapters\nimport { fetch_url as fetch, research } from plugins\ncrm = connect attio\ntype Stage = <\"lead\" | \"won\">\nnode Lead: \"a lead\" {\n  name: <text> \"its name\"\n  stage: <Stage>\n  node founder: \"each founder\" { first: <text> }\n}\nfunction m(e: <crm>) {\n  x = 1\n}";
-        let checked = join_check(parse(source, 5).unwrap(), &json!({ "diagnostics": [], "stamps": [] }), 5).unwrap();
+        let checked = join_check(parse(source).unwrap(), &json!({ "diagnostics": [], "stamps": [] })).unwrap();
         let declarations = &checked.declarations;
         assert_eq!(declarations.root.types["Stage"], ["lead", "won"]);
         assert_eq!(declarations.plugins.iter().map(|(l, p)| (l.as_str(), p.as_str())).collect::<Vec<_>>(), [("fetch", "fetch_url"), ("research", "research")]);
@@ -483,7 +470,7 @@ mod tests {
             "link": { "imports": [{ "local": "Deal", "kind": "shape", "name": "Deal", "file": "deals", "declaration": "/statements/0" }], "files": [] },
             "stamps": [],
         });
-        assert!(join_check(parse(SOURCE, 5).unwrap(), &unlinked, 5).unwrap_err().contains("unlinked file"));
+        assert!(join_check(parse(SOURCE).unwrap(), &unlinked).unwrap_err().contains("unlinked file"));
     }
 
     /// A park names code by its place in the file that wrote it, a
@@ -496,7 +483,7 @@ mod tests {
             "link": { "imports": [], "files": [{ "path": "lib/deals", "source": library, "imports": [], "exports": [] }] },
             "stamps": [{ "file": "lib/deals", "path": "/statements/0/body/0/value/closure/body/0/write/spreads/0", "spreadFields": ["name"] }],
         });
-        let checked = join_check(parse(SOURCE, 5).unwrap(), &answer, 5).unwrap();
+        let checked = join_check(parse(SOURCE).unwrap(), &answer).unwrap();
         let closure = in_file(&DeclaringFile::Library("lib/deals".into()), "/statements/0/body/0/value/closure");
         assert_eq!(closure, "@lib~1deals/statements/0/body/0/value/closure");
         let Some(crate::code::CodeAt::Closure(code)) = checked.code(&closure) else { panic!("no closure at {closure}") };

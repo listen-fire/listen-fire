@@ -1,17 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  CURRENT_LANGUAGE_VERSION,
-  DEPRECATED_LANGUAGE_VERSIONS,
-  LANGUAGE_VERSIONS,
-  SUPPORTED_LANGUAGE_VERSIONS,
-} from 'movement-lang';
+import { LANGUAGE_VERSION, compatibilityKey, languageStanding, languageVersionDiagnostic, languageVersionStanding } from 'movement-lang';
 
 import {
   CATALOG_SNAPSHOT_VERSION,
   CONTRACTS,
   CORE_PARK_REASONS,
+  LANGUAGE_CONTRACT,
   HOST_FAMILIES,
   HOST_FAMILIES_VERSION,
   MANIFEST_PROTOCOL_VERSION,
@@ -68,7 +64,6 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
     expect(versionLine('host-families.md')).toBe(HOST_FAMILIES_VERSION);
     expect(versionLine('adapter-protocol.md')).toBe(MANIFEST_PROTOCOL_VERSION);
     expect(String(versionLine('adapter-protocol.md'))).toBe(PROTOCOL_VERSION);
-    expect(versionLine('language-versions.md')).toBe(CURRENT_LANGUAGE_VERSION);
     expect(versionLine('system-caller.md')).toBe(SYSTEM_CALLER_VERSION);
   });
 
@@ -83,24 +78,82 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
     expect(indexed).toEqual(CONTRACTS);
   });
 
-  it('the language document tabulates every version this release knows, and its standing', () => {
-    const rows = [...read('language-versions.md').matchAll(/^\| (\d+) \| ([A-Za-z ]+) \| (yes|no) \| (yes|no) \|/gm)];
-    expect(rows.map(([, version, name]) => ({ version: Number(version), name }))).toEqual(
-      LANGUAGE_VERSIONS.map(({ version, name }) => ({ version, name })),
-    );
-    expect(rows.filter((row) => row[3] === 'yes').map((row) => Number(row[1]))).toEqual([...SUPPORTED_LANGUAGE_VERSIONS]);
-    expect(rows.filter((row) => row[4] === 'yes').map((row) => Number(row[1]))).toEqual([...DEPRECATED_LANGUAGE_VERSIONS]);
+  it('the language row states the release\'s compatibility key', () => {
+    const row = /^\| language-versions \| \[language-versions\.md\]\(language-versions\.md\) \| the release \| the release's compatibility key \(([^)]+)\) \|/m.exec(read('README.md'));
+    if (row === null) throw new Error('README.md no longer spells the language row as this test reads it');
+    expect(row[1]).toBe(LANGUAGE_CONTRACT.key);
+    expect(LANGUAGE_CONTRACT).toEqual({ version: LANGUAGE_VERSION, key: compatibilityKey(LANGUAGE_VERSION) });
+  });
+});
+
+// The compatibility rule is one rule in two implementations, both held to
+// docs/contracts/language-versions.md: its table of standings runs through the
+// TypeScript and through the Rust (the movement artifact's `language_standing`,
+// which answers against the artifact's own release), and its three refusals
+// are the document's words in both.
+describe('the language versions document is the rule both implementations apply', () => {
+  const docs = path.resolve(__dirname, '../../../docs/contracts');
+  const doc = fs.readFileSync(path.join(docs, 'language-versions.md'), 'utf8');
+  const rust = fs.readFileSync(path.resolve(__dirname, '../../../crates/movement-parser/src/version.rs'), 'utf8');
+  const STANDING_OF_ROW = { compatible: 'compatible', newer: 'newer', 'older key': 'olderKey', malformed: 'malformed' } as const;
+  const rows = [...doc.matchAll(/^\| ([^ |]+) \| ([^ |]+) \| (compatible|newer|older key|malformed) \|$/gm)].map(
+    ([, pin, own, standing]) => ({ pin, own, standing: STANDING_OF_ROW[standing as keyof typeof STANDING_OF_ROW] }),
+  );
+
+  it('tabulates every standing', () => {
+    expect(new Set(rows.map((row) => row.standing))).toEqual(new Set(Object.values(STANDING_OF_ROW)));
   });
 
-  // The Rust side's table, read from its source as the lowering vocabulary's
-  // pin reads data.rs: the Rust engine refuses a version outside it by name.
-  it('the Rust parser\'s version table is the same', () => {
-    const rust = fs.readFileSync(path.resolve(__dirname, '../../../crates/movement-parser/src/version.rs'), 'utf8');
-    const current = /^pub const CURRENT_LANGUAGE_VERSION: u32 = (\d+);$/m.exec(rust);
-    const supported = /^pub const SUPPORTED_LANGUAGE_VERSIONS: &\[u32\] = &\[([\d, ]*)\];$/m.exec(rust);
-    if (current === null || supported === null) throw new Error('version.rs no longer spells its constants as this test reads them');
-    expect(Number(current[1])).toBe(CURRENT_LANGUAGE_VERSION);
-    expect(supported[1].split(',').map((v) => Number(v.trim()))).toEqual([...SUPPORTED_LANGUAGE_VERSIONS]);
+  it('the TypeScript reads each pin as the document does', () => {
+    for (const { pin, own, standing } of rows) expect({ pin, own, standing: languageVersionStanding(pin, own) }).toEqual({ pin, own, standing });
+  });
+
+  it('the Rust reads each pin as the document does, against a release of its own key', () => {
+    const ownKey = compatibilityKey(LANGUAGE_VERSION);
+    const ofThisKey = rows.filter(({ own }) => compatibilityKey(own) === ownKey);
+    expect(ofThisKey.length).toBeGreaterThan(0);
+    // A standing reads the release's key alone, so the artifact's own release
+    // stands in for the row's.
+    for (const { pin, own, standing } of ofThisKey) expect({ pin, own, standing: languageStanding(pin).standing }).toEqual({ pin, own, standing });
+  });
+
+  it('the Rust and the TypeScript answer every pin alike against this release', () => {
+    for (const { pin } of rows) {
+      expect({ pin, ...languageStanding(pin) }).toEqual({
+        pin,
+        standing: languageVersionStanding(pin),
+        message: languageVersionDiagnostic(pin)?.message ?? null,
+      });
+    }
+  });
+
+  it('the three refusals are the document\'s, the Rust\'s and the TypeScript\'s', () => {
+    const quoted = (label: string) => {
+      const match = new RegExp(`^- \\*\\*${label}:\\*\\* "([^"]+)"$`, 'm').exec(doc);
+      if (match === null) throw new Error(`language-versions.md no longer quotes the ${label} refusal as this test reads it`);
+      return match[1];
+    };
+    const fill = (template: string, pin: string, own: string) => template.replaceAll('{pin}', pin).replaceAll('{own}', own);
+    const cases = [
+      { label: 'newer', pin: '99.0.0' },
+      { label: 'older key', pin: '0.0.1' },
+      { label: 'malformed', pin: 'banana' },
+    ];
+    for (const { label, pin } of cases) {
+      expect(languageStanding(pin).message).toBe(fill(quoted(label), pin, LANGUAGE_VERSION));
+      expect(languageVersionDiagnostic(pin, '0.12.0')).toEqual({
+        code: 'MOV_LANGUAGE_VERSION_UNSUPPORTED',
+        message: fill(quoted(label), pin, '0.12.0'),
+        span: { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } },
+      });
+    }
+  });
+
+  it('the Rust reads this release\'s version from its crate, the TypeScript from its package', () => {
+    expect(rust).toMatch(/^pub const LANGUAGE_VERSION: &str = env!\("CARGO_PKG_VERSION"\);$/m);
+    const cargo = fs.readFileSync(path.resolve(__dirname, '../../../Cargo.toml'), 'utf8');
+    const workspaceVersion = /^version = "([^"]+)"$/m.exec(cargo);
+    expect(workspaceVersion?.[1]).toBe(LANGUAGE_VERSION);
   });
 });
 
