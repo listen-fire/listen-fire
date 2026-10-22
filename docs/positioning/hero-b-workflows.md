@@ -5,11 +5,11 @@
 
 Today your automations live in a workflow tool as a diagram of nodes. Nobody can read one back a year later, your agent cannot write one at all, and every change is a click nobody recorded.
 
-With Listen-Fire an automation is a short text file. Tell your agent "when a deal is marked won in the CRM, add a row to the onboarding sheet and tell #customers"; it writes the file, checked against the real fields of your tools, and from then on every won deal is handled the same way. You can read the file back, see what changed and when, and have the agent change it for you.
+With Listen-Fire an automation is a short text file. Tell your agent "when a deal is marked won in the CRM, add a row to the onboarding sheet and tell #customers"; it writes the file, checked against the real fields of your tools, and from then on every won deal is handled the same way. You can read the file back, see what changed and when, and have the agent change it for you. On the hosted platform no terminal is involved.
 
 - **For:** teams who automate across their SaaS tools today with n8n, Zapier or Make.
-- **Replaces:** a drag-and-drop workflow. A text file can be written by an agent, read by a person, tested against fake systems, and read again a year later.
-- **Proves it:** the won-deal automation above is a dozen lines, with `unique by` so a re-run never adds the row twice.
+- **Replaces:** a drag-and-drop workflow. A text file can be written by an agent, read by a person, and read again a year later.
+- **Proves it:** the won-deal automation above is a dozen lines, and running it twice never adds the row twice.
 <!-- hero:end -->
 
 ## Notes for the test

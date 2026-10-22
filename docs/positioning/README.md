@@ -35,3 +35,11 @@ Personas: an engineer at a startup building a support agent (A's target); a reve
 - VC associate: can I get this working with Affinity and Gmail without a terminal, and what does it cost a month?
 
 **What to change if hero B or C becomes the lead.** B's non-engineer reader was lost by "diff", "pull request" and "version control"; say "reviewed like a document" before "reviewed like code". C's reader wanted proof of the tenant boundary and the run store, not a phrase; lead with the embed example's test.
+
+## Second rehearsal, 2026-10-22, heroes B and C in the contrast register
+
+After the README hero was rewritten to open on the default and what is wrong with it, B and C were rewritten the same way and each shown to its own target persona.
+
+**B (the ops lead).** Explained it back correctly and named the exact zap they are afraid to touch. Lost by "tested against fake systems" and by `unique by`; both are now out of the hero. Would close the tab on finding a terminal or GitHub is needed, and asked whether their assistant could rewrite an existing zap with no engineer. So hypothesis B only lands with the hosted platform in the pitch; the hero now says so in one sentence.
+
+**C (the SaaS engineer).** Explained it back correctly and mapped it onto the roadmap item. Wanted concreteness, not reassurance: what exactly they implement (now: describe your product once as a module, answer requests for data, AI, the clock and storage), what a paused run is in practice (now: wait three days, then act), and tenant isolation and limits (now: every run sees one tenant only and stops at the limits you set). Would close the tab on no answer about sandboxing customer-written programs: CPU, memory, loops, cross-tenant leakage. The hero answers tenant and spend limits; CPU and memory limits are not claimed because the engine does not enforce them.

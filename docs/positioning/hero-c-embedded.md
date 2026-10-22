@@ -5,7 +5,7 @@
 
 Today "when this happens in my workspace, do that" is the feature your customers keep asking for, and the honest answer is a rules engine you would have to build, run and keep up yourself.
 
-With Listen-Fire the engine is a package. It runs inside your own Node process, sees your product as one more system a program can read and write, and lets each customer, or their agent, write automations in a short language that is checked against that customer's own data before it runs. Your code answers its requests for data, AI, the clock and storage, so nothing leaves your tenant boundary, and a paused run is a value you keep wherever you keep state.
+With Listen-Fire the engine is a package. It runs inside your own Node process. You describe your product once as a module, its records and the links between them, and each customer, or their agent, writes automations against it in a short language that is checked against that customer's own fields before it runs. Your code answers the engine's requests for data, AI, the clock and storage, so every run sees one tenant only and stops at the limits you set. A program can wait three days and then act; the waiting run is a value you store wherever you keep state.
 
 - **For:** product teams who want customer-defined automations in their SaaS without owning a scheduler, a run store and a language.
 - **Replaces:** a home-grown rules engine, or a model call per event.
