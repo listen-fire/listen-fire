@@ -45,3 +45,14 @@ core:
 #   LF_SECRET__ACME_VAULT__<SETTING>=…   (each setting its manifest declares)
 # A token one worker refreshes is kept for all, and two workers refresh it once.
 # `LF_SECRET__<CREDENTIAL>__<FIELD>` still lies over what the vault holds.
+# The project's movement files kept in a store of your own, one tenant's per
+# process (the movements slot, `@lf/folder-movements` by default: the folder
+# above). A module of your own fills it; its own settings come from the
+# environment, never from the secrets slot:
+#   core:
+#     store: "@lf/postgres-store"
+#     movements: acme_movements    # externals/acme_movements/lf-external.yaml, kind: core, slot: movements, settings: [{ name: tenant }]
+#   LF_SECRET__ACME_MOVEMENTS__EXTERNAL=acme_movements
+#   LF_SECRET__ACME_MOVEMENTS__TENANT=…   (the team whose movements these are, set per process)
+# lf sends the settings on every request and never reads the tenant itself.
+# This file and the externals folder stay here, whichever module holds the movements.

@@ -89,12 +89,16 @@ Every credential lf reads, refreshes and writes goes through the secrets slot. T
 
 ## The movements module
 
-Every movement file lf reads goes through the movements slot. `lf.yaml` and the externals folder stay local files.
+Every movement file lf reads goes through the movements slot. The wire a module of your own speaks, and the cases it must pass: [movements-slot.md](contracts/movements-slot.md). `lf.yaml` and the externals folder stay local files: `lf.yaml` is what names the slots.
 
-- `@lf/folder-movements` is the movements folder `lf.yaml` names, read as it always was: every `.mvt` under it, each folder's entries in sorted order, folders depth first.
-- A module filling the slot answers the files by their path under that folder (`orders/sync.mvt`): lf lists them, then reads each. No movements folder need exist on disk; messages still name each file as if it were in it.
+- `@lf/folder-movements` is the movements folder `lf.yaml` names, read as it always was: every `.mvt` under it, each folder's entries in sorted order, folders depth first. With no `core: { movements: … }` nothing is different.
+- A module filling the slot answers the files by their path under that folder (`orders/sync.mvt`): lf lists them, then reads each. No movements folder need exist on disk; messages still name each file as if it were in it. lf sorts the list itself, to the order of the walk.
 - lf reads the files when a command opens its project, and nothing is polled. A file whose listed version lf already holds is not read again, so one command reads each file once. `lf serve` and `lf drain` keep the files they started with until they restart.
-- A movements module's own settings come from `LF_SECRET__…` or the secrets file, never from the secrets slot. A project naming a movements module whose settings neither holds is refused as it loads.
+- `lf upgrade` and `lf init` write movement files through the module, by version. A file changed since lf read it is reported and left (`changed since lf read it; nothing written`), and `lf upgrade` then holds the project's pin. `lf init` writes its starter only when `lf.yaml` already names a movements module; otherwise it makes the folder as ever.
+- A module that keeps the files where lf cannot change them answers the write `read_only` with a reason. `lf upgrade` and `lf init` then refuse, exit 2, writing nothing: `<module> holds the project's movements read-only: <reason>. Change them where they live.`
+- A movements module's own settings never come from the secrets slot. They come from `LF_SECRET__…` or the secrets file, so run `lf connect <module>` before naming it in `core:`. A project naming a movements module whose settings neither holds is refused as it loads.
+- lf has no tenant. A platform running lf for a tenant starts it per tenant and sets the tenant per process, `LF_SECRET__<MODULE>__TENANT=<id>` beside `LF_SECRET__<MODULE>__EXTERNAL=<module>`. The module declares `tenant` among its settings, lf sends the settings on every request, and the module scopes each call. In a cloud deployment the module and its settings come from the environment ([deploy/lf](../deploy/lf/README.md#the-movements-module)).
+- `lf --contract-movements-slot --dir <project>` serves the project's movements slot as a module for the conformance cases, as `--contract-secrets-slot` does for the secrets slot.
 
 ## The loop guard
 
