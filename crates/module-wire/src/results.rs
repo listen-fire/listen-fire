@@ -259,6 +259,7 @@ fn result_schema(method: &str) -> Option<S> {
                         req("events", arr(discriminable_event())),
                         opt("wakeKeys", arr(S::Str)),
                         opt("checkpoint", S::Unknown),
+                        opt("deliveryId", S::Str),
                     ]),
                 ),
                 ("refused", obj(vec![req("outcome", S::Literal("refused")), opt("status", S::Num)])),
@@ -444,6 +445,13 @@ mod tests {
     fn a_passthrough_object_keeps_the_rest_after_its_declared_keys() {
         let checked = check("createRecord", "a", &js(r#"{"data":{},"z":1,"externalId":"e","adapterType":"x"}"#)).unwrap();
         assert_eq!(checked.to_json(), r#"{"adapterType":"x","externalId":"e","data":{},"z":1}"#);
+    }
+
+    #[test]
+    fn check_inbound_keeps_the_delivery_id_a_module_names() {
+        let checked = check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":"d-1","extra":1}"#)).unwrap();
+        assert_eq!(checked.to_json(), r#"{"outcome":"accepted","events":[],"deliveryId":"d-1"}"#);
+        assert!(check("checkInbound", "mail", &js(r#"{"outcome":"accepted","events":[],"deliveryId":7}"#)).is_err());
     }
 
     #[test]

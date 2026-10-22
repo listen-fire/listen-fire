@@ -1176,6 +1176,12 @@ impl Store {
         Ok(i64::try_from(swept).unwrap_or(i64::MAX))
     }
 
+    /// crate::backend::RunHostStore::forget_delivery_id.
+    pub fn forget_delivery_id(&self, id: &str) -> Result<()> {
+        self.db.execute("update delivery set external_id = null where id = ?", params![id])?;
+        Ok(())
+    }
+
     /// crate::backend::RunHostStore::claim_event.
     pub fn claim_event(&self, listen: &str, key: &str) -> Result<bool> {
         Self::claim_event_in(&self.db, listen, key)
@@ -1486,6 +1492,18 @@ mod tests {
         assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
         assert!(other.keep_delivery("sub", None, &delivery(None), &[]).unwrap());
         assert_eq!(store.deliveries(&all).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_forgotten_delivery_id_lets_the_retry_in() {
+        let (store, _) = state_file();
+        let first = delivery(Some("d-1"));
+        assert!(store.keep_delivery("sub", None, &first, &[]).unwrap());
+        store.forget_delivery_id(&first.id).unwrap();
+        let kept = store.delivery(&first.id).unwrap().unwrap();
+        assert_eq!((kept.external_id, kept.event_count), (None, 1), "the receipt stays, without its id");
+        assert!(store.keep_delivery("sub", None, &delivery(Some("d-1")), &[]).unwrap(), "the retry is its own");
+        assert!(!store.keep_delivery("sub", None, &delivery(Some("d-1")), &[]).unwrap(), "and its id is kept");
     }
 
     #[test]

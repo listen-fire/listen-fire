@@ -437,7 +437,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 let store = store_of(&args, &project)?;
                 let session = runs::open_session(project, args.ephemeral, &store).await?;
                 let delivery = serve::WebhookFile { external, install: args.install.as_deref(), body, headers: &args.headers };
-                return report_runs(&serve::receive_webhook(&session, delivery).await?, args.json, &mut out);
+                return report_fired(&serve::receive_webhook(&session, delivery).await?, args.json, &mut out);
             }
             if let Some(movement) = &args.poll {
                 let project = load()?;
@@ -463,7 +463,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let session = runs::open_session(project, args.ephemeral, &store).await?;
             let (external, event) = runs::read_event_file(event_file)?;
-            report_fired(&session.fire_event(&external, &event, args.dry_run).await?, args.json, &mut out)
+            report_fired(&session.fire_event(&external, &event, args.dry_run, None).await?, args.json, &mut out)
         }
         "resume" => {
             let project = load()?;

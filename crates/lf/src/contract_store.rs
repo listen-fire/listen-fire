@@ -39,7 +39,7 @@ pub const STORE_METHODS: &[&str] = &[
     "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
-    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries",
+    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -355,6 +355,10 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         }
         "inbound.delivery" => Ok(store.delivery(p.str("id")?)?.as_ref().map(Wire::to_wire).unwrap_or(Js::Null)),
         "inbound.sweepDeliveries" => Ok(Js::Num(store.sweep_deliveries(p.str("before")?, p.int("limit")?)?.into())),
+        "inbound.forgetDeliveryId" => {
+            store.forget_delivery_id(p.str("id")?)?;
+            none
+        }
         "inbound.saveCheckpoint" => {
             store.save_inbound_checkpoint(p.str("subscriptionId")?, &p.value("checkpoint"))?;
             none
@@ -433,11 +437,15 @@ mod tests {
         let other_row = NewWork { key: "w2".into(), ..work.clone() };
         assert_eq!(keep("c2", &again, &[other_row]), Js::from(obj! { "kept" => Js::Bool(false) }), "a redelivery under the same external id");
         assert_eq!(store.inbound_checkpoint("sub").unwrap(), Some(Js::str("c")));
+        let unnamed = NewDelivery { id: uuid::Uuid::new_v4().to_string(), external_id: Some("x-2".into()), ..receipt.clone() };
+        assert_eq!(keep("c", &unnamed, &[]), Js::from(obj! { "kept" => Js::Bool(true) }));
+        assert_eq!(call(&store, "inbound.forgetDeliveryId", obj! { "id" => Js::str(&unnamed.id) }), Js::Null);
+        assert_eq!(store.delivery(&unnamed.id).unwrap().unwrap().external_id, None, "a failed inline delivery's retry is its own");
         let kept = call(&store, "inbound.delivery", obj! { "id" => Js::str(&receipt.id) });
         assert_eq!(kept.get("events"), Some(&Js::Arr(vec![Js::str("e-1")])));
         assert_eq!(kept.get("runs").and_then(|r| r.as_array()).map(<[Js]>::len), Some(1));
         let listed = call(&store, "inbound.deliveries", obj! { "subscriptionId" => Js::str("sub"), "since" => Js::Null, "limit" => Js::Num(10.into()) });
-        assert_eq!(listed.as_array().map(<[Js]>::len), Some(1));
+        assert_eq!(listed.as_array().map(<[Js]>::len), Some(2));
         assert_eq!(listed.as_array().unwrap()[0].get("events"), None, "a listing carries no events");
         let claimed = call(&store, "work.claimDue", obj! { "limit" => Js::Num(10.into()), "leaseMs" => Js::Num(60_000.into()), "kinds" => Js::strings(["wake_await"]) });
         let row = claimed.as_array().unwrap()[0].clone();
@@ -462,6 +470,7 @@ mod tests {
             "inbound.deliveries",
             "inbound.delivery",
             "inbound.sweepDeliveries",
+            "inbound.forgetDeliveryId",
         ] {
             assert!(STORE_METHODS.contains(&method), "{method}");
         }

@@ -308,13 +308,14 @@ impl Session {
     /// Route one event to every listen it matches, and run each (`fireEvent`).
     /// An event with an `idempotencyKey` runs a listen once: a redelivery
     /// runs nothing. A dry run notes no receipt, so the real delivery after
-    /// it still runs.
-    pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool) -> Result<Fired, String> {
-        self.fire_to(external, event, dry_run, |_| true).await
+    /// it still runs. Each run names `delivery_id`, the delivery the event
+    /// came in, when it came in one.
+    pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>) -> Result<Fired, String> {
+        self.fire_to(external, event, dry_run, delivery_id, |_| true).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
-    async fn fire_to(&self, external: &str, event: &Js, dry_run: bool, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
+    async fn fire_to(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
         let event_types = self.event_types_of(external).await?;
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
@@ -345,7 +346,7 @@ impl Session {
                 continue;
             }
             let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
-            match self.run_listen(&run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key))).await? {
+            match self.run_listen(&run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id).await? {
                 Some(outcome) => fired.outcomes.push(outcome),
                 None => fired.redelivered.push(ran_before(key.unwrap_or_default())),
             }
@@ -361,7 +362,7 @@ impl Session {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `lf run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(crate::units::MANUAL, &event, dry_run, |l| l.movement_name == movement).await
+        self.fire_to(crate::units::MANUAL, &event, dry_run, None, |l| l.movement_name == movement).await
     }
 
     /// The cron unit's due ticks (scale from zero): for each cron listen, the
@@ -398,7 +399,7 @@ impl Session {
             let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
             let due = crate::units::iso_of(due_ms);
             let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(crate::units::CRON, &event, false, |l| std::ptr::eq(l, &self.listens[index])).await?;
+            let fired = self.fire_to(crate::units::CRON, &event, false, None, |l| std::ptr::eq(l, &self.listens[index])).await?;
             self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
             outcomes.extend(fired.outcomes);
         }
@@ -446,7 +447,7 @@ impl Session {
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
-            let one = self.fire_to(&listen.adapter, event, false, |l| std::ptr::eq(l, listen)).await?;
+            let one = self.fire_to(&listen.adapter, event, false, None, |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -508,8 +509,9 @@ impl Session {
 
     /// Start the run and step its first segment. With a `receipt` (the
     /// listen and the event's key), the receipt and the run are one write:
-    /// None, and nothing run, for an event the listen has run before.
-    async fn run_listen(&self, run_id: &str, listen: &Listen, event: Js, dry_run: bool, receipt: Option<(&str, &str)>) -> Result<Option<RunOutcome>, String> {
+    /// None, and nothing run, for an event the listen has run before. The
+    /// run names `delivery_id`, the delivery its event came in.
+    async fn run_listen(&self, run_id: &str, listen: &Listen, event: Js, dry_run: bool, receipt: Option<(&str, &str)>, delivery_id: Option<&str>) -> Result<Option<RunOutcome>, String> {
         let file = &self.files[listen.file];
         let fired_at = iso(0);
         let facts = RunFacts {
@@ -521,7 +523,7 @@ impl Session {
             dry_run,
         };
         let input = facts.to_js().to_json();
-        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id: None };
+        let start = RunStart { id: run_id, file: &file.name, movement: &facts.movement_name, started_at: &fired_at, input: &input, delivery_id };
         match receipt {
             None => self.store.start_run(&start).map_err(|e| e.to_string())?,
             Some((listen, key)) => {
@@ -906,9 +908,18 @@ impl Session {
         match kind {
             "fire_event" => {
                 let event = payload.get("event").cloned().ok_or("a fire_event row has no event")?;
-                let fired = self.fire_event(&text("external")?, &event, false).await?;
+                let external = text("external")?;
+                // Rows queued before deliveries were kept name none.
+                let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
+                let fired = self.fire_event(&external, &event, false, delivery_id).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
+                }
+                if let Some(id) = delivery_id
+                    && fired.outcomes.is_empty()
+                    && fired.redelivered.is_empty()
+                {
+                    eprintln!("lf: {}", no_listen_line(id, &external));
                 }
                 Ok((Next::Done, fired.outcomes))
             }
@@ -1287,6 +1298,12 @@ pub fn read_event_file(path: &std::path::Path) -> Result<(String, Js), String> {
     Ok((external.to_string(), event))
 }
 
+/// What a drain says of a delivery's event that no listen takes: the
+/// delivery is kept (`lf deliveries` lists it) and ran nothing.
+fn no_listen_line(delivery_id: &str, external: &str) -> String {
+    format!("delivery {delivery_id}: no listen takes its {external} event; it is kept and ran nothing")
+}
+
 /// `poll`'s params (adapter protocol 2): the listen's options, the checkpoint
 /// the previous poll left, and `movementId`. Locally the automation is the
 /// movement the listen is declared in, which has no id but its name.
@@ -1315,6 +1332,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_run_from_a_queued_delivery_names_it() {
+        let root = std::env::temp_dir().join(format!("lf-runs-delivery-{}", uuid::Uuid::new_v4()));
+        crate::init::run(&root, &mut Vec::new()).unwrap();
+        // The project's own (empty) secrets, never the home directory's.
+        let secrets = root.join(".lf/secrets.yaml");
+        std::fs::write(&secrets, "{}\n").unwrap();
+        std::fs::set_permissions(&secrets, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let project = crate::project::load_project(&root).unwrap();
+            let session = open_session(project, false, &StoreSpec::Sqlite(root.join(".lf/state.db"))).await.unwrap();
+            let event = crate::units::manual_event(&iso(0), &session.user, None);
+            let row = |delivery_id: Option<&str>| {
+                let mut payload = obj! { "external" => Js::str(crate::units::MANUAL), "event" => event.clone() };
+                if let Some(id) = delivery_id {
+                    payload.insert("deliveryId".into(), Js::str(id));
+                }
+                Js::Obj(payload)
+            };
+            let delivery_of = |outcomes: &[RunOutcome]| {
+                assert_eq!(outcomes.len(), 1, "the starter movement's manual listen takes it");
+                session.store.run(&outcomes[0].run_id).unwrap().unwrap().delivery_id
+            };
+            let (_, outcomes) = session.do_work("fire_event", &row(Some("d-1"))).await.unwrap();
+            assert_eq!(delivery_of(&outcomes).as_deref(), Some("d-1"));
+            let (_, outcomes) = session.do_work("fire_event", &row(None)).await.unwrap();
+            assert_eq!(delivery_of(&outcomes), None, "a row queued before deliveries were kept names none");
+        });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_delivery_no_listen_takes_is_said_to_run_nothing() {
+        assert_eq!(no_listen_line("d-1", "acme"), "delivery d-1: no listen takes its acme event; it is kept and ran nothing");
+    }
 
     fn polled(config: Obj) -> Listen {
         Listen { file: 0, adapter: "system".into(), config, movement_name: "alerts".into() }

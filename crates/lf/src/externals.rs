@@ -122,6 +122,10 @@ pub struct WebhookBlock {
     pub header: String,
     #[serde(rename = "secretField")]
     pub secret_field: String,
+    /// The header carrying the provider's id for each delivery: a
+    /// redelivery under an id kept before is kept out at the door.
+    #[serde(rename = "deliveryIdHeader")]
+    pub delivery_id_header: Option<String>,
 }
 
 fn remote_signature_header() -> String {

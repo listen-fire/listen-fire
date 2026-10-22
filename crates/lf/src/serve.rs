@@ -23,7 +23,7 @@ use crate::callbacks::CallOutcome;
 use crate::doors::Webhook;
 use crate::json::{Js, Obj};
 use crate::project::Project;
-use crate::runs::{Cancelled, Returned, RunOutcome, Session, cancel_run, open_session, report};
+use crate::runs::{Cancelled, Fired, Returned, Session, cancel_run, open_session, report};
 
 
 /// Where this process serves, once `serve` listens: every external started
@@ -151,7 +151,7 @@ pub struct WebhookFile<'a> {
     pub headers: &'a [String],
 }
 
-pub async fn receive_webhook(session: &Session, file: WebhookFile<'_>) -> Result<Vec<RunOutcome>, String> {
+pub async fn receive_webhook(session: &Session, file: WebhookFile<'_>) -> Result<Fired, String> {
     let raw_body = std::fs::read(file.body).map_err(|e| format!("{}: {e}", file.body.display()))?;
     let headers = file
         .headers

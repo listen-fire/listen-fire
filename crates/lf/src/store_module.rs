@@ -339,6 +339,9 @@ impl RunHostStore for ProcessStore {
             _ => Err(self.malformed("inbound.keepDelivery", &answer)),
         }
     }
+    fn forget_delivery_id(&self, id: &str) -> Result<()> {
+        self.unit("inbound.forgetDeliveryId", obj! { "id" => s(id) })
+    }
     fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
         let params = obj! { "subscriptionId" => opt(query.subscription_id), "since" => opt(query.since), "limit" => Js::Num(query.limit.into()) };
         self.rows("inbound.deliveries", params)

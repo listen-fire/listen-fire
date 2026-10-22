@@ -265,6 +265,10 @@ pub trait RunHostStore {
     /// id was kept at its subscription before (a redelivery, even one whose
     /// first's work is still queued).
     fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool>;
+    /// Clear a kept delivery's external id, its receipt kept: its events
+    /// failed inside the request and its sender was answered 500, so the
+    /// sender's retry under that id is kept as a delivery of its own.
+    fn forget_delivery_id(&self, id: &str) -> Result<()>;
     /// The kept deliveries the query names, most recent first, each with its
     /// runs and without its events.
     fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>>;
@@ -467,6 +471,9 @@ impl RunHostStore for Store {
     }
     fn keep_delivery(&self, subscription_id: &str, checkpoint: Option<&Js>, delivery: &NewDelivery, work: &[NewWork]) -> Result<bool> {
         Store::keep_delivery(self, subscription_id, checkpoint, delivery, work)
+    }
+    fn forget_delivery_id(&self, id: &str) -> Result<()> {
+        Store::forget_delivery_id(self, id)
     }
     fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
         Store::deliveries(self, query)

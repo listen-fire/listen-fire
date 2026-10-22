@@ -41,6 +41,8 @@ export interface ContractProvider {
   scheme: InboundSignatureScheme;
   signatureHeaders: string[];
   intercepts?: InboundIntercept[];
+  /** The header carrying the provider's id for each delivery. */
+  deliveryId?: { header: string };
 }
 
 export interface ContractWorld {
@@ -442,6 +444,141 @@ export const INBOUND_CONTRACT_CASES: InboundContractCase[] = [
       }));
       assert.deepEqual([answer.status, answer.body], [202, { accepted: 2 }]);
       assert.deepEqual((await backend.observed()).wakes, ['k1', 'k2']);
+    },
+  },
+];
+
+// ── The delivery receipt ──────────────────────────────────────────────────
+//
+// A host that keeps each delivery as a receipt (lf's doors): a redelivery
+// under the provider's id, at the same subscription, is acked as a duplicate
+// and queues nothing. A separate list: the door core here (deliver.ts) and
+// memoryInboundStores keep no deliveries yet.
+
+/** A kept delivery, as the receipt cases read it. */
+export interface ContractDelivery {
+  externalId: string | null;
+  source: string;
+  eventCount: number;
+}
+
+export interface DeliveryReceiptContractBackend extends InboundContractBackend {
+  /** Every delivery the host kept, most recent first. */
+  deliveries(): Promise<ContractDelivery[]>;
+}
+
+export interface DeliveryReceiptContractCase {
+  name: string;
+  run(backend: DeliveryReceiptContractBackend): Promise<void>;
+}
+
+const CRM_WITH_IDS: ContractProvider = { ...CRM, deliveryId: { header: 'x-crm-delivery' } };
+const withIds = (overrides: Partial<ContractWorld> = {}): Partial<ContractWorld> => ({ providers: [CRM_WITH_IDS, SLACK], ...overrides });
+const crmSignedAs = (id: string) => (body: Buffer) => ({ ...crmSigned(body), 'x-crm-delivery': id });
+const EMIT_DOOR = `/api/public/adapter/${CONTRACT_PUSH_TYPE}/emit`;
+const pushCredential = () => ({ authorization: 'Bearer push-credential' });
+
+export const DELIVERY_RECEIPT_CONTRACT_CASES: DeliveryReceiptContractCase[] = [
+  {
+    name: 'a delivery is kept under the id its declared header carries',
+    async run(backend) {
+      await arrangeAnd(backend, withIds());
+      const answer = await post(backend, CRM_DOOR, json(TWO_EVENTS), crmSignedAs('d-1'));
+      assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 2 }]);
+      assert.deepEqual(await backend.deliveries(), [{ externalId: 'd-1', source: 'webhook', eventCount: 2 }]);
+    },
+  },
+  {
+    name: 'a redelivery under the same id is acked as a duplicate and queues nothing',
+    async run(backend) {
+      await arrangeAnd(backend, withIds());
+      const first = await post(backend, CRM_DOOR, json({ ...TWO_EVENTS, checkpoint: { cursor: 'c-1' } }), crmSignedAs('d-1'));
+      assert.equal(first.status, 200);
+      const again = await post(backend, CRM_DOOR, json({ ...TWO_EVENTS, checkpoint: { cursor: 'c-2' } }), crmSignedAs('d-1'));
+      assert.deepEqual([again.status, again.body], [200, { ok: true, duplicate: true, eventsProcessed: 0 }]);
+      const seen = await backend.observed();
+      assert.deepEqual([seen.enqueued, seen.checkpoints.length, seen.notified], [2, 1, 1]);
+      assert.equal((await backend.deliveries()).length, 1);
+    },
+  },
+  {
+    name: 'without the header each delivery is its own, and none is a duplicate',
+    async run(backend) {
+      await arrangeAnd(backend, withIds());
+      for (let i = 0; i < 2; i += 1) {
+        const answer = await post(backend, CRM_DOOR, json(TWO_EVENTS), crmSigned);
+        assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 2 }]);
+      }
+      assert.equal((await backend.observed()).enqueued, 4);
+      const kept = await backend.deliveries();
+      assert.deepEqual(
+        kept.map((d) => d.externalId),
+        [null, null],
+      );
+    },
+  },
+  {
+    name: 'the same id at another subscription is not a duplicate',
+    async run(backend) {
+      await arrangeAnd(
+        backend,
+        withIds({
+          subscriptions: [
+            { id: 'sub-crm', teamId: TEAM, providerKey: CONTRACT_PROVIDER_KEY, secret: SECRET },
+            { id: 'sub-crm-2', teamId: TEAM, providerKey: CONTRACT_PROVIDER_KEY, secret: SECRET },
+          ],
+        }),
+      );
+      for (const subscription of ['sub-crm', 'sub-crm-2']) {
+        const answer = await post(backend, door('contract_crm', subscription), json(TWO_EVENTS), crmSignedAs('d-1'));
+        assert.deepEqual([answer.status, answer.body], [200, { ok: true, eventsProcessed: 2 }]);
+      }
+      assert.equal((await backend.observed()).enqueued, 4);
+      assert.deepEqual(
+        (await backend.deliveries()).map((d) => d.externalId),
+        ['d-1', 'd-1'],
+      );
+    },
+  },
+  {
+    name: 'a delivery whose wakes failed is kept without its id, so the retry is kept too',
+    async run(backend) {
+      await arrangeAnd(backend, withIds({ faults: { wakeKeys: true } }));
+      for (let i = 0; i < 2; i += 1) {
+        const answer = await post(backend, CRM_DOOR, json(TWO_EVENTS), crmSignedAs('d-1'));
+        assert.equal(answer.status, 500);
+      }
+      assert.equal((await backend.observed()).enqueued, 4);
+      assert.deepEqual(
+        (await backend.deliveries()).map((d) => d.externalId),
+        [null, null],
+      );
+    },
+  },
+  {
+    name: "emit's deliveryId keeps the batch out the second time",
+    async run(backend) {
+      await arrangeAnd(backend);
+      const batch = json({ events: [{ payload: { n: 1 } }], deliveryId: 'b-1' });
+      const first = await post(backend, EMIT_DOOR, batch, pushCredential);
+      assert.deepEqual([first.status, first.body], [202, { accepted: 1 }]);
+      const again = await post(backend, EMIT_DOOR, batch, pushCredential);
+      assert.deepEqual([again.status, again.body], [202, { accepted: 0, duplicate: true }]);
+      const seen = await backend.observed();
+      assert.deepEqual([seen.enqueued, seen.notified], [1, 1]);
+      assert.deepEqual(await backend.deliveries(), [{ externalId: 'b-1', source: 'emit', eventCount: 1 }]);
+    },
+  },
+  {
+    name: "an emit's deliveryId that is not a non-empty string is a 400",
+    async run(backend) {
+      await arrangeAnd(backend);
+      for (const deliveryId of ['', 7, null]) {
+        const answer = await post(backend, EMIT_DOOR, json({ events: [{ payload: { n: 1 } }], deliveryId }), pushCredential);
+        assert.equal(answer.status, 400);
+        assert.deepEqual((answer.body as { issues?: { path?: unknown }[] }).issues?.[0]?.path, 'deliveryId');
+      }
+      assert.deepEqual(await backend.deliveries(), []);
     },
   },
 ];

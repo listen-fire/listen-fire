@@ -157,6 +157,7 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
     let parked = store.leaves(run_id, true, None, None).map_err(io)?;
     let cancel = store.cancel_request(run_id).map_err(io)?;
     let mut shown = row_summary(&run);
+    shown.insert("deliveryId".into(), opt(run.delivery_id.as_deref()));
     shown.insert("firedAt".into(), facts.get("firedAt").cloned().unwrap_or(Js::Null));
     shown.insert("languageVersion".into(), facts.get("languageVersion").cloned().unwrap_or(Js::Null));
     shown.insert("event".into(), facts.get("event").cloned().unwrap_or(Js::Null));

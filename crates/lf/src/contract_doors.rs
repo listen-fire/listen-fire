@@ -8,9 +8,10 @@
 //! the suite's faults injected, around lf's own stores over a scratch state
 //! file.
 //!
-//!   doors.baseUrl   → { baseUrl }
-//!   doors.arrange   the world (`ContractWorld`) → null
-//!   doors.observed  → what the doors did since the world was arranged
+//!   doors.baseUrl     → { baseUrl }
+//!   doors.arrange     the world (`ContractWorld`) → null
+//!   doors.observed    → what the doors did since the world was arranged
+//!   doors.deliveries  → the deliveries kept: [{ externalId, source, eventCount }]
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -24,7 +25,7 @@ use crate::inbound::{Declaration, Extraction, InboundStore, Kept, PushAuth, Push
 use crate::json::Js;
 use crate::obj;
 use crate::secrets::{Binding, Credential, Origin};
-use crate::store::Store;
+use crate::store::{DeliveryQuery, Store};
 
 #[derive(Default, Clone, Copy)]
 struct Faults {
@@ -97,6 +98,7 @@ async fn answer_lines(bridge: &Bridge, base_url: &str) -> Result<(), String> {
             Some("doors.baseUrl") => Ok(Js::Obj(obj! { "baseUrl" => Js::str(base_url) })),
             Some("doors.arrange") => bridge.arrange(&params).map(|()| Js::Null),
             Some("doors.observed") => Ok(bridge.observed()),
+            Some("doors.deliveries") => bridge.deliveries(),
             other => Err(format!("no method {}", other.unwrap_or("(none)"))),
         };
         let reply = match answered {
@@ -172,6 +174,24 @@ impl Bridge {
             "checkpoints" => Js::Arr(seen.checkpoints.clone()),
             "notified" => Js::Num(seen.notified.into()),
         })
+    }
+
+    /// Every delivery the doors kept, since the bridge started: a world is
+    /// arranged over the same state file.
+    fn deliveries(&self) -> Result<Js, String> {
+        let all = DeliveryQuery { subscription_id: None, since: None, limit: 1000 };
+        let kept = self.store.deliveries(&all).map_err(|e| e.to_string())?;
+        Ok(Js::Arr(
+            kept.iter()
+                .map(|d| {
+                    Js::Obj(obj! {
+                        "externalId" => d.external_id.as_deref().map_or(Js::Null, Js::str),
+                        "source" => Js::str(d.source.wire()),
+                        "eventCount" => Js::Num(d.event_count.into()),
+                    })
+                })
+                .collect(),
+        ))
     }
 
     /// lf's doors over the arranged world, observed.
@@ -260,17 +280,21 @@ impl InboundStore for Observed<'_> {
     /// lf keeps a delivery in one write, so the suite's faults land on it
     /// whole: wakes that cannot be queued keep nothing; receipts that cannot
     /// be queued are each refused, the rest kept (the suite's per-receipt
-    /// failure), and the delivery fails.
-    async fn keep(&self, mut kept: Kept<'_>) -> Result<(), String> {
+    /// failure) without the delivery's id, so the sender's retry is kept,
+    /// and the delivery fails. A duplicate is observed doing nothing.
+    async fn keep(&self, mut kept: Kept<'_>) -> Result<bool, String> {
         if self.faults.enqueue_wakes && !kept.wake_keys.is_empty() {
             return Err("wake queue unavailable".into());
         }
         let refused = self.faults.enqueue && !kept.receipts.is_empty();
         if refused {
             kept.receipts.clear();
+            kept.external_id = None;
         }
         let (checkpoint, receipts, wakes) = (kept.checkpoint.cloned(), kept.receipts.len() as u64, kept.wake_keys.to_vec());
-        self.lf().keep(kept).await?;
+        if !self.lf().keep(kept).await? {
+            return Ok(false);
+        }
         self.note(|seen| {
             seen.checkpoints.extend(checkpoint);
             seen.enqueued += receipts;
@@ -279,7 +303,7 @@ impl InboundStore for Observed<'_> {
         if refused {
             return Err("work table unavailable".into());
         }
-        Ok(())
+        Ok(true)
     }
 
     fn notify(&self) {
@@ -298,11 +322,13 @@ impl PushStore for Observed<'_> {
         Ok(captured)
     }
 
-    async fn enqueue_pushed(&self, captured: Vec<Js>) -> Result<(), String> {
+    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String> {
         let count = captured.len() as u64;
-        self.lf().enqueue_pushed(captured).await?;
+        if !self.lf().enqueue_pushed(caller, captured, external_id).await? {
+            return Ok(false);
+        }
         self.note(|seen| seen.enqueued += count);
-        Ok(())
+        Ok(true)
     }
 
     async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String> {

@@ -1,10 +1,11 @@
 //! `lf serve --doors-only` with a wake module in the project's wake slot,
 //! both served by a module host (crates/module-kit) on a thread of the test:
 //! a signed delivery to `/hooks/inbox` is queued, not run (202, the row
-//! listed), and the wake module is told the work is ready now; nothing
-//! drains in serve; a worker (`lf drain --until-idle`) runs the event, whose
-//! movement parks on a timer, and the wake module is told the timer's work
-//! is ready an hour later. A call to a callback's door is recorded, its body
+//! listed), and the wake module is told the work is ready now; its
+//! redelivery, under the same delivery id, is a duplicate that queues
+//! nothing; nothing drains in serve; a worker (`lf drain --until-idle`) runs
+//! the event once, the run naming its delivery, and its movement parks on a
+//! timer, and the wake module is told the timer's work is ready an hour later. A call to a callback's door is recorded, its body
 //! queued for a worker rather than run in the request.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -123,7 +124,7 @@ impl Project {
             std::fs::create_dir_all(root.join("externals").join(name)).unwrap();
             std::fs::write(root.join("externals").join(name).join("lf-external.yaml"), yaml).unwrap();
         };
-        external("inbox", format!("name: inbox\nkind: adapter\nprotocol: 2\nurl: http://127.0.0.1:{port}/inbox\nwebhook:\n  signature: hmac-sha256\n  secretField: webhook_secret\n"));
+        external("inbox", format!("name: inbox\nkind: adapter\nprotocol: 2\nurl: http://127.0.0.1:{port}/inbox\nwebhook:\n  signature: hmac-sha256\n  secretField: webhook_secret\n  deliveryIdHeader: x-inbox-delivery\n"));
         external("acme_wake", format!("name: acme_wake\nkind: core\nslot: wake\nurl: http://127.0.0.1:{port}/acme_wake\n"));
         let mut lf_yaml = std::fs::read_to_string(root.join("lf.yaml")).unwrap();
         lf_yaml.push_str("core:\n  wake: acme_wake\n");
@@ -183,12 +184,12 @@ fn serve_doors_only(project: &Project) -> (Serving, u16) {
     panic!("lf serve stopped before it listened");
 }
 
-/// One signed POST; the status and the body.
-fn deliver(port: u16, body: &str) -> (u16, String) {
+/// One signed POST, under the provider's delivery id; the status and the body.
+fn deliver(port: u16, body: &str, delivery_id: &str) -> (u16, String) {
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
     mac.update(body.as_bytes());
     let signature: String = mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect();
-    post(port, "/hooks/inbox", &format!("x-listen-fire-signature: {signature}\r\n"), body)
+    post(port, "/hooks/inbox", &format!("x-listen-fire-signature: {signature}\r\nx-inbox-delivery: {delivery_id}\r\n"), body)
 }
 
 /// One POST of a JSON body, with any extra header lines; the status and the body.
@@ -218,7 +219,8 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
     assert_eq!(code, 0, "lf check: {out}");
 
     let (serving, port) = serve_doors_only(&project);
-    let (status, body) = deliver(port, r#"{"notes":[{"id":"n-1","Title":"hello"}]}"#);
+    let note = r#"{"notes":[{"id":"n-1","Title":"hello"}]}"#;
+    let (status, body) = deliver(port, note, "d-1");
     assert_eq!(status, 202, "{body}");
     let answer: serde_json::Value = serde_json::from_str(&body).unwrap();
     let queued = answer["queued"].as_array().unwrap();
@@ -226,6 +228,13 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
     assert_eq!((queued[0]["kind"].as_str(), queued[0]["external"].as_str()), (Some("fire_event"), Some("inbox")));
     assert!(answer.get("runs").is_none(), "nothing ran in the request: {body}");
     assert_eq!(told.all(), vec![("now".to_string(), "fire_event".to_string())]);
+
+    // The provider sends it again: kept out at the door, nothing queued.
+    let (status, body) = deliver(port, note, "d-1");
+    assert_eq!(status, 202, "{body}");
+    let answer: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((answer["duplicate"].as_bool(), answer["queued"].as_array().map(Vec::len)), (Some(true), Some(0)), "{body}");
+    assert_eq!(told.all().len(), 1, "the wake module heard of nothing new");
 
     // Past serve's drain tick: had it drained, the run would be there.
     std::thread::sleep(std::time::Duration::from_millis(2_500));
@@ -237,6 +246,15 @@ fn serve_doors_only_queues_a_delivery_and_the_wake_module_hears_of_each_queued_r
     let (code, out) = project.lf(&["drain", "--until-idle"]);
     assert_eq!(code, 0, "lf drain: {out}");
     assert!(out.contains("parked"), "the worker ran the event to its timer: {out}");
+    let (code, out) = project.lf(&["runs", "--json"]);
+    assert_eq!(code, 0, "lf runs: {out}");
+    let runs: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let later: Vec<&str> = runs["runs"].as_array().unwrap().iter().filter(|r| r["movement"] == "later").map(|r| r["runId"].as_str().unwrap()).collect();
+    assert_eq!(later.len(), 1, "the delivery ran once: {out}");
+    let (code, out) = project.lf(&["runs", "show", later[0], "--json"]);
+    assert_eq!(code, 0, "lf runs show: {out}");
+    let shown: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(shown["run"]["deliveryId"].as_str().is_some_and(|id| !id.is_empty()), "the run names its delivery: {out}");
     let told = told.all();
     let (at, _) = told.iter().find(|(_, kind)| kind == "resume_timer").unwrap_or_else(|| panic!("the timer's wake: {told:?}"));
     let in_an_hour = jiff::Timestamp::now().as_millisecond() + 3_600_000;

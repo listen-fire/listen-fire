@@ -413,6 +413,10 @@ slot! {
             delivery: NewDelivery,
             work: Vec<NewWork>,
         }) -> Kept;
+        /// Clear a kept delivery's `external_id`, its receipt kept: its
+        /// events failed inside the request, so the sender's retry under
+        /// that id is a delivery of its own.
+        "inbound.forgetDeliveryId" => fn forget_delivery_id(InboundForgetDeliveryId { id: String }) -> ();
         /// Most recent first, each with its runs and without its events;
         /// `since`: received at or after it.
         "inbound.deliveries" => fn deliveries(InboundDeliveries { subscription_id: Option<String>, since: Option<String>, limit: i64 }) -> Vec<DeliveryRow>;

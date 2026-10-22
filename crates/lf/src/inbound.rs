@@ -8,6 +8,8 @@
 //! → preprocessInbound → capture an event's receipt → advance the pull cursor
 //! → queue a work row per receipt and per await wake → ack. Capture, queue,
 //! then ack: the sender's 200 means every receipt and wake has its work row.
+//! A delivery the provider names (a declared header, or the module's check)
+//! is kept once per subscription: its redelivery is acked as a duplicate.
 //! A module that checks its own inbound (`scheme: module`) is handed the raw
 //! request (`checkInbound`) in place of the signature, `preprocessInbound`
 //! and `wakeKeys`, and may answer a reply to send as it is (a handshake);
@@ -19,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::http::header;
 use crate::json::Js;
 use crate::obj;
+pub use crate::store::DeliverySource;
 
 /// The placeholder a subscription holds until its registration returns a
 /// secret (`UNREGISTERED_SECRET`): never a key anything verifies against.
@@ -107,6 +110,9 @@ pub struct Declaration {
     /// Whether the provider issues the secret when the webhook is registered
     /// (`secretIssuedBy: provider`), rather than the installer setting it.
     pub secret_from_provider: bool,
+    /// Lower case: the header carrying the provider's id for a delivery
+    /// (`deliveryId: { header }`), so a redelivery under it is kept out.
+    pub delivery_id_header: Option<String>,
 }
 
 impl Declaration {
@@ -126,8 +132,7 @@ impl Declaration {
             (_, headers) => headers.and_then(Js::as_array).ok_or("signatureHeaders: expected an array")?,
         };
         for h in headers {
-            let name = h.as_str().filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
-            signature_headers.push(name.ok_or("signatureHeaders: a signature header is a lower-case header name")?.to_string());
+            signature_headers.push(header_name(h).ok_or("signatureHeaders: a signature header is a lower-case header name")?.to_string());
         }
         if signature_headers.is_empty() && scheme != Scheme::Module {
             return Err("signatureHeaders: expected at least one header".into());
@@ -152,8 +157,21 @@ impl Declaration {
                 _ => return Err("secretIssuedBy: expected installer or provider".into()),
             },
         };
-        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider })
+        // A module that checks its own inbound names the id in its check.
+        let delivery_id_header = match value.get("deliveryId").filter(|_| scheme != Scheme::Module) {
+            None => None,
+            Some(declared) => {
+                let header = declared.get("header").and_then(header_name).ok_or("deliveryId.header: a delivery id header is a lower-case header name")?;
+                Some(header.to_string())
+            }
+        };
+        Ok(Declaration { provider_key: provider_key.to_string(), scheme, signature_headers, intercepts, secret_from_provider, delivery_id_header })
     }
+}
+
+/// A lower-case header name, as the wire's `HEADER_NAME` reads one.
+fn header_name(value: &Js) -> Option<&str> {
+    value.as_str().filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
 }
 
 /// The first of `names` that is present, or '' when none is.
@@ -406,9 +424,11 @@ pub trait InboundStore {
     async fn wake_keys(&self, source: &Source, raw: &Js) -> Result<Vec<String>, String>;
     /// An event's receipt: what `keep` later queues.
     async fn capture(&self, event: &Js, source: &Source) -> Result<Js, String>;
-    /// What the delivery leaves, kept as one: its pull cursor, its receipts
-    /// queued and its wakes. A failure is the sender's to retry, whole.
-    async fn keep(&self, kept: Kept<'_>) -> Result<(), String>;
+    /// What the delivery leaves, kept as one: the delivery's receipt, its
+    /// pull cursor, its receipts queued and its wakes. False, and nothing
+    /// kept, for a duplicate: its external id was kept at its subscription
+    /// before. A failure is the sender's to retry, whole.
+    async fn keep(&self, kept: Kept<'_>) -> Result<bool, String>;
     /// Poke whatever drains the work rows.
     fn notify(&self);
 }
@@ -422,6 +442,11 @@ pub struct Kept<'a> {
     pub source: &'a Source,
     pub team_id: &'a str,
     pub wake_keys: &'a [String],
+    /// The provider's id for the delivery: a second one under it, at the
+    /// same subscription, is a duplicate.
+    pub external_id: Option<&'a str>,
+    /// Which door it came through (the receipt's `source`).
+    pub door: DeliverySource,
 }
 
 pub struct Delivery<'a> {
@@ -435,6 +460,8 @@ pub struct Delivery<'a> {
     /// Percent-encoded, without its query.
     pub path: &'a str,
     pub query: &'a str,
+    /// Which door it came through: webhook-sync, `/hooks`, `lf run --webhook`.
+    pub source: DeliverySource,
 }
 
 /// Why a delivery is refused, and the status it is refused with.
@@ -447,6 +474,14 @@ enum Refusal {
     RefusedWith(u16),
     MethodNotAllowed,
     CannotPreprocess,
+}
+
+/// What a delivery that got in came to.
+enum Received {
+    /// Kept, with this many of its events.
+    Kept(usize),
+    /// Its external id was kept at its subscription before: nothing kept.
+    Duplicate,
 }
 
 /// How a delivery ended short of its events.
@@ -480,12 +515,17 @@ pub async fn answer_delivery<S: InboundStore>(store: &S, delivery: Delivery<'_>)
         }
     }
     match receive_delivery(store, &provider_key, &delivery).await {
-        Ok(Ok(events_processed)) => Answer {
+        Ok(Ok(Received::Kept(events_processed))) => Answer {
             status: 200,
             body: Js::Obj(obj! { "ok" => Js::Bool(true), "eventsProcessed" => Js::Num((events_processed as u64).into()) }),
             text: None,
             notify_after: true,
         },
+        // Acked, so the sender stops: the first delivery's work is in.
+        Ok(Ok(Received::Duplicate)) => Answer::of(
+            200,
+            Js::Obj(obj! { "ok" => Js::Bool(true), "duplicate" => Js::Bool(true), "eventsProcessed" => Js::Num(0.into()) }),
+        ),
         Ok(Err(Ended::Refused(refusal))) => refusal.answer(),
         Ok(Err(Ended::Reply(answer))) => answer,
         Err(error) => {
@@ -498,7 +538,7 @@ pub async fn answer_delivery<S: InboundStore>(store: &S, delivery: Delivery<'_>)
 /// Verify, capture and queue one delivery (`receiveDelivery` and its
 /// `queue`): the events captured, or why it is refused. Anything that cannot
 /// be queued is an error, so the sender's retry replays it.
-async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delivery: &Delivery<'_>) -> Result<Result<usize, Ended>, String> {
+async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delivery: &Delivery<'_>) -> Result<Result<Received, Ended>, String> {
     let refused = |refusal| Ok(Err(Ended::Refused(refusal)));
     let Some(subscription) = store.find_subscription(delivery.subscription_id).await? else {
         return refused(if store.knows_provider(provider_key) { Refusal::SubscriptionNotFound } else { Refusal::UnknownProvider });
@@ -508,7 +548,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
     }
     let Some(source) = store.source_for(&subscription).await? else { return refused(Refusal::UnknownProvider) };
 
-    let (extraction, wakes) = if source.declaration.scheme == Scheme::Module {
+    let (extraction, wakes, external_id) = if source.declaration.scheme == Scheme::Module {
         let request = RawRequest { method: delivery.method, path: delivery.path, query: delivery.query, headers: delivery.headers, body: delivery.raw_body };
         let secret = is_usable_secret(&source.secret).then_some(source.secret.as_str());
         let answer = store.check_inbound(&source, &request, secret, subscription.checkpoint.as_ref()).await?;
@@ -522,7 +562,8 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             _ => {
                 let events = answer.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default();
                 let keys = answer.get("wakeKeys").and_then(Js::as_array).unwrap_or(&[]).iter().filter_map(Js::as_str).map(str::to_string).collect::<Vec<_>>();
-                (Extraction { events, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys))
+                let external_id = answer.get("deliveryId").and_then(Js::as_str).filter(|id| !id.is_empty()).map(str::to_string);
+                (Extraction { events, checkpoint: answer.get("checkpoint").cloned() }, Wakes::Known(keys), external_id)
             }
         }
     } else {
@@ -535,13 +576,15 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
             return refused(Refusal::SignatureInvalid);
         }
         let body = Js::parse(delivery.raw_body).map_err(|e| format!("the delivery is not JSON: {e}"))?;
+        // Read off the request, never the external: the id is the provider's.
+        let external_id = source.declaration.delivery_id_header.as_deref().and_then(|name| header(delivery.headers, name)).filter(|id| !id.is_empty()).map(str::to_string);
         // `preprocessInbound` is the raw→events seam every inbound adapter
         // implements; one that lacks it is a wiring bug, refused loudly.
         if !store.reads_deliveries(&source) {
             eprintln!("[webhook] adapter for provider {} has no preprocessInbound — delivery dropped", subscription.provider_key);
             return refused(Refusal::CannotPreprocess);
         }
-        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body))
+        (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body), external_id)
     };
 
     // Capture: one receipt per event. A receipt that cannot be stored drops
@@ -561,7 +604,7 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         Wakes::Read(body) => store.wake_keys(&source, &body).await,
     };
     if extraction.events.is_empty() && wakes.as_ref().is_ok_and(Vec::is_empty) {
-        return Ok(Ok(0));
+        return Ok(Ok(Received::Kept(0)));
     }
     // The pull cursor rides on "receipted", not "run", and is kept with the
     // receipts it moved past: never one without the other.
@@ -573,11 +616,17 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         source: &source,
         team_id: &subscription.team_id,
         wake_keys: wakes.as_deref().unwrap_or(&[]),
+        // A delivery whose wakes failed is answered 500 and sent again: kept
+        // without its id, so the retry is kept rather than a duplicate.
+        external_id: external_id.as_deref().filter(|_| wakes.is_ok()),
+        door: delivery.source,
     };
-    store.keep(kept).await?;
+    if !store.keep(kept).await? {
+        return Ok(Ok(Received::Duplicate));
+    }
     // The events are in; a failing wake door is still the sender's to retry.
     wakes.map_err(|error| format!("wakeKeys failed for adapter {}: {error}", source.adapter_type))?;
-    Ok(Ok(events_processed))
+    Ok(Ok(Received::Kept(events_processed)))
 }
 
 /// A delivery's wakes: named by the module's check, or read off the body.
@@ -610,6 +659,8 @@ fn module_reply(answer: &Js) -> Answer {
 pub struct PushCaller {
     pub team_id: String,
     pub adapter_type: String,
+    /// The install's name: the subscription an emitted batch is kept under.
+    pub subscription_id: String,
 }
 
 pub enum PushAuth {
@@ -623,7 +674,9 @@ pub trait PushStore {
     async fn authenticate(&self, adapter_type: &str, headers: &[(String, String)]) -> Result<PushAuth, String>;
     /// The receipts one event earns.
     async fn capture_pushed(&self, caller: &PushCaller, event: &Js) -> Result<Vec<Js>, String>;
-    async fn enqueue_pushed(&self, captured: Vec<Js>) -> Result<(), String>;
+    /// The batch's receipts kept and queued as one delivery. False, and
+    /// nothing queued, for a duplicate: its external id was kept before.
+    async fn enqueue_pushed(&self, caller: &PushCaller, captured: Vec<Js>, external_id: Option<&str>) -> Result<bool, String>;
     async fn enqueue_pushed_wakes(&self, adapter_type: &str, team_id: &str, keys: &[String]) -> Result<(), String>;
     fn notify_pushed(&self);
 }
@@ -660,7 +713,7 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
     let answered = match push {
         Push::Emit => match emit_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
-            Ok(events) => emit(store, &caller, events).await,
+            Ok((events, delivery_id)) => emit(store, &caller, events, delivery_id.as_deref()).await,
         },
         Push::Wake => match wake_body(body.as_ref()) {
             Err(issue) => return bad_request(issue),
@@ -673,9 +726,10 @@ pub async fn answer_push<S: PushStore>(store: &S, push: Push, adapter_type: &str
     })
 }
 
-/// `{ events }`: 1 to 1,000 events, each read as the protocol's event (its
-/// declared keys, in order).
-fn emit_body(body: Option<&Js>) -> Result<Vec<Js>, (String, String)> {
+/// `{ events, deliveryId? }`: 1 to 1,000 events, each read as the
+/// protocol's event (its declared keys, in order), and the external's id for
+/// the batch, when it names one.
+fn emit_body(body: Option<&Js>) -> Result<(Vec<Js>, Option<String>), (String, String)> {
     let events = body.and_then(|b| b.get("events")).and_then(Js::as_array).ok_or(("events".to_string(), "expected an array".to_string()))?;
     if events.is_empty() || events.len() > DOOR_MAX_BATCH {
         return Err(("events".into(), format!("expected between 1 and {DOOR_MAX_BATCH} events")));
@@ -683,7 +737,12 @@ fn emit_body(body: Option<&Js>) -> Result<Vec<Js>, (String, String)> {
     // The events as the protocol's `preprocessInbound` result reads them.
     let read = module_wire::results::check("preprocessInbound", "emit", &Js::Obj(obj! { "events" => Js::Arr(events.to_vec()) }))
         .map_err(|issue| ("events".to_string(), issue))?;
-    Ok(read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default())
+    let delivery_id = match body.and_then(|b| b.get("deliveryId")) {
+        None => None,
+        Some(Js::Str(id)) if !id.is_empty() => Some(id.clone()),
+        Some(_) => return Err(("deliveryId".into(), "expected a non-empty string".into())),
+    };
+    Ok((read.get("events").and_then(Js::as_array).map(<[Js]>::to_vec).unwrap_or_default(), delivery_id))
 }
 
 /// `{ keys }`: 1 to 1,000 non-empty texts.
@@ -705,10 +764,11 @@ fn bad_request((path, message): (String, String)) -> Answer {
     )
 }
 
-/// `emitEvents`: receipt each event and queue a run per receipt. A capture
-/// that throws fails the call (500) after the receipts already made are
-/// queued, since a receipt without its row would never run.
-async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>) -> Result<Answer, String> {
+/// `emitEvents`: receipt each event and queue a run per receipt, the batch
+/// one delivery. A capture that throws fails the call (500) after the
+/// receipts already made are queued, since a receipt without its row would
+/// never run. A batch under an id kept before queues nothing.
+async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>, delivery_id: Option<&str>) -> Result<Answer, String> {
     let mut captured = Vec::new();
     let mut failed = 0u64;
     for event in &events {
@@ -722,7 +782,12 @@ async fn emit<S: PushStore>(store: &S, caller: &PushCaller, events: Vec<Js>) -> 
     }
     let accepted = captured.len() as u64;
     let any = !captured.is_empty();
-    store.enqueue_pushed(captured).await?;
+    // A batch with a failed capture is the caller's to send again: kept
+    // without its id, so the retry is kept rather than a duplicate.
+    let external_id = delivery_id.filter(|_| failed == 0);
+    if !store.enqueue_pushed(caller, captured, external_id).await? {
+        return Ok(Answer::of(202, Js::Obj(obj! { "accepted" => Js::Num(0.into()), "duplicate" => Js::Bool(true) })));
+    }
     if any {
         store.notify_pushed();
     }
@@ -777,7 +842,14 @@ mod tests {
 
     #[test]
     fn a_declaration_holds_the_signed_inbound_rule() {
-        let declared = Declaration { provider_key: "crm".into(), scheme: Scheme::Attio, signature_headers: vec!["x-sig".into()], intercepts: Vec::new(), secret_from_provider: false };
+        let declared = Declaration {
+            provider_key: "crm".into(),
+            scheme: Scheme::Attio,
+            signature_headers: vec!["x-sig".into()],
+            intercepts: Vec::new(),
+            secret_from_provider: false,
+            delivery_id_header: None,
+        };
         let unsigned_key = to_hex(&hmac_sha256(b"", BODY));
         assert!(verify_with_scheme(Scheme::Attio, BODY, &headers(&[("x-sig", &unsigned_key)]), "", &declared.signature_headers), "attio is lenient alone");
         assert!(!verify_declared(&declared, BODY, &headers(&[("x-sig", &unsigned_key)]), ""), "never under a declaration");
@@ -809,6 +881,21 @@ mod tests {
         assert!(read(r#"{"providerKey":"attio","scheme":"attio","signatureHeaders":["x"],"secretIssuedBy":"someone"}"#).is_err());
     }
 
+    #[test]
+    fn a_declaration_reads_its_delivery_id_header() {
+        let read = |text: &str| Declaration::read(&Js::parse(text.as_bytes()).unwrap());
+        let declared = read(r#"{"providerKey":"crm","scheme":"hmac_sha256_hex","signatureHeaders":["x-sig"],"deliveryId":{"header":"x-crm-delivery"}}"#).unwrap();
+        assert_eq!(declared.delivery_id_header.as_deref(), Some("x-crm-delivery"));
+        assert_eq!(read(r#"{"providerKey":"crm","scheme":"hmac_sha256_hex","signatureHeaders":["x-sig"]}"#).unwrap().delivery_id_header, None);
+        for refused in [r#"{"header":"X-Crm-Delivery"}"#, r#"{"header":""}"#, r#"{}"#, r#""x-crm-delivery""#] {
+            let text = format!(r#"{{"providerKey":"crm","scheme":"hmac_sha256_hex","signatureHeaders":["x-sig"],"deliveryId":{refused}}}"#);
+            assert_eq!(read(&text).unwrap_err(), "deliveryId.header: a delivery id header is a lower-case header name", "{refused}");
+        }
+        // A module that checks its own inbound names the id in its check.
+        let module = read(r#"{"providerKey":"mail","scheme":"module","deliveryId":{"header":"x-mail-id"}}"#).unwrap();
+        assert_eq!(module.delivery_id_header, None);
+    }
+
     /// A store whose one provider checks its own inbound: its answer is set
     /// per test, and what reached the module and the queue is kept.
     struct ModuleChecked {
@@ -816,11 +903,19 @@ mod tests {
         seen: std::cell::RefCell<Vec<String>>,
         queued: std::cell::Cell<usize>,
         wakes: std::cell::RefCell<Vec<String>>,
+        /// Each kept delivery's external id; one kept before is a duplicate.
+        kept: std::cell::RefCell<Vec<Option<String>>>,
     }
 
     impl ModuleChecked {
         fn answering(answer: &str) -> ModuleChecked {
-            ModuleChecked { answer: Js::parse(answer.as_bytes()).unwrap(), seen: Default::default(), queued: Default::default(), wakes: Default::default() }
+            ModuleChecked {
+                answer: Js::parse(answer.as_bytes()).unwrap(),
+                seen: Default::default(),
+                queued: Default::default(),
+                wakes: Default::default(),
+                kept: Default::default(),
+            }
         }
     }
 
@@ -854,16 +949,21 @@ mod tests {
         async fn capture(&self, event: &Js, _source: &Source) -> Result<Js, String> {
             Ok(event.clone())
         }
-        async fn keep(&self, kept: Kept<'_>) -> Result<(), String> {
+        async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
+            let external_id = kept.external_id.map(str::to_string);
+            if external_id.is_some() && self.kept.borrow().contains(&external_id) {
+                return Ok(false);
+            }
+            self.kept.borrow_mut().push(external_id);
             self.queued.set(self.queued.get() + kept.receipts.len());
             self.wakes.borrow_mut().extend(kept.wake_keys.iter().cloned());
-            Ok(())
+            Ok(true)
         }
         fn notify(&self) {}
     }
 
     fn delivery<'a>(method: &'a str, body: &'a [u8], headers: &'a [(String, String)]) -> Delivery<'a> {
-        Delivery { provider: "mail", subscription_id: "inst", raw_body: body, headers, method, path: "/api/public/webhook-sync/mail/inst", query: "a=1" }
+        Delivery { provider: "mail", subscription_id: "inst", raw_body: body, headers, method, path: "/api/public/webhook-sync/mail/inst", query: "a=1", source: DeliverySource::Webhook }
     }
 
     #[tokio::test]
@@ -877,6 +977,24 @@ mod tests {
             store.seen.borrow()[0],
             r#"{"method":"POST","path":"/api/public/webhook-sync/mail/inst","query":"a=1","headers":{"content-type":"application/x-www-form-urlencoded"},"body":"YT1i"} key POST"#
         );
+    }
+
+    #[tokio::test]
+    async fn a_module_names_the_delivery_id_in_its_check() {
+        let store = ModuleChecked::answering(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}],"deliveryId":"m-1"}"#);
+        let first = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!((first.status, first.body.to_json()), (200, r#"{"ok":true,"eventsProcessed":1}"#.to_string()));
+        let again = answer_delivery(&store, delivery("POST", b"a=b", &[])).await;
+        assert_eq!((again.status, again.body.to_json()), (200, r#"{"ok":true,"duplicate":true,"eventsProcessed":0}"#.to_string()));
+        assert!(!again.notify_after, "a duplicate queued nothing to drain");
+        assert_eq!((store.queued.get(), store.kept.borrow().clone()), (1, vec![Some("m-1".to_string())]));
+
+        // An empty id is none: each delivery is its own.
+        let unnamed = ModuleChecked::answering(r#"{"outcome":"accepted","events":[{"payload":{"n":1}}],"deliveryId":""}"#);
+        for _ in 0..2 {
+            assert_eq!(answer_delivery(&unnamed, delivery("POST", b"a=b", &[])).await.body.to_json(), r#"{"ok":true,"eventsProcessed":1}"#);
+        }
+        assert_eq!(unnamed.kept.borrow().clone(), vec![None, None]);
     }
 
     #[tokio::test]

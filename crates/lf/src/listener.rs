@@ -22,7 +22,7 @@ use crate::backend::StoreSpec;
 use crate::callbacks::CallOutcome;
 use crate::doors::{EventSink, LfDoors, deliver_inline, hook_target};
 use crate::http::{Request, Response, decode_component};
-use crate::inbound::{Answer, Delivery, InboundStore, Push, PushStore, answer_delivery, answer_push};
+use crate::inbound::{Answer, Delivery, DeliverySource, InboundStore, Push, PushStore, answer_delivery, answer_push};
 use crate::json::{Js, Obj};
 #[cfg(feature = "oauth")]
 use crate::oauth_signin::deliver_public_redirect;
@@ -312,18 +312,33 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
     let Some((provider, subscription_id)) = hook_target(session, &external, install.as_deref()) else {
         return Ok(Response::json(404, &Js::Obj(obj! { "error" => Js::str("unknown_provider") })));
     };
-    let delivery = Delivery { provider: &provider, subscription_id: &subscription_id, raw_body: &request.body, headers: &request.headers, method: "POST", path: &request.path, query: &request.query };
+    let delivery = Delivery {
+        provider: &provider,
+        subscription_id: &subscription_id,
+        raw_body: &request.body,
+        headers: &request.headers,
+        method: "POST",
+        path: &request.path,
+        query: &request.query,
+        source: DeliverySource::Hook,
+    };
     if listening.doors_only {
         return Ok(hook_queued(session, delivery, &notify).await);
     }
-    let (answer, outcomes) = deliver_inline(session, delivery, &notify).await;
-    log_runs(&outcomes);
+    let (answer, fired) = deliver_inline(session, delivery, &notify).await;
+    log_runs(&fired.outcomes);
     if answer.status != 200 {
         return Ok(send(answer, notify));
     }
+    let mut body = obj! { "runs" => Js::Arr(fired.outcomes.iter().map(outcome_js).collect()) };
+    if Js::is_true(answer.body.get("duplicate")) {
+        // Kept before: nothing ran, nothing was queued.
+        body.insert("duplicate".into(), Js::Bool(true));
+        return Ok(Response::json(202, &Js::Obj(body)));
+    }
     // A delivery may have queued wakes.
     poke.notify_one();
-    Ok(Response::json(202, &Js::Obj(obj! { "runs" => Js::Arr(outcomes.iter().map(outcome_js).collect()) })))
+    Ok(Response::json(202, &Js::Obj(body)))
 }
 
 /// `/hooks/…` under `--doors-only`: the delivery's events queued for a
@@ -422,7 +437,16 @@ pub async fn doors_route<S: InboundStore + PushStore>(stores: &S, request: &Requ
             return Ok(Some(send(Answer::payload_too_large(), || {})));
         }
         let (provider, install) = (decoded(provider)?, decoded(install)?);
-        let delivery = Delivery { provider: &provider, subscription_id: &install, raw_body: &request.body, headers: &request.headers, method: &request.method, path: &request.path, query: &request.query };
+        let delivery = Delivery {
+            provider: &provider,
+            subscription_id: &install,
+            raw_body: &request.body,
+            headers: &request.headers,
+            method: &request.method,
+            path: &request.path,
+            query: &request.query,
+            source: DeliverySource::Webhook,
+        };
         return Ok(Some(send(answer_delivery(stores, delivery).await, || InboundStore::notify(stores))));
     }
     Ok(None)

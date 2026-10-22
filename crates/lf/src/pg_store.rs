@@ -1163,6 +1163,14 @@ impl RunHostStore for PgStore {
         })
     }
 
+    fn forget_delivery_id(&self, id: &str) -> Result<()> {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Ok(());
+        }
+        self.execute("update lf.delivery set external_id = null where id = $1::text::uuid and team_id = $2::text::uuid", &[&id, &self.tenant])?;
+        Ok(())
+    }
+
     fn deliveries(&self, query: &DeliveryQuery<'_>) -> Result<Vec<DeliveryRow>> {
         self.query(
             &format!(

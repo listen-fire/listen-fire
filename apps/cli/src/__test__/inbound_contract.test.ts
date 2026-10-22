@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import { z } from 'zod';
-import { INBOUND_CONTRACT_CASES, type InboundContractBackend } from 'movement-engine/public/inbound';
+import { DELIVERY_RECEIPT_CONTRACT_CASES, INBOUND_CONTRACT_CASES, type DeliveryReceiptContractBackend } from 'movement-engine/public/inbound';
 import { StdioRpcBridge } from './stdio_rpc';
 import { lfBinary } from './lf_bin';
 
@@ -18,10 +18,12 @@ const Observations = z.object({
   notified: z.number(),
 });
 
-async function backendOnLfHost(): Promise<{ backend: InboundContractBackend; stop(): Promise<void> }> {
+const Deliveries = z.array(z.object({ externalId: z.string().nullable(), source: z.string(), eventCount: z.number() }));
+
+async function backendOnLfHost(): Promise<{ backend: DeliveryReceiptContractBackend; stop(): Promise<void> }> {
   const bridge = new StdioRpcBridge(lfBinary(), ['--contract-doors']);
   const { baseUrl } = await bridge.call('doors.baseUrl', {}, z.object({ baseUrl: z.string() }));
-  const backend: InboundContractBackend = {
+  const backend: DeliveryReceiptContractBackend = {
     baseUrl,
     async arrange(world) {
       await bridge.call('doors.arrange', world, z.null());
@@ -29,6 +31,9 @@ async function backendOnLfHost(): Promise<{ backend: InboundContractBackend; sto
     async observed() {
       const seen = await bridge.call('doors.observed', {}, Observations);
       return { ...seen, checkpoints: [...seen.checkpoints] };
+    },
+    async deliveries() {
+      return bridge.call('doors.deliveries', {}, Deliveries);
     },
   };
   return { backend, stop: () => bridge.close() };
@@ -39,6 +44,17 @@ const NOT_ON_LF = new Set(['a synthetic subscription skips the signature and dra
 
 for (const entry of INBOUND_CONTRACT_CASES) {
   test(`inbound doors contract — lf: ${entry.name}`, { skip: NOT_ON_LF.has(entry.name) }, async () => {
+    const { backend, stop } = await backendOnLfHost();
+    try {
+      await entry.run(backend);
+    } finally {
+      await stop();
+    }
+  });
+}
+
+for (const entry of DELIVERY_RECEIPT_CONTRACT_CASES) {
+  test(`delivery receipt contract — lf: ${entry.name}`, async () => {
     const { backend, stop } = await backendOnLfHost();
     try {
       await entry.run(backend);

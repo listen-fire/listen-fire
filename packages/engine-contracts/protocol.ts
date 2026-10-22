@@ -779,6 +779,10 @@ export const WireSignedInboundDeclaration = z.object({
     .min(1),
   intercepts: z.array(WireInboundIntercept).optional(),
   secretIssuedBy: WireSecretIssuedBy.optional(),
+  /** The header carrying the provider's id for each delivery (GitHub's
+   *  `x-github-delivery`), read by the host before the module sees the body:
+   *  a redelivery under an id the host kept before is acked and runs nothing. */
+  deliveryId: z.object({ header: z.string().regex(HEADER_NAME, 'a delivery id header is a lower-case header name') }).optional(),
 });
 
 /**
@@ -1084,6 +1088,9 @@ export const WireInboundCheck = z.discriminatedUnion('outcome', [
     events: z.array(WireDiscriminableEvent),
     wakeKeys: z.array(z.string().min(1)).optional(),
     checkpoint: z.unknown().optional(),
+    /** The provider's id for this delivery: a redelivery under an id the
+     *  host kept before is acked and runs nothing. */
+    deliveryId: z.string().min(1).optional(),
   }),
   z.object({
     outcome: z.literal('refused'),

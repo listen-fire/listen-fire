@@ -113,6 +113,14 @@ describe('a module manifest', () => {
     expect(refusal({ ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, signatureHeaders: [] } })[0]).toMatch(/^inbound\.signatureHeaders/);
   });
 
+  it('takes the header a delivery id is read from, a lower-case header name', () => {
+    const declared = { ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, deliveryId: { header: 'x-attio-delivery' } } };
+    expect(WireManifestResult.parse(declared)).toEqual(declared);
+    expect(refusal({ ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, deliveryId: { header: 'X-Bad' } } })).toEqual([
+      'inbound.deliveryId.header: a delivery id header is a lower-case header name',
+    ]);
+  });
+
   it('refuses an OAuth 2 credential without its OAuth 2 declaration', () => {
     const { oauth2: _omitted, ...bare } = MODULE_MANIFEST.credentials[0];
     expect(refusal({ ...MODULE_MANIFEST, credentials: [bare] })[0]).toMatch(/^credentials\.0\.oauth2/);
@@ -180,6 +188,12 @@ describe('the module methods', () => {
   it('refreshCredential: the changed fields out', () => {
     expect(METHODS.refreshCredential.params.parse({})).toEqual({});
     expect(METHODS.refreshCredential.result.parse({ fields: { access_token: 'at-2' } })).toEqual({ fields: { access_token: 'at-2' } });
+  });
+
+  it('checkInbound: an accepted request may name the delivery id, never an empty one', () => {
+    const accepted = { outcome: 'accepted', events: [], deliveryId: 'd-1' };
+    expect(METHODS.checkInbound.result.parse(accepted)).toEqual(accepted);
+    expect(METHODS.checkInbound.result.safeParse({ ...accepted, deliveryId: '' }).success).toBe(false);
   });
 
   it('runPeriodic: a declared task by name, answered with null', () => {
