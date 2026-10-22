@@ -78,7 +78,7 @@ pub struct Program {
     pub statements: Vec<Statement>,
     /// Every old spelling the program is written in, with its rewrite
     /// (crate::surface). Empty — and absent from the JSON — for a program in
-    /// the v5 surface.
+    /// the current surface.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spelling: Vec<crate::surface::SpellingFinding>,
 }
@@ -138,8 +138,8 @@ statements! {
 pub struct ReturnStatement {
     pub value: RValue,
     pub span: Span,
-    /// A concise closure body that is one call (`(f) => f()`, language
-    /// version 5): TypeScript's `() => g()`, which hands back what `g`
+    /// A concise closure body that is one call (`(f) => f()`):
+    /// TypeScript's `() => g()`, which hands back what `g`
     /// returns, and nothing when `g` returns nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub concise: bool,
@@ -576,7 +576,7 @@ pub struct AwaitStatement {
 pub enum CombinatorKind {
     Race,
     Parallel,
-    /// Language version 5's join, which replaced `parallel`.
+    /// The join, which replaced `parallel`.
     All,
 }
 
@@ -595,8 +595,7 @@ impl CombinatorKind {
 pub struct CombinatorExpression {
     pub kind: CombinatorKind,
     pub arms: CombinatorArms,
-    /// `all(f, g, { concurrency: 2 })` — the settings record, written last
-    /// (language version 5): MAP's `concurrency` and `onError`.
+    /// `all(f, g, { concurrency: 2 })` — the settings record, written last: MAP's `concurrency` and `onError`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<ExprSlot>,
     pub span: Span,
@@ -606,8 +605,7 @@ pub struct CombinatorExpression {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum CombinatorArms {
     Literal { arms: Vec<ArmExpression>, span: Span },
-    /// `race(q, () => { … })` — the arms are the call's arguments (language
-    /// version 5), as written down as a bracket's.
+    /// `race(q, () => { … })` — the arms are the call's arguments, as written down as a bracket's.
     Arguments { arms: Vec<ArmExpression>, span: Span },
     Dynamic { expr: ExprSlot, span: Span },
 }
@@ -650,7 +648,7 @@ pub enum CollectionOp {
     Reduce,
     Groupby,
     Keyby,
-    /// `sort(xs, (x) => key, { order })` (language version 5): the members
+    /// `sort(xs, (x) => key, { order })`: the members
     /// ordered by what the function answers for each. The tree calls it
     /// `SORTBY`, a name no version reads as written (crate::surface::table).
     Sort,
@@ -876,7 +874,7 @@ pub enum ValueType {
     Name { name: String, span: Span },
     List { of: Box<ValueType>, span: Span },
     Record { keys: Vec<ValueTypeKey>, span: Span },
-    /// `<(c: <Company>) => <text>>` — a closure type (language version 5),
+    /// `<(c: <Company>) => <text>>` — a closure type,
     /// TypeScript's function type. Every parameter is typed.
     Closure { params: Vec<MovementParam>, returns: Box<ParamTypeRef>, span: Span },
 }
@@ -1017,7 +1015,7 @@ pub enum ExtractCallShape {
 pub struct PluginCall {
     pub plugin: String,
     pub args: Vec<NamedArg>,
-    /// From version 5: the arguments written by position, the settings
+    /// The arguments written by position, the settings
     /// record among them, bound to the plugin's parameters where its spec is
     /// known (`PluginSpec::bind_stage_args`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -58,7 +58,7 @@ pub struct LoweringRefusal {
     #[serde(skip_serializing_if = "RefusalClass::is_lowering")]
     pub class: RefusalClass,
     /// A closure written where it would be kept as data — a list's element
-    /// or a map's value. From language version 5 a closure is a value, and
+    /// or a map's value. A closure is a value, and
     /// the checker refuses it there because a closure is not data.
     #[serde(rename = "heldAsData", skip_serializing_if = "Option::is_none")]
     pub held_as_data: Option<HeldAsData>,
@@ -225,7 +225,7 @@ fn aggregate_fn(upper: &str) -> Option<AggregationFunction> {
 
 /// The aggregates whose bare-walk argument takes a property written after
 /// the call (`FIRST(orgs-[:co]->).url`). Read with the case folded: a
-/// function's name is the same name in any letter case (language version 3),
+/// function's name is the same name in any letter case,
 /// and accepting what the old bridge's case-sensitive regex refused is
 /// additive, so it holds under every version.
 const BARE_PATH_AGGREGATES: [&str; 12] =
@@ -439,8 +439,8 @@ impl Lowering {
                 // `text.slice(1)`: the `@` is one unit.
                 let v = text.get(1..).unwrap_or("");
                 // The formula grammar carries these fields unchecked; mirrored
-                // as-is. Language version 3 retires both reads (the checker's
-                // MOV_PARENT_READ_RETIRED and MOV_RESOURCE_READ_RETIRED).
+                // as-is. The checker refuses both reads
+                // (MOV_PARENT_READ_RETIRED and MOV_RESOURCE_READ_RETIRED).
                 if let Some(field) = v.strip_prefix("parent.") {
                     Expression::ParentResult { field: field.into() }
                 } else if let Some(field) = v.strip_prefix("resource.") {
@@ -732,8 +732,8 @@ impl Lowering {
             None => None,
         };
         // A config `{ … }` on a plain edge hop is dropped by the formula
-        // grammar; language version 3 refuses it (the checker's
-        // MOV_HOP_CONFIG_UNREAD).
+        // grammar; the checker refuses it
+        // (MOV_HOP_CONFIG_UNREAD).
         Ok(EdgeStep {
             edge_type_id: hop.label.text.clone(),
             direction: if hop.direction == Direction::In { EdgeDirection::Incoming } else { EdgeDirection::Outgoing },

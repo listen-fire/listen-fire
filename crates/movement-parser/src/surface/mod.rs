@@ -1,7 +1,7 @@
-//! The language surface of version 5 (plans/naming-rethink-2026-10-14/
+//! The language surface (plans/naming-rethink-2026-10-14/
 //! 5_design.md): the everyday spelling outside walk brackets, read into the
 //! canonical tree. `table` is the spelling table, `canonical` the rewrite of
-//! a v5 expression into the canonical tree.
+//! a current-spelling expression into the canonical tree.
 //!
 //! The findings a parse gathers are AMBIENT for its length (`collecting`):
 //! slot text is read at many places, and each reports into the one scope.
@@ -21,11 +21,11 @@ use crate::ast::{Loc, Span};
 use crate::tree::At;
 use crate::util::utf16::Utf16;
 
-/// An old spelling under version 5: refused, with the exact rewrite.
+/// An old spelling: refused, with the exact rewrite.
 pub const SPELLING_CODE: &str = "MOV_V5_SPELLING";
 /// `Text.foo(…)`: a standard namespace has no such member.
 pub const UNKNOWN_MEMBER_CODE: &str = "MOV_V5_UNKNOWN_MEMBER";
-/// A v5 form the spelling rewrite cannot read yet (the spine's edge).
+/// A current-spelling form the spelling rewrite cannot read yet (the spine's edge).
 pub const NOT_YET_CODE: &str = "MOV_V5_NOT_YET";
 /// ``import { `@lf/web` } from plugins``: an imported name no program can
 /// write (a package's tag) bound without `as`, so nothing could call it.
@@ -72,7 +72,7 @@ pub struct SpellingFinding {
     /// See `Finding::unsafe_if_bound`; the span starts where the call does.
     #[serde(rename = "unsafeIfBound", skip_serializing_if = "Vec::is_empty", default)]
     pub unsafe_if_bound: Vec<String>,
-    /// A call with named arguments (from version 5 they are positional): its
+    /// A call with named arguments (they are positional): its
     /// arguments as written, for the checker to order by the callee's
     /// parameters. The finding stands only where the checker can.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -138,7 +138,7 @@ pub fn report(finding: SpellingFinding) {
     });
 }
 
-/// Reads a v5 expression into the canonical tree; the findings are where
+/// Reads a current-spelling expression into the canonical tree; the findings are where
 /// its text spells something the old way.
 pub fn canonicalize(tree: &mut crate::tree::MExpr, src: &Utf16) -> Vec<Finding> {
     let mut canon = canonical::Canon::new(src);

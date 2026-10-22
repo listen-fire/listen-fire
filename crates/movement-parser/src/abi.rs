@@ -100,7 +100,7 @@ pub unsafe extern "C" fn parse_expression(
     unsafe { emit(parsed, out_ptr_ptr, out_len_ptr) }
 }
 
-/// A diagnostic's message with every built-in it quotes in the version 5
+/// A diagnostic's message with every built-in it quotes in the current spelling
 /// spelling (crate::surface::table::spell_message), as a JSON string.
 ///
 /// # Safety
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn spell_message(
     unsafe { emit(spelled, out_ptr_ptr, out_len_ptr) }
 }
 
-/// A plugin's name from version 5 (crate::surface::table::plugin_name): the
+/// A plugin's name (crate::surface::table::plugin_name): the
 /// registry name or catalog key in camelCase, as a JSON string.
 ///
 /// # Safety
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn plugin_name(
     unsafe { emit(spelled, out_ptr_ptr, out_len_ptr) }
 }
 
-/// Program text a diagnostic suggests, in the version 5 spelling
+/// Program text a diagnostic suggests, in the current spelling
 /// (crate::surface::phrase::spell_code), as a JSON string.
 ///
 /// # Safety

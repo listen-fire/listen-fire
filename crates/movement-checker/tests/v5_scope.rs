@@ -23,7 +23,7 @@ fn a_library_s_old_spellings_are_reported_at_its_import() {
     let found = check_with(root, &files);
     let spelling: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(spelling.len(), 1, "{found:#?}");
-    assert_eq!(spelling[0].message, "\"lib/a\" line 2: `UPPER` is written `Text.upper` from language version 5");
+    assert_eq!(spelling[0].message, "\"lib/a\" line 2: the retired spelling `UPPER` is written `Text.upper`");
     assert_eq!((spelling[0].span.start.line, spelling[0].span.start.col), (1, 1));
     // The library's fix edits its own file, so none is carried to the import.
     assert!(spelling[0].fix.is_none());
@@ -34,7 +34,7 @@ fn a_library_s_old_spellings_are_reported_at_its_import() {
     );
     let found = check_with(root, &files);
     let spelling: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").map(|d| d.message.as_str()).collect();
-    assert_eq!(spelling, vec!["\"lib/a\" line 1: \"lib/b\" line 2: `LOWER` is written `Text.lower` from language version 5"]);
+    assert_eq!(spelling, vec!["\"lib/a\" line 1: \"lib/b\" line 2: the retired spelling `LOWER` is written `Text.lower`"]);
 }
 
 const PLUGINS: &str = r#"{"adapters":{},"credentials":{},"plugins":{"fetch_url":{"args":["url"],"requiredArgs":["url"]}}}"#;
@@ -61,7 +61,7 @@ fn the_catalog_s_key_is_the_old_spelling_under_5() {
     let found = check_with(old, PLUGINS);
     let spelling: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(spelling.len(), 1, "{found:#?}");
-    assert_eq!(spelling[0].message, "from language version 5 the plugin `fetch_url` is imported as `fetchUrl`");
+    assert_eq!(spelling[0].message, "the plugin `fetch_url` is imported as `fetchUrl`");
     // The local name is kept, so every call still reads.
     assert_eq!(spelling[0].fix.as_ref().unwrap()["edits"][0]["text"], "fetchUrl as fetch_url");
     let aliased = check_with("import { fetch_url as get } from plugins\n", PLUGINS);
@@ -97,7 +97,7 @@ fn a_call_goes_to_the_name_the_program_binds_under_5() {
 #[test]
 fn an_unbound_old_name_is_still_refused_under_5() {
     let found = check_with("function go(t: <text>) {\n  a = upper(t)\n}", NONE);
-    assert_eq!(of_code(&found, "MOV_V5_SPELLING"), vec!["`upper` is written `Text.upper` from language version 5"]);
+    assert_eq!(of_code(&found, "MOV_V5_SPELLING"), vec!["the retired spelling `upper` is written `Text.upper`"]);
     // Bound in an inner block only: not where the call is written.
     let inner = "function go(t: <text>) {\n  if (t == \"a\") {\n    upper = (s: <text>) => s\n  }\n  n = upper(t)\n}";
     assert_eq!(of_code(&check_with(inner, NONE), "MOV_V5_SPELLING").len(), 1);

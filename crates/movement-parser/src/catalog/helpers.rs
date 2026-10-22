@@ -169,7 +169,7 @@ pub fn refinement_key(type_: &str, filter: &Value) -> String {
 }
 
 /// catalog.ts's `fieldReadsUnmarked`: the mark says how a read was spelled
-/// (through the hop's alias from version 5, bare before), and both spellings
+/// (through the hop's alias bare before), and both spellings
 /// name the same field, so a host's registered narrowing matches either.
 fn field_reads_unmarked(value: &Value) -> Value {
     match value {

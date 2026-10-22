@@ -40,8 +40,8 @@ pub struct ScopeEnv<'s> {
     pub zones: &'s dyn crate::host::ZoneLookup,
     pub nodes: &'s crate::families::nodes::NodeState,
     pub upgrading_from: Option<&'s str>,
-    /// Each function declared with a name read as a value (version 5,
-    /// `functionAsValue`), typed before the typing that reads it.
+    /// Each function declared with a name read as a value
+    /// (`functionAsValue`), typed before the typing that reads it.
     pub function_values: &'s std::collections::HashMap<crate::scope::SymbolId, super::position::ClosureType>,
 }
 

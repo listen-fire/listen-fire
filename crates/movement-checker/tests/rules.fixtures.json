@@ -1364,7 +1364,7 @@
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  org = write crm-[:companies]-> { unique by (`Name`), Name: \"Acme\", Domains: [\"acme.com\"] }\n  n = count(org-[:@previous]->)\n  write crm-[:notes]-> { title: org.created ? \"y\" : \"n\" }\n  ex = match crm-[:companies]-> { unique by (`Name`), Name: \"Acme\" }\n  if (ex != null) { k = count(ex-[:@old]->) }\n  write org { Name: \"Acme Ltd\" }\n  org2 = write org { Name: \"Acme Ltd\" }\n  d = org.Domains\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_ARTIFICIAL_EDGE_UNKNOWN 9:7-9:32 '-[:@previous]->': '@' names an edge the engine makes, not one a system declares — the only one is '@old' (the record as it stood before a write) (see handbook: writes#what-the-write-did)",
-    "MOV_HANDLE_FIELD_RETIRED 10:33-10:56 'created' is no longer a field of a write's handle since \"Luminous Owl\" (4) — ask the record before the write instead: `exists(h-[:@old]->)` is false when this write created the record; `first(h-[:@old]->) == h` when it was only rehearsed; compare fields against `first(h-[:@old]->)` for what changed (see handbook: writes#what-the-write-did)",
+    "MOV_HANDLE_FIELD_RETIRED 10:33-10:56 'created' is no longer a field of a write's handle — ask the record before the write instead: `exists(h-[:@old]->)` is false when this write created the record; `first(h-[:@old]->) == h` when it was only rehearsed; compare fields against `first(h-[:@old]->)` for what changed (see handbook: writes#what-the-write-did)",
     "MOV_OLD_EDGE_NOT_A_WRITE 12:25-12:44 only a handle a write returned has an '@old' (the record as it stood before that write), and a crm.company handle is not one — a record a match or a traversal found already is the record as it stands, so read it directly (see handbook: writes#what-the-write-did)"
    ]
   },
@@ -1454,7 +1454,7 @@
    ]
   },
   {
-   "name": "__proto__ is a name from version 5",
+   "name": "__proto__ is a name",
    "snapshot": "old_edge",
    "version": 5,
    "source": "import { email } from adapters\nimport { dealflow_inbox } from credentials\n\ninbox = connect email using dealflow_inbox\nnode Company: \"each company\" {\n  name: <text> \"the name\"\n  node __proto__: \"each round\" { __proto__: <text> \"the stage\" }\n}\nfunction main(msg: <inbox-[:message]->>) {\n  __proto__ = 1\n  xs = map([1, 2], (__proto__) => {\n    return __proto__\n  })\n  deals = extract from [msg.`text`] {\n    __proto__: \"the pitch\"\n    node fund: \"each fund\" {\n      __proto__: \"the name\"\n    }\n  }\n}\nfunction f(__proto__: <text>) {\n  return 1\n}\nlisten to inbox fire main\n",
@@ -2008,8 +2008,8 @@
    "version": 5,
    "source": "function m(t: <text>) {\n  inc = (v: <number>) => v + 1\n  c = INC(inc(1)) * 10\n  d = LEN([inc(1), 2])\n  e = AT([inc(1), 2], 0)\n  f = UPPER(t) + \"${inc(2)}\"\n  g = CONTAINS([inc(1)], 2)\n  return [c, d, e, f, g]\n}\n",
    "expected": [
-    "MOV_V5_SPELLING 5:7-5:25 `AT(x, i)` is written `x[i]` from language version 5",
-    "MOV_V5_SPELLING 6:7-6:15 `UPPER` is written `Text.upper` from language version 5",
+    "MOV_V5_SPELLING 5:7-5:25 the retired spelling `AT(x, i)` is written `x[i]`",
+    "MOV_V5_SPELLING 6:7-6:15 the retired spelling `UPPER` is written `Text.upper`",
     "MOV_FUNCTION_UNKNOWN 3:7-3:23 Unknown function 'INC' — did you mean 'inc'? Write 'inc(inc(1))' — a call names a function declared or imported here, or a built-in (see handbook: front#functions-not-methods)",
     "MOV_FUNCTION_UNKNOWN 4:7-4:23 Unknown function 'LEN' — did you mean 'List.min'? — a call names a function declared or imported here, or a built-in (see handbook: front#functions-not-methods)",
     "MOV_ARITH_NON_NUMERIC 6:7-6:29 An arithmetic operation requires numeric operands — both sides of '+' are text. Build the string with \"${…}\" interpolation instead.",

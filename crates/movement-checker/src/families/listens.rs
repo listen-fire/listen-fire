@@ -886,7 +886,7 @@ impl Checker<'_> {
             .collect()
     }
 
-    /// `callbackClosureFix`: the upgrade of `callback(f(x))` (versions 1–4)
+    /// `callbackClosureFix`: the upgrade of `callback(f(x))`
     /// where `f` has a parameter left open, read off `f`'s signature:
     /// `callback((d: <date>) => f(x, d))`, each open parameter declared under
     /// its own name and type, so the platform sends what it sent before and
@@ -1169,7 +1169,7 @@ fn surface_not_enumerated(position: &movement_parser::catalog::types::PositionSc
     position.open_properties == Some(true) || position.undescribed == Some(true) || position.pending == Some(true)
 }
 
-/// A callback's call written in place under version 5 that leaves its
+/// A callback's call written in place that leaves its
 /// function a parameter open, or passes one too many.
 fn callback_call_arity_message(movement: &str, arity: usize, given: usize) -> String {
     format!(

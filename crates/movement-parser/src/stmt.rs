@@ -54,7 +54,7 @@ const SLEEP_STATEMENT_REPLACED: &str = "the `sleep` statement was replaced — a
 
 /// `parallel` is retired too, so the rewrite these refusals offer is the
 /// `all` that replaced it.
-const PARALLEL_AS_ALL: &str = "the join is `all`, which takes its functions as arguments (language version 5): `r = all(() => { … }, () => { … })` — no `await`; one slot per function, in order. One that only acts needs no binding: `all(f, g)`.";
+const PARALLEL_AS_ALL: &str = "the join is `all`, which takes its functions as arguments: `r = all(() => { … }, () => { … })` — no `await`; one slot per function, in order. One that only acts needs no binding: `all(f, g)`.";
 
 /// A race's arms are arguments, and no `await`.
 const RACE_BRANCHES_RETIRED_V5: &str = "a race takes FUNCTIONS as its arguments, not brace branches: `r = race(q, () => { await sleep(4h) })`. The value is one slot per arm, in the order written — the winner's slot holds what its function returned and every other slot is null, so a timeout is `AT(r, 1) != null`.";
@@ -240,14 +240,14 @@ pub struct Parser {
     /// Recursion depth, bounded by `MAX_DEPTH` for the same two stacks the
     /// expression grammar guards.
     depth: usize,
-    /// The local names imported from adapters so far: from version 5 setting
+    /// The local names imported from adapters so far: setting
     /// one up is `connect`, and its old construction is refused.
     adapters: Vec<String>,
-    /// The local names imported from plugins so far: from version 5 one may
+    /// The local names imported from plugins so far:e may
     /// name a package, whose members are called `web.fetchUrl(u)`.
     plugin_locals: Vec<String>,
     /// A nested call read on its own (`parse_nested_call_value`): the file's
-    /// imports are not in sight, so from version 5 any dotted head that is no
+    /// imports are not in sight, so any dotted head that is no
     /// standard namespace's names a package's member, in the call and in
     /// every closure it holds.
     imports_unseen: bool,
@@ -265,7 +265,7 @@ impl Parser {
         Self { src, pos: 0, line_starts, origin, eager, depth: 0, adapters: Vec::new(), plugin_locals: Vec::new(), imports_unseen: false }
     }
 
-    /// From version 5 `xs[i]` is the call `AT(xs, i)` versions 1–4 write, so
+    /// `xs[i]` is the call `AT(xs, i)` the older language writes, so
     /// a member read off it (`xs[0].name`) binds it first as it binds
     /// `AT(xs, 0)`: the text is the index, read here as that call.
     fn nested_index_call(&mut self, start: usize) -> Option<CallStatement> {
@@ -407,13 +407,13 @@ impl Parser {
         ExprSlot { raw, span, eager: self.eager }
     }
 
-    /// `template` with its one `{}` filled by `code`, in the v5 spelling
+    /// `template` with its one `{}` filled by `code`, in the current spelling
     /// (crate::surface::phrase::spell_code).
     fn code(&self, code: &str, template: &str) -> String {
         template.replacen("{}", &crate::surface::phrase::spell_code(code), 1)
     }
 
-    /// An old spelling under version 5 at `start..end`, and its rewrite as
+    /// An old spelling at `start..end`, and its rewrite as
     /// edits (offsets into this parser's text).
     fn spelling(&self, message: impl Into<String>, start: usize, end: usize, edits: Vec<(usize, usize, String)>) {
         use crate::surface::{Fix, SPELLING_CODE, SourceEdit, SpellingFinding};
@@ -426,9 +426,9 @@ impl Parser {
         crate::surface::report(SpellingFinding { code: SPELLING_CODE.into(), message: message.into(), span: self.span_between(start, end), fix, named: None, unless_bound: None, unsafe_if_bound: Vec::new() });
     }
 
-    /// From version 5 an `if` condition is parenthesised, as TypeScript's.
+    /// An `if` condition is parenthesised, as TypeScript's.
     /// The parentheses are the statement's, not the condition's: the slot is
-    /// the text inside them, the condition versions 1–4 write bare (so `is`
+    /// the text inside them, the condition the older language writes bare (so `is`
     /// keeps its narrowing as a top-level test).
     fn condition_in_parens(&self, condition: ExprSlot, start: usize, end: usize) -> ExprSlot {
         let whole = |t: &crate::tree::MExpr| t.at().start == 0 && t.at().end == crate::util::form::utf16_len(&condition.raw);
@@ -440,7 +440,7 @@ impl Parser {
                 return ExprSlot { raw: self.text(inner_start, inner_end), span: self.span_between(inner_start, inner_end), eager: condition.eager };
             }
             Ok(_) => self.spelling(
-                "from language version 5 an `if` condition is parenthesised: `if (…) {`",
+                "an `if` condition is parenthesised: `if (…) {`",
                 start,
                 end,
                 vec![(start, start, "(".into()), (end, end, ")".into())],
@@ -1034,7 +1034,7 @@ impl Parser {
                     return Ok(Statement::Combinator(combinator));
                 }
             }
-            // From language version 5 `all(f, g)` is the join; before it, the
+            // `all(f, g)` is the join; before it, the
             // name was retired in favour of `parallel`.
             "all" => {
                 if let Some(combinator) = self.try_parse_combinator_statement(CombinatorKind::All, start)? {
@@ -1043,7 +1043,7 @@ impl Parser {
             }
             "if" => return Ok(Statement::If(self.parse_if()?)),
             "ERROR" => return Ok(Statement::Error(self.parse_error_statement("ERROR")?)),
-            // From version 5 `fail("…")` is `ERROR("…")`: the same statement.
+            // `fail("…")` is `ERROR("…")`: the same statement.
             "fail" if self.followed_by_call("fail") => {
                 return Ok(Statement::Error(self.parse_error_statement("fail")?));
             }
@@ -1087,9 +1087,9 @@ impl Parser {
         if let Some(block) = self.try_parse_traversal_block()? {
             return Ok(Statement::Block(BlockStatement { span: block.span, block }));
         }
-        // `web.fetchUrl(u)` run bare (version 5): a package's member is one
+        // `web.fetchUrl(u)` run bare: a package's member is one
         // name, and so is a standard namespace's (`Text.upper(x)`), which the
-        // checker then reports as a value nothing reads (version 5, whose
+        // checker then reports as a value nothing reads (whose
         // spelling the namespaces are).
         self.pos = start;
         let head = match self.scan_callee() {
@@ -1263,9 +1263,9 @@ impl Parser {
         Ok(ImportStatement { names, source, span: self.span_from(start) })
     }
 
-    /// A plugin imported under version 5 by its exact camelCase name
+    /// A plugin imported by its exact camelCase name
     /// (`fetchUrl`, crate::surface::table::plugin_name), read into the import
-    /// versions 1–4 write: the catalog's key, under the name as written
+    /// the older language writes: the catalog's key, under the name as written
     /// (`fetch_url as fetchUrl`). The catalog's key written as the name is
     /// the old spelling, refused with the rewrite, the local name kept.
     fn read_plugin_import(&mut self, imported: &mut ImportedName, start: usize, end: usize) {
@@ -1286,7 +1286,7 @@ impl Parser {
             return;
         }
         let text = if imported.alias.is_some() { name.clone() } else { format!("{name} as {}", imported.name) };
-        self.spelling(format!("from language version 5 the plugin `{}` is imported as `{name}`", imported.name), start, end, vec![(start, end, text)]);
+        self.spelling(format!("the plugin `{}` is imported as `{name}`", imported.name), start, end, vec![(start, end, text)]);
     }
 
     /// A package's tag (`` `@lf/web` ``) imported without `as`: its members
@@ -2515,9 +2515,9 @@ impl Parser {
         CallStatement { callee, args, expression, span }
     }
 
-    /// From version 5 a built-in called in its v5 spelling (`map(xs, f, s)`,
-    /// `List.groupBy(xs, f)`, `fail("…")`) reads as the canonical call versions
-    /// 1–4 write (`MAP(xs, s, f)`, `GROUPBY(xs, f)`, `ERROR("…")`), as its
+    /// A built-in called in its current spelling (`map(xs, f, s)`,
+    /// `List.groupBy(xs, f)`, `fail("…")`) reads as the canonical call the older language
+    /// writes (`MAP(xs, s, f)`, `GROUPBY(xs, f)`, `ERROR("…")`), as its
     /// expression slot does (crate::surface::canonical), so the call's
     /// structure and its expression agree.
     fn canonical_call(&self, callee: String, args: &mut [CallArg]) -> String {
@@ -2538,11 +2538,11 @@ impl Parser {
         row.canonical.to_string()
     }
 
-    /// A v5 built-in whose canonical form the call's structure cannot hold
+    /// A current-spelling built-in whose canonical form the call's structure cannot hold
     /// (`sort`'s key function, `ai`'s settings, `Text.includes` as an
     /// operator): read as an expression, whose slot is rewritten whole. So is
     /// one whose canonical name is a family member (`Date.today` is
-    /// `DATE.TODAY`), because versions 1–4 read `DATE.TODAY(…)` as an
+    /// `DATE.TODAY`), because the older language reads `DATE.TODAY(…)` as an
     /// expression, never as a call, and only that reading knows the families.
     fn rewritten_whole(&self, callee: &str) -> bool {
         use crate::surface::table::{Shape, by_v5};
@@ -2552,7 +2552,7 @@ impl Parser {
             })
     }
 
-    /// The name being called at the cursor and where it ends — from version 5
+    /// The name being called at the cursor and where it ends —
     /// also a standard namespace's member (`List.groupBy`) or a plugin
     /// package's (`web.fetchUrl`), one name.
     fn scan_callee(&self) -> Option<(String, usize)> {
@@ -2635,7 +2635,7 @@ impl Parser {
             marks.push((arg_start, name.clone(), self.pos));
             self.refuse_mixed_args(callee, args.first().map(|a| a.name().is_some()), name.as_deref(), arg_start)?;
             // A function written in place and a type: what `MAP` and `MEMBERS`
-            // take from version 3, read for every callee.
+            // take read for every callee.
             if self.at_closure() {
                 let closure = self.parse_closure(self.pos, ",)")?;
                 args.push(CallArg::Closure { name, span: closure.span, closure });
@@ -2712,7 +2712,7 @@ impl Parser {
         Ok(args)
     }
 
-    /// From version 5 a call passes its arguments by position (design §2.7).
+    /// A call passes its arguments by position (design §2.7).
     /// The order is the callee's, which only the checker knows, so a call
     /// with named arguments is a finding without a fix that carries each
     /// argument's text; the checker writes the fix when the callee is a
@@ -2735,7 +2735,7 @@ impl Parser {
         let end = (marks[0].0 + 1..=close).rev().find(|&i| !crate::util::utf16::is_js_space(self.src.units()[i - 1])).unwrap_or(close);
         crate::surface::report(crate::surface::SpellingFinding {
             code: crate::surface::SPELLING_CODE.into(),
-            message: format!("from language version 5 arguments are passed by position: `{callee}(a, b)`, in the order its parameters are declared"),
+            message: format!("arguments are passed by position: `{callee}(a, b)`, in the order its parameters are declared"),
             span: self.span_between(marks[0].0, end),
             fix: None,
             named: Some(crate::surface::NamedCall { callee: callee.to_string(), args }),
@@ -3030,7 +3030,7 @@ impl Parser {
                     self.pos += 1;
                     self.skip_all_ws();
                     let arg_start = self.pos;
-                    // From version 5 the cadence is a setting: `{ every: 1h }`.
+                    // The cadence is a setting: `{ every: 1h }`.
                     let settings = self.is('{');
                     if settings {
                         self.pos += 1;
@@ -3053,7 +3053,7 @@ impl Parser {
                         let written = self.text(arg_start, end).trim_end().to_string();
                         let written_end = arg_start + crate::util::form::utf16_len(&written);
                         self.spelling(
-                            "from language version 5 `until`'s cadence is a setting: `{ every: … }`",
+                            "`until`'s cadence is a setting: `{ every: … }`",
                             arg_start,
                             written_end,
                             vec![(arg_start, written_end, format!("{{ {written} }}"))],
@@ -3083,7 +3083,7 @@ impl Parser {
                 self.pos = save;
             }
         }
-        // From version 5 the core word is `first`, as everywhere else.
+        // The core word is `first`, as everywhere else.
         let first = "first";
         if self.at_word("FIRST") || self.at_word(first) {
             let save = self.pos;
@@ -3092,7 +3092,7 @@ impl Parser {
             self.skip_inline_ws();
             if self.is('(') {
                 if old {
-                    self.spelling("`FIRST` is written `first` from language version 5", save, save + 5, vec![(save, save + 5, first.into())]);
+                    self.spelling("the retired spelling `FIRST` is written `first`", save, save + 5, vec![(save, save + 5, first.into())]);
                 }
                 self.pos += 1;
                 self.skip_inline_ws();
@@ -3160,7 +3160,7 @@ impl Parser {
     }
 
     /// The combinator a word leading a value names: `race` and `parallel` on
-    /// every version, `all` from language version 5.
+    /// every version, `all`.
     fn combinator_named(&self, word: &str) -> Option<CombinatorKind> {
         match word {
             "race" => Some(CombinatorKind::Race),
@@ -3175,7 +3175,7 @@ impl Parser {
     }
 
     /// `race(<arms>)` / `parallel(<arms>)` / `all(<arms>)`; `pos` is just past
-    /// the keyword. From language version 5 the arms are the call's
+    /// the keyword. The arms are the call's
     /// ARGUMENTS — `race(q, () => { … })`, `all(f, g, { concurrency: 2 })` —
     /// as TypeScript's `Promise.all` takes its promises: a closure is not
     /// data, so there is no list of them to pass. A bracket is still read, so
@@ -3197,8 +3197,8 @@ impl Parser {
         Ok(CombinatorExpression { kind, arms, settings: None, span: self.span_from(start) })
     }
 
-    /// `race(q, () => { … })` / `all(f, g, { concurrency: 2 })` (language
-    /// version 5): each argument an arm — a closure written in place, or a
+    /// `race(q, () => { … })` / `all(f, g, { concurrency: 2 })`:
+    /// each argument an arm — a closure written in place, or a
     /// function's name — and, last, the settings record `all` may be given.
     /// `pos` is just past the `(`.
     fn parse_argument_arms(&mut self, start: usize, kind: CombinatorKind) -> SResult<CombinatorExpression> {
@@ -3400,11 +3400,11 @@ impl Parser {
             }
             self.expect("=>", "between a callback's parameters and its body")?;
             self.skip_all_ws();
-            // From version 5 `callback(() => f(x))` is the deferred call
-            // `callback(f(x))` versions 1–4 write.
+            // `callback(() => f(x))` is the deferred call
+            // `callback(f(x))` the older language writes.
             // With parameters, the acting side fills them, and the call is the
             // closure's one statement: `callback((d: <date>) => f(x, d))` is
-            // the closure `callback((d: <date>) => { f(x, d) })` versions 1–4
+            // the closure `callback((d: <date>) => { f(x, d) })` the older language
             // write, so the call is checked against what `d` is declared as.
             if !self.is('{') {
                 if params.is_empty() {
@@ -3434,7 +3434,7 @@ impl Parser {
         if self.src.at(self.pos - 1) == Some(unit(')')) {
             let call = self.text(name_start, self.pos);
             self.spelling(
-                "`callback(f(x))` is written `callback(() => f(x))` from language version 5",
+                "the retired spelling `callback(f(x))` is written `callback(() => f(x))`",
                 name_start,
                 self.pos,
                 vec![(name_start, self.pos, format!("() => {call}"))],
@@ -3554,13 +3554,13 @@ impl Parser {
         self.expect("=>", "between a closure's parameters and its body")?;
         self.skip_all_ws();
         // `(x) => x * 2` is `(x) => { return x * 2 }` with the ceremony elided
-        // (language version 3).
+        //.
         if !self.is('{') {
-            // `(f) => f()` is `(f) => { return f() }` (language version 5): a body
+            // `(f) => f()` is `(f) => { return f() }`: a body
             // that is one call returns the call, so a callee that waits parks the
             // run as a returned call does — inside an expression it could not.
             // `() => await sleep(1h)` is `() => { return await sleep(1h) }`
-            // (language version 5), as TypeScript's `async () => await x` is — and
+            //, as TypeScript's `async () => await x` is — and
             // a retired `await race(…)` there is refused with its rewrite.
             if self.peek_ident().as_deref() == Some("await") {
                 let await_start = self.pos;
@@ -3573,7 +3573,7 @@ impl Parser {
                 })];
                 return Ok(ClosureExpression { params, return_type, body, span: self.span_from(start) });
             }
-            // `() => all(f, g)` / `() => race(f, g)` (language version 5) returns
+            // `() => all(f, g)` / `() => race(f, g)` returns
             // the combinator's answer, as a returned call does.
             if let Some(word) = self.peek_ident()
                 && let Some(kind) = self.combinator_named(&word)
@@ -3719,7 +3719,7 @@ impl Parser {
         Ok(DurationLiteral { raw, span: self.span_from(start) })
     }
 
-    /// `ERROR("message")` as a statement; from version 5 `fail("message")`.
+    /// `ERROR("message")` as a statement; `fail("message")`.
     fn parse_error_statement(&mut self, word: &str) -> SResult<ErrorStatement> {
         let start = self.pos;
         let message = self.parse_error_call(word)?;
@@ -3731,7 +3731,7 @@ impl Parser {
         let start = self.pos;
         self.expect_word(word, &format!("a '{word}(…)' call"))?;
         if word == "ERROR" {
-            self.spelling("`ERROR` is written `fail` from language version 5", start, self.pos, vec![(start, self.pos, "fail".into())]);
+            self.spelling("the retired spelling `ERROR` is written `fail`", start, self.pos, vec![(start, self.pos, "fail".into())]);
         }
         self.skip_inline_ws();
         self.expect("(", &format!("after '{word}'"))?;
@@ -3938,7 +3938,7 @@ impl Parser {
     fn parse_movement(&mut self, keyword: &str) -> SResult<MovementDeclaration> {
         let start = self.pos;
         if keyword == "movement" {
-            self.spelling("from language version 5 a declaration is a `function`", start, start + keyword.len(), vec![(start, start + keyword.len(), "function".into())]);
+            self.spelling("a declaration is a `function`", start, start + keyword.len(), vec![(start, start + keyword.len(), "function".into())]);
         }
         self.pos += keyword.len();
         self.skip_inline_ws();
@@ -4002,7 +4002,7 @@ impl Parser {
         Ok(ParamTypeRef::Name(type_ref_from_marker(marker)))
     }
 
-    /// `): <number>` — the type a function declares it returns (version 3).
+    /// `): <number>` — the type a function declares it returns.
     fn parse_return_annotation(&mut self) -> SResult<Option<ParamTypeRef>> {
         let save = self.pos;
         self.skip_inline_ws();
@@ -4072,7 +4072,7 @@ impl Parser {
         self.is_at(offset, '(')
     }
 
-    /// `<(c: <Company>) => <text>>` — a closure type (language version 5),
+    /// `<(c: <Company>) => <text>>` — a closure type,
     /// TypeScript's `(c: Company) => string`. The parameters are a function's own
     /// parameter list, every one typed; the return is written as a function's
     /// return annotation is. A closure that returns a list is
@@ -4280,7 +4280,7 @@ impl Parser {
                 self.skip_inline_ws();
                 self.expect(":", &format!("after the config key '{name}'"))?;
                 self.skip_inline_ws();
-                // From version 5 a listen's own poll interval is the setting
+                // A listen's own poll interval is the setting
                 // `every: <duration>`, as `until`'s cadence is.
                 if name == "every" {
                     let duration = self.parse_duration()?;
@@ -4298,7 +4298,7 @@ impl Parser {
                     let seconds = slot.raw.trim().parse::<u64>().ok().filter(|s| *s > 0);
                     let fix = seconds.map_or("<duration>".to_string(), seconds_as_duration);
                     self.spelling(
-                        format!("from language version 5 a listen's poll interval is the setting `every: {fix}`"),
+                        format!("a listen's poll interval is the setting `every: {fix}`"),
                         key_start,
                         value_end,
                         seconds.map(|_| vec![(key_start, value_end, format!("every: {fix}"))]).unwrap_or_default(),
@@ -4340,7 +4340,7 @@ impl Parser {
 
     // ── extract(content, Shape, config) and extractOne(…) ──
 
-    /// The extraction call next, if one is — from language version 3, in any
+    /// The extraction call next, if one is — in any
     /// letter case.
     fn extract_call_ahead(&mut self) -> Option<(String, ExtractCallFinds)> {
         let word = self.peek_ident()?;
@@ -4505,7 +4505,7 @@ impl Parser {
             }
             let plugin_start = self.pos;
             let mut plugin = self.read_ident("a plugin name in 'through […]'")?;
-            // From version 5 a stage names a package's member (`web.linkedinEnrichment`).
+            // A stage names a package's member (`web.linkedinEnrichment`).
             if self.is('.')
                 && let Some((member, end)) = scan_ident(self.src.units(), self.pos + 1)
             {
@@ -4527,7 +4527,7 @@ impl Parser {
                         break;
                     }
                     let arg_start = self.pos;
-                    // From version 5 a stage's arguments are by position, as a
+                    // A stage's arguments are by position, as a
                     // call's are (crate::catalog::plugin_args binds them).
                     let arg_name = self.read_call_arg_name();
                     self.refuse_mixed_args(&plugin, marks.first().map(|m| m.1.is_some()), arg_name.as_deref(), arg_start)?;
@@ -4703,8 +4703,8 @@ pub(crate) fn read_block_for_findings(text: &str, origin: Loc) {
 const ADAPTER_PACKAGE_PREFIX: &str = "@lf/";
 
 impl Parser {
-    /// `connect attio using acme { dryRun: true }` (version 5): the
-    /// construction `attio(credentials: acme, dry_run: true)` versions 1–4
+    /// `connect attio using acme { dryRun: true }`: the
+    /// construction `attio(credentials: acme, dry_run: true)` the older language
     /// write, so nothing downstream learns a second form.
     fn parse_connect(&mut self) -> SResult<ConstructionCall> {
         let start = self.pos;
@@ -4752,7 +4752,7 @@ impl Parser {
         Ok(ConstructionCall { callee, args, span: self.span_from(start) })
     }
 
-    /// From version 5 an adapter is set up with `connect`; its construction
+    /// An adapter is set up with `connect`; its construction
     /// is refused with the rewrite.
     fn refuse_adapter_construction(&self, construct: &ConstructionCall, start: usize) {
         if !self.adapters.contains(&construct.callee) {
@@ -4762,7 +4762,7 @@ impl Parser {
         let text = crate::surface::phrase::connection(
             &crate::surface::phrase::Connection { adapter: &construct.callee, args: &args, credential: Some("credentials") });
         let end = self.pos;
-        let message = format!("from language version 5 an adapter is set up with `{text}`");
+        let message = format!("an adapter is set up with `{text}`");
         self.spelling(message, start, end, vec![(start, end, text)]);
     }
 }
@@ -4806,7 +4806,7 @@ pub fn local_name_for_tag(tag: &str) -> String {
     if out.is_empty() { "pkg".to_string() } else { out }
 }
 
-/// `sort` in its v5 spelling.
+/// `sort` in its current spelling.
 fn is_sort(callee: &str) -> bool {
     crate::surface::table::by_v5(callee).is_some_and(|row| row.shape == crate::surface::table::Shape::SortKey)
 }

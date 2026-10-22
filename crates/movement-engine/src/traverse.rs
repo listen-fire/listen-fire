@@ -256,10 +256,10 @@ pub(crate) fn resources_alias(hops_raw: &str) -> Option<String> {
 /// resources are related through.
 const RESOURCES_REFERENCE_FIELD_ID: &str = "_resources";
 
-/// Since language version 5 (run.ts): `_resources` off an adapter's record,
+/// `_resources` off an adapter's record,
 /// the TypeScript's message byte for byte.
 const RESOURCES_RETIRED: &str =
-    "'-[:_resources]->' is read only off an extraction's result since language version 5 — walk the edge the record's system declares to its files";
+    "'-[:_resources]->' is read only off an extraction's result — walk the edge the record's system declares to its files";
 
 /// One iteration per resource, the hop's alias naming it.
 fn resource_paths(resources: Vec<Js>, alias: Option<&str>) -> Paths {

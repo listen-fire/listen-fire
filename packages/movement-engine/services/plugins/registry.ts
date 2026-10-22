@@ -201,9 +201,9 @@ const LINKEDIN_ENRICHMENT_SIGNATURE: TransformSignature = {
       linkedin_profile: { kind: 'string' },
     },
   },
-  // What a call hands back from language version 5, where the record a stage
+  // What a call hands back where the record a stage
   // fed it is the call's argument. Before 5 nothing can call it — it is fed
-  // only by an extraction — so this is read by version 5 alone.
+  // only by an extraction — so this is read by the current language alone.
   output: {
     kind: 'record',
     fields: {

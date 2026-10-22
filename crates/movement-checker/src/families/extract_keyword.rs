@@ -1,5 +1,5 @@
-//! The extraction keyword (`x = extract from […] { … }`) under language
-//! version 5: refused as MOV_EXTRACT_KEYWORD_RETIRED, with the rewrite to the
+//! The extraction keyword (`x = extract from […] { … }`):
+//! refused as MOV_EXTRACT_KEYWORD_RETIRED, with the rewrite to the
 //! extraction call where it is mechanical — extract_keyword_retired.ts, the
 //! same message and the same fix. The rewrite declares the tree as a node
 //! shape and extracts it with `extractOne`; it is never `safe` (the record may

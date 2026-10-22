@@ -1,6 +1,6 @@
 # Contributing to Listen-Fire (the language)
 
-This is the language repository: the Rust crates, the `lf` command, the engine package, the modules and the documentation site. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, which installs this repository's published packages. This repository serves language version 5 and later.
+This is the language repository: the Rust crates, the `lf` command, the engine package, the modules and the documentation site. The hosted platform is `lf-platform`, a separate repository in the same GitHub organisation, which installs this repository's published packages. This repository serves the language of its own release.
 
 ## Setting up
 

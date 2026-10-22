@@ -269,7 +269,7 @@ fn presence_and_walks() {
 #[test]
 fn wrong_case_and_unknown_members() {
     let f = findings("Upper(x)");
-    assert_eq!(f[0].message, "`Upper` is written `Text.upper` from language version 5");
+    assert_eq!(f[0].message, "the retired spelling `Upper` is written `Text.upper`");
     let f = findings("Map(xs, f)");
     assert_eq!(f[0].edits.as_ref().unwrap()[0].text, "map");
     let f = findings("Text.uper(x)");
@@ -311,8 +311,8 @@ fn declarations_conditions_and_errors() {
     assert_eq!(
         spelling("movement f() {\n  if x != null {\n    y = 1\n  }\n}\n"),
         vec![
-            ("from language version 5 a declaration is a `function`".to_string(), "function".to_string()),
-            ("from language version 5 an `if` condition is parenthesised: `if (…) {`".to_string(), "(".to_string()),
+            ("a declaration is a `function`".to_string(), "function".to_string()),
+            ("an `if` condition is parenthesised: `if (…) {`".to_string(), "(".to_string()),
         ]
     );
     assert!(spelling("function f() {\n  if (x != null && y) {\n    fail(\"no\")\n  } else if (z) {\n  }\n}\n").is_empty());
@@ -356,7 +356,7 @@ fn fail_is_the_error_statement() {
     let (n, o) = (serde_json::to_value(&new.statements).unwrap(), statements("movement f() {\n  ERROR(\"no\")\n}\n"));
     assert!(n.pointer("/0/body/0").is_some(), "{n}");
     assert_eq!(n.pointer("/0/body/0").map(|s| s.as_object().unwrap().keys().cloned().collect::<Vec<_>>()), o.pointer("/0/body/0").map(|s| s.as_object().unwrap().keys().cloned().collect::<Vec<_>>()));
-    assert_eq!(spelling("function f() {\n  ERROR(\"no\")\n}\n"), vec![("`ERROR` is written `fail` from language version 5".to_string(), "fail".to_string())]);
+    assert_eq!(spelling("function f() {\n  ERROR(\"no\")\n}\n"), vec![("the retired spelling `ERROR` is written `fail`".to_string(), "fail".to_string())]);
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn a_block_closure_inside_an_expression_is_read_for_old_spellings() {
     let source = "function go(xs) {\n  if (count(filter(xs, (r) => {\n    return LENGTH(r) > 0\n  })) > 0) {\n    y = 1\n  }\n}\n";
     let found = program(source).spelling;
     assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].message, "`LENGTH` is written `Text.length` from language version 5");
+    assert_eq!(found[0].message, "the retired spelling `LENGTH` is written `Text.length`");
     assert_eq!((found[0].span.start.line, found[0].span.start.col), (3, 12));
     // Nested a level deeper, and placed in the file.
     let deeper = "function go(xs) {\n  n = Text.length(Text.trim(f(xs, (r) => {\n    m = Text.trim(g((s) => {\n      return UPPER(s)\n    }))\n    return m\n  })))\n}\n";

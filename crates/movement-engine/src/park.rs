@@ -213,7 +213,7 @@ pub(crate) fn serialize_alone_plain(run: &Run<'_>, binding: &Binding) -> Result<
     })
 }
 
-/// One member's answer from version 5 (run.ts `memberAnswerPark`): a park
+/// One member's answer (run.ts `memberAnswerPark`): a park
 /// that names the live scopes the op's statement runs in (`chain`, its
 /// file's left out) by their place in it rather than copying them — a
 /// closure the member returns holds its scope by reference, so a copy

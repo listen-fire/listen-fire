@@ -108,7 +108,7 @@ pub enum Scalar {
     Json,
     Absent,
     /// What a value that never arrives has (`fail("…")` inside an
-    /// expression, from language version 5): TypeScript's `never`.
+    /// expression): TypeScript's `never`.
     Never,
 }
 
@@ -342,7 +342,7 @@ pub struct PositionSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ambiguous_properties: Option<Vec<String>>,
     /// The system removes a record of this type (its describe's
-    /// `deletable: true`); since language version 5 the checker refuses a
+    /// `deletable: true`); the checker refuses a
     /// `delete` of a type that does not say so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletable: Option<bool>,

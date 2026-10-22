@@ -48,7 +48,7 @@ pub trait TypeEnv {
         false
     }
     /// The variables in scope, innermost first: what a bare name in a hop's
-    /// WHERE may have meant (version 5's did-you-mean).
+    /// WHERE may have meant (the did-you-mean).
     fn value_names_in_scope(&self) -> Vec<String> {
         Vec::new()
     }
@@ -117,7 +117,7 @@ pub struct Typing<'a> {
     /// The field a write puts this value into (`WriteTargetRef`): its type,
     /// and its borrowable spelling (`crm.companies.stage`) when known.
     pub write_target: Option<(Ty, Option<String>)>,
-    /// From version 5, each bare name read in a hop's WHERE or ORDER BY that
+    /// Each bare name read in a hop's WHERE or ORDER BY that
     /// no variable in scope binds: true while every hop it was read in is
     /// known not to carry it (reported here as an unknown name, so the
     /// spelling rule that would offer the hop's alias leaves it alone).
@@ -963,7 +963,7 @@ impl<'a> Typing<'a> {
         }
     }
 
-    /// `reportUnknownWalkName`: version 5's unknown name in a hop's WHERE or
+    /// `reportUnknownWalkName`: the unknown name in a hop's WHERE or
     /// ORDER BY — no variable binds it and the hop's type (`fields`, every
     /// one it carries) does not carry it.
     fn report_unknown_walk_name(&mut self, position: &Position, name: &str, fields: &[String]) {

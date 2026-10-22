@@ -26,7 +26,7 @@ const SETTINGS: [(&str, &str); 3] = [
     ("initialConcurrency", "how many members the first batch runs, before the rest start"),
 ];
 
-/// `ALL_SETTING_KEYS`: what `all(f, g, { … })` takes (version 5).
+/// `ALL_SETTING_KEYS`: what `all(f, g, { … })` takes.
 pub const ALL_SETTING_KEYS: &[&str] = &["onError", "concurrency"];
 
 const OP_SETTING_KEYS: &[&str] = &["onError", "concurrency", "initialConcurrency"];
@@ -86,7 +86,7 @@ pub fn collection_config_problems(record: &Expression, spelling: &str, keys: &[&
 pub const SORT_ORDERS: [&str; 2] = ["asc", "desc"];
 
 /// `readSortSettings`: `sort`'s settings record (`sort(xs, f, { order:
-/// "desc" })`, language version 5) — its one setting, written down. `Ok`
+/// "desc" })`) — its one setting, written down. `Ok`
 /// holds whether the order is descending.
 pub fn read_sort_settings(record: &Expression) -> Result<bool, Vec<String>> {
     const ONE: &str = "Its one setting is order — \"asc\" (the default) or \"desc\"";

@@ -407,7 +407,7 @@ impl Run<'_> {
         {
             return self.local_write(write, &lines, path, node, binding_name, scope).await;
         }
-        // From version 5 the checker refuses `bind` whole (MOV_WRITE_BIND_RETIRED).
+        // The checker refuses `bind` whole (MOV_WRITE_BIND_RETIRED).
         assert!(write.bind.is_none(), "the checker refuses a bound write");
         match &write.target {
             WriteTarget::Position { root: PathRoot::Name { name }, .. } => {
@@ -1551,7 +1551,7 @@ impl Run<'_> {
     /// `recordWrite`: the firing record finished — each written field's
     /// trail summarised, the binding's name, the interned origin — onto the
     /// run's writes, and the handle bound: a new one, or `into` moved on to
-    /// the record in place (`write org { … }` from version 4). A write
+    /// the record in place (`write org { … }`). A write
     /// through a rehearsing adapter changed nothing, so a record it found
     /// stood before the write exactly as the handle shows it: its `@old` is
     /// the handle itself.

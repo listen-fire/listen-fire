@@ -47,13 +47,13 @@ pub(crate) struct Function {
     captured: Rc<Scope>,
     /// The body's AST path, where its statements' stamps are keyed.
     path: String,
-    /// A function handed by name: from version 3 a call by that name.
+    /// A function handed by name: a call by that name.
     named: Option<String>,
     /// A closure handed by name: the closure, its body calling it by the
     /// name of its own (`self`).
     closure: Option<Rc<crate::bindings::Closure>>,
     self_name: Option<String>,
-    /// A function written in place from version 5: `captured` is the scope
+    /// A function written in place: `captured` is the scope
     /// it is written in, held by REFERENCE, as every other closure holds
     /// its scope.
     by_reference: bool,
@@ -117,7 +117,7 @@ impl CollectionRun {
 }
 
 /// `serializeMemberAnswer`: a finished member as its op's frame keeps it.
-/// From version 5 the park names `chain`, the op's live scopes
+/// The park names `chain`, the op's live scopes
 /// (`memberAnswerPark`); before, the answer is written as it always was.
 pub(crate) fn member_answer_export(run: &Run<'_>, answer: Option<&Js>, chain: Option<&[Rc<Scope>]>) -> Result<Js, Failure> {
     Ok(match answer {
@@ -201,7 +201,7 @@ pub(crate) fn member_left_out(spelling: &str, index: usize, count: Option<usize>
     }
 }
 
-/// What a version-3 call of a built-in reads as (`readCall`): the op, or
+/// What a call of a built-in reads as (`readCall`): the op, or
 /// `MEMBERS`, or nothing this module runs.
 // Handed straight back to its caller and taken apart at once, never stored
 // in bulk: boxing the large variant would only add an allocation.
@@ -341,7 +341,7 @@ fn written_settings(config: &ast::ExprSlot) -> Result<(OnError, Option<f64>, Opt
     Ok((on_error, concurrency, initial))
 }
 
-/// `readSortSettings`: whether `sort`'s settings record (version 5) asks for
+/// `readSortSettings`: whether `sort`'s settings record asks for
 /// descending order; none written is ascending.
 pub(crate) fn sort_descending(config: Option<&ast::ExprSlot>) -> Result<bool, String> {
     let Some(config) = config else { return Ok(false) };
@@ -600,7 +600,7 @@ impl Run<'_> {
         }
     }
 
-    /// `liveAnswerChain`: from version 5, the live scopes the op's statement
+    /// `liveAnswerChain`: the live scopes the op's statement
     /// runs in, its file's left out (a file scope is found again by its
     /// file) — what a member's answer names rather than copies, numbered by
     /// their place in the chain, the same on the writing run and the
@@ -642,7 +642,7 @@ impl Run<'_> {
     /// it is written in, or a movement by name, capturing the caller's.
     pub(crate) fn collection_function(&self, function: &ArmExpression, spelling: &str, scope: &Rc<Scope>, fn_path: &str) -> Result<Function, Stop> {
         match function {
-            // From version 5 a function written in place holds the scope it
+            // A function written in place holds the scope it
             // is written in by REFERENCE, as every other closure does — so a
             // closure its body returns chains up to the live scope, not to a
             // flat copy that no park can tell from a file's.
@@ -757,7 +757,7 @@ impl Run<'_> {
         }
     }
 
-    /// `assertCallDepth` for a function handed to an op by name (version 3).
+    /// `assertCallDepth` for a function handed to an op by name.
     pub(crate) fn enter_named_call(&self, name: &str) -> Result<(), Stop> {
         let stack = self.call_stack.borrow();
         let limit = self.input.max_call_depth;

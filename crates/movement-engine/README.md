@@ -20,12 +20,12 @@ rust_engine.ts` drives it, and `rust_host.ts` forwards each request to the
 run's `EngineHost`.
 
 Which runs reach it is decided by the run's pinned language version alone
-(`engineRoute` in rust_engine.ts): version 5 or later runs here, 1–4 on the
-TypeScript engine, which no longer runs version 5. There is no fallback and
-no admission step: the checker is the one gate, and a version-5 run this
-engine will not run fails where it is met with `MOVENG_UNSUPPORTED`, naming
+(`engineRoute` in rust_engine.ts): a pin this release reads runs here, and
+the platform's earlier integer pins run on its TypeScript engine, which does
+not run this language. There is no fallback and no admission step: the
+checker is the one gate, and a run this engine will not run fails where it is met with `MOVENG_UNSUPPORTED`, naming
 the reason. A resume goes back to the engine that parked it (the run row's
-`engine`, handed in as `parkedOnEngine`); a version-5 state the TypeScript
+`engine`, handed in as `parkedOnEngine`); a state the TypeScript
 engine parked cannot resume, and fails saying so. `MOVEMENT_ENGINE`,
 `MOVEMENT_ENGINE_FALLBACK`, `MOVEMENT_ENGINE_DRY_RUN_EVERY` and
 `MOVEMENT_ENGINE_V5_ON_TS` are retired, and boot refuses any of them set.
@@ -35,8 +35,8 @@ bindings, `if` and `return` over reads of the event and of values (slice
 2a), writes with identity (`unique by`) and the nodes a run builds (slice
 2b), `sleep`, parked and resumed in its own state, traversal blocks over
 adapter edges, plugin calls and the extraction call ("The run" below). The
-extraction keyword (`x = extract from […] { … }`) is a version-5 refusal in
-the checker. The conformance corpora run on this engine for version 5.
+extraction keyword (`x = extract from […] { … }`) is a refusal in
+the checker. The conformance corpora run on this engine.
 
 ## Modules
 
@@ -48,7 +48,7 @@ the checker. The conformance corpora run on this engine for version 5.
 | `abi` | the C ABI: `engine_start`, `engine_answer`, `engine_finish`; the checker's `check_program` and `check_answer` `(src_ptr, src_len, catalog_ptr, catalog_len, options_ptr, options_len, out_ptr_ptr, out_len_ptr) -> status` (options: `{"upgradingFrom": "0.11.0" \| null}`; no pin: the artifact checks in its own release's language), `check_compatible`; `standard_library` `(out_ptr_ptr, out_len_ptr) -> 0`, no input: the built-in table as JSON (`[{name, params: [{name, type, optional?, rest?}], returns, summary}]`, movement_checker `types::stdlib::standard_library_json`), which the handbook's language search reads; `language_version` `(out_ptr_ptr, out_len_ptr) -> 0`: the release's version as a JSON string, the language this artifact reads; `language_standing` `(pin_ptr, pin_len, out_ptr_ptr, out_len_ptr) -> status`: `{standing: "compatible" \| "newer" \| "olderKey" \| "malformed", message}` (the refusal's text, null when compatible), how a pin stands against this release |
 | `eval` | `evalMovementExpr`: the expression kinds, with their provenance rules and errors; the folds; what a walk, an `EXISTS` over a record, or a count needs asked of the run (`Reader`) |
 | `stdlib` | the 17 flat built-ins and all 15 namespaced members |
-| `run` | the `segment` entry: `runMovement` / `resumeMovement` for a version 5 program (below) |
+| `run` | the `segment` entry: `runMovement` / `resumeMovement` for a program (below) |
 | `call` | calls of the movements a program declares: the call's step, the callee's scope, its arguments bound, its value, the depth |
 | `write` | the `write` statement: targets (a WHERE on one included), fields, identity, update or create, the firing record |
 | `verbs` | `match`, `link`, `unlink`, `delete`: the identity half of a write on its own, edges between two handles, a record removed |
@@ -117,7 +117,7 @@ Measured 2026-10-07 (gzip -9):
 | extraction specs, prompts and the validator (chunk 6A, not yet run) | 2,185,406 | 623,115 |
 | the extraction keyword and plugin calls run whole (chunk 6A) | 2,423,062 | 694,914 |
 | folds, EXISTS, IS and a record named twice (chunk 6A Task 4) | 2,458,709 | 710,999 |
-| language version 4's changed constructs refused at admission (main merge 2) | 2,459,419 | 711,283 |
+| the changed match and handle constructs refused at admission (main merge 2) | 2,459,419 | 711,283 |
 | admission walks what the entry reaches, every reason named (PLAN-07A Task 1) | 2,461,388 | 712,055 |
 | calls to helper movements, run-built graphs, lazy walks (PLAN-07A Task 2) | 2,585,141 | 758,389 |
 | records held as values, mirrored (PLAN-07A Task 3, its fix rounds) | 2,972,633 | 872,415 |
@@ -125,7 +125,7 @@ Measured 2026-10-07 (gzip -9):
 | case mapping, prototype keys, regex completion, TimSort (PLAN-07A Task 5) | 3,253,385 | 966,528 |
 | the forward merge of cloud-native (main merge 2's refusals in) | 3,254,071 | 966,867 |
 | host data never read as an engine object (PLAN-07A Task 4b) | 3,031,573 | 908,024 |
-| language version 4's changed constructs run (PLAN-07A Task 4c) | 3,044,472 | 912,975 |
+| the changed match and handle constructs run (PLAN-07A Task 4c) | 3,044,472 | 912,975 |
 | a file is what the envelope declares (`Js::File`, PLAN-07A Task 4d; the forward merges between) | 3,276,404 | 981,675 |
 | the engine holds no team (PLAN-07A Task 4d fix round 1) | 3,275,777 | 981,473 |
 | a file is an opaque handle the host resolves (PLAN-07A Task 4d fix round 2) | 3,271,057 | 980,116 |
@@ -256,7 +256,7 @@ recorded answers (tests/frozen/stdlib.jsonl, 11,357 cases) and
 pattern/text pairs, 3,200 over the core dialect, 4,000 over the rest of it,
 and nine long texts and deep nestings). The answers are Rust's: the files were
 first written by the TypeScript engine, and Rust agreed with it except where
-version 5 differs on purpose (CHANGELOG.md). To change an answer on purpose,
+the language differs on purpose (CHANGELOG.md). To change an answer on purpose,
 run the test with `FROZEN_REGENERATE=1` and read the diff of the .jsonl.
 
 ## Refusals
@@ -269,7 +269,7 @@ the engine refuses a run in three places, each below: before the run asks
 anything (`done` is `{declined}`), when a resumed state does
 not read, and mid-run, where a construct this engine has no case for fails
 the run with MOVENG_UNSUPPORTED naming it. Nothing runs a refused program
-another way: every refusal of a checked version 5 program is a checker or
+another way: every refusal of a checked program is a checker or
 engine bug.
 
 **Before the run.** The shim fails the run with MOVENG_UNSUPPORTED "the
@@ -289,10 +289,10 @@ read fails before the host is asked anything, with MOVENG_UNSUPPORTED
 | reason | the state | what closes it |
 |---|---|---|
 | `resume_state_does_not_read` | it does not read off the wire; its scopes, frames or journals (a frame's own) are not lists; or a descriptor has no kind this engine rebuilds | nothing: a malformed or foreign record |
-| `resume_state_version` | a version other than 2 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash) | nothing: a version 1 state is the TypeScript engine's, and a version 5 run it parked fails its resume by `parkedOnEngine` before reaching here |
+| `resume_state_version` | a version other than 2 (docs/contracts/park-state.md: version 2 names code by its place in the pinned program, and pins each library by `park.sources` hash) | nothing: a version 1 state is the TypeScript engine's, and a run it parked fails its resume by `parkedOnEngine` before reaching here |
 | `resume_state_suspended` | a `suspended` other than `true` | nothing: the park-state contract refuses it |
 | `resume_state_code_does_not_read` | code the state names (a closure, a run-time arm's body, a body-local declaration, a kept walk's head or mapping) that is not text, or whose place holds no code of that kind in the pinned program (checked once the program and its pinned libraries are read, before anything runs); a code reference declared in a library the program does not link | nothing: this engine writes only places that resolve |
-| `resume_state_kind:blockMeta` | a block's meta edges bound as a name | nothing: no run makes one (the TypeScript's builders of it are called nowhere, and version 5 retires every `#` hop) |
+| `resume_state_kind:blockMeta` | a block's meta edges bound as a name | nothing: no run makes one (the TypeScript's builders of it are called nowhere, and the language retires every `#` hop) |
 
 A state that reads but is malformed for its kind (a `handle` without its
 record) fails the resume with MOVENG_RUNTIME ("the parked state holds …"),
@@ -331,7 +331,7 @@ refusal out of `onError`.
 **Mid-run: the language's own.** Every other MOVENG_UNSUPPORTED a run can
 meet is a failure the TypeScript engine had in its words, kept here with
 its message: the checker refuses each program
-that reaches one under version 5, or the construct depends on what a value
+that reaches one under the current language, or the construct depends on what a value
 or a host holds at run time. Each names its construct:
 
 - the extraction keyword (`legacy_extraction`; MOV_EXTRACT_KEYWORD_RETIRED),
@@ -362,11 +362,10 @@ or a host holds at run time. Each names its construct:
 - reading a record's internals as a map's key; writing out a record that
   contains itself.
 
-### Language version 4's changes
+### The match and handle changes
 
-Version 4 (Luminous Owl, main's d5bb93f794) changed what four constructs
-mean. The engine runs version 5 only, which keeps each of them as version 4
-made it:
+Main's d5bb93f794 changed what four constructs mean. The engine keeps each of
+them as that change made it:
 
 | main's change | sha | on this engine |
 |---|---|---|
@@ -375,12 +374,12 @@ made it:
 | `write org { … }` on a handle updates it in place | 1bd0d3aa10, 30e1acc55b | runs: the handle `org` moves on to the updated record (crate::bindings `Handle::move_to`), seen by every scope holding it, its `@old` a snapshot of it as it stood (or itself, under `dry_run`); a match's handle, a landing or a snapshot is written through as before, into a new handle |
 | a handle reads the record as found (`foundData`) for a field its write did not set; a parent link carries only what the parent's own write got back | 1bd0d3aa10, ac7ac15ec8 | runs: every update that found its record by identity (`unique by`, native constraints or the adapter's own rule) or through a position keeps it (crate::write `record_before`); a hop and a parent link read only `resultData` |
 
-### Language version 5's changes
+### The retirements
 
-Version 5 (Dancing Wren, main's 4319a39f..e0736369) retires constructs and
-changes some meanings. A retirement is a checker refusal, so a version 5
-program that uses one ends at its check before a segment opens; where the
-engine still meets one, it fails as the mid-run lists above say.
+Main's 4319a39f..e0736369 retires constructs and changes some meanings. A
+retirement is a checker refusal, so a program that uses one ends at its check
+before a segment opens; where the engine still meets one, it fails as the
+mid-run lists above say.
 
 | main's change | sha | on this engine |
 |---|---|---|
@@ -395,9 +394,9 @@ engine still meets one, it fails as the mid-run lists above say.
 | `all(f, g, { concurrency, onError })` replaces `parallel`; `race(f, g)` takes its arms as arguments; no `await` on either | main merge 17 | crate::combinator: `all` is `parallel`'s join (the same branch frames, exports and park format); at most `concurrency` arms run at once, a parked arm freeing its lane; `onError` `warn`/`ignore` leaves a failing arm's slot null, before a park or after a resume (resume.rs `forgives_arm_failure`) |
 | the extraction keyword retired (`MOV_EXTRACT_KEYWORD_RETIRED`) | 2026-10-16 | the checker refuses it; one the engine meets fails as `legacy_extraction` |
 
-The values a version 5 run computes are Rust's, not JavaScript's
-("JavaScript semantics, written out" above; CHANGELOG.md, "Language version
-5, Dancing Wren: it runs as Rust does").
+The values a run computes are Rust's, not JavaScript's ("JavaScript
+semantics, written out" above; CHANGELOG.md, the entry "it runs as Rust
+does").
 
 ### The evidence
 
@@ -633,8 +632,7 @@ entity's fields. A WHERE on its hop fails the run as the TypeScript's does
 read.
 
 Heads of more than one hop run since PLAN-08A group D. A `_resources` head
-runs off an extraction's result only (version 5, "Language version 5's
-changes" above).
+runs off an extraction's result only ("The retirements" above).
 
 ### Records held as values
 
@@ -739,10 +737,11 @@ The extraction keyword (`x = extract ["tier"] from […] { tree }`, with its
 inline node shapes and `through` stages) is not run here on any version: a
 run that meets one fails with MOVENG_UNSUPPORTED naming `legacy_extraction`
 (Henry's ruling, 2026-10-16).
-Version 5 refuses it at the check (`MOV_EXTRACT_KEYWORD_RETIRED`, with the
-upgrade to a declared shape and `extract(…)` where that is mechanical), and a
-version 1–4 program holding one runs on the TypeScript engine, which keeps
-the keyword as those versions' reference. `lf` refuses such a project, saying to upgrade it to version 5 on the platform. The
+The checker refuses it (`MOV_EXTRACT_KEYWORD_RETIRED`, with the upgrade to a
+declared shape and `extract(…)` where that is mechanical), and a program of
+the platform's earlier integer pins holding one runs on the TypeScript
+engine, which keeps the keyword as those languages' reference. `lf` refuses
+such a project, saying to upgrade it on the platform. The
 extraction call (`extract(content, Shape, { … })`, `extractOne(…)`) runs
 whole (crate::extract::call).
 
@@ -1084,8 +1083,8 @@ suspends at its cap ends in a parked `result`.
 
 ## Mirroring JavaScript
 
-Version 5 runs as Rust does, not as JavaScript did (CHANGELOG.md, "Language
-version 5, Dancing Wren: it runs as Rust does"): the machinery that copied
+The language runs as Rust does, not as JavaScript did (CHANGELOG.md, the
+entry "it runs as Rust does"): the machinery that copied
 V8's quirks (its legacy date parser, its regex Annex B, `ryu-js`'s number
 printing, ICU's case tables, `Object.prototype` reads, identity across the
 host boundary, the `builtins` hand-back to the TypeScript standard library)
@@ -1116,9 +1115,9 @@ pinned by its test. What is still the TypeScript's behaviour, on purpose:
 
 ### Known divergences
 
-Where a version 5 run here answers differently from the TypeScript engine
-on the same program, beyond the version 5 changes above (the TypeScript
-engine wrote the version 5 corpora's expectations). A refusal is not one:
+Where a run here answers differently from the TypeScript engine
+on the same program, beyond the changes above (the TypeScript
+engine wrote the corpora's expectations). A refusal is not one:
 "Refusals" above lists each, and the run fails.
 
 **Answers that may differ (Henry's ruling, 2026-10-12):**
@@ -1255,12 +1254,12 @@ The TypeScript side: `packages/movement-engine/services/movement_engine/__test__
 (the shim against a scripted double, and its routes against the host
 manifest), `rust_engine_abi.unit.test.ts` (the committed artifact), `rust_run.unit.test.ts` and `rust_write.unit.test.ts`
 (whole runs on both engines, compared). The oracle for the evaluator and the
-runs is the version 5 conformance corpus.
+runs is the conformance corpus.
 
 **Running a corpus case on Rust.** In lf-platform's apps/api, after
-`scripts/build-movement-wasm.sh` if a crate changed, run the version 5
+`scripts/build-movement-wasm.sh` if a crate changed, run the
 conformance corpus and the engine's unit suites (`pnpm test:unit
 --testPathPattern movement_engine`). The Rust engine is the only engine for
-version 5, so there is no engine setting to pass; the TypeScript engine stays
-as the reference the version 5 corpora were checked against.
+the current language, so there is no engine setting to pass; the TypeScript engine stays
+as the reference the corpora were checked against.
 

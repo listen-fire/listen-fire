@@ -31,7 +31,7 @@ export class LoweringError extends BridgeError {
     message: string,
     code?: string,
     /** A closure written where it would be kept as data — a list's element
-     *  or a map's value. From language version 5 a closure is a value, and
+     *  or a map's value. A closure is a value, and
      *  the checker refuses it there because a closure is not data. */
     readonly heldAsData?: 'list' | 'map',
   ) {
@@ -203,8 +203,8 @@ export function endingHop(hop: Hop): 'resources' | 'linked' | undefined {
 
 /** `-[t:#transform { plugin: … }]->` — the one meta hop whose `{ … }`
  *  settings are read. On any other hop the lowering has nowhere to put them.
- *  Language version 3 retires the hop (the checker's
- *  MOV_TRANSFORM_HOP_RETIRED), and with it every hop's settings. */
+ *  The checker refuses the hop
+ *  (MOV_TRANSFORM_HOP_RETIRED), and with it every hop's settings. */
 export function isTransformHop(hop: Hop): boolean {
   return hop.label.text === '#transform';
 }

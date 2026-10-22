@@ -1,5 +1,5 @@
 //! Program text a diagnostic suggests (`'if EXISTS(x)'`, `AT(r, 0)`,
-//! `IF … THEN "Yes" ELSE "No" END`), in the v5 spelling. A message writes its
+//! `IF … THEN "Yes" ELSE "No" END`), in the current spelling. A message writes its
 //! suggestion once, in the canonical spelling, and passes it through
 //! `spell_code`, which rewrites it by the very fixes the parser attaches to
 //! an old spelling, so a suggestion can never drift from what the upgrade
@@ -21,7 +21,7 @@ const ELLIPSIS_STATEMENT: &str = "__ellipsis__()";
 const BODY_OPEN: &str = "function __phrase__() {\n";
 const BODY_CLOSE: &str = "\n}\n";
 
-/// `text` (program text in the canonical spelling) in the v5 spelling. A word the operators row holds (`AND`, `TRUE`) is
+/// `text` (program text in the canonical spelling) in the current spelling. A word the operators row holds (`AND`, `TRUE`) is
 /// that row's spelling; an expression or a statement is rewritten by its
 /// spelling fixes until none is left. A text neither grammar reads is
 /// returned as it is.
@@ -83,7 +83,7 @@ fn name_source(name: &str) -> String {
     if ident { name.to_string() } else { format!("`{name}`") }
 }
 
-/// `dry_run` as a v5 setting is spelled: `dryRun`.
+/// `dry_run` as a current-spelling setting is spelled: `dryRun`.
 pub fn camel_case(name: &str) -> String {
     let mut out = String::new();
     let mut upper = false;

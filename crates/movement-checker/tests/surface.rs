@@ -30,8 +30,8 @@ fn an_old_spelling_under_5_is_refused_with_its_rewrite() {
     let spelling: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert!(spelling.len() >= 8, "{spelling:#?}");
     assert!(spelling.iter().all(|d| d.fix.is_some()));
-    let upper = spelling.iter().find(|d| d.message.starts_with("`UPPER`")).unwrap();
-    assert_eq!(upper.message, "`UPPER` is written `Text.upper` from language version 5");
+    let upper = spelling.iter().find(|d| d.message.starts_with("the retired spelling `UPPER`")).unwrap();
+    assert_eq!(upper.message, "the retired spelling `UPPER` is written `Text.upper`");
     assert_eq!(upper.fix.as_ref().unwrap()["edits"][0]["text"], "Text.upper");
 }
 

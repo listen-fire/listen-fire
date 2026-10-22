@@ -546,7 +546,7 @@ mod tests {
             (f64::INFINITY, "Infinity"),
             (f64::NEG_INFINITY, "-Infinity"),
             (1234.5, "1234.5"),
-            // A 17-digit tie: version 5 prints Rust's shortest digits, where
+            // A 17-digit tie: the current language prints Rust's shortest digits, where
             // JavaScript took the closer ones (`…062`); both read back as the
             // same number.
             (16086.196899414062, "16086.196899414063"),
@@ -577,7 +577,7 @@ mod tests {
         for (s, want) in cases {
             assert_eq!(string_to_number(s), *want, "{s:?}");
         }
-        // Version 5 reads no radix prefix and Rust's whitespace (U+0085 in,
+        // This language reads no radix prefix and Rust's whitespace (U+0085 in,
         // U+FEFF out).
         for s in ["infinity", "inf", "nan", "NaN", "1_0", "-0x10", "0x10", "0o17", "0b101", "0x", "1e", "e3", ".", "+", "12abc", "\u{feff}12", "1 2"] {
             assert!(string_to_number(s).is_nan(), "{s:?}");
@@ -585,7 +585,7 @@ mod tests {
         assert!(string_to_number("-0").is_sign_negative());
     }
 
-    /// Version 5 rounds the double's exact value half to even at the last
+    /// This language rounds the double's exact value half to even at the last
     /// place (JavaScript's `toFixed` rounded half up: `0.25` → `0.3`).
     #[test]
     fn to_fixed_is_rusts_fixed_point() {

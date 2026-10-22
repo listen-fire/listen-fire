@@ -353,16 +353,16 @@ export interface PluginFedArg {
 }
 
 
-// ── A plugin's arguments by position (language version 5, design §2.7) ──
+// ── A plugin's arguments by position (design §2.7) ──
 //
 // Its required inputs in the manifest's declared order, then one optional
 // settings record `{ name: value }` for the rest. Binding turns that call into
-// the named arguments versions 1–4 write, so every check and the wire to the
+// the named arguments the older language writes, so every check and the wire to the
 // plugin read one form. The Rust twin is `PluginSpec::bind_args`
 // (crates/movement-parser/src/catalog/plugin_args.rs); both checkers and both
 // engines bind through these two and nothing else.
 
-// ── A plugin package (language version 5, design §2.10, §4.3) ──
+// ── A plugin package (design §2.10, §4.3) ──
 //
 // A tag a plugin's spec declares as its `package`, matched exactly and never
 // parsed. ``import { `@lf/web` as web } from plugins`` binds each member under
@@ -385,7 +385,7 @@ export function pluginProgramNameOf(key: string, spec: PluginSpec): string {
 
 /** What a written plugin name stands for among `plugins`: the entry keyed by
  *  exactly that (a package member's key), else the one entry whose name it is
- *  (a bare import, as versions 1 to 4 write it); several such are `ambiguous`,
+ *  (a bare import, as the older language writes it); several such are `ambiguous`,
  *  listing the packages that serve it. The Rust twin is `find_plugin`. */
 export function findPlugin(
   plugins: Readonly<Record<string, PluginSpec>>,
@@ -591,7 +591,7 @@ export interface EdgeSchema {
    * The edge is the one the system declared as its records' resources (the
    * describe's reserved `_resources` reference — the knowledge graph's
    * `Resources`). An ordinary edge, walked by its name like any other; what
-   * the flag records is that a pre-version-5 `x-[f:_resources]->` on this
+   * the flag records is that an older `x-[f:_resources]->` on this
    * system read it, so MOV_RESOURCES_NOT_EXTRACTED can name it. Diagnostics
    * only: nothing resolves `_resources` to it.
    */
@@ -736,8 +736,7 @@ export interface PositionSchema {
   /**
    * A record of this type can be DELETED — the system's own promise, declared
    * per type in its describe (`deletable: true`) where its `deleteRecord`
-   * removes one. Absent ⇒ it makes no such promise, and since language
-   * version 5 `delete x` of this type is MOV_DELETE_NOT_DECLARED (an
+   * removes one. Absent ⇒ it makes no such promise, and `delete x` of this type is MOV_DELETE_NOT_DECLARED (an
    * undescribed or pending position says nothing, so nothing is refused).
    */
   deletable?: boolean;
@@ -1153,7 +1152,7 @@ export function refinementKey(input: { type: string; filter: Expression }): stri
 
 /**
  * The filter with its field reads' `fieldOnly` marks dropped. The mark says
- * how a read was SPELLED — through the hop's alias from version 5
+ * how a read was SPELLED — through the hop's alias
  * (`e.action`), bare before (`action`) — and both spellings name the same
  * field, so the key must not tell them apart: a host registers its narrowing
  * once, from its own filter, and every version's program must find it.

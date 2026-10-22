@@ -1,4 +1,4 @@
-//! Real v5 movements run end to end through the typed interface, host family
+//! Real current-spelling movements run end to end through the typed interface, host family
 //! by host family, each compared with the same run through the JSON boundary
 //! (crate::begin, answered with the wire a TypeScript or lf host writes by
 //! hand), so the typed mapping is held to the JSON route's behaviour rather

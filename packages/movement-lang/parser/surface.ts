@@ -1,4 +1,4 @@
-// The language surface of version 5 (plans/naming-rethink-2026-10-14/5_design.md):
+// The language surface (plans/naming-rethink-2026-10-14/5_design.md):
 // its spelling table and rewrite live in Rust (crates/movement-parser/src/surface);
 // this is the TypeScript's view of them through the WASM.
 
@@ -6,7 +6,7 @@ import type { Span } from './ast';
 import type { DiagnosticFix } from '../checker/fixes';
 import { callParser } from '../wasm/loader';
 
-/** An old spelling in a version 5 program: refused, its rewrite as the fix.
+/** An old spelling in a current program: refused, its rewrite as the fix.
  *  `Program.spelling` carries them; both checkers report each as a diagnostic. */
 export interface SpellingFinding {
   code: string;
@@ -23,7 +23,7 @@ export interface SpellingFinding {
    *  name first): the checker, holding the scopes, unmarks it there. The span
    *  starts where the call does. */
   unsafeIfBound?: string[];
-  /** A call with named arguments (from version 5 they are positional): its
+  /** A call with named arguments (they are positional): its
    *  arguments as written, for the checker to order by the callee's
    *  parameters. The finding stands only where the checker can. */
   named?: NamedCall;
@@ -42,7 +42,7 @@ export function spellMessage(message: string): string {
   return json;
 }
 
-/** A plugin's name from version 5: its registry name or catalog key in
+/** A plugin's name: its registry name or catalog key in
  *  camelCase (`fetch_url` → `fetchUrl`), one spelling, matched exactly. */
 export function pluginName(key: string): string {
   const { ok, json } = callParser('plugin_name', key, []);
@@ -107,7 +107,7 @@ function isTable(value: unknown): value is SurfaceTable {
   return typeof value === 'object' && value !== null && Array.isArray((value as { spellings?: unknown }).spellings);
 }
 
-/** What a name a program binds hides from version 5, exactly as written: a
+/** What a name a program binds hides exactly as written: a
  *  core word or a standard namespace (Rust: `table::hidden_by`). */
 export function hiddenBy(name: string): string | undefined {
   const { coreWords, namespaces } = surfaceTable();
@@ -117,7 +117,7 @@ export function hiddenBy(name: string): string | undefined {
 }
 
 /** Whether the spelling table respells the built-in the tree names
- *  `canonical` (in any letter case, as versions 1–4 read it). */
+ *  `canonical` (in any letter case, as the older language reads it). */
 export function isRespelled(canonical: string): boolean {
   const folded = canonical.toUpperCase();
   return surfaceTable().spellings.some((s) => !s.newOnly && s.canonical.toUpperCase() === folded);
