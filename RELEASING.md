@@ -19,7 +19,7 @@ A suffixed tag never moves npm `latest` or the default docs.
    ```sh
    git push origin main
    ```
-2. Push the three tags. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the pre-release GitHub release; `docs-v*` publishes the docs under `/docs/next/`.
+2. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the pre-release GitHub release; `docs-v*` publishes the docs under `/docs/next/`.
    ```sh
    git tag v0.12.0-rc.6 && git tag lf-v0.12.0-rc.6 && git tag docs-v0.12.0-rc.6
    git push origin v0.12.0-rc.6 lf-v0.12.0-rc.6 docs-v0.12.0-rc.6
