@@ -15,7 +15,8 @@ use movement_parser::util::form::{external_text, read_json_text};
 use serde_json::Value;
 
 use crate::check::{Opened, open_checking, parse};
-use crate::project::Project;
+use crate::project::{PROJECT_FILE, Project};
+use movement_parser::version::LANGUAGE_VERSION;
 
 /// One pass per level of fix nesting; a well-behaved upgrade settles in a few.
 const MAX_PASSES: usize = 16;
@@ -224,6 +225,19 @@ fn severity_word(d: &Diagnostic) -> &'static str {
     }
 }
 
+/// `lf.yaml`'s text with its top-level `engine:` line set to `to`, comments
+/// and layout kept; none when the line already says it.
+fn with_engine_pin(text: &str, to: &str) -> Result<Option<String>, String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let at = lines.iter().position(|l| l.strip_prefix("engine:").is_some()).ok_or("lf.yaml has no top-level `engine:` line to set")?;
+    let line = format!("engine: {to}");
+    if lines[at].trim_end() == line {
+        return Ok(None);
+    }
+    lines[at] = line;
+    Ok(Some(lines.join("\n")))
+}
+
 pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Write) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
     let checking = match open_checking(project).await? {
@@ -263,6 +277,16 @@ pub async fn run(project: &Project, options: UpgradeOptions, out: &mut impl Writ
             writeln!(out, "{shown}: the rewrite did not settle — a fix keeps rewriting its own output (a bug; please report it)").map_err(io)?;
         }
     }
+    let pin_file = project.root.join(PROJECT_FILE);
+    let pinned = std::fs::read_to_string(&pin_file).map_err(|e| format!("{}: {e}", pin_file.display()))?;
+    if let Some(repinned) = with_engine_pin(&pinned, LANGUAGE_VERSION)? {
+        if options.check_only {
+            writeln!(out, "{PROJECT_FILE}: would set engine: {LANGUAGE_VERSION} (the pin is {})", project.engine).map_err(io)?;
+        } else {
+            std::fs::write(&pin_file, repinned).map_err(|e| format!("{}: {e}", pin_file.display()))?;
+            writeln!(out, "{PROJECT_FILE}: engine: {LANGUAGE_VERSION} (was {})", project.engine).map_err(io)?;
+        }
+    }
     let verb = if options.check_only { "would be rewritten" } else { "rewritten" };
     writeln!(out, "{} file(s), {changed} {verb}, {left} left to change by hand", checking.files.len()).map_err(io)?;
     Ok(if left > 0 || (options.check_only && changed > 0) { 1 } else { 0 })
@@ -280,6 +304,14 @@ fn relative(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pin_is_set_on_the_engine_line_and_nothing_else_moves() {
+        let text = "# the project\nengine: 0.11.0\nmovements: movements\n";
+        assert_eq!(with_engine_pin(text, "0.12.0").unwrap().unwrap(), "# the project\nengine: 0.12.0\nmovements: movements\n");
+        assert_eq!(with_engine_pin("engine: 0.12.0\n", "0.12.0").unwrap(), None);
+        assert!(with_engine_pin("movements: m\n", "0.12.0").is_err());
+    }
 
     #[test]
     fn a_diff_marks_the_changed_line_with_context() {

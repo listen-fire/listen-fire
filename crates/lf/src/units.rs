@@ -1,5 +1,5 @@
 //! The run host's units (Henry 2026-10-16): `cron` and `manual`, in every
-//! file's scope from language version 5 with no import
+//! file's scope in this language with no import
 //! (movement_parser::version::RUN_HOST_UNITS). lf builds them in, as the
 //! platform does (lf-platform's apps/api translation_graph/adapters/{cron,manual}): their
 //! catalog entries, the in-process adapter a run reads its event through, the

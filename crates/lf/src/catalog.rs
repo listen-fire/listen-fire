@@ -163,7 +163,7 @@ fn trigger_config_vocabulary(supported_triggers: &[String], listen: &Obj) -> Obj
         }
     }
     // Every polled source takes its listen's own interval (spelled `every`
-    // from language version 5 by the checker, over this key).
+    // in this release by the checker, over this key).
     if supported_triggers.iter().any(|t| t == "poll") && !keys.iter().any(|k| k == "pollIntervalSeconds") {
         keys.push("pollIntervalSeconds".into());
     }

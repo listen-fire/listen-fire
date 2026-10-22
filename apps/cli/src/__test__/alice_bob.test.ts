@@ -46,7 +46,7 @@ listen to hs_alice { events: ["deal.created"] } fire mirror
 
 function hubspotProject(fake: FakeHubSpot): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-alice-bob-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.11.0\nmovements: movements\nexternals: externals\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\nmovements: movements\nexternals: externals\n');
   mkdirSync(join(dir, 'externals/hubspot'), { recursive: true });
   writeFileSync(
     join(dir, 'externals/hubspot/lf-external.yaml'),

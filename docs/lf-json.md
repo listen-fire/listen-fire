@@ -67,6 +67,7 @@ When credentials are missing: `{ "error", "missingCredentials": [diagnostic…] 
   "cancelRequested": false, "cancelReason": null } }
 ```
 
+- `languageVersion`: the version string the run is pinned to (a store from before pins were versions, holding the integer 5, is read as this release's version).
 - `event`: the event that fired the run. `outcome`: what the store recorded when the run last settled.
 - `returned`: what the movement returned, as under `lf run` above. Every run records it, however it was started.
 - `trace` is `null` when the run's store cannot hand entries back (a store module over its wire); `traceEntries` is always the count.
