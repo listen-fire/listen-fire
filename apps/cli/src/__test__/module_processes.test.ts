@@ -18,7 +18,7 @@ const List = z.object({ processes: z.array(z.unknown()), version: z.number() });
 /** A project whose store slot the test store module fills, its state in `path`. */
 function storeModuleProject(path: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'lf-processes-slot-'));
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.11.0\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\n');
   withStoreModule(dir, path);
   return dir;
 }

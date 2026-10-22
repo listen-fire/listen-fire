@@ -901,7 +901,7 @@ async fn route(host: &SegmentHost<'_>, label: &str, args: &Json) -> Result<Answe
                 _ => return Err(Fault("files.render type is \"pdf\" or \"text\"".into())),
             };
             if kind == "pdf" {
-                // From language version 5 a PDF is drawn by the `@lf/pdf` plugin; a kind
+                // In this language a PDF is drawn by the `@lf/pdf` plugin; a kind
                 // that only meets "pdf" at run time (`File.from(t, kind)`) lands here.
                 return Ok(Err(failure("File.from(…, \"pdf\") draws no PDF in lf: import the `@lf/pdf` plugin and call pdf.render(text) (``import { `@lf/pdf` as pdf } from plugins``)")));
             }

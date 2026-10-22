@@ -14,6 +14,6 @@ export function guardModuleProject(): string {
     join(dir, 'externals/acme_guard/lf-external.yaml'),
     ['name: acme_guard', 'kind: core', 'slot: loopGuard', `command: [${command.map((part) => JSON.stringify(part)).join(', ')}]`, ''].join('\n'),
   );
-  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.11.0\ncore:\n  loopGuard: acme_guard\n');
+  writeFileSync(join(dir, 'lf.yaml'), 'engine: 0.12.0\ncore:\n  loopGuard: acme_guard\n');
   return dir;
 }
