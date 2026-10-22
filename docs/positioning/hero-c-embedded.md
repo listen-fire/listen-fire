@@ -1,13 +1,15 @@
 <!-- hero:start -->
 # Listen-Fire
 
-**Customer-facing automations for your product, without building the engine.**
+**Customer automations for your product, without building the engine.**
 
-Every SaaS product eventually needs "when this happens in your workspace, do that", and most build a workflow engine from scratch to get it. Listen-Fire is that engine as a package: it runs inside your own Node process as WebAssembly, treats your product as one more system a program can read and write, and lets your customers (or their agents) write automations in a small, checkable language. Programs can pause for a person and resume days later, and the engine asks your host for everything it touches, so nothing leaves your tenant boundary.
+Today "when this happens in my workspace, do that" is the feature your customers keep asking for, and the honest answer is a rules engine you would have to build, run and keep up yourself.
+
+With Listen-Fire the engine is a package. It runs inside your own Node process, sees your product as one more system a program can read and write, and lets each customer, or their agent, write automations in a short language that is checked against that customer's own data before it runs. Your code answers its requests for data, AI, the clock and storage, so nothing leaves your tenant boundary, and a paused run is a value you keep wherever you keep state.
 
 - **For:** product teams who want customer-defined automations in their SaaS without owning a scheduler, a run store and a language.
-- **Replaces:** a home-grown rules engine, or a per-event call to a model. A checked program is predictable, cheap to run, and the same for every tenant.
-- **Proves it:** a small HTTP app where a customer saves a program, the app checks it against that customer's own data model, and the app's own event runs it. The example ships in the repository with an end-to-end test.
+- **Replaces:** a home-grown rules engine, or a model call per event.
+- **Proves it:** a small HTTP app in the repository where a customer saves a program, the app checks it against that customer's data model, and the app's own event runs it, with an end-to-end test.
 <!-- hero:end -->
 
 ## Notes for the test
