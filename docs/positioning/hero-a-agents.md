@@ -1,9 +1,11 @@
 <!-- hero:start -->
 # Listen-Fire
 
-**Agents write it. Listen-Fire runs it.**
+**The automation language for agents.**
 
-Every webhook, cron tick and inbound email that an agent handles today costs a model call, and no two calls do quite the same thing. Listen-Fire is the layer that takes that work off the model: an agent reads the language handbook once and writes a small program, and the engine then runs that program on every event with no model in the loop. A run is fast, costs nothing per event, leaves an audit trail, and can still stop and wait for a person when the program says so.
+Your agent writes the automation once. It runs on every event after that, without the agent.
+
+Ask your agent for "when I label an email Dealflow, add the company to Attio and tell #dealflow". It writes a short program, the checker tests it against the real fields and stages of your tools, and from then on every matching email is handled the same way. No agent in the loop, and no tokens spent unless the program asks for AI. When the program needs a person, it waits for one.
 
 - **For:** teams building agents that have to react to a stream of events, not answer one prompt.
 - **Replaces:** an LLM call on every webhook or cron run. A compiled program is cheaper, deterministic, and the same on the thousandth event as on the first.
@@ -12,6 +14,6 @@ Every webhook, cron tick and inbound email that an agent handles today costs a m
 
 ## Notes for the test
 
-- Claim under test: a program an agent writes once beats a model call per event.
+- Claim under test: an agent writes the automation once and it runs on every event after that, without the agent.
 - The reader should be able to say back: "my agent writes the automation, then the automation runs by itself, and it can pause to ask me."
 - Watch for: readers who hear "no model in the loop" as "no AI at all". The program can still call a model when it chooses to (`ai(…)`, `extract(…)`); the point is that the engine does not need one to run.

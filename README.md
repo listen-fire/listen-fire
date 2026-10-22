@@ -1,9 +1,11 @@
 <!-- hero:start -->
 # Listen-Fire
 
-**Agents write it. Listen-Fire runs it.**
+**The automation language for agents.**
 
-Every webhook, cron tick and inbound email that an agent handles today costs a model call, and no two calls do quite the same thing. Listen-Fire is the layer that takes that work off the model: an agent reads the language handbook once and writes a small program, and the engine then runs that program on every event with no model in the loop. A run is fast, costs nothing per event, leaves an audit trail, and can still stop and wait for a person when the program says so.
+Your agent writes the automation once. It runs on every event after that, without the agent.
+
+Ask your agent for "when I label an email Dealflow, add the company to Attio and tell #dealflow". It writes a short program, the checker tests it against the real fields and stages of your tools, and from then on every matching email is handled the same way. No agent in the loop, and no tokens spent unless the program asks for AI. When the program needs a person, it waits for one.
 <!-- hero:end -->
 
 ## How it works
@@ -18,7 +20,7 @@ flowchart LR
   F --> E
 ```
 
-1. **An agent writes a program**: a plain text `.mvt` file in a small language made for moving data between systems, learned from a handbook written for agents. A person can write or review one too.
+1. **An agent writes a program**: a short text file (`.mvt`) in a language made for moving data between systems. A person can write or review one too.
 2. **The engine runs it on every event** the program listens for, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
 3. **It waits for a person when the program says so**: post a button, park, and resume on the tap minutes or days later, holding nothing open in between. Every run is recorded.
 
