@@ -73,7 +73,7 @@ const AUTHORIZE = /^\s+http:\/\/127\.0\.0\.1:\d+\/authorize\?/;
 /** `lf connect acme_crm` on a fresh project: server secret, webhook secret
  *  (generated), the OAuth app, and the registered redirect port. */
 async function connectAcme(dir: string, port = '0'): Promise<string> {
-  return ok(lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, port] }));
+  return ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, port] }));
 }
 
 // ── lf connect <module> ─────────────────────────────────────────────────────
@@ -113,8 +113,52 @@ test('lf connect <module> writes its install — server secret, webhook secret, 
     assert.equal(provider.calls.length, 0);
 
     // Again: every answer kept by enter.
-    await ok(lf(dir, ['connect', 'acme_crm'], { answers: ['', '', '', '', ''] }));
+    await ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['', '', '', '', ''] }));
     assert.deepEqual(secretsFile(dir).acme_crm, install);
+  } finally {
+    await provider.close();
+  }
+});
+
+test('lf connect ends by offering the first sign-in, and "y" runs lf credential add in the same command', async () => {
+  const provider = await startFakeOAuthServer({ ...CLIENT, requirePkce: true });
+  try {
+    const dir = freshProject(oauthDeclaration(provider));
+    const connecting = lf(dir, ['connect', 'acme_crm', '--no-browser'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0', 'y', 'alice_acme'] });
+    const url = (await connecting.line(AUTHORIZE)).trim();
+    const page = await fetch(url);
+    assert.equal(page.status, 200, await page.clone().text());
+    const out = await ok(connecting);
+    assert.match(out, /Sign in now\? \[Y\/n\]/);
+    assert.match(out, /added alice_acme \(acme_crm, credential acme\)/);
+    assert.doesNotMatch(out, /next, a user credential/);
+
+    const { alice_acme: alice, acme_crm: install } = secretsFile(dir);
+    assert.ok(alice !== undefined && install !== undefined);
+    assert.equal(install.client_id, CLIENT.clientId);
+    assert.equal(alice.module, 'acme_crm');
+    assert.equal(alice.credential, 'acme');
+    assert.equal(alice.access_token, 'access-1');
+  } finally {
+    await provider.close();
+  }
+});
+
+test('lf connect: "n" to the sign-in offer, and --yes, leave the next-step line and no credential', async () => {
+  const provider = await startFakeOAuthServer(CLIENT);
+  try {
+    const declined = freshProject(oauthDeclaration(provider));
+    const out = await ok(lf(declined, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0', 'n'] }));
+    assert.match(out, /Sign in now\? \[Y\/n\]/);
+    assert.match(out, /next, a user credential: lf credential add --module acme_crm <name>/);
+    assert.deepEqual(Object.keys(secretsFile(declined)), ['acme_crm']);
+
+    const unasked = freshProject(oauthDeclaration(provider));
+    const yes = await ok(lf(unasked, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
+    assert.doesNotMatch(yes, /Sign in now/);
+    assert.match(yes, /next, a user credential: lf credential add --module acme_crm <name>/);
+    assert.deepEqual(Object.keys(secretsFile(unasked)), ['acme_crm']);
+    assert.equal(provider.calls.length, 0);
   } finally {
     await provider.close();
   }
@@ -242,7 +286,7 @@ test('lf credential add --public sends the relay URI lf.yaml names; the relay fo
     const dir = freshProject(oauthDeclaration(provider));
     const relay = 'https://relay.example.com/lf/oauth/callback';
     writeFileSync(join(dir, 'lf.yaml'), `${readFileSync(join(dir, 'lf.yaml'), 'utf8')}oauth:\n  redirectUri: ${relay}\n`);
-    const connected = await ok(lf(dir, ['connect', 'acme_crm'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
+    const connected = await ok(lf(dir, ['connect', 'acme_crm', '--yes'], { answers: ['dev-acme-token', '', CLIENT.clientId, CLIENT.clientSecret, '0'] }));
     assert.ok(connected.includes(`  ${relay}   (lf credential add --public, forwarded on to lf serve's /oauth/callback)`), connected);
     const serving = await served(dir);
     try {

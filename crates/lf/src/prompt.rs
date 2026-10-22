@@ -61,6 +61,17 @@ impl Prompter {
         }
     }
 
+    /// A yes/no question whose enter is yes. Input that has ended is a no:
+    /// whoever piped the answers did not mean to be asked this one.
+    pub async fn confirm(&mut self, question: &str) -> Result<bool, String> {
+        write_out(&format!("{question} [Y/n]: "));
+        let line = self.lines.next_line().await.map_err(|e| e.to_string())?;
+        if !self.terminal {
+            write_out("\n");
+        }
+        Ok(line.is_some_and(|answer| !matches!(answer.trim().to_ascii_lowercase().as_str(), "n" | "no")))
+    }
+
     /// A line of progress, between questions.
     pub fn print(&self, line: &str) {
         write_out(&format!("{line}\n"));

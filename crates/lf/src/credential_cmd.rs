@@ -315,7 +315,7 @@ fn user_name() -> String {
 
 pub const COMMANDS: &[&str] = &["connect", "credential", "completion"];
 
-pub const USAGE: &str = "  lf connect [<module>] [--url <server url>]     set a module up: install it, its server and webhook secrets, its OAuth app (no module: list the ones known; --json: as JSON)
+pub const USAGE: &str = "  lf connect [<module>] [--url <server url>] [--yes]     set a module up (a module that signs users in with OAuth ends by offering the first sign-in; --yes skips the offer): install it, its server and webhook secrets, its OAuth app (no module: list the ones known; --json: as JSON)
     pointing it elsewhere (a fake, a proxy): --base-url <its API root>  --oauth-authorize-url <url>  --oauth-token-url <url>  ('' goes back to the provider's own)
   lf credential add --module <module> [<name>] [--credential <declared>]   a user credential for the module: sign in at the provider, or its fields
   lf credential update <name> [--no-reauthorize]   sign in again and edit its fields
@@ -341,6 +341,7 @@ struct Line {
     public: bool,
     no_reauthorize: bool,
     json: bool,
+    yes: bool,
 }
 
 fn parse(argv: &[String]) -> Result<Line, String> {
@@ -367,6 +368,7 @@ fn parse(argv: &[String]) -> Result<Line, String> {
             "--public" => line.public = true,
             "--no-reauthorize" => line.no_reauthorize = true,
             "--json" => line.json = true,
+            "--yes" => line.yes = true,
             "--ephemeral" => {}
             flag if flag.starts_with('-') && flag != "-" => return Err(format!("unknown option \"{flag}\"")),
             positional => line.positionals.push(positional.to_string()),
@@ -412,7 +414,15 @@ async fn run(argv: &[String]) -> Result<i32, String> {
                 }
                 return Ok(0);
             };
+            let redirect = match redirect_of(&line) {
+                Ok(redirect) => redirect,
+                Err(message) => {
+                    eprintln!("{message}");
+                    return Ok(2);
+                }
+            };
             let options = ConnectOptions {
+                sign_in: (!line.yes).then_some(&redirect),
                 url: line.url.as_deref(),
                 base_url: line.base_url.as_deref(),
                 oauth_authorize_url: line.oauth_authorize_url.as_deref(),
@@ -436,6 +446,28 @@ fn refused(done: Result<(), EntryError>) -> Result<i32, String> {
     }
 }
 
+/// How the sign-in goes back from the provider, as the command line asked.
+fn redirect_of(line: &Line) -> Result<RedirectChoice, String> {
+    if line.headless && line.public {
+        return Err("lf credential: --headless and --public are two ways back from the provider; pick one".into());
+    }
+    let port = match &line.redirect_port {
+        Some(port) => match port.parse::<u16>() {
+            Ok(n) if port.chars().all(|c| c.is_ascii_digit()) => Some(n),
+            _ => return Err(format!("--redirect-port: a port number, not \"{port}\"")),
+        },
+        None => None,
+    };
+    let how = if line.headless {
+        How::Headless
+    } else if line.public {
+        How::Public
+    } else {
+        How::Loopback
+    };
+    Ok(RedirectChoice { how, port, open_browser: !line.no_browser && !line.headless })
+}
+
 async fn credential(line: &Line, rest: &[String]) -> Result<i32, String> {
     let project = project_at(line)?;
     let (action, name) = (rest.first().map(String::as_str), rest.get(1).map(String::as_str));
@@ -450,28 +482,13 @@ async fn credential(line: &Line, rest: &[String]) -> Result<i32, String> {
         }
         return Ok(0);
     }
-    if line.headless && line.public {
-        eprintln!("lf credential: --headless and --public are two ways back from the provider; pick one");
-        return Ok(2);
-    }
-    let port = match &line.redirect_port {
-        Some(port) => match port.parse::<u16>() {
-            Ok(n) if port.chars().all(|c| c.is_ascii_digit()) => Some(n),
-            _ => {
-                eprintln!("--redirect-port: a port number, not \"{port}\"");
-                return Ok(2);
-            }
-        },
-        None => None,
+    let redirect = match redirect_of(line) {
+        Ok(redirect) => redirect,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
     };
-    let how = if line.headless {
-        How::Headless
-    } else if line.public {
-        How::Public
-    } else {
-        How::Loopback
-    };
-    let redirect = RedirectChoice { how, port, open_browser: !line.no_browser && !line.headless };
     let mut prompter = Prompter::terminal();
     match (action, name) {
         (Some("add"), _) => {
