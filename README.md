@@ -50,7 +50,7 @@ run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
 
 [Getting started with `lf`](docs/getting-started-lf.md) goes on to connect a system (`lf connect @lf/attio`), add a credential, route a recorded event through your programs (`lf run --event …`) and serve webhooks (`lf serve`).
 
-**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([the full table](#what-you-can-connect)).
+**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([connect anything](#connect-anything)).
 
 **Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
 
@@ -108,11 +108,13 @@ An agent's loop with `lf`:
 
 The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. For editors, `lf lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
 
-## What you can connect
+## Connect anything
 
-Each system is reached through an adapter, which presents it as a graph. The adapters in the tree are:
+The engine knows no system. Everything a program touches is a module: a separate program that presents one system as records joined by links, and that handles its sign-in, rate limits and paging. A project installs the modules it needs (`lf connect @lf/attio`), and a program imports only what is installed. Two sources are built in and need nothing: `manual`, a run you start by hand, and `cron`, a schedule.
 
-| adapter | system |
+The ready-made modules in this repository today, each a starting point rather than a fixture of the language:
+
+| module | system |
 |---|---|
 | `slack` | Slack |
 | `email` | inbound and outbound email |
@@ -128,10 +130,10 @@ Each system is reached through an adapter, which presents it as a graph. The ada
 | `granola` | Granola meeting notes |
 | `evertrace` | Evertrace |
 | `dealroom` | Dealroom |
-| `cron` | a schedule |
-| `manual` | an on-demand run |
 
-`cron` and `manual` are the engine's own and need no module. [`modules/`](modules) also holds the plugins a program imports (`@lf/web`, `@lf/pdf`) and the modules behind the engine's [core slots](docs/core-slots.md): models, the identity judge, the run store, files. An adapter can also live outside this repository and be reached over a wire protocol; see [`docs/contracts/adapter-protocol.md`](docs/contracts/adapter-protocol.md).
+Any other system is a module away. A module is an HTTP server speaking a [versioned protocol](docs/contracts/adapter-protocol.md), in whatever language you like: [`examples/lf-acme`](examples/lf-acme) is a CRM adapter in one JavaScript file, and [`examples/rust-module`](examples/rust-module) serves an adapter and a plugin from Rust. A project reaches a module through a folder in `externals/` that says how: a command the host starts, a URL already serving, or a package.
+
+The same holds for everything else the engine needs. Where runs are stored, which models answer `ai(…)`, where files go, what settles whether two records are the same, how workers are woken: each is a [slot](docs/core-slots.md) a module fills, with a default that needs no setup and an alternative you can swap in or write. Plugins add functions a program can call: `@lf/pdf` renders one, and [`examples/lf-custom-plugin`](examples/lf-custom-plugin) adds your own.
 
 ## Repository layout
 
