@@ -3,9 +3,9 @@
 
 **The automation language for agents.**
 
-When an agent looks after a stream of events, it is called on every one: each webhook, cron tick and inbound email is another model call, and no two calls do quite the same thing.
+Today your agent acts when you ask it to. Most of what you want done happens when you are not asking: an email arrives, it is 8am, a deal moves stage in the CRM. Having the agent handle each of those is another model call every time, and no two calls do quite the same thing.
 
-With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every matching email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI.
+With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every such email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI.
 <!-- hero:end -->
 
 ## How it works
@@ -13,13 +13,13 @@ With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflo
 ```mermaid
 flowchart LR
   A["Agent reads the handbook,<br>writes a .mvt program"] --> B["Engine checks it"]
-  B --> C["An event arrives:<br>webhook, schedule, email"]
+  B --> C["Something happens:<br>an email, 8am, a CRM change"]
   C --> D["Engine runs the program<br>(no model needed)"]
   D --> E["Writes land in Slack,<br>the CRM, a sheet"]
 ```
 
 1. **An agent writes a program**: a short text file (`.mvt`) in a language made for moving data between systems. A person can write or review one too.
-2. **The engine runs it on every event** the program listens for, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
+2. **The engine runs it every time that thing happens**, the same way every time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
 3. **Every run is recorded**: the event it started from, what it read, and what it wrote.
 
 ## Fastest path to a first run
