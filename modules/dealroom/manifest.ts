@@ -115,11 +115,11 @@ export const DEALROOM_MANIFEST: AdapterManifest = {
   ],
   triggerKinds: ['DEALROOM'],
   vocabulary: {
-    // A stroke "D" — the mark opens with a moveto, as path data must.
+    // Dealroom's mark: the bars and the D of its logo, without the tile, as one filled path.
     icon: {
-      d: 'M8 5 H13 A7 7 0 0 1 13 19 H8 Z',
-      fill: false,
-      viewBox: '0 0 24 24',
+      d: 'M17,38.2v-17h6.21v17Zm14,0H24.82V15.07h7.87q5.56,0,8.6,2.85t3,8.23c0,3.85-1.06,6.83-3.19,8.91s-5.11,3.13-9,3.14ZM31,33.07h1.3a5.05,5.05,0,0,0,4.17-1.65,8,8,0,0,0,1.33-5.05,7.34,7.34,0,0,0-1.26-4.72,4.66,4.66,0,0,0-3.82-1.53H31ZM9.15,38.2V27.55h6.21V38.2Z',
+      fill: true,
+      viewBox: '8.4 14.3 36.6 24.6',
     },
     eventPhrase: {
       default: [{ template: 'When Dealroom records a new funding round' }],
