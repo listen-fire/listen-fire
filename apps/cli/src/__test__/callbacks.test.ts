@@ -186,3 +186,43 @@ test('lf resume with no run steps only what is due: the timeout arm beside an ap
   assert.match(called.out, /race:approve completed/);
   assert.deepEqual(companies(dir).slice(1), ['Approved']);
 });
+
+test('lf serve: GET on a callback url renders the confirm page and fires nothing; its form post fires it, answered with a page', async () => {
+  const dir = project('callback');
+  const serving = await served(dir);
+  try {
+    const crm = `http://127.0.0.1:${externalPort(dir)}`;
+    await fetch(`${crm}/dev/companies`, { method: 'POST', body: JSON.stringify({ Name: 'Osprey' }) });
+    await serving.waitFor(/run .* callback:approve parked/);
+    const { id } = minted(dir);
+    const door = `http://127.0.0.1:${serving.port}/api/cb/${id}`;
+
+    const unknown = await fetch(`http://127.0.0.1:${serving.port}/api/cb/cb_never-minted`);
+    assert.equal(unknown.status, 404);
+    assert.match(await unknown.text(), /This link is not valid/);
+
+    const page = await fetch(`${door}?note=prefetched`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type') ?? '', /text\/html/);
+    const html = await page.text();
+    assert.ok(html.includes(`<form method="post" action="/api/cb/${id}">`), html);
+    assert.ok(html.includes('<input type="text" name="note" required>'), html);
+    assert.equal(companies(dir).length, 2, 'opening the link fired nothing');
+
+    const submitted = await fetch(door, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' },
+      body: 'note=from+the+page',
+    });
+    assert.equal(submitted.status, 200);
+    assert.match(await submitted.text(), /<h1>Done<\/h1>/);
+    await serving.waitFor(/resumed .* callback:approve completed/);
+    assert.deepEqual(companies(dir).slice(2), ['Body from the page', 'Approved from the page']);
+
+    const closed = await fetch(door);
+    assert.equal(closed.status, 410);
+    assert.match(await closed.text(), /This action was closed/);
+  } finally {
+    await serving.stop();
+  }
+});

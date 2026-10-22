@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 use crate::backend::StoreSpec;
 use crate::callbacks::CallOutcome;
 use crate::doors::{EventSink, LfDoors, deliver_inline, hook_target};
-use crate::http::{Request, Response, decode_component, query_pairs};
+use crate::http::{Request, Response, decode_component};
 use crate::inbound::{Answer, Delivery, InboundStore, Push, PushStore, answer_delivery, answer_push};
 use crate::json::{Js, Obj};
 #[cfg(feature = "oauth")]
@@ -266,6 +266,10 @@ async fn route(listening: &Listening, request: Request) -> Result<Response, Stri
             let (status, text) = deliver_public_redirect(&session.project.lf_dir, &request.query);
             return Ok(Response::text(status, &text));
         }
+        if let Some([id]) = segments(&request.path, "/api/cb/").as_deref() {
+            let callback = session.store.callback(&decoded(id)?).map_err(|e| e.to_string())?;
+            return Ok(crate::callback_page::get(callback.as_ref()));
+        }
         if let Some([id]) = segments(&request.path, "/files/").as_deref() {
             return Ok(match session.documents.exposed(id) {
                 Some(bytes) => Response::bytes(200, bytes),
@@ -442,12 +446,18 @@ pub async fn only_doors<S: InboundStore + PushStore>(stores: &S, request: Reques
 
 // ── The callback door ───────────────────────────────────────────────────────
 
-/// `POST /api/cb/<id>`: the call's values are the JSON body's keys over the
-/// query string's, every key passed raw (the callback's signature judges them).
+/// `POST /api/cb/<id>`: the call's values are the body's keys (a JSON object,
+/// or the confirm page's form) over the query string's, every key passed raw
+/// (the callback's signature judges them). A browser is answered with a page.
 async fn callback_door(listening: &Listening, id: &str, request: &Request) -> Result<Response, String> {
     let (session, poke) = (&*listening.session, &*listening.poke);
-    let Some(values) = call_values(&request.body, &request.query) else {
-        return Ok(Response::json(400, &Js::Obj(obj! { "outcome" => Js::str("mismatch"), "message" => Js::str("the body is not a JSON object of values") })));
+    let wants_html = crate::callback_page::prefers_html(&request.headers);
+    let Some(values) = crate::callback_page::call_values(&request.headers, &request.body, &request.query) else {
+        let message = "the body is not a JSON object or a form of values";
+        if wants_html {
+            return Ok(crate::callback_page::answered(400, &CallOutcome::Mismatch(message.into())));
+        }
+        return Ok(Response::json(400, &Js::Obj(obj! { "outcome" => Js::str("mismatch"), "message" => Js::str(message) })));
     };
     // Under --doors-only the body is a worker's: the instance is frozen
     // once this answers, so nothing may run on past the response.
@@ -456,17 +466,10 @@ async fn callback_door(listening: &Listening, id: &str, request: &Request) -> Re
     let (status, message) = call_answer(&called);
     // A queued body, and the wake backstop, are drained work.
     poke.notify_one();
-    Ok(Response::json(status, &Js::Obj(obj! { "outcome" => Js::str(called.call.kind()), "message" => Js::Str(message) })))
-}
-
-fn call_values(raw_body: &[u8], query: &str) -> Option<Obj> {
-    let mut values: Obj = query_pairs(query).into_iter().map(|(k, v)| (k, Js::Str(v))).collect();
-    if raw_body.is_empty() {
-        return Some(values);
+    if wants_html {
+        return Ok(crate::callback_page::answered(status, &called.call));
     }
-    let Ok(Js::Obj(body)) = Js::parse(raw_body) else { return None };
-    values.extend(body);
-    Some(values)
+    Ok(Response::json(status, &Js::Obj(obj! { "outcome" => Js::str(called.call.kind()), "message" => Js::Str(message) })))
 }
 
 /// The door's answer, as the hosted door gives it.
@@ -503,15 +506,6 @@ mod tests {
         assert_eq!(doors_only(false, Some("")), Ok(false));
         assert!(doors_only(false, Some("yes")).unwrap_err().contains("LF_DOORS_ONLY"));
         assert_eq!(doors_only(true, Some("0")), Ok(true), "the flag wins");
-    }
-
-    #[test]
-    fn a_calls_values_are_the_bodys_over_the_querys() {
-        let values = call_values(br#"{"note":"body"}"#, "note=query&other=1").unwrap();
-        assert_eq!(Js::Obj(values).to_json(), r#"{"note":"body","other":"1"}"#);
-        assert!(call_values(b"[1]", "").is_none());
-        assert!(call_values(b"not json", "").is_none());
-        assert_eq!(call_values(b"", "a=b").map(|v| Js::Obj(v).to_json()).as_deref(), Some(r#"{"a":"b"}"#));
     }
 
     /// What a run returned is never a door's answer: a webhook's sender hears

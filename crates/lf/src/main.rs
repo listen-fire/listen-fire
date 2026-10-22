@@ -47,6 +47,8 @@
 #[cfg(feature = "anthropic")]
 mod anthropic;
 mod backend;
+#[cfg(feature = "serve")]
+mod callback_page;
 mod callbacks;
 mod catalog;
 mod check;
