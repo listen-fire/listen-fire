@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "description": "A SaaS that lets its customers write and run movements inside its product: the engine in process, through its public entries only (docs/embedding.md)",
   "engines": {
-    "node": "22.23.4"
+    "node": ">=22.23.4 <23"
   },
   "scripts": {
     "start": "node --require tsx/cjs src/server.ts",
