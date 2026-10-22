@@ -30,6 +30,7 @@
 //!   lf --contract-ocr-slot [--dir <project>]                     the project's OCR module, served through lf's client of it
 //!   lf --contract-models | --contract-judge | --contract-files   the built-in models, judge, files module served
 //!     (each --contract-<slot> server speaks adapter protocol 2 on --listen unix:<path> | <port>, default a fresh socket)
+//!   lf --contract-movements-slot [--dir <project>]               the project's movements module, served through lf's client of it
 //!   lf --contract-secrets <file|env>    a secrets store over stdio JSON-RPC
 //!   lf --contract-secrets-slot [--dir <project>]                 the project's secrets module, served through lf's client of it
 //!   lf --contract-doors                 the inbound doors over HTTP, their world arranged over stdio JSON-RPC
@@ -59,6 +60,8 @@ mod connect;
 #[cfg(feature = "serve")]
 mod contract_doors;
 mod contract_secrets;
+#[cfg(feature = "serve")]
+mod contract_movements_slot;
 #[cfg(feature = "serve")]
 mod contract_secrets_slot;
 #[cfg(feature = "serve")]
@@ -183,6 +186,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliverie
        lf --contract-wake-slot [--dir <project>]
        lf --contract-ocr-slot [--dir <project>]
        lf --contract-models | --contract-judge | --contract-files
+       lf --contract-movements-slot [--dir <project>]
        lf --contract-secrets <secrets file | env>
        lf --contract-secrets-slot [--dir <project>]
        lf --contract-doors
@@ -217,6 +221,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliverie
   --contract-doors  serve the inbound doors over HTTP, their world arranged over stdin/stdout JSON-RPC (the inbound contract suite's bridge)
   --project-schema  project one adapter introspection (JSON on stdin) into its schema and notes (the projection's parity probe)
   --contract-secrets-slot  serve the secrets module the project's secrets slot names, through lf's client of it, on --listen
+  --contract-movements-slot  serve the movements module the project's movements slot names, through lf's client of it, on --listen
   --contract-secrets  serve one secrets store over stdin/stdout JSON-RPC (the secrets contract suite's bridge)
   --version  this lf's version (a release tag lf-v<version> is built from the crate at that version)
 {CREDENTIAL_USAGE}";
@@ -250,6 +255,7 @@ struct Args {
     contract_guard_slot: bool,
     contract_wake_slot: bool,
     contract_secrets_slot: bool,
+    contract_movements_slot: bool,
     contract_ocr_slot: bool,
     doors_only: bool,
     contract_models: bool,
@@ -297,6 +303,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         contract_guard_slot: false,
         contract_wake_slot: false,
         contract_secrets_slot: false,
+        contract_movements_slot: false,
         contract_ocr_slot: false,
         doors_only: false,
         contract_models: false,
@@ -345,6 +352,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--contract-guard-slot" => args.contract_guard_slot = true,
             "--contract-wake-slot" => args.contract_wake_slot = true,
             "--contract-secrets-slot" => args.contract_secrets_slot = true,
+            "--contract-movements-slot" => args.contract_movements_slot = true,
             "--contract-ocr-slot" => args.contract_ocr_slot = true,
             "--doors-only" => args.doors_only = true,
             "--contract-models" => args.contract_models = true,
@@ -645,6 +653,9 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
     } else if args.contract_secrets_slot {
         let (project, env) = project_env()?;
         contract_secrets_slot::serve(secrets::Secrets::open(&project, &env)?.store_handle(), &project.core.secrets.name, listen()?).await?;
+    } else if args.contract_movements_slot {
+        let (project, env) = project_env()?;
+        contract_movements_slot::serve(movements_slot::of_project(&project, &env)?, &project.core.movements.name, listen()?).await?;
     } else if args.contract_ocr_slot {
         let (project, env) = project_env()?;
         let Some(module) = &project.core.ocr else { return Err("the project's ocr slot is empty: name an OCR module in lf.yaml's `core: { ocr: … }`".to_string()) };
@@ -670,6 +681,7 @@ async fn serve_contract_bridge(args: &Args) -> Result<Option<i32>, String> {
         || args.contract_guard_slot
         || args.contract_wake_slot
         || args.contract_secrets_slot
+        || args.contract_movements_slot
         || args.contract_ocr_slot
         || args.contract_models
         || args.contract_judge

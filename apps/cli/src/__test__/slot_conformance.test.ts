@@ -4,7 +4,7 @@
 // `public/module-wire`) — the cases every slot module answers alike (its
 // manifest, the envelope's refusals) and the models, judge and files slots'
 // own; the secrets slot's default module is held to the envelope here and to its own
-// cases in secrets_slot_contract. The store, limiter and loop guard are held to their families' contract
+// cases in secrets_slot_contract (the movements slot's folder module likewise, in movements_slot_contract). The store, limiter and loop guard are held to their families' contract
 // cases over the same wire in run_host_contract, limiter_contract and
 // loop_guard_contract. The browser slot, which lf builds none of, is held to
 // its contract through the wire client, against the scripted page served as a
@@ -16,7 +16,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FILES_METHODS, JUDGE_METHODS, MODELS_METHODS, SECRETS_METHODS } from 'engine-contracts/slots';
+import { FILES_METHODS, JUDGE_METHODS, MODELS_METHODS, MOVEMENTS_METHODS, SECRETS_METHODS } from 'engine-contracts/slots';
 import {
   SlotClient,
   browserSlotAnswer,
@@ -73,6 +73,8 @@ const builtIns: Array<{ slot: Parameters<typeof commonSlotCases>[0]; args: () =>
   { slot: 'loopGuard', args: () => ['--contract-guard'], methods: ['guard.isEcho'], cases: [] },
   // The default module, over a project with nothing in it; the slot's own cases are secrets_slot_contract's.
   { slot: 'secrets', args: () => ['--contract-secrets-slot', '--dir', emptyProject()], methods: SECRETS_METHODS, cases: [] },
+  // The folder module, likewise; its cases are movements_slot_contract's.
+  { slot: 'movements', args: () => ['--contract-movements-slot', '--dir', emptyProject()], methods: MOVEMENTS_METHODS, cases: [] },
 ];
 
 for (const builtIn of builtIns) {

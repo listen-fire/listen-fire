@@ -1,5 +1,5 @@
 // The conformance suites of the slots with no family contract of their own
-// (models, judge, files, wake, ocr), and the secrets slot's own cases beside
+// (models, judge, files, wake, ocr), the movements slot's, and the secrets slot's own cases beside
 // the family's (`services/secrets/contract.ts`), and the cases every slot module answers alike (its
 // manifest, the envelope's refusals). Each runs against any server over the
 // wire: written once here, they hold lf's built-ins (`lf --contract-<slot>`)
@@ -19,6 +19,9 @@ import {
   MODELS_PRICES_METHOD,
   ModelsCallAnswer,
   ModelsPricesAnswer,
+  MovementsListAnswer,
+  MovementsReadAnswer,
+  MovementsWriteAnswer,
   OCR_PRICES_METHOD,
   OCR_UNSUPPORTED_TYPE_CODE,
   OcrPricesAnswer,
@@ -506,6 +509,140 @@ export const secretsReadOnlySlotCases: SlotConformanceCase[] = [
       const held = await client.read('secrets.lock', { ref, ttlMs: 30_000 }, SecretsLockAnswer);
       assert.ok(held !== null);
       assert.equal(await client.call('secrets.unlock', { ref, token: held.token }), null);
+    },
+  },
+];
+
+// ── The movements slot ──────────────────────────────────────────────────────
+
+const NEW_MOVEMENT = () => `conformance/${randomUUID()}.mvt`;
+
+async function listedMovements(client: SlotClient) {
+  return client.read('movements.list', {}, MovementsListAnswer);
+}
+
+const writeMovement = (client: SlotClient, path: string, text: string, expectedVersion: string | null) =>
+  client.read('movements.write', { path, text, expectedVersion }, MovementsWriteAnswer);
+
+/** Creates a file and returns the version it was written at. */
+async function createdMovement(client: SlotClient, path: string, text: string): Promise<string> {
+  const made = await writeMovement(client, path, text, null);
+  assert.equal(made.kind, 'written', `creating ${path} answered ${JSON.stringify(made)}`);
+  return made.kind === 'written' ? made.version : '';
+}
+
+/** The movements slot's own cases (docs/contracts/movements-slot.md): the
+ *  list, a read of nothing, writes by compare-and-swap on the version, the
+ *  path rule. `client` reaches a module that can change its files. */
+export const movementsSlotCases: SlotConformanceCase[] = [
+  {
+    name: 'movements: list names a created file, and its version is the one read answers',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      const version = await createdMovement(client, path, 'movement hello {}\n');
+      const one = (await listedMovements(client)).find((file) => file.path === path);
+      assert.ok(one !== undefined, 'a created file is listed');
+      assert.ok(one.version === undefined || one.version === version, 'a listed version is the one the write answered');
+      assert.deepEqual(await client.read('movements.read', { path }, MovementsReadAnswer), { text: 'movement hello {}\n', version });
+    },
+  },
+  {
+    name: 'movements: read of a path with nothing at it answers null',
+    async run(client) {
+      assert.equal(await client.call('movements.read', { path: NEW_MOVEMENT() }), null);
+    },
+  },
+  {
+    name: 'movements: create with a null expectedVersion writes; a second create answers conflict with the current version and changes nothing',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      const version = await createdMovement(client, path, 'one');
+      assert.deepEqual(await writeMovement(client, path, 'two', null), { kind: 'conflict', current: version });
+      assert.equal((await client.read('movements.read', { path }, MovementsReadAnswer))?.text, 'one', 'the refused create changed nothing');
+    },
+  },
+  {
+    name: 'movements: replace with the current version answers a new version, and the text reads back byte for byte',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      const first = await createdMovement(client, path, 'one');
+      const text = 'movement caf\u00e9 {}\n\u00fcber \u2713\n';
+      const replaced = await writeMovement(client, path, text, first);
+      assert.equal(replaced.kind, 'written');
+      assert.ok(replaced.kind === 'written' && replaced.version !== first, 'a replace is a new version');
+      const read = await client.read('movements.read', { path }, MovementsReadAnswer);
+      assert.equal(read?.text, text);
+      assert.equal(read?.version, replaced.kind === 'written' ? replaced.version : undefined);
+    },
+  },
+  {
+    name: 'movements: a stale version answers conflict with the current one and changes nothing; so does a version for a path with nothing at it',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      const first = await createdMovement(client, path, 'one');
+      const second = await writeMovement(client, path, 'two', first);
+      assert.equal(second.kind, 'written');
+      const current = second.kind === 'written' ? second.version : '';
+      assert.deepEqual(await writeMovement(client, path, 'three', first), { kind: 'conflict', current });
+      assert.equal((await client.read('movements.read', { path }, MovementsReadAnswer))?.text, 'two');
+      assert.deepEqual(await writeMovement(client, NEW_MOVEMENT(), 'x', 'no-such-version'), { kind: 'conflict', current: null });
+    },
+  },
+  {
+    name: 'movements: the same text listed twice keeps its version; a changed text changes it',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      await createdMovement(client, path, 'one');
+      const versionOf = async () => (await client.read('movements.read', { path }, MovementsReadAnswer))?.version;
+      const before = await versionOf();
+      assert.equal(await versionOf(), before, 'reading twice does not change the version');
+      const listedVersion = async () => (await listedMovements(client)).find((file) => file.path === path)?.version;
+      assert.equal(await listedVersion(), await listedVersion(), 'listing twice does not change it');
+      assert.ok(before !== undefined);
+      await writeMovement(client, path, 'two', before);
+      assert.notEqual(await versionOf(), before, 'a changed text is a new version');
+    },
+  },
+  {
+    name: 'movements: a path that is not relative, `/`-separated and ending .mvt is refused as bad_request on read and write',
+    async run(client) {
+      for (const path of ['/a.mvt', 'a/../b.mvt', './a.mvt', 'a//b.mvt', 'a\\b.mvt', 'a.txt', 'a']) {
+        await refusedWith('bad_request', client.call('movements.read', { path }));
+        await refusedWith('bad_request', client.call('movements.write', { path, text: 'x', expectedVersion: null }));
+      }
+      await refusedWith('bad_request', client.call('movements.read', {}));
+    },
+  },
+  {
+    name: 'movements: a write without its expectedVersion, or without its text, is refused as bad_request and writes nothing',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      await refusedWith('bad_request', client.call('movements.write', { path, text: 'x' }));
+      await refusedWith('bad_request', client.call('movements.write', { path, expectedVersion: null }));
+      assert.equal(await client.call('movements.read', { path }), null);
+    },
+  },
+];
+
+/** What a module that keeps the project's movements where lf cannot change
+ *  them answers: `client` reaches one. A write is refused by name with a
+ *  reason; listing and reading still work. */
+export const movementsReadOnlySlotCases: SlotConformanceCase[] = [
+  {
+    name: 'movements: a read-only module answers movements.write with read_only and its reason, and keeps nothing',
+    async run(client) {
+      const path = NEW_MOVEMENT();
+      const answer = await writeMovement(client, path, 'one', null);
+      assert.ok(answer.kind === 'read_only' && answer.reason.length > 0, `movements.write answered ${JSON.stringify(answer)}`);
+      assert.equal(await client.call('movements.read', { path }), null);
+      assert.equal((await listedMovements(client)).find((file) => file.path === path), undefined);
+    },
+  },
+  {
+    name: 'movements: a read-only module still lists and reads',
+    async run(client) {
+      assert.ok(Array.isArray(await client.call('movements.list', {})));
+      assert.equal(await client.call('movements.read', { path: NEW_MOVEMENT() }), null);
     },
   },
 ];
