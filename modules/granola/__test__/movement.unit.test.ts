@@ -7,7 +7,7 @@
 // distinctly from the `Meeting Note` position it yields (the `collectionName`
 // the adapter declares). So a green check here predicts a green save.
 
-import { CURRENT_LANGUAGE_VERSION, checkSourceInRust, mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
+import { LANGUAGE_VERSION, checkSourceInRust, mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
 
 // The Granola instance schema as the real projection produces it: one readable
 // `Meeting Note` position reachable through a `Meetings` collection.
@@ -52,7 +52,7 @@ const catalog = mockCatalogSnapshot({
 });
 
 const errors = (source: string): string[] =>
-  checkSourceInRust(source, catalog, { languageVersion: CURRENT_LANGUAGE_VERSION })
+  checkSourceInRust(source, catalog, { languageVersion: LANGUAGE_VERSION })
     .filter((d) => (d.severity ?? 'error') === 'error')
     .map((d) => `${d.code}: ${d.message}`);
 

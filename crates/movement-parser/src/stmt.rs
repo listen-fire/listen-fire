@@ -4681,7 +4681,8 @@ fn type_ref_from_marker(marker: Marker) -> TypeRef {
 /// The whole-file entry: a program, or the one error that stopped the parse.
 /// A version this release does not read is refused before the text is.
 pub fn parse_program(source: &str, version: u32, eager: bool) -> SResult<Program> {
-    if let Some(message) = crate::version::unsupported_message(version) {
+    use crate::version::{LANGUAGE_VERSION, legacy_pin_to_semver, refusal};
+    if let Some(message) = refusal(&legacy_pin_to_semver(version), LANGUAGE_VERSION) {
         return Err(ParseError { message, loc: Loc { line: 1, col: 1 } });
     }
     let (program, spelling) =
@@ -4889,16 +4890,19 @@ mod tests {
 
     #[test]
     fn a_version_this_release_does_not_read_is_refused_by_name() {
-        let refused = |version: u32| json!({ "message": crate::version::unsupported_message(version).unwrap(), "loc": { "line": 1, "col": 1 } });
+        use crate::version::{LANGUAGE_VERSION, LEGACY_PIN, legacy_pin_to_semver, refusal};
+        let message = |version: u32| refusal(&legacy_pin_to_semver(version), LANGUAGE_VERSION).unwrap();
+        let refused = |version: u32| json!({ "message": message(version), "loc": { "line": 1, "col": 1 } });
         assert_eq!(crate::parse_program("x = 1", 4), Err(refused(4)));
         assert_eq!(crate::parse_program_eager("x = 1", 99), Err(refused(99)));
-        assert!(refused(4)["message"].as_str().unwrap().contains("language version \"Luminous Owl\" (4)"));
+        assert!(message(4).starts_with("this automation pins language 4, which is not a version"));
         let expression = crate::parse_expression("x", 0).unwrap_err();
-        assert_eq!(expression, json!({ "message": crate::version::unsupported_message(0).unwrap(), "pos": 0 }));
+        assert_eq!(expression, json!({ "message": message(0), "pos": 0 }));
         let call = crate::NestedCall { at_start: 0, at_end: 4, origin_line: 1, origin_col: 1, version: 3 };
         assert_eq!(crate::parse_nested_call("f(x)", &call), Err(refused(3)));
-        assert_eq!(crate::version::unsupported_message(5), None);
+        assert!(crate::parse_program("x = 1", LEGACY_PIN).is_ok());
     }
+
 
     #[test]
     fn absent_optionals_are_omitted() {

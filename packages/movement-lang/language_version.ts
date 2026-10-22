@@ -1,163 +1,103 @@
-// Language versions — the one table.
+// The language version is the toolchain release: the one semver every crate
+// and package carries. A movement's pin is the release it was written
+// against, and a release reads a pin whose compatibility key is its own: the
+// minor under 0.x (`0.12`), the major from 1.0 (`1`). Any other pin is refused
+// by name, with the remedy (docs/contracts/language-versions.md).
 //
-// A saved movement is pinned to the language version it was written against,
-// and every layer (parser, checker, engine, plugins, adapters) honours that pin
-// by a conditional at the point of difference:
-//
-//     if (ctx.languageVersion < 2) { …the old behaviour… }
-//
-// The integer is the identity — code compares it and never parses the name.
-// The name is display only: it is what a person sees.
-//
-// A version keeps its row here after it leaves SUPPORTED, so a movement pinned
-// to it can still be refused by name.
-//
-// See plans/language-versioning-2026-09-29/.
+// The same rule is crates/movement-parser/src/version.rs; a test holds the two
+// equal (packages/engine-contracts/__test__/contracts.unit.test.ts).
 
 import type { Diagnostic } from './checker/diagnostic';
+import { PACKAGE_VERSION } from './language_version_value';
 import { neverAsAny } from './never';
 
-/** A language version's identity. */
-export type LanguageVersion = number;
+/** A pin: the release a movement was written against, `MAJOR.MINOR.PATCH[-pre]`. */
+export type LanguageVersion = string;
 
-export interface LanguageVersionInfo {
-  version: LanguageVersion;
-  /** Display only. */
-  name: string;
-  /** What the version is, for release notes and people. */
-  is: string;
+/** This release's version, and so the language it reads. */
+export const LANGUAGE_VERSION: LanguageVersion = PACKAGE_VERSION;
+
+export type LanguageVersionStanding = 'compatible' | 'newer' | 'olderKey' | 'malformed';
+
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function parse(version: string): { major: number; minor: number } | undefined {
+  const match = SEMVER.exec(version);
+  return match === null ? undefined : { major: Number(match[1]), minor: Number(match[2]) };
 }
 
-export const LANGUAGE_VERSIONS: readonly LanguageVersionInfo[] = [
-  { version: 1, name: 'Quiet Heron', is: 'the language as of tag v0.6.0' },
-  { version: 2, name: 'Bright Otter', is: 'the language from v0.7.0 through v0.9.1' },
-  {
-    version: 3,
-    name: 'Steady Lynx',
-    is: 'the language from v0.10.0: a list literal is a tuple — exact at a literal index, a list of its members\' union elsewhere',
-  },
-  {
-    version: 4,
-    name: 'Luminous Owl',
-    is: 'the language from v0.11.0: a match yields absent on a miss, a write handle reaches its pre-write record through @old',
-  },
-  {
-    version: 5,
-    name: 'Dancing Wren',
-    is: 'the language after v0.11.0: no engine-side store and no meta edges — no `write … bind` (a link lives in the system that holds it), no `#` hops (a plugin is a function you call), `delete` only where the system declares a type deletable, `_resources` only on an extraction\'s result (a record walks its system\'s file edge: `Attachments`, `Files`, `Resources`), a file is never joined into text (its text is `READ(f)`), a closure is a value (a list may hold closures, and a value that is one is called), and `parallel` is retired (`MAP` over the functions, calling each, is the join)',
-  },
-];
-
-/** What a movement saved today is pinned to, and what an entry point given no
- *  version compiles and runs under. */
-export const CURRENT_LANGUAGE_VERSION: LanguageVersion = 5;
-
-/** The versions this release parses, checks and runs. */
-export const SUPPORTED_LANGUAGE_VERSIONS: ReadonlySet<LanguageVersion> = new Set([5]);
-
-/** Supported versions that will be removed: they still run, with a warning. */
-export const DEPRECATED_LANGUAGE_VERSIONS: ReadonlySet<LanguageVersion> = new Set<LanguageVersion>();
-
-/** What a release declares about versions. The standing of a pin is a question
- *  asked of a release, so a deploy check can ask it of the next one. */
-export interface LanguageRelease {
-  current: LanguageVersion;
-  supported: ReadonlySet<LanguageVersion>;
-  deprecated: ReadonlySet<LanguageVersion>;
+/** The part of a version a pin must share with a release; undefined for a
+ *  text that is not a version. */
+export function compatibilityKey(version: string): string | undefined {
+  const parsed = parse(version);
+  if (parsed === undefined) return undefined;
+  return parsed.major === 0 ? `0.${parsed.minor}` : String(parsed.major);
 }
 
-export const THIS_RELEASE: LanguageRelease = {
-  current: CURRENT_LANGUAGE_VERSION,
-  supported: SUPPORTED_LANGUAGE_VERSIONS,
-  deprecated: DEPRECATED_LANGUAGE_VERSIONS,
-};
-
-export function languageVersionInfo(version: LanguageVersion): LanguageVersionInfo | undefined {
-  return LANGUAGE_VERSIONS.find((info) => info.version === version);
+/** How `pin` stands against the release `own`. */
+export function languageVersionStanding(pin: string, own: LanguageVersion = LANGUAGE_VERSION): LanguageVersionStanding {
+  const pinned = parse(pin);
+  const release = parse(own);
+  if (pinned === undefined || release === undefined) return 'malformed';
+  if (compatibilityKey(pin) === compatibilityKey(own)) return 'compatible';
+  const newer = pinned.major !== release.major ? pinned.major > release.major : pinned.minor > release.minor;
+  return newer ? 'newer' : 'olderKey';
 }
 
-/** `"Quiet Heron" (1)` — or `version 7` for an integer this release has never
- *  heard of (a movement saved by a newer release). */
-export function describeLanguageVersion(version: LanguageVersion): string {
-  const info = languageVersionInfo(version);
-  return info ? `"${info.name}" (${info.version})` : `version ${version}`;
-}
-
-/** How a version is shown to a person or an agent: the integer that identifies
- *  it, and its name. */
-export interface LanguageVersionView {
-  version: LanguageVersion;
-  name: string;
-}
-
-export function languageVersionView(version: LanguageVersion): LanguageVersionView {
-  return { version, name: languageVersionInfo(version)?.name ?? `version ${version}` };
-}
-
-export type LanguageVersionStanding ='supported' | 'deprecated' | 'unsupported';
-
-export function languageVersionStanding(
-  version: LanguageVersion,
-  release: LanguageRelease = THIS_RELEASE,
-): LanguageVersionStanding {
-  if (!release.supported.has(version)) return 'unsupported';
-  if (release.deprecated.has(version)) return 'deprecated';
-  return 'supported';
+/** Whether the release `own` reads a movement pinned to `pin`. */
+export function compatible(pin: string, own: LanguageVersion = LANGUAGE_VERSION): boolean {
+  return languageVersionStanding(pin, own) === 'compatible';
 }
 
 export const LanguageVersionDiagnosticCodes = {
   UNSUPPORTED: 'MOV_LANGUAGE_VERSION_UNSUPPORTED',
-  DEPRECATED: 'MOV_LANGUAGE_VERSION_DEPRECATED',
 } as const;
 
-/**
- * What a movement pinned to `version` must be told before anything else: an
- * error when this release cannot run it (never a silent fallback to the current
- * version), a warning when it runs but will stop doing so, nothing otherwise.
- * The message names the version and the fix.
- */
-export function languageVersionDiagnostic(
-  version: LanguageVersion,
-  release: LanguageRelease = THIS_RELEASE,
-): Diagnostic | undefined {
-  const span = { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } };
-  const current = describeLanguageVersion(release.current);
-  const standing = languageVersionStanding(version, release);
+function refusalMessage(pin: string, own: string, standing: Exclude<LanguageVersionStanding, 'compatible'>): string {
   switch (standing) {
-    case 'supported':
-      return undefined;
-    case 'unsupported':
-      return {
-        code: LanguageVersionDiagnosticCodes.UNSUPPORTED,
-        message:
-          `this automation is written in language version ${describeLanguageVersion(version)}, ` +
-          `which this release does not support, so it will not validate or run. ` +
-          `To fix: validate it under ${current}, repair what that reports, and upgrade it to ${current}.`,
-        span,
-      };
-    case 'deprecated':
-      return {
-        code: LanguageVersionDiagnosticCodes.DEPRECATED,
-        message:
-          `this automation is written in language version ${describeLanguageVersion(version)}, ` +
-          `which is deprecated and will be removed in a future release. ` +
-          `Validate it under ${current}, repair what that reports, and upgrade it to ${current} before then.`,
-        span,
-        severity: 'warning',
-      };
+    case 'newer':
+      return `this automation pins language ${pin}, newer than this release (${own}); upgrade the engine`;
+    case 'olderKey':
+      return `this automation pins language ${pin}, which this release (${own}) does not read; validate it under ${own} and upgrade it`;
+    case 'malformed':
+      return `this automation pins language ${pin}, which is not a version; a pin is a release's version, such as ${own}`;
     default:
       return neverAsAny(standing);
   }
 }
 
-/** The run host's units (Henry 2026-10-16): from version 5 every file has
- *  these names in scope, each already connected — `listen to manual fire
- *  hello`, `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no
- *  import and no `connect`. A file's own binding of the name replaces it.
+/**
+ * What a movement pinned to `pin` must be told before anything else: an error
+ * when this release does not read it (never a silent fallback to the current
+ * version), naming the pin and the remedy; nothing when it does.
+ */
+export function languageVersionDiagnostic(pin: string, own: LanguageVersion = LANGUAGE_VERSION): Diagnostic | undefined {
+  const standing = languageVersionStanding(pin, own);
+  if (standing === 'compatible') return undefined;
+  return {
+    code: LanguageVersionDiagnosticCodes.UNSUPPORTED,
+    message: refusalMessage(pin, own, standing),
+    span: { start: { line: 1, col: 1 }, end: { line: 1, col: 1 } },
+  };
+}
+
+/** The integer the wasm entries still take for a pin: 5 for one this release
+ *  reads, 0 (which the wasm refuses) for any other. Task 2 removes. */
+export function legacyPinOf(pin: LanguageVersion): number {
+  return compatible(pin) ? 5 : 0;
+}
+
+/** An integer pin as the wasm engine still sends it, as the version the rule
+ *  reads: 5 is this release, any other integer is not a version
+ *  (`legacy_pin_to_semver` in crates/movement-parser/src/version.rs). Task 2
+ *  removes. */
+export function legacyPinToSemver(pin: number): LanguageVersion {
+  return pin === 5 ? LANGUAGE_VERSION : String(pin);
+}
+
+/** The run host's units (Henry 2026-10-16): every file has these names in
+ *  scope, each already connected — `listen to manual fire hello`,
+ *  `listen to cron { schedule: "0 9 * * 1" } fire digest` — with no import
+ *  and no `connect`. A file's own binding of the name replaces it.
  *  (`RUN_HOST_UNITS` in crates/movement-parser/src/version.rs.) */
 export const RUN_HOST_UNITS: readonly string[] = ['cron', 'manual'];
-
-/** The units a file pinned to `version` has in scope. */
-export function runHostUnits(version: LanguageVersion): readonly string[] {
-  return version >= 5 ? RUN_HOST_UNITS : [];
-}

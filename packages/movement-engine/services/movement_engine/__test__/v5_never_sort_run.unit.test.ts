@@ -4,7 +4,7 @@
 // crates/movement-checker/tests/v5_never_sort.rs and
 // checker/__test__/v5_never_sort.unit.test.ts.
 
-import { mockCatalogSnapshot, type InstanceSchema, type LanguageVersion } from 'movement-lang';
+import { LANGUAGE_VERSION, mockCatalogSnapshot, type InstanceSchema, type LanguageVersion } from 'movement-lang';
 import { tenantIdOf } from 'engine-contracts';
 
 import type { Adapter } from '../../translation_graph/adapter';
@@ -127,7 +127,7 @@ async function onRust(body: string[]): Promise<unknown> {
   recorded.length = 0;
   let outcome: unknown;
   try {
-    const result = await runMovement(inputOf(V5(...body), 5, 'run-rust'));
+    const result = await runMovement(inputOf(V5(...body), LANGUAGE_VERSION, 'run-rust'));
     outcome = { writes: bodies(result.writes) };
   } catch (error) {
     const { name, message } = error as Error;

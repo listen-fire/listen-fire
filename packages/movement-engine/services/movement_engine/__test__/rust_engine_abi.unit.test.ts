@@ -6,7 +6,7 @@
 // that exercise them are built into test builds only), and the loader's trap
 // path is movement-lang's loader test.
 
-import { EMPTY_CATALOG_SNAPSHOT, checkAnswerInRust, compatibleInRust, openEngineSegment, RustCheckRefused } from 'movement-lang';
+import { EMPTY_CATALOG_SNAPSHOT, LANGUAGE_VERSION, checkAnswerInRust, compatibleInRust, openEngineSegment, RustCheckRefused } from 'movement-lang';
 
 import { tenantIdOf } from 'engine-contracts';
 
@@ -90,7 +90,7 @@ describe('the Rust engine artifact', () => {
   it('is driven by the shim against a host: the host check fails, and its failure ends the run', async () => {
     // Parses, and fails the check: no adapter `nope` in the snapshot.
     const host = makeTestHost();
-    const context = await openRunContext({ host, teamId: tenantIdOf('team-1'), languageVersion: 5, spend: {} });
+    const context = await openRunContext({ host, teamId: tenantIdOf('team-1'), languageVersion: LANGUAGE_VERSION, spend: {} });
     await expect(
       driveEngine(openWasmEngine(), JSON.parse(segmentStart('import { nope } from adapters', context.segmentId)), {
         host,
@@ -106,15 +106,15 @@ describe('the Rust engine artifact', () => {
   });
 
   it("answers the engine's check.program as data: diagnostics, stamps, and no link without imports", () => {
-    const answer = checkAnswerInRust('x = 1\nmovement m() {\n  y = x\n}', EMPTY_CATALOG_SNAPSHOT, { languageVersion: 5 });
+    const answer = checkAnswerInRust('x = 1\nmovement m() {\n  y = x\n}', EMPTY_CATALOG_SNAPSHOT, { languageVersion: LANGUAGE_VERSION });
     expect(answer).toEqual({ diagnostics: expect.any(Array), stamps: [] });
-    expect(() => checkAnswerInRust('movement {', EMPTY_CATALOG_SNAPSHOT, { languageVersion: 5 })).toThrow(RustCheckRefused);
+    expect(() => checkAnswerInRust('movement {', EMPTY_CATALOG_SNAPSHOT, { languageVersion: LANGUAGE_VERSION })).toThrow(RustCheckRefused);
   });
 
   it("answers the engine's check.compatible by the checker's comparator, extends folded in", () => {
     const source = 'node Base { name: <text> }\nnode Lead extends Base { stage: <text> }';
     const schema = (properties: Record<string, string>) => ({ positions: { Person: { properties, edges: {} } }, collections: {} });
-    const ask = (s: unknown, declaration = 'Lead') => compatibleInRust({ source, languageVersion: 5, declaration, schema: s, recordType: 'Person' });
+    const ask = (s: unknown, declaration = 'Lead') => compatibleInRust({ source, languageVersion: LANGUAGE_VERSION, declaration, schema: s, recordType: 'Person' });
     expect(ask(schema({ name: 'text', stage: 'text' }))).toEqual({ fits: true });
     expect(ask(schema({ stage: 'text' }))).toEqual({ fits: false });
     expect(ask({ positions: {}, collections: {} })).toEqual({ undescribed: true });

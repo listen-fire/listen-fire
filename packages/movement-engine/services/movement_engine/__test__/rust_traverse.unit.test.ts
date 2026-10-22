@@ -6,6 +6,7 @@
 // so the order of an argument object's keys is held too).
 
 import {
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   parseMovementExpression,
   refinementKey,
@@ -85,7 +86,7 @@ function parseTraversalPath(path: string, languageVersion?: LanguageVersion) {
 function selectionKey(where: string, version?: 5): string {
   const steps =
     version === 5
-      ? parseTraversalPath(`-[le:list_entries WHERE ${where}]->`, 5)
+      ? parseTraversalPath(`-[le:list_entries WHERE ${where}]->`, LANGUAGE_VERSION)
       : parseTraversalPath(`-[:list_entries WHERE ${where}]->`);
   const filter = steps?.[0]?.type === 'edge' ? steps[0].expressionFilter : undefined;
   if (!filter) throw new Error(`test setup: no filter parsed out of \`${where}\``);
@@ -141,15 +142,14 @@ const catalog = mockCatalogSnapshot({
   credentials: { dealflow_inbox: { adapters: ['email'] }, graph_main: { adapters: ['graph'] } },
 });
 
-/** The program as `version` spells it: one text, written in the spelling
- *  versions 1–4 read, respelled by the upgrade tool for a version-5 run. */
+/** The program as `version` spells it: one text, written in the old
+ *  spelling and respelled by the upgrade tool. */
 const programFor = (
   version: LanguageVersion,
   body: string,
   v5Edits: ReadonlyArray<readonly [string, string]> = [],
 ): string => {
-  const edited =
-    version >= 5 ? v5Edits.reduce((text, [from, to]) => text.replace(from, to), body) : body;
+  const edited = v5Edits.reduce((text, [from, to]) => text.replace(from, to), body);
   return spelledFor(
     version,
     `${PRELUDE}movement m(msg: <inbox-[:message]->>) {\n${edited}\n}`,
@@ -465,7 +465,7 @@ async function runOn(c: Case): Promise<Outcome> {
   });
   try {
     const run = runMovement({
-      source: programFor(5, c.body, c.v5Edits),
+      source: programFor(LANGUAGE_VERSION, c.body, c.v5Edits),
       event: c.event ?? webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,
@@ -1177,8 +1177,8 @@ describe('the expression tail, on both engines', () => {
     const park = makeFakeParkSink();
     const graph = fakeGraph();
     await runMovement({
-      source: programFor(5, body),
-      languageVersion: 5,
+      source: programFor(LANGUAGE_VERSION, body),
+      languageVersion: LANGUAGE_VERSION,
       event: webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,
@@ -1219,8 +1219,8 @@ describe('the expression tail, on both engines', () => {
 
     const body = [...before, '  await sleep(1h)', ...after].join('\n');
     const base = {
-      source: programFor(5, body),
-      languageVersion: 5 as const,
+      source: programFor(LANGUAGE_VERSION, body),
+      languageVersion: LANGUAGE_VERSION,
       event: webhook({ subject: 'Seed', text: 'Late' }),
       teamId: TEAM_ID,
       catalog,

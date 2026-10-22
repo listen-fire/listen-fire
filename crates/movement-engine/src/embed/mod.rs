@@ -35,8 +35,10 @@ use serde_json::{Value as Json, json};
 
 use crate::executor::{ProtocolError, Step};
 
-/// The first language version this engine runs.
-pub const LANGUAGE_VERSION: u32 = 5;
+/// The language this engine reads: the toolchain release. A movement pinned
+/// to a release of another compatibility key is refused by name.
+pub use movement_parser::version::LANGUAGE_VERSION;
+use movement_parser::version::LEGACY_PIN;
 
 /// The host families a run may ask, each one optional.
 #[derive(Default)]
@@ -173,12 +175,17 @@ pub enum Severity {
     Info,
 }
 
-/// What the checker says of `source` against `catalog`, under the language
-/// version `language_version`. A run checks again before it runs anything.
-pub fn check(source: &str, catalog: &Catalog, language_version: u32) -> Vec<Problem> {
+/// What the checker says of `source` against `catalog`, for a movement
+/// pinned to `language_version` (a release's version: `LANGUAGE_VERSION`
+/// for one written today). A run checks again before it runs anything.
+pub fn check(source: &str, catalog: &Catalog, language_version: &str) -> Vec<Problem> {
     use movement_checker::host::native::NativeZones;
-    let options = movement_checker::CheckOptions { language_version, upgrading_from: None, zones: &NativeZones };
     let external = |text: &str| movement_parser::util::form::external_text(text).into_owned();
+    if let Some(refusal) = movement_checker::language_version_diagnostic(language_version) {
+        return vec![Problem { code: refusal.code, message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }];
+    }
+    // Task 2 removes: the checker still takes the integer pin.
+    let options = movement_checker::CheckOptions { language_version: LEGACY_PIN, upgrading_from: None, zones: &NativeZones };
     match movement_checker::check_source(source, &catalog.snapshot, options) {
         Err(refusal) => vec![Problem { code: "MOV_PARSE".into(), message: external(&refusal.message), line: 0, column: 0, severity: Severity::Error }],
         Ok(diagnostics) => diagnostics
@@ -210,10 +217,14 @@ pub struct Listen {
     pub events: Vec<String>,
 }
 
-pub fn listens(source: &str, language_version: u32) -> Result<Vec<Listen>, String> {
+pub fn listens(source: &str, language_version: &str) -> Result<Vec<Listen>, String> {
     use movement_parser::ast::{RValue, Statement};
+    if let Some(refusal) = movement_parser::version::refusal(language_version, LANGUAGE_VERSION) {
+        return Err(refusal);
+    }
     let form = movement_parser::util::form::form_of_text(source);
-    let program = movement_parser::stmt::parse_program(&form, language_version, true)
+    // Task 2 removes: the parser still takes the integer pin.
+    let program = movement_parser::stmt::parse_program(&form, LEGACY_PIN, true)
         .map_err(|e| format!("{} (line {}, col {})", movement_parser::util::form::external_text(&e.message), e.loc.line, e.loc.col))?;
     let mut aliases = std::collections::HashMap::new();
     let mut instances = std::collections::HashMap::new();
@@ -322,6 +333,8 @@ impl Event {
 #[derive(Debug, Clone)]
 pub struct RunInput {
     pub source: String,
+    /// The integer pin the engine's segment input still carries; Task 2
+    /// makes it the release's version.
     pub language_version: u32,
     /// The function the event fires (a `listen … fire <function>`); `None`
     /// runs the file's one movement.
@@ -340,7 +353,7 @@ impl RunInput {
     pub fn new(source: impl Into<String>, event: Event, now: impl Into<String>) -> RunInput {
         RunInput {
             source: source.into(),
-            language_version: LANGUAGE_VERSION,
+            language_version: LEGACY_PIN,
             function: None,
             event,
             now: now.into(),

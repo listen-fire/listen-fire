@@ -14,7 +14,7 @@
 // program in the repository to that (rust_reachability.unit.test.ts). Each
 // segment is logged once (`noteEngine`) and counted (`rustRunStats`).
 
-import { languageVersionDiagnostic, openEngineSegment, type LanguageVersion } from 'movement-lang';
+import { languageVersionDiagnostic, legacyPinOf, openEngineSegment, type LanguageVersion } from 'movement-lang';
 
 import { RunCostCapExceeded } from '../../lib/run_cost';
 import { extractionTierAssignments, runChatModels } from './ai_tiers';
@@ -513,8 +513,8 @@ function segmentInput(
       snapshotModels: input.catalog.models ?? null,
       ...versionWarningOf(context.languageVersion),
       // The pin the run is under, written out: the engine cannot know this
-      // release's current version.
-      languageVersion: context.languageVersion,
+      // release's current version. Task 2 removes the integer (`legacyPinOf`).
+      languageVersion: legacyPinOf(context.languageVersion),
       ...(input.movementName !== undefined ? { movementName: input.movementName } : {}),
       event,
       // The segment the run host opened: every host request names it.

@@ -6,7 +6,7 @@
 // and Rust), ORDER BY included, and the source is still asked for the field
 // test (`where`, `orderBy`).
 
-import { mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
+import { LANGUAGE_VERSION, mockCatalogSnapshot, type InstanceSchema } from 'movement-lang';
 import { tenantIdOf } from 'engine-contracts';
 
 import type { Adapter, GetRelatedInput } from '../../translation_graph/adapter';
@@ -134,7 +134,7 @@ async function onRust(source: string): Promise<Seen> {
   resetRustRunStats();
   await runMovement({
     source,
-    languageVersion: 5,
+    languageVersion: LANGUAGE_VERSION,
     event,
     teamId: TEAM_ID,
     catalog,

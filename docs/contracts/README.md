@@ -1,6 +1,6 @@
 # The contracts
 
-The movement core speaks six contracts. Each is written down here with an integer version of its own, independent of the release tag and of the others, so an embedder, an adapter vendor or a second engine can say exactly what it speaks.
+The movement core speaks six contracts. Five are written down here with an integer version of its own, independent of the release tag and of the others, so an embedder, an adapter vendor or a second engine can say exactly what it speaks. The sixth, the language, is versioned by the release itself.
 
 | contract | document | current | supported | deprecated | on the wire |
 |---|---|---|---|---|---|
@@ -8,13 +8,13 @@ The movement core speaks six contracts. Each is written down here with an intege
 | park-state | [park-state.md](park-state.md) | 2 | 1, 2 | none | `version` on the state |
 | host-families | [host-families.md](host-families.md) | 1 | 1 | none | `hostFamiliesVersion` on `segment.open` |
 | adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 | none | `protocolVersion` on every request and the manifest |
-| language-versions | [language-versions.md](language-versions.md) | 5 | 5 | none | `languageVersion` beside every program |
+| language-versions | [language-versions.md](language-versions.md) | the release | the release's compatibility key (0.12) | none | `languageVersion` beside every program |
 | system-caller | [system-caller.md](system-caller.md) | 1 | 1 | none | none: an in-process interface |
 
 - **Not a contract of its own:** [run-limits.md](run-limits.md) says what one segment may consume, and what holds a movement away from the network.
 - **Part of the adapter protocol:** every core slot's methods, carried over the protocol's one transport (within adapter protocol 2): [store-slot.md](store-slot.md), [limiter-slot.md](limiter-slot.md), [loop-guard-slot.md](loop-guard-slot.md), [models-slot.md](models-slot.md), [judge-slot.md](judge-slot.md), [files-slot.md](files-slot.md), [browser-slot.md](browser-slot.md) (also what a module gets from the host's browser), [wake-slot.md](wake-slot.md) and [ocr-slot.md](ocr-slot.md) (also what a module gets from the host's OCR).
 - **This table is this release's.** A release states, contract by contract, the version it writes, the versions it reads, and the ones it will stop reading.
-- **The table is held equal to the code.** `CONTRACTS` (`packages/engine-contracts/versions.ts`) is test-held equal to this table, and each document's version line to its constant (`CATALOG_SNAPSHOT_VERSION`, `PARK_STATE_VERSION`, `HOST_FAMILIES_VERSION`, `MANIFEST_PROTOCOL_VERSION`, `CURRENT_LANGUAGE_VERSION`, `SYSTEM_CALLER_VERSION`).
+- **The table is held equal to the code.** `CONTRACTS` (`packages/engine-contracts/versions.ts`) is test-held equal to this table's integer rows, and each document's version line to its constant (`CATALOG_SNAPSHOT_VERSION`, `PARK_STATE_VERSION`, `HOST_FAMILIES_VERSION`, `MANIFEST_PROTOCOL_VERSION`, `SYSTEM_CALLER_VERSION`). The language row's key is held to `LANGUAGE_CONTRACT`, and its document's rule to both implementations.
 
 ## How a version moves
 

@@ -13,7 +13,7 @@ fn check(source: &str, version: u32) -> Vec<Diagnostic> {
     check_source(source, &catalog, options)
         .unwrap()
         .into_iter()
-        .filter(|d| d.code != "MOV_LISTEN_MISSING" && d.code != "MOV_LANGUAGE_VERSION_DEPRECATED")
+        .filter(|d| d.code != "MOV_LISTEN_MISSING")
         .collect()
 }
 

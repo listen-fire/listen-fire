@@ -10,7 +10,7 @@
 
 import { callCheckAnswer, callCheckCompatible, callCheckProgram } from '../wasm/loader';
 import type { Loc, Span } from '../parser/ast';
-import type { LanguageVersion } from '../language_version';
+import { languageVersionDiagnostic, legacyPinOf, type LanguageVersion } from '../language_version';
 import type { CatalogSnapshot } from '../service/snapshot';
 import type { Diagnostic } from './diagnostic';
 import type { DiagnosticFix, SourceEdit } from './fixes';
@@ -30,10 +30,20 @@ export class RustCheckRefused extends Error {
   }
 }
 
+/** The pins as the wasm entries still take them: the integer, 0 for none.
+ *  A pin this release does not read is refused before the wasm is asked, as
+ *  the Rust checker refuses it (its standing diagnostic alone). Task 2
+ *  removes the integer and the early refusal both. */
+function legacyPins(options: RustCheckOptions): [number, number] {
+  return [legacyPinOf(options.languageVersion), options.upgradingFrom === undefined ? 0 : legacyPinOf(options.upgradingFrom)];
+}
+
 /** Every diagnostic the Rust checker reports for `source` against
  *  `snapshot`, warnings and info included. */
 export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, options: RustCheckOptions): Diagnostic[] {
-  const reply = callCheckProgram(source, JSON.stringify(snapshot), options.languageVersion, options.upgradingFrom ?? 0);
+  const refusal = languageVersionDiagnostic(options.languageVersion);
+  if (refusal !== undefined) return [refusal];
+  const reply = callCheckProgram(source, JSON.stringify(snapshot), ...legacyPins(options));
   const json: unknown = reply.json;
   if (!reply.ok) throw refused(json);
   const diagnostics = isRecord(json) ? json.diagnostics : undefined;
@@ -85,7 +95,9 @@ export interface CheckAnswer {
 
 /** `checkSourceInRust` as data (crates/movement-checker/src/answer.rs). */
 export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, options: RustCheckOptions): CheckAnswer {
-  const reply = callCheckAnswer(source, JSON.stringify(snapshot), options.languageVersion, options.upgradingFrom ?? 0);
+  const refusal = languageVersionDiagnostic(options.languageVersion);
+  if (refusal !== undefined) return { diagnostics: [refusal], stamps: [] };
+  const reply = callCheckAnswer(source, JSON.stringify(snapshot), ...legacyPins(options));
   const json: unknown = reply.json;
   if (!reply.ok) throw refused(json);
   if (!isRecord(json) || !Array.isArray(json.diagnostics) || !Array.isArray(json.stamps)) {
@@ -110,7 +122,7 @@ export function compatibleInRust(request: {
   recordType: string;
   path?: readonly string[];
 }): { fits: boolean } | { undescribed: true } {
-  const reply = callCheckCompatible(JSON.stringify(request));
+  const reply = callCheckCompatible(JSON.stringify({ ...request, languageVersion: legacyPinOf(request.languageVersion) }));
   const json: unknown = reply.json;
   if (!reply.ok) throw refused(json);
   if (isRecord(json) && json.undescribed === true) return { undescribed: true };

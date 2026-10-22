@@ -6,7 +6,7 @@
 // received, in order and key for key — held to the recorded snapshot.
 
 import {
-  CURRENT_LANGUAGE_VERSION,
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   type InstanceSchema,
 } from 'movement-lang';
@@ -314,7 +314,7 @@ async function runOn(c: Case): Promise<Outcome> {
   try {
     const result = await runMovement({
       source: spelledFor(
-        CURRENT_LANGUAGE_VERSION,
+        LANGUAGE_VERSION,
         `${PRELUDE}movement m(msg: <inbox-[:message]->>) {\n${c.body}\n}`,
         catalog,
       ),

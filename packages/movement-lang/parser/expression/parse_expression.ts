@@ -8,6 +8,7 @@
 // `CURRENCY.PARSE(s)` are calls; which built-in (if any) a call reaches is
 // decided by whoever has a scope.
 
+import type { LanguageVersion } from '../../language_version';
 import { rustParseExpression } from '../rust_parser';
 import type { MExpr } from './tree';
 
@@ -16,6 +17,6 @@ export { ExpressionSyntaxError } from '../../expression/error';
 /** Parse one expression slot. Throws `ExpressionSyntaxError`.
  *  `languageVersion`: a text that is part of a program, read under that
  *  program's version (`rustParseExpression`). */
-export function parseExpression(source: string, languageVersion?: number): MExpr {
+export function parseExpression(source: string, languageVersion?: LanguageVersion): MExpr {
   return rustParseExpression(source, languageVersion);
 }

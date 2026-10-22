@@ -2,7 +2,7 @@
 // of the segment asking, and keeps what it checked for that segment alone:
 // two runs of one source over two tenants' catalogs never share a check.
 
-import { mockCatalogSnapshot } from 'movement-lang';
+import { LANGUAGE_VERSION, mockCatalogSnapshot } from 'movement-lang';
 
 import { checkedProgram } from '../rust_host';
 
@@ -25,16 +25,16 @@ const catalogOf = (credential: string) =>
 describe("check.compatible's checked programs", () => {
   it("are kept per segment, and checked against that segment's catalog: another tenant's run is never answered from one", () => {
     const first = { catalog: catalogOf('tenant_a'), checked: new Map() };
-    const a = checkedProgram(first, SOURCE, 5);
-    expect(checkedProgram(first, SOURCE, 5)).toBe(a);
+    const a = checkedProgram(first, SOURCE, LANGUAGE_VERSION);
+    expect(checkedProgram(first, SOURCE, LANGUAGE_VERSION)).toBe(a);
     expect(first.checked.size).toBe(1);
     // The same source over a catalog without its credential fails its check
     // there, where a process-wide cache keyed on the source alone handed back
     // the first tenant's program.
     const second = { catalog: catalogOf('tenant_b'), checked: new Map() };
-    expect(() => checkedProgram(second, SOURCE, 5)).toThrow(/MOVENG_CHECK/);
+    expect(() => checkedProgram(second, SOURCE, LANGUAGE_VERSION)).toThrow(/MOVENG_CHECK/);
     expect(second.checked.size).toBe(0);
     const third = { catalog: catalogOf('tenant_a'), checked: new Map() };
-    expect(checkedProgram(third, SOURCE, 5)).not.toBe(a);
+    expect(checkedProgram(third, SOURCE, LANGUAGE_VERSION)).not.toBe(a);
   });
 });

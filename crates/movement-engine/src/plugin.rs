@@ -3,8 +3,8 @@
 //! arguments are evaluated in the order written and handed to the plugin as
 //! its config; the invocation is timed (`clock.now` either side), refused
 //! before the host is asked when the plugin is priced and the cap is spent,
-//! and traced; what comes back is bound as the plugin's DECLARED output under
-//! the movement's pin (`pluginOutputUnder`): a `value` output its text, a
+//! and traced; what comes back is bound as the plugin's DECLARED output
+//! (`PluginSpec.output`): a `value` output its text, a
 //! `record` output a node of the fields it attached (its text under `text`),
 //! a `records` output one such node per record it found.
 

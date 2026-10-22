@@ -1,4 +1,4 @@
-// The six contracts' versions, as one table. Each is an integer the contract's
+// The integer contracts' versions, as one table. Each is an integer the contract's
 // doc under docs/contracts/ states, and a test holds each constant here equal
 // to its doc and the table equal to docs/contracts/README.md.
 //
@@ -9,11 +9,10 @@
 
 import {
   CATALOG_SNAPSHOT_VERSION,
-  CURRENT_LANGUAGE_VERSION,
   DEPRECATED_CATALOG_SNAPSHOT_VERSIONS,
-  DEPRECATED_LANGUAGE_VERSIONS,
+  LANGUAGE_VERSION,
   SUPPORTED_CATALOG_SNAPSHOT_VERSIONS,
-  SUPPORTED_LANGUAGE_VERSIONS,
+  compatibilityKey,
 } from 'movement-lang';
 
 import { MANIFEST_PROTOCOL_VERSION } from './protocol';
@@ -61,13 +60,16 @@ export const CONTRACTS = {
     deprecated: [],
   },
   'adapter-protocol': { current: MANIFEST_PROTOCOL_VERSION, supported: [MANIFEST_PROTOCOL_VERSION], deprecated: [] },
-  'language-versions': {
-    current: CURRENT_LANGUAGE_VERSION,
-    supported: [...SUPPORTED_LANGUAGE_VERSIONS],
-    deprecated: [...DEPRECATED_LANGUAGE_VERSIONS],
-  },
   'system-caller': { current: SYSTEM_CALLER_VERSION, supported: [SYSTEM_CALLER_VERSION], deprecated: [] },
 } as const satisfies Record<string, ContractStanding>;
+
+/** The language's contract (docs/contracts/language-versions.md) is not an
+ *  integer of its own: it is the release's version, and a release reads the
+ *  pins that share its compatibility key. */
+export const LANGUAGE_CONTRACT = {
+  version: LANGUAGE_VERSION,
+  key: compatibilityKey(LANGUAGE_VERSION),
+} as const;
 
 /** Refuse a `segment.open` whose host families version this host does not
  *  serve: it names the contract, the version it was handed and the ones it

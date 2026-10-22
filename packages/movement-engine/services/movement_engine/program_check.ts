@@ -26,7 +26,7 @@
 // the slot's text (UTF-16 offsets).
 
 import {
-  CURRENT_LANGUAGE_VERSION,
+  LANGUAGE_VERSION,
   languageVersionDiagnostic,
   checkAnswerInRust as rustCheckAnswer,
   checkSourceInRust,
@@ -55,12 +55,12 @@ export interface CheckInput {
 
 /** The pin, the parse: MOVENG_LANGUAGE_VERSION or MOVENG_PARSE. */
 export function parsePinned(input: Pick<CheckInput, 'source' | 'languageVersion'>): Program {
-  const languageVersion = input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const languageVersion = input.languageVersion ?? LANGUAGE_VERSION;
   // The pin is answered before the source is read: a version this release
   // cannot honour must fail as exactly that, not as whatever the current
   // grammar makes of the text.
   const versionDiagnostic = languageVersionDiagnostic(languageVersion);
-  if (versionDiagnostic !== undefined && (versionDiagnostic.severity ?? 'error') === 'error') {
+  if (versionDiagnostic !== undefined) {
     throw new MovementEngineError('MOVENG_LANGUAGE_VERSION', versionDiagnostic.message, [
       versionDiagnostic,
     ]);
@@ -81,7 +81,7 @@ export function parsePinned(input: Pick<CheckInput, 'source' | 'languageVersion'
  *  stamps and link the run reads; this one answers only whether the run may
  *  open a segment at all. */
 export function checkPinnedInRust(input: CheckInput): Diagnostic[] {
-  const languageVersion = input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const languageVersion = input.languageVersion ?? LANGUAGE_VERSION;
   parsePinned(input);
   const diagnostics = checkSourceInRust(input.source, input.catalog, {
     languageVersion,
@@ -94,7 +94,7 @@ export function checkPinnedInRust(input: CheckInput): Diagnostic[] {
 /** `checkPinnedInRust`, answered as data (the `check.program` host call):
  *  every diagnostic, the import link and the checker's stamps. */
 export function checkAnswerInRust(input: CheckInput): CheckAnswer {
-  const languageVersion = input.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const languageVersion = input.languageVersion ?? LANGUAGE_VERSION;
   parsePinned(input);
   const answer = rustCheckAnswer(input.source, input.catalog, {
     languageVersion,

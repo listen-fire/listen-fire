@@ -30,7 +30,7 @@
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
+import { LANGUAGE_VERSION, type LanguageVersion } from 'movement-lang';
 
 import { tenantIdOf, type TenantId } from 'engine-contracts';
 
@@ -244,7 +244,7 @@ export async function withSegment<T>(
 ): Promise<T> {
   const { segmentId } = await openSegment({
     teamId: tenantIdOf(input.teamId),
-    languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
+    languageVersion: input.languageVersion ?? LANGUAGE_VERSION,
     ...(input.runId !== undefined ? { runId: input.runId } : {}),
   });
   try {
@@ -290,7 +290,7 @@ export const segmentScopedCalls: {
  * describe, tests) there is no pin and this is the current version.
  */
 export function currentLanguageVersion(): LanguageVersion {
-  return asyncLocalStorage.getStore()?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  return asyncLocalStorage.getStore()?.languageVersion ?? LANGUAGE_VERSION;
 }
 
 /**

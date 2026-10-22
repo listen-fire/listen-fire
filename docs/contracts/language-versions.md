@@ -1,41 +1,48 @@
 # Language versions
 
-Version: 5
+Version: the release's own
 
-Every saved movement is pinned to the language version it was written against: an integer with a two-word name. The pin governs syntax and semantics, and every layer honours it: the parser, the checker, both engines, plugins and adapters. The version above is the current one, what a movement saved today is pinned to and what an entry point given no version compiles and runs under.
+The language version is the toolchain release: the one semver every crate and package of a release carries (`0.12.0-rc.6`, `0.12.0`). There is no separate integer and no name.
 
-- **The table:** `LANGUAGE_VERSIONS`, `CURRENT_LANGUAGE_VERSION`, `SUPPORTED_LANGUAGE_VERSIONS` and `DEPRECATED_LANGUAGE_VERSIONS` (`packages/movement-lang/language_version.ts`); the Rust side's is `crates/movement-parser/src/version.rs`. A test holds them equal to this document.
+- **A pin is a release's version.** A saved movement is pinned to the release it was written against: `MAJOR.MINOR.PATCH`, with an optional `-pre-release` (`0.12.0`, `0.12.0-rc.6`). A text of any other form is not a version.
+- **The compatibility key.** A version's key is its minor under 0.x (`0.12.3` → `0.12`) and its major from 1.0 (`1.4.0` → `1`). A pre-release has its release's key (`0.12.0-rc.6` → `0.12`).
+- **The rule.** A release reads a pin whose key is its own, and refuses any other by name, with the remedy. One rule, implemented twice: `compatible` and `standing` in `crates/movement-parser/src/version.rs`, `compatible` and `languageVersionStanding` in `packages/movement-lang/language_version.ts`. A test holds both to the table below.
+- **This release's version** is read from one place on each side: the parser crate's `CARGO_PKG_VERSION` (`LANGUAGE_VERSION`), and `packages/movement-lang/package.json`'s `version` (`LANGUAGE_VERSION`).
 - **On the wire:** the pin travels as `languageVersion` with a run's input, on `segment.open` (so an in-process adapter reads it from its segment), and on the checker's `check.program`. A remote adapter does not receive it: the adapter protocol carries no `languageVersion` today.
 
-## The versions
+## The standings
 
-| version | name | supported | deprecated | is |
-|---|---|---|---|---|
-| 1 | Quiet Heron | no | no | the language as of tag v0.6.0 |
-| 2 | Bright Otter | no | no | the language from v0.7.0 through v0.9.1 |
-| 3 | Steady Lynx | no | no | the language from v0.10.0: a list literal is a tuple, exact at a literal index and a list of its members' union elsewhere |
-| 4 | Luminous Owl | no | no | the language from v0.11.0: a match yields absent on a miss, a write handle reaches its pre-write record through `@old` |
-| 5 | Dancing Wren | yes | no | the language after v0.11.0: no engine-side store and no meta edges; no `write … bind`, no `#` hops (a plugin is a function you call), `delete` only where the system declares a type deletable, `_resources` only on an extraction's result |
+| pin | release | standing |
+|---|---|---|
+| 0.12.3 | 0.12.0 | compatible |
+| 0.12.0-rc.6 | 0.12.0 | compatible |
+| 1.4.0 | 1.0.0 | compatible |
+| 0.13.0 | 0.12.0 | newer |
+| 2.0.0 | 1.9.0 | newer |
+| 0.11.0 | 0.12.0 | older key |
+| banana | 0.12.0 | malformed |
 
-The language release names the versions it supports; versions it has dropped are served by the platform's legacy packages until their saved movements are upgraded.
+## The refusals
 
-The integer is the identity: code compares it and never parses the name, which is display only. A version keeps its row after it leaves the supported set, so a movement pinned to it can still be refused by name. [`docs/language/steady-lynx-migration.md`](../language/steady-lynx-migration.md) is the migration guide from version 2 to 3, [`docs/language/luminous-owl-migration.md`](../language/luminous-owl-migration.md) from 3 to 4, and [`docs/language/dancing-wren-migration.md`](../language/dancing-wren-migration.md) from 4 to 5.
+A pin this release does not read is refused with `MOV_LANGUAGE_VERSION_UNSUPPORTED` (the checker) or `MOVENG_LANGUAGE_VERSION` (the engine), whose message is one of three, `{pin}` the pin and `{own}` this release:
 
-## The rules
+- **newer:** "this automation pins language {pin}, newer than this release ({own}); upgrade the engine"
+- **older key:** "this automation pins language {pin}, which this release ({own}) does not read; validate it under {own} and upgrade it"
+- **malformed:** "this automation pins language {pin}, which is not a version; a pin is a release's version, such as {own}"
+
+A compatible pin is read with nothing said: a deprecation is the CHANGELOG's to announce.
+
+## Breaking changes
 
 Breaking changes never break a saved movement.
 
-- **A break is a version conditional, never a fork.** A spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened: each lands as a conditional (`since(v, n)` or `before(v, n)` on the compile or run context's `languageVersion`) at the point of difference in the parser, checker, engine, plugin or adapter. Never a forked parser, never a second engine.
-- **The old behaviour is proved by its own corpus.** Each older version's test corpus runs against the current code under that version. Adding a version adds its fixtures; removing one deletes its conditionals and its fixtures.
-- **A changed meaning is diagnosed.** Any construct whose meaning changed gets a checker diagnostic under the new version, so "validates clean under the new version" can never hide a silent behaviour change.
-- **A release names what it supports and deprecates.** Unsupported: validate and run refuse, loudly (`MOV_LANGUAGE_VERSION_UNSUPPORTED`, naming the version and the fix). Deprecated: it runs, with a warning (`MOV_LANGUAGE_VERSION_DEPRECATED`).
-- **The pin moves only by an explicit upgrade.** A person asks for it (`lf upgrade`, the API's or an agent's upgrade). Never automatically, and never by an ordinary edit. A movement that validates clean under a newer version is at most offered the upgrade (the deploy check reports it), never moved.
-- **The CHANGELOG says why.** The entry for a break names the version that introduces it and why.
+- **A break lands in a new key.** A spelling retired, a construct's meaning changed, a plugin's output reshaped, an engine rule tightened: each ships in a release of a new compatibility key, never within one.
+- **A changed meaning is diagnosed.** Any construct whose meaning changed gets a checker diagnostic under the new key, so "validates clean under the new release" can never hide a silent behaviour change.
+- **The pin moves only by an explicit upgrade.** A person asks for it (`lf upgrade`, the API's or an agent's upgrade). Never automatically, and never by an ordinary edit.
+- **The CHANGELOG says why.** The entry for a break names the release that introduces it and why.
+
+Movements pinned to the integer versions of earlier releases (1 to 4) are the platform's: it keeps their parser, checker and engine until they are upgraded. The integer 5 is the 0.12 line.
 
 ## Changes
 
-- **5, Dancing Wren** (after v0.11.0): `write … bind` is retired (`MOV_WRITE_BIND_RETIRED`); every `#` hop is retired (`MOV_META_HOP_RETIRED`), a plugin being a function called by name; `delete` only of one stored record whose type's describe declares `deletable: true` (`MOV_DELETE_NOT_DECLARED`, `MOV_DELETE_NOT_RECORD`); `_resources` only on an extraction's result (`MOV_RESOURCES_NOT_EXTRACTED`), a system's record walking the edge its system declares to its files. Each is a checker refusal. On both engines `_resources` off an adapter's record is a `MOVENG_UNSUPPORTED` under 5 and the host's `filesIn: "resources"` envelope is not asked for one; an extraction's resources are unchanged on every version.
-- **4, Luminous Owl** (v0.11.0): a named `match` yields its handle or absent, and a miss no longer ends the scope (an unnamed match and `link … { match … }` are refused); `created` and `committed` are retired; `-[:@old]->` off a write handle is the record the write found; `write org { … }` on a handle updates it in place; a handle reads the record as found for a field its write did not set; `@` is reserved for artificial edges. Both engines run them (the Rust engine since PLAN-07A Task 4c, each change a `since(v, 4)` conditional where it differs).
-- **3, Steady Lynx** (v0.10.0): a list literal is a tuple. Exact at a literal index; a list of its members' union elsewhere.
-- **2, Bright Otter** (v0.7.0 through v0.9.1).
-- **1, Quiet Heron**: the language as of tag v0.6.0, the first pinned version.
+- **0.12** (this rewrite): the language version is the toolchain release; a pin is a semver, read by its compatibility key. The integer versions and their names (version 5, "Dancing Wren", is the 0.12 line) retire, and so does `MOV_LANGUAGE_VERSION_DEPRECATED`.

@@ -3,7 +3,7 @@
 // is the TypeScript surface over it. Expression positions come back as ExprSlot
 // spans whose trees the bridge reads (expression/bridge.ts).
 
-import { CURRENT_LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
+import { LANGUAGE_VERSION, type LanguageVersion } from '../language_version';
 import type { ExprSlot, Loc, Program, RValue } from './ast';
 import { originalSlot } from '../expression/bridge';
 import { rustParseNestedCall, rustParseProgram, type StatementParse } from './rust_parser';
@@ -26,7 +26,7 @@ export interface ParseOptions {
 }
 
 export function parseProgram(source: string, options?: ParseOptions): Program {
-  const languageVersion = options?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  const languageVersion = options?.languageVersion ?? LANGUAGE_VERSION;
   return refusedAsError(rustParseProgram(source, languageVersion));
 }
 

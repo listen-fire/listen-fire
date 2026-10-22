@@ -69,7 +69,7 @@ fn attach_slot_trees(value: &mut Value) {
 /// One expression text in the v5 surface, read into the canonical tree
 /// (crate::surface). A version this release does not read is refused.
 pub fn parse_expression(source: &str, version: u32) -> Parsed {
-    if let Some(message) = version::unsupported_message(version) {
+    if let Some(message) = version::refusal(&version::legacy_pin_to_semver(version), version::LANGUAGE_VERSION) {
         return Err(to_value(&lexer::SyntaxError { message, pos: 0 }));
     }
     let tree = expr::parse_expression(source).map_err(|e| to_value(&e))?;
@@ -91,7 +91,7 @@ pub struct NestedCall {
 /// program's do. Offsets are UTF-16 units, as the TypeScript caller has them.
 pub fn parse_nested_call(raw: &str, call: &NestedCall) -> Parsed {
     let head = util::utf16::Utf16::new(raw).text(0, call.at_end as usize);
-    if let Some(message) = version::unsupported_message(call.version) {
+    if let Some(message) = version::refusal(&version::legacy_pin_to_semver(call.version), version::LANGUAGE_VERSION) {
         return Err(to_value(&stmt::ParseError { message, loc: ast::Loc { line: 1, col: 1 } }));
     }
     let origin = ast::Loc { line: call.origin_line as usize, col: call.origin_col as usize };

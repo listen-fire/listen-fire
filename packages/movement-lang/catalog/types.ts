@@ -8,7 +8,6 @@
 // the record that carries a checker position; every `SchemaFieldType` is a
 // `FieldType`, and the platform's checker asserts it at compile time.
 
-import type { LanguageVersion } from '../language_version';
 import type { EdgeCapability, EdgeSequencing, Expression, FieldCapability } from '../expression/types';
 
 
@@ -332,13 +331,6 @@ export interface PluginSpec {
    * goes to the extractor, not to a name.
    */
   output?: PluginOutput;
-  /**
-   * The shapes `output` had before it changed: each is what a plain call hands
-   * back to a program pinned before language version `before`, earliest
-   * first. A call is typed under its program's pin (`pluginOutputUnder`);
-   * removing a language version removes its entries.
-   */
-  earlierOutputs?: ReadonlyArray<{ before: LanguageVersion; output: PluginOutput }>;
   /** The package tag it is a member of (`@lf/web`), matched exactly
    *  (`packageMembers`); absent when it is in none. */
   package?: string;

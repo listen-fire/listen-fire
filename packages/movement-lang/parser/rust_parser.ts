@@ -6,7 +6,7 @@
 
 import { ExpressionSyntaxError } from '../expression/error';
 import { slotTrees } from '../expression/slot_trees';
-import { CURRENT_LANGUAGE_VERSION } from '../language_version';
+import { LANGUAGE_VERSION, legacyPinOf, type LanguageVersion } from '../language_version';
 import { callParser } from '../wasm/loader';
 import type { ExprSlot, Loc, Program, RValue } from './ast';
 import type { MExpr } from './expression/tree';
@@ -79,16 +79,18 @@ export function parserOver(call: ParserCall): RustParser {
 // Called through, not captured, so a test's spy on the loader sees each call.
 const live = parserOver((fn, input, extra) => callParser(fn, input, extra));
 
-export function rustParseProgram(source: string, languageVersion: number): StatementParse<Program> {
-  return live.program(source, languageVersion);
+// The wasm entries still take the integer pin (`legacyPinOf`); Task 2 removes it.
+
+export function rustParseProgram(source: string, languageVersion: LanguageVersion): StatementParse<Program> {
+  return live.program(source, legacyPinOf(languageVersion));
 }
 
 export function rustParseNestedCall(
   slot: ExprSlot,
   at: { start: number; end: number },
-  languageVersion: number,
+  languageVersion: LanguageVersion,
 ): StatementParse<RValue> {
-  return live.nestedCall(slot, at, languageVersion);
+  return live.nestedCall(slot, at, legacyPinOf(languageVersion));
 }
 
 /** Throws `ExpressionSyntaxError`. A text read here is not a program's slot
@@ -96,8 +98,8 @@ export function rustParseNestedCall(
  *  current version unless the caller reads it as a part of a program, under
  *  that program's `languageVersion` (an engine probing a block head's hops,
  *  a checker reading a type's hops), which reads as its slots did. */
-export function rustParseExpression(source: string, languageVersion: number = CURRENT_LANGUAGE_VERSION): MExpr {
-  return live.expression(source, languageVersion);
+export function rustParseExpression(source: string, languageVersion: LanguageVersion = LANGUAGE_VERSION): MExpr {
+  return live.expression(source, legacyPinOf(languageVersion));
 }
 
 /**

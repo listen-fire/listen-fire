@@ -20,6 +20,7 @@ import { BridgeError } from '../../expression/error';
 import { neverAsAny } from '../../never';
 import { callLowering } from '../../wasm/loader';
 import { isMapSpread, type Hop, type MExpr } from './tree';
+import type { LanguageVersion } from '../../language_version';
 import { parseExpression } from './parse_expression';
 
 /** A tree the lowering has no reading for. A built-in call's static shape
@@ -113,12 +114,12 @@ export function lowerCondition(tree: MExpr, source: string): MovementCondition {
 
 /** Parse and lower one expression text, part of a program under
  *  `languageVersion` where given (`parseExpression`). */
-export function lowerMovementExpression(raw: string, languageVersion?: number): Expression {
+export function lowerMovementExpression(raw: string, languageVersion?: LanguageVersion): Expression {
   return lowerExpression(parseExpression(raw, languageVersion), raw);
 }
 
 /** Parse and lower one condition text. */
-export function lowerMovementCondition(raw: string, languageVersion?: number): MovementCondition {
+export function lowerMovementCondition(raw: string, languageVersion?: LanguageVersion): MovementCondition {
   return lowerCondition(parseExpression(raw, languageVersion), raw);
 }
 

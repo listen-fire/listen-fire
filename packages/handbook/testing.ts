@@ -20,7 +20,7 @@
 // examples demand: the fixture is the union of what the examples demand, and an
 // example that names something no example demands is one it cannot back.
 
-import { CURRENT_LANGUAGE_VERSION, mockCatalogSnapshot, type AdapterSpec, type CatalogSnapshot, type InstanceSchema } from 'movement-lang';
+import { LANGUAGE_VERSION, mockCatalogSnapshot, type AdapterSpec, type CatalogSnapshot, type InstanceSchema } from 'movement-lang';
 import { bundledPluginSpecs } from 'movement-engine/public/plugins';
 import { programCheck } from 'movement-engine/public/movement-engine';
 
@@ -123,11 +123,11 @@ export function admitProbe(claim: EngineClaim, catalog: CatalogSnapshot = HANDBO
     catalog: files
       ? { ...catalog, files: Object.fromEntries(Object.entries(files).map(([path, source]) => [path, { source }])) }
       : catalog,
-    languageVersion: CURRENT_LANGUAGE_VERSION,
+    languageVersion: LANGUAGE_VERSION,
   });
 }
 
 /** Only the parse the engine performs first: MOVENG_PARSE when it refuses. */
 export function parseProbe(claim: EngineClaim): void {
-  programCheck.parsePinned({ source: claim.probe, languageVersion: CURRENT_LANGUAGE_VERSION });
+  programCheck.parsePinned({ source: claim.probe, languageVersion: LANGUAGE_VERSION });
 }

@@ -10,6 +10,7 @@
 // under test too.
 
 import { tenantIdOf } from 'engine-contracts';
+import { LANGUAGE_VERSION } from 'movement-lang';
 import type { Adapter } from '../adapter';
 import { adapterTable } from '../engine/adapter_table';
 import {
@@ -139,7 +140,7 @@ describe('the per-segment Affinity call ceiling', () => {
   });
 
   it('a segment is entered by its id, and a closed one cannot be', async () => {
-    const { segmentId } = await openSegment({ teamId: TEAM_ID, languageVersion: 2 });
+    const { segmentId } = await openSegment({ teamId: TEAM_ID, languageVersion: LANGUAGE_VERSION });
     inSegment(segmentId, () => countAdapterCall('affinity'));
     expect(inSegment(segmentId, () => currentSegmentCallCount('affinity'))).toBe(1);
     await closeSegment({ segmentId });
@@ -170,7 +171,7 @@ describe('the per-segment Affinity call ceiling', () => {
       segments: { facts: () => ({ teamId: TEAM_ID }) },
       ...segmentScopedCalls,
     });
-    const { segmentId } = await openSegment({ teamId: TEAM_ID, languageVersion: 2 });
+    const { segmentId } = await openSegment({ teamId: TEAM_ID, languageVersion: LANGUAGE_VERSION });
     const { instance } = await table.resolve({ adapterType: 'affinity', role: 'source', segmentId });
     const describe = () => table.call({ segmentId, instance, method: 'describe', args: { typeId: 't' } });
 

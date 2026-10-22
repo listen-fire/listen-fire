@@ -14,7 +14,7 @@ fn options(language_version: u32) -> CheckOptions<'static> {
 }
 
 #[test]
-fn a_version_4_pin_is_refused_with_the_one_standing_diagnostic() {
+fn an_integer_pin_other_than_the_legacy_one_is_refused_with_the_one_standing_diagnostic() {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let program = movement_parser::stmt::parse_program(SOURCE, 5, false).unwrap();
     let found: Vec<(String, String)> = check_program(&program, &catalog, options(4)).into_iter().map(|d| (d.code, d.message)).collect();
@@ -22,7 +22,7 @@ fn a_version_4_pin_is_refused_with_the_one_standing_diagnostic() {
         found,
         [(
             "MOV_LANGUAGE_VERSION_UNSUPPORTED".to_string(),
-            "this automation is written in language version \"Luminous Owl\" (4), which this release does not support, so it will not validate or run. To fix: validate it under \"Dancing Wren\" (5), repair what that reports, and upgrade it to \"Dancing Wren\" (5).".to_string()
+            format!("this automation pins language 4, which is not a version; a pin is a release's version, such as {}", movement_parser::version::LANGUAGE_VERSION)
         )]
     );
     let answer = movement_checker::answer::check_answer(&program, &catalog, options(4));

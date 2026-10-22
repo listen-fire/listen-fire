@@ -1373,7 +1373,7 @@ impl Checker<'_> {
             codes::MATCH_UNNAMED,
             format!(
                 "'match … {{ }}' on its own gates nothing since {}: a miss is absent, not the end of the scope. Bind it and test the name — `existing = match … {{ … }}` then `{}`",
-                version::describe(4),
+                version::MATCH_AND_HANDLE_RULES_SINCE,
                 self.code("if existing != null { … }")
             ),
             span,

@@ -115,10 +115,22 @@ function assertPublishedEntriesExist(dir) {
   if (missing.length > 0) throw new Error(`${dir} publishes ${missing.join(', ')}, which its build did not produce`);
 }
 
+/** The language's version is its package's: written into the source the
+ *  build compiles, since neither the source nor its build can require
+ *  package.json by one relative path. A test holds the checked-in copy equal. */
+function writeLanguageVersion(at) {
+  const file = path.join(at, 'language_version_value.ts');
+  const text = fs.readFileSync(file, 'utf8');
+  const written = text.replace(/^export const PACKAGE_VERSION = '[^']*';$/m, `export const PACKAGE_VERSION = '${manifestOf(path.relative(ROOT, at)).version}';`);
+  if (written === text && !/^export const PACKAGE_VERSION = '/m.test(text)) throw new Error(`${file} no longer declares PACKAGE_VERSION`);
+  if (written !== text) fs.writeFileSync(file, written);
+}
+
 function build({ dir, assets = [], copies = [] }) {
   const at = path.join(ROOT, dir);
   const dist = path.join(at, 'dist');
   fs.rmSync(dist, { recursive: true, force: true });
+  if (dir === 'packages/movement-lang') writeLanguageVersion(at);
 
   // Every neighbour, by every spelling, resolves to its built declarations.
   const paths = {};

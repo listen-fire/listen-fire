@@ -25,7 +25,7 @@
 // from a limit pause. The cap itself is run input (`costCapMicrodollars`),
 // read by the run host, never by the engine.
 
-import { CURRENT_LANGUAGE_VERSION, findPlugin, type FileArtifactType, type LanguageVersion, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
+import { LANGUAGE_VERSION, findPlugin, type FileArtifactType, type LanguageVersion, type PluginOutput, type PluginSpec, type SchemaFieldType } from 'movement-lang';
 
 import { HOST_FAMILIES_VERSION, filesAtType, guidSequence, missingHostMethods, type ActingPrincipal, type TenantId } from 'engine-contracts';
 import type { FileRef } from '../translation_graph/adapter';
@@ -54,14 +54,6 @@ import {
 
 /** The plugins a run's catalog snapshot describes, by name. */
 export type PluginSpecs = Readonly<Record<string, PluginSpec>>;
-
-/** What a plain call to `spec`'s plugin hands back to a program pinned to
- *  `languageVersion`: its current output, or an older shape it kept for
- *  programs pinned before the change (`PluginSpec.earlierOutputs`). */
-export function pluginOutputUnder(spec: PluginSpec, languageVersion: LanguageVersion): PluginOutput | undefined {
-  const earlier = spec.earlierOutputs?.find((entry) => languageVersion < entry.before);
-  return earlier !== undefined ? earlier.output : spec.output;
-}
 
 /** A plugin by either spelling: movement identifiers can't carry dashes, so a
  *  program writes `vc_url_retrieval` for a plugin registered as
@@ -158,7 +150,7 @@ export interface RunContext extends RunFacts {
 /** The pin a callee honours: its run's, or — outside a run (a script, a test
  *  calling the extraction directly) — the current version. */
 export function languageVersionOf(run: RunFacts | undefined): LanguageVersion {
-  return run?.languageVersion ?? CURRENT_LANGUAGE_VERSION;
+  return run?.languageVersion ?? LANGUAGE_VERSION;
 }
 
 /**
@@ -541,7 +533,7 @@ export async function inRunContext(
     host: input.host,
     teamId: input.teamId,
     ...(input.runId !== undefined ? { runId: input.runId } : {}),
-    languageVersion: input.languageVersion ?? CURRENT_LANGUAGE_VERSION,
+    languageVersion: input.languageVersion ?? LANGUAGE_VERSION,
     ...(input.firedAt !== undefined ? { firedAt: input.firedAt } : {}),
     spend: {
       priorMicrodollars: input.priorSpentMicrodollars ?? 0,

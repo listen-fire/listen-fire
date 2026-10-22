@@ -19,6 +19,8 @@
 import {
   compatibleInRust,
   languageVersionDiagnostic,
+  legacyPinToSemver,
+  type LanguageVersion,
   RustCheckRefused,
   type CatalogSnapshot,
   type InstanceSchema,
@@ -40,7 +42,7 @@ import { ADAPTER_METHODS, type AdapterCall, type AdapterMethod, type EngineHost 
 import { hostCallFailure, isoDates } from './host_adapter';
 import { checkAnswerInRust, checkPinnedInRust, parsePinned } from './program_check';
 import type { MovementRunResult } from './run_types';
-import { pluginOutputUnder, pluginSpecNamed, publishTrace, runLogFields, withDeclaredFiles, type RunContext } from './segment_context';
+import { pluginSpecNamed, publishTrace, runLogFields, withDeclaredFiles, type RunContext } from './segment_context';
 import type { HostAnswer, HostRequest } from './rust_engine';
 import { rustRunStats } from './rust_stats';
 import {
@@ -104,12 +106,10 @@ const ROUTES: Record<string, Route> = {
    *  deprecated pin. A program that fails its check ends the run with the
    *  check's error, as the run's own check throws it. */
   async 'check.program'(request, context) {
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('check.program languageVersion must be a number');
-    const upgradingFrom = request.upgradingFrom;
-    if (upgradingFrom !== undefined && typeof upgradingFrom !== 'number') {
-      throw new RustShimError('check.program upgradingFrom must be a number');
-    }
+    // Task 2 removes: the engine still sends the integer pins.
+    const languageVersion = legacyPinOfRequest(request.languageVersion, 'check.program languageVersion must be a number');
+    const upgradingFrom =
+      request.upgradingFrom === undefined ? undefined : legacyPinOfRequest(request.upgradingFrom, 'check.program upgradingFrom must be a number');
     const source = string(request.source, 'check.program source');
     let answer;
     try {
@@ -141,8 +141,7 @@ const ROUTES: Record<string, Route> = {
    *  there as `surfaceMisfit` compares a landing across an edge. With
    *  `file`, the declaration is a library's, checked as its own file. */
   async 'check.compatible'(request, context) {
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('check.compatible languageVersion must be a number');
+    const languageVersion = legacyPinOfRequest(request.languageVersion, 'check.compatible languageVersion must be a number');
     // The declaration's own file: a library's, by its path in the snapshot.
     const file = optionalString(request.file, 'check.compatible file');
     const source = file === undefined ? string(request.source, 'check.compatible source') : context.catalog.files?.[file]?.source;
@@ -229,8 +228,7 @@ const ROUTES: Record<string, Route> = {
     if (!Array.isArray(candidates)) throw new RustShimError('llm.arbitrateEntities candidates is a list');
     const constraints = wire.read(request.constraints);
     if (!isUniquenessConstraints(constraints)) throw new RustShimError('llm.arbitrateEntities constraints are {any: [{all}]}');
-    const languageVersion = request.languageVersion;
-    if (typeof languageVersion !== 'number') throw new RustShimError('llm.arbitrateEntities languageVersion is a number');
+    const languageVersion = legacyPinOfRequest(request.languageVersion, 'llm.arbitrateEntities languageVersion is a number');
     const answer = await host.llm.arbitrateEntities({
       asserted,
       candidates,
@@ -322,7 +320,7 @@ const ROUTES: Record<string, Route> = {
     // The files the plugin's output declares, made here (as the TypeScript
     // engine's priced invoker makes them): the engine is handed handles.
     const spec = pluginSpecNamed(catalog.plugins, string(request.plugin, 'llm.transforms.invoke plugin'));
-    const output = spec !== undefined ? pluginOutputUnder(spec, context.languageVersion) : undefined;
+    const output = spec?.output;
     const typed = 'error' in answer ? answer : withDeclaredFiles(answer, output);
     return new Plain(wired(wire, typed, 'llm.transforms.invoke'));
   },
@@ -636,14 +634,21 @@ export function shimRoutePaths(): string[] {
 
 /** The segment a forwarded request names (`serve` has held it to the one
  *  the run host opened). */
+/** A pin as the engine still sends it, an integer (`legacyPinToSemver`).
+ *  Task 2 removes. */
+function legacyPinOfRequest(pin: unknown, refusal: string): LanguageVersion {
+  if (typeof pin !== 'number') throw new RustShimError(refusal);
+  return legacyPinToSemver(pin);
+}
+
 /** A program's key in `RouteContext.checked`: its source under its pin. */
-export function checkedKey(source: string, languageVersion: number): string {
+export function checkedKey(source: string, languageVersion: LanguageVersion): string {
   return JSON.stringify([source, languageVersion]);
 }
 
 /** The program `check.compatible` asks about, checked once per segment
  *  against the segment's own catalog (`RouteContext.checked`). */
-export function checkedProgram(context: Pick<RouteContext, 'catalog' | 'checked'>, source: string, languageVersion: number): Program {
+export function checkedProgram(context: Pick<RouteContext, 'catalog' | 'checked'>, source: string, languageVersion: LanguageVersion): Program {
   const key = checkedKey(source, languageVersion);
   let program = context.checked.get(key);
   if (program === undefined) {

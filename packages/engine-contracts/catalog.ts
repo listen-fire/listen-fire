@@ -1709,20 +1709,6 @@ const transformOutputKindSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
-/**
- * A plugin whose output changed shape keeps its older shapes beside the
- * current one: `previously` lists what a call handed back to a movement pinned
- * before language version `before`, earliest first. A call runs, and is typed,
- * under its movement's pin (`transformOutputUnder`). Removing a language
- * version removes its entries.
- */
-const transformOutputSchema = transformOutputKindSchema.and(
-  z.object({
-    previously: z
-      .array(z.object({ before: z.number().int(), output: transformOutputKindSchema }))
-      .optional(),
-  }),
-);
 export type TransformOutputKind = z.infer<typeof transformOutputKindSchema>;
 
 const transformSignatureSchema = z.object({
@@ -1757,7 +1743,7 @@ const transformSignatureSchema = z.object({
    *  traversal. */
   additions: transformAdditionsSchema,
   /**
-   * What a PLAIN call hands back — see `transformOutputSchema`. Absent is
+   * What a PLAIN call hands back — see `transformOutputKindSchema`. Absent is
    * nobody having said, and the language keeps such a plugin to `through [ … ]`
    * stages, where its output goes to the extractor rather than to a name.
    *
@@ -1765,7 +1751,7 @@ const transformSignatureSchema = z.object({
    * when it found something declares that field `optional`, and every read of
    * it downstream then has to discharge the absence.
    */
-  output: transformOutputSchema.optional(),
+  output: transformOutputKindSchema.optional(),
 });
 
 export type TransformSignature = z.infer<typeof transformSignatureSchema>;

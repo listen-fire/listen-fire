@@ -12,6 +12,7 @@
 import { applyFix, type DiagnosticFix, type SourceEdit } from 'movement-lang/checker/fixes';
 import { checkSourceInRust, RustCheckRefused } from 'movement-lang/checker/rust_checker';
 import { rustParseProgram } from 'movement-lang/parser/rust_parser';
+import type { LanguageVersion } from 'movement-lang/language_version';
 import type { Diagnostic } from 'movement-lang/checker/diagnostic';
 import type { Loc, Span } from 'movement-lang/parser/ast';
 import type { CatalogSnapshot } from 'movement-lang/service/snapshot';
@@ -21,7 +22,7 @@ const MAX_PASSES = 16;
 const isRespelling = (d: Diagnostic): boolean => d.code.startsWith('MOV_V5_');
 
 /** The old spellings alone, from the parse: what is checked with no catalog. */
-function spellingFindings(source: string, version: number): Diagnostic[] {
+function spellingFindings(source: string, version: LanguageVersion): Diagnostic[] {
   const parse = rustParseProgram(source, version);
   if (!parse.ok) return [];
   return (parse.value.spelling ?? []).map((f) => ({
@@ -32,7 +33,7 @@ function spellingFindings(source: string, version: number): Diagnostic[] {
   }));
 }
 
-function respellings(source: string, version: number, snapshot: CatalogSnapshot | undefined): Diagnostic[] {
+function respellings(source: string, version: LanguageVersion, snapshot: CatalogSnapshot | undefined): Diagnostic[] {
   if (snapshot === undefined) return spellingFindings(source, version).filter(isRespelling);
   try {
     return checkSourceInRust(source, snapshot, { languageVersion: version }).filter(isRespelling);
@@ -45,8 +46,7 @@ function respellings(source: string, version: number, snapshot: CatalogSnapshot 
 /** `source` as `version` spells it. With a snapshot, the respellings only a
  *  check can decide (a built-in read by its argument's type, a call's named
  *  arguments put in order) are applied too. */
-export function spelledFor(version: number, source: string, snapshot?: CatalogSnapshot): string {
-  if (version < 5) return source;
+export function spelledFor(version: LanguageVersion, source: string, snapshot?: CatalogSnapshot): string {
   let text = source;
   for (let i = 0; i < MAX_PASSES; i++) {
     const fixes = fixesToApply(respellings(text, version, snapshot));

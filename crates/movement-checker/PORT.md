@@ -144,7 +144,7 @@ The family is also the Rust module (`src/families/<family>.rs`).
 
 | code | raised at (file:function × sites) | corpus |
 |---|---|---|
-| MOV_LANGUAGE_VERSION_DEPRECATED | language_version.ts:languageVersionDiagnostic | 0 |
+| MOV_LANGUAGE_VERSION_DEPRECATED | retired: a deprecation is the CHANGELOG's to announce | 0 |
 | MOV_LANGUAGE_VERSION_UNSUPPORTED | language_version.ts:languageVersionDiagnostic | 5 |
 | MOV_PLUGIN_OUTPUT_CHANGED | check.ts:reportPluginOutputChanged | 2 |
 

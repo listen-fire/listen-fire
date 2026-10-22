@@ -3,6 +3,7 @@
 // whether that credential is the segment's tenant's.
 
 import { HOST_FAMILIES_VERSION, tenantIdOf } from 'engine-contracts';
+import { LANGUAGE_VERSION } from 'movement-lang';
 
 import type { Adapter } from '../../translation_graph/adapter';
 import { CredentialNotTenants } from '../../translation_graph/engine/adapter_table';
@@ -32,7 +33,7 @@ function crm(): Adapter {
 }
 
 async function segmentFor(host: ReturnType<typeof inProcessHost>, teamId: typeof ACME): Promise<string> {
-  const { segmentId } = await host.segment.open({ teamId, languageVersion: 5, hostFamiliesVersion: HOST_FAMILIES_VERSION });
+  const { segmentId } = await host.segment.open({ teamId, languageVersion: LANGUAGE_VERSION, hostFamiliesVersion: HOST_FAMILIES_VERSION });
   return segmentId;
 }
 

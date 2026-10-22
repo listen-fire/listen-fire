@@ -5,7 +5,7 @@
 import type { Span } from './ast';
 import type { DiagnosticFix } from '../checker/fixes';
 import { callParser } from '../wasm/loader';
-import { CURRENT_LANGUAGE_VERSION } from '../language_version';
+import { LANGUAGE_VERSION, legacyPinOf, type LanguageVersion } from '../language_version';
 
 /** An old spelling in a version 5 program: refused, its rewrite as the fix.
  *  `Program.spelling` carries them; both checkers report each as a diagnostic. */
@@ -35,11 +35,13 @@ export interface NamedCall {
   args: Array<{ name: string; text: string; at: { line: number; col: number } }>;
 }
 
-/** `message` naming every built-in it quotes as `version` spells it
- *  (`UPPER` under 4, `Text.upper` under 5). */
-export function spellMessage(message: string, version: number): string {
-  if (version < 5) return message;
-  const { ok, json } = callParser('spell_message', message, [version]);
+// The spell entries still take the integer pin, and ignore it (`legacyPinOf`);
+// Task 2 removes it.
+
+/** `message` naming every built-in it quotes as the language spells it
+ *  (`Text.upper`). */
+export function spellMessage(message: string, version: LanguageVersion = LANGUAGE_VERSION): string {
+  const { ok, json } = callParser('spell_message', message, [legacyPinOf(version)]);
   if (!ok || typeof json !== 'string') throw new Error(`spell_message: ${JSON.stringify(json)}`);
   return json;
 }
@@ -47,35 +49,33 @@ export function spellMessage(message: string, version: number): string {
 /** A plugin's name from version 5: its registry name or catalog key in
  *  camelCase (`fetch_url` → `fetchUrl`), one spelling, matched exactly. */
 export function pluginName(key: string): string {
-  const { ok, json } = callParser('plugin_name', key, [CURRENT_LANGUAGE_VERSION]);
+  const { ok, json } = callParser('plugin_name', key, [legacyPinOf(LANGUAGE_VERSION)]);
   if (!ok || typeof json !== 'string') throw new Error(`plugin_name: ${JSON.stringify(json)}`);
   return json;
 }
 
 /** Program text a diagnostic suggests (`EXISTS(x)`, `AT(r, 0)`, `IF … THEN
- *  "Yes" ELSE "No" END`), written in the canonical spelling, as `version`
- *  spells it: as it is under 1–4, rewritten by the parser's own spelling
- *  fixes from 5 (`x != null`, `r[0]`, `… ? "Yes" : "No"`). `…` stands for any
- *  expression. Pass only code: a text that parses is rewritten. */
-export function spellCode(code: string, version: number): string {
-  if (version < 5) return code;
-  const { ok, json } = callParser('spell_code', code, [version]);
+ *  "Yes" ELSE "No" END`), written in the canonical spelling and rewritten by
+ *  the parser's own spelling fixes (`x != null`, `r[0]`, `… ? "Yes" : "No"`).
+ *  `…` stands for any expression. Pass only code: a text that parses is
+ *  rewritten. */
+export function spellCode(code: string, version: LanguageVersion = LANGUAGE_VERSION): string {
+  const { ok, json } = callParser('spell_code', code, [legacyPinOf(version)]);
   if (!ok || typeof json !== 'string') throw new Error(`spell_code: ${JSON.stringify(json)}`);
   return json;
 }
 
-/** A word of code in prose (`negated by NOT`, `narrow with an IS test`): bare
- *  up to version 4, where it is a CAPS word; quoted from 5, where it is a
- *  symbol or lower case (`negated by '!'`). */
-export function spellWord(word: string, version: number): string {
-  return version < 5 ? word : `'${spellCode(word, version)}'`;
+/** A word of code in prose (`negated by NOT`, `narrow with an IS test`),
+ *  quoted as a symbol or lower case (`negated by '!'`). */
+export function spellWord(word: string, version: LanguageVersion = LANGUAGE_VERSION): string {
+  return `'${spellCode(word, version)}'`;
 }
 
-/** The head of an `if` a diagnostic suggests (`if EXISTS(x)`), as
- *  `version` spells it: from 5 its condition is parenthesised and respelled
- *  (`if (x != null)`). For a suggestion whose body is not code. */
-export function spellIf(condition: string, version: number): string {
-  return version < 5 ? `if ${condition}` : `if (${spellCode(condition, version)})`;
+/** The head of an `if` a diagnostic suggests (`if EXISTS(x)`): its condition
+ *  parenthesised and respelled (`if (x != null)`). For a suggestion whose
+ *  body is not code. */
+export function spellIf(condition: string, version: LanguageVersion = LANGUAGE_VERSION): string {
+  return `if (${spellCode(condition, version)})`;
 }
 
 export interface SpellingRow {
@@ -100,7 +100,7 @@ let table: SurfaceTable | undefined;
 /** The spelling table, read once from the WASM. */
 export function surfaceTable(): SurfaceTable {
   if (table === undefined) {
-    const { ok, json } = callParser('surface_table', '', [CURRENT_LANGUAGE_VERSION]);
+    const { ok, json } = callParser('surface_table', '', [legacyPinOf(LANGUAGE_VERSION)]);
     if (!ok || !isTable(json)) throw new Error(`surface_table: ${JSON.stringify(json)}`);
     table = json;
   }

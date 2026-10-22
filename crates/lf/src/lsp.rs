@@ -134,7 +134,7 @@ impl Server {
     async fn open(project: Option<Project>, log: &mut Vec<String>) -> Server {
         let before = log.len();
         let catalog = catalog_of_project(project.as_ref(), log).await;
-        let version = project.as_ref().map_or(movement_parser::version::CURRENT_LANGUAGE_VERSION, |p| p.language_version);
+        let version = project.as_ref().map_or(movement_parser::version::LEGACY_PIN, |p| p.language_version);
         Server { service: Service::new(catalog, version), project, documents: HashMap::new(), due: HashMap::new(), reread_due: None, read_clean: log.len() == before }
     }
 

@@ -11,6 +11,7 @@
 //   `getFieldValue` — on every version.
 
 import {
+  LANGUAGE_VERSION,
   mockCatalogSnapshot,
   type InstanceSchema,
   type LanguageVersion,
@@ -319,7 +320,7 @@ const messageOf = (error: unknown) => {
  *  check). */
 async function onRust(source: string): Promise<Outcome> {
   resetRustRunStats();
-  const rust = await runOn(source, 5);
+  const rust = await runOn(source, LANGUAGE_VERSION);
   expect(rustRunStats).toMatchObject(endedInRust(rust.error));
   return rust;
 }
@@ -344,7 +345,7 @@ describe('`_resources` off an adapter record, by language version', () => {
   it('version 5, past a checker that missed it: the engine refuses, and never asks for the reserved reference', async () => {
     mockCheckerMisses.add('MOV_RESOURCES_NOT_EXTRACTED');
     resetRustRunStats();
-    const rust = await runOn(source, 5);
+    const rust = await runOn(source, LANGUAGE_VERSION);
     const cause = runFailureCause(rust.error);
     expect(cause).toBeInstanceOf(MovementEngineError);
     expect(cause instanceof MovementEngineError ? cause.code : undefined).toBe(

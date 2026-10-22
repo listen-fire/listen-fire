@@ -42,7 +42,7 @@ impl Checker<'_> {
             codes::LINK_MATCH_BODY_RETIRED,
             format!(
                 "a 'link' no longer finds its record in its own body since {}: find it first and test it — `to = match … {{ … }}` then `{}`",
-                version::describe(4),
+                version::MATCH_AND_HANDLE_RULES_SINCE,
                 self.code(&format!("if to != null {{ link {} -[:{}]-> to }}", link.from, link.edge))
             ),
             span,

@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use movement_parser::version::CURRENT_LANGUAGE_VERSION;
+// Task 3 makes the project's pin lf.yaml's `engine:` itself; until then it is
+// the integer the engine's entries still carry.
+use movement_parser::version::LEGACY_PIN;
 use serde::Deserialize;
 
 pub const PROJECT_FILE: &str = "lf.yaml";
@@ -127,7 +129,7 @@ pub fn language_version_of_engine(engine: &str) -> Result<u32, String> {
             "lf.yaml pins engine {engine}, newer than this lf ({CURRENT_ENGINE_VERSION}); upgrade lf or lower the pin"
         ));
     }
-    Ok(CURRENT_LANGUAGE_VERSION)
+    Ok(LEGACY_PIN)
 }
 
 /// Refuses a pin lf does not run, before any engine sees it.
@@ -238,8 +240,8 @@ mod tests {
     #[test]
     fn a_newer_engine_is_refused_and_an_older_one_runs_the_current_version() {
         assert!(language_version_of_engine("0.13.0").unwrap_err().contains("newer than this lf"));
-        assert_eq!(language_version_of_engine("0.6.0"), Ok(CURRENT_LANGUAGE_VERSION));
-        assert_eq!(language_version_of_engine("0.11.0"), Ok(CURRENT_LANGUAGE_VERSION));
+        assert_eq!(language_version_of_engine("0.6.0"), Ok(LEGACY_PIN));
+        assert_eq!(language_version_of_engine("0.11.0"), Ok(LEGACY_PIN));
     }
 
     #[test]
@@ -261,7 +263,7 @@ mod tests {
             );
         }
         assert_eq!(FIRST_LF_LANGUAGE_VERSION, 5);
-        for version in [5, CURRENT_LANGUAGE_VERSION] {
+        for version in [5, LEGACY_PIN] {
             assert!(refuse_below_lf(version, "lf.yaml", "").is_ok());
         }
     }

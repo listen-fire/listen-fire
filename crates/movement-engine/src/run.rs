@@ -71,14 +71,6 @@ use crate::stdlib::Surroundings;
 use crate::trace::{FlowTrace, TraceEntry};
 use crate::{env_services, js_date};
 
-/// The first language version this engine runs; every earlier one runs on
-/// the TypeScript engine, and a segment pinned below it is refused by
-/// BELOW_FIRST_VERSION before anything is asked.
-pub const FIRST_VERSION: u32 = 5;
-
-/// Why a segment pinned below FIRST_VERSION is refused (`{refused}`).
-pub const BELOW_FIRST_VERSION: &str = "language_version_runs_on_typescript";
-
 /// The slot a `return` binds its value into (run.ts `RETURN_SLOT`): a name
 /// the grammar cannot spell.
 pub(crate) const RETURN_SLOT: &str = "#return";
@@ -232,7 +224,6 @@ pub async fn segment(host: Host, input: SegmentInput) -> Json {
     let ledger = crate::ledger::Ledger::new(&input.spend);
     let mut done = match run(&host, &input, &ledger).await {
         Ok(result) => json!({ "result": result }),
-        Err(Stop::Refused(reason)) => return json!({ "refused": reason }),
         Err(Stop::Declined(reason)) => return json!({ "declined": reason }),
         Err(Stop::Thrown(failure)) => json!({ "thrown": failure.to_json() }),
         Err(Stop::Failed(failure, result)) => json!({ "failed": { "error": failure.to_json(), "result": result } }),
@@ -266,8 +257,6 @@ fn legacy_extraction() -> Failure {
 
 /// How a run stops early.
 pub(crate) enum Stop {
-    /// Not run, before anything was asked: a pin below FIRST_VERSION.
-    Refused(String),
     /// Before any host-visible effect, the run's input turned out to be
     /// one this engine cannot read.
     Declined(String),
@@ -508,12 +497,10 @@ pub(crate) struct Run<'a> {
 
 async fn run(host: &Host, input: &SegmentInput, ledger: &crate::ledger::Ledger) -> Result<Json, Stop> {
     let version = input.language_version;
-    // Language versions 1–4 run on the TypeScript engine, never here.
-    if version < FIRST_VERSION {
-        return Err(Stop::Refused(BELOW_FIRST_VERSION.into()));
-    }
-    if let Some(pin) = movement_checker::language_version_diagnostic(version).filter(|d| d.is_error()) {
-        return Err(Stop::Thrown(Failure::engine("MOVENG_LANGUAGE_VERSION", pin.message)));
+    // Task 2 removes: the segment input still carries the integer pin.
+    let pin = movement_parser::version::legacy_pin_to_semver(version);
+    if let Some(refusal) = movement_parser::version::refusal(&pin, movement_parser::version::LANGUAGE_VERSION) {
+        return Err(Stop::Thrown(Failure::engine("MOVENG_LANGUAGE_VERSION", refusal)));
     }
     let root = match program::parse(&input.source, version) {
         Ok(root) => root,
@@ -670,8 +657,9 @@ async fn pin_libraries(host: &Host, input: &SegmentInput, state: &Json, catalog:
 /// diagnostics — errors only, and a retired write form that still runs does
 /// not block.
 fn native_check(program: &ast::Program, catalog: &CatalogSnapshot, version: u32, release_warning: Option<&VersionWarning>) -> Result<Json, Stop> {
-    // An error pin never gets here (the run's entry refused it).
-    let pin = movement_checker::language_version_diagnostic(version);
+    // A pin this release does not read never gets here (the run's entry
+    // refused it). Task 2 removes the integer.
+    let pin = movement_checker::language_version_diagnostic(&movement_parser::version::legacy_pin_to_semver(version));
     let options = movement_checker::CheckOptions { language_version: version, upgrading_from: None, zones: &crate::env_services::EnvZones };
     let answer = movement_checker::answer::check_answer(program, catalog, options);
     let blocking: Vec<String> = answer
@@ -2947,16 +2935,18 @@ mod tests {
         }
     }
 
-    /// A segment pinned below version 5 is refused by name before anything
-    /// is asked: those versions run on the TypeScript engine.
+    /// A segment pinned to a version this release does not read throws
+    /// MOVENG_LANGUAGE_VERSION naming the pin, before anything is asked.
     #[test]
-    fn a_run_pinned_below_five_is_refused_by_name_and_asks_nothing() {
+    fn a_run_pinned_to_a_version_this_release_does_not_read_is_refused_by_name_and_asks_nothing() {
         let source = "import { email } from adapters\ninbox = email()\nmovement m(msg: <inbox-[:message]->>) {\n  s = 1\n}";
-        for version in 1..FIRST_VERSION {
+        for version in [1, 4, 99] {
             let mut input = segment_input(source, json!(["o", []]), &[]);
             input["languageVersion"] = json!(version);
             let (done, seen) = drive_input(input, plain_host(json!({})));
-            assert_eq!(done, json!({ "refused": BELOW_FIRST_VERSION }), "v{version}");
+            let refusal = movement_parser::version::refusal(&version.to_string(), movement_parser::version::LANGUAGE_VERSION).unwrap();
+            assert_eq!(done["thrown"]["code"], json!("MOVENG_LANGUAGE_VERSION"), "v{version}: {done}");
+            assert!(done["thrown"]["message"].as_str().unwrap().ends_with(&refusal), "v{version}: {done}");
             assert!(seen.is_empty(), "v{version}: {seen:?}");
         }
     }

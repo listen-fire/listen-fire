@@ -26,6 +26,7 @@ pub use diagnostic::{Diagnostic, Severity};
 use movement_parser::ast::Program;
 use movement_parser::catalog::types::CatalogSnapshot;
 use movement_parser::util::form::form_of_text;
+use movement_parser::version::{LANGUAGE_VERSION, compatible};
 
 #[derive(Clone, Copy)]
 pub struct CheckOptions<'a> {
@@ -47,9 +48,10 @@ pub fn check_program(program: &Program, catalog: &CatalogSnapshot, options: Chec
 /// does not support is refused with its standing diagnostic alone, the
 /// program unwalked.
 pub(crate) fn run_check<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: CheckOptions<'c>) -> (Vec<Diagnostic>, checker::Checker<'c>) {
-    if !movement_parser::version::SUPPORTED_LANGUAGE_VERSIONS.contains(&options.language_version) {
+    let pin = pin_of(options.language_version);
+    if !compatible(&pin, LANGUAGE_VERSION) {
         let checker = checker::Checker::new(catalog, &options, catalog.files.is_some());
-        return (version::standing_diagnostic(options.language_version).into_iter().collect(), checker);
+        return (version::standing_diagnostic(&pin).into_iter().collect(), checker);
     }
     run_check_here(program, catalog, options)
 }
@@ -78,7 +80,7 @@ fn run_check_here<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: 
             })
         })
         .collect();
-    let diagnostics = version::standing_diagnostic(options.language_version)
+    let diagnostics = version::standing_diagnostic(&pin_of(options.language_version))
         .into_iter()
         .chain(spelling)
         .chain(std::mem::take(&mut checker.imports.spelling))
@@ -88,11 +90,16 @@ fn run_check_here<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: 
     (diagnostics, checker)
 }
 
-/// `languageVersionDiagnostic`: what a pin to `version` says on its own —
-/// an error for one this release does not support, a warning for a
-/// deprecated one, nothing for a current one.
-pub fn language_version_diagnostic(version: u32) -> Option<Diagnostic> {
-    version::standing_diagnostic(version)
+/// `languageVersionDiagnostic`: what a pin says on its own — an error for
+/// one this release does not read, nothing for one it does.
+pub fn language_version_diagnostic(pin: &str) -> Option<Diagnostic> {
+    version::standing_diagnostic(pin)
+}
+
+/// The integer pin the wasm entries still carry, as the version the rule
+/// reads. Task 2 removes.
+fn pin_of(language_version: u32) -> String {
+    movement_parser::version::legacy_pin_to_semver(language_version)
 }
 
 /// A source the parser refuses: its message and where.
@@ -122,7 +129,7 @@ pub fn check_form(source: &str, catalog: &CatalogSnapshot, options: CheckOptions
 /// check is the standing diagnostic alone (`run_check`), never the parser's
 /// refusal of the same pin.
 fn parsed_unless_refused(source: &str, version: u32) -> Result<Program, movement_parser::stmt::ParseError> {
-    if !movement_parser::version::SUPPORTED_LANGUAGE_VERSIONS.contains(&version) {
+    if !compatible(&pin_of(version), LANGUAGE_VERSION) {
         return Ok(Program { statements: Vec::new(), spelling: Vec::new() });
     }
     movement_parser::stmt::parse_program(source, version, false)
