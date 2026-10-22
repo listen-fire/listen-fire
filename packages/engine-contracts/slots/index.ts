@@ -9,3 +9,4 @@ export * from './files';
 export * from './browser';
 export * from './wake';
 export * from './ocr';
+export * from './secrets';

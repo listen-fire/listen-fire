@@ -14,12 +14,16 @@
 //!   secrets.list {}                                    → [{ ref, external, binding: "install" | "legacy" | { credential }, version }]
 //!   secrets.lock { ref, ttlMs }                        → { token } | null (another holds it; lf asks again)
 //!   secrets.unlock { ref, token }
-//!   secrets.assertWritable { ref }
+//!   secrets.assertWritable { ref }                     → null | { kind: "read_only", reason }
 //!   secrets.create | secrets.replace { ref, external, binding, fields }
 //!   secrets.delete { ref }
 //!
 //! The three entry methods answer null, or `{ kind: "read_only", reason }` from
 //! a module that cannot persist; lf then refuses by name (`EntryError`).
+//! `assertWritable` answers the same, and `lf credential add` and `update` ask
+//! it before the provider's sign-in, so a person is not sent through one for
+//! an entry that cannot be kept. A token refresh's write-back is not what it
+//! answers for: a read-only module still takes that.
 //!
 //! Whichever module fills the slot, `LF_SECRET__<CREDENTIAL>__<FIELD>` lies
 //! over what it holds (crate::secrets). The module's own settings cannot come
@@ -117,6 +121,13 @@ pub trait SecretsStore: SecretsBackend {
             entries.push(Stored { reference: listed.reference, external: listed.external, binding: listed.binding, fields: record.fields });
         }
         Ok(entries)
+    }
+    /// Whether whole entries can be changed here, asked before a command
+    /// sends a person through a provider's sign-in. A refusal to write them
+    /// is `EntryError::ReadOnly`; a token refresh's write-back is not in
+    /// question (a store may keep its entries fixed and still take that).
+    fn entries_writable(&self, reference: &str) -> Result<(), EntryError> {
+        Ok(self.assert_writable(reference)?)
     }
     /// A new entry; refused when it exists.
     fn create<'a>(&'a self, reference: &'a str, entry: Entry) -> LocalFuture<'a, Result<(), EntryError>>;
@@ -302,10 +313,10 @@ impl ProcessSecrets {
         format!("{}: {method} answered {}, not the slot's shape", self.client.label, shape_of(answer))
     }
 
-    /// An entry method's answer: null when changed, `{ kind: "read_only", reason }`
-    /// when the module keeps its credentials where lf cannot change them.
-    fn changed(&self, method: &str, params: Obj) -> Result<(), EntryError> {
-        let answer = self.call(method, params)?;
+    /// An entry method's (or `assertWritable`'s) answer: null when it is fine,
+    /// `{ kind: "read_only", reason }` when the module keeps its credentials
+    /// where lf cannot change them.
+    fn interpreted(&self, method: &str, answer: Js) -> Result<(), EntryError> {
         match (&answer, answer.get("kind").and_then(Js::as_str)) {
             (Js::Null, _) => Ok(()),
             (_, Some("read_only")) => {
@@ -314,6 +325,11 @@ impl ProcessSecrets {
             }
             _ => Err(self.unexpected(method, &answer).into()),
         }
+    }
+
+    fn changed(&self, method: &str, params: Obj) -> Result<(), EntryError> {
+        let answer = self.call(method, params)?;
+        self.interpreted(method, answer)
     }
 
     /// The entry as stored now, its binding keys first (crate::connect::entry_content).
@@ -377,6 +393,10 @@ impl SecretsStore for ProcessSecrets {
 
     fn looked_in(&self) -> String {
         self.client.label.clone()
+    }
+
+    fn entries_writable(&self, reference: &str) -> Result<(), EntryError> {
+        self.changed("secrets.assertWritable", obj! { "ref" => Js::str(reference) })
     }
 
     fn list(&self) -> Result<Vec<Listed>, String> {

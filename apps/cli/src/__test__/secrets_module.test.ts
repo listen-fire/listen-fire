@@ -271,3 +271,36 @@ test('a token refresh is still written back to a read-only secrets module: read-
     await provider.close();
   }
 });
+
+test('a read-only secrets module refuses lf credential add and update before the sign-in: nothing reaches the provider', async () => {
+  const reason = 'it is filled from the platform';
+  const provider = await startFakeOAuthServer(CLIENT);
+  const vault = await serveSecretsModule({
+    listen: 0,
+    readOnly: reason,
+    seed: {
+      acme_crm: { external: 'acme_crm', binding: 'install', fields: { access_token: 'dev-acme-token', client_id: CLIENT.clientId, client_secret: CLIENT.clientSecret } },
+      alice_acme: { external: 'acme_crm', binding: { credential: 'acme' }, fields: { access_token: 'alice-access', refresh_token: 'alice-refresh' } },
+    },
+  });
+  try {
+    const dir = project(vault, { credentials: oauth(provider) });
+    const before = await vault.held();
+    const refused = [
+      await lf(dir, ['credential', 'add', '--module', 'acme_crm', 'ada', '--no-browser']).done,
+      await lf(dir, ['credential', 'update', 'alice_acme', '--no-browser']).done,
+    ];
+    for (const run of refused) {
+      assert.equal(run.code, 2, run.out);
+      assert.ok(run.out.includes(READ_ONLY(reason)), run.out);
+      assert.doesNotMatch(run.out, /authorize\?/, 'no sign-in link was printed');
+    }
+    assert.deepEqual(provider.authorizations, [], 'the provider was never sent to');
+    assert.deepEqual(provider.calls, [], 'the provider was never called');
+    assert.ok(vault.calls.includes('secrets.assertWritable ada') && vault.calls.includes('secrets.assertWritable alice_acme'), vault.calls.join('\n'));
+    assert.deepEqual(await vault.held(), before, 'the vault is unchanged');
+  } finally {
+    await vault.close();
+    await provider.close();
+  }
+});

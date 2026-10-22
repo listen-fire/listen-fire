@@ -92,6 +92,7 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
     if credentials.iter().any(|c| c.name == name) {
         return Err(format!("there is already a credential \"{name}\"; change it with lf credential update {name}").into());
     }
+    secrets.store().entries_writable(&name)?;
     let mut fields: Vec<(String, String)> = ask_fields(declaration, &Fields::new(), prompter).await?.into_iter().filter(|(_, v)| !v.is_empty()).collect();
     if let DeclarationKind::OAuth2(oauth2) = &declaration.kind {
         let client = client_of(&module, install)?;
@@ -137,6 +138,7 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
     };
     let declaration = choose_declared(&credential.external, &facts.declarations, named.as_deref())?;
 
+    secrets.store().entries_writable(name)?;
     let mut edited = ask_fields(declaration, &credential.fields, prompter).await?;
     if let (DeclarationKind::OAuth2(oauth2), true) = (&declaration.kind, input.reauthorize) {
         // A hand-written entry holds its own app; a bound one uses the install's.

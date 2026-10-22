@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createMemoryVault, type SecretFields } from 'movement-engine/public/secrets';
+import { SECRETS_METHODS } from 'engine-contracts/slots';
 import { SlotRefusal, serveSlot } from 'movement-engine/public/module-wire';
 
 export type Binding = 'install' | 'legacy' | { credential: string };
@@ -43,7 +44,7 @@ const BindingShape = z.union([z.literal('install'), z.literal('legacy'), z.objec
 const Entry = Ref.extend({ external: z.string().min(1), binding: BindingShape, fields: Fields });
 
 /** `readOnly` (or the `SECRETS_READ_ONLY` environment variable, for the module run as a script) is the reason this vault gives for
- *  not changing whole entries: it answers `read_only` to create, replace and delete, and still resolves, lists, locks and writes back. */
+ *  not changing whole entries: it answers `read_only` to assertWritable, create, replace and delete, and still resolves, lists, locks and writes back. */
 export async function serveSecretsModule(
   options: { seed?: Record<string, Seeded>; listen?: string | number; print?: boolean; readOnly?: string } = {},
 ): Promise<SecretsModule> {
@@ -70,7 +71,7 @@ export async function serveSecretsModule(
       name: 'acme_vault',
       kind: 'core',
       slot: 'secrets',
-      methods: ['secrets.resolve', 'secrets.writeBack', 'secrets.list', 'secrets.lock', 'secrets.unlock', 'secrets.assertWritable', 'secrets.create', 'secrets.replace', 'secrets.delete'],
+      methods: [...SECRETS_METHODS],
     },
     ...(options.listen !== undefined ? { listen: options.listen } : {}),
     ...(options.print !== undefined ? { print: options.print } : {}),
@@ -105,7 +106,7 @@ export async function serveSecretsModule(
         }
         case 'secrets.assertWritable':
           parse(Ref, method, params);
-          return null;
+          return readOnly !== undefined ? { kind: 'read_only', reason: readOnly } : null;
         case 'secrets.create': {
           const { ref, ...entry } = parse(Entry, method, params);
           if (readOnly !== undefined) return { kind: 'read_only', reason: readOnly };
