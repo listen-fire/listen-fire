@@ -93,8 +93,6 @@ impl From<String> for WriteError {
 
 /// What fills the movements slot.
 pub trait MovementsStore {
-    /// Where the files are kept, as messages name it.
-    fn label(&self) -> String;
     fn list(&self) -> Result<Vec<Listed>, String>;
     /// None: nothing is at `path`.
     fn read(&self, path: &str) -> Result<Option<Text>, String>;
@@ -206,10 +204,6 @@ impl FolderMovements {
 }
 
 impl MovementsStore for FolderMovements {
-    fn label(&self) -> String {
-        self.dir.display().to_string()
-    }
-
     fn list(&self) -> Result<Vec<Listed>, String> {
         Ok(self.files(&self.dir)?.into_iter().map(|f| Listed { path: format!("{}{MOVEMENT_EXTENSION}", f.name), version: f.version }).collect())
     }
@@ -278,10 +272,6 @@ fn unexpected(label: &str, method: &str, answer: &Js) -> String {
 }
 
 impl MovementsStore for ProcessMovements {
-    fn label(&self) -> String {
-        self.client.label.clone()
-    }
-
     fn list(&self) -> Result<Vec<Listed>, String> {
         listed_of(&self.client.label, &self.client.call_text("movements.list", Obj::new())?)
     }
@@ -582,7 +572,7 @@ mod tests {
         let env = [("LF_SECRET__ACME_MOVEMENTS__EXTERNAL".to_string(), "acme_movements".to_string()), ("LF_SECRET__ACME_MOVEMENTS__TENANT".to_string(), "t1".to_string())];
         let project = crate::project::load_project_with(&dir, &env).unwrap();
         assert_eq!(crate::secrets_slot::module_settings(&project, &env, &project.core.movements).unwrap().get("tenant").map(String::as_str), Some("t1"));
-        assert_eq!(of_project(&project, &env).unwrap().label(), "the movements module acme_movements");
+        of_project(&project, &env).unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 }
