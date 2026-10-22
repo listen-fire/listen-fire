@@ -616,8 +616,13 @@ Answers:
 - `accepted` counts receipts: one per listen the event matched. An event no
   listen selects is accepted as 0 and leaves nothing behind.
 - One malformed event fails the whole request with 400; nothing is queued.
-- `emit` is not idempotent in protocol 2. Sending an event twice runs its
-  automations twice. (A dedupe key is a planned addition.)
+- `deliveryId` (optional, a non-empty string, else 400 at path `deliveryId`)
+  names the batch. The host keeps the batch as one delivery; a second batch
+  with the same `deliveryId` from the same adapter is kept out and answered
+  202 `{ accepted: 0, duplicate: true }`. `lf` honours it from this release;
+  the hosted platform honours it from its own release. Without `deliveryId`,
+  `emit` is not idempotent: sending an event twice runs its automations twice
+  (an event's `idempotencyKey` still dedupes per listen).
 - While your request is open, Listen-Fire calls you back (`listEventTypes`).
   A single-threaded server must not block on its own push.
 
@@ -852,6 +857,13 @@ host verifies each delivery before `preprocessInbound` sees it:
 - `signatureHeaders` lists the headers that may carry the signature, in lower
   case; the first one present is read. `slack_v0` also reads
   `x-slack-request-timestamp`, which the scheme fixes.
+- `deliveryId` (optional) names the header that carries the provider's id for
+  a delivery, `{ "header": "x-github-delivery" }` (lower case, as
+  `signatureHeaders`). The host reads it before `preprocessInbound` and keeps
+  a second delivery under the same id at the same subscription out: it answers
+  200 `{ ok: true, duplicate: true, eventsProcessed: 0 }` and queues nothing.
+  Without it every delivery is kept under an id the host mints, and none is a
+  duplicate. Ignored for `scheme: module`, whose check names the id itself.
 - `intercepts` (optional) names requests the host answers itself, unsigned,
   before verifying: `slack_url_verification` echoes Slack's `challenge`.
 - `secretIssuedBy` (optional) says who sets the key deliveries are signed
@@ -912,7 +924,7 @@ The answer is one of three:
 
 | `outcome` | Fields | The door answers |
 |---|---|---|
-| `accepted` | `events`, `wakeKeys?`, `checkpoint?` | 200 `{ ok, eventsProcessed }` once the events and wakes are queued, as for any delivery |
+| `accepted` | `events`, `wakeKeys?`, `checkpoint?`, `deliveryId?` | 200 `{ ok, eventsProcessed }` once the events and wakes are queued, as for any delivery; a non-empty `deliveryId` already kept at this subscription answers 200 `{ ok, duplicate: true, eventsProcessed: 0 }` and queues nothing |
 | `refused` | `status?` (a 4xx) | `status`, default 401, `{ "error": "signature_invalid" }` |
 | `reply` | `status`, `text?` or `json?` | exactly that: `text` as `text/plain`, `json` as JSON, neither as an empty body; nothing runs |
 
@@ -1405,6 +1417,7 @@ from the root, so no automation can walk the collection.
 
 ## Changes
 
+- **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
 - **Conformance CLI.** lf-platform's `pnpm adapter:conformance` checks a server against this protocol; run it first when building an adapter ([Build your first adapter](#build-your-first-adapter)).

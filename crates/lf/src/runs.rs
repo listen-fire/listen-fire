@@ -890,8 +890,8 @@ impl Session {
         Ok((claimed_rows, outcomes))
     }
 
-    /// The lost-run sweep (crate::run_host::fail_lost_runs), at most once
-    /// per LOST_RUN_SWEEP_EVERY.
+    /// The lost-run sweep (crate::run_host::fail_lost_runs) and the delivery
+    /// retention sweep, at most once per LOST_RUN_SWEEP_EVERY.
     async fn sweep_lost_runs(&self, log: &mut impl Write) -> Result<(), String> {
         if self.swept_at.get().is_some_and(|at| at.elapsed() < LOST_RUN_SWEEP_EVERY) {
             return Ok(());
@@ -900,6 +900,8 @@ impl Session {
         for run_id in fail_lost_runs(&*self.store, WORK_ROWS_PER_DRAIN).await? {
             let _ = writeln!(log, "run {run_id} failed: {WORKER_LOST}");
         }
+        let retain_ms = i64::from(self.project.delivery_retain_days) * 86_400_000;
+        self.store.sweep_deliveries(&iso(-retain_ms), WORK_ROWS_PER_DRAIN).map_err(|e| e.to_string())?;
         Ok(())
     }
 

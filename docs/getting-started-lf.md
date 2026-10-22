@@ -142,6 +142,16 @@ lf serve [--port N] [--doors-only]
 
 `lf serve --doors-only` (or `LF_DOORS_ONLY=1`) is for compute billed by the request, which is frozen once a response is sent. It runs no drain, `/hooks/…` queues its events (answering 202 with the rows queued), and the callback door `/api/cb/…` records the call and queues its body (answering 202) instead of running it inside the request. `lf drain` workers run the work, started on a schedule or by the [wake slot](core-slots.md#the-wake)'s module.
 
+### Deliveries
+
+Every delivery a door takes is kept as a receipt: the events it produced, not its bytes (no body, headers or signature are stored). `lf deliveries` lists them, most recent first (`--subscription <id>`, `--since <instant | 6h | 2d>`, `--json`), `lf deliveries show <id>` prints one with its events and the runs they started, and `lf runs show` names the delivery a run came from.
+
+- **Redelivery.** A provider that sends its own delivery id lets the door keep a repeat out: it answers 200 with `duplicate: true` and runs nothing. A signed external declares the header in its `lf-external.yaml` (`webhook: { deliveryIdHeader: x-github-delivery }`) or its manifest (`inbound.deliveryId: { header }`); a module that checks its own inbound returns `deliveryId` from `checkInbound`; an external's `emit` may send `deliveryId` in its body. Without an id every delivery is its own, as before; an event's `idempotencyKey` still dedupes at drain.
+- **Inline deliveries.** `/hooks/…` under a normal `lf serve`, and `lf run --webhook`, run their events in the request. The receipt is written first and says `inline`, so a crash before the runs leaves a receipt with no runs, which can be replayed.
+- **Replay.** `lf deliveries replay <id>` keeps a new delivery holding the same events (`source: cli`, naming the one it replays) and queues them. `lf serve` or `lf drain` routes them against the project as it is now: a listen added since runs on them, and if no listen takes an event the drain says so and the replayed delivery lists no runs. A replay with no worker running waits for one.
+- **Retention.** The drain forgets a delivery older than `deliveries: { retainDays: 14 }` in `lf.yaml` (a whole number of days, at least 1), unless one of its runs is still running or parked or one of its events is still queued. The runs it started stay.
+- **`--ephemeral`** keeps its receipts in the session's temporary state, so they go with the session; `lf deliveries` in the same project will not list them.
+
 ## 7. Upgrade a project
 
 > `engine:` in `lf.yaml` is the language version the project is pinned to: a release's version, such as `0.12.0`. This lf reads every pin of its own compatibility key (under 0.x, the minor: `0.12`). A newer pin is refused with "upgrade lf"; an older key is refused with "run `lf upgrade`".

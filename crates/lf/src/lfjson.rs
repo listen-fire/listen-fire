@@ -11,7 +11,8 @@ use crate::json::{Js, Obj};
 use crate::obj;
 use crate::runs::{Fired, RunOutcome};
 use crate::secrets::MissingCredential;
-use crate::store::RunRow;
+use crate::store::{DeliveryRow, RunRow};
+use crate::store_wire::Wire;
 
 /// Write the document as one line, and pass the exit code through.
 pub fn emit(out: &mut impl Write, doc: &Js, code: i32) -> Result<i32, String> {
@@ -180,4 +181,21 @@ pub fn run_show_doc(store: &dyn RunHostStore, run_id: &str) -> Result<Js, String
     shown.insert("cancelRequested".into(), Js::Bool(cancel.is_some()));
     shown.insert("cancelReason".into(), cancel.flatten().map_or(Js::Null, Js::Str));
     Ok(Js::Obj(obj! { "run" => Js::Obj(shown) }))
+}
+
+// ── deliveries ──────────────────────────────────────────────────────────────
+
+/// `deliveries`: each kept delivery with its run ids and statuses, no events.
+pub fn deliveries_list_doc(rows: &[DeliveryRow]) -> Js {
+    Js::Obj(obj! { "deliveries" => Js::Arr(rows.iter().map(Wire::to_wire).collect()) })
+}
+
+/// `deliveries show`: one delivery, with the events it holds and the runs they started.
+pub fn delivery_show_doc(row: &DeliveryRow) -> Js {
+    Js::Obj(obj! { "delivery" => row.to_wire() })
+}
+
+/// `deliveries replay`: the new delivery, the one it replays and the events queued.
+pub fn delivery_replay_doc(new_id: &str, replay_of: &str, queued: usize) -> Js {
+    Js::Obj(obj! { "ok" => Js::Bool(true), "deliveryId" => Js::str(new_id), "replayOf" => Js::str(replay_of), "queued" => num(queued as u64) })
 }

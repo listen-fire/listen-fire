@@ -9,7 +9,8 @@
 //!   lf resume [<run-id>]                step a parked run's every leaf now, or drain what is due in every parked run
 //!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
 //!   lf runs [show <run-id>]             the runs, most recent first; one run in full
-//!   --json                              (check, catalog, run, resume, runs, call, cancel, connect, credential list) one JSON document
+//!   lf deliveries [show|replay <id>]    the kept deliveries; one in full; one queued again
+//!   --json                              (check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list) one JSON document
 //!   lf drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)
 //!   lf serve [--port N] [--doors-only]  the inbound doors, the callback door and the work drain (--doors-only: no drain)
 //!   lf call <callback-id> [--body <values.json>]
@@ -75,6 +76,7 @@ mod contract_store;
 mod core;
 mod credential_calls;
 mod credential_cmd;
+mod deliveries;
 mod doors;
 mod documents;
 mod drain;
@@ -159,7 +161,7 @@ use std::io::Write;
 pub(crate) use module_wire::{json, obj};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
+const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|deliveries|drain|serve|call|cancel|upgrade|connect|credential|completion> [--dir <project folder>] [--ephemeral] [--store <state.db|postgres://…>] [--team <uuid>]
        lf run <movement> [--text <text>] [--dry-run]
        lf run --event <file.json> [--dry-run]
        lf run --poll <movement>
@@ -170,6 +172,7 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|ser
        lf call <callback-id> [--body <values.json>]
        lf cancel <run-id> [--reason <text>]
        lf runs [show <run-id>]
+       lf deliveries [show <id> | replay <id>] [--subscription <id>] [--since <ISO instant | <n>h | <n>d>]
        lf --contract-store <state.db|postgres://…> [--team <uuid>]
        lf --contract-store-slot [--dir <project>]
        lf --contract-limiter
@@ -192,7 +195,8 @@ const USAGE: &str = "usage: lf <init|check|catalog|lsp|run|resume|runs|drain|ser
   resume    step every parked leaf of one run now; with no run, drain the due work and what is due in every parked run (a timer not yet come stays parked)
   upgrade   rewrite the movement files by the fixes that keep their meaning (--all: every fix offered; --check: print the diff, write nothing)
   runs      the runs in the state file, most recent first (as `lf runs`); `runs show <run-id>`: one run, its event, trace and park
-  --json    check, catalog, run, resume, runs, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
+  deliveries  the deliveries the doors kept (events, not bytes), most recent first, at most 50 (--subscription: one subscription's; --since: received at or after an instant, or <n>h or <n>d ago); `deliveries show <id>`: one, its events and runs; `deliveries replay <id>`: queue its events again as a delivery of its own, for lf serve or lf drain to run against the project as it is now
+  --json    check, catalog, run, resume, runs, deliveries, call, cancel, connect, credential list: one JSON document (docs/lf-json.md); a failure is {\"error\": …}
   drain     fire each cron listen's due tick (once, however many workers drain), then claim due work rows one at a time and run them (a polled listen's row is its next poll, due every interval its source declares); with --until-idle exit once none is due, with --max-seconds stop claiming after n seconds, with --kinds only rows of those kinds (resume_timer, wake_await, fire_event, fire_callback, poll_listen) and the cron ticks only when it names cron
   serve     the inbound doors, the callback door and the work queue's drain (as `lf serve`)
   --doors-only  (serve) only the doors, for compute billed by the request: nothing drains in this process, `/hooks/…` queues its events (answering 202 with the rows queued) and `/api/cb/…` its callback's body (answering 202) instead of running them in the request; workers (`lf drain`) run the work, started by the wake slot's module or a schedule. Also LF_DOORS_ONLY=1
@@ -235,6 +239,8 @@ struct Args {
     headers: Vec<String>,
     port: Option<String>,
     reason: Option<String>,
+    subscription: Option<String>,
+    since: Option<String>,
     contract_store: Option<String>,
     contract_store_slot: bool,
     contract_limiter: bool,
@@ -280,6 +286,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         headers: Vec::new(),
         port: None,
         reason: None,
+        subscription: None,
+        since: None,
         contract_store: None,
         contract_store_slot: false,
         contract_limiter: false,
@@ -322,6 +330,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--header" => args.headers.push(value("--header")?),
             "--port" => args.port = Some(value("--port")?),
             "--reason" => args.reason = Some(value("--reason")?),
+            "--subscription" => args.subscription = Some(value("--subscription")?),
+            "--since" => args.since = Some(value("--since")?),
             "--contract-doors" => args.contract_doors = true,
             "--ephemeral" => args.ephemeral = true,
             "--json" => args.json = true,
@@ -508,6 +518,12 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
                 writeln!(out, "{} {} {}:{} {}", run.id, run.started_at, run.file, run.movement, run.status).map_err(|e| e.to_string())?;
             }
             Ok(0)
+        }
+        "deliveries" => {
+            let project = load()?;
+            let store = backend::open_store(&store_of(&args, &project)?)?;
+            let request = deliveries::Request { rest: &args.rest, subscription: args.subscription.as_deref(), since: args.since.as_deref(), json: args.json };
+            deliveries::command(&*store, &request, &mut out)
         }
         "drain" => {
             let project = load()?;

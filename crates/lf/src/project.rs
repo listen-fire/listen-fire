@@ -41,6 +41,26 @@ struct ProjectFile {
     /// `MOVEMENT_MAX_RUN_COST_USD`).
     #[serde(rename = "maxRunCostUsd")]
     max_run_cost_usd: Option<f64>,
+    /// How long the drain keeps a settled delivery's receipt.
+    deliveries: Option<DeliveriesFile>,
+}
+
+#[derive(Deserialize)]
+struct DeliveriesFile {
+    #[serde(rename = "retainDays")]
+    retain_days: Option<serde_yaml::Value>,
+}
+
+/// Days a delivery's receipt is kept when lf.yaml says nothing.
+pub const DEFAULT_DELIVERY_RETAIN_DAYS: u32 = 14;
+
+fn retain_days_of(value: Option<&serde_yaml::Value>, at: &str) -> Result<u32, String> {
+    let Some(value) = value else { return Ok(DEFAULT_DELIVERY_RETAIN_DAYS) };
+    value
+        .as_u64()
+        .filter(|days| *days >= 1)
+        .and_then(|days| u32::try_from(days).ok())
+        .ok_or_else(|| format!("{at}: deliveries.retainDays: a whole number of days, at least 1 (default {DEFAULT_DELIVERY_RETAIN_DAYS})"))
 }
 
 #[derive(Deserialize, Default)]
@@ -86,6 +106,9 @@ pub struct Project {
     /// The most one run may spend on model calls and paid services, in
     /// microdollars (lf.yaml's `maxRunCostUsd`); None: no cap.
     pub cost_cap_microdollars: Option<f64>,
+    /// How many days the drain keeps a settled delivery's receipt
+    /// (lf.yaml's `deliveries.retainDays`).
+    pub delivery_retain_days: u32,
 }
 
 /// `maxRunCostUsd` as the platform reads `MOVEMENT_MAX_RUN_COST_USD`
@@ -177,6 +200,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
     let module_idle_timeout = seconds_or(file.module_idle_timeout, crate::module_hosts::DEFAULT_IDLE_TIMEOUT, "moduleIdleTimeout")?;
     let call_timeout = seconds_or(file.call_timeout, crate::module_hosts::DEFAULT_CALL_TIMEOUT, "callTimeout")?;
     let cost_cap_microdollars = file.max_run_cost_usd.map(|d| cost_cap_of(d, &path.display().to_string())).transpose()?;
+    let delivery_retain_days = retain_days_of(file.deliveries.as_ref().and_then(|d| d.retain_days.as_ref()), "lf.yaml")?;
     if file.store.is_some() {
         return Err(format!(
             "{}: store: run state is kept by the store module now: `core: {{ store: \"@lf/postgres-store\" }}` (or @lf/sqlite-store, the default), set up with `lf connect @lf/postgres-store`",
@@ -209,6 +233,7 @@ fn load_pinned(from: &Path, older_key_loads: bool) -> Result<Project, String> {
         module_idle_timeout,
         call_timeout,
         cost_cap_microdollars,
+        delivery_retain_days,
         root: dir,
     })
 }
@@ -244,6 +269,20 @@ mod tests {
         );
         let malformed = language_version_of_engine("5").unwrap_err();
         assert!(malformed.contains("pins language 5, which is not a version"), "{malformed}");
+    }
+
+    #[test]
+    fn retain_days_defaults_to_fourteen_and_refuses_zero() {
+        let yaml = |text: &str| serde_yaml::from_str::<serde_yaml::Value>(text).unwrap();
+        assert_eq!(retain_days_of(None, "lf.yaml"), Ok(14));
+        assert_eq!(retain_days_of(Some(&yaml("30")), "lf.yaml"), Ok(30));
+        for bad in ["0", "-3", "1.5", "\"soon\""] {
+            assert_eq!(
+                retain_days_of(Some(&yaml(bad)), "lf.yaml"),
+                Err("lf.yaml: deliveries.retainDays: a whole number of days, at least 1 (default 14)".to_string()),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
