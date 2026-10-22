@@ -26,8 +26,8 @@ const BODY_CLOSE: &str = "\n}\n";
 /// spelling fixes until none is left. A text neither grammar reads is
 /// returned as it is.
 pub fn spell_code(text: &str) -> String {
-    if let Some((_, v5)) = OPERATORS.iter().find(|(old, _)| *old == text) {
-        return (*v5).to_string();
+    if let Some((_, current)) = OPERATORS.iter().find(|(old, _)| *old == text) {
+        return (*current).to_string();
     }
     expression(&text.replace('…', ELLIPSIS))
         .map(|spelled| spelled.replace(ELLIPSIS, "…"))

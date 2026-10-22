@@ -112,6 +112,6 @@ pub fn builtin_anchor(name: &str) -> String {
 /// Every link the service can put in a hover, as (page, anchor).
 pub fn all_targets() -> Vec<(String, String)> {
     let fixed = KINDS.iter().map(|k| page_of(*k)).chain([FIELD, WALK]).map(|(p, a)| (p.to_string(), a.to_string()));
-    let builtin = builtins::v5_builtins().into_iter().map(|b| builtin_page(b.name)).map(|(p, a)| (p.to_string(), a));
+    let builtin = builtins::current_builtins().into_iter().map(|b| builtin_page(b.name)).map(|(p, a)| (p.to_string(), a));
     fixed.chain(builtin).collect()
 }

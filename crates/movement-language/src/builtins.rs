@@ -1,42 +1,42 @@
-//! Built-ins as language version 5 spells them: the spelling table's v5
+//! Built-ins as the language spells them: the spelling table's current
 //! names, with each one's signature from the standard library's and what it
 //! does from the built-ins reference (`builtins.md`, which the platform's
 //! handbook serves as its builtins chapter, so the two cannot drift).
 
 use movement_checker::types::stdlib::{Builtin, ParamType, lookup_builtin};
-use movement_parser::surface::table::{CORE_WORDS, NAMESPACES, SPELLINGS, Shape, Spelling, by_v5};
+use movement_parser::surface::table::{CORE_WORDS, NAMESPACES, SPELLINGS, Shape, Spelling, by_current};
 
-/// One built-in a v5 program calls.
-pub struct V5Builtin {
+/// One built-in a program calls.
+pub struct CurrentBuiltin {
     pub name: &'static str,
     pub spelling: &'static Spelling,
 }
 
-/// Every built-in a v5 program calls by name (operators and indexing left out).
-pub fn v5_builtins() -> Vec<V5Builtin> {
-    let mut out: Vec<V5Builtin> = Vec::new();
+/// Every built-in a program calls by name (operators and indexing left out).
+pub fn current_builtins() -> Vec<CurrentBuiltin> {
+    let mut out: Vec<CurrentBuiltin> = Vec::new();
     for spelling in SPELLINGS.iter().filter(|s| !s.old_only) {
-        let name = spelling.v5;
+        let name = spelling.current;
         if !name.chars().all(|c| c.is_alphanumeric() || c == '.') || out.iter().any(|b| b.name == name) {
             continue;
         }
-        out.push(V5Builtin { name, spelling });
+        out.push(CurrentBuiltin { name, spelling });
     }
     out
 }
 
 /// The core words the grammar reads that are not in the table (`sleep`, `race`, …).
 pub fn grammar_words() -> impl Iterator<Item = &'static str> {
-    CORE_WORDS.iter().copied().filter(|w| !SPELLINGS.iter().any(|s| s.v5 == *w))
+    CORE_WORDS.iter().copied().filter(|w| !SPELLINGS.iter().any(|s| s.current == *w))
 }
 
 pub fn namespaces() -> &'static [&'static str] {
     NAMESPACES
 }
 
-/// The built-in written `name` under version 5.
-pub fn by_name(name: &str) -> Option<V5Builtin> {
-    by_v5(name).map(|spelling| V5Builtin { name: spelling.v5, spelling })
+/// The built-in written `name` in the current language.
+pub fn by_name(name: &str) -> Option<CurrentBuiltin> {
+    by_current(name).map(|spelling| CurrentBuiltin { name: spelling.current, spelling })
 }
 
 fn param_text(param: &movement_checker::types::stdlib::Param) -> String {
@@ -48,12 +48,12 @@ fn param_text(param: &movement_checker::types::stdlib::Param) -> String {
     }
 }
 
-impl V5Builtin {
+impl CurrentBuiltin {
     fn library(&self) -> Option<&'static Builtin> {
         lookup_builtin(self.spelling.canonical)
     }
 
-    /// `Text.upper(text)`, its parameters in the order v5 writes them.
+    /// `Text.upper(text)`, its parameters in the order the language writes them.
     pub fn signature(&self) -> String {
         let Some(builtin) = self.library() else { return format!("{}(…)", self.name) };
         let mut params: Vec<String> = builtin.params.iter().map(param_text).collect();
@@ -111,7 +111,7 @@ mod tests {
     /// other chapters (`crate::docs::builtin_page`).
     #[test]
     fn every_built_in_has_a_line_in_the_reference() {
-        let missing: Vec<&str> = super::v5_builtins().iter().map(|b| b.name).filter(|name| super::reference_line(name).is_none()).collect();
+        let missing: Vec<&str> = super::current_builtins().iter().map(|b| b.name).filter(|name| super::reference_line(name).is_none()).collect();
         assert_eq!(missing, vec!["fail", "callback"]);
     }
 }

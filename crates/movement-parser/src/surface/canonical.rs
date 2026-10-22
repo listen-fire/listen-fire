@@ -275,7 +275,7 @@ impl<'s> Canon<'s> {
         // `Text.includes(t, v)` and `List.includes(xs, v)` read inside the
         // brackets as they read outside: the `t CONTAINS v` and `v IN xs`
         // written there.
-        if let Some(row) = table::by_v5(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes)) {
+        if let Some(row) = table::by_current(&written).filter(|row| matches!(row.shape, Shape::Contains | Shape::ListIncludes)) {
             self.rewrite(row, e);
         }
     }
@@ -402,7 +402,7 @@ impl<'s> Canon<'s> {
             }
         }
         // A current spelling, exactly as written: read into the canonical call.
-        if let Some(row) = table::by_v5(&written) {
+        if let Some(row) = table::by_current(&written) {
             if self.is_old_shape(row, args) {
                 self.old_call(row, &written, args, at, callee_at);
                 return;
@@ -414,12 +414,12 @@ impl<'s> Canon<'s> {
         if let Some((ns, member)) = written.split_once('.')
             && table::NAMESPACES.contains(&ns)
         {
-            let near = table::SPELLINGS.iter().find(|s| !s.old_only && s.v5.eq_ignore_ascii_case(&written));
+            let near = table::SPELLINGS.iter().find(|s| !s.old_only && s.current.eq_ignore_ascii_case(&written));
             let message = match near {
-                Some(s) => format!("`{ns}` has no member `{member}` — did you mean `{}`?", s.v5),
+                Some(s) => format!("`{ns}` has no member `{member}` — did you mean `{}`?", s.current),
                 None => format!("`{ns}` has no member `{member}`"),
             };
-            let edits = near.map(|s| vec![Edit { at: callee_at, text: s.v5.to_string() }]);
+            let edits = near.map(|s| vec![Edit { at: callee_at, text: s.current.to_string() }]);
             // A did-you-mean is a guess at what was meant, never safe.
             self.findings.push(Finding { code: UNKNOWN_MEMBER_CODE, message, at: callee_at, edits, unless_bound: None, safe: false, unsafe_if_bound: Vec::new() });
             return;
@@ -430,9 +430,9 @@ impl<'s> Canon<'s> {
             return;
         }
         // A core word or a namespace in the wrong letter case.
-        if let Some(row) = table::SPELLINGS.iter().find(|s| !s.old_only && s.v5.eq_ignore_ascii_case(&written)) {
-            let message = format!("`{written}` — did you mean `{}`?", row.v5);
-            self.old(callee_at, message, Some(Edit { at: callee_at, text: row.v5.to_string() }));
+        if let Some(row) = table::SPELLINGS.iter().find(|s| !s.old_only && s.current.eq_ignore_ascii_case(&written)) {
+            let message = format!("`{written}` — did you mean `{}`?", row.current);
+            self.old(callee_at, message, Some(Edit { at: callee_at, text: row.current.to_string() }));
         }
     }
 
@@ -468,18 +468,18 @@ impl<'s> Canon<'s> {
     /// The finding for an old spelling, with the rewrite its shape gives.
     fn old_call(&mut self, row: &Spelling, written: &str, args: &[CallArg], at: At, callee_at: At) {
         let a = |i: usize| self.arg_text(args, i);
-        let rename = Edit { at: callee_at, text: row.v5.to_string() };
+        let rename = Edit { at: callee_at, text: row.current.to_string() };
         let (message, edit) = match row.shape {
-            Shape::Same | Shape::Contains | Shape::ListIncludes => (format!("the retired spelling `{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::Same | Shape::Contains | Shape::ListIncludes => (format!("the retired spelling `{written}` is written `{}`", row.current), Some(rename)),
             Shape::SettingsLast if args.len() == 3 => {
-                (format!("`{written}` is written `{}`, its settings last", row.v5), Some(Edit { at, text: format!("{}({}, {}, {})", row.v5, a(0), a(2), a(1)) }))
+                (format!("`{written}` is written `{}`, its settings last", row.current), Some(Edit { at, text: format!("{}({}, {}, {})", row.current, a(0), a(2), a(1)) }))
             }
-            Shape::SettingsLast => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::SettingsLast => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::ReduceOrder if args.len() == 3 => (
-                format!("`{written}` is written `{}`, its function before its start", row.v5),
-                Some(Edit { at, text: format!("{}({}, {}, {})", row.v5, a(0), a(2), a(1)) }),
+                format!("`{written}` is written `{}`, its function before its start", row.current),
+                Some(Edit { at, text: format!("{}({}, {}, {})", row.current, a(0), a(2), a(1)) }),
             ),
-            Shape::ReduceOrder => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::ReduceOrder => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::SortKey => {
                 let direction = |e: &MExpr| match e {
                     MExpr::Name { name, .. } if name.text.eq_ignore_ascii_case("ASC") || name.text.eq_ignore_ascii_case("DESC") => {
@@ -498,28 +498,28 @@ impl<'s> Canon<'s> {
                     [_, MExpr::Name { name, .. }] => Some(Some(format!("(r) => r.{}", field_source(&name.text)))),
                     _ => None,
                 };
-                let message = format!("`{written}` is written `{}`, its key a function", row.v5);
+                let message = format!("`{written}` is written `{}`, its key a function", row.current);
                 match key {
                     Some(key) => {
                         let text = [Some(a(0)), key, order].into_iter().flatten().collect::<Vec<_>>().join(", ");
-                        (message, Some(Edit { at, text: format!("{}({text})", row.v5) }))
+                        (message, Some(Edit { at, text: format!("{}({text})", row.current) }))
                     }
                     None => (message, None),
                 }
             }
             Shape::AiTier if args.len() == 2 => (
-                format!("`{written}` is written `{}`, its tier a setting", row.v5),
-                Some(Edit { at, text: format!("{}({}, {{ tier: {} }})", row.v5, a(0), a(1)) }),
+                format!("`{written}` is written `{}`, its tier a setting", row.current),
+                Some(Edit { at, text: format!("{}({}, {{ tier: {} }})", row.current, a(0), a(1)) }),
             ),
-            Shape::AiTier => (format!("`{written}` is written `{}`", row.v5), Some(rename)),
+            Shape::AiTier => (format!("`{written}` is written `{}`", row.current), Some(rename)),
             Shape::CallbackClosure => (
                 "the retired spelling `callback(f(x))` is written `callback(() => f(x))`".into(),
                 Some(Edit { at, text: format!("callback(() => {})", a(0)) }),
             ),
             Shape::JsonStringify => {
                 let format = args.get(1).map(|f| self.text(f.value.at()).trim_matches(['"', '\'']).to_ascii_uppercase());
-                let message = format!("`{written}` is written `{}`", row.v5);
-                if format.as_deref() == Some("JSON") { (message, Some(Edit { at, text: format!("{}({})", row.v5, a(0)) })) } else { (message, None) }
+                let message = format!("`{written}` is written `{}`", row.current);
+                if format.as_deref() == Some("JSON") { (message, Some(Edit { at, text: format!("{}({})", row.current, a(0)) })) } else { (message, None) }
             }
             Shape::NullTest => (
                 format!("the retired spelling `{written}(x)` is written `x == null`"),

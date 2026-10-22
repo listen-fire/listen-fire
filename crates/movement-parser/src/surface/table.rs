@@ -46,7 +46,7 @@ pub struct Spelling {
     /// Its spelling outside walk brackets: `Text.upper`,
     /// `map`. A current spelling that is not a call (`== null`, `xs[i]`) is
     /// written as the shape shows it.
-    pub v5: &'static str,
+    pub current: &'static str,
     pub shape: Shape,
     /// Only the old spelling reads this row (a second old name for one new
     /// function, or a built-in whose current-spelling form is not a call).
@@ -58,23 +58,23 @@ pub struct Spelling {
     pub new_only: bool,
 }
 
-const fn row(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: false, new_only: false }
+const fn row(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: false, new_only: false }
 }
 
-const fn old(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: true, new_only: false }
+const fn old(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: true, new_only: false }
 }
 
-const fn new(canonical: &'static str, v5: &'static str, shape: Shape) -> Spelling {
-    Spelling { canonical, v5, shape, old_only: false, new_only: true }
+const fn new(canonical: &'static str, current: &'static str, shape: Shape) -> Spelling {
+    Spelling { canonical, current, shape, old_only: false, new_only: true }
 }
 
 use Shape::*;
 
 /// The tree's name for `sort` by a function key: a
-/// collection op like `GROUPBY`. No version reads it as written — under 5 it
-/// is an old spelling of `sort`, and before 5 no built-in has the name.
+/// collection op like `GROUPBY`. The language does not read it as written; it is an
+/// old spelling of `sort`.
 pub const SORT_BY: &str = "SORTBY";
 
 /// §2.1 core words and §2.2 namespaces, in the design's order.
@@ -239,8 +239,8 @@ pub fn plugin_key(written: &str) -> Option<String> {
 }
 
 /// The row a current spelling (`Text.upper`, `map`) reads as, exactly as written.
-pub fn by_v5(written: &str) -> Option<&'static Spelling> {
-    SPELLINGS.iter().find(|s| !s.old_only && s.v5 == written)
+pub fn by_current(written: &str) -> Option<&'static Spelling> {
+    SPELLINGS.iter().find(|s| !s.old_only && s.current == written)
 }
 
 /// The row of a built-in as the tree names it, in any letter case (the older
@@ -256,7 +256,7 @@ pub fn spell(canonical: &str) -> String {
     if let Some(s) = by_canonical(canonical)
         && !s.old_only
     {
-        return s.v5.to_string();
+        return s.current.to_string();
     }
     canonical.to_string()
 }
@@ -343,7 +343,7 @@ pub fn spell_message(message: &str) -> String {
             trailing = ".";
         }
         match by_canonical(word) {
-            Some(s) if !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.v5),
+            Some(s) if !next_is_word && s.canonical == word && !s.old_only && !s.new_only => out.push_str(s.current),
             _ => out.push_str(word),
         }
         out.push_str(trailing);
@@ -382,7 +382,7 @@ mod tests {
             let member = everyday.rsplit('.').next().unwrap();
             let namespace = everyday.split('.').next().unwrap();
             assert!(member.to_ascii_uppercase() == *caps || namespace.to_ascii_uppercase() == *caps, "{caps} / {everyday}");
-            assert!(by_v5(everyday).is_some(), "{everyday} has a row");
+            assert!(by_current(everyday).is_some(), "{everyday} has a row");
         }
     }
 
@@ -390,7 +390,7 @@ mod tests {
     fn no_two_new_spellings_collide() {
         let mut seen = std::collections::HashSet::new();
         for s in SPELLINGS.iter().filter(|s| !s.old_only) {
-            assert!(seen.insert(s.v5), "{} twice", s.v5);
+            assert!(seen.insert(s.current), "{} twice", s.current);
         }
     }
 
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn spelling_is_the_v5_one() {
+    fn spelling_is_the_current_one() {
         assert_eq!(spell("UPPER"), "Text.upper");
         assert_eq!(spell("date.today"), "Date.today");
         assert_eq!(spell("my_function"), "my_function");

@@ -117,7 +117,7 @@ fn sort_by_a_function_key() {
         assert!(findings(new).is_empty(), "{new}: {:?}", findings(new));
         assert_eq!(lowered(new), lowered(canonical), "{new}");
     }
-    // The tree's name is no spelling: under 5 it is refused as `sort`'s.
+    // The tree's name is no spelling: it is refused as `sort`'s.
     assert_eq!(upgraded("SORTBY(rows, { order: \"desc\" }, (r) => r.score)"), "sort(rows, (r) => r.score, { order: \"desc\" })");
     // The old field key: a function reading the field, not marked safe on
     // its own — the checker marks it where no variable hides the field.

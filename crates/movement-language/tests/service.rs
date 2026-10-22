@@ -136,7 +136,7 @@ fn record_types_follow_an_instance_in_a_type() {
 }
 
 #[test]
-fn a_namespace_offers_its_functions_as_v5_spells_them() {
+fn a_namespace_offers_its_functions_as_the_language_spells_them() {
     let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  z = Text.");
     let items = service().complete(&text, pos);
     let names = labels(&items);

@@ -138,7 +138,7 @@ const CORE_SPELLING: Record<string, string> = { EXTRACT: 'extract', EXTRACTONE: 
 
 /** `Text.join` for `JOIN` — the name an author writes. */
 export function builtinName(entry: StandardBuiltin): string {
-  return spelling(entry)?.v5 ?? CORE_SPELLING[entry.name] ?? entry.name;
+  return spelling(entry)?.current ?? CORE_SPELLING[entry.name] ?? entry.name;
 }
 
 const settingsParam = (keys: string): StandardBuiltinParam => ({ name: `settings { ${keys} }`, type: 'options', optional: true });

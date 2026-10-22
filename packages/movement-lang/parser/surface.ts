@@ -76,7 +76,7 @@ export function spellIf(condition: string): string {
 
 export interface SpellingRow {
   canonical: string;
-  v5: string;
+  current: string;
   shape: string;
   oldOnly: boolean;
   newOnly: boolean;

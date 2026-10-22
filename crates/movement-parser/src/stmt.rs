@@ -57,7 +57,7 @@ const SLEEP_STATEMENT_REPLACED: &str = "the `sleep` statement was replaced — a
 const PARALLEL_AS_ALL: &str = "the join is `all`, which takes its functions as arguments: `r = all(() => { … }, () => { … })` — no `await`; one slot per function, in order. One that only acts needs no binding: `all(f, g)`.";
 
 /// A race's arms are arguments, and no `await`.
-const RACE_BRANCHES_RETIRED_V5: &str = "a race takes FUNCTIONS as its arguments, not brace branches: `r = race(q, () => { await sleep(4h) })`. The value is one slot per arm, in the order written — the winner's slot holds what its function returned and every other slot is null, so a timeout is `AT(r, 1) != null`.";
+const RACE_BRANCHES_RETIRED: &str = "a race takes FUNCTIONS as its arguments, not brace branches: `r = race(q, () => { await sleep(4h) })`. The value is one slot per arm, in the order written — the winner's slot holds what its function returned and every other slot is null, so a timeout is `AT(r, 1) != null`.";
 
 const UNTIL_CADENCE_IS_A_SETTING: &str = "'until' takes its cadence as a setting: `await until(<condition>, { every: 5m })`. There is no second positional argument — a value to wait FOR is an equality in the condition itself (`await until(a.state == \"done\", { every: 5m })`).";
 
@@ -2521,8 +2521,8 @@ impl Parser {
     /// expression slot does (crate::surface::canonical), so the call's
     /// structure and its expression agree.
     fn canonical_call(&self, callee: String, args: &mut [CallArg]) -> String {
-        use crate::surface::table::{Shape, by_v5};
-        let Some(row) = by_v5(&callee) else { return callee };
+        use crate::surface::table::{Shape, by_current};
+        let Some(row) = by_current(&callee) else { return callee };
         match row.shape {
             // Only by a function key (`try_parse_invocation_call`): `SORTBY`.
             Shape::SortKey => {
@@ -2545,8 +2545,8 @@ impl Parser {
     /// `DATE.TODAY`), because the older language reads `DATE.TODAY(…)` as an
     /// expression, never as a call, and only that reading knows the families.
     fn rewritten_whole(&self, callee: &str) -> bool {
-        use crate::surface::table::{Shape, by_v5};
-        by_v5(callee).is_some_and(|row| {
+        use crate::surface::table::{Shape, by_current};
+        by_current(callee).is_some_and(|row| {
                 row.canonical.contains('.')
                     || matches!(row.shape, Shape::SortKey | Shape::AiTier | Shape::Contains | Shape::ListIncludes | Shape::JsonStringify)
             })
@@ -2562,7 +2562,7 @@ impl Parser {
             && let Some((member, member_end)) = scan_ident(self.src.units(), end + 1)
         {
             let dotted = format!("{name}.{member}");
-            if crate::surface::table::by_v5(&dotted).is_some() || self.names_plugin_import(&name) {
+            if crate::surface::table::by_current(&dotted).is_some() || self.names_plugin_import(&name) {
                 return Some((dotted, member_end));
             }
         }
@@ -3186,7 +3186,7 @@ impl Parser {
         self.expect("(", &format!("to open '{k}(…)'"))?;
         self.skip_all_ws();
         if self.is('{') {
-            return self.fail_at(RACE_BRANCHES_RETIRED_V5, start);
+            return self.fail_at(RACE_BRANCHES_RETIRED, start);
         }
         if !self.is('[') {
             return self.parse_argument_arms(start, kind);
@@ -4808,7 +4808,7 @@ pub fn local_name_for_tag(tag: &str) -> String {
 
 /// `sort` in its current spelling.
 fn is_sort(callee: &str) -> bool {
-    crate::surface::table::by_v5(callee).is_some_and(|row| row.shape == crate::surface::table::Shape::SortKey)
+    crate::surface::table::by_current(callee).is_some_and(|row| row.shape == crate::surface::table::Shape::SortKey)
 }
 
 /// `sort(xs, f)` / `sort(xs, f, settings)` with `f` no settings record and
