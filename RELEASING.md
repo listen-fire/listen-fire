@@ -41,6 +41,16 @@ A suffixed tag never moves npm `latest` or the default docs.
    pnpm -r publish --tag next --access public --no-git-checks
    ```
    (`pnpm -r publish` publishes in dependency order and skips private packages.)
+5. Verify every public package landed (a recursive publish in one burst has
+   dropped packages twice); republish any that are missing with `--filter`:
+   ```sh
+   for f in $(git ls-files '*/package.json' | grep -vE '^(apps/|examples/)'); do
+     n=$(node -e "const j=require('./$f'); if(!j.private&&j.name) console.log(j.name)");
+     [ -z "$n" ] && continue
+     npm view "$n@0.12.0-rc.6" version >/dev/null 2>&1 || echo "MISSING $n"
+   done
+   pnpm -r --filter <missing-name> publish --tag next --access public --no-git-checks
+   ```
 
 ## Promoting to a full release
 
