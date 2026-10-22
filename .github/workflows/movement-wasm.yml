@@ -100,7 +100,7 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.20.0
+          node-version: 22.23.4
           cache: "pnpm"
       # Full workspace install: movement-lang's tests resolve workspace
       # packages through symlinks a filtered install omits.

@@ -4,7 +4,7 @@ This is the language repository: the Rust crates, the `lf` command, the engine p
 
 ## Setting up
 
-You need Node 22.20.0 (the version pinned in [`.nvmrc`](.nvmrc)), pnpm 9.5 or later (the root `package.json` pins `pnpm@9.5.0` as its `packageManager` and declares `"pnpm": "^9.5.0"` in `engines`), and Rust 1.99.0 with the `wasm32-unknown-unknown` target (pinned in [`rust-toolchain.toml`](rust-toolchain.toml)).
+You need Node 22.23.4 (the version pinned in [`.nvmrc`](.nvmrc)), pnpm 9.5 or later (the root `package.json` pins `pnpm@9.5.0` as its `packageManager` and declares `"pnpm": "^9.5.0"` in `engines`), and Rust 1.99.0 with the `wasm32-unknown-unknown` target (pinned in [`rust-toolchain.toml`](rust-toolchain.toml)).
 
 ```bash
 nvm install && nvm use          # reads .nvmrc
