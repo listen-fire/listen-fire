@@ -54,6 +54,13 @@ serve = ["cli", "hyper/server"]
 # A PDF's own text layer (src/pdf_text.rs), read before the ocr slot is asked.
 pdf = ["cli", "dep:lopdf", "dep:libc"]
 
+# `cargo binstall listen-fire` fetches the release tarball (lf-release.yml's
+# Archive step) instead of compiling; the tarball nests everything in one directory.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/lf-v{ version }/lf-v{ version }-{ target }.tar.gz"
+bin-dir = "lf-v{ version }-{ target }/bin/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [dependencies]
 movement-parser = { package = "listen-fire-parser", version = "0.12.0-rc.6", path = "../movement-parser" }
 # The checker with its native zone database: the same one the engine's
