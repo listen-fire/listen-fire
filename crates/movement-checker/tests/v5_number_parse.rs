@@ -1,4 +1,4 @@
-//! From version 5 `Number.parse(text)` answers nothing for text that is no
+//! `Number.parse(text)` answers nothing for text that is no
 //! number (the engine's `NUMBER("")` is null), so it is `number | absent`: a
 //! required value must come from a `!= null` guard, a guard clause that always
 //! leaves, or a fallback (MOV_ABSENT_REQUIRED).

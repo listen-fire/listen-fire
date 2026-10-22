@@ -7,7 +7,7 @@
 //!   lf run --event <file> [--dry-run]   route an event to its listens and run each
 //!   lf run --poll <movement>            poll now the polled sources of the listens that fire it
 //!   lf resume [<run-id>]                step a parked run, or drain due work and every parked run
-//!   lf upgrade [--check] [--all]        rewrite the movement files into the current language version
+//!   lf upgrade [--check] [--all]        rewrite the movement files into the language of this release
 //!   lf runs [show <run-id>]             the runs, most recent first; one run in full
 //!   --json                              (check, catalog, run, resume, runs, call, cancel, connect, credential list) one JSON document
 //!   lf drain [--until-idle] [--max-seconds N]  a worker over the work queue (scale from zero)

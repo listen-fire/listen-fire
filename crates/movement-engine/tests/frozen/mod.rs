@@ -1,6 +1,6 @@
 //! Frozen fixtures: one case per line (tests/frozen/<name>.jsonl), inputs
 //! chosen for JavaScript's hazards, each with the answer the Rust engine
-//! gives today. Rust is the reference for language version 5, so the file
+//! gives today. Rust is the reference for the language, so the file
 //! is Rust's own: a test recomputes every answer and fails on the first
 //! line that moved. When a change is meant to move answers, regenerate with
 //! `FROZEN_REGENERATE=1 cargo test -p movement-engine --test <test>`
@@ -8,7 +8,7 @@
 //!
 //! The answers were first frozen from files the TypeScript engine had
 //! written, wherever Rust agreed with it; the CHANGELOG names the places
-//! version 5 answers differently on purpose.
+//! the Rust engine answers differently on purpose.
 #![allow(dead_code)]
 
 use std::path::PathBuf;

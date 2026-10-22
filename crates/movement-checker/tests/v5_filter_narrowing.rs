@@ -1,4 +1,4 @@
-//! From version 5 a `filter` whose function's own test keeps only members
+//! A `filter` whose function's own test keeps only members
 //! that are there answers a list of present members, as TypeScript's inferred
 //! type predicate makes `xs.filter(x => x != null)` a `T[]`. The narrowing is
 //! the body's: `x != null` returned, `!(x == null)`, a guard clause that

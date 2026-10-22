@@ -60,8 +60,8 @@ export interface ParkedCode {
   op: unknown;
 }
 
-/** Version 1 (the TypeScript engine, language versions 1–4): code rides as
- *  its syntax tree, which the version pin keeps identical. */
+/** Version 1 (the earlier TypeScript engine): code rides as
+ *  its syntax tree, which the pin keeps identical. */
 export interface CodeAsTree extends ParkedCode {
   version: 1;
   closure: ClosureExpression;
@@ -81,7 +81,7 @@ export interface CodeAsTree extends ParkedCode {
  */
 export type CodePlace = string;
 
-/** Version 2 (the Rust engine, language version 5 on): code is its place in
+/** Version 2 (the Rust engine): code is its place in
  *  the pinned program (a collection op its span among its statement's
  *  calls), and the libraries ride beside it (`ParkedScopeState.libraries`). */
 export interface CodeByPlace extends ParkedCode {
@@ -147,7 +147,7 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
       handle: WriteRecord;
       targetType: string;
       graph: HandleGraphDescriptor;
-      /** The record before the handle's write (`-[:@old]->`, version 4 on),
+      /** The record before the handle's write (`-[:@old]->`),
        *  itself a handle. A rehearsed write's `old` is the handle itself, which
        *  JSON cannot nest, so it is said instead (`oldIsSelf`). */
       old?: BindingDescriptor<C>;
@@ -271,7 +271,7 @@ export type BindingDescriptor<C extends ParkedCode = CodeAsTree> =
        *  node on no edge, and on a park written before landings kept it. */
       landedOn?: string;
       edges: Record<string, NodeEdgeDescriptor<C>>;
-      /** A record an extraction call found (version 5): the content that call
+      /** A record an extraction call found: the content that call
        *  read, as resources (what `-[f:_resources]->` walks off it). Absent
        *  on every other node, and on a park written before calls kept it. */
       resources?: ResourceDescriptor[];
@@ -406,8 +406,8 @@ export type ScopeLink<C extends ParkedCode = CodeAsTree> =
  * rebuilds the scope chain by rehydrating each scope in order.
  */
 export interface ParkedScopeState<C extends ParkedCode = CodeAsTree> {
-  /** The park state contract's version: 1 for the TypeScript engine's
-   *  states (language versions 1–4), 2 for the Rust engine's (5 on). */
+  /** The park state contract's version: 1 for the earlier TypeScript
+   *  engine's states, 2 for the Rust engine's. */
   version: C['version'];
   /** The parked statement's canonical lexical address — the resume entry
    *  point. */

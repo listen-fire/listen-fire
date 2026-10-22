@@ -1,5 +1,5 @@
 // Whole runs in the Rust engine (slice 2a): each program runs on the Rust
-// engine (version 5) against fakes of its own. What a caller can see — the
+// engine against fakes of its own. What a caller can see — the
 // result (or the error, its class and the very object a host call failed
 // with), the trace, and every call the adapters received, in order — is
 // recorded as a snapshot, and the assertions beside each case say what it
@@ -316,7 +316,7 @@ describe('a whole run in the Rust engine', () => {
       expectOf(await onRust(c));
     };
 
-    // From version 5 the walk off the json value is refused at the check
+    // The walk off the json value is refused at the check
     // (MOV_JSON_HAS_NO_EDGES), so nothing is read and nothing walked.
     it('reads a field shaped like a kept walk as data: the walk off it refused at the check, no program text run', async () => {
       for (const raw of ['COUNT(e-[:items]->)', 'NOSUCHFN(1)']) {
@@ -532,7 +532,7 @@ describe('IS <Decl> of a record a system describes', () => {
 });
 
 describe('the file scope, as interpretFileStatement reads it', () => {
-  // From version 5 a file-level value holds a value only: a file-level
+  // A file-level value holds a value only: a file-level
   // extraction, write or call ends the run at the check (MOV_FILE_VALUE_RUNS),
   // before a segment opens; a value binds; a file-level statement runs
   // nothing.

@@ -1,4 +1,4 @@
-//! Language version 5's surface through the Rust checker: the everyday
+//! The current language's surface through the Rust checker: the everyday
 //! spelling checks, an old spelling is MOV_V5_SPELLING with its rewrite, and
 //! messages name built-ins in the program's own spelling. Parity with the TypeScript checker is
 //! parity/run.sh's.
@@ -16,12 +16,12 @@ fn codes(source: &str) -> Vec<String> {
     check(source).into_iter().map(|d| d.code).collect()
 }
 
-const V5: &str = "function go(t: <text>, n: <number>) {\n  a = Text.upper(Text.trim(t))\n  b = n > 1 && n < 5 ? Number.round(n) : 0\n  if (a != null || !(n == 2)) {\n    c = Text.length(a)\n  }\n}";
+const CURRENT_FORM: &str = "function go(t: <text>, n: <number>) {\n  a = Text.upper(Text.trim(t))\n  b = n > 1 && n < 5 ? Number.round(n) : 0\n  if (a != null || !(n == 2)) {\n    c = Text.length(a)\n  }\n}";
 const OLD: &str = "movement go(t: <text>, n: <number>) {\n  a = UPPER(TRIM(t))\n  b = IF n > 1 AND n < 5 THEN ROUND(n) ELSE 0 END\n  if a != NULL OR NOT (n == 2) {\n    c = LENGTH(a)\n  }\n}";
 
 #[test]
 fn the_everyday_spelling_checks() {
-    assert_eq!(codes(V5), ["MOV_PRESENCE_TEST_CONSTANT"]);
+    assert_eq!(codes(CURRENT_FORM), ["MOV_PRESENCE_TEST_CONSTANT"]);
 }
 
 #[test]
@@ -37,23 +37,23 @@ fn an_old_spelling_under_5_is_refused_with_its_rewrite() {
 
 #[test]
 fn a_message_names_a_built_in_in_the_program_s_spelling() {
-    let v5: Vec<String> = check("function go(n: <number>) {\n  a = Text.upper(n)\n}").into_iter().map(|d| d.message).collect();
-    assert_eq!(v5, ["Text.upper's 'text' takes text, and this is number — Text.upper(text)"]);
+    let current_form: Vec<String> = check("function go(n: <number>) {\n  a = Text.upper(n)\n}").into_iter().map(|d| d.message).collect();
+    assert_eq!(current_form, ["Text.upper's 'text' takes text, and this is number — Text.upper(text)"]);
 }
 
 #[test]
 fn a_message_suggests_the_surface_of_its_program_s_version() {
-    let v5: Vec<String> = check("function go() {\n  f = () => 1\n  x = !f\n  y = f && f\n}").into_iter().map(|d| d.message).collect();
-    assert!(v5[0].starts_with("a value negated by '!' is a closure"), "{v5:?}");
-    assert!(v5[1].starts_with("a value joined by '&&' is a closure"), "{v5:?}");
+    let current_form: Vec<String> = check("function go() {\n  f = () => 1\n  x = !f\n  y = f && f\n}").into_iter().map(|d| d.message).collect();
+    assert!(current_form[0].starts_with("a value negated by '!' is a closure"), "{current_form:?}");
+    assert!(current_form[1].starts_with("a value joined by '&&' is a closure"), "{current_form:?}");
 }
 
 const PDF_OLD: &str = "movement go(t: <text>) {\n  f = FILE(t, \"pdf\")\n}";
-const PDF_V5: &str = "function go(t: <text>) {\n  f = File.from(t, \"pdf\")\n}";
+const PDF_CURRENT: &str = "function go(t: <text>) {\n  f = File.from(t, \"pdf\")\n}";
 
 #[test]
 fn a_pdf_is_the_pdf_plugin_s_from_version_5() {
-    for (source, written) in [(PDF_OLD, "FILE"), (PDF_V5, "File.from")] {
+    for (source, written) in [(PDF_OLD, "FILE"), (PDF_CURRENT, "File.from")] {
         let found = check(source);
         let pdf: Vec<_> = found.iter().filter(|d| d.code == "MOV_V5_SPELLING" && d.message.contains("@lf/pdf")).collect();
         assert_eq!(pdf.len(), 1, "{written}: {found:#?}");

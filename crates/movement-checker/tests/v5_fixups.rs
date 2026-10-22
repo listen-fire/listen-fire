@@ -1,4 +1,4 @@
-//! Version 5 fix-ups the handbook found, through the Rust checker. The
+//! Fix-ups the handbook found, through the Rust checker. The
 //! TypeScript twin is lf-platform's packages/legacy-lang/checker/__test__/v5_fixups.unit.test.ts.
 
 use movement_checker::types::event_address::{EventAddress, event_address_of_hops};
@@ -97,8 +97,8 @@ fn length_and_exists_of_a_list_rewrite_to_count_marked_safe() {
 
 #[test]
 fn a_message_calls_a_declaration_a_function_from_5() {
-    let v5 = errors("function f() {\n  return nope(1)\n}").join("\n");
-    assert!(v5.contains("a call names a function declared or imported here, or a built-in"), "{v5}");
+    let current_form = errors("function f() {\n  return nope(1)\n}").join("\n");
+    assert!(current_form.contains("a call names a function declared or imported here, or a built-in"), "{current_form}");
 }
 
 #[test]

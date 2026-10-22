@@ -1,7 +1,5 @@
-// A maybe-record handed to a position parameter (B15): from language
-// version 5 the checker refuses it (MOV_CALL_ARG_MAYBE_RECORD) before the run
-// opens a segment, so the Rust engine never meets it. Versions 1–4, which ran
-// it, run only on the TypeScript engine (its conformance corpora).
+// A maybe-record handed to a position parameter (B15): the checker refuses it (MOV_CALL_ARG_MAYBE_RECORD) before the run
+// opens a segment, so the Rust engine never meets it.
 
 import { LANGUAGE_VERSION, mockCatalogSnapshot, type InstanceSchema, type LanguageVersion } from 'movement-lang';
 import { tenantIdOf } from 'engine-contracts';
@@ -243,7 +241,7 @@ describe('a maybe-record handed to a position parameter (B15)', () => {
     ],
   ];
 
-  it('version 5: the checker refuses it, with no segment opened', async () => {
+  it('the checker refuses it, with no segment opened', async () => {
     const source = shapes('Acme', '"x"')[1]![1];
     resetRustRunStats();
     const outcome = await runOn(source, LANGUAGE_VERSION);

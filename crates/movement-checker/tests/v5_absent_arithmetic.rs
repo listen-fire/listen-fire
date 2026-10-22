@@ -1,4 +1,4 @@
-//! From version 5 a number computed from a value that may be absent is refused
+//! A number computed from a value that may be absent is refused
 //! (MOV_ABSENT_REQUIRED): `+ - * / %`, unary minus, a built-in's number
 //! parameter (`Number.round(n)`), and a fold over a list that may hold an
 //! absent member (`List.sum`, `List.avg`, `List.min`, `List.max`). The engine

@@ -9,7 +9,7 @@ use movement_parser::catalog::types::CatalogSnapshot;
 const UNDESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{}}"#;
 const DESCRIBED: &str = r#""manual":{"constructionArgs":[],"canFire":true,"triggerConfig":[],"schemas":{"":{"positions":{"Invocation":{"properties":{"text":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}}"#;
 
-const V5: &str = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) {\n  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n}\nlisten to runs {} fire recap";
+const CURRENT_FORM: &str = "import { manual } from adapters\nruns = connect manual\nfunction recap(go: <runs-[:Invocation]->>) {\n  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n}\nlisten to runs {} fire recap";
 
 fn check(source: &str, manual: &str) -> Vec<Diagnostic> {
     check_with(source, manual, None, "{}")
@@ -29,7 +29,7 @@ fn found(diagnostics: &[Diagnostic]) -> Vec<(&str, String, usize)> {
 
 #[test]
 fn version_5_refuses_a_field_read_and_a_walk_off_an_undescribed_event_each_where_it_is() {
-    let diagnostics = check(V5, UNDESCRIBED);
+    let diagnostics = check(CURRENT_FORM, UNDESCRIBED);
     assert_eq!(found(&diagnostics), [("MOV_EVENT_UNDESCRIBED", "None".to_string(), 4), ("MOV_EVENT_UNDESCRIBED", "None".to_string(), 5)]);
     assert_eq!(
         diagnostics[0].message,
@@ -39,9 +39,9 @@ fn version_5_refuses_a_field_read_and_a_walk_off_an_undescribed_event_each_where
 
 #[test]
 fn a_described_event_a_parameter_nothing_reads_and_an_unknown_adapter_are_silent() {
-    let unread = V5.replace("  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n", "  return go\n");
-    let unknown = V5.replace("manual", "nope");
-    for (source, manual) in [(V5, DESCRIBED), (unread.as_str(), UNDESCRIBED), (unknown.as_str(), UNDESCRIBED)] {
+    let unread = CURRENT_FORM.replace("  t = go.`text`\n  go-[r:record]-> { fail(\"${r.`Name`}\") }\n", "  return go\n");
+    let unknown = CURRENT_FORM.replace("manual", "nope");
+    for (source, manual) in [(CURRENT_FORM, DESCRIBED), (unread.as_str(), UNDESCRIBED), (unknown.as_str(), UNDESCRIBED)] {
         let diagnostics = check(source, manual);
         assert!(!diagnostics.iter().any(|d| d.code == "MOV_EVENT_UNDESCRIBED"), "{source}: {diagnostics:?}");
     }

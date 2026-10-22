@@ -46,7 +46,7 @@ export function mergeUniqueness(
  * An identity key component that says nothing: absent, or text with nothing
  * in it. An empty key is no key — two records that both lack a name are not
  * thereby the same record — so such a component never matches and is never
- * matched on. Blank text is no key at every pin: version 1's matching of ""
+ * matched on. Blank text is no key at every pin: the earlier matching of ""
  * like any other value is retired. The pin is still taken so the rules keep
  * one signature with the rest of this file.
  */

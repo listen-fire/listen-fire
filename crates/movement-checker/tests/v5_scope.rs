@@ -1,4 +1,4 @@
-//! Language version 5's semantics the spelling rewrite alone cannot carry
+//! The current language's semantics the spelling rewrite alone cannot carry
 //! (plans/naming-rethink-2026-10-14/5_design.md): old spellings in imported
 //! libraries reported at the import; a name that hides a built-in; plugins
 //! by their exact-case names and package tags.

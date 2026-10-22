@@ -64,7 +64,7 @@ pub struct Project {
     /// The host's own folder: `<root>/.lf`.
     pub lf_dir: PathBuf,
     pub engine: String,
-    /// The language version the project is pinned to: `engine:`, a release's version.
+    /// The release the project is pinned to: `engine:`, a release's version.
     pub language_version: String,
     pub movements_dir: PathBuf,
     pub externals_dir: PathBuf,

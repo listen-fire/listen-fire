@@ -1,4 +1,4 @@
-//! A plugin's arguments by position from language version 5 (design §2.7),
+//! A plugin's arguments by position (design §2.7),
 //! through the Rust checker: its required inputs in the manifest's order,
 //! then one settings record; the named form is refused with the positional
 //! rewrite. The TypeScript twin is
@@ -26,7 +26,7 @@ fn codes(source: &str) -> Vec<String> {
     check(source).into_iter().map(|d| d.code).collect()
 }
 
-fn v5(body: &str) -> String {
+fn current_form(body: &str) -> String {
     format!("{HEAD5}function go(u: <text>, n: <text>, s: <text>, t: <text>) {{\n{body}\n}}\n")
 }
 
@@ -53,45 +53,45 @@ fn apply_fixes(source: &str, diagnostics: &[Diagnostic]) -> String {
 
 #[test]
 fn a_plugin_takes_its_required_inputs_by_position_and_the_rest_in_a_settings_record() {
-    let program = v5("  p = fetchUrl(u)\n  r = research(n, { context: s, questions: s })\n  v = vcUrlRetrieval(t, { email: u })\n  w = fetchUrl(u, { email: s })");
+    let program = current_form("  p = fetchUrl(u)\n  r = research(n, { context: s, questions: s })\n  v = vcUrlRetrieval(t, { email: u })\n  w = fetchUrl(u, { email: s })");
     assert_eq!(check(&program), Vec::<Diagnostic>::new());
     // A bare statement, a call as another's argument, and one nested in an expression.
-    let nested = v5("  fetchUrl(u)
+    let nested = current_form("  fetchUrl(u)
   r = research(fetchUrl(u), { context: s })
   x = Text.length(fetchUrl(u)) + 1");
     assert_eq!(check(&nested), Vec::<Diagnostic>::new());
-    assert_eq!(codes(&v5("  x = Text.upper(fetchUrl(u, s))")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&current_form("  x = Text.upper(fetchUrl(u, s))")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
 }
 
 #[test]
 fn the_bound_call_is_checked_as_the_named_one_is() {
     // Too many by position, a setting that is positional, an unknown setting,
     // a last extra argument that is no record, a missing input.
-    assert_eq!(codes(&v5("  p = fetchUrl(u, { url: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n, { nope: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  p = fetchUrl(u, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  p = fetchUrl(u, { email: s }, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
-    assert_eq!(codes(&v5("  r = research()")), vec!["MOV_THROUGH_ARG_MISSING".to_string()]);
-    let missing_fed = check(&v5("  v = vcUrlRetrieval()"));
+    assert_eq!(codes(&current_form("  p = fetchUrl(u, { url: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&current_form("  r = research(n, { nope: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&current_form("  p = fetchUrl(u, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&current_form("  p = fetchUrl(u, { email: s }, s)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    assert_eq!(codes(&current_form("  r = research()")), vec!["MOV_THROUGH_ARG_MISSING".to_string()]);
+    let missing_fed = check(&current_form("  v = vcUrlRetrieval()"));
     assert_eq!(missing_fed.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_PLUGIN_FED_BY_EXTRACTION"]);
     assert!(missing_fed[0].message.contains("`vcUrlRetrieval(text)`"), "{}", missing_fed[0].message);
     // Each value is held to the type declared for the parameter it binds.
-    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(r)")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n)\n  p = fetchUrl(u, { email: r })")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
-    let extra = check(&v5("  p = fetchUrl(u, s)"));
+    assert_eq!(codes(&current_form("  r = research(n)\n  p = fetchUrl(r)")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&current_form("  r = research(n)\n  p = fetchUrl(u, { email: r })")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    let extra = check(&current_form("  p = fetchUrl(u, s)"));
     assert_eq!(extra[0].message, "'fetchUrl' takes one argument by position (url), then its settings as one record `{ name: value }` — this argument is past them");
     assert_eq!((extra[0].span.start.line, extra[0].span.start.col), (4, 19));
-    let past = check(&v5("  p = fetchUrl(u, { email: s }, s)"));
+    let past = check(&current_form("  p = fetchUrl(u, { email: s }, s)"));
     assert_eq!((past[0].span.start.col, past[0].span.end.col), (33, 34));
 }
 
 #[test]
 fn a_settings_entry_is_reported_where_it_is_written() {
-    let found = check(&v5("  r = research(n, { context: s, name: s })"));
+    let found = check(&current_form("  r = research(n, { context: s, name: s })"));
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].message, "'name' is an argument 'research' takes by position — write it in its place, not in the settings record");
     assert_eq!((found[0].span.start.line, found[0].span.start.col, found[0].span.end.col), (4, 33, 37));
-    let typed = check(&v5("  r = research(n)\n  q = research(n, { context: r })"));
+    let typed = check(&current_form("  r = research(n)\n  q = research(n, { context: r })"));
     assert_eq!(typed.iter().map(|d| (d.code.as_str(), d.span.start.line, d.span.start.col)).collect::<Vec<_>>(), vec![("MOV_CALL_ARG_TYPE", 5, 30)]);
 }
 
@@ -107,19 +107,19 @@ fn the_named_form_under_5_is_rewritten_by_position_from_the_manifest() {
             })
             .collect()
     };
-    assert_eq!(fixes_of(&v5("  p = fetchUrl(url: u)")), vec![(Some("u".to_string()), true)]);
-    assert_eq!(fixes_of(&v5("  r = research(name: n, context: s)")), vec![(Some("n, { context: s }".to_string()), true)]);
-    assert_eq!(fixes_of(&v5("  v = vcUrlRetrieval(text: t, email: u)")), vec![(Some("t, { email: u }".to_string()), true)]);
+    assert_eq!(fixes_of(&current_form("  p = fetchUrl(url: u)")), vec![(Some("u".to_string()), true)]);
+    assert_eq!(fixes_of(&current_form("  r = research(name: n, context: s)")), vec![(Some("n, { context: s }".to_string()), true)]);
+    assert_eq!(fixes_of(&current_form("  v = vcUrlRetrieval(text: t, email: u)")), vec![(Some("t, { email: u }".to_string()), true)]);
     // Moved, the arguments would run in another order: a fix, not a safe one.
-    assert_eq!(fixes_of(&v5("  r = research(context: s, name: n)")), vec![(Some("n, { context: s }".to_string()), false)]);
+    assert_eq!(fixes_of(&current_form("  r = research(context: s, name: n)")), vec![(Some("n, { context: s }".to_string()), false)]);
     // A name the manifest does not know, or an input never written: no rewrite.
-    assert_eq!(fixes_of(&v5("  r = research(name: n, nope: s)")), vec![(None, false)]);
-    assert_eq!(fixes_of(&v5("  r = research(context: s)")), vec![(None, false)]);
+    assert_eq!(fixes_of(&current_form("  r = research(name: n, nope: s)")), vec![(None, false)]);
+    assert_eq!(fixes_of(&current_form("  r = research(context: s)")), vec![(None, false)]);
 }
 
 #[test]
 fn the_rewrite_applied_checks_clean() {
-    let program = v5("  p = fetchUrl(url: u)\n  r = research(name: n, context: s, questions: t)\n  v = vcUrlRetrieval(text: t, email: u)");
+    let program = current_form("  p = fetchUrl(url: u)\n  r = research(name: n, context: s, questions: t)\n  v = vcUrlRetrieval(text: t, email: u)");
     let fixed = apply_fixes(&program, &check(&program));
     assert!(fixed.contains("fetchUrl(u)") && fixed.contains("research(n, { context: s, questions: t })") && fixed.contains("vcUrlRetrieval(t, { email: u })"), "{fixed}");
     assert_eq!(check(&fixed), Vec::<Diagnostic>::new());
@@ -168,7 +168,7 @@ fn all(source: &str) -> Vec<(String, bool, String)> {
 
 #[test]
 fn a_record_value_handed_to_a_text_input_is_refused() {
-    let refused = all(&v5("  r = research({ context: s })"));
+    let refused = all(&current_form("  r = research({ context: s })"));
     assert_eq!(
         refused,
         vec![(
@@ -177,7 +177,7 @@ fn a_record_value_handed_to_a_text_input_is_refused() {
             "'research' takes text for 'name', and this is { context: text } — a record, not text, as in TypeScript. Pass the text it should read: one of its fields ('name: r.name'), or the text built from them".to_string()
         )]
     );
-    let may = codes(&v5("  r = research(n, { context: s == \"\" ? { a: 1 } : s })"));
+    let may = codes(&current_form("  r = research(n, { context: s == \"\" ? { a: 1 } : s })"));
     assert_eq!(may, vec!["MOV_CALL_ARG_MAYBE_RECORD".to_string()]);
-    assert_eq!(codes(&v5("  r = research(n, { context: s })")), Vec::<String>::new());
+    assert_eq!(codes(&current_form("  r = research(n, { context: s })")), Vec::<String>::new());
 }

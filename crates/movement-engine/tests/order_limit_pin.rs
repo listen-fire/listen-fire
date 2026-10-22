@@ -16,7 +16,7 @@ use serde_json::Value as Json;
 fn edge_step(hop: &str) -> EdgeStep {
     let probe = format!("graph{hop}.`__movement_engine_probe__`");
     // The oracle read each hop as written (the TypeScript probe, before a
-    // text was read into the version 5 canonical tree), so the tree is too.
+    // text was read into the canonical tree), so the tree is too.
     let tree = movement_parser::expr::parse_expression_raw(&probe).expect("the hop parses");
     let lowered = movement_parser::lowering::lower_expression(&tree, &probe).expect("the hop lowers");
     match lowered {

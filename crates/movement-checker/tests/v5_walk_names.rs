@@ -1,4 +1,4 @@
-//! One diagnostic per misspelled bare name in a version 5 walk's WHERE: a
+//! One diagnostic per misspelled bare name in a walk's WHERE: a
 //! bare name inside a hop's brackets is a variable from outside the walk. A
 //! field of the hop written bare is the old spelling (MOV_V5_SPELLING, its fix
 //! the alias read); a name that is neither a variable nor a field of the

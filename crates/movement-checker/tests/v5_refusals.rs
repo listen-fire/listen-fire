@@ -1,4 +1,4 @@
-//! From version 5 the checker refuses at save the forms the engine does not
+//! The checker refuses at save the forms the engine does not
 //! run, each with the spelling it does run: a linked write or match whose
 //! target walks more than one hop (MOV_WRITE_MULTI_HOP), a walk with no root
 //! outside a hop's WHERE (MOV_WALK_ROOTLESS), and a `unique by` on a write to

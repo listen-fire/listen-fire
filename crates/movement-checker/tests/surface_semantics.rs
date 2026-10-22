@@ -1,4 +1,4 @@
-//! Language version 5's semantics the spelling rewrite alone cannot carry
+//! The current language's semantics the spelling rewrite alone cannot carry
 //! (the spine report's item (e)), through the Rust checker: the old text is
 //! refused with a fix, and the fixed program checks clean. The TypeScript twin is
 //! lf-platform's packages/legacy-lang/checker/__test__/v5_semantics.unit.test.ts.
@@ -64,11 +64,11 @@ const HEAD5: &str = "import { `@lf/slack` as slack } from adapters\nchat = conne
 
 #[test]
 fn bang_binds_as_typescript_s_unary_operator() {
-    let v5 = format!("{HEAD5}function go(a: <boolean>, b: <boolean>) {{\n  if (!a == b) {{\n    x = 1\n  }}\n}}");
-    let refused: Vec<_> = check(&v5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let current_form = format!("{HEAD5}function go(a: <boolean>, b: <boolean>) {{\n  if (!a == b) {{\n    x = 1\n  }}\n}}");
+    let refused: Vec<_> = check(&current_form).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(refused.len(), 1, "{refused:#?}");
     assert_eq!(refused[0].fix.as_ref().unwrap()["edits"][0]["text"], "!(a == b)");
-    let fixed = upgraded(&v5);
+    let fixed = upgraded(&current_form);
     assert!(fixed.contains("if (!(a == b)) {"), "{fixed}");
     assert_eq!(codes(&fixed), Vec::<String>::new());
 }
@@ -143,31 +143,31 @@ fn a_list_s_length_membership_and_presence_follow_the_operand_s_type() {
 
 #[test]
 fn a_walk_s_fields_are_read_through_the_hop_s_alias() {
-    let v5 = |body: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>, cutoff: <text>) {{\n{body}\n}}");
-    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC LIMIT 3]->")), Vec::<String>::new());
-    assert_eq!(codes(&v5("  ms = c-[m:Messages WHERE m.Nope == cutoff]->")), ["MOV_UNKNOWN_PROPERTY"]);
-    let found: Vec<_> = check(&v5("  ms = c-[m:Messages WHERE Text == cutoff]->")).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let current_form = |body: &str| format!("{HEAD5}function go(c: <chat-[:channel]->>, cutoff: <text>) {{\n{body}\n}}");
+    assert_eq!(codes(&current_form("  ms = c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC LIMIT 3]->")), Vec::<String>::new());
+    assert_eq!(codes(&current_form("  ms = c-[m:Messages WHERE m.Nope == cutoff]->")), ["MOV_UNKNOWN_PROPERTY"]);
+    let found: Vec<_> = check(&current_form("  ms = c-[m:Messages WHERE Text == cutoff]->")).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].fix.as_ref().unwrap()["edits"][0]["text"], "m.Text");
-    assert!(upgraded(&v5("  ms = c-[m:Messages WHERE Text == cutoff ORDER BY Text DESC]->")).contains("c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC]->"));
-    let fixed = upgraded(&v5("  ms = c-[:Messages WHERE Text == cutoff AND `Text` != \"x\"]->"));
+    assert!(upgraded(&current_form("  ms = c-[m:Messages WHERE Text == cutoff ORDER BY Text DESC]->")).contains("c-[m:Messages WHERE m.Text == cutoff ORDER BY m.Text DESC]->"));
+    let fixed = upgraded(&current_form("  ms = c-[:Messages WHERE Text == cutoff AND `Text` != \"x\"]->"));
     assert!(fixed.contains("c-[m:Messages WHERE m.Text == cutoff AND m.`Text` != \"x\"]->"), "{fixed}");
     assert_eq!(codes(&fixed), Vec::<String>::new());
-    let fixed = upgraded(&v5("  if (EXISTS(c-[:Messages]-> WHERE Text CONTAINS \"pdf\")) {\n    x = 1\n  }"));
+    let fixed = upgraded(&current_form("  if (EXISTS(c-[:Messages]-> WHERE Text CONTAINS \"pdf\")) {\n    x = 1\n  }"));
     assert!(fixed.contains("if (exists(c-[m:Messages WHERE m.Text CONTAINS \"pdf\"]->)) {"), "{fixed}");
     assert_eq!(codes(&fixed), Vec::<String>::new());
-    let fixed = upgraded(&v5("  c-[m:Messages WHERE Text == cutoff]-> {\n    x = 1\n  }"));
+    let fixed = upgraded(&current_form("  c-[m:Messages WHERE Text == cutoff]-> {\n    x = 1\n  }"));
     assert!(fixed.contains("c-[m:Messages WHERE m.Text == cutoff]-> {"), "{fixed}");
 }
 
 #[test]
 fn named_arguments_become_positional_in_the_callee_s_order() {
     let lib5 = "function label(name: <text>, tags: <text[]>) {\n  return name\n}\n\n";
-    let v5 = format!("{HEAD5}{lib5}function go(n: <text>, ts: <text[]>) {{\n  x = label(tags: ts, name: n)\n}}");
-    let found: Vec<_> = check(&v5).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
+    let current_form = format!("{HEAD5}{lib5}function go(n: <text>, ts: <text[]>) {{\n  x = label(tags: ts, name: n)\n}}");
+    let found: Vec<_> = check(&current_form).into_iter().filter(|d| d.code == "MOV_V5_SPELLING").collect();
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].fix.as_ref().unwrap()["edits"][0]["text"], "n, ts");
-    let fixed = upgraded(&v5);
+    let fixed = upgraded(&current_form);
     assert!(fixed.contains("x = label(n, ts)"), "{fixed}");
     assert_eq!(codes(&fixed), Vec::<String>::new());
     // A name that is no parameter: refused as before, the spelling without a fix.

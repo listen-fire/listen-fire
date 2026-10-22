@@ -20,8 +20,9 @@ export class MovementParseError extends Error {
 
 /** The compile context a parse runs under. */
 export interface ParseOptions {
-  /** The language version the source is written against — what a version
-   *  conditional in the grammar reads. Absent ⇒ the current version. */
+  /** The release the source is written against. A release that does not read
+   *  that pin refuses the parse by name; the grammar itself does not vary with
+   *  it. Absent ⇒ this release. */
   languageVersion?: LanguageVersion;
 }
 

@@ -251,7 +251,7 @@ impl RunFacts {
             // parked run still resumes.
             Some(Js::Num(n)) if n.as_u64().is_some_and(|n| n >= 5) => LANGUAGE_VERSION.to_string(),
             Some(Js::Num(n)) => {
-                return Err(format!("run {run_id}: pinned to language version {n}, which lf does not run; it cannot resume: upgrade its movement and fire it again"));
+                return Err(format!("run {run_id}: pinned to the integer {n}, from before pins were releases, which lf does not run; it cannot resume: upgrade its movement and fire it again"));
             }
             _ => return Err(format!("run {run_id}: its facts have no languageVersion")),
         };

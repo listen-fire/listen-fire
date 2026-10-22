@@ -52,7 +52,7 @@ const emailSchema: InstanceSchema = {
 };
 
 // The system deletes a record of any of its types, and says so as a describe
-// would (`deletable`, which version 5 checks a `delete` against).
+// would (`deletable`, which the checker checks a `delete` against).
 const crmSchema: InstanceSchema = {
   positions: {
     company: {

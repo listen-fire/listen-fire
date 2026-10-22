@@ -1,4 +1,4 @@
-//! The v5 surface integration's own rules, through the Rust checker: letter
+//! The current surface's integration own rules, through the Rust checker: letter
 //! case counts in a call's name; an alias read is the field even where the
 //! scope binds its name; and
 //! which fixes are
@@ -27,9 +27,9 @@ fn errors(source: &str) -> Vec<String> {
 
 #[test]
 fn a_function_call_matches_its_name_in_letter_case_from_version_5() {
-    let v5 = format!("{HEAD5}function helper(x: <text>) {{\n  return x\n}}\n\nfunction go() {{\n  y = Helper(\"a\")\n}}\n");
-    assert!(errors(&v5).contains(&"MOV_FUNCTION_UNKNOWN".to_string()), "{:?}", check(&v5));
-    assert_eq!(errors(&v5.replace("Helper(", "helper(")), Vec::<String>::new());
+    let current_form = format!("{HEAD5}function helper(x: <text>) {{\n  return x\n}}\n\nfunction go() {{\n  y = Helper(\"a\")\n}}\n");
+    assert!(errors(&current_form).contains(&"MOV_FUNCTION_UNKNOWN".to_string()), "{:?}", check(&current_form));
+    assert_eq!(errors(&current_form.replace("Helper(", "helper(")), Vec::<String>::new());
 }
 
 #[test]
@@ -69,8 +69,8 @@ fn only_fixes_that_keep_the_meaning_are_marked_safe() {
 #[test]
 fn a_field_read_off_text_and_a_map_s_settings_say_what_version_5_writes() {
     let text_read = |found: Vec<Diagnostic>| found.into_iter().filter(|d| d.code == "MOV_TEXT_HAS_NO_FIELDS").map(|d| d.is_error()).collect::<Vec<_>>();
-    let v5 = format!("{HEAD5}function go(t: <text>) {{\n  d = t.Name\n}}\n");
-    assert_eq!(text_read(check(&v5)), vec![true]);
+    let current_form = format!("{HEAD5}function go(t: <text>) {{\n  d = t.Name\n}}\n");
+    assert_eq!(text_read(check(&current_form)), vec![true]);
 
     let map = format!("{HEAD5}function go() {{\n  a = map([1, 2], (x) => x, 5)\n}}\n");
     let found = check(&map);

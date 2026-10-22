@@ -1,5 +1,5 @@
-// Language version 5 runs: `fail(…)` inside an expression and `sort` by a
-// function key, on the Rust engine (the version-5 reference). The checkers'
+// Runs of `fail(…)` inside an expression and `sort` by a
+// function key, on the Rust engine (the reference). The checkers'
 // twins are
 // crates/movement-checker/tests/v5_never_sort.rs and
 // checker/__test__/v5_never_sort.unit.test.ts.
@@ -100,7 +100,7 @@ function inputOf(
   };
 }
 
-const V5 = (...body: string[]) =>
+const CURRENT = (...body: string[]) =>
   [
     'import { `@lf/email` as email } from adapters',
     'import { `Dealflow Inbox` } from credentials',
@@ -121,13 +121,13 @@ afterEach(() => setRunEngineRecorder(undefined));
 const bodies = (writes: unknown[]): unknown =>
   JSON.parse(JSON.stringify(writes, (key, value: unknown) => (key === 'span' ? undefined : value)));
 
-/** Runs a v5 body on the Rust engine (the version-5 reference): what it
+/** Runs a body on the Rust engine (the reference): what it
  *  writes, or how it failed. */
 async function onRust(body: string[]): Promise<unknown> {
   recorded.length = 0;
   let outcome: unknown;
   try {
-    const result = await runMovement(inputOf(V5(...body), LANGUAGE_VERSION, 'run-rust'));
+    const result = await runMovement(inputOf(CURRENT(...body), LANGUAGE_VERSION, 'run-rust'));
     outcome = { writes: bodies(result.writes) };
   } catch (error) {
     const { name, message } = error as Error;

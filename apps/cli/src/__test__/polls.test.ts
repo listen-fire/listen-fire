@@ -115,7 +115,7 @@ test('a listen\'s `every` is its poll interval, over the source\'s', () => {
   assert.equal(polls(dir).length, 2);
 });
 
-test('the old `pollIntervalSeconds` spelling is refused from v5, with the fix', () => {
+test('the old `pollIntervalSeconds` spelling is refused, with the fix', () => {
   const dir = feedProject('listen to f { pollIntervalSeconds: 300 } fire seen');
   const check = lf(dir, 'check');
   assert.notEqual(check.code, 0);

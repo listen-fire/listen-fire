@@ -17,12 +17,12 @@ fn codes_at(source: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-const RUN_BUILT_V5: &str = "node Company {\n  name: <text>\n  thesis: <text | null>\n}\nfunction main() {\n  deduped = node { companies: <Company> order by arrival }\n  write deduped-[:companies]-> { name: \"Acme\" }\n  map(deduped-[:companies]->, (e) => {\n    BODY\n  })\n}\n";
+const RUN_BUILT_CURRENT: &str = "node Company {\n  name: <text>\n  thesis: <text | null>\n}\nfunction main() {\n  deduped = node { companies: <Company> order by arrival }\n  write deduped-[:companies]-> { name: \"Acme\" }\n  map(deduped-[:companies]->, (e) => {\n    BODY\n  })\n}\n";
 
 #[test]
 fn a_record_this_run_built_updates_in_place_by_its_landing_type() {
     assert_eq!(
-        codes_at(&RUN_BUILT_V5.replace("BODY", "write e { nope: \"x\" }")),
+        codes_at(&RUN_BUILT_CURRENT.replace("BODY", "write e { nope: \"x\" }")),
         vec![("MOV_WRITE_UNKNOWN_FIELD".into(), "'e' (Company.Company this run built) has no field 'nope' — it has: name, thesis".into())]
     );
 }

@@ -1,6 +1,6 @@
 /**
- * Tree-sitter grammar for listen-fire movement files (`.mvt`), language
- * version 5 ("Dancing Wren").
+ * Tree-sitter grammar for listen-fire movement files (`.mvt`), in the
+ * language of the current release.
  *
  * This grammar exists for editors: highlighting, bracket matching,
  * indentation, outline. It is deliberately more permissive than the real

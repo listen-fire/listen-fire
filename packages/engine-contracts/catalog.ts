@@ -1237,10 +1237,8 @@ export const schemaTypeDescriptorSchema = z.object({
    * `deleteRecord` — a promise per type, like a field's `writable`. Default
    * (unset) ⇒ no: an adapter declares it on exactly the types its
    * `deleteRecord` removes (Attio objects, but not its notes; Evertrace
-   * searches, lists and list entries, but not its signals). Since language
-   * version 5 the checker refuses `delete x` where `x`'s type does not
-   * declare it; versions 1–4 leave it to the run, which fails where the
-   * adapter refuses.
+   * searches, lists and list entries, but not its signals). The checker refuses
+   * `delete x` where `x`'s type does not declare it.
    */
   deletable: z.boolean().optional(),
   /**

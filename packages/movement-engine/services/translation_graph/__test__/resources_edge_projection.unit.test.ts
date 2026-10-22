@@ -2,7 +2,7 @@
 // knowledge graph's `Resources`) projects as an ORDINARY edge, walked by its
 // name: its landing is reachable type-space (a described position when the
 // type was described, an undescribed one otherwise), and the edge carries
-// `resources: true` so that, since language version 5, the checker's
+// `resources: true` so that the checker's
 // refusal of `x-[f:_resources]->` off a record can name it. Nothing resolves
 // `_resources` to it.
 

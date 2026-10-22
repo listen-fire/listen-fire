@@ -21,8 +21,8 @@ import { MANIFEST_PROTOCOL_VERSION } from './protocol';
 export { CATALOG_SNAPSHOT_VERSION, DEPRECATED_CATALOG_SNAPSHOT_VERSIONS, SUPPORTED_CATALOG_SNAPSHOT_VERSIONS };
 
 /** A parked flow's state (docs/contracts/park-state.md). Engine to engine: a
- *  host stores it and hands it back. Version 2 is the Rust engine's (language
- *  version 5 on); the TypeScript engine (versions 1–4) writes and reads 1. */
+ *  host stores it and hands it back. Version 2 is the Rust engine's; the earlier
+ *  TypeScript engine wrote and read 1. */
 export const PARK_STATE_VERSION = 2;
 
 /** The park state versions this release reads: each engine its own. */

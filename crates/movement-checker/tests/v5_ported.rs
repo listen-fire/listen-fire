@@ -1,5 +1,5 @@
-//! Tests written at versions 1 to 4 whose rule does not depend on the
-//! version, restated in version 5's surface: scoping, calls, nodes and
+//! Tests written for earlier releases whose rule does not depend on the
+//! release, restated in the current surface: scoping, calls, nodes and
 //! shaped graphs, walks, listens and their time zones, library imports, a
 //! write's absent field, and a retired read of a resource.
 

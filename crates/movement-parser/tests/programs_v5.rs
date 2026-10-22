@@ -1,8 +1,8 @@
-//! The language's version 5 programs (tests/programs_v5.json, one JSON
+//! The language's programs (tests/programs_v5.json, one JSON
 //! object per line: `origin` and `source`): the engine's pattern programs and
 //! their library files (crates/movement-engine/tests/oracle/patterns.json,
 //! without the cases the parser refuses), the examples' movement files, and
-//! the handbook's engine-claim probes. Every one parses at version 5, and its
+//! the handbook's engine-claim probes. Every one parses, and its
 //! eager parse is its plain parse with every slot read.
 //!
 //!   cargo test -p listen-fire-parser --test programs_v5

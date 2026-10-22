@@ -1,4 +1,4 @@
-//! The extraction keyword under language version 5: MOV_EXTRACT_KEYWORD_RETIRED
+//! The extraction keyword in the current language: MOV_EXTRACT_KEYWORD_RETIRED
 //! with the same rewrite the TypeScript checker writes
 //! (lf-platform's packages/legacy-lang/checker/__test__/extract_keyword_retired.unit.test.ts).
 

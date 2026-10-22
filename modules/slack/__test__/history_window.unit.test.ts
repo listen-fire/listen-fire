@@ -162,7 +162,7 @@ describe('the window a real hop WHERE yields', () => {
     ).toEqual({ oldest: '1786622399.999000' });
   });
 
-  // Version 5 lowers a read through the hop's OWN alias to that hop's field
+  // The language lowers a read through the hop's OWN alias to that hop's field
   // (marked field-only), so it is the landing record's timestamp and bounds
   // the window like the bare read does.
   it('a read through the hop\'s own alias bounds the window like the bare field', () => {

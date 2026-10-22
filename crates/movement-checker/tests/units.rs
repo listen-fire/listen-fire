@@ -1,6 +1,6 @@
-//! The run host's units (`cron`, `manual`): from version 5 in every file's
-//! scope, connected, with no import; before it, imported and constructed as
-//! any adapter. The TypeScript checker's twin is packages/movement-lang/
+//! The run host's units (`cron`, `manual`): in every file's scope,
+//! connected, with no import (an earlier release imported and constructed them as
+//! any adapter). The TypeScript checker's twin is packages/movement-lang/
 //! checker/__test__/units.unit.test.ts, on the same catalog.
 
 use movement_checker::{CheckOptions, Diagnostic, check_source};

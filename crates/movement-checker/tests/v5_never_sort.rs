@@ -1,4 +1,4 @@
-//! Language version 5: `fail(…)` inside an expression (a value that never
+//! `fail(…)` inside an expression (a value that never
 //! arrives, TypeScript's `never`) and `sort` by a function key, through the
 //! Rust checker.
 
@@ -54,7 +54,7 @@ fn upgraded(source: &str) -> String {
 const HEAD_V5: &str = "import { `@lf/attio` as attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = connect attio using `Acme CRM`\n";
 const HEAD_OLD: &str = "import { attio } from adapters\nimport { `Acme CRM` } from credentials\ncrm = attio(credentials: `Acme CRM`)\n";
 
-fn v5(body: &str) -> String {
+fn current_form(body: &str) -> String {
     format!("{HEAD_V5}function need(s: <text>) {{\n  return s\n}}\nfunction go(t: <text>, xs: <text[]>, co: <crm-[:company]->>) {{\n{body}\n}}\n")
 }
 fn old_form(body: &str) -> String {
@@ -64,7 +64,7 @@ fn old_form(body: &str) -> String {
 
 /// A body with `m` a text that may be absent.
 fn with_m(body: &str) -> String {
-    v5(&format!("  m = first(xs)\n{body}"))
+    current_form(&format!("  m = first(xs)\n{body}"))
 }
 
 fn clean(body: &str) {
@@ -105,7 +105,7 @@ fn code_after_an_arm_that_only_fails_knows_the_condition() {
 
 #[test]
 fn fail_inside_an_expression_is_not_refused_as_not_yet_read() {
-    let refused = codes(&v5("  x = coalesce(t, fail(\"no\"))"));
+    let refused = codes(&current_form("  x = coalesce(t, fail(\"no\"))"));
     assert!(refused.is_empty(), "{refused:?}");
 }
 
