@@ -3,9 +3,9 @@
 
 **The automation language for agents.**
 
-Your agent writes the automation once. It runs on every event after that, without the agent.
+When an agent looks after a stream of events, it is called on every one: each webhook, cron tick and inbound email is another model call, and no two calls do quite the same thing.
 
-Ask your agent for "when I label an email Dealflow, add the company to Attio and tell #dealflow". It writes a short program, the checker tests it against the real fields and stages of your tools, and from then on every matching email is handled the same way. No agent in the loop, and no tokens spent unless the program asks for AI. When the program needs a person, it waits for one.
+With Listen-Fire the agent is asked once. Tell it "when I label an email Dealflow, add the company to Attio and tell #dealflow"; it writes a short program, checked against the real fields of your tools, and from then on every matching email is handled the same way, with no agent in the loop and no tokens spent unless the program asks for AI. When the program needs a person, it waits for one.
 
 - **For:** teams building agents that have to react to a stream of events, not answer one prompt.
 - **Replaces:** an LLM call on every webhook or cron run. A compiled program is cheaper, deterministic, and the same on the thousandth event as on the first.
