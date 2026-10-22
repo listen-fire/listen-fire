@@ -19,7 +19,7 @@ flowchart LR
 ```
 
 1. **An agent writes a program**: a short text file (`.mvt`) in a language made for moving data between systems. A person can write or review one too.
-2. **The engine runs it whenever that happens**, the same way each time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to pull fields from a document).
+2. **The engine runs it whenever that happens**, the same way each time. No model is needed to run a program; a program may call one for a single step (`ai(…)` to draft text, `extract(…)` to produce structured data from text).
 3. **Every run is recorded**: the event it started from, what it read, and what it wrote.
 
 ## Fastest path to a first run
@@ -43,7 +43,7 @@ lf run hello
 ```
 $ lf run hello
 run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
-  returned "Hello, henrystanford!"
+  returned "Hello, <username>!"
 ```
 
 `lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account and no key. `lf runs` lists every run and `lf runs show <run-id>` opens one.
