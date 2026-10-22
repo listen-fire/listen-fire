@@ -17,6 +17,10 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+
+## [0.12.0-rc.10] - 2026-10-22
+
+- `lf connect` on a module declaring OAuth now asks "Sign in now?"; scripted use passes `--yes`.
 - A model call made inside a run names the run: the models slot's `models.call` request (and the models door's `HostModelRequest`) carries an optional `runId`, which `lf` sends for a call a run makes, so a host's usage rows can attribute the call to its run. A call outside a run sends none; a module that ignores the field is unaffected. See `docs/contracts/models-slot.md`.
 - A limit of `calls: N, per: <window>` is a rolling window in every limiter (lf's built-in, the engine's in-process one and `@listen-fire/postgres-limiter`): no stretch of that length ever holds more than N calls. They were token buckets, which let a burst of N and then one call every window/N put nearly 2N in one window, so a module that declared fewer calls than its provider allows to make up for that can declare the real number now. A refusal's `retryAt` is when the oldest calls leave the window. `@listen-fire/postgres-limiter` keeps each call's instant in a `calls` table; opening it drops the old token columns, and each window starts empty after the upgrade. See `docs/contracts/limiter-slot.md`.
 - The built-ins reference names `pdf.render`'s and `web.render`'s `name` setting (and gains a `web.render` entry).
@@ -2219,7 +2223,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.10...HEAD
+[0.12.0-rc.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...v0.12.0-rc.10
 [0.12.0-rc.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...v0.12.0-rc.9
 [0.12.0-rc.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.7...v0.12.0-rc.8
 [0.12.0-rc.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.6...v0.12.0-rc.7
