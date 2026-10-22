@@ -1360,7 +1360,6 @@
   {
    "name": "the @old edge and a write handle's fields",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  org = write crm-[:companies]-> { unique by (`Name`), Name: \"Acme\", Domains: [\"acme.com\"] }\n  n = count(org-[:@previous]->)\n  write crm-[:notes]-> { title: org.created ? \"y\" : \"n\" }\n  ex = match crm-[:companies]-> { unique by (`Name`), Name: \"Acme\" }\n  if (ex != null) { k = count(ex-[:@old]->) }\n  write org { Name: \"Acme Ltd\" }\n  org2 = write org { Name: \"Acme Ltd\" }\n  d = org.Domains\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_ARTIFICIAL_EDGE_UNKNOWN 9:7-9:32 '-[:@previous]->': '@' names an edge the engine makes, not one a system declares — the only one is '@old' (the record as it stood before a write) (see handbook: writes#what-the-write-did)",
@@ -1371,7 +1370,6 @@
   {
    "name": "a hop's LIMIT where the source takes none",
    "snapshot": "cap",
-   "version": 5,
    "source": "import { cap } from adapters\nimport { cap_cred } from credentials\n\nc = connect cap using cap_cred\nfunction main(msg: <c-[:company]->>) {\n  n = count(msg-[p:staff LIMIT 3]->)\n  k = count(msg-[p:people LIMIT 3]->)\n}\nlisten to c fire main\n",
    "expected": [
     "MOV_LIMIT_NEEDS_ORDER 6:7-6:37 'staff' comes back in no particular order, so 'LIMIT 3' takes some 3 of them — a different 3 each run. Say which ones you mean with an ORDER BY (`-[:staff ORDER BY `…` DESC LIMIT 3]->`).",
@@ -1382,7 +1380,6 @@
   {
    "name": "delete refuses what is no deletable record",
    "snapshot": "delete",
-   "version": 5,
    "source": "import { crm, loose } from adapters\ndb = connect crm\nfree = connect loose\n\nnode Company: \"each company named\" {\n  name: <text> \"its name\"\n}\n\nfunction scan(x: <db-[:company]->>) {\n  x-[n:notes]-> {\n    delete n\n  }\n  v = \"Acme\"\n  delete v\n  people = x-[:people]->\n  delete people\n  w = x.name == \"a\" ? x : null\n  delete w\n  d = extract from [x.name] {\n    node co: \"a company\" {\n      nm: <text> \"the name\"\n    }\n  }\n  delete d\n  d-[k:co]-> {\n    delete k\n  }\n  delete x\n}\n",
    "expected": [
     "MOV_DELETE_NOT_DECLARED 11:5-11:13 'n' is db.note, and its system does not declare that it can delete one — 'delete' is checked against the system's own promise ('deletable' on the type it describes). Change the record instead ('write n { … }'), or delete it in a system that can.",
@@ -1398,7 +1395,6 @@
   {
    "name": "a credential is never a value",
    "snapshot": "cred",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { acme } from credentials\nimport { summarise } from plugins\ncrm = connect attio using acme\nfunction echo(v: <text>) {\n  return v\n}\nfunction m() {\n  x1 = acme\n  x2 = acme.token\n  x3 = \"${acme}\"\n  x4 = acme == \"acme\"\n  if (acme == null) { fail(\"none\") }\n  x5 = acme != null\n  x6 = [acme]\n  x7 = { a: acme }\n  fail(\"${acme}\")\n  x8 = ai(\"say ${acme}\")\n  x9 = Text.pairs(acme)\n  x10 = acme.token\n  x11 = echo(acme)\n  x12 = summarise(acme)\n  write crm-[:companies]-> { name: acme }\n  return acme\n}\nfunction n(c: <acme-[:company]->>) {\n  y = 1\n}\n",
    "expected": [
     "MOV_CREDENTIAL_NOT_A_VALUE 9:8-9:12 'acme' is a credential, which is never a value in a program — it is only named after 'using' where an adapter is connected ('connect … using acme'), and the host resolves it there",
@@ -1423,7 +1419,6 @@
   {
    "name": "a '#' hop is retired",
    "snapshot": "meta",
-   "version": 5,
    "source": "import { slack, loose } from adapters\nimport { vcUrlRetrieval as vc_url_retrieval, linkedinEnrichment as linkedin_enrichment } from plugins\nchat = connect slack\nfree = connect loose\nfunction scan(c: <chat-[:channel]->>, d: <chat-[:channel]->-[:#members]->>) {\n  x1 = first(c-[:#foo]->)\n  x2 = c-[:#foo]->.Name\n  c-[:#foo]-> {\n    y = 1\n  }\n  c-[#foo]-> {\n    y = 1\n  }\n  x3 = c-[:`#foo`]->.Name\n  write c-[:#foo]-> { Body: \"a\" }\n  x4 = count(chat-[:#Channels]->)\n  x5 = first(free-[:#foo]->)\n  c-[f:#resources]-> {\n    y = f.url\n  }\n  x6 = c-[t:#transform { plugin: \"vc_url_retrieval\" }]->.out\n  x7 = c-[t:#transform { plugin: \"linkedin_enrichment\" }]->.out\n  x8 = c-[l:#linked WHERE l.type == \"ATTIO\"]->.external_id\n  x9 = c-[t:#transform]->.out\n}\nlisten to chat fire scan\n",
    "expected": [
     "MOV_META_HOP_RETIRED 5:42-5:75 '-[:#members]->' is a '#' hop, and '#' hops are retired — there are no meta edges, only the edges a system declares. Walk an edge the record has; for what a plugin computes, import the plugin and call it ('import { fetch_url } from plugins', then 'page = fetch_url(…)')",
@@ -1446,7 +1441,6 @@
   {
    "name": "a '#' hop in a type's address",
    "snapshot": "meta",
-   "version": 5,
    "source": "import { slack } from adapters\nchat = connect slack\nfunction scan(c: <chat-[:#channel]->>) {\n  sent = node { messages: <chat-[:Channels]->-[:#members]->> }\n  y = 1\n}\nlisten to chat fire scan\n",
    "expected": [
     "MOV_META_HOP_RETIRED 3:18-3:38 '-[:#channel]->' is a '#' hop, and '#' hops are retired — there are no meta edges, only the edges a system declares. Walk an edge the record has; for what a plugin computes, import the plugin and call it ('import { fetch_url } from plugins', then 'page = fetch_url(…)')",
@@ -1456,7 +1450,6 @@
   {
    "name": "__proto__ is a name",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email } from adapters\nimport { dealflow_inbox } from credentials\n\ninbox = connect email using dealflow_inbox\nnode Company: \"each company\" {\n  name: <text> \"the name\"\n  node __proto__: \"each round\" { __proto__: <text> \"the stage\" }\n}\nfunction main(msg: <inbox-[:message]->>) {\n  __proto__ = 1\n  xs = map([1, 2], (__proto__) => {\n    return __proto__\n  })\n  deals = extract from [msg.`text`] {\n    __proto__: \"the pitch\"\n    node fund: \"each fund\" {\n      __proto__: \"the name\"\n    }\n  }\n}\nfunction f(__proto__: <text>) {\n  return 1\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_SHADOWED_NAME 11:21-11:30 '__proto__' is already a binding at line 10 — a name means one thing everywhere it is visible, so this one would hide it. Rename it.",
@@ -1466,7 +1459,6 @@
   {
    "name": "a value that may be a record, handed to a value parameter",
    "snapshot": "maybe",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { score } from plugins\ncrm = connect attio using crm_cred\nfunction f(n: <number>) {\n  return n\n}\nfunction all3(ns: <number[]>) {\n  return 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x1 = f(coalesce(co, 1))\n  c = true\n  x2 = f(c ? co : 1)\n  v = coalesce(co, 1)\n  x3 = f(v)\n  f(coalesce(co, 1))\n  x4 = all3([coalesce(co, 1)])\n}\n",
    "expected": [
     "MOV_CALL_ARG_MAYBE_RECORD 13:10-13:25 'f' expects number for 'n' (argument 1), but 'coalesce(co, 1)' may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value",
@@ -1479,7 +1471,6 @@
   {
    "name": "all's receipt types each slot under 5",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  r = all(\n    () => {\n      a = write crm-[:companies]-> { unique by (`Name`), Name: \"Acme\" }\n      return a\n    },\n    () => 2,\n  )\n  n = r[0].Name\n  t = r[1] + \"x\"\n  write crm-[:notes]-> { title: r[1] }\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_ARITH_NON_NUMERIC 16:7-16:17 An arithmetic operation requires numeric operands — the right side of '+' is text. Build the string with \"${…}\" interpolation instead."
@@ -1488,7 +1479,6 @@
   {
    "name": "all with onError warn leaves each slot maybe absent",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  r = all(() => \"one\", () => 2, { onError: \"warn\" })\n  write crm-[:notes]-> { title: r[0] }\n  write crm-[:notes]-> { title: r[1] }\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_ABSENT_REQUIRED 9:33-9:37 'title' on crm.note needs a value, but 'r[0]' may be absent (text (or absent)) — write 'title: coalesce(r[0], \"unknown\")' to fall back to a value that is always there, or 'title ?: r[0]' to leave it unset when absent (see handbook: front#maybe-absent)",
@@ -1498,7 +1488,6 @@
   {
    "name": "an arm returning a closure is no data in the receipt",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  r = all(() => { return () => 1 }, () => 2)\n}\nlisten to inbox fire main\n",
    "expected": [
     "MOV_CLOSURE_NOT_DATA 8:11-8:35 'all' keeps what each arm returns in its answer, and this arm returns a closure, and a closure is not data — keep it in a variable ('g = …', called as 'g()') or pass it as an argument ('all(f, g)', 'map(xs, (x) => …)')"
@@ -1507,279 +1496,246 @@
   {
    "name": "an until with an inline closure condition binds what it returns",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\ngraph = connect kg using native_knowledge\nfunction main(msg: <inbox-[:message]->>) {\n  ok = await until(() => { return 3 }, { every: 5m })\n  write crm-[:notes]-> { title: ok }\n  b = await until(() => { return msg }, { every: 5m })\n  write crm-[:notes]-> { title: b.subject }\n}\nlisten to inbox fire main\n",
    "expected": []
   },
   {
-   "name": "closure candidates: a record the first named function returns (v5)",
+   "name": "closure candidates: a record the first named function returns",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction mk(c: <boolean>) {\n  if (c) {\n    return made\n  }\n    return label\n}\nfunction m() {\n  g = mk(true)\n  x = g()\n  write crm-[:notes]-> { title: x }\n}",
    "expected": [
     "MOV_WRITE_FIELD_TYPE 23:33-23:34 'title' on crm.note is text, and this may be a crm.company handle — a record, not a value. Write a field off it ('title: r.`Name`'), or join the two records with a link ('link … -[:edge]-> r')."
    ]
   },
   {
-   "name": "closure candidates: a record a later named function returns (v5)",
+   "name": "closure candidates: a record a later named function returns",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction mk(c: <boolean>) {\n  if (c) {\n    return label\n  }\n    return made\n}\nfunction m() {\n  g = mk(true)\n  x = g()\n  write crm-[:notes]-> { title: x }\n}",
    "expected": [
     "MOV_WRITE_FIELD_TYPE 23:33-23:34 'title' on crm.note is text, and this may be a crm.company handle — a record, not a value. Write a field off it ('title: r.`Name`'), or join the two records with a link ('link … -[:edge]-> r')."
    ]
   },
   {
-   "name": "closure candidates: a record a later closure literal returns (v5)",
+   "name": "closure candidates: a record a later closure literal returns",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\n\nfunction m() {\n  c = true\n  mk = () => {\n    if (c) {\n      return () => \"x\"\n    }\n    return () => made()\n  }\n  g = mk()\n  x = g()\n  write crm-[:notes]-> { title: x }\n}",
    "expected": [
     "MOV_WRITE_FIELD_TYPE 25:33-25:34 'title' on crm.note is text, and this may be a crm.company handle — a record, not a value. Write a field off it ('title: r.`Name`'), or join the two records with a link ('link … -[:edge]-> r')."
    ]
   },
   {
-   "name": "closure candidates: every candidate arity (v5)",
+   "name": "closure candidates: every candidate arity",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction mk(c: <boolean>) {\n  if (c) {\n    return label\n  }\n    return pair\n}\nfunction m() {\n  g = mk(true)\n  x = g()\n}",
    "expected": [
     "MOV_CALL_ARITY 22:7-22:10 'g' may be any of several closures, taking 0 or 2 arguments, got 0"
    ]
   },
   {
-   "name": "closure candidates: parameters no argument fits (v5)",
+   "name": "closure candidates: parameters no argument fits",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\n\nfunction m() {\n  c = true\n  mk = () => {\n    if (c) {\n      return (n: <number>) => n + 1\n    }\n    return (n: <text>) => n\n  }\n  g = mk()\n  x = g(1)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 24:7-24:11 'g' may be any of several closures, and two disagree about argument 1: a closure returning number takes number for 'n', and a closure returning text takes text for 'n'. No argument fits both, so no call fits every closure it may be, as in TypeScript. Give them parameters one argument fits, or call each where it is known"
    ]
   },
   {
-   "name": "closure candidates: the narrowest parameter (v5)",
+   "name": "closure candidates: the narrowest parameter",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\n\nfunction m() {\n  c = true\n  mk = () => {\n    if (c) {\n      return (n: <number>) => n + 1\n    }\n    return (n: <number>) => n\n  }\n  g = mk()\n  x = g(\"a\")\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 24:9-24:12 'g' expects number for 'n' (argument 1), but this argument is text"
    ]
   },
   {
-   "name": "closure candidates: candidates that agree (v5)",
+   "name": "closure candidates: candidates that agree",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction mk(c: <boolean>) {\n  if (c) {\n    return label\n  }\n    return label\n}\nfunction m() {\n  g = mk(true)\n  x = g()\n  write crm-[:notes]-> { title: x }\n}",
    "expected": []
   },
   {
-   "name": "closure candidates: a declared return narrows (v5)",
+   "name": "closure candidates: a declared return narrows",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction mk(c: <boolean>): <() => <text>> {\n  if (c) {\n    return made\n  }\n    return label\n}\nfunction m() {\n  g = mk(true)\n  x = g()\n  write crm-[:notes]-> { title: x }\n}",
    "expected": [
     "MOV_RETURN_TYPE 16:5-16:16 'mk' declares it returns <() => <text>>, but this returns a closure returning a crm.company handle"
    ]
   },
   {
-   "name": "closure candidates: a named function aliased and returned as a value (v5)",
+   "name": "closure candidates: a named function aliased and returned as a value",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction made() {\n  o = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  return o\n}\nfunction label() {\n  return \"x\"\n}\nfunction pair(a: <number>, b: <number>) {\n  return a\n}\nfunction pick() {\n  return label\n}\nfunction m() {\n  f = made\n  y = f()\n  write crm-[:notes]-> { title: y }\n  h = pick()\n  z = h()\n  write crm-[:notes]-> { title: z }\n}",
    "expected": [
     "MOV_WRITE_FIELD_TYPE 20:33-20:34 'title' on crm.note is text, and this is a crm.company handle — a record, not a value. Write a field off it ('title: r.`Name`'), or join the two records with a link ('link … -[:edge]-> r')."
    ]
   },
   {
-   "name": "member fit: MAP closure number (v5)",
+   "name": "member fit: MAP closure number",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([\"a\"], (n: <number>) => n)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:16 the function for 'map' expects number for 'n' (argument 1), but each member 'map' hands it is text"
    ]
   },
   {
-   "name": "member fit: MAP named (v5)",
+   "name": "member fit: MAP named",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([\"a\"], inc)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:16 'inc' expects number for 'n' (argument 1), but each member 'map' hands it is text"
    ]
   },
   {
-   "name": "member fit: FILTER (v5)",
+   "name": "member fit: FILTER",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = filter([\"a\"], (n: <number>) => n > 1)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:14-9:19 the function for 'filter' expects number for 'n' (argument 1), but each member 'filter' hands it is text"
    ]
   },
   {
-   "name": "member fit: GROUPBY (v5)",
+   "name": "member fit: GROUPBY",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = List.groupBy([\"a\"], (n: <number>) => \"k\")\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:20-9:25 the function for 'List.groupBy' expects number for 'n' (argument 1), but each member 'List.groupBy' hands it is text"
    ]
   },
   {
-   "name": "member fit: KEYBY (v5)",
+   "name": "member fit: KEYBY",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = List.keyBy([\"a\"], (n: <number>) => \"k\")\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:18-9:23 the function for 'List.keyBy' expects number for 'n' (argument 1), but each member 'List.keyBy' hands it is text"
    ]
   },
   {
-   "name": "member fit: REDUCE start (v5)",
+   "name": "member fit: REDUCE start",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = reduce([1, 2], (acc: <number>, n: <number>) => acc + n, \"s\")\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:63-9:66 the function for 'reduce' expects number for 'acc' (argument 1), but its starting value 'reduce' hands it is text"
    ]
   },
   {
-   "name": "member fit: REDUCE member (v5)",
+   "name": "member fit: REDUCE member",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = reduce([\"a\"], (acc: <number>, n: <number>) => acc + n, 0)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:14-9:19 the function for 'reduce' expects number for 'n' (argument 2), but each member 'reduce' hands it is text"
    ]
   },
   {
-   "name": "member fit: record member (v5)",
+   "name": "member fit: record member",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([co], (n: <number>) => n)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:15 the function for 'map' expects number for 'n' (argument 1), but each member 'map' hands it is a crm.company handle"
    ]
   },
   {
-   "name": "member fit: maybe record member (v5)",
+   "name": "member fit: maybe record member",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([coalesce(co, 1)], (n: <number>) => n)\n}",
    "expected": [
     "MOV_CALL_ARG_MAYBE_RECORD 9:11-9:28 the function for 'map' expects number for 'n' (argument 1), but each member 'map' hands it may be a crm.company handle — a record, not a value, and such a union is no number, as in TypeScript. Narrow it to the record with 'is' and pass a field off it ('r.`Name`'), or fill every arm with a value"
    ]
   },
   {
-   "name": "member fit: hop records to text closure (v5)",
+   "name": "member fit: hop records to text closure",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  up = (t: <text>) => Text.upper(t)\n  x = map(crm-[:companies]->, up)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 10:11-10:29 'up' expects text for 't' (argument 1), but each member 'map' hands it is crm.company"
    ]
   },
   {
-   "name": "member fit: FILTER hop (v5)",
+   "name": "member fit: FILTER hop",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  long = (t: <text>) => Text.length(t) > 3\n  x = filter(crm-[:companies]->, long)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 10:14-10:32 'long' expects text for 't' (argument 1), but each member 'filter' hands it is crm.company"
    ]
   },
   {
-   "name": "member fit: REDUCE record start (v5)",
+   "name": "member fit: REDUCE record start",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  add = (acc: <text>, n: <text>) => Text.concat(acc, n)\n  x = reduce([\"a\"], add, co)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 10:26-10:28 'add' expects text for 'acc' (argument 1), but its starting value 'reduce' hands it is a crm.company handle"
    ]
   },
   {
-   "name": "member fit: MAP adding (v5)",
+   "name": "member fit: MAP adding",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([\"a\"], (t: <number>) => t + 1)\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:16 the function for 'map' expects number for 't' (argument 1), but each member 'map' hands it is text"
    ]
   },
   {
-   "name": "member fit: fits (v5)",
+   "name": "member fit: fits",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([1, 2], (n: <number>) => n)\n}",
    "expected": []
   },
   {
-   "name": "member fit: untyped (v5)",
+   "name": "member fit: untyped",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([\"a\"], (n) => n)\n}",
    "expected": []
   },
   {
-   "name": "member fit: REDUCE fits (v5)",
+   "name": "member fit: REDUCE fits",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = reduce([1, 2], (acc: <number>, n: <number>) => acc + n, 0)\n}",
    "expected": []
   },
   {
-   "name": "member fit: field off record (v5)",
+   "name": "member fit: field off record",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([co], (c) => c.name)\n}",
    "expected": []
   },
   {
-   "name": "member fit: untyped over maybe record (v5)",
+   "name": "member fit: untyped over maybe record",
    "snapshot": "cands",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction inc(n: <number>) {\n  return n + 1\n}\nfunction m() {\n  co = write crm-[:companies]-> { name: \"a\" }\n  x = map([coalesce(co, 1)], (n) => n)\n}",
    "expected": []
   },
   {
-   "name": "plugin arg: record in MULTI to structured (v5)",
+   "name": "plugin arg: record in MULTI to structured",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = summarise(List.compact(org))\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:17-9:34 'summarise' takes structured data for 'data', and 'data[…]' is a crm.company handle — a record, not a value. A record goes to a plugin only as the whole argument ('data: r', which hands it the record's fields); inside a value, write a field off it ('r.`Name`')."
    ]
   },
   {
-   "name": "plugin arg: record under a key (v5)",
+   "name": "plugin arg: record under a key",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = summarise({ a: coalesce(org, \"x\") })\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:17-9:42 'summarise' takes structured data for 'data', and 'data.a' may be a crm.company handle — a record, not a value. A record goes to a plugin only as the whole argument ('data: r', which hands it the record's fields); inside a value, write a field off it ('a: r.`Name`')."
    ]
   },
   {
-   "name": "plugin arg: file in COALESCE to open (v5)",
+   "name": "plugin arg: file in COALESCE to open",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = relay(coalesce(f, \"x\"))\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:13-9:29 'relay' takes structured data for 'data', and 'data' may be file — a file, not a value. A file goes to a plugin only as an argument it takes a file for; inside a value, put its text in its place ('data: File.read(f)')."
    ]
   },
   {
-   "name": "plugin arg: record whole of COALESCE (v5)",
+   "name": "plugin arg: record whole of COALESCE",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = summarise(coalesce(org, org))\n}",
    "expected": []
   },
   {
-   "name": "plugin arg: system record whole (v5)",
+   "name": "plugin arg: system record whole",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  c = first(crm-[:companies]->)\n  s = summarise(c)\n}",
    "expected": [
     "MOV_FOLD_NEEDS_ORDER 9:7-9:32 first takes the first of a sequence, and 'companies' comes back in no particular order — so there is no first. If you mean the one that matched, write only(…) — it answers that one and fails the run if there turns out to be more than one. Order the hop (`-[:companies ORDER BY `…` DESC]->`), or reach for a relationship the source keeps in order.",
@@ -1787,61 +1743,54 @@
    ]
   },
   {
-   "name": "plugin arg: file under a key to text (v5)",
+   "name": "plugin arg: file under a key to text",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = tag({ a: f })\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:19 'tag' takes text for 'label', and 'label.a' is file — a file, not a value. A file goes to a plugin only as an argument it takes a file for; put its text in its place ('a: File.read(f)')."
    ]
   },
   {
-   "name": "plugin arg: file in a list to file (v5)",
+   "name": "plugin arg: file in a list to file",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = ocr([f])\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:14 'ocr' takes file for 'doc', and 'doc[0]' is file — a file, not a value. A file goes to a plugin only as an argument it takes a file for; hand it over as the whole argument ('doc: f'), or put its text in its place ('File.read(f)')."
    ]
   },
   {
-   "name": "plugin arg: file whole to file (v5)",
+   "name": "plugin arg: file whole to file",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = ocr(f)\n}",
    "expected": []
   },
   {
-   "name": "plugin arg: maybe record to number (v5)",
+   "name": "plugin arg: maybe record to number",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = score(coalesce(org, 1))\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:13-9:29 'score' takes number for 'n', and this may be a crm.company handle — a record, not a value. Pass one of its fields ('n: r.`Name`')."
    ]
   },
   {
-   "name": "plugin arg: record in IF to text (v5)",
+   "name": "plugin arg: record in IF to text",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = tag(1 > 0 ? org : \"x\")\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:11-9:28 'tag' takes text for 'label', and this may be a crm.company handle — a record, not a value. Pass one of its fields ('label: r.`Name`')."
    ]
   },
   {
-   "name": "plugin arg: node literal with file to structured (v5)",
+   "name": "plugin arg: node literal with file to structured",
    "snapshot": "plug",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\nimport { summarise, relay, tag, ocr, score } from plugins\n\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"Acme Inc.\" }\n  f = File.from(\"contents\", \"text\")\n  s = summarise({ k: \"x\", up: f })\n}",
    "expected": [
     "MOV_CALL_ARG_TYPE 9:17-9:34 'summarise' takes structured data for 'data', and 'data.up' is file — a file, not a value. A file goes to a plugin only as an argument it takes a file for; inside a value, put its text in its place ('up: File.read(f)')."
    ]
   },
   {
-   "name": "opaque record: a function parameter to a json plugin (v5)",
+   "name": "opaque record: a function parameter to a json plugin",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  s = summarise(e)\n  write sink-[:rows]-> { v: s }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 16:9-16:10 'use' needs every field of 'e' in hand — its body hands it to 'summarise' as 'data', which takes every field (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -1849,18 +1798,16 @@
    ]
   },
   {
-   "name": "checked against TS: AWAIT_REQUIRED a bare read of an answer-only edge (v5)",
+   "name": "checked against TS: AWAIT_REQUIRED a bare read of an answer-only edge",
    "snapshot": "polls",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  n = count(a-[:Result]->)\n}\n",
    "expected": [
     "MOV_AWAIT_REQUIRED 8:7-8:27 '-[:Result]->' on a p write handle resolves only when it is answered — read it with 'await' (`await …-[:Result]->`). A bare traversal reads now and would yield nothing until then."
    ]
   },
   {
-   "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using EXISTS (v5)",
+   "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using EXISTS",
    "snapshot": "polls",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[:Result WHERE EXISTS(a-[:Result]->)]->)\n}\n",
    "expected": [
     "MOV_AWAIT_IMPURE_WHERE 8:19-8:60 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields.",
@@ -1868,50 +1815,44 @@
    ]
   },
   {
-   "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using AI (v5)",
+   "name": "checked against TS: AWAIT_IMPURE_WHERE an awaited WHERE using AI",
    "snapshot": "polls",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[:Result WHERE AI(\"is it good?\")]->)\n}\n",
    "expected": [
     "MOV_AWAIT_IMPURE_WHERE 8:19-8:56 The WHERE on '-[:Result]->' has to run in the app (it uses ai() or exists), which an 'await' can't do — its condition is evaluated against each candidate without re-running the movement. Narrow it with a pure predicate over the awaited record's own fields."
    ]
   },
   {
-   "name": "checked against TS: an awaited pure WHERE is clean (v5)",
+   "name": "checked against TS: an awaited pure WHERE is clean",
    "snapshot": "polls",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\"] }\n  r = await first(a-[r2:Result WHERE r2.Answer == \"Seed\"]->)\n}\n",
    "expected": []
   },
   {
-   "name": "checked against TS: WRITE_GENERIC_UNTYPED a generic field built at run time (v5)",
+   "name": "checked against TS: WRITE_GENERIC_UNTYPED a generic field built at run time",
    "snapshot": "polls_warn",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m(q: <text>) {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [q] }\n}\n",
    "expected": [
     "MOV_WRITE_GENERIC_UNTYPED 7:56-7:59 'Choices' is built at run time, so what '-[:Result]->' delivers on p.Poll cannot be typed here — it stays one opaque value you cannot read a part out of. Name 'Choices' with a literal to read the answer back by name"
    ]
   },
   {
-   "name": "checked against TS: WRITE_GENERIC_UNTYPED silent for literals (v5)",
+   "name": "checked against TS: WRITE_GENERIC_UNTYPED silent for literals",
    "snapshot": "polls_warn",
-   "version": 5,
    "source": "import { polls } from adapters\nimport { probe } from credentials\n\np = connect polls using probe\n\nfunction m() {\n  a = write p-[:Poll]-> { Question: \"Round?\", Choices: [\"Seed\", \"Series A\"] }\n}\n",
    "expected": []
   },
   {
-   "name": "checked against TS: GRAPH_COPY_SHAPE a record copied whose edge records fit (v5)",
+   "name": "checked against TS: GRAPH_COPY_SHAPE a record copied whose edge records fit",
    "snapshot": "graphs",
-   "version": 5,
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Archived> { ...e }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox fire m"
    ]
   },
   {
-   "name": "checked against TS: GRAPH_COPY_SHAPE an edge whose records miss a field (v5)",
+   "name": "checked against TS: GRAPH_COPY_SHAPE an edge whose records miss a field",
    "snapshot": "graphs",
-   "version": 5,
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Strict> { ...e }\n}\n",
    "expected": [
     "MOV_GRAPH_COPY_SHAPE 29:23-29:27 '...e' copies its 'Attachments' records, and <Strict> → Attachments doesn't fit them: it has no `Missing` — write 'Attachments' after the spread with a body ('Attachments: e-[x:Attachments]-> { field: x.Field }')",
@@ -1919,9 +1860,8 @@
    ]
   },
   {
-   "name": "checked against TS: GRAPH_COPY_SHAPE an edge whose records hold another type (v5)",
+   "name": "checked against TS: GRAPH_COPY_SHAPE an edge whose records hold another type",
    "snapshot": "graphs",
-   "version": 5,
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Typed> { ...e }\n}\n",
    "expected": [
     "MOV_GRAPH_COPY_SHAPE 29:22-29:26 '...e' copies its 'Attachments' records, and <Typed> → Attachments doesn't fit them: its `Pages` is number, not text — write the text it should be: `Text.from(…)` — write 'Attachments' after the spread with a body ('Attachments: e-[x:Attachments]-> { field: x.Field }')",
@@ -1929,18 +1869,16 @@
    ]
   },
   {
-   "name": "checked against TS: GRAPH_COPY_SHAPE an edge written after the spread (v5)",
+   "name": "checked against TS: GRAPH_COPY_SHAPE an edge written after the spread",
    "snapshot": "graphs",
-   "version": 5,
    "source": "import { email } from adapters\ninbox = connect email\n\nnode Archived {\n  Subject: <text>\n  node Attachments {\n    Name: <text | null>\n    File: <file>\n    node Versions {\n      Label: <text>\n    }\n  }\n}\n\nnode Strict {\n  Subject: <text>\n  node Attachments {\n    Missing: <text>\n  }\n}\n\nnode Typed {\n  Subject: <text>\n  node Attachments {\n    Pages: <text>\n  }\n}\nfunction m(e: <inbox-[:message]->>) {\n  g = graph<Strict> { ...e, Attachments: e-[x:Attachments]-> { Missing: x.Type } }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 28:1-28:1 'm' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to inbox fire m"
    ]
   },
   {
-   "name": "checked against TS: BORROW_MALFORMED a field name holding a dot (v5)",
+   "name": "checked against TS: BORROW_MALFORMED a field name holding a dot",
    "snapshot": "old_edge",
-   "version": 5,
    "source": "import { email, attio, kg } from adapters\nimport { dealflow_inbox, acme_main, native_knowledge } from credentials\n\ninbox = connect email using dealflow_inbox\ncrm   = connect attio using acme_main\nfunction m(msg: <inbox-[:message]->>) {\n  deals = extract from [msg.`text`] {\n    node company: \"each company\" {\n      name: \"the name\"\n      stage: <crm-[:companies]->.`Na.me`> \"the stage\"\n    }\n  }\n}\nlisten to inbox fire m\n",
    "expected": [
     "MOV_EXTRACT_KEYWORD_RETIRED 7:11-12:4 the extraction keyword ('extract from […] { … }') is retired — an extraction is the call over a declared node shape: 'extract(content, Shape)' for each record the content holds, 'extractOne(content, Shape)' for the one it describes. The fix declares this tree as 'node DealsShape' and writes 'deals = extractOne(content, DealsShape)': the one record the keyword's result was, its fields read off it and its nodes walked from it as before. Review it before applying: the record may be absent where the keyword's result never was (a field read off it then needs a fallback), an untyped field becomes <text>, and the model is asked through the call's prompt (see handbook: front#extraction)",
@@ -1950,7 +1888,6 @@
   {
    "name": "a record this run built that may be empty is not written in place unless a != NULL guard proves it there",
    "snapshot": "none",
-   "version": 5,
    "source": "node Company: \"each company named here\" {\n  name: <text> \"the company's name\"\n  site: <text | null> \"its website\"\n}\nfunction m(t: <text>) {\n  found = EXTRACT([t], Company)\n  one = EXTRACTONE([t], Company)\n  write found { name: \"x\" }\n  write one { name: \"y\" }\n  if (one != null) {\n    write one { name: \"h\" }\n  }\n  if (one is <Company>) {\n    write one { name: \"i\" }\n  }\n  head = found[0]\n  write head { name: \"w\" }\n  deduped = node { companies: <Company> order by arrival }\n  write deduped-[:companies]-> { name: \"Acme\" }\n  pick = deduped-[:companies]->[0]\n  write pick { name: \"p\" }\n  if (pick != null) {\n    write pick { name: \"q\" }\n  }\n  return 1\n}\n",
    "expected": [
     "MOV_WRITE_POSITION_NOT_RECORD 9:9-9:12 'one' is an extracted 'Company' record (which may be empty) — 'write one { … }' updates an already-identified record in place, so it needs a record position: a traversal alias or a prior write result",
@@ -1962,7 +1899,6 @@
   {
    "name": "an extraction's result is not a record to write in place",
    "snapshot": "none",
-   "version": 5,
    "source": "function m(t: <text>) {\n  ex = extract from [t] {\n    company: \"the company\"\n  }\n  write ex { company: \"x\" }\n  return 1\n}\n",
    "expected": [
     "MOV_EXTRACT_KEYWORD_RETIRED 2:8-4:4 the extraction keyword ('extract from […] { … }') is retired — an extraction is the call over a declared node shape: 'extract(content, Shape)' for each record the content holds, 'extractOne(content, Shape)' for the one it describes. The fix declares this tree as 'node ExShape' and writes 'ex = extractOne(content, ExShape)': the one record the keyword's result was, its fields read off it and its nodes walked from it as before. Review it before applying: the record may be absent where the keyword's result never was (a field read off it then needs a fallback), an untyped field becomes <text>, and the model is asked through the call's prompt (see handbook: front#extraction)",
@@ -1972,7 +1908,6 @@
   {
    "name": "a system's record that may be empty is not written in place unless a != NULL guard proves it there",
    "snapshot": "maybe",
-   "version": 5,
    "source": "import { attio } from adapters\nimport { crm_cred } from credentials\ncrm = connect attio using crm_cred\nfunction m() {\n  org = write crm-[:companies]-> { name: \"A\" }\n  pick = crm-[:companies]->[0]\n  write pick { name: \"p\" }\n  if (pick != null) {\n    write pick { name: \"q\" }\n  }\n  if (pick is <crm-[:company]->>) {\n    write pick { name: \"r\" }\n  }\n  return 1\n}\n",
    "expected": [
     "MOV_FOLD_NEEDS_ORDER 6:10-6:31 AT reads a position in a sequence, and 'companies' comes back in no particular order — every index picks an arbitrary member. Order the hop (`-[:companies ORDER BY `…` DESC]->`), or reach for a relationship the source keeps in order.",
@@ -1984,7 +1919,6 @@
   {
    "name": "a walk or a match off a node declaration's own name starts at the declaration, a graph whose one collection is itself",
    "snapshot": "none",
-   "version": 5,
    "source": "node Note {\n  title: <text>\n}\nfunction m() {\n  found = match Note-[:item]-> { title: \"x\" }\n  w = Note-[:item]->\n  Note-[n:item]-> {\n    x = 1\n  }\n  return 1\n}\n",
    "expected": [
     "MOV_LINKED_UNKNOWN_EDGE 5:17-5:32 'Note' (the instance itself) has no edge 'item' — a match looks along an edge the parent's type declares; it declares: Note",
@@ -1995,7 +1929,6 @@
   {
    "name": "a unique by part the lowering refuses is MOV_EXPR_PARSE at the part",
    "snapshot": "delete",
-   "version": 5,
    "source": "import { crm } from adapters\nc = connect crm\nfunction m() {\n  write c-[:company]-> { unique by (`name` == map([1], (v) => v)[0]) name: \"a\" }\n  found = match c-[:company]-> { unique by (`name` && `name` == map([1], (v) => v)[0]) name: \"a\" }\n  return 1\n}\n",
    "expected": [
     "MOV_EXPR_PARSE 4:37-4:68 a closure cannot be written here — bind it to a name first and pass the name",
@@ -2005,7 +1938,6 @@
   {
    "name": "a message or a fix quotes an expression's nested calls as written, and every place after one is where it is written",
    "snapshot": "none",
-   "version": 5,
    "source": "function m(t: <text>) {\n  inc = (v: <number>) => v + 1\n  c = INC(inc(1)) * 10\n  d = LEN([inc(1), 2])\n  e = AT([inc(1), 2], 0)\n  f = UPPER(t) + \"${inc(2)}\"\n  g = CONTAINS([inc(1)], 2)\n  return [c, d, e, f, g]\n}\n",
    "expected": [
     "MOV_V5_SPELLING 5:7-5:25 the retired spelling `AT(x, i)` is written `x[i]`",
@@ -2017,9 +1949,8 @@
    ]
   },
   {
-   "name": "a version 5 block head whose WHERE joins with && is read under version 5: its bare fields are refused",
+   "name": "a block head whose WHERE joins with && is read in the current language: its bare fields are refused",
    "snapshot": "delete",
-   "version": 5,
    "source": "import { crm } from adapters\nc = connect crm\nfunction m() {\n  wanted = \"a\"\n  c-[co:company WHERE co.name == wanted && co.name != wante]-> {\n    c-[p:company WHERE p.name == \"x\" && nam == \"y\"]-> {\n    }\n  }\n  return 1\n}\n",
    "expected": [
     "MOV_NAME_UNRESOLVED 5:3-5:63 Unknown name 'wante' — no variable in scope is called that, and c.company has no such field (a bare name inside a walk's brackets is a variable from outside the walk; a field is read through the hop's alias) — did you mean 'wanted'?",
@@ -2027,9 +1958,8 @@
    ]
   },
   {
-   "name": "opaque record: serialising body refuses a traversed system record (v5)",
+   "name": "opaque record: serialising body refuses a traversed system record",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use_ser(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 15:13-15:14 'use_ser' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use_ser' read the fields it uses one by one",
@@ -2037,36 +1967,32 @@
    ]
   },
   {
-   "name": "opaque record: a body reading one field takes a system record (v5)",
+   "name": "opaque record: a body reading one field takes a system record",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_name(e: <Entry>) {\n  write sink-[:rows]-> { v: e.name }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use_name(c)\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 13:1-13:1 'run' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run"
    ]
   },
   {
-   "name": "opaque record: run-built, node literal and extracted pass (v5)",
+   "name": "opaque record: run-built, node literal and extracted pass",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction run2(go: <src>) {\n  deduped = node { entries: <Entry> order by arrival }\n  a = write deduped-[:entries]-> { name: \"Acme\", tag: \"a\" }\n  use_ser(a)\n  deduped-[x:entries]-> {\n    use_ser(x)\n  }\n  use_ser(node { name: \"n\", tag: \"t\" })\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 13:1-13:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a system write's own result passes (v5)",
+   "name": "opaque record: a system write's own result passes",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction run2(go: <src>) {\n  w = write src-[:companies]-> { name: \"Gamma\", tag: \"g\" }\n  use_ser(w)\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 13:1-13:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a pick of a traversal is opaque (v5)",
+   "name": "opaque record: a pick of a traversal is opaque",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction run2(go: <src>) {\n  x = first(src-[c:companies ORDER BY c.name]->)\n  if (x == null) { fail(\"none\") }\n  use_ser(x)\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 16:11-16:12 'use_ser' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use_ser' read the fields it uses one by one",
@@ -2074,9 +2000,8 @@
    ]
   },
   {
-   "name": "opaque record: TEXT.PAIRS needs the fields (v5)",
+   "name": "opaque record: TEXT.PAIRS needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  write sink-[:rows]-> { v: Text.pairs(e) }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 15:9-15:10 'use' needs every field of 'e' in hand — its body reads every field of it with `Text.pairs` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2084,9 +2009,8 @@
    ]
   },
   {
-   "name": "opaque record: a map spread needs the fields (v5)",
+   "name": "opaque record: a map spread needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  m = { ...e, k: \"1\" }\n  write sink-[:rows]-> { v: m.k }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 16:9-16:10 'use' needs every field of 'e' in hand — its body copies its fields into a map with '...' (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2094,9 +2018,8 @@
    ]
   },
   {
-   "name": "opaque record: a write spread needs the fields (v5)",
+   "name": "opaque record: a write spread needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  write sink-[:rows]-> { ...e }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 15:9-15:10 'use' needs every field of 'e' in hand — its body writes every field of it with '...e' (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2104,9 +2027,8 @@
    ]
   },
   {
-   "name": "opaque record: an alias needs the fields (v5)",
+   "name": "opaque record: an alias needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  y = e\n  write sink-[:rows]-> { v: Json.stringify(y) }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 16:9-16:10 'use' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 12) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2114,9 +2036,8 @@
    ]
   },
   {
-   "name": "opaque record: a list holding it needs the fields (v5)",
+   "name": "opaque record: a list holding it needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify([e]) }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 15:9-15:10 'use' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2124,9 +2045,8 @@
    ]
   },
   {
-   "name": "opaque record: a closure over it needs the fields (v5)",
+   "name": "opaque record: a closure over it needs the fields",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use(e: <Entry>) {\n  vs = map([e], (r) => { return Json.stringify(r) })\n  write sink-[:rows]-> { v: Text.join(vs, \",\") }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 16:9-16:10 'use' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2134,9 +2054,8 @@
    ]
   },
   {
-   "name": "opaque record: passing the parameter on carries the need (v5)",
+   "name": "opaque record: passing the parameter on carries the need",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction outer(r: <Entry>) {\n  use_ser(r)\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    outer(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 18:11-18:12 'outer' needs every field of 'r' in hand — its body passes it to 'use_ser' as 'e' (line 14), and 'use_ser' writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'r' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'outer' read the fields it uses one by one",
@@ -2144,9 +2063,8 @@
    ]
   },
   {
-   "name": "opaque record: a call above the declaration (v5)",
+   "name": "opaque record: a call above the declaration",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    outer(c)\n  }\n}\nfunction outer(r: <Entry>) {\n  use_ser(r)\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 12:11-12:12 'outer' needs every field of 'r' in hand — its body passes it to 'use_ser' as 'e' (line 16), and 'use_ser' writes it out with `Json.stringify` (line 19) — and this argument is src.company, whose fields are read from its system one at a time for 'r' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'outer' read the fields it uses one by one",
@@ -2154,9 +2072,8 @@
    ]
   },
   {
-   "name": "opaque record: a call cycle (v5)",
+   "name": "opaque record: a call cycle",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction ping(e: <Entry>, n: <number>) {\n  if (n > 0) { pong(e, n - 1) }\n}\nfunction pong(e: <Entry>, n: <number>) {\n  if (n > 0) { ping(e, n - 1) }\n  write sink-[:rows]-> { v: Text.pairs(e) }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    ping(c, 2)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 19:10-19:11 'ping' needs every field of 'e' in hand — its body passes it to 'pong' as 'e' (line 11), and 'pong' reads every field of it with `Text.pairs` (line 15) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'ping' read the fields it uses one by one",
@@ -2164,18 +2081,16 @@
    ]
   },
   {
-   "name": "opaque record: morning recap shape (v5)",
+   "name": "opaque record: morning recap shape",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Deal {\n  name: <text>\n  tag: <text>\n}\nfunction upsert_deal(d: <Deal>) {\n  write sink-[:rows]-> { ...d }\n}\nfunction recap(go: <src>) {\n  entries = node { deals: <Deal> order by arrival }\n  write entries-[:deals]-> { name: \"Acme\", tag: \"a\" }\n  entries-[d:deals]-> {\n    upsert_deal(d)\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 17:1-17:1 'recap' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire recap"
    ]
   },
   {
-   "name": "opaque record: block head over child serialised (v5)",
+   "name": "opaque record: block head over child serialised",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction use(e: <Holder>) {\n  e-[k:child]-> {\n    write sink-[:rows]-> { v: Json.stringify(k) }\n  }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 23:9-23:10 'use' needs every field of the records 'e' leads to in hand — its body reaches a record through 'e' and writes it out with `Json.stringify` (line 18) — and this argument is src.company, whose linked records are the system's, read one field at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2183,9 +2098,8 @@
    ]
   },
   {
-   "name": "opaque record: MAP over child serialised (v5)",
+   "name": "opaque record: MAP over child serialised",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction use(e: <Holder>) {\n  vs = map(e-[c:child ORDER BY c.first]->, (k) => { return Json.stringify(k) })\n  write sink-[:rows]-> { v: Text.join(vs, \",\") }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 22:9-22:10 'use' needs every field of the records 'e' leads to in hand — its body reaches a record through 'e' and writes it out with `Json.stringify` (line 17) — and this argument is src.company, whose linked records are the system's, read one field at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'use' read the fields it uses one by one",
@@ -2193,18 +2107,16 @@
    ]
   },
   {
-   "name": "opaque record: child field read one at a time (v5)",
+   "name": "opaque record: child field read one at a time",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction use(e: <Holder>) {\n  e-[k:child]-> {\n    write sink-[:rows]-> { v: k.first }\n  }\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    use(c)\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 21:1-21:1 'run' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run"
    ]
   },
   {
-   "name": "opaque record: plugin json arg given a system record (v5)",
+   "name": "opaque record: plugin json arg given a system record",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run(go: <src>) {\n  src-[c:companies]-> {\n    s = summarise(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_TYPE 12:19-12:20 'summarise' takes every field of the record it is given as 'data', and this is src.company, whose fields are read from its system one at a time. Pass a dict of the fields it needs ('data: { name: r.name, … }')",
@@ -2212,18 +2124,16 @@
    ]
   },
   {
-   "name": "opaque record: plugin json arg given held records (v5)",
+   "name": "opaque record: plugin json arg given held records",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  deduped = node { entries: <Entry> order by arrival }\n  a = write deduped-[:entries]-> { name: \"Acme\", tag: \"a\" }\n  s1 = summarise(a)\n  src-[c:companies]-> {\n    s2 = summarise({ name: c.name })\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 10:1-10:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a named closure serialising its parameter (v5)",
+   "name": "opaque record: a named closure serialising its parameter",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  f = (e: <Entry>) => {\n    write sink-[:rows]-> { v: Json.stringify(e) }\n  }\n  src-[c:companies]-> {\n    f(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 15:7-15:8 'f' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 12) — and this argument is src.company, whose fields are read from its system one at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'f' read the fields it uses one by one",
@@ -2231,18 +2141,16 @@
    ]
   },
   {
-   "name": "opaque record: closures reading and serialising (v5)",
+   "name": "opaque record: closures reading and serialising",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  f = (e: <Entry>) => {\n    write sink-[:rows]-> { v: e.name }\n  }\n  g = (e: <Entry>) => {\n    write sink-[:rows]-> { v: Json.stringify(e) }\n  }\n  deduped = node { entries: <Entry> order by arrival }\n  a = write deduped-[:entries]-> { name: \"Acme\", tag: \"a\" }\n  g(a)\n  src-[c:companies]-> {\n    f(c)\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 10:1-10:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a closure passing its parameter on (v5)",
+   "name": "opaque record: a closure passing its parameter on",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction use_ser(e: <Entry>) {\n  write sink-[:rows]-> { v: Json.stringify(e) }\n}\nfunction run2(go: <src>) {\n  f = (r: <Entry>) => {\n    use_ser(r)\n  }\n  src-[c:companies]-> {\n    f(c)\n  }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 18:7-18:8 'f' needs every field of 'r' in hand — its body passes it to 'use_ser' as 'e' (line 15), and 'use_ser' writes it out with `Json.stringify` (line 11) — and this argument is src.company, whose fields are read from its system one at a time for 'r' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'f' read the fields it uses one by one",
@@ -2250,18 +2158,16 @@
    ]
   },
   {
-   "name": "opaque record: a closure handing its parameter back (v5)",
+   "name": "opaque record: a closure handing its parameter back",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  f = (e: <Entry>) => {\n    return e\n  }\n  deduped = node { entries: <Entry> order by arrival }\n  a = write deduped-[:entries]-> { name: \"Acme\", tag: \"a\" }\n  b = f(a)\n  write sink-[:rows]-> { v: Json.stringify(b) }\n  src-[c:companies]-> {\n    f(c)\n  }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 10:1-10:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a system write's children are the system's (v5)",
+   "name": "opaque record: a system write's children are the system's",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction ser_child(e: <Holder>) {\n  e-[k:child]-> {\n    write sink-[:rows]-> { v: Json.stringify(k) }\n  }\n}\nfunction run2(go: <src>) {\n  w = write src-[:companies]-> { name: \"Gamma\", tag: \"g\" }\n  ser_child(w)\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 23:13-23:14 'ser_child' needs every field of the records 'e' leads to in hand — its body reaches a record through 'e' and writes it out with `Json.stringify` (line 18) — and this argument is a src.company handle, whose linked records are the system's, read one field at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'ser_child' read the fields it uses one by one",
@@ -2269,27 +2175,24 @@
    ]
   },
   {
-   "name": "opaque record: run-built children are held (v5)",
+   "name": "opaque record: run-built children are held",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction ser_child(e: <Holder>) {\n  e-[k:child]-> {\n    write sink-[:rows]-> { v: Json.stringify(k) }\n  }\n}\nfunction run2(go: <src>) {\n  deduped = node { entries: <Holder> order by arrival }\n  a = write deduped-[:entries]-> { name: \"Acme\" }\n  write a-[:child]-> { first: \"Ann\" }\n  ser_child(a)\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 21:1-21:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a write's child read one field at a time (v5)",
+   "name": "opaque record: a write's child read one field at a time",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nfunction read_child(e: <Holder>) {\n  e-[k:child]-> {\n    write sink-[:rows]-> { v: k.first }\n  }\n}\nfunction run2(go: <src>) {\n  w = write src-[:companies]-> { name: \"Gamma\", tag: \"g\" }\n  read_child(w)\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 21:1-21:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a child passed on to a serialiser (v5)",
+   "name": "opaque record: a child passed on to a serialiser",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nnode Holder {\n  name: <text>\n  node child {\n    first: <text>\n  }\n}\nnode Person {\n  first: <text>\n}\nfunction ser_one(k: <Person>) {\n  write sink-[:rows]-> { v: Json.stringify(k) }\n}\nfunction walk(e: <Holder>) {\n  e-[k:child]-> {\n    ser_one(k)\n  }\n}\nfunction run2(go: <src>) {\n  w = write src-[:companies]-> { name: \"Gamma\", tag: \"g\" }\n  walk(w)\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 29:8-29:9 'walk' needs every field of the records 'e' leads to in hand — its body passes it to 'ser_one' as 'k' (line 24), and 'ser_one' writes it out with `Json.stringify` (line 20) — and this argument is a src.company handle, whose linked records are the system's, read one field at a time for 'e' (argument 1). Copy the fields it needs into a record the program holds and pass that ('node { name: r.name, … }'), or have 'walk' read the fields it uses one by one",
@@ -2297,9 +2200,8 @@
    ]
   },
   {
-   "name": "opaque record: a serialising closure over a system collection (v5)",
+   "name": "opaque record: a serialising closure over a system collection",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  vs = map(src-[c:companies ORDER BY c.name]->, (e: <Entry>) => { return Json.stringify(e) })\n  write sink-[:rows]-> { v: Text.join(vs, \",\") }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 11:49-11:93 the function for 'map' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and 'map' hands it each member of the collection, src.company, whose fields are read from its system one at a time. Copy the fields it needs into records the program holds first ('map(…, (r) => { return node { name: r.name, … } })'), or have the function read the fields it uses one by one",
@@ -2307,18 +2209,16 @@
    ]
   },
   {
-   "name": "opaque record: field-reading and run-built collections pass (v5)",
+   "name": "opaque record: field-reading and run-built collections pass",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  names = map(src-[c:companies ORDER BY c.name]->, (e: <Entry>) => { return e.name })\n  deduped = node { entries: <Entry> order by arrival }\n  write deduped-[:entries]-> { name: \"Acme\", tag: \"a\" }\n  vs = map(deduped-[:entries]->, (e: <Entry>) => { return Json.stringify(e) })\n  write sink-[:rows]-> { v: Text.join(vs, \",\") }\n  write sink-[:rows]-> { v: Text.join(names, \",\") }\n}\n",
    "expected": [
     "MOV_LISTEN_MISSING 10:1-10:1 'run2' has no listener, so nothing dispatches it — add a listen statement, e.g. listen to src fire run2"
    ]
   },
   {
-   "name": "opaque record: a named closure handed to the op (v5)",
+   "name": "opaque record: a named closure handed to the op",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  f = (e: <Entry>) => { return Json.stringify(e) }\n  vs = map(src-[c:companies ORDER BY c.name]->, f)\n  write sink-[:rows]-> { v: Text.join(vs, \",\") }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 12:49-12:50 'f' needs every field of 'e' in hand — its body writes it out with `Json.stringify` (line 11) — and 'map' hands it each member of the collection, src.company, whose fields are read from its system one at a time. Copy the fields it needs into records the program holds first ('map(…, (r) => { return node { name: r.name, … } })'), or have the function read the fields it uses one by one",
@@ -2326,9 +2226,8 @@
    ]
   },
   {
-   "name": "opaque record: FILTER and REDUCE bind their member (v5)",
+   "name": "opaque record: FILTER and REDUCE bind their member",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  kept = filter(src-[c:companies ORDER BY c.name]->, (e: <Entry>) => { return Text.pairs(e) != \"\" })\n  folded = reduce(src-[c:companies ORDER BY c.name]->, (acc, e: <Entry>) => { return \"${acc}${Text.pairs(e)}\" }, \"\")\n  write sink-[:rows]-> { v: folded }\n  write sink-[:rows]-> { v: \"${count(kept)}\" }\n}\n",
    "expected": [
     "MOV_CALL_ARG_OPAQUE_RECORD 11:54-11:100 the function for 'filter' needs every field of 'e' in hand — its body reads every field of it with `Text.pairs` (line 11) — and 'filter' hands it each member of the collection, src.company, whose fields are read from its system one at a time. Copy the fields it needs into records the program holds first ('map(…, (r) => { return node { name: r.name, … } })'), or have the function read the fields it uses one by one",
@@ -2337,9 +2236,8 @@
    ]
   },
   {
-   "name": "opaque record: a system record through a function's call to a json arg (v5)",
+   "name": "opaque record: a system record through a function's call to a json arg",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction first_company(go: <src>) {\n  return first(src-[c:companies ORDER BY c.name]->)\n}\nfunction run2(go: <src>) {\n  s = summarise(first_company(go))\n  write sink-[:rows]-> { v: s }\n}\n",
    "expected": [
     "MOV_CALL_ARG_TYPE 14:17-14:34 'summarise' takes every field of the record it is given as 'data', and this is src.company (which may be empty), whose fields are read from its system one at a time. Pass a dict of the fields it needs ('data: { name: r.name, … }')",
@@ -2348,9 +2246,8 @@
    ]
   },
   {
-   "name": "opaque record: shout given a node literal (v5)",
+   "name": "opaque record: shout given a node literal",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  s = shout(node { name: \"n\", tag: \"t\" })\n  write sink-[:rows]-> { v: s }\n}\n",
    "expected": [
     "MOV_CALL_ARG_TYPE 11:13-11:41 'shout' takes text for 'data', and this is a 'node { … }' literal written in place — a record, and a plugin's arguments are values. Pass one of the values it would hold ('data: …')",
@@ -2358,9 +2255,8 @@
    ]
   },
   {
-   "name": "opaque record: relay given a write in place (v5)",
+   "name": "opaque record: relay given a write in place",
    "snapshot": "opaque",
-   "version": 5,
    "source": "import { attio, sheets } from adapters\nimport { summarise, relay, shout } from plugins\nsrc = connect attio\nsink = connect sheets\n\nnode Entry {\n  name: <text>\n  tag: <text>\n}\nfunction run2(go: <src>) {\n  s = relay(write src-[:companies]-> { name: \"Gamma\", tag: \"g\" })\n  write sink-[:rows]-> { v: s }\n}\n",
    "expected": [
     "MOV_CALL_ARG_TYPE 11:13-11:65 'relay' takes a value for 'data', and this is a write written in place — a record, and a plugin's arguments are values. Run the write first ('r = write …') and pass 'data: r' or one of its fields ('data: r.name')",

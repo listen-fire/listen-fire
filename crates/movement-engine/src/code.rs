@@ -352,7 +352,8 @@ mod tests {
         let mut read = 0;
         for case in corpus["cases"].as_array().unwrap() {
             let program = &case["program"];
-            if program["version"] != 5 {
+            // This case pins a release the parser has nothing to say about.
+            if case["pattern"] == "language_version_unsupported" {
                 continue;
             }
             // A case the parser refuses ends in MOVENG_PARSE; it has no tree to read.
