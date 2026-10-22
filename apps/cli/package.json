@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "description": "Test harness for the `lf` binary (crates/lf): drives the built binary against the example project. Contains no lf runtime.",
   "engines": {
-    "node": "22.23.4"
+    "node": ">=22.23.4 <23"
   },
   "scripts": {
     "code:type-check": "tsc --pretty --noEmit",
