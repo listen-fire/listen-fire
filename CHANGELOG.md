@@ -10,7 +10,7 @@ audiences, an operator running a self-hosted installation and an author writing 
 movement language, and both repositories keep it in full. From the split on, this repository's
 Unreleased section takes only the language's entries (constructs, the checker, the engine, `lf`,
 modules, the docs); the platform's entries live in `lf-platform`'s `CHANGELOG.md`. This repository
-serves language version 5 and later, and the entry for a break says which version introduces it and why.
+is versioned by its release; the entry for a break names the release that introduces it and which older pins it no longer reads.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are the git tags
 named in [`RELEASING.md`](RELEASING.md).
 
