@@ -1,12 +1,63 @@
+<!-- hero:start -->
 # Listen-Fire
 
-Listen-Fire runs small programs over the systems a team already uses. A program is a plain text file with a `.mvt` extension, written in a language called movement: it names the systems it touches, traverses them as graphs of records joined by edges, and moves data between them.
+**Agents write it. Listen-Fire runs it.**
 
-This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `lf` command, the modules that connect systems, and the embedding kit. The hosted platform that runs movements for teams is a separate repository, `lf-platform`, in the same GitHub organisation. This repository serves language version 5 and later; upgrading an older automation is the platform's.
+Every webhook, cron tick and inbound email that an agent handles today costs a model call, and no two calls do quite the same thing. Listen-Fire is the layer that takes that work off the model: an agent reads the language handbook once and writes a small program, and the engine then runs that program on every event with no model in the loop. A run is fast, costs nothing per event, leaves an audit trail, and can still stop and wait for a person when the program says so.
+<!-- hero:end -->
 
-## Listen and fire
+## How it works
 
-An automation **listens** to something in one of your systems and **fires** a named automation in response. That is the whole shape of a program, and it is where the name comes from.
+```mermaid
+flowchart LR
+  A["Agent reads the handbook,<br>writes a .mvt program"] --> B["Engine checks it"]
+  B --> C["An event arrives:<br>webhook, schedule, email"]
+  C --> D["Engine runs the program<br>(no model needed)"]
+  D --> E["Writes land in Slack,<br>the CRM, a sheet"]
+  D -. "needs a decision" .-> F["A person taps a button;<br>the run resumes"]
+  F --> E
+```
+
+1. **An agent writes a program.** A program is a plain text file with a `.mvt` extension, in a small language made for moving data between systems. The handbook that teaches the language is written for agents: a front page of where it differs from TypeScript, then chapters looked up on demand. A person can write one too, and review one in a pull request.
+2. **The engine runs it on every event.** The program says what it listens for (`listen to inbox … fire …`). The engine, written in Rust and also compiled to WebAssembly, checks the program against the real shape of the connected systems before it runs, then runs it the same way every time. Running a program never calls a model on its own. A program may call one for a single step, `ai(…)` to draft text or `extract(…)` to pull fields from a document, and is deterministic around it.
+3. **It waits for a person when the program says so.** A program can post a message with a button or link, wait for the tap, and resume where it stopped, minutes or days later, holding nothing open in between. It can also sleep until a time, or wait on a condition. Each run, including what it wrote and where it paused, is recorded and can be inspected afterwards.
+
+**What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([the full table](#what-you-can-connect)).
+
+**Where it runs:** as one binary on your machine; as the same binary split into a web-facing service and on-demand workers on cloud compute that can scale to zero; or inside your own Node or Rust product ([deploy options](#deploy-options)).
+
+## Fastest path to a first run
+
+Get the `lf` command one of three ways:
+
+- Download a prebuilt binary for macOS (Apple silicon or Intel) or Linux (x64 or arm64) from the [releases page](https://github.com/listen-fire/listen-fire/releases). Each archive holds `bin/lf` plus the built-in modules.
+- Install from crates.io. Every release so far is a pre-release, so the version must be named until a full release is cut:
+  ```sh
+  cargo install listen-fire --version 0.12.0-rc.6
+  ```
+- Build from a clone: `cargo build --release -p listen-fire` puts the binary at `target/release/lf`.
+
+Then:
+
+```sh
+lf init my-project && cd my-project
+lf check
+lf run hello
+```
+
+```
+$ lf run hello
+run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
+  returned "Hello, henrystanford!"
+```
+
+`lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account, no model key and no module. `lf runs` lists every run and `lf runs show <run-id>` opens one.
+
+From there, [Getting started with `lf`](docs/getting-started-lf.md) covers connecting a system (`lf connect @lf/attio`), adding a credential, routing a recorded event through your programs (`lf run --event …`) and serving webhooks (`lf serve`). The built-in modules that connect systems are TypeScript, so connecting one needs Node 22 on the machine.
+
+## The example program
+
+A program **listens** to something in one of your systems and **fires** a named function in response. That is the whole shape of a program, and it is where the name comes from.
 
 ```
 import { `@lf/email` as email, `@lf/attio` as attio } from adapters
@@ -25,9 +76,69 @@ function `Inbound Intake`(msg: <inbox-[:Email]->>) {
 listen to inbox { key: "intake" } fire `Inbound Intake`
 ```
 
-The event that arrives is a *position*: a point in the graph of the system it came from. From there the program traverses to related records, fans out across them, and writes into other systems along their own edges. `unique by` makes a repeat update an existing record instead of duplicating it.
+In plain English: every email that reaches the inbox becomes a company in the Attio CRM, named after the subject line, and an email with a subject already in the CRM updates that company instead of making a second one (`unique by`).
 
-The language lives in [`packages/movement-lang`](packages/movement-lang). The reference is the handbook under [`packages/handbook/chapters`](packages/handbook/chapters); `foundations.ts` and `anatomy.ts` are the two to start with.
+Each system is presented to the program as a graph of records joined by edges, so `<inbox-[:Email]->>` is "an email that arrived in the inbox", and `crm-[:Companies]->` is "the companies in the CRM". The program starts from the record that arrived, follows edges to related records, and writes along other systems' edges. The language lives in [`packages/movement-lang`](packages/movement-lang) and the handbook in [`packages/handbook/chapters`](packages/handbook/chapters); [`foundations.ts`](packages/handbook/chapters/foundations.ts) and [`anatomy.ts`](packages/handbook/chapters/anatomy.ts) are the two to start with.
+
+## Worked example: CRM intake at a venture fund
+
+Listen-Fire grew out of one job: keeping a venture fund's CRM up to date from email, meeting notes and Slack, without an associate retyping it. That job is the case study that the rest of this README generalises from.
+
+A fund's deal flow arrives as email. Each new company should land in the CRM once, but an associate wants a say before a cold inbound is added. The program below posts the question in the fund's Slack deal channel with a link, waits for someone to confirm, and only then writes the company:
+
+```
+import { `@lf/email` as email, `@lf/attio` as attio, `@lf/slack` as slack } from adapters
+import { acme, team_chat } from credentials
+
+inbox = connect email
+crm   = connect attio using acme
+chat  = connect slack using team_chat
+
+function `Inbound Intake`(msg: <inbox-[:Email]->>) {
+  approve = callback({ })
+  deals = only(chat-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (deals == null) { fail("no #dealflow channel") }
+  write deals-[:Messages]-> {
+    Message: "Add ${msg.Subject} to the CRM? ${approve.url}"
+  }
+  await first(approve-[:Called]->)
+  write crm-[:Companies]-> {
+    unique by (Name)
+    Name: msg.Subject
+  }
+}
+
+listen to inbox { key: "intake" } fire `Inbound Intake`
+```
+
+What happens on each email: the run mints a callback (a one-use link that resumes this run), posts it to the channel, and parks. Nothing is held open. When someone opens the link, the run resumes at the `await`, writes the company, and completes. Both programs on this page are checked by the handbook's tests against the captured schemas of the real Attio and Slack modules, so what the README shows is what the engine accepts.
+
+The fund's full version adds what the language is for: a deadline on the wait (`race` with `await sleep(2d)`), meeting notes from Granola attached to the company, fields pulled from an attached deck with `extract(…)`, and `FUZZY` matching so "Acme" and "Acme Inc" are one record. The [reviews chapter](packages/handbook/chapters/asks.ts) of the handbook covers the waiting forms. [`examples/lf-attio`](examples/lf-attio) is a runnable Attio project with its own walkthrough.
+
+On the hosted platform, a program can also raise a review with a typed answer (a yes/no check, a choice, a form) that mints a page for the person to answer; that review module is hosted by the platform, and `lf` on its own waits through callbacks, timers and conditions.
+
+## Deploy options
+
+**One binary.** `lf serve` receives webhooks and callbacks, fires scheduled programs, polls systems that have no webhooks, and runs due work. Run state lives in SQLite under `.lf/`. This is enough for one machine. See [Getting started, section 6](docs/getting-started-lf.md#6-serve).
+
+**Cloud, scaling from zero.** The same binary splits into two commands. `lf serve --doors-only` answers webhooks and callbacks by queuing them (so it suits compute billed by the request), and `lf drain --until-idle --max-seconds N` is a worker that claims queued work, runs it, and exits when nothing is due. State lives in Postgres, containers keep none, and any number of workers can drain at once. [`deploy/lf`](deploy/lf) holds the image and [its guide](deploy/lf/README.md) describes the platform shape: a service, a scheduled or queue-triggered job, and an optional wake module that starts a worker the moment work is due. The guide is written for any such platform rather than one vendor, and a local trial runs under Docker Compose.
+
+**Inside your product.** The engine runs in your own Node process as WebAssembly, with your product defined as one more system a program can read and write, each customer as a tenant, and every outside call answered by a host you build. [`docs/embedding.md`](docs/embedding.md) is the guide and [`examples/embed-saas`](examples/embed-saas) is a small HTTP app with an end-to-end test. The engine is a Rust crate too: [`examples/rust-embed`](examples/rust-embed) runs programs from a Rust host with its own tests.
+
+**The hosted platform.** The web app, the API, the review pages and the agent connector that run programs for teams are a separate repository, `lf-platform`, in the same GitHub organisation, with its own self-hosting runbook.
+
+## Talking to it from agents
+
+The handbook is the interface an agent uses. It ships in this repository as data ([`packages/handbook`](packages/handbook)): a [front page](packages/handbook/front_page.ts) that names where the language differs from TypeScript and the few ideas it adds, chapters addressed by anchor, and a keyword search over built-ins, recipes and system behaviour. Every example on the front page is checked by the engine in the handbook's tests, so it cannot teach something that does not compile. The same content is published at [listen-fire.github.io/listen-fire/docs/next](https://listen-fire.github.io/listen-fire/docs/next/) while the release is a pre-release.
+
+An agent's loop with `lf`:
+
+1. Read the handbook's front page, then look up what the program needs.
+2. Write the `.mvt` file into `movements/`.
+3. `lf check`: every diagnostic names the rule it broke, with the file and line.
+4. `lf run --event <recorded-event.json>`, or `--dry-run`, to see what the program would do; `lf runs show <run-id>` to read the trace.
+
+The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. The MCP connector lives in the platform repository. For editors, `lf lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
 
 ## What you can connect
 
@@ -52,9 +163,11 @@ Each system is reached through an adapter, which presents it as a graph. The ada
 | `cron` | a schedule |
 | `manual` | an on-demand run |
 
-Beyond these, an adapter can also live outside this repository and be reached over a wire protocol; see [`docs/contracts/adapter-protocol.md`](docs/contracts/adapter-protocol.md).
+`cron` and `manual` are the engine's own sources and need no module. Alongside the adapters, [`modules/`](modules) holds plugins a program imports (`@lf/web` for fetching and searching the web, `@lf/pdf` for rendering one) and the modules that fill the engine's core slots: models, the identity judge, the run store, files and rate limits ([core slots](docs/core-slots.md)). An adapter can also live outside this repository and be reached over a wire protocol; see [`docs/contracts/adapter-protocol.md`](docs/contracts/adapter-protocol.md).
 
 ## Repository layout
+
+This repository is the language: the parser, checker and engine (Rust, compiled to WebAssembly), the `lf` command, the modules that connect systems, and the embedding kit. It serves language version 5 and later; upgrading an older program is the platform's.
 
 - [`crates/`](crates): the Rust crates: parser, checker, engine, language service, module wire and kit, and the `lf` command (`crates/lf`).
 - [`packages/movement-lang`](packages/movement-lang): the wasm artifacts, their bindings, the version table, the expression AST and the catalog types.
@@ -62,7 +175,8 @@ Beyond these, an adapter can also live outside this repository and be reached ov
 - [`packages/handbook`](packages/handbook): the language handbook.
 - [`modules/`](modules): the modules that connect systems.
 - [`apps/cli`](apps/cli): the `lf` command's TypeScript tests and fixtures.
-- [`docs/`](docs/README.md): the guides and the versioned contracts.
+- [`examples/`](examples): runnable projects: an `lf` project, the Attio walkthrough, a custom plugin, the embedded engine in Node and in Rust, and a module served from Rust.
+- [`docs/`](docs/README.md): the guides and the versioned contracts. [`docs/positioning/`](docs/positioning): the hero variants for positioning tests.
 
 ## Developing
 
