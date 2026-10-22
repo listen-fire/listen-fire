@@ -100,6 +100,12 @@ export const EMAIL_MANIFEST: AdapterManifest = {
   get triggerConfig() {
     return emailTriggerConfig();
   },
+  // The same `key`, declared where a host without the settings form reads a
+  // listen's vocabulary (lf: `listen to inbox { key: "deals" }`). lf routes
+  // by it too: a message to `<box>+deals@…` fires the listen keyed "deals".
+  // Not required here: under lf a listen with no key hears the mail sent to
+  // the box itself; the platform still requires one through the block above.
+  listenConfig: [{ key: 'key', required: false }],
   // Without an address there is no door for mail to arrive at, so an author
   // who imports email on such a deployment is writing something that can
   // never fire. That is a gap they are shown, not a boot failure: a

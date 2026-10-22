@@ -21,7 +21,7 @@ use crate::obj;
 use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
-use crate::routing::{Listen, collect_listens, event_matches_trigger_scope, trigger_event_of};
+use crate::routing::{Listen, address_matches_key, collect_listens, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line};
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
@@ -155,8 +155,9 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     Ok(Session { project, store, credentials, running, documents, files, catalog, listens, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
 }
 
-/// What firing one event came to: the runs it started, and a line per
-/// listen it was a redelivery to (its `idempotencyKey` seen there before).
+/// What firing one event came to: the runs it started, and a line for each
+/// way it ran nothing: a listen it was a redelivery to (its `idempotencyKey`
+/// seen there before) or an echo of, or mail no listen is keyed for.
 #[derive(Default)]
 pub struct Fired {
     pub outcomes: Vec<RunOutcome>,
@@ -317,7 +318,13 @@ impl Session {
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
         let mut fired = Fired::default();
-        for listen in self.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config) && to(l)) {
+        let keyed = self.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
+        let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
+        let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config) && routed(l) && to(l)).collect();
+        if keyed && reached.is_empty() {
+            fired.redelivered.push(unrouted_line(external, event));
+        }
+        for listen in reached {
             let run_id = uuid::Uuid::new_v4().to_string();
             let file = &self.files[listen.file];
             let pipeline = format!("listen:{}:{}", file.name, listen.movement_name);

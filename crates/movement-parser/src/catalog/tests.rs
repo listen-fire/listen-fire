@@ -138,6 +138,22 @@ fn an_adapter_without_a_credential_reads_its_credential_free_schema() {
 }
 
 #[test]
+fn an_optional_credential_not_given_reads_the_credential_free_schema() {
+    let snapshot = json!({
+        "adapters": { "email": {
+            "constructionArgs": [{ "name": "credentials", "kind": "credential", "required": false }],
+            "schemas": { "": schema_with("messages"), "mail_keys": schema_with("sent") },
+        } },
+        "credentials": { "mail_keys": { "adapters": ["email"] } }, "plugins": {},
+    });
+    let snapshot = CatalogSnapshot::load(&snapshot.to_string()).unwrap();
+    assert_eq!(collections(snapshot.instantiate("email", &args(&[]))), ["messages"]);
+    assert_eq!(collections(snapshot.instantiate("email", &args(&[("credentials", "mail_keys")]))), ["sent"]);
+    // Named but unknown is still untyped, never the credential-free schema.
+    assert!(snapshot.instantiate("email", &args(&[("credentials", "other")])).is_none());
+}
+
+#[test]
 fn position_arg_options_are_published_and_absent_ones_unchecked() {
     let snapshot = json!({
         "adapters": { "google_sheets": {

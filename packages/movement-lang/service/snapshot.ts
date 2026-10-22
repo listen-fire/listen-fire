@@ -280,6 +280,9 @@ export function fromCatalogSnapshot(snapshot: CatalogSnapshot): Catalog {
       // without pre-processing (defense-in-depth: callers should unwrap first,
       // but the snapshot instantiate is the last lookup that can catch it).
       const rawCredName = args?.[credArg?.name ?? 'credentials']?.trim();
+      // A credential the adapter can do without, not given: the
+      // credential-free instance (lf's email, which receives with none).
+      if (rawCredName === undefined && credArg !== undefined && !credArg.required) return at();
       const credentialName = rawCredName !== undefined
         ? (unwrapCredentialArg(rawCredName) ?? rawCredName)
         : rawCredName;

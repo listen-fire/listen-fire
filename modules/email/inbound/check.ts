@@ -9,7 +9,8 @@
 // sees the same thing from either host: no key 401; a bad or unreadable
 // delivery 406 (a code neither provider retries); a Resend event that is not
 // mail arriving 200 with nothing run. Who the mail is for is not decided
-// here: every listen on the install hears every message.
+// here: the host routes each message by its recipient's plus-suffix to the
+// listen whose `key` it is.
 
 import { accepted, inboundRequest, refused, type InboundRequest } from 'module-kit';
 

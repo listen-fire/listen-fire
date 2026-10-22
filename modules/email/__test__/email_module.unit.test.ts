@@ -52,6 +52,12 @@ describe('@lf/email', () => {
     expect(manifest.methods).toContain('checkInbound');
   });
 
+  it('declares a listen’s `key` (the plus-suffix it is routed by) and a credential a host may leave out', () => {
+    const { manifest } = load({ credential: noCredential('email') });
+    expect(manifest.listenConfig).toEqual([{ key: 'key', required: false }]);
+    expect(manifest.credentials?.every((c) => c.fields?.every((f) => f.optional === true))).toBe(true);
+  });
+
   it('mints a Resend attachment’s URL with the credential’s key, at the dev loop’s fake when there is one', async () => {
     const { adapter, calls } = load({ credential: credential({ resendApiKey: 're_1', resendBaseUrl: 'https://resend.example' }), baseUrlOverride: 'http://fake' });
     await adapter.resolveFileRef?.(owned('resend:e1/a1'));

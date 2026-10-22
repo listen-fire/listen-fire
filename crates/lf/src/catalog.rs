@@ -47,10 +47,15 @@ pub fn catalog_of(running: &[RunningExternal], schemas: &IndexMap<String, Js>, c
         // The hosted product holds a remote install's secret itself, so there
         // it constructs credential-free; here the secrets file names it.
         let installed = credentials.iter().any(|c| c.external == *name && c.binding == Binding::Install);
-        let credentialed = !r.credential_declarations.is_empty() || (r.external.manifest.auth.is_some() && !installed);
+        let remote_secret = r.external.manifest.auth.is_some() && !installed;
+        let credentialed = !r.credential_declarations.is_empty() || remote_secret;
+        // A module whose credentials are all optional works without one
+        // (email receives with none; sending refuses by name when it is
+        // called), so constructing it with no `using` is a whole instance.
+        let credential_required = remote_secret || !r.credential_declarations.iter().all(optional_credential);
         let mut adapter_schemas = Obj::new();
         if let Some(schema) = schemas.get(name) {
-            if !credentialed {
+            if !credential_required {
                 adapter_schemas.insert(instance_schema_key(None), schema.clone());
             }
             for (credential_name, spec) in &enumerated {
@@ -61,7 +66,7 @@ pub fn catalog_of(running: &[RunningExternal], schemas: &IndexMap<String, Js>, c
             }
         }
         let construction_args = if credentialed {
-            vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(true) })]
+            vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(credential_required) })]
         } else {
             Vec::new()
         };
@@ -104,6 +109,12 @@ fn unit_snapshot(unit: &str) -> Js {
         description: None,
         schemas,
     })
+}
+
+/// A static credential every field of which may be left out. An OAuth 2
+/// credential is never optional: its tokens are the point of it.
+pub fn optional_credential(declaration: &crate::oauth2::Declaration) -> bool {
+    declaration.oauth2().is_none() && declaration.fields.iter().all(|f| f.optional == Some(true))
 }
 
 fn declared_names(declarations: &[crate::oauth2::Declaration]) -> Vec<String> {

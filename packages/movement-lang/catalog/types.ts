@@ -23,11 +23,13 @@ export interface ConstructionArg {
   name: string;
   /**
    * `credential` = names an imported credential whose `adapter` is this adapter
-   * (always required). `position` = an entry-position arg (e.g. Sheets'
+   * (required unless the adapter works without one: lf's email). `position` = an entry-position arg (e.g. Sheets'
    * `spreadsheet`) that pins where the instance starts.
    */
   kind: 'credential' | 'position';
-  /** Whether construction MUST supply it. Credential args are required; position args are optional today. */
+  /** Whether construction MUST supply it. A credential arg is required unless every credential the
+   *  adapter declares is optional (an absent one then instantiates the credential-free schema);
+   *  position args are optional today. */
   required: boolean;
   /**
    * Position args only: the collection/type whose members are the value enum

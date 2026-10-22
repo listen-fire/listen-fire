@@ -153,6 +153,48 @@ pub fn event_matches_trigger_scope(event: &Js, config: &Obj) -> bool {
     true
 }
 
+/// The listen config key that routes inbound mail: a module that declares
+/// it (`@lf/email`) has each message reach the listen whose `key` is the
+/// plus-suffix of the address it was sent to.
+pub const ROUTING_KEY: &str = "key";
+
+/// Whether a module's listen vocabulary declares the routing key.
+pub fn routes_by_key(listen_vocabulary: &Obj) -> bool {
+    let entries = listen_vocabulary.get("listenConfig").and_then(Js::as_array).unwrap_or(&[]);
+    entries.iter().any(|entry| entry.get("key").and_then(Js::as_str) == Some(ROUTING_KEY))
+}
+
+/// The plus-suffix of the address a message was delivered to (its
+/// `recipient`, `<box>+<key>@<domain>`), lowercased: a mail server hands the
+/// address back in whatever case the sender typed. None for the box itself.
+pub fn plus_suffix_of(event: &Js) -> Option<String> {
+    let recipient = event.get("payload").and_then(|p| p.get("recipient")).and_then(Js::as_str)?;
+    recipient.split(',').find_map(|address| {
+        let address = address.trim();
+        let address = address.rsplit_once('<').map_or(address, |(_, bracketed)| bracketed.trim_end_matches('>'));
+        let (local, _domain) = address.rsplit_once('@')?;
+        let (_box, key) = local.split_once('+')?;
+        (!key.is_empty()).then(|| key.to_lowercase())
+    })
+}
+
+/// The routing gate (the platform's `findTriggerByInboundKey`): a message
+/// reaches a listen when its address's plus-suffix is the listen's `key`, and
+/// a listen with no key hears only the mail sent to the box itself. A suffix
+/// no listen has reaches none: mail is never fanned out to every listen.
+pub fn address_matches_key(event: &Js, config: &Obj) -> bool {
+    let key = config.get(ROUTING_KEY).and_then(Js::as_str).map(str::to_lowercase);
+    plus_suffix_of(event) == key
+}
+
+/// The line a message no listen is keyed for is refused with.
+pub fn unrouted_line(external: &str, event: &Js) -> String {
+    match plus_suffix_of(event) {
+        Some(key) => format!("no listen on {external} has the key \"{key}\" (the plus-suffix of the address the message was sent to): it runs nothing"),
+        None => format!("no listen on {external} is without a key, and the message was sent to the box itself, with no plus-suffix: it runs nothing"),
+    }
+}
+
 /// `readPath`.
 fn read_path<'a>(value: &'a Js, path: &str) -> Option<&'a Js> {
     path.split('.').try_fold(value, |at, key| at.get(key))
@@ -243,6 +285,31 @@ mod tests {
         assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config));
         assert!(!event_matches_trigger_scope(&js(r#"{}"#), &config));
         assert!(event_matches_trigger_scope(&js(r#"{}"#), &Obj::new()));
+    }
+
+    #[test]
+    fn mail_reaches_the_listen_keyed_by_its_plus_suffix_and_no_other() {
+        let keyed = |key: &str| match js(&format!(r#"{{"key":"{key}"}}"#)) {
+            Js::Obj(map) => map,
+            _ => unreachable!(),
+        };
+        let listens = [("deals", keyed("deals")), ("intros", keyed("Intros")), ("box", Obj::new())];
+        let reached = |recipient: &str| -> Vec<&str> {
+            let event = js(&format!(r#"{{"payload":{{"recipient":"{recipient}"}}}}"#));
+            listens.iter().filter(|(_, config)| address_matches_key(&event, config)).map(|(name, _)| *name).collect()
+        };
+        assert_eq!(reached("inbox+deals@acme.test"), ["deals"]);
+        assert_eq!(reached("Inbox <inbox+INTROS@acme.test>"), ["intros"]);
+        assert_eq!(reached("inbox@acme.test"), ["box"]);
+        assert!(reached("inbox+hiring@acme.test").is_empty());
+        let stray = js(r#"{"payload":{"recipient":"inbox+hiring@acme.test"}}"#);
+        assert!(unrouted_line("email", &stray).contains(r#"no listen on email has the key "hiring""#));
+        let vocabulary = match js(r#"{"listenConfig":[{"key":"key","required":false}]}"#) {
+            Js::Obj(map) => map,
+            _ => unreachable!(),
+        };
+        assert!(routes_by_key(&vocabulary));
+        assert!(!routes_by_key(&Obj::new()));
     }
 
     #[test]

@@ -385,7 +385,11 @@ async fn set_up(
     };
     change_entry(&file, &install_name, EntryChange::Replace(&next)).await?;
     prompter.print(&format!("connected {name}: its install is \"{install_name}\" in {}", file.path.display()));
-    if !facts.declarations.is_empty() {
+    if facts.declarations.iter().all(crate::catalog::optional_credential) {
+        if !facts.declarations.is_empty() {
+            prompter.print(&format!("{name} works without a user credential; what needs one asks for it by name: lf credential add --module {name} <name>"));
+        }
+    } else {
         prompter.print(&format!("next, a user credential: lf credential add --module {name} <name>"));
     }
     Ok(facts)
