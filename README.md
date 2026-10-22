@@ -19,8 +19,8 @@ flowchart LR
 ```
 
 1. **An agent writes a program.** A program is a plain text file with a `.mvt` extension, in a small language made for moving data between systems. The handbook that teaches the language is written for agents: a front page of where it differs from TypeScript, then chapters looked up on demand. A person can write one too, and review one in a pull request.
-2. **The engine runs it on every event.** The program says what it listens for (`listen to inbox … fire …`). The engine, written in Rust and also compiled to WebAssembly, checks the program against the real shape of the connected systems before it runs, then runs it the same way every time. Running a program never calls a model on its own. A program may call one for a single step, `ai(…)` to draft text or `extract(…)` to pull fields from a document, and is deterministic around it.
-3. **It waits for a person when the program says so.** A program can post a message with a button or link, wait for the tap, and resume where it stopped, minutes or days later, holding nothing open in between. It can also sleep until a time, or wait on a condition. Each run, including what it wrote and where it paused, is recorded and can be inspected afterwards.
+2. **The engine runs it on every event.** The program says what it listens for (`listen to inbox … fire …`). The engine (Rust, also compiled to WebAssembly) checks the program against the real shape of the connected systems, then runs it the same way every time. No model is needed to run a program; a program may call one for a single step, `ai(…)` to draft text or `extract(…)` to pull fields from a document.
+3. **It waits for a person when the program says so.** A program can post a message with a button, wait for the tap, and resume where it stopped, minutes or days later, holding nothing open in between. It can also sleep until a time, or wait on a condition. Every run is recorded: what it wrote, and where it paused.
 
 **What it connects to:** Slack, email and Gmail, WhatsApp, Telegram, Attio, Affinity, Airtable, Google Sheets, Google Drive, Dropbox, Granola meeting notes, a schedule, and your own system through a module ([the full table](#what-you-can-connect)).
 
@@ -30,12 +30,12 @@ flowchart LR
 
 Get the `lf` command one of three ways:
 
-- Download a prebuilt binary for macOS (Apple silicon or Intel) or Linux (x64 or arm64) from the [releases page](https://github.com/listen-fire/listen-fire/releases). Each archive holds `bin/lf` plus the built-in modules.
-- Install from crates.io. Every release so far is a pre-release, so the version must be named until a full release is cut:
+- Download a prebuilt archive for macOS or Linux from the [releases page](https://github.com/listen-fire/listen-fire/releases); `bin/lf` inside it is the command.
+- Or from crates.io:
   ```sh
   cargo install listen-fire --version 0.12.0-rc.6
   ```
-- Build from a clone: `cargo build --release -p listen-fire` puts the binary at `target/release/lf`.
+- Or from a clone: `cargo build --release -p listen-fire` puts it at `target/release/lf`.
 
 Then:
 
@@ -51,9 +51,9 @@ run efde8ee1-… hello:hello completed — 0 write(s), 0 trace entries
   returned "Hello, henrystanford!"
 ```
 
-`lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account, no model key and no module. `lf runs` lists every run and `lf runs show <run-id>` opens one.
+`lf init` writes a project folder: `lf.yaml`, a starter program in `movements/hello.mvt`, and `.lf/` for run state and secrets. The starter listens to `manual`, a built-in source that fires when you run it by hand, so it needs no account and no key. `lf runs` lists every run and `lf runs show <run-id>` opens one.
 
-From there, [Getting started with `lf`](docs/getting-started-lf.md) covers connecting a system (`lf connect @lf/attio`), adding a credential, routing a recorded event through your programs (`lf run --event …`) and serving webhooks (`lf serve`). The built-in modules that connect systems are TypeScript, so connecting one needs Node 22 on the machine.
+[Getting started with `lf`](docs/getting-started-lf.md) goes on to connect a system (`lf connect @lf/attio`), add a credential, route a recorded event through your programs (`lf run --event …`) and serve webhooks (`lf serve`).
 
 ## The example program
 
@@ -82,54 +82,23 @@ Each system is presented to the program as a graph of records joined by edges, s
 
 ## Worked example: CRM intake at a venture fund
 
-Listen-Fire grew out of one job: keeping a venture fund's CRM up to date from email, meeting notes and Slack, without an associate retyping it. That job is the case study that the rest of this README generalises from.
+Listen-Fire grew out of one job: keeping a venture fund's CRM up to date from email, meeting notes and Slack, without an associate retyping it. That job is the case study the rest of this README generalises from.
 
-A fund's deal flow arrives as email. Each new company should land in the CRM once, but an associate wants a say before a cold inbound is added. The program below posts the question in the fund's Slack deal channel with a link, waits for someone to confirm, and only then writes the company:
-
-```
-import { `@lf/email` as email, `@lf/attio` as attio, `@lf/slack` as slack } from adapters
-import { acme, team_chat } from credentials
-
-inbox = connect email
-crm   = connect attio using acme
-chat  = connect slack using team_chat
-
-function `Inbound Intake`(msg: <inbox-[:Email]->>) {
-  approve = callback({ })
-  deals = only(chat-[ch:Channels WHERE ch.Name == "dealflow"]->)
-  if (deals == null) { fail("no #dealflow channel") }
-  write deals-[:Messages]-> {
-    Message: "Add ${msg.Subject} to the CRM? ${approve.url}"
-  }
-  await first(approve-[:Called]->)
-  write crm-[:Companies]-> {
-    unique by (Name)
-    Name: msg.Subject
-  }
-}
-
-listen to inbox { key: "intake" } fire `Inbound Intake`
-```
-
-What happens on each email: the run mints a callback (a one-use link that resumes this run), posts it to the channel, and parks. Nothing is held open. When someone opens the link, the run resumes at the `await`, writes the company, and completes. Both programs on this page are checked by the handbook's tests against the captured schemas of the real Attio and Slack modules, so what the README shows is what the engine accepts.
-
-The fund's full version adds what the language is for: a deadline on the wait (`race` with `await sleep(2d)`), meeting notes from Granola attached to the company, fields pulled from an attached deck with `extract(…)`, and `FUZZY` matching so "Acme" and "Acme Inc" are one record. The [reviews chapter](packages/handbook/chapters/asks.ts) of the handbook covers the waiting forms. [`examples/lf-attio`](examples/lf-attio) is a runnable Attio project with its own walkthrough.
-
-On the hosted platform, a program can also raise a review with a typed answer (a yes/no check, a choice, a form) that mints a page for the person to answer; that review module is hosted by the platform, and `lf` on its own waits through callbacks, timers and conditions.
+The fund's programs do what the example above does, and then what the language is for. A company that arrives by email lands in Attio once, however many times it is mentioned (`unique by`, with `FUZZY` matching so "Acme" and "Acme Inc" are one record). Meeting notes from Granola attach to the company they were about. The fields of an attached deck are pulled out with `extract(…)`, the one step that calls a model. A cold inbound is not added until a partner has confirmed it from a button in Slack, with a deadline after which the run gives up (`race` with `await sleep(2d)`). The [reviews chapter](packages/handbook/chapters/asks.ts) of the handbook covers the waiting forms, and [`examples/lf-attio`](examples/lf-attio) is a runnable Attio project with its own walkthrough.
 
 ## Deploy options
 
 **One binary.** `lf serve` receives webhooks and callbacks, fires scheduled programs, polls systems that have no webhooks, and runs due work. Run state lives in SQLite under `.lf/`. This is enough for one machine. See [Getting started, section 6](docs/getting-started-lf.md#6-serve).
 
-**Cloud, scaling from zero.** The same binary splits into two commands. `lf serve --doors-only` answers webhooks and callbacks by queuing them (so it suits compute billed by the request), and `lf drain --until-idle --max-seconds N` is a worker that claims queued work, runs it, and exits when nothing is due. State lives in Postgres, containers keep none, and any number of workers can drain at once. [`deploy/lf`](deploy/lf) holds the image and [its guide](deploy/lf/README.md) describes the platform shape: a service, a scheduled or queue-triggered job, and an optional wake module that starts a worker the moment work is due. The guide is written for any such platform rather than one vendor, and a local trial runs under Docker Compose.
+**Cloud, scaling from zero.** The same binary splits into two commands. `lf serve --doors-only` answers webhooks and callbacks by queuing them (so it suits compute billed by the request), and `lf drain --until-idle --max-seconds N` is a worker that claims queued work, runs it, and exits when nothing is due. State lives in Postgres, containers keep none, and any number of workers can drain at once. [`deploy/lf`](deploy/lf) holds the image and [its guide](deploy/lf/README.md) describes the platform shape: a service, a scheduled or queue-triggered job, and an optional wake module that starts a worker the moment work is due. A local trial runs under Docker Compose.
 
 **Inside your product.** The engine runs in your own Node process as WebAssembly, with your product defined as one more system a program can read and write, each customer as a tenant, and every outside call answered by a host you build. [`docs/embedding.md`](docs/embedding.md) is the guide and [`examples/embed-saas`](examples/embed-saas) is a small HTTP app with an end-to-end test. The engine is a Rust crate too: [`examples/rust-embed`](examples/rust-embed) runs programs from a Rust host with its own tests.
 
-**The hosted platform.** The web app, the API, the review pages and the agent connector that run programs for teams are a separate repository, `lf-platform`, in the same GitHub organisation, with its own self-hosting runbook.
+**The hosted platform.** The web app, the API, the review pages and the agent connector that run programs for teams are a separate repository, `lf-platform`, in the same GitHub organisation.
 
 ## Talking to it from agents
 
-The handbook is the interface an agent uses. It ships in this repository as data ([`packages/handbook`](packages/handbook)): a [front page](packages/handbook/front_page.ts) that names where the language differs from TypeScript and the few ideas it adds, chapters addressed by anchor, and a keyword search over built-ins, recipes and system behaviour. Every example on the front page is checked by the engine in the handbook's tests, so it cannot teach something that does not compile. The same content is published at [listen-fire.github.io/listen-fire/docs/next](https://listen-fire.github.io/listen-fire/docs/next/) while the release is a pre-release.
+The handbook is the interface an agent uses. It ships in this repository as data ([`packages/handbook`](packages/handbook)): a [front page](packages/handbook/front_page.ts) that names where the language differs from TypeScript and the few ideas it adds, chapters addressed by anchor, and a keyword search over built-ins, recipes and system behaviour. Every example on the front page is checked by the engine in the handbook's tests, so it cannot teach something that does not compile. The same content is published at [listen-fire.github.io/listen-fire/docs/next](https://listen-fire.github.io/listen-fire/docs/next/).
 
 An agent's loop with `lf`:
 
@@ -138,7 +107,7 @@ An agent's loop with `lf`:
 3. `lf check`: every diagnostic names the rule it broke, with the file and line.
 4. `lf run --event <recorded-event.json>`, or `--dry-run`, to see what the program would do; `lf runs show <run-id>` to read the trace.
 
-The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. The MCP connector lives in the platform repository. For editors, `lf lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
+The hosted platform exposes the same handbook, the search, and save, run and inspect to agents over MCP (the Model Context Protocol), so an agent in a chat can author and run a program without a terminal. For editors, `lf lsp` is a language server over stdio; [`docs/editor-zed.md`](docs/editor-zed.md) wires it into Zed.
 
 ## What you can connect
 
@@ -163,7 +132,7 @@ Each system is reached through an adapter, which presents it as a graph. The ada
 | `cron` | a schedule |
 | `manual` | an on-demand run |
 
-`cron` and `manual` are the engine's own sources and need no module. Alongside the adapters, [`modules/`](modules) holds plugins a program imports (`@lf/web` for fetching and searching the web, `@lf/pdf` for rendering one) and the modules that fill the engine's core slots: models, the identity judge, the run store, files and rate limits ([core slots](docs/core-slots.md)). An adapter can also live outside this repository and be reached over a wire protocol; see [`docs/contracts/adapter-protocol.md`](docs/contracts/adapter-protocol.md).
+`cron` and `manual` are the engine's own and need no module. [`modules/`](modules) also holds the plugins a program imports (`@lf/web`, `@lf/pdf`) and the modules behind the engine's [core slots](docs/core-slots.md): models, the identity judge, the run store, files. An adapter can also live outside this repository and be reached over a wire protocol; see [`docs/contracts/adapter-protocol.md`](docs/contracts/adapter-protocol.md).
 
 ## Repository layout
 

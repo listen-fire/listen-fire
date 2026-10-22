@@ -14,7 +14,7 @@ const programs = [...readme.matchAll(/^```\n(import \{[\s\S]*?)^```$/gm)].map((m
 
 describe('the programs the README shows', () => {
   it('are there to check', () => {
-    expect(programs.length).toBeGreaterThanOrEqual(2);
+    expect(programs.length).toBeGreaterThanOrEqual(1);
   });
 
   it.each(programs.map((source, i) => [i + 1, source]))('program %i checks clean against the captured schemas', (_i, source) => {
