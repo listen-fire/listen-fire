@@ -58,6 +58,7 @@ mod connect;
 #[cfg(feature = "serve")]
 mod contract_doors;
 mod contract_secrets;
+#[cfg(feature = "serve")]
 mod contract_secrets_slot;
 #[cfg(feature = "serve")]
 mod contract_guard;
