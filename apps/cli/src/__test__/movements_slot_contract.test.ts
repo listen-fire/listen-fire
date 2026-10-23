@@ -4,20 +4,33 @@
 // lf's side of the wire is held to the meaning the module is. lf's default
 // module (`@lf/folder-movements`) is served and held the same way, so the
 // runner is held to what it serves. The read-only cases run against a module
-// that refuses every write, directly and through lf's client of it.
+// that refuses every write, directly and through lf's client of it. A fourth
+// bridge is a module that answers every watch at once, so no case assumes a
+// held request.
 
 import { test } from 'node:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MOVEMENTS_METHODS } from 'engine-contracts/slots';
-import { SlotClient, commonSlotCases, movementsReadOnlySlotCases, movementsSlotCases, startModule, type SlotAddress } from 'movement-engine/public/module-wire';
+import {
+  SlotClient,
+  commonSlotCases,
+  movementsReadOnlySlotCases,
+  movementsSlotCases,
+  movementsWatchCapCase,
+  movementsWatchRemovalCase,
+  startModule,
+  type SlotAddress,
+} from 'movement-engine/public/module-wire';
 import { lfBinary } from './lf_bin';
 import { serveMovementsModule } from './movements_module/serve';
 
 interface Reached {
   address: SlotAddress;
   settings: Record<string, string>;
+  /** Deletes a file behind the module: the wire has no delete. */
+  remove(path: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -46,7 +59,15 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     readOnly: true,
     reach: async ({ readOnly }) => {
       const served = await serveMovementsModule({ listen: 0, ...(readOnly !== undefined ? { readOnly } : {}) });
-      return { address: { baseUrl: served.url }, settings: { tenant: 't1' }, close: () => served.close() };
+      return { address: { baseUrl: served.url }, settings: { tenant: 't1' }, remove: async (path) => served.remove(path), close: () => served.close() };
+    },
+  },
+  {
+    over: 'a movements module that does not hold a watch',
+    readOnly: true,
+    reach: async ({ readOnly }) => {
+      const served = await serveMovementsModule({ listen: 0, holds: false, ...(readOnly !== undefined ? { readOnly } : {}) });
+      return { address: { baseUrl: served.url }, settings: { tenant: 't1' }, remove: async (path) => served.remove(path), close: () => served.close() };
     },
   },
   {
@@ -60,6 +81,7 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
       return {
         address: served.address,
         settings: {},
+        remove: async (path) => module.remove(path),
         close: async () => {
           await served.close();
           await module.close();
@@ -71,8 +93,9 @@ const bridges: Array<{ over: string; readOnly: boolean; reach(options: { readOnl
     over: "lf's folder movements module",
     readOnly: false,
     reach: async () => {
-      const served = await startModule(lfBinary(), ['--contract-movements-slot', '--dir', project(null)]);
-      return { address: served.address, settings: {}, close: () => served.close() };
+      const dir = project(null);
+      const served = await startModule(lfBinary(), ['--contract-movements-slot', '--dir', dir]);
+      return { address: served.address, settings: {}, remove: async (path) => rmSync(join(dir, 'movements', path)), close: () => served.close() };
     },
   },
 ];
@@ -93,6 +116,10 @@ for (const bridge of bridges) {
   for (const conformance of movementsSlotCases) {
     test(`${bridge.over}: ${conformance.name}`, () => withModule({}, (reached) => conformance.run(new SlotClient(reached.address, reached.settings))));
   }
+  test(`${bridge.over}: ${movementsWatchRemovalCase(async () => {}).name}`, () =>
+    withModule({}, (reached) => movementsWatchRemovalCase(reached.remove).run(new SlotClient(reached.address, reached.settings))));
+  test(`${bridge.over}: ${movementsWatchCapCase.name}`, { timeout: 40_000 }, () =>
+    withModule({}, (reached) => movementsWatchCapCase.run(new SlotClient(reached.address, reached.settings))));
   if (bridge.readOnly) {
     for (const conformance of movementsReadOnlySlotCases) {
       test(`${bridge.over}: ${conformance.name}`, () => withModule({ readOnly: REASON }, (reached) => conformance.run(new SlotClient(reached.address, reached.settings))));

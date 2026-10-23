@@ -22,6 +22,9 @@ import {
   MovementsListAnswer,
   MovementsReadAnswer,
   MovementsWriteAnswer,
+  MovementsWatchAnswer,
+  WATCH_WAIT_CAP_MS,
+  type MovementsChangeShape,
   OCR_PRICES_METHOD,
   OCR_UNSUPPORTED_TYPE_CODE,
   OcrPricesAnswer,
@@ -531,6 +534,47 @@ async function createdMovement(client: SlotClient, path: string, text: string): 
   return made.kind === 'written' ? made.version : '';
 }
 
+const watchMovements = (client: SlotClient, params: object) => client.read('movements.watch', params, MovementsWatchAnswer);
+
+/** The module's current cursor (a watch without one answers it, no events). */
+async function currentCursor(client: SlotClient): Promise<string> {
+  const answer = await watchMovements(client, { waitMs: 0 });
+  assert.ok('cursor' in answer, `a watch without a cursor answered ${JSON.stringify(answer)}`);
+  return 'cursor' in answer ? answer.cursor : '';
+}
+
+const WATCH_DEADLINE_MS = 10_000;
+
+/** Re-asks from `cursor` until an event satisfies `wanted` or the deadline
+ *  passes, so a module that answers at once (and one that holds) both pass.
+ *  Returns the cursor after the answer that carried it and every event seen. */
+async function watchedUntil(
+  client: SlotClient,
+  cursor: string,
+  wanted: (event: MovementsChangeShape) => boolean,
+): Promise<{ cursor: string; seen: MovementsChangeShape[] }> {
+  const deadline = Date.now() + WATCH_DEADLINE_MS;
+  const seen: MovementsChangeShape[] = [];
+  let from = cursor;
+  while (Date.now() < deadline) {
+    const asked = Date.now();
+    const answer = await watchMovements(client, { cursor: from, waitMs: 1_000 });
+    assert.ok('cursor' in answer, `a watch from a cursor the module gave answered ${JSON.stringify(answer)}`);
+    if (!('cursor' in answer)) break;
+    from = answer.cursor;
+    seen.push(...answer.events);
+    if (answer.events.some(wanted)) return { cursor: from, seen };
+    if (Date.now() - asked < 500) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`no wanted event within ${WATCH_DEADLINE_MS} ms; saw ${JSON.stringify(seen)}`);
+}
+
+const eventAt = (path: string, kind: MovementsChangeShape['kind']) => (event: MovementsChangeShape) => event.path === path && event.kind === kind;
+
+async function readVersion(client: SlotClient, path: string): Promise<string | undefined> {
+  return (await client.read('movements.read', { path }, MovementsReadAnswer))?.version;
+}
+
 /** The movements slot's own cases (docs/contracts/movements-slot.md): the
  *  list, a read of nothing, writes by compare-and-swap on the version, the
  *  path rule. `client` reaches a module that can change its files. */
@@ -622,7 +666,99 @@ export const movementsSlotCases: SlotConformanceCase[] = [
       assert.equal(await client.call('movements.read', { path }), null);
     },
   },
+  {
+    name: 'movements: a watch without a cursor answers a cursor and no events',
+    async run(client) {
+      const answer = await watchMovements(client, { waitMs: 0 });
+      assert.ok('cursor' in answer && answer.events.length === 0, `answered ${JSON.stringify(answer)}`);
+    },
+  },
+  {
+    name: 'movements: a file created after a watch is reported added with the version read answers; a replace is changed with the new version',
+    async run(client) {
+      const cursor = await currentCursor(client);
+      const path = NEW_MOVEMENT();
+      const first = await createdMovement(client, path, 'one');
+      const added = await watchedUntil(client, cursor, eventAt(path, 'added'));
+      const event = added.seen.find(eventAt(path, 'added'));
+      assert.equal(event && event.kind !== 'removed' ? event.version : undefined, first, 'added carries the version read answers');
+      const replaced = await writeMovement(client, path, 'two', first);
+      assert.equal(replaced.kind, 'written');
+      const changed = await watchedUntil(client, added.cursor, eventAt(path, 'changed'));
+      const edit = changed.seen.find(eventAt(path, 'changed'));
+      assert.equal(edit && edit.kind !== 'removed' ? edit.version : undefined, await readVersion(client, path), 'changed carries the new version');
+    },
+  },
+  {
+    name: 'movements: an event answered once is not answered again from the next cursor, and a write between two calls appears in the second',
+    async run(client) {
+      const first = NEW_MOVEMENT();
+      await createdMovement(client, first, 'one');
+      const cursor = await currentCursor(client);
+      const second = NEW_MOVEMENT();
+      await createdMovement(client, second, 'two');
+      const afterSecond = await watchedUntil(client, cursor, eventAt(second, 'added'));
+      assert.equal(afterSecond.seen.filter(eventAt(first, 'added')).length, 0, 'a file written before the cursor is not an event after it');
+      const third = NEW_MOVEMENT();
+      await createdMovement(client, third, 'three');
+      const afterThird = await watchedUntil(client, afterSecond.cursor, eventAt(third, 'added'));
+      assert.equal(afterThird.seen.filter(eventAt(second, 'added')).length, 0, 'an answered event is not answered again');
+    },
+  },
+  {
+    name: 'movements: two watchers from one cursor both see the change',
+    async run(client) {
+      const cursor = await currentCursor(client);
+      const path = NEW_MOVEMENT();
+      await createdMovement(client, path, 'one');
+      await watchedUntil(client, cursor, eventAt(path, 'added'));
+      await watchedUntil(client, cursor, eventAt(path, 'added'));
+    },
+  },
+  {
+    name: 'movements: a cursor the module never gave answers resync',
+    async run(client) {
+      assert.deepEqual(await watchMovements(client, { cursor: 'conformance-unknown', waitMs: 0 }), { resync: true });
+    },
+  },
+  {
+    name: 'movements: a watch without waitMs, with a negative waitMs or with a cursor that is not a string is refused as bad_request',
+    async run(client) {
+      await refusedWith('bad_request', client.call('movements.watch', {}));
+      await refusedWith('bad_request', client.call('movements.watch', { cursor: 'x' }));
+      await refusedWith('bad_request', client.call('movements.watch', { waitMs: -1 }));
+      await refusedWith('bad_request', client.call('movements.watch', { waitMs: 0, cursor: 5 }));
+    },
+  },
 ];
+
+/** A removed file is reported `removed`. The wire has no delete, so the
+ *  harness supplies the removal (the test module's `remove`, a file deleted
+ *  from the folder). */
+export const movementsWatchRemovalCase = (remove: (path: string) => Promise<void>): SlotConformanceCase => ({
+  name: 'movements: a removed file is reported removed',
+  async run(client) {
+    const path = NEW_MOVEMENT();
+    await createdMovement(client, path, 'one');
+    const cursor = await currentCursor(client);
+    await remove(path);
+    await watchedUntil(client, cursor, eventAt(path, 'removed'));
+  },
+});
+
+/** A module honours at most the cap: with nothing changing, a request for a
+ *  minute is answered within the cap (plus slack). It takes about 30 s. */
+export const movementsWatchCapCase: SlotConformanceCase = {
+  name: 'movements: a watch for longer than the cap is answered within the cap',
+  async run(client) {
+    const cursor = await currentCursor(client);
+    const asked = Date.now();
+    const answer = await watchMovements(client, { cursor, waitMs: 60_000 });
+    assert.ok(!('resync' in answer), 'a cursor the module gave is not resync');
+    const took = Date.now() - asked;
+    assert.ok(took < WATCH_WAIT_CAP_MS + 2_000, `a watch for 60000 ms took ${took} ms`);
+  },
+};
 
 /** What a module that keeps the project's movements where lf cannot change
  *  them answers: `client` reaches one. A write is refused by name with a
@@ -643,6 +779,13 @@ export const movementsReadOnlySlotCases: SlotConformanceCase[] = [
     async run(client) {
       assert.ok(Array.isArray(await client.call('movements.list', {})));
       assert.equal(await client.call('movements.read', { path: NEW_MOVEMENT() }), null);
+    },
+  },
+  {
+    name: 'movements: a read-only module still watches: a cursor without one, resync on one it never gave',
+    async run(client) {
+      await currentCursor(client);
+      assert.deepEqual(await watchMovements(client, { cursor: 'conformance-unknown', waitMs: 0 }), { resync: true });
     },
   },
 ];

@@ -5,7 +5,9 @@
 
 import { z } from 'zod';
 
-export const MOVEMENTS_METHODS = ['movements.list', 'movements.read', 'movements.write'] as const;
+import { WatchRequest, watchAnswer } from './wire';
+
+export const MOVEMENTS_METHODS = ['movements.list', 'movements.read', 'movements.write', 'movements.watch'] as const;
 
 /** A file's path under the movements folder: `/`-separated, ending `.mvt`,
  *  no segment empty, `.` or `..`, and no `\` (`orders/sync.mvt`). */
@@ -46,3 +48,16 @@ export const MovementsWriteAnswer = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('read_only'), reason: z.string().min(1) }),
 ]);
 export type MovementsWriteAnswerShape = z.infer<typeof MovementsWriteAnswer>;
+
+/** One change `movements.watch` reports. `version` is the one `read` answers; a module that can change its files gives it on `added` and `changed`. */
+export const MovementsChange = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('added'), path: MovementPath, version: Version.optional() }),
+  z.object({ kind: z.literal('changed'), path: MovementPath, version: Version.optional() }),
+  z.object({ kind: z.literal('removed'), path: MovementPath }),
+]);
+export type MovementsChangeShape = z.infer<typeof MovementsChange>;
+
+export const MovementsWatchRequest = WatchRequest;
+
+export const MovementsWatchAnswer = watchAnswer(MovementsChange);
+export type MovementsWatchAnswerShape = z.infer<typeof MovementsWatchAnswer>;
