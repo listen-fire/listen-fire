@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `@lf/attio` accepts a static access token as a second credential, `attio_token` (fields `accessToken` and an optional `baseUrl`), beside the OAuth sign-in `attio`. A connection uses one; `lf credential add --module attio <name>` now needs `--credential attio` or `--credential attio_token`. See `modules/attio/README.md`.
+
 ## [0.12.1] - 2026-10-23
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks nothing an author or operator wrote.
