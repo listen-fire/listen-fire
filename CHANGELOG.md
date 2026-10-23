@@ -21,6 +21,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - A model vendor that reports its budget spent on a success now closes the key before its 429: `@lf/anthropic` and `lf`'s Anthropic client throttle the API key until the reset named in `anthropic-ratelimit-*-remaining`/`-reset` (a count above zero changes nothing). Modules can use `vendorBudget` and `budgetAfter` from `@listen-fire/engine/public/limiter` (it also reads OpenAI's `x-ratelimit-*` headers). See `docs/contracts/limiter-slot.md`.
 - The adapter protocol's "Build your first adapter" walkthrough drives `lf` and `examples/lf-acme` (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) instead of the platform's conformance CLI and dev loop.
 - The lowering vocabulary (the built-ins' option keys and summaries, the AI tiers, the stdlib families) is generated from one file, `crates/movement-parser/src/lowering/vocabulary/vocabulary.json`, with `cargo run -p listen-fire-parser --features generate --bin gen-vocabulary`; tests hold the checker's standard library and the built-ins reference to it. What a program reads is unchanged.
+- `lf serve` and `lf drain` pick up changed, added and removed movement files from the movements module or folder without a restart, checking the new set first. A set that does not check keeps the running one, with the diagnostics printed once. `LF_MOVEMENTS_REFRESH_MS` sets the interval (default 5000). One-shot commands and the wire are unchanged.
 
 ## [0.12.0] - 2026-10-23
 

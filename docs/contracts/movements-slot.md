@@ -98,10 +98,13 @@ A module whose files come from somewhere lf cannot write (a platform's store the
 
 ## When lf reads the files
 
-lf asks `list`, then `read` for each file it does not already hold at the listed version, when a command opens its project (`check`, `catalog`, `run`, `serve`, `drain`, `upgrade` and the rest) and on each re-read of `lf lsp`. Nothing is polled.
+lf asks `list`, then `read` for each file it does not already hold at the listed version, when a command opens its project (`check`, `catalog`, `run`, `serve`, `drain`, `upgrade` and the rest) and on each re-read of `lf lsp`. A long-running `lf serve` or `lf drain` asks again on an interval (below).
 
 - lf keeps each path's version and text for the process. A listing whose version matches makes no `read`. A command reads the files twice (before and after the externals start), so the second read of an unchanged project is one `list`.
-- `lf serve` and `lf drain` keep the files they opened with until they restart, as they do for a movements folder. A parked run resumes from its own recorded source, not from the files.
+- `lf serve` and `lf drain` (without `--until-idle`) ask `list` every `LF_MOVEMENTS_REFRESH_MS` (default 5000; `0` asks on every pass of their loop) and read only the files whose listed version moved. A movements folder is read the same way, by the text of each file.
+- A module that leaves `version` out has that file read at every refresh, and a file counts as unchanged when its text equals the text lf holds. The version is what makes a change visible, so a module whose version does not move with a file's text is never refreshed.
+- A refresh that finds the set changed checks it first. A set that checks replaces the running one; a set that does not is kept out, with its diagnostics printed once, and the files lf had keep running. A module that fails to answer `list` is reported once per distinct message, and the files lf has stay.
+- A parked run resumes from its own recorded source, not from the files, and its imports link against the files lf holds now.
 - A platform running a session per tenant per job sees current files at each job.
 
 ## The tenant
