@@ -18,6 +18,7 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- New module `@listen-fire/wake-cloud-tasks` fills the wake slot on Google Cloud Tasks: each wake becomes a task, one per coalescing window, that starts a Cloud Run drain job, so the scheduled drain can drop to an hourly safety net. The `lf` image carries it as `wake_cloud_tasks` (off by default); its fake Cloud Tasks ships in the package for hosts' tests. See `modules/wake-cloud-tasks/README.md`.
 - A model vendor that reports its budget spent on a success now closes the key before its 429: `@lf/anthropic` and `lf`'s Anthropic client throttle the API key until the reset named in `anthropic-ratelimit-*-remaining`/`-reset` (a count above zero changes nothing). Modules can use `vendorBudget` and `budgetAfter` from `@listen-fire/engine/public/limiter` (it also reads OpenAI's `x-ratelimit-*` headers). See `docs/contracts/limiter-slot.md`.
 - The adapter protocol's "Build your first adapter" walkthrough drives `lf` and `examples/lf-acme` (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) instead of the platform's conformance CLI and dev loop.
 - The lowering vocabulary (the built-ins' option keys and summaries, the AI tiers, the stdlib families) is generated from one file, `crates/movement-parser/src/lowering/vocabulary/vocabulary.json`, with `cargo run -p listen-fire-parser --features generate --bin gen-vocabulary`; tests hold the checker's standard library and the built-ins reference to it. What a program reads is unchanged.

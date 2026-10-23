@@ -63,7 +63,13 @@ The row is already in the store when the module is called. If the call fails, lf
 
 ## A cloud queue module
 
-A module on Google Cloud Tasks (shipped separately) turns `wake.now` into a task due now and `wake.at` into a task scheduled at `at`. The task's delivery starts a worker job rather than running the work inside the delivery, since a delivery has a time limit (about 30 minutes) and a worker may run longer.
+`@listen-fire/wake-cloud-tasks` ([its README](../../modules/wake-cloud-tasks/README.md)) fills the slot on Google Cloud Tasks. The task's delivery starts a worker job rather than running the work inside the delivery, since a delivery has a time limit (about 30 minutes) and a worker may run longer.
+
+- **A task per window.** Each task is named `<job id>-<window index>`, the index being the time divided by `coalesce_window_ms` (default a minute, so the unix minute). Cloud Tasks refuses a second task of a name, so a burst of `wake.now` inside one window makes one task.
+- **The spent-name follow-on.** Cloud Tasks keeps an executed task's name about an hour. A `wake.now` whose window's task already ran makes the next window's task, at that window's start.
+- **Rounding up.** `wake.at` makes the task of the window `at` closes, scheduled at that window's end, because a worker must never start before `at`. It starts at most one window late.
+- **The target.** The task posts to `https://run.googleapis.com/v2/<job>:run` with the invoker service account's OAuth token. OAuth, not OIDC: `run.googleapis.com` is a Google API.
+- **The 30-day limit.** Cloud Tasks schedules at most 30 days ahead. An `at` further out makes no task; the module logs it and answers `null`, and the scheduled worker finds the row.
 
 ## The conformance cases
 
@@ -87,8 +93,9 @@ For a cloud queue module, point its deliveries at an endpoint the harness serves
 
 Every slot module also answers `commonSlotCases('wake', WAKE_METHODS)`: its manifest, and the envelope's refusals.
 
-`apps/cli` runs both against a test module standing for a cloud queue (`apps/cli/src/__test__/wake_module/serve.ts`), directly and through lf's own client of it (`lf --contract-wake-slot --dir <project>`), in `wake_contract.test.ts`. A Rust module implements `module_kit::Wake` and is served with `Host::wake`.
+`apps/cli` runs both against a test module standing for a cloud queue (`apps/cli/src/__test__/wake_module/serve.ts`), directly and through lf's own client of it (`lf --contract-wake-slot --dir <project>`), in `wake_contract.test.ts`. `wake_cloud_tasks_contract.test.ts` runs both against `@listen-fire/wake-cloud-tasks` and its shipped fake Cloud Tasks, whose dispatched tasks are the workers started. A Rust module implements `module_kit::Wake` and is served with `Host::wake`.
 
 ## Changes
 
 - **2026-10-20** (within adapter protocol 2): the wake slot, its methods, and its conformance cases.
+- **2026-10-23**: the Cloud Tasks module.

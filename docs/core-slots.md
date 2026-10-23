@@ -18,7 +18,7 @@ core:
 | `limiter` | keeps calls to modules and models inside the providers' limits | `@lf/memory-limiter` (in lf's own process) | |
 | `loopGuard` | tells a movement's own write echoing back from a real change | none: the slot is empty and nothing is suppressed | `@lf/fingerprint-guard` (opt in) |
 | `browser` | a real page a module drives: a gated deck, a viewer that draws with script ([browser-slot.md](contracts/browser-slot.md)) | none: lf has no browser, and a module asking for a page is refused by name | none in lf; the platform's api image fills it with `@lf/chromium` |
-| `wake` | told when work is due, so whatever starts lf's workers starts one then ([wake-slot.md](contracts/wake-slot.md)) | none: nobody is told, and work waits for a scheduled `lf drain` | none in lf; a cloud queue module (Google Cloud Tasks) ships separately |
+| `wake` | told when work is due, so whatever starts lf's workers starts one then ([wake-slot.md](contracts/wake-slot.md)) | none: nobody is told, and work waits for a scheduled `lf drain` | none in lf; `@listen-fire/wake-cloud-tasks` starts a Cloud Run job through Google Cloud Tasks ([its README](../modules/wake-cloud-tasks/README.md)) |
 | `ocr` | the text of a scanned PDF or an image, for `extract(…)`, `File.read` and a plugin's `ctx.ocr` ([ocr-slot.md](contracts/ocr-slot.md)) | none: a file with no text layer is unreadable, saying the slot is empty | none in lf; `@listen-fire/document-ai` (Google Document AI) and `@listen-fire/models` on Gemini fill it |
 | `secrets` | where credentials are kept: the ones a movement imports, each module's install, each core module's settings | `@lf/file-secrets` (the secrets file, plain or SOPS, and its lock file) | none in lf; a vault module (the platform's credential store, a cloud secret manager) fills it |
 | `movements` | the project's movement files, by name | `@lf/folder-movements` (the movements folder `lf.yaml` names) | none in lf; the platform's per-tenant store fills it |
@@ -130,6 +130,7 @@ core:
 - lf calls it after the work is written. A failed wake is logged and the work stays queued, so keep a scheduled worker (every minute) as the safety net.
 - Pair it with `lf serve --doors-only`: the doors queue what arrives, and the wake starts a worker for it.
 - lf builds none in. A module filling it speaks [its wire](contracts/wake-slot.md), and the conformance cases there hold it to the slot's meaning.
+- `@listen-fire/wake-cloud-tasks` fills it on Google Cloud: each wake becomes a Cloud Tasks task that starts a Cloud Run drain job ([its README](../modules/wake-cloud-tasks/README.md)). With it, the scheduled worker becomes an hourly safety drain.
 
 ## OCR
 
