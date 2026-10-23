@@ -28,8 +28,8 @@ The plain tags move npm `latest`, make the GitHub release a full release and pub
    ```sh
    cargo publish -p listen-fire-parser
    cargo publish -p listen-fire-checker
-   cargo publish -p listen-fire-engine
    cargo publish -p listen-fire-language
+   cargo publish -p listen-fire-engine
    cargo publish -p listen-fire-module-wire
    cargo publish -p listen-fire
    cargo publish -p listen-fire-module-kit
@@ -78,8 +78,8 @@ A suffixed tag never moves npm `latest` or the default docs.
    ```sh
    cargo publish -p listen-fire-parser
    cargo publish -p listen-fire-checker
-   cargo publish -p listen-fire-engine
    cargo publish -p listen-fire-language
+   cargo publish -p listen-fire-engine
    cargo publish -p listen-fire-module-wire
    cargo publish -p listen-fire
    cargo publish -p listen-fire-module-kit

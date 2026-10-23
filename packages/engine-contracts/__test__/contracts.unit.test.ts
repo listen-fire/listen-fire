@@ -14,6 +14,7 @@ import {
   MANIFEST_PROTOCOL_VERSION,
   PARK_STATE_VERSION,
   PROTOCOL_VERSION,
+  STORY_ANALYSIS_VERSION,
   SYSTEM_CALLER_VERSION,
   hostMethodPaths,
   isCorePark,
@@ -67,6 +68,7 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
     expect(versionLine('adapter-protocol.md')).toBe(MANIFEST_PROTOCOL_VERSION);
     expect(String(versionLine('adapter-protocol.md'))).toBe(PROTOCOL_VERSION);
     expect(versionLine('system-caller.md')).toBe(SYSTEM_CALLER_VERSION);
+    expect(versionLine('story-analysis.md')).toBe(STORY_ANALYSIS_VERSION);
   });
 
   it('the index is the CONTRACTS table, contract by contract', () => {

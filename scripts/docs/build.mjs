@@ -85,7 +85,7 @@ addFile('Guides', 'lf-json', 'docs/lf-json.md');
 addFile('Guides', 'embedding', 'docs/embedding.md');
 addFile('Guides', 'adapter-protocol', 'docs/adapter-protocol.md');
 addFile('Guides', 'migrating-to-0.12', 'docs/language/migrating-to-0.12.md');
-for (const name of ['README', 'language-versions', 'catalog-snapshot', 'host-families', 'store-slot', 'limiter-slot', 'run-limits', 'park-state', 'system-caller', 'adapter-protocol']) {
+for (const name of ['README', 'language-versions', 'catalog-snapshot', 'host-families', 'store-slot', 'limiter-slot', 'run-limits', 'park-state', 'system-caller', 'story-analysis', 'adapter-protocol']) {
   addFile('Contracts', name === 'README' ? 'contracts' : `contracts-${name}`, `docs/contracts/${name}.md`, name === 'README' ? 'Contracts' : undefined);
 }
 
