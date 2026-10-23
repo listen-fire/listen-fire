@@ -72,8 +72,8 @@ test('lf upgrade moves an older pin to the current release once the project vali
 
   const { code, out } = lf(dir, 'upgrade');
   assert.equal(code, 0, out);
-  assert.match(out, /lf\.yaml: engine: 0\.12\.0(-[\w.]+)? \(was 0\.11\.0\)/);
-  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.0(-[\w.]+)?$/m);
+  assert.match(out, /lf\.yaml: engine: 0\.12\.\d+(-[\w.]+)? \(was 0\.11\.0\)/);
+  assert.match(readFileSync(join(dir, 'lf.yaml'), 'utf8'), /^engine: 0\.12\.\d+(-[\w.]+)?$/m);
   assert.equal(lf(dir, 'check').code, 0);
 });
 

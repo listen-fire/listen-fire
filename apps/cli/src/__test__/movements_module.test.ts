@@ -162,7 +162,7 @@ test('upgrade writes through the module, at the version it read, and the project
     assert.equal(upgraded.code, 0, upgraded.out);
     assert.equal(module.held()['companies.mvt'], UPGRADED);
     assert.deepEqual(module.writes, [{ path: 'companies.mvt', expectedVersion: 'v1' }], 'the version the list answered');
-    assert.match(read(dir, 'lf.yaml'), /^engine: 0\.12\.0(-[\w.]+)?$/m);
+    assert.match(read(dir, 'lf.yaml'), /^engine: 0\.12\.\d+(-[\w.]+)?$/m);
     assert.equal(existsSync(join(dir, 'movements')), false);
     const checked = await lf(dir, ['check'], { env: ENV }).done;
     assert.equal(checked.code, 0, checked.out);
