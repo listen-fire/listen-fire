@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A record a library movement returns keeps the system it was read from. A write on it in the caller (a linked write under it, or an update of it) now goes through the connection the library read it with, whatever either file calls its connection. Before, it failed ("a linked write's parent — the system 'ch' came from can't be determined"); and when the caller happened to name a connection the same as the library's, the write went through the caller's, a different workspace if its credential differed. A park holding such a record resumes the same way.
+
 ## [0.12.2] - 2026-10-23
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two operator-facing changes need an action, both below.

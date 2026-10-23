@@ -115,10 +115,15 @@ export interface InstanceIdentityDescriptor {
 }
 
 /** The serialised `SourceRead` — just the instance identity behind it. The live
- *  `adapter` + the `edgeFieldId` closure are rebound from `instanceName` on
- *  rehydrate. */
+ *  `adapter` + the `edgeFieldId` closure are rebound on rehydrate: from
+ *  `instance` when the park carries it, else from `instanceName` in the root
+ *  program's scope (a park written before `instance`). */
 export interface SourceReadDescriptor {
   instanceName: string;
+  /** The system the record was read from (the Rust engine writes it): a
+   *  record a library returned names a connection the root program's scope
+   *  does not hold. */
+  instance?: InstanceIdentityDescriptor;
 }
 
 /** A serialised `ExtractEmission` — its `children` Map flattened to a record of

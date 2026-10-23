@@ -579,7 +579,9 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
         // A record a pick bound (`top = FIRST(…)`): admission refuses every
         // park inside a block, so no hop alias reaches here. Its read is
         // named only when it is not the event's source (the TypeScript binds
-        // none there), and a pick keeps no edge properties.
+        // none there), and a pick keeps no edge properties. The read is its
+        // system's identity: a record a library returned names a connection
+        // no scope of the caller's holds.
         Binding::Landed(landed) => {
             let mut descriptor = vec![kind("sourcePosition"), ("position", json_round_trip(&landed.position()))];
             if let Some(properties) = &landed.edge_properties {
@@ -587,7 +589,8 @@ fn serialize_binding(run: &Run<'_>, name: &str, binding: &Binding, park: &mut Pa
             }
             let from_source = run.source.borrow().as_ref().is_some_and(|source| Rc::ptr_eq(&source.read, &landed.read));
             if !from_source {
-                descriptor.push(("read", object_of(vec![("instanceName", Js::str(landed.read.instance_name.clone()))])));
+                let graph = &landed.read.graph;
+                descriptor.push(("read", object_of(vec![("instanceName", Js::str(graph.name.clone())), ("instance", identity(graph))])));
             }
             object_of(descriptor)
         }
@@ -1440,8 +1443,7 @@ mod tests {
         let read = Rc::new(crate::traverse::Read {
             instance: crate::host::Instance { id: "i1".into(), methods: Rc::new(Vec::new()) },
             adapter_type: "graph".into(),
-            instance_name: "kg".into(),
-            schema: None,
+            graph: Rc::new(InstanceBinding { name: "kg".into(), adapter_slug: "kg".into(), credential_name: None, construction_config: Vec::new(), schema: None }),
             start_surface_type: None,
             incoming: false,
             edge_properties: false,
@@ -1462,7 +1464,7 @@ mod tests {
         for state in [ready(parked_state(&run, "s0", None, &scope)), ready(suspended_state(&run, "s0", &scope))] {
             let state = crate::env::encode_plain(&state.expect("a picked record parks"));
             let text = state.to_string();
-            assert!(text.contains(r#"[["kind","sourcePosition"],["read",["o",[["instanceName","kg"]]]]"#), "{text}");
+            assert!(text.contains(r#"[["kind","sourcePosition"],["read",["o",[["instanceName","kg"],["instance",["o",[["name","kg"],["adapterSlug","kg"]]]]]]]"#), "{text}");
         }
     }
 

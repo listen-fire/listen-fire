@@ -599,7 +599,7 @@ impl Run<'_> {
                     let mut kept = Vec::new();
                     for landed in self.step_cursor(cursor, step, scope, span).await? {
                         if let (Some((gate, read)), Binding::Landed(l)) = (&gate, &landed)
-                            && !gate.admits(read.schema.as_ref(), &l.position())
+                            && !gate.admits(read.graph.schema.as_ref(), &l.position())
                         {
                             continue;
                         }

@@ -24,6 +24,8 @@ mod data;
 #[cfg(test)]
 mod end_to_end;
 mod hosts;
+#[cfg(test)]
+mod library_records;
 mod serve;
 #[cfg(test)]
 mod test_time;

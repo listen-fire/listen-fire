@@ -74,9 +74,11 @@ pub struct Read {
     pub instance: Instance,
     /// The live adapter's own `adapterType`.
     pub adapter_type: String,
-    /// The instance's name, which a read's origins cite.
-    pub instance_name: String,
-    pub schema: Option<InstanceSchema>,
+    /// The system the read is of, which a record read through it carries
+    /// out of the scope that connected it: what a write on the record acts
+    /// through, and the name its origins cite. Two connections to one
+    /// system (adapter, credential, construction) share one read.
+    pub graph: Rc<InstanceBinding>,
     /// The movement parameter's declared position, which names a typeless
     /// event root (the event's source only).
     pub start_surface_type: Option<String>,
@@ -95,15 +97,14 @@ pub struct Read {
 
 impl Read {
     /// What `adapters.resolve` answered, as a read.
-    pub fn of_resolved(resolved: &Json, instance: Instance, binding: &InstanceBinding, start_surface_type: Option<String>) -> Read {
+    pub fn of_resolved(resolved: &Json, instance: Instance, graph: Rc<InstanceBinding>, start_surface_type: Option<String>) -> Read {
         let traversal = resolved.get("capabilities").and_then(|c| c.get("traversal"));
         let flag = |name: &str| traversal.and_then(|t| t.get(name)).and_then(Json::as_bool) == Some(true);
         Read {
             streams: instance.has("iterateRelated"),
-            adapter_type: resolved.get("adapterType").and_then(Json::as_str).unwrap_or(&binding.adapter_slug).to_string(),
+            adapter_type: resolved.get("adapterType").and_then(Json::as_str).unwrap_or(&graph.adapter_slug).to_string(),
             instance,
-            instance_name: binding.name.clone(),
-            schema: binding.schema.clone(),
+            graph,
             start_surface_type,
             incoming: flag("incoming"),
             edge_properties: flag("edgeProperties"),
@@ -367,7 +368,7 @@ pub(crate) fn member_gate(step: &EdgeStep, origin: &Js, read: &Read) -> Option<M
 }
 
 fn selection(filter: &Expression, step: &EdgeStep, origin: &Js, read: &Read) -> Option<MemberGate> {
-    let schema = read.schema.as_ref()?;
+    let schema = read.graph.schema.as_ref()?;
     let selected = schema.selected_members.as_ref()?;
     let declared = record_type(origin)
         .and_then(|from| schema.positions.get(&from)?.edges.get(&step.edge_type_id).map(|e| e.target.clone()))
@@ -880,7 +881,7 @@ impl Run<'_> {
 
     /// `instanceSourceRead`: the instance resolved as a source, once per
     /// (adapter, credential, construction arguments).
-    pub(crate) async fn instance_read(&self, instance: &InstanceBinding) -> Result<Rc<Read>, Failure> {
+    pub(crate) async fn instance_read(&self, instance: &Rc<InstanceBinding>) -> Result<Rc<Read>, Failure> {
         let adapter_type = instance.adapter_slug.clone();
         let credentials_id = instance.credential_name.as_deref().and_then(|name| self.credential_id(name));
         let construction_args: std::collections::BTreeMap<String, String> = instance
@@ -904,7 +905,7 @@ impl Run<'_> {
             .await?
             .unwrap_or(Json::Null);
         let handle = host::instance_of(&resolved).ok_or_else(|| Failure::engine("MOVENG_RUNTIME", format!("adapters.resolve answered {resolved}")))?;
-        let read = Rc::new(Read::of_resolved(&resolved, handle, instance, None));
+        let read = Rc::new(Read::of_resolved(&resolved, handle, instance.clone(), None));
         self.source_reads.borrow_mut().push((key, read.clone()));
         Ok(read)
     }
@@ -997,7 +998,7 @@ impl Run<'_> {
 
     /// `related_items`, its answer the `envelope` the host makes files in.
     async fn related_items_as(&self, start: &Js, step: &EdgeStep, read: &Rc<Read>, mut args: Vec<(&str, Js)>, envelope: Option<&str>) -> Result<Vec<(Js, Js)>, Failure> {
-        let schema = read.schema.as_ref();
+        let schema = read.graph.schema.as_ref();
         let (from, landed_type) = if record_type(start).as_deref() == Some("meta") {
             (start.clone(), schema.and_then(|s| s.collections.get(&step.edge_type_id)).map(|c| c.target.clone()))
         } else {
@@ -1083,7 +1084,7 @@ impl Run<'_> {
         scope: &Rc<Scope>,
         span: &Js,
     ) -> Result<(), Failure> {
-        if gate.is_some_and(|gate| !gate.admits(read.schema.as_ref(), &position)) {
+        if gate.is_some_and(|gate| !gate.admits(read.graph.schema.as_ref(), &position)) {
             return Ok(());
         }
         let edge_properties = match get(item, "edgeProperties") {
@@ -1351,15 +1352,15 @@ impl Run<'_> {
         let position = &surface;
         // Through the read wrapper, a file is what the catalog declares one
         // (the host makes it); the adapter itself, read raw, answers data.
-        let declared = if read.raw { None } else { crate::file::declared_field_type(read.schema.as_ref(), record_type(position).as_deref(), field) };
+        let declared = if read.raw { None } else { crate::file::declared_field_type(read.graph.schema.as_ref(), record_type(position).as_deref(), field) };
         let value = self.field_value_at(&read.instance, position, field, declared).await?;
         let stable = is_stable(&landed.position());
         if value.is_nullish() && !stable {
-            self.trace_miss_in(&read.instance_name, &position_data(&landed.position()), field);
+            self.trace_miss_in(&read.graph.name, &position_data(&landed.position()), field);
         }
         let mut entries = vec![
             ("kind", Js::str("source_field")),
-            ("instance", Js::str(read.instance_name.clone())),
+            ("instance", Js::str(read.graph.name.clone())),
             ("adapterType", Js::str(read.adapter_type.clone())),
         ];
         if stable && let Some(record_type) = record_type(&landed.position()) {

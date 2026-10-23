@@ -526,7 +526,7 @@ impl Run<'_> {
             let adapter = self.target_adapter(instance).await?;
             return Ok(Target { adapter, record_type, graph: Some(instance.clone()), parents: Vec::new(), handle_type: None, where_: where_.into_iter().collect() });
         }
-        let parent = self.linked_parent(path, explicit_type.as_deref(), root_name.as_deref(), root, scope, verb, false).await?;
+        let parent = self.linked_parent(path, explicit_type.as_deref(), root_name.as_deref(), root, verb, false).await?;
         let adapter = self.target_adapter(&parent.graph).await?;
         Ok(Target {
             adapter,
@@ -549,7 +549,7 @@ impl Run<'_> {
                 _ => None,
             };
             let root = root_name.as_deref().and_then(|name| scope.resolve(name));
-            resolved.push(self.linked_parent(path, explicit_type, root_name.as_deref(), root, scope, verb, true).await?);
+            resolved.push(self.linked_parent(path, explicit_type, root_name.as_deref(), root, verb, true).await?);
         }
         let Some((first, rest)) = resolved.split_first() else {
             return Err(thrown(Failure::engine("MOVENG_RUNTIME", "a tuple write with no paths — the checker should have caught this".into())));
@@ -596,7 +596,6 @@ impl Run<'_> {
         explicit_type: Option<&str>,
         root_name: Option<&str>,
         root: Option<Binding>,
-        scope: &Scope,
         verb: Verb,
         tuple: bool,
     ) -> Result<LinkedParent, Stop> {
@@ -608,9 +607,7 @@ impl Run<'_> {
             match root {
                 Some(Binding::Handle(handle)) => Ok(handle.graph.clone()),
                 Some(Binding::Event) => self.source_instance.borrow().clone().ok_or_else(|| thrown(self.unnamed_graph(&name))),
-                // The graph the record was read from: its constructed instance by
-                // name, or, read off the event's source, the source's instance.
-                Some(Binding::Landed(landed)) => self.landed_graph(landed, scope).ok_or_else(|| thrown(self.unnamed_graph(&name))),
+                Some(Binding::Landed(landed)) => Ok(landed.read.graph.clone()),
                 other => Err(thrown(Failure::engine(
                     "MOVENG_RUNTIME",
                     format!("a linked write's path must start at a bound write handle or a traversed record — '{name}' is {}", describe(other)),
@@ -668,20 +665,6 @@ impl Run<'_> {
             parent: Parent { handle_name: name, edge_name: edge, record_type: parent_type, external_id: parent_id, data },
             where_,
         })
-    }
-
-    /// The instance a traversed record lives in (`linkedPathGraph`): read
-    /// off the event's source, the source's own; otherwise the constructed
-    /// instance its read names.
-    pub(crate) fn landed_graph(&self, landed: &crate::bindings::Landed, scope: &Scope) -> Option<Rc<InstanceBinding>> {
-        let source = self.source.borrow().clone();
-        if source.as_ref().is_some_and(|s| Rc::ptr_eq(&s.read, &landed.read)) {
-            return self.source_instance.borrow().clone();
-        }
-        match scope.resolve(&landed.read.instance_name) {
-            Some(Binding::Instance(instance)) => Some(instance),
-            _ => None,
-        }
     }
 
     /// `singleWriteEdge`: the one edge step a linked path walks, and its WHERE.
@@ -1446,7 +1429,7 @@ impl Run<'_> {
     /// stands on — a write's handle, or a traversed record.
     async fn position_write(&self, alias: &str, lines: &[Line], binding_name: Option<&str>, scope: &Rc<Scope>) -> Result<Binding, Stop> {
         let binding = scope.resolve(alias);
-        let PositionTarget { target, graph, external_id } = self.position_target_of(alias, binding.clone(), scope, "update").await?;
+        let PositionTarget { target, graph, external_id } = self.position_target_of(alias, binding.clone(), "update").await?;
         let fields = self.write_fields(lines, &target.adapter, &target.record_type, scope).await?;
         let lock = unique::record_lock_name(&target.adapter.adapter_type, &external_id);
         let prior = Prior {
@@ -1488,12 +1471,12 @@ impl Run<'_> {
     /// is written through its graph's target adapter, under the type its
     /// position names; a handle under the type it stands on.
     pub(crate) async fn position_target(&self, alias: &str, scope: &Rc<Scope>, action: &str) -> Result<PositionTarget, Stop> {
-        self.position_target_of(alias, scope.resolve(alias), scope, action).await
+        self.position_target_of(alias, scope.resolve(alias), action).await
     }
 
     /// `resolvePositionWriteTarget` of a binding in hand, `alias` naming it
     /// in the messages.
-    pub(crate) async fn position_target_of(&self, alias: &str, binding: Option<Binding>, scope: &Rc<Scope>, action: &str) -> Result<PositionTarget, Stop> {
+    pub(crate) async fn position_target_of(&self, alias: &str, binding: Option<Binding>, action: &str) -> Result<PositionTarget, Stop> {
         let unstable = || {
             thrown(Failure::engine(
                 "MOVENG_RUNTIME",
@@ -1520,13 +1503,7 @@ impl Run<'_> {
                         format!("can't {action} '{alias}' — its record type is unknown (an un-narrowed position). Narrow it with an IS test first"),
                     )));
                 };
-                let name = &landed.read.instance_name;
-                let Some(Binding::Instance(instance)) = scope.resolve(name) else {
-                    return Err(thrown(Failure::engine(
-                        "MOVENG_RUNTIME",
-                        format!("can't {action} '{alias}' — its graph '{name}' is not a constructed instance in scope"),
-                    )));
-                };
+                let instance = landed.read.graph.clone();
                 let adapter = self.target_adapter(&instance).await?;
                 Ok(target(adapter, record_type, instance, crate::traverse::record_id(position)))
             }

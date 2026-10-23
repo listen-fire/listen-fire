@@ -335,7 +335,7 @@ impl Run<'_> {
         }
         let alias = format!("{} landing", edge.edge_name);
         let crate::write::PositionTarget { target, graph, external_id } =
-            self.position_target_of(&alias, Some(landing.clone()), &edge.scope, "update").await.map_err(crate::write::failure_of)?;
+            self.position_target_of(&alias, Some(landing.clone()), "update").await.map_err(crate::write::failure_of)?;
         let real = RealRecord { adapter: target.adapter, record_type: target.record_type, graph, external_id };
         edge.real.borrow_mut().push((landing.clone(), real.clone()));
         Ok(real)

@@ -79,7 +79,7 @@ impl Run<'_> {
             }
             Binding::Landed(landed) => {
                 // An address names an event narrowing; a landed record is never one.
-                if type_.hops_raw.is_some() || !graph_named(&landed.read.instance_name) {
+                if type_.hops_raw.is_some() || !graph_named(&landed.read.graph.name) {
                     return Ok(false);
                 }
                 let Some(record_type) = crate::traverse::record_type(&landed.position()) else { return Err(undiscriminated(name, UNSTAMPED_LANDING)) };
@@ -108,10 +108,7 @@ impl Run<'_> {
             Binding::Landed(landed) => {
                 let Some(record_type) = crate::traverse::record_type(&landed.position()) else { return Err(undiscriminated(name, UNSTAMPED_LANDING)) };
                 // The graph the landing was yielded from (`graphSchemaOf`).
-                let schema = match scope.resolve(&landed.read.instance_name) {
-                    Some(Binding::Instance(instance)) => instance.schema.clone(),
-                    _ => landed.read.schema.clone(),
-                };
+                let schema = landed.read.graph.schema.clone();
                 return self.typed_record_fits(name, schema.as_ref(), &record_type, declared).await;
             }
             _ => return Ok(false),
@@ -141,7 +138,7 @@ impl Run<'_> {
                 Some(Binding::Node(node)) => Surface::Node(node),
                 Some(Binding::Extracted { emission, .. }) => Surface::Emission(emission),
                 Some(record @ (Binding::Event | Binding::Landed(_) | Binding::Handle(_))) => {
-                    if !self.nested_record_fits(&record, declaration, &below, scope).await? {
+                    if !self.nested_record_fits(&record, declaration, &below).await? {
                         return Ok(true);
                     }
                     continue;
@@ -160,7 +157,7 @@ impl Run<'_> {
     /// declaration's node at `path` (`subjectSurface` then `surfaceMisfit`
     /// across the edge): a record of no known type, or one no schema
     /// enumerates, fits.
-    async fn nested_record_fits(&self, record: &Binding, declaration: &ShapeBinding, path: &[String], scope: &Scope) -> Result<bool, Failure> {
+    async fn nested_record_fits(&self, record: &Binding, declaration: &ShapeBinding, path: &[String]) -> Result<bool, Failure> {
         let (schema, record_type) = match record {
             Binding::Event => {
                 let source = self.source.borrow().clone();
@@ -169,10 +166,7 @@ impl Run<'_> {
             }
             Binding::Handle(handle) => (handle.graph.schema.clone(), Some(handle.target_type.clone())),
             Binding::Landed(landed) => {
-                let schema = match scope.resolve(&landed.read.instance_name) {
-                    Some(Binding::Instance(instance)) => instance.schema.clone(),
-                    _ => landed.read.schema.clone(),
-                };
+                let schema = landed.read.graph.schema.clone();
                 (schema, crate::traverse::record_type(&landed.position()))
             }
             _ => return Ok(true),

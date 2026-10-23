@@ -334,7 +334,7 @@ impl Run<'_> {
         }
         let mut instance = (*handle.graph).clone();
         instance.adapter_slug = adapter_type.clone();
-        let read = self.instance_read(&instance).await.map_err(Stop::Thrown)?;
+        let read = self.instance_read(&Rc::new(instance)).await.map_err(Stop::Thrown)?;
         let awaited = Awaited { adapter_type, record_id, read, head_data: record.get("resultData") };
         self.await_record(awaited, edge, filter, binding_name, scope, at).await
     }

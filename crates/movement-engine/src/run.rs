@@ -1192,7 +1192,7 @@ impl Run<'_> {
 
     /// The source adapter resolved and the event seeded (`prepareMovement`'s
     /// instance branch).
-    async fn seed(&self, instance: &InstanceBinding, type_ref: &ast::TypeRef) -> Result<(), Failure> {
+    async fn seed(&self, instance: &Rc<InstanceBinding>, type_ref: &ast::TypeRef) -> Result<(), Failure> {
         let credentials_id = instance.credential_name.as_deref().and_then(|name| self.credential_id(name));
         let resolved = self
             .resolve_adapter(&ResolveAdapter {
@@ -1218,7 +1218,7 @@ impl Run<'_> {
         let address = event_seed_address(schema, &self.event, root_surface_type.as_deref());
         let position = seed_event_position(&self.event, &instance.adapter_slug, root_surface_type, address.as_ref())?;
         let surface = restamp(&position, position.record_type.clone().or_else(|| type_ref.position.clone()), &adapter_type).to_js();
-        let read = Rc::new(crate::traverse::Read::of_resolved(&resolved, handle.clone(), instance, type_ref.position.clone()));
+        let read = Rc::new(crate::traverse::Read::of_resolved(&resolved, handle.clone(), instance.clone(), type_ref.position.clone()));
         *self.source.borrow_mut() = Some(Rc::new(Source {
             instance: handle,
             adapter_type,
@@ -2058,7 +2058,7 @@ impl Run<'_> {
         // A file is what the catalog declares one (the read wrapper's
         // `filesAtType`, which the host applies): any other field's answer is
         // data, whatever its keys.
-        let declared = crate::file::declared_field_type(source.read.schema.as_ref(), crate::traverse::record_type(&source.surface).as_deref(), field);
+        let declared = crate::file::declared_field_type(source.read.graph.schema.as_ref(), crate::traverse::record_type(&source.surface).as_deref(), field);
         let value = self.field_value_at(&source.instance, &source.surface, field, declared).await?;
         if value.is_nullish() && !seed.is_stable() {
             self.trace_miss_in(&source.instance_name, &seed.data, field);

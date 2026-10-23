@@ -1021,7 +1021,11 @@ impl Run<'_> {
                     let position = at(descriptor, "position").cloned().unwrap_or(Js::Undefined);
                     let properties = at(descriptor, "edgeProperties").cloned();
                     let read = match at(descriptor, "read") {
-                        Some(read) => self.source_read_of(text(at(read, "instanceName")).unwrap_or("")).await?,
+                        Some(read) => match at(read, "instance") {
+                            Some(identity) => self.instance_read(&Rc::new(self.rehydrate_instance(identity)?)).await.map_err(Stop::Thrown)?,
+                            // Parked before a read carried its system.
+                            None => self.source_read_of(text(at(read, "instanceName")).unwrap_or("")).await?,
+                        },
                         None => self.source.borrow().as_ref().map(|source| source.read.clone()).ok_or_else(|| malformed("a record read off a source this run has none of"))?,
                     };
                     Binding::Landed(Rc::new(Landed::new(position, properties, read)))

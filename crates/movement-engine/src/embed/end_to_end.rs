@@ -281,8 +281,8 @@ impl WireWorld {
 
 /// Parks, joins and callbacks in memory.
 #[derive(Default)]
-struct Parks {
-    timers: Vec<TimerPark>,
+pub(super) struct Parks {
+    pub(super) timers: Vec<TimerPark>,
     awaits: Vec<AwaitPark>,
     mints: Vec<CallbackMint>,
     /// Each callback's ledger of calls, as `{at, values}`.
@@ -290,6 +290,8 @@ struct Parks {
     joins: Vec<(String, i64)>,
     exports: Vec<(String, BranchExport)>,
     wakes: Vec<(String, serde_json::Value)>,
+    /// Library texts a park names by hash, the hash being the index.
+    sources: Vec<String>,
 }
 
 impl Store for Parks {
@@ -338,6 +340,13 @@ impl Store for Parks {
     }
     fn callback_calls(&mut self, _callback_id: &serde_json::Value) -> HostFuture<Data> {
         ready(Ok(Data::List(self.calls.clone())))
+    }
+    fn save_source(&mut self, source: &str) -> HostFuture<String> {
+        self.sources.push(source.to_string());
+        ready(Ok((self.sources.len() - 1).to_string()))
+    }
+    fn load_source(&mut self, hash: &str) -> HostFuture<Option<String>> {
+        ready(Ok(hash.parse::<usize>().ok().and_then(|i| self.sources.get(i).cloned())))
     }
 }
 
