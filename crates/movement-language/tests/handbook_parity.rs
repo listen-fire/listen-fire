@@ -6,8 +6,9 @@
 //! `LF_BLESS=1 cargo test -p listen-fire-language --test handbook_parity`.
 //!
 //! answers.json: `{lists, programs: [{construct, probes: [{at, complete:
-//! {items, word}, codeActions, hover?, definition?}]}]}`, hover and
-//! definition asked only at each line's first identifier. Completion lists
+//! {items, word}, codeActions} | {at, hover, definition}]}]}`: completion
+//! and code actions after each completion trigger, hover and definition at
+//! each line's first identifier. Completion lists
 //! repeat across probes, so each is written once in `lists` and a probe's
 //! `complete.items` is its index there. The docs link's versioned base is
 //! written `<docs>`, so a release does not re-bless.
@@ -23,9 +24,9 @@ fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/handbook")
 }
 
-/// Where a probe asks: after each `.`, `-[`, backtick, `using ` and `{ `,
-/// and at the first identifier of each line. Only that first identifier is
-/// also asked for its hover and definition (`true`).
+/// Where a probe asks: its completion and code actions after each `.`,
+/// `-[`, `using ` and `{ ` (the completion triggers), and its hover and
+/// definition at the first identifier of each line (`true`).
 fn probes(source: &str) -> Vec<(Pos, bool)> {
     let mut found = Vec::new();
     for (line, text) in source.split('\n').enumerate() {
@@ -34,7 +35,7 @@ fn probes(source: &str) -> Vec<(Pos, bool)> {
             found.push((at(first), true));
         }
         for (byte, c) in text.char_indices() {
-            if c == '.' || c == '`' {
+            if c == '.' {
                 found.push((at(byte + 1), false));
             }
             for marker in ["-[", "using ", "{ "] {
@@ -44,9 +45,8 @@ fn probes(source: &str) -> Vec<(Pos, bool)> {
             }
         }
     }
-    // A position probed both ways keeps its hover and definition.
-    found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    found.dedup_by(|later, kept| later.0 == kept.0);
+    found.sort();
+    found.dedup();
     found
 }
 
@@ -77,8 +77,16 @@ fn answers() -> (Value, usize) {
             None => &plain,
         };
         let mut asked = Vec::new();
-        for (at, first) in probes(source) {
+        for (at, line_start) in probes(source) {
             probed += 1;
+            if line_start {
+                asked.push(json!({
+                    "at": pos_json(at),
+                    "hover": unversioned(answer(service, source, Query::Hover(at))),
+                    "definition": answer(service, source, Query::Definition(at)),
+                }));
+                continue;
+            }
             let completed = unversioned(answer(service, source, Query::Complete(at)));
             let items = completed["items"].clone();
             let index = match lists.iter().position(|l| *l == items) {
@@ -88,16 +96,11 @@ fn answers() -> (Value, usize) {
                     lists.len() - 1
                 }
             };
-            let mut probe = json!({
+            asked.push(json!({
                 "at": pos_json(at),
                 "complete": { "items": index, "word": completed["word"] },
                 "codeActions": answer(service, source, Query::CodeActions(Range { start: at, end: at })),
-            });
-            if first {
-                probe["hover"] = unversioned(answer(service, source, Query::Hover(at)));
-                probe["definition"] = answer(service, source, Query::Definition(at));
-            }
-            asked.push(probe);
+            }));
         }
         out.push(json!({ "construct": program["construct"], "probes": asked }));
     }
