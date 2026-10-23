@@ -18,10 +18,14 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.2] - 2026-10-23
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two operator-facing changes need an action, both below.
+
 - `lf serve` and `lf drain` (without `--until-idle`) see a changed, added or removed movement within about a second, from the movements slot's change events instead of a 5 s timer. The folder module uses the OS file watcher. `LF_MOVEMENTS_REFRESH_MS` is now only the pause after a module that answers at once with no events (at least 100 ms). `lf drain --until-idle` no longer refreshes, and one-shot commands are unchanged.
 - **Module authors:** every movements module must answer `movements.watch` (`{ cursor?, waitMs }` to `{ cursor, events }` or `{ resync: true }`, held up to 30 s, answering early when its platform's request timeout is shorter). `lf serve` and `lf drain` refuse a module whose manifest lacks it, by name. New conformance cases, `movementsWatchRemovalCase` and `movementsWatchCapCase` in `module-wire`; the generic shape is in the adapter protocol's "Watching for changes".
-
 - `@lf/attio` accepts a static access token as a second credential, `attio_token` (fields `accessToken` and an optional `baseUrl`), beside the OAuth sign-in `attio`. A connection uses one; `lf credential add --module attio <name>` now needs `--credential attio` or `--credential attio_token`. See `modules/attio/README.md`.
+- The adapter protocol names one watch shape for every slot, `<slot>.watch` (`{ cursor?, waitMs }` to `{ cursor, events }` or `{ resync: true }`), `movements.watch` being the first slot to use it ("Watching for changes" in the adapter protocol).
 
 ## [0.12.1] - 2026-10-23
 
@@ -2255,7 +2259,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/listen-fire/listen-fire/compare/v0.11.0...v0.12.0
 [0.12.0-rc.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...v0.12.0-rc.10
