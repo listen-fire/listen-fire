@@ -42,3 +42,54 @@ fn a_through_stage_has_no_rewrite() {
     assert!(found[0].fix.is_none());
     assert!(found[0].message.contains("No rewrite keeps a 'through […]' stage's meaning"));
 }
+
+fn check_all(source: &str, files: serde_json::Value) -> Vec<Diagnostic> {
+    let mut snapshot: serde_json::Value = serde_json::from_str(CATALOG).unwrap();
+    snapshot["files"] = files;
+    let catalog = CatalogSnapshot::load(&snapshot.to_string()).unwrap();
+    let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
+    check_source(source, &catalog, options).unwrap()
+}
+
+fn apply(source: &str, fix: &serde_json::Value) -> String {
+    let mut lines: Vec<String> = source.split('\n').map(String::from).collect();
+    let mut edits: Vec<&serde_json::Value> = fix["edits"].as_array().unwrap().iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse((e["span"]["start"]["line"].as_u64().unwrap(), e["span"]["start"]["col"].as_u64().unwrap())));
+    for edit in edits {
+        let at = |side: &str| (edit["span"][side]["line"].as_u64().unwrap() as usize - 1, edit["span"][side]["col"].as_u64().unwrap() as usize - 1);
+        let ((sl, sc), (el, ec)) = (at("start"), at("end"));
+        let tail = lines[el][ec..].to_string();
+        let head = lines[sl][..sc].to_string();
+        let joined = format!("{head}{}{tail}", edit["text"].as_str().unwrap());
+        lines.splice(sl..=el, joined.split('\n').map(String::from));
+    }
+    lines.join("\n")
+}
+
+#[test]
+fn a_type_name_that_is_not_an_identifier_keeps_its_backticks_in_the_rewrite() {
+    let source = format!(
+        "{PRELUDE}type `Pass Reason` = <\"yes\" | \"no\">\nfunction go(m: <chat-[:message]->>) {{\n  found = extract \"careful\" from [m.Text] {{ reason: <`Pass Reason`> \"why\" }}\n}}\n"
+    );
+    let fix = check(&source).remove(0).fix.expect("a fix");
+    let rewritten = apply(&source, &fix);
+    assert!(rewritten.contains("reason: <`Pass Reason`> \"why\""), "{rewritten}");
+    let remaining = check_all(&rewritten, serde_json::json!({}));
+    assert!(remaining.iter().all(|d| d.severity == Some(movement_checker::Severity::Info)), "{rewritten}\n{remaining:?}");
+}
+
+#[test]
+fn a_librarys_fix_is_not_carried_to_the_import_that_surfaces_it() {
+    let library = format!("{PRELUDE}export function go(m: <chat-[:message]->>) {{\n  found = extract \"careful\" from [m.Text] {{ reason: \"why\" }}\n}}");
+    let files = serde_json::json!({ "lib/go": { "source": library } });
+
+    let importer = "import { go } from \"lib/go\"\nx = 1";
+    let surfaced: Vec<Diagnostic> = check_all(importer, files.clone()).into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").collect();
+    assert_eq!(surfaced.len(), 1);
+    assert_eq!(surfaced[0].span.start.line, 1);
+    assert!(surfaced[0].message.starts_with("\"lib/go\" line "), "{}", surfaced[0].message);
+    assert!(surfaced[0].fix.is_none());
+
+    let own: Vec<Diagnostic> = check_all(&library, serde_json::json!({})).into_iter().filter(|d| d.code == "MOV_EXTRACT_KEYWORD_RETIRED").collect();
+    assert!(own[0].fix.is_some());
+}

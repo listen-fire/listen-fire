@@ -332,10 +332,13 @@ impl Checker<'_> {
         for mut diagnostic in surfaced.into_iter().filter(|d| d.severity != Some(Severity::Info)) {
             diagnostic.message = format!("\"{}\" line {}: {}", file.path, diagnostic.span.start.line, diagnostic.message);
             diagnostic.span = at;
+            // A fix's edits are in the library file's text; applied to the
+            // importer they would corrupt it.
+            diagnostic.fix = None;
             self.push(diagnostic);
         }
-        // A fix's edits are the library file's, so none is carried to the
-        // import.
+        // The spelling diagnostics below are built without a fix for the same
+        // reason.
         if self.type_only == 0 {
             for diagnostic in surfaced_spelling {
                 let message = format!("\"{}\" line {}: {}", file.path, diagnostic.span.start.line, diagnostic.message);

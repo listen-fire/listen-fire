@@ -243,7 +243,7 @@ fn shape_lines(node: &ShapeNode, indent: &str) -> Vec<String> {
 fn type_marker(type_: &str, nullable: bool) -> String {
     let segments: Vec<&str> = type_.split('.').collect();
     let borrowed = segments.len() == 3 && is_identifier(segments[0]) && segments[1..].iter().all(|s| !s.is_empty()) && !type_.contains('"');
-    let written = if borrowed { format!("{}-[:{}]->.`{}`", segments[0], segments[1], segments[2]) } else { type_.to_string() };
+    let written = if borrowed { format!("{}-[:{}]->.`{}`", segments[0], segments[1], segments[2]) } else { spelled(type_) };
     format!("<{written}{}>", if nullable { " | null" } else { "" })
 }
 

@@ -16,6 +16,9 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ## [Unreleased]
 
+- Upgrading a movement that imports a library no longer applies the library's fixes to it: a diagnostic surfaced at the import line carries no fix, since its edits were in the library's text and corrupted the importer. The library's own check still offers them.
+- The extraction keyword's upgrade rewrite keeps a type name's backticks (`<`Pass Reason`>` stays so), where it wrote `<Pass Reason>`, which does not parse.
+
 <!-- add merged PRs here -->
 
 - A record a library movement returns keeps the system it was read from. A write on it in the caller (a linked write under it, or an update of it) now goes through the connection the library read it with, whatever either file calls its connection. Before, it failed ("a linked write's parent — the system 'ch' came from can't be determined"); and when the caller happened to name a connection the same as the library's, the write went through the caller's, a different workspace if its credential differed. A park holding such a record resumes the same way.
