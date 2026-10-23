@@ -14,7 +14,9 @@
 import { randomUUID } from 'node:crypto';
 import type { WireDeclaredLimitShape, WireLimitScopeShape } from 'engine-contracts';
 
-export { vendorWaitMs } from 'module-runtime/vendor_wait';
+import { type VendorBudget } from 'module-runtime/vendor_wait';
+
+export { vendorBudget, vendorWaitMs, type VendorBudget } from 'module-runtime/vendor_wait';
 
 /** One limit a request is under, resolved to the bucket it counts in. */
 export interface LimitBucket {
@@ -152,6 +154,18 @@ export async function limited<T>(limiter: Limiter, request: LimitRequest, call: 
  *  sharing `limiter`, is refused until then, and `acquireOrWait` waits it out. */
 export async function throttleAfter(limiter: Limiter, caller: Caller, waitMs: number, now: number = Date.now()): Promise<void> {
   await limiter.throttle({ key: throttleKey(caller), until: new Date(now + waitMs).toISOString() });
+}
+
+/** A vendor's budget reported on a success (`vendorBudget`), taken early: a
+ *  vendor out of budget (`remaining` 0) closes the caller's key until it
+ *  resets, as its 429 would, so the next call waits rather than earning one.
+ *  A count above zero changes nothing. The window the limiter keeps is the
+ *  module's declared budget, which the module's author set on purpose; the
+ *  vendor's count is advisory (shared with other clients of the same key,
+ *  stale by the time it is read), so it is never used to reshape that window. */
+export async function budgetAfter(limiter: Limiter, caller: Caller, budget: VendorBudget | undefined, now: number = Date.now()): Promise<void> {
+  if (budget === undefined || budget.remaining > 0 || budget.resetAt <= now) return;
+  await throttleAfter(limiter, caller, budget.resetAt - now, now);
 }
 
 // ── The slot this process's calls ask ───────────────────────────────────────

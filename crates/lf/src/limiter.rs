@@ -225,6 +225,83 @@ pub fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
+/// What a vendor reports of its own budget on a success.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VendorBudget {
+    pub remaining: u64,
+    /// Epoch ms when the vendor's window resets.
+    pub reset_at_ms: i64,
+}
+
+/// Each family of success headers: the remaining count, then its reset.
+const BUDGET_FAMILIES: [(&str, &str); 4] = [
+    ("anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-requests-reset"),
+    ("anthropic-ratelimit-tokens-remaining", "anthropic-ratelimit-tokens-reset"),
+    ("x-ratelimit-remaining-requests", "x-ratelimit-reset-requests"),
+    ("x-ratelimit-remaining-tokens", "x-ratelimit-reset-tokens"),
+];
+
+/// The ceiling on a reset, as `vendorWaitMs` clamps a wait: a hostile or
+/// absurd value cannot stall a caller for long.
+const MAX_RESET_MS: i64 = 120_000;
+
+/// OpenAI's reset form: a Go-style duration, `"1s"`, `"6m0s"`, `"20ms"`.
+fn go_duration_ms(text: &str) -> Option<f64> {
+    let (mut rest, mut total) = (text, 0.0);
+    while !rest.is_empty() {
+        let digits = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).filter(|at| *at > 0)?;
+        let amount: f64 = rest[..digits].parse().ok()?;
+        let (unit_ms, unit_len) = [("ms", 1.0), ("h", 3_600_000.0), ("m", 60_000.0), ("s", 1_000.0)].into_iter().find_map(|(unit, ms)| rest[digits..].starts_with(unit).then_some((ms, unit.len())))?;
+        total += amount * unit_ms;
+        rest = &rest[digits + unit_len..];
+    }
+    Some(total)
+}
+
+/// A reset as epoch ms: an ISO timestamp (Anthropic), seconds from now, or a
+/// duration from now (OpenAI).
+fn reset_instant(value: &str, now_ms: i64) -> Option<i64> {
+    let text = value.trim();
+    if let Ok(seconds) = text.parse::<f64>() {
+        return (seconds.is_finite() && seconds >= 0.0).then(|| now_ms + (seconds * 1000.0).round() as i64);
+    }
+    if let Some(ms) = go_duration_ms(text) {
+        return Some(now_ms + ms.round() as i64);
+    }
+    text.parse::<jiff::Timestamp>().ok().map(|at| at.as_millisecond())
+}
+
+/// The budget a vendor reported on a success, from its rate-limit headers
+/// (`header` looks one up by lowercase name): Anthropic's
+/// `anthropic-ratelimit-{requests,tokens}-{remaining,reset}` and OpenAI's
+/// `x-ratelimit-{remaining,reset}-{requests,tokens}`. Where several report,
+/// the one that binds: an exhausted one (latest reset), else the least
+/// remaining. The same reading as `vendorBudget` in TypeScript.
+pub fn vendor_budget(header: &dyn Fn(&str) -> Option<String>, now_ms: i64) -> Option<VendorBudget> {
+    let reports: Vec<VendorBudget> = BUDGET_FAMILIES
+        .iter()
+        .filter_map(|(remaining, reset)| {
+            let remaining = header(remaining)?.trim().parse::<u64>().ok()?;
+            let reset_at_ms = reset_instant(&header(reset)?, now_ms)?.min(now_ms + MAX_RESET_MS);
+            Some(VendorBudget { remaining, reset_at_ms })
+        })
+        .collect();
+    let exhausted = reports.iter().filter(|report| report.remaining == 0).max_by_key(|report| report.reset_at_ms);
+    exhausted.or_else(|| reports.iter().min_by_key(|report| report.remaining)).copied()
+}
+
+/// A vendor's reported budget, taken early: spent (`remaining` 0), it closes
+/// `key` until the reset as the vendor's 429 would. Anything left changes
+/// nothing: the window the limiter keeps is the module's declared budget, set
+/// on purpose, and the vendor's count is advisory (shared with the key's other
+/// clients, stale when read), so it never reshapes that window.
+pub fn budget_after(limiter: &dyn Limiter, key: &str, budget: Option<VendorBudget>, now_ms: i64) -> Result<(), String> {
+    match budget {
+        Some(budget) if budget.remaining == 0 && budget.reset_at_ms > now_ms => limiter.throttle(key, budget.reset_at_ms),
+        _ => Ok(()),
+    }
+}
+
 /// A granted call: released when dropped.
 pub struct Held {
     limiter: Arc<dyn Limiter>,
@@ -456,6 +533,71 @@ mod tests {
 
     fn caller() -> Caller<'static> {
         Caller { module: "@acme/crm", install: Some("crm"), credential: Some("alice_crm"), team: "local" }
+    }
+
+    fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
+    }
+
+    const NOW: i64 = 1_792_584_000_000; // 2026-10-21T12:00:00Z
+
+    #[test]
+    fn a_vendors_budget_is_read_from_either_family_and_either_reset_form() {
+        let anthropic = headers(&[("anthropic-ratelimit-requests-remaining", "0"), ("anthropic-ratelimit-requests-reset", "2026-10-21T12:00:20Z")]);
+        assert_eq!(vendor_budget(&anthropic, NOW), Some(VendorBudget { remaining: 0, reset_at_ms: NOW + 20_000 }));
+        let openai = headers(&[("x-ratelimit-remaining-requests", "0"), ("x-ratelimit-reset-requests", "1m2.5s")]);
+        assert_eq!(vendor_budget(&openai, NOW), Some(VendorBudget { remaining: 0, reset_at_ms: NOW + 62_500 }));
+        let millis = headers(&[("x-ratelimit-remaining-tokens", "3"), ("x-ratelimit-reset-tokens", "20ms")]);
+        assert_eq!(vendor_budget(&millis, NOW), Some(VendorBudget { remaining: 3, reset_at_ms: NOW + 20 }));
+        let seconds = headers(&[("x-ratelimit-remaining-requests", "0"), ("x-ratelimit-reset-requests", "12")]);
+        assert_eq!(vendor_budget(&seconds, NOW), Some(VendorBudget { remaining: 0, reset_at_ms: NOW + 12_000 }));
+    }
+
+    #[test]
+    fn the_binding_limit_wins_and_a_far_reset_is_clamped() {
+        let both = headers(&[
+            ("anthropic-ratelimit-requests-remaining", "50"),
+            ("anthropic-ratelimit-requests-reset", "2026-10-21T12:00:05Z"),
+            ("anthropic-ratelimit-tokens-remaining", "0"),
+            ("anthropic-ratelimit-tokens-reset", "2026-10-21T12:00:30Z"),
+        ]);
+        assert_eq!(vendor_budget(&both, NOW), Some(VendorBudget { remaining: 0, reset_at_ms: NOW + 30_000 }));
+        let least = headers(&[
+            ("anthropic-ratelimit-requests-remaining", "50"),
+            ("anthropic-ratelimit-requests-reset", "2026-10-21T12:00:05Z"),
+            ("anthropic-ratelimit-tokens-remaining", "9"),
+            ("anthropic-ratelimit-tokens-reset", "2026-10-21T12:00:30Z"),
+        ]);
+        assert_eq!(vendor_budget(&least, NOW), Some(VendorBudget { remaining: 9, reset_at_ms: NOW + 30_000 }));
+        let far = headers(&[("anthropic-ratelimit-requests-remaining", "0"), ("anthropic-ratelimit-requests-reset", "2026-10-21T13:00:00Z")]);
+        assert_eq!(vendor_budget(&far, NOW), Some(VendorBudget { remaining: 0, reset_at_ms: NOW + 120_000 }));
+    }
+
+    #[test]
+    fn missing_half_given_or_unreadable_budget_headers_are_no_budget() {
+        for pairs in [
+            &[][..],
+            &[("anthropic-ratelimit-requests-remaining", "0")][..],
+            &[("anthropic-ratelimit-requests-reset", "2026-10-21T12:00:20Z")][..],
+            &[("x-ratelimit-remaining-requests", "lots"), ("x-ratelimit-reset-requests", "1s")][..],
+            &[("x-ratelimit-remaining-requests", "0"), ("x-ratelimit-reset-requests", "soon")][..],
+        ] {
+            assert_eq!(vendor_budget(&headers(pairs), NOW), None, "{pairs:?}");
+        }
+    }
+
+    #[test]
+    fn a_spent_budget_closes_the_key_until_the_reset_and_anything_left_changes_nothing() {
+        let limiter = MemoryLimiter::default();
+        let key = caller().throttle_key();
+        let ask = || limiter.acquire(&caller().request(&[])).unwrap();
+        let (spent, left) = (Some(VendorBudget { remaining: 0, reset_at_ms: now_ms() + 60_000 }), Some(VendorBudget { remaining: 3, reset_at_ms: now_ms() + 60_000 }));
+        for nothing in [left, None, Some(VendorBudget { remaining: 0, reset_at_ms: now_ms() - 1 })] {
+            budget_after(&limiter, &key, nothing, now_ms()).unwrap();
+            assert!(matches!(ask(), Grant::Granted { .. }));
+        }
+        budget_after(&limiter, &key, spent, now_ms()).unwrap();
+        assert!(matches!(ask(), Grant::Refused { retry_at_ms } if retry_at_ms == spent.unwrap().reset_at_ms));
     }
 
     fn concurrent(n: u64) -> DeclaredLimit {

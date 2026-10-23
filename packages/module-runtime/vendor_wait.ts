@@ -63,3 +63,64 @@ export function vendorWaitMs(e: unknown, now: number = Date.now()): number | und
   const fromBody = text === undefined ? undefined : fromRetryInfo(text);
   return fromBody === undefined ? undefined : clamp(fromBody);
 }
+
+/** What a vendor reports of its own budget on a success. */
+export interface VendorBudget {
+  /** Calls (or tokens) the vendor says are left in its window. */
+  remaining: number;
+  /** Epoch ms when that window resets. */
+  resetAt: number;
+}
+
+/** Each family of success headers: the remaining count, and when it resets. */
+const BUDGET_FAMILIES = [
+  { remaining: 'anthropic-ratelimit-requests-remaining', reset: 'anthropic-ratelimit-requests-reset' },
+  { remaining: 'anthropic-ratelimit-tokens-remaining', reset: 'anthropic-ratelimit-tokens-reset' },
+  { remaining: 'x-ratelimit-remaining-requests', reset: 'x-ratelimit-reset-requests' },
+  { remaining: 'x-ratelimit-remaining-tokens', reset: 'x-ratelimit-reset-tokens' },
+];
+
+const DURATION_UNIT_MS: Record<string, number> = { ms: 1, s: SECOND, m: 60 * SECOND, h: 3600 * SECOND };
+
+/** OpenAI's reset form: a Go-style duration, `"1s"`, `"6m0s"`, `"20ms"`. */
+function fromDuration(text: string): number | undefined {
+  const parts = [...text.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)];
+  if (parts.length === 0 || parts.map((part) => part[0]).join('') !== text) return undefined;
+  return parts.reduce((total, [, amount, unit]) => total + Number(amount) * (DURATION_UNIT_MS[unit] ?? 0), 0);
+}
+
+/** A reset as an epoch ms: an ISO timestamp (Anthropic), whole or fractional
+ *  seconds from now, or a duration from now (OpenAI). */
+function resetInstant(value: string, now: number): number | undefined {
+  const text = value.trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return now + Number(text) * SECOND;
+  const duration = fromDuration(text);
+  if (duration !== undefined) return now + duration;
+  const date = Date.parse(text);
+  return Number.isNaN(date) ? undefined : date;
+}
+
+/**
+ * The budget a vendor reported on a success, from its rate-limit headers
+ * (`headers`: a plain object or `Headers`): Anthropic's
+ * `anthropic-ratelimit-{requests,tokens}-{remaining,reset}` and OpenAI's
+ * `x-ratelimit-{remaining,reset}-{requests,tokens}`. When several limits
+ * report, the one that binds: an exhausted one (the latest reset among them),
+ * else the least remaining. Undefined when no family gave both a count and a
+ * reset. The reset is clamped to at most 120s ahead, as `vendorWaitMs` clamps
+ * a wait.
+ */
+export function vendorBudget(headers: unknown, now: number = Date.now()): VendorBudget | undefined {
+  const reports: VendorBudget[] = [];
+  for (const family of BUDGET_FAMILIES) {
+    const left = readHeader(headers, family.remaining)?.trim();
+    const reset = readHeader(headers, family.reset);
+    if (left === undefined || reset === undefined || !/^\d+$/.test(left)) continue;
+    const resetAt = resetInstant(reset, now);
+    if (resetAt === undefined) continue;
+    reports.push({ remaining: Number(left), resetAt: Math.min(resetAt, now + MAX_WAIT_MS) });
+  }
+  const exhausted = reports.filter((report) => report.remaining === 0);
+  if (exhausted.length > 0) return exhausted.reduce((latest, report) => (report.resetAt > latest.resetAt ? report : latest));
+  return reports.reduce<VendorBudget | undefined>((least, report) => (least === undefined || report.remaining < least.remaining ? report : least), undefined);
+}

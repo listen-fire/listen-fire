@@ -24,7 +24,7 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value as Json, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use crate::limiter::{Caller, DeclaredLimit, Limiter, Scope};
+use crate::limiter::{Caller, DeclaredLimit, Limiter, Scope, VendorBudget, vendor_budget};
 
 use crate::models::{ProviderKey, TokenCounts};
 
@@ -305,7 +305,10 @@ impl Provider {
             let mut attempt = 1;
             let error = loop {
                 let error = match self.request_once(body).await {
-                    Ok(message) => return Ok(message),
+                    Ok((message, budget)) => {
+                        crate::limiter::budget_after(&*self.limiter, &caller.throttle_key(), budget, crate::limiter::now_ms()).map_err(RequestError::Connection)?;
+                        return Ok(message);
+                    }
                     Err(error) => error,
                 };
                 if error.rate_limited() || !error.retryable() || attempt >= backoff.attempts {
@@ -325,7 +328,7 @@ impl Provider {
         }
     }
 
-    async fn request_once(&self, body: &Json) -> Result<Message, RequestError> {
+    async fn request_once(&self, body: &Json) -> Result<(Message, Option<VendorBudget>), RequestError> {
         let base = self.key.base_url.as_deref().unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
         let target = Target::of(&format!("{base}/v1/messages")).map_err(RequestError::Connection)?;
         match tokio::time::timeout(REQUEST_TIMEOUT, self.send(&target, body)).await {
@@ -334,7 +337,7 @@ impl Provider {
         }
     }
 
-    async fn send(&self, target: &Target, body: &Json) -> Result<Message, RequestError> {
+    async fn send(&self, target: &Target, body: &Json) -> Result<(Message, Option<VendorBudget>), RequestError> {
         let connection_error = |e: &dyn std::fmt::Display| RequestError::Connection(format!("Connection error: {e}"));
         let tcp = TcpStream::connect((target.host.as_str(), target.port)).await.map_err(|e| connection_error(&e))?;
         let request = Request::post(&target.path)
@@ -358,9 +361,9 @@ impl Provider {
             return Err(RequestError::Http { status, message: http_error_message(status, &bytes), retry_after });
         }
         if head.content_type.starts_with("application/json") {
-            return Message::of_json(&bytes).map_err(RequestError::Connection);
+            return Ok((Message::of_json(&bytes).map_err(RequestError::Connection)?, head.budget));
         }
-        Message::of_stream(&String::from_utf8_lossy(&bytes))
+        Ok((Message::of_stream(&String::from_utf8_lossy(&bytes))?, head.budget))
     }
 }
 
@@ -368,6 +371,7 @@ impl Provider {
 struct Head {
     content_type: String,
     retry_after: Option<String>,
+    budget: Option<VendorBudget>,
 }
 
 async fn exchange<S>(stream: S, request: Request<Full<Bytes>>) -> Result<(u16, Head, Bytes), String>
@@ -381,7 +385,7 @@ where
     let response = sender.send_request(request).await.map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
-    let head = Head { content_type: header("content-type").unwrap_or_default(), retry_after: header("retry-after") };
+    let head = Head { content_type: header("content-type").unwrap_or_default(), retry_after: header("retry-after"), budget: vendor_budget(&header, crate::limiter::now_ms()) };
     let bytes = response.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
     Ok((status, head, bytes))
 }
@@ -844,6 +848,52 @@ pub mod tests {
         let credential = credential_id("test-key");
         let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&credential), team: "" };
         assert!(matches!(provider.limiter.acquire(&caller.request(&[])), Ok(crate::limiter::Grant::Granted { .. })));
+    }
+
+    /// A provider answering every request 200 with `headers` (raw header lines).
+    async fn reporting_budget(headers: String) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counting = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                read_request(&mut socket).await;
+                counting.fetch_add(1, Ordering::SeqCst);
+                let payload = stream_of(&[("text", "ok")], "end_turn", (1, 1));
+                let reply = format!("HTTP/1.1 200 X\r\ncontent-type: text/event-stream\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{payload}", payload.len());
+                let _ = socket.write_all(reply.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (url, seen)
+    }
+
+    fn acquire_as_caller(provider: &Provider) -> crate::limiter::Grant {
+        let credential = credential_id("test-key");
+        let caller = Caller { module: crate::core::ANTHROPIC, install: None, credential: Some(&credential), team: "" };
+        provider.limiter.acquire(&caller.request(&[])).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_success_reporting_no_budget_left_closes_the_key_until_the_reset() {
+        let reset = jiff::Timestamp::from_millisecond(crate::limiter::now_ms() + 60_000).unwrap();
+        let (url, _) = reporting_budget(format!("anthropic-ratelimit-requests-remaining: 0\r\nanthropic-ratelimit-requests-reset: {reset}\r\n")).await;
+        let provider = quick(url);
+        let reply = provider.chat_detailed(&options(None, "claude-sonnet-5"), &|| true).await.unwrap();
+        assert_eq!(reply.text, "ok");
+        let crate::limiter::Grant::Refused { retry_at_ms } = acquire_as_caller(&provider) else { panic!("the key should be closed") };
+        assert!((retry_at_ms - reset.as_millisecond()).abs() <= 1_000, "{retry_at_ms} vs {}", reset.as_millisecond());
+    }
+
+    #[tokio::test]
+    async fn a_success_reporting_budget_left_changes_nothing() {
+        let reset = jiff::Timestamp::from_millisecond(crate::limiter::now_ms() + 60_000).unwrap();
+        let (url, _) = reporting_budget(format!("anthropic-ratelimit-requests-remaining: 41\r\nanthropic-ratelimit-requests-reset: {reset}\r\n")).await;
+        let provider = quick(url);
+        provider.chat_detailed(&options(None, "claude-sonnet-5"), &|| true).await.unwrap();
+        assert!(matches!(acquire_as_caller(&provider), crate::limiter::Grant::Granted { .. }));
     }
 
     #[tokio::test]

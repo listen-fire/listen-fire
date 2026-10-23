@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 
 import Anthropic from '@anthropic-ai/sdk';
+import { budgetAfter, limiterSlot, vendorBudget, type Caller } from 'movement-engine/public/limiter';
 
 import type { ChatProvider } from './chat';
 
@@ -23,6 +24,24 @@ export function credentialId(apiKey: string): string {
   return `sha256:${createHash('sha256').update(apiKey).digest('hex').slice(0, 16)}`;
 }
 
+/** Who a model request is made as: the API key it calls on (Anthropic's
+ *  limits are per key), so a 429 on one key leaves the others open. A provider
+ *  with no key of its own is one caller, module-wide. */
+export function modelsCallerFor(credential: string | undefined): Caller {
+  return { module: '@lf/anthropic', team: '', ...(credential !== undefined ? { credential } : {}) };
+}
+
+/** Every response the key's client receives reports the key's remaining
+ *  budget; a spent one closes the key before the 429 would. A failed
+ *  response is the handler's (it reads the 429's own Retry-After). */
+function fetchReportingBudget(credential: string): typeof fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    if (response.ok) await budgetAfter(limiterSlot(), modelsCallerFor(credential), vendorBudget(response.headers));
+    return response;
+  };
+}
+
 export function anthropicKeyedChatProvider({ apiKey, baseUrl }: AnthropicKey): ChatProvider {
   const cacheKey = `${baseUrl ?? ''}\n${apiKey}`;
   let keyed = keyedClients.get(cacheKey);
@@ -31,8 +50,9 @@ export function anthropicKeyedChatProvider({ apiKey, baseUrl }: AnthropicKey): C
     // releases the permit and throttles the key for everyone sharing the
     // limiter. The SDK would sleep on it (twice) inside the held permit.
     // The client's own backoff retries the other transient failures.
-    const sdk = new Anthropic({ apiKey, maxRetries: 0, ...(baseUrl !== undefined ? { baseURL: baseUrl } : {}) });
-    keyed = { credential: credentialId(apiKey), messages: sdk.messages };
+    const credential = credentialId(apiKey);
+    const sdk = new Anthropic({ apiKey, maxRetries: 0, fetch: fetchReportingBudget(credential), ...(baseUrl !== undefined ? { baseURL: baseUrl } : {}) });
+    keyed = { credential, messages: sdk.messages };
     keyedClients.set(cacheKey, keyed);
   }
   return keyed;

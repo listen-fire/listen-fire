@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A model vendor that reports its budget spent on a success now closes the key before its 429: `@lf/anthropic` and `lf`'s Anthropic client throttle the API key until the reset named in `anthropic-ratelimit-*-remaining`/`-reset` (a count above zero changes nothing). Modules can use `vendorBudget` and `budgetAfter` from `@listen-fire/engine/public/limiter` (it also reads OpenAI's `x-ratelimit-*` headers). See `docs/contracts/limiter-slot.md`.
+
 ## [0.12.0] - 2026-10-23
 
 The first full release of the 0.12 line, and the first of this repository as the language alone: the hosted platform lives in `lf-platform` (same GitHub organisation), which installs the language from the crates and `@listen-fire/*` packages released here. The sections beneath, `0.12.0-rc.2` to `0.12.0-rc.10`, are the detail of how it was reached and stay as history; nothing in them is withdrawn.

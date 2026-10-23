@@ -35,6 +35,7 @@ import {
   webChatTools,
   WEB_FETCH_MAX_CONTENT_TOKENS,
 } from './web_tools';
+import { modelsCallerFor } from './keyed_provider';
 import { limited, limiterSlot, limitRequest, throttleAfter, vendorWaitMs, type Caller } from 'movement-engine/public/limiter';
 import { logger } from 'movement-engine/public/log';
 import { assertRunBudget } from 'movement-engine/public/models';
@@ -70,11 +71,8 @@ interface ModelAccess {
   logFields(): Record<string, unknown>;
 }
 
-/** Who a model request is made as: the API key it calls on (Anthropic's
- *  limits are per key), so a 429 on one key leaves the others open. A provider
- *  with no key of its own is one caller, module-wide. */
 function modelsCaller(provider: ChatProvider): Caller {
-  return { module: '@lf/anthropic', team: '', ...(provider.credential !== undefined ? { credential: provider.credential } : {}) };
+  return modelsCallerFor(provider.credential);
 }
 
 /** Requests in flight at once, per key: `@lf/anthropic`'s own declared limit,
