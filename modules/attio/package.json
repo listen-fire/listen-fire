@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/attio",
   "license": "Apache-2.0",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "description": "Attio (objects, records, lists, notes, tasks, comments, files) as a module: read, written, and signed webhooks. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"

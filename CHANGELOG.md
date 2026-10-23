@@ -16,12 +16,15 @@ named in [`RELEASING.md`](RELEASING.md).
 
 ## [Unreleased]
 
-- Upgrading a movement that imports a library no longer applies the library's fixes to it: a diagnostic surfaced at the import line carries no fix, since its edits were in the library's text and corrupted the importer. The library's own check still offers them.
-- The extraction keyword's upgrade rewrite keeps a type name's backticks (`<`Pass Reason`>` stays so), where it wrote `<Pass Reason>`, which does not parse.
-
 <!-- add merged PRs here -->
 
-- A record a library movement returns keeps the system it was read from. A write on it in the caller (a linked write under it, or an update of it) now goes through the connection the library read it with, whatever either file calls its connection. Before, it failed ("a linked write's parent — the system 'ch' came from can't be determined"); and when the caller happened to name a connection the same as the library's, the write went through the caller's, a different workspace if its credential differed. A park holding such a record resumes the same way.
+## [0.12.3] - 2026-10-23
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: the first change below fixes a write that could reach the wrong workspace.
+
+- A record a library movement returns keeps the system it was read from, and a write on it in the caller (a linked write under it, or an update of it) goes through the connection the library read it with, whatever either file calls its connection, including when the library uses a different credential. Before, such a write failed ("a linked write's parent — the system 'ch' came from can't be determined"); and when the caller reused the library's connection name with another credential, the write went through the caller's connection, to the wrong workspace. A park carries the connection's identity (optional: parks written by earlier releases resume as before).
+- Upgrading a movement that imports a library no longer applies the library's fixes to it: a diagnostic surfaced at the import line carries no fix, since its edits were in the library's text and corrupted the importer. The library's own check still offers them.
+- The extraction keyword's upgrade rewrite keeps a type name's backticks (`<`Pass Reason`>` stays so), where it wrote `<Pass Reason>`, which does not parse.
 
 ## [0.12.2] - 2026-10-23
 
@@ -2264,7 +2267,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/listen-fire/listen-fire/compare/v0.11.0...v0.12.0
