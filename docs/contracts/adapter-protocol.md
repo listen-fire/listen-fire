@@ -1285,65 +1285,62 @@ Use your own `code` for anything else; set `retryable` honestly.
 
 ## Build your first adapter
 
-The fake CRM is a complete protocol-2 adapter in one file, in lf-platform:
-`apps/api/src/scripts/dev/fake_crm_adapter.ts`. It has one type, `Company`,
-with a comment thread. It uses both push doors and the host door's methods,
-and it pages. Read it next to this walkthrough.
+The Acme CRM is a complete protocol-2 adapter in one dependency-free file:
+[`examples/lf-acme/externals/acme_crm/server.mjs`](../../examples/lf-acme/externals/acme_crm/server.mjs).
+It has one type, `Company`, with a comment thread. It uses both push doors
+and the host door's methods, and it pages. Read it next to this walkthrough,
+and drive it with `lf`, the same binary a user runs your adapter under.
 
-Its paging is exercised by its integration test
-(`scripts/dev/__test__/fake_crm_adapter.integration.test.ts`) and by the
-conformance CLI (step 1), not by an automation: `Company` is not readable
-from the root, so no automation can walk the collection.
+`lf` has no adapter conformance command. These three commands make up the
+check, and each runs against the example project:
 
-1. **Run the conformance CLI against your server.** Start with it and keep
-   it green as you build. It is lf-platform's; run it from an lf-platform
-   checkout. It needs no Listen-Fire stack and no database:
+- `lf check` and `lf catalog` start your server and read its `describe`: a
+  catalog `lf` cannot read fails here, and a movement written against a type
+  or field you did not publish is a diagnostic.
+- `lf run --webhook` hands a delivery to the doors as a provider would,
+  signature and all, and shows the event it became.
+- `lf serve` is the real host: your server pushes to its doors, and a
+  parked run resumes.
+
+The doors themselves are held to the cases every host's doors pass by
+`lf --contract-doors`, which is not a command to type: it serves the doors
+for the contract suite over a JSON-RPC bridge on stdin and stdout. Run it as
+`node --conditions=movement-engine-internals --test --require tsx/cjs src/__test__/inbound_contract.test.ts`
+from `apps/cli`.
+
+1. **Install the example and keep `lf check` green as you build.** Copy
+   `examples/lf-acme` to a folder of your own, give it its secrets, and check:
 
    ```bash
-   export ADAPTER_CONFORMANCE_SECRET=<your secret>
-   pnpm adapter:conformance --url https://crm.acme.example/listen-fire --auth bearer \
-     --scratch-type Company --scratch-fields '{"Name":"Conformance Co"}' \
-     --sample-delivery '{"companies":[{"id":"c1","Name":"A"}]}' \
-     --wait-for-push 30
+   cp -R examples/lf-acme my-adapter && cd my-adapter
+   mkdir .lf && cp secrets.example.yaml .lf/secrets.yaml && chmod 600 .lf/secrets.yaml
+   lf check                 # 1 file(s), 0 error(s)
+   lf catalog               # the catalog, with acme_crm's types, fields and the awaitable Comments edge
    ```
 
-   It prints one line per check (`PASS`, `FAIL` or `SKIP`, then the check's
-   name and detail) and exits 1 on any `FAIL`. The checks: the manifest and
-   its version; the refusal of an older `protocolVersion`; the error
-   envelopes (`bad_request` naming the method and path, `method_not_implemented`);
-   `listEntryPoints`, `describe` and the natural names; `resolveEntity`,
-   `getRelated`, `iterateRelatedPage` (paging), `getFieldValue`, `createRecord`,
-   `files-declared` (no field answers a file ref unless your catalog declares
-   it a file), `updateRecord`, `deleteRecord`; `resolveAwait`; the event subscription
-   (a secret, a stable `externalId`); `listEventTypes`, `preprocessInbound`
-   and `wakeKeys`; and the two push doors.
+   To build your own, replace `externals/acme_crm/` with a folder of the same
+   shape (`lf-external.yaml` names the command that serves it, or a `url:` already
+   serving) and put your credential in `.lf/secrets.yaml`. `lf` refuses a
+   secrets file other users can read. `lf catalog` shows what `describe`
+   published: a field you meant to be writable, a file field, a missing
+   `awaitable` edge, are all visible there before any movement uses them.
 
-   Flags:
+   Then deliver a webhook. The example verifies HMAC-SHA256 of the raw body in
+   `x-listen-fire-signature`, keyed by the credential's `webhook_secret`:
 
-   - `--url <baseUrl>` and `--auth bearer|secret` are required. For
-     `--auth secret`, `--auth-header <name>` names the header (default
-     `x-listen-fire-adapter-secret`).
-   - The secret is read from the environment variable `--secret-env` names
-     (default `ADAPTER_CONFORMANCE_SECRET`), never from the command line.
-   - `--scratch-type <typeId>` with `--scratch-fields '<json>'` names a type
-     the CLI may write. It creates three records with those fields (the first
-     string field gets ` #1`, ` #2`, ` #3` appended), updates one, reads a
-     field back and compares it with what it wrote, deletes them all, and uses them to check paging and `resolveAwait`.
-     Without the flags, those checks are skipped with a notice.
-   - `--sample-delivery '<json>'` is a webhook body your server sends. The CLI
-     cannot make you deliver one, so it hands this body to `preprocessInbound`
-     and `wakeKeys` and checks the shapes.
-   - `--wait-for-push <seconds>` makes the CLI wait for your server to push
-     to the doors. The CLI serves a stand-in for Listen-Fire's host and
-     prints its URL on stderr (`--host-port <n>` fixes the port, `--host-bind <address>`
-     picks the address, default `127.0.0.1`: use one your server can reach); point your
-     server's host URL at it, then trigger an event and a wake. It checks the
-     credential and the body of each push against the doors' own schemas.
-     At `0` (the default) the door checks are skipped.
-   - `--json` prints the report as a JSON array.
+   ```bash
+   SIG=$(openssl dgst -sha256 -hmac dev-acme-webhook-secret -hex < events/webhook_body.json | awk '{print $NF}')
+   lf run --webhook acme_crm --body events/webhook_body.json --install acme \
+     --header "x-listen-fire-signature:$SIG"
+   ```
 
-   The fake CRM passes every check. The CLI cannot check what the real host
-   does with a push; the dev loop in step 7 does.
+   Without the header, or with a wrong one, it refuses
+   (`signature did not verify for external "acme_crm"`) and runs nothing.
+   `lf run --event events/company_created.json` routes one event, as your
+   server's `preprocessInbound` would have shaped it, to the listens it
+   matches. `lf runs` and `lf runs show <run-id>` show what each run saw.
+   The fake CRM passes all of this. What a real host does with a push is
+   step 7.
 
 2. **Describe your data.** `listEntryPoints` publishes `Company` (writable,
    fires) and `Comment`. `describe` gives `Company` its fields and its
@@ -1375,45 +1372,51 @@ from the root, so no automation can walk the collection.
    to `/wake`. When somebody creates a company, it `POST`s the event to
    `/emit`. Both send `Authorization: Bearer <secret>`.
 
-7. **Try it in lf-platform's dev loop** (from an lf-platform checkout).
-
-   ```bash
-   pnpm dev:loop:agent                # starts the fake CRM with the stack
-   pnpm dev:seed                      # installs it; the install probes for protocol 2
-   ```
-
-   Save these two automations (`pnpm dev:movement provision --file <file>`):
-
-   ```
-   import { manual, acme_crm } from adapters
-   crm = acme_crm()
-   runs = manual()
-   function crm_review(go: <runs-[:Invocation]->>) {
-     c = write crm-[:Company]-> { Name: "Vireo Robotics" }
-     r = await FIRST(c-[:Comments]->)
-     write crm-[:Company]-> { Name: "Vireo Robotics (reviewed)", Description: COALESCE(r.Text, "no comment") }
-   }
-   listen to runs {} fire crm_review
-   ```
+7. **Try it under `lf serve`.** Start clean (`rm -rf .lf/state.db .lf/externals`,
+   so the ids below are the CRM's first) and replace the example's
+   `movements/companies.mvt` with `movements/discuss.mvt`:
 
    ```
    import { acme_crm } from adapters
-   crm = acme_crm()
-   function crm_intake(e: <crm-[:Company]->>) {
-     write crm-[:Company]-> { Name: "Seen: ${e.Name}" }
+   import { acme } from credentials
+
+   crm = connect acme_crm using acme
+
+   function discuss(company: <crm-[:Company]->>) {
+     thread = write crm-[:Company]-> { Name: "Discuss ${company.Name}" }
+     c = await first(thread-[:Comments]->)
+     write crm-[:Company]-> { Name: "Answered ${c.Text}" }
    }
-   listen to crm {} fire crm_intake
+
+   listen to crm {} fire discuss
    ```
 
-   Then:
+   Serve the project and read the port `lf` started the CRM on; the example
+   keeps its companies in `.lf/externals/acme_crm/state.json`, and the CRM
+   pushes to the host's doors with the credential `lf` hands it:
 
    ```bash
-   pnpm dev:movement run crm_review                                  # writes company-1, then waits
-   pnpm dev:inspect crm                                              # the wait, keyed thread:company-1
-   pnpm dev:inject crm-comment --company company-1 --text "approved" # the CRM pushes wake; the run finishes
-   pnpm dev:inject crm-company --name "Larch Bio"                    # the CRM pushes emit; crm_intake runs
-   pnpm dev:inspect crm                                              # every company the CRM holds
+   lf serve --port 5871 &      # wait for its address line, and for .lf/externals/acme_crm/port to appear
+   CRM=http://127.0.0.1:$(cat .lf/externals/acme_crm/port)
+   curl -s -XPOST $CRM/dev/companies -d '{"Name":"Larch Bio"}'
+   # the CRM pushes emit: {"id":"company-1","pushed":{"status":202,"body":{"accepted":1}}}
+   # lf serve prints: run … discuss:discuss parked   (it wrote "Discuss Larch Bio", then awaits its first comment)
+   curl -s -XPOST $CRM/dev/comments -d '{"company":"company-2","text":"approved"}'
+   # the CRM pushes wake for thread:company-2; lf serve prints: resumed … discuss:discuss completed
+   curl -s $CRM/dev/state      # every company the CRM holds, ending in "Answered approved"
    ```
+
+   The doors refuse what they should. A wake presenting a credential no install
+   holds answers `401`, and one naming no keys answers `400`:
+
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}\n" -XPOST -H 'authorization: Bearer nope' \
+     -H 'content-type: application/json' -d '{"keys":["thread:company-1"]}' \
+     http://127.0.0.1:5871/api/public/adapter/acme_crm/wake       # 401
+   ```
+
+   Stop `lf serve` when done. `lf runs show <run-id>` shows the park and the
+   wake that ended it.
 
 ## Changes
 

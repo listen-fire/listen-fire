@@ -20,7 +20,6 @@
   "//pnpm.overrides": "Overrides keyed by name@range pin transitive dependencies past audit advisories (high/critical); advisory ids are in plans/repo-split-2026-10-20/chunk-records/sec01-language-record.md",
   "pnpm": {
     "overrides": {
-      "@pinecone-database/pinecone>@sinclair/typebox": "0.32.30",
       "tar-fs@>=2.0.0 <2.1.4": "^2.1.4",
       "form-data@>=2.0.0 <2.5.6": "^2.5.6",
       "jws@>=4.0.0 <4.0.1": "^4.0.1",

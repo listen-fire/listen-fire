@@ -84,4 +84,4 @@ Every program the test suites check, with its catalog snapshot, language version
 
 ### The adapter kit
 
-lf-platform's `pnpm adapter:conformance` runs a vendor's server through the adapter protocol and reports each check. See step 1, "Run the conformance CLI against your server", of [Build your first adapter](adapter-protocol.md#build-your-first-adapter).
+A vendor's server is run through the adapter protocol with `lf` itself (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) against [`examples/lf-acme`](../../examples/lf-acme): see [Build your first adapter](adapter-protocol.md#build-your-first-adapter).

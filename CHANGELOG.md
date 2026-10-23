@@ -19,6 +19,7 @@ named in [`RELEASING.md`](RELEASING.md).
 <!-- add merged PRs here -->
 
 - A model vendor that reports its budget spent on a success now closes the key before its 429: `@lf/anthropic` and `lf`'s Anthropic client throttle the API key until the reset named in `anthropic-ratelimit-*-remaining`/`-reset` (a count above zero changes nothing). Modules can use `vendorBudget` and `budgetAfter` from `@listen-fire/engine/public/limiter` (it also reads OpenAI's `x-ratelimit-*` headers). See `docs/contracts/limiter-slot.md`.
+- The adapter protocol's "Build your first adapter" walkthrough drives `lf` and `examples/lf-acme` (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) instead of the platform's conformance CLI and dev loop.
 
 ## [0.12.0] - 2026-10-23
 

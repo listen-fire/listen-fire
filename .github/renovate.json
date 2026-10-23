@@ -40,56 +40,6 @@
       "matchPackagePatterns": [".*jest.*"]
     },
     {
-      "groupName": "React",
-      "matchPackageNames": [
-        "@types/react",
-        "@types/react-dom",
-        "react",
-        "react-dom"
-      ]
-    },
-    {
-      "groupName": "React (non-major)",
-      "automerge": true,
-      "matchUpdateTypes": ["patch", "minor"],
-      "matchPackageNames": [
-        "@types/react",
-        "@types/react-dom",
-        "react",
-        "react-dom"
-      ]
-    },
-    {
-      "groupName": "Prisma",
-      "matchPackageNames": [
-        "@prisma/client",
-        "@prisma/generator-helper",
-        "@prisma/internals",
-        "prisma"
-      ]
-    },
-    {
-      "groupName": "Prisma (non-major)",
-      "automerge": true,
-      "matchUpdateTypes": ["patch", "minor"],
-      "matchPackageNames": [
-        "@prisma/client",
-        "@prisma/generator-helper",
-        "@prisma/internals",
-        "prisma"
-      ]
-    },
-    {
-      "groupName": "Sentry",
-      "matchPackagePatterns": ["@sentry/*"]
-    },
-    {
-      "groupName": "Sentry (non-major)",
-      "automerge": true,
-      "matchUpdateTypes": ["patch", "minor"],
-      "matchPackagePatterns": ["@sentry/*"]
-    },
-    {
       "groupName": "Typescript",
       "packageNames": ["typescript"]
     },
