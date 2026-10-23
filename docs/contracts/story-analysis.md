@@ -54,7 +54,7 @@ interface StoryAddress {
 }
 
 interface StoryEffects {
-  reads: string[];                       // instance binding names
+  reads: string[];                       // instance binding names, or a source a plugin or built-in declares ("the web", "files")
   writes: string[];
   ai: boolean;
   now: boolean;
@@ -145,9 +145,10 @@ A movement's `effects` come from the sites inside its span, closures written ins
 
 - **Writes.** A write adds the instance its handle is in to `writes`. A match adds it to `reads`. A write onto a node this run built adds nothing.
 - **Link, unlink and delete** add the instance of the subject's type to `writes`. **Refresh** adds it to `reads`.
-- **Walks.** A traversal head that was walked, or a value path with steps, adds to `reads` the instance of its start and of each landing.
+- **Walks.** A traversal head that was walked, a value path with steps, or a walk inside `exists(…)` (a hop `WHERE` included) adds to `reads` the instance of its start and of each landing.
+- **Built-ins.** A built-in called inside an expression folds in what the standard library declares it does: `File.read` reads `files`, the retired `KG_EXISTS` and `KG_VALUE` read `the knowledge graph`.
 - **`ai`.** Any extraction sets it. Inside an expression, `ai(…)`, an `llm` aggregate and `extract_value` set it.
-- **`now`.** Reading `@current_date` or `@current_timestamp` sets it.
+- **`now`.** Reading `@current_date` or `@current_timestamp` sets it, and so does `Date.today(zone)`, the one built-in that reads the clock. `DateTime.at` and the other `Date.*` members read only their arguments.
 - **`suspend`** is the checker's own inference for the movement.
 - **Calls.**
   - A call to a movement of this file is closed by fixpoint, so a cycle shares one row.

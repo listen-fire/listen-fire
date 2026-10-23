@@ -814,7 +814,15 @@ impl<'a> Typing<'a> {
                 (None, Vec::new())
             }
             Expression::Exists { steps, where_ } => {
+                // A hop under `exists` is a fetch like any other walk's.
+                let observed_start = self.observed.as_ref().map(|_| position.and_then(crate::story::instance_of));
                 let destination = self.walk_steps(position.cloned(), steps, false);
+                if let (Some(start), false) = (observed_start, steps.is_empty()) {
+                    let reads = std::iter::once(start).chain(self.last_landings.iter().map(|l| l.as_ref().and_then(crate::story::instance_of))).collect();
+                    if let Some(observed) = self.observed.as_mut() {
+                        observed.reads.push(reads);
+                    }
+                }
                 if let Some(where_) = where_ {
                     self.infer_at(where_, destination.as_ref());
                 }
@@ -904,18 +912,14 @@ impl<'a> Typing<'a> {
                 (self.at_type(inner.as_ref(), index, index_ty.as_ref()), vec![inner, index_ty])
             }
             Expression::Aggregate { fn_, expression, .. } => {
-                if *fn_ == AggregationFunction::Llm
-                    && let Some(observed) = self.observed.as_mut()
-                {
-                    observed.ai = true;
+                if *fn_ == AggregationFunction::Llm {
+                    self.observe_builtin("LLM_AGG");
                 }
                 let inner = self.infer_at(expression, position);
                 (self.aggregate_type(*fn_, inner.as_ref(), expression), vec![inner])
             }
             Expression::Llm { prompt_expression, .. } => {
-                if let Some(observed) = self.observed.as_mut() {
-                    observed.ai = true;
-                }
+                self.observe_builtin("AI");
                 let prompt = prompt_expression.as_ref().map(|p| self.infer_at(p, position));
                 (None, prompt.into_iter().collect())
             }
@@ -929,6 +933,7 @@ impl<'a> Typing<'a> {
                         _ => self.infer_at(a, position),
                     })
                     .collect();
+                self.observe_builtin(fn_);
                 crate::families::values::observe_call(self, fn_, args);
                 crate::families::extraction::observe_function(self, fn_);
                 if crate::families::calls::check_call_operands(self, expr, fn_, args, &types) {
@@ -939,6 +944,7 @@ impl<'a> Typing<'a> {
                 (ty, types)
             }
             Expression::KgExists { params, .. } | Expression::KgValue { params, .. } => {
+                self.observe_builtin(if matches!(expr, Expression::KgExists { .. }) { "KG_EXISTS" } else { "KG_VALUE" });
                 let types: Vec<Option<Ty>> = params.iter().map(|p| self.infer_at(p, position)).collect();
                 (matches!(expr, Expression::KgExists { .. }).then_some(Ty::Boolean), types)
             }
@@ -987,9 +993,7 @@ impl<'a> Typing<'a> {
                 (self.bare_name_type(name), Vec::new())
             }
             Expression::ExtractValue { .. } => {
-                if let Some(observed) = self.observed.as_mut() {
-                    observed.ai = true;
-                }
+                self.observe_builtin("EXTRACT_VALUE");
                 (None, Vec::new())
             }
             Expression::ParentResult { .. }
@@ -997,6 +1001,17 @@ impl<'a> Typing<'a> {
             | Expression::Resource { .. }
             | Expression::LinkedObject { .. } => (None, Vec::new()),
         }
+    }
+
+    /// `absorbBuiltinEffects`: what calling the built-in `function` does
+    /// (its table entry, in any letter case), into what the typing observed.
+    fn observe_builtin(&mut self, function: &str) {
+        let Some(observed) = self.observed.as_mut() else { return };
+        let Some(builtin) = super::stdlib::builtin_under(&function.to_ascii_uppercase()) else { return };
+        let effects = builtin.effects;
+        observed.ai |= effects.ai;
+        observed.now |= effects.now;
+        observed.reads.extend(effects.reads.iter().map(|source| vec![Some((*source).to_string())]));
     }
 
     /// `reportUnknownWalkName`: the unknown name in a hop's WHERE or

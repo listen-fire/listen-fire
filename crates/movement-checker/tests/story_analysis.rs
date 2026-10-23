@@ -22,6 +22,9 @@ const FIXTURES: &[(&str, &str)] = &[
     ("callback", include_str!("fixtures/story/callback.mvt")),
     ("extract", include_str!("fixtures/story/extract.mvt")),
     ("traversal", include_str!("fixtures/story/traversal.mvt")),
+    ("exists_where", include_str!("fixtures/story/exists_where.mvt")),
+    ("file_read", include_str!("fixtures/story/file_read.mvt")),
+    ("clock", include_str!("fixtures/story/clock.mvt")),
 ];
 
 fn options() -> CheckOptions<'static> {
@@ -312,6 +315,36 @@ fn a_movement_s_effects_are_closed_over_the_movements_it_calls() {
     assert_eq!(symbol(&w, "Intake")["effects"]["reads"], json!(["crm"]), "a match finds, so it reads");
     let e = analysis("extract");
     assert_eq!(symbol(&e, "Enrich")["effects"]["ai"], true);
+}
+
+#[test]
+fn a_walk_inside_exists_reads_its_start_and_landings() {
+    let a = analysis("exists_where");
+    let intake = &symbol(&a, "Intake")["effects"];
+    assert_eq!(intake["reads"], json!(["inbox"]), "the hop under the WHERE is a fetch from the inbox");
+    assert_eq!(intake["writes"], json!(["crm"]));
+    assert_eq!(intake["partial"], false);
+}
+
+#[test]
+fn a_built_in_that_reads_a_file_reads_the_files() {
+    let a = analysis("file_read");
+    let cut = &symbol(&a, "Cut A Document")["effects"];
+    // The order a row lists its reads in is not the source's (the expression sites come first).
+    let mut reads: Vec<&str> = cut["reads"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
+    reads.sort_unstable();
+    assert_eq!(reads, ["files", "runs"], "File.read reads what the standard library declares it reads");
+    assert_eq!(cut["ai"], true);
+    assert_eq!(cut["partial"], false);
+    let intake = &symbol(&a, "Intake Documents")["effects"];
+    assert!(intake["reads"].as_array().unwrap().contains(&json!("files")), "a File.read nested in an argument: {intake}");
+}
+
+#[test]
+fn only_a_built_in_that_reads_the_clock_marks_now() {
+    let a = analysis("clock");
+    assert_eq!(symbol(&a, "Intake")["effects"]["now"], true, "Date.today(zone) reads the run's instant");
+    assert_eq!(symbol(&a, "Anchor Only")["effects"]["now"], false, "DateTime.at and Date.addDays read only their arguments");
 }
 
 #[test]

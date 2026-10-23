@@ -1,0 +1,11 @@
+import { `@lf/email` as email, `@lf/attio` as attio } from adapters
+import { acme } from credentials
+
+inbox = connect email
+crm   = connect attio using acme
+
+function `Intake`(m: <inbox-[:Email]->>) {
+  if (exists(m-[a:Attachments WHERE a.Name CONTAINS "pdf"]->)) {
+    write crm-[:Companies]-> { Name: m.Subject }
+  }
+}

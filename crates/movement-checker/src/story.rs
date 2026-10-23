@@ -36,7 +36,8 @@ pub struct Recording {
     writes: Vec<RecordedWrite>,
     nodes: Vec<RecordedNode>,
     bodies: Vec<RecordedBody>,
-    /// Where an expression calls a model or reads the clock.
+    /// Where an expression calls a model, reads the clock, or reads a
+    /// source outside a value path.
     sites: Vec<EffectSite>,
 }
 
@@ -140,15 +141,21 @@ struct EffectSite {
     span: Span,
     ai: bool,
     now: bool,
+    reads: Vec<Vec<Option<String>>>,
 }
 
 /// A walk a typing made inside an expression (`recordPath`), and whether
-/// the expression calls a model or reads the clock.
+/// the expression calls a model, reads the clock, or reads a source no
+/// value path names.
 #[derive(Default)]
 pub struct Observed {
     pub(crate) paths: Vec<Walked>,
     pub(crate) ai: bool,
     pub(crate) now: bool,
+    /// Each read site, offering every source it might be in: a walk under
+    /// `exists` (its start, then each landing), or a source a built-in
+    /// declares it reads (`files`).
+    pub(crate) reads: Vec<Vec<Option<String>>>,
 }
 
 /// `instanceOfType`: the system a position is in, by its binding's name.
@@ -338,8 +345,8 @@ impl Checker<'_> {
     pub(crate) fn record_observed(&mut self, span: Span, scope: ScopeId, observed: Option<Box<Observed>>) {
         let Some(observed) = observed else { return };
         let Some(recording) = self.recorder() else { return };
-        if observed.ai || observed.now {
-            recording.sites.push(EffectSite { span, ai: observed.ai, now: observed.now });
+        if observed.ai || observed.now || !observed.reads.is_empty() {
+            recording.sites.push(EffectSite { span, ai: observed.ai, now: observed.now, reads: observed.reads });
         }
         let mut seen: Vec<String> = Vec::new();
         for walked in observed.paths {
@@ -880,6 +887,9 @@ impl<'w, 'c> Writer<'w, 'c> {
             for site in self.recording.sites.iter().filter(|s| within(&s.span)) {
                 row.ai |= site.ai;
                 row.now |= site.now;
+                for read in &site.reads {
+                    row.touch(false, read);
+                }
             }
             for node in self.recording.nodes.iter().filter(|n| within(&n.span)) {
                 match &node.what {

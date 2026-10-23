@@ -1,6 +1,6 @@
 //! The standard library's signatures (checker/standard_library.ts and the
 //! function families of expression/stdlib.ts): each built-in's parameters,
-//! what it returns and its one-line summary. Generated from
+//! what it returns, its one-line summary and what it does beyond answering. Generated from
 //! `standardLibrary()` on 2026-10-15; a function added there is added here.
 //! The summaries are the language's own: the handbook's language search
 //! reads this table (`standard_library_json`, through the engine's wasm),
@@ -125,6 +125,25 @@ pub struct Builtin {
     pub summary: &'static str,
     /// A function of a namespaced family (`stdlibFunctionById` finds it).
     pub family: bool,
+    /// What calling it does beyond answering: the function around the call does it too.
+    pub effects: Effects,
+}
+
+/// A built-in's declared effects (`DeclaredEffectRow`): the sources it reads,
+/// by the name a row lists them under, whether it calls a model, and whether
+/// it reads the run's pinned instant.
+#[derive(Debug, Clone, Copy)]
+pub struct Effects {
+    pub reads: &'static [&'static str],
+    pub ai: bool,
+    pub now: bool,
+}
+
+const PURE: Effects = Effects { reads: &[], ai: false, now: false };
+const AI_ROW: Effects = Effects { ai: true, ..PURE };
+const CLOCK: Effects = Effects { now: true, ..PURE };
+const fn reads(sources: &'static [&'static str]) -> Effects {
+    Effects { reads: sources, ..PURE }
 }
 
 impl Builtin {
@@ -163,10 +182,16 @@ use Returns as R;
 
 macro_rules! b {
     ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal) => {
-        Builtin { name: $name, params: &[$($param),*], returns: $returns, summary: $summary, family: false }
+        b!($name, [$($param),*], $returns, $summary, effects: PURE)
     };
     ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal, family) => {
-        Builtin { name: $name, params: &[$($param),*], returns: $returns, summary: $summary, family: true }
+        b!($name, [$($param),*], $returns, $summary, family, effects: PURE)
+    };
+    ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal, effects: $effects:expr) => {
+        Builtin { name: $name, params: &[$($param),*], returns: $returns, summary: $summary, family: false, effects: $effects }
+    };
+    ($name:literal, [$($param:expr),*], $returns:expr, $summary:literal, family, effects: $effects:expr) => {
+        Builtin { name: $name, params: &[$($param),*], returns: $returns, summary: $summary, family: true, effects: $effects }
     };
 }
 
@@ -198,16 +223,16 @@ pub static STANDARD_LIBRARY: &[Builtin] = &[
     b!("MAX", [p("collection", T::Any)], R::Derived, "the largest member"),
     b!("JOIN", [p("collection", T::Any), opt("separator", T::Text)], R::Text, "the members joined into text"),
     b!("COLLECT", [p("collection", T::Any)], R::Derived, "the members as a list"),
-    b!("LLM_AGG", [p("collection", T::Any), opt("instruction", T::Text)], R::Derived, "the members summarised by a model"),
-    b!("AI", [p("prompt", T::Text), opt("tier", T::Text)], R::Derived, "a model's answer to a prompt"),
+    b!("LLM_AGG", [p("collection", T::Any), opt("instruction", T::Text)], R::Derived, "the members summarised by a model", effects: AI_ROW),
+    b!("AI", [p("prompt", T::Text), opt("tier", T::Text)], R::Derived, "a model's answer to a prompt", effects: AI_ROW),
     b!("CONCAT", [rest("parts", T::Scalar)], R::Text, "the arguments joined into one text"),
-    b!("KG_EXISTS", [p("query", T::Text), rest("params", T::Any)], R::Boolean, "RETIRED — whether a knowledge-graph query finds anything"),
-    b!("KG_VALUE", [p("query", T::Text), rest("params", T::Any)], R::Derived, "RETIRED — a value a knowledge-graph query reads"),
-    b!("EXTRACT_VALUE", [rest("values", T::Any)], R::Derived, "RETIRED — a scalar extracted by a model"),
+    b!("KG_EXISTS", [p("query", T::Text), rest("params", T::Any)], R::Boolean, "RETIRED — whether a knowledge-graph query finds anything", effects: reads(&["the knowledge graph"])),
+    b!("KG_VALUE", [p("query", T::Text), rest("params", T::Any)], R::Derived, "RETIRED — a value a knowledge-graph query reads", effects: reads(&["the knowledge graph"])),
+    b!("EXTRACT_VALUE", [rest("values", T::Any)], R::Derived, "RETIRED — a scalar extracted by a model", effects: AI_ROW),
     b!("AT", [p("collection", T::Any), p("index", T::Any)], R::Derived, "a list's member by position, or a dict's by key"),
     b!("SORT", [p("collection", T::Any), opt("key", T::Any), opt("direction", T::Any)], R::Derived, "the members in order"),
     b!("FILE", [p("content", T::Any), p("type", T::Text)], R::File, "content rendered as a file — FILE(content, \"pdf\" | \"text\")"),
-    b!("READ", [p("file", T::File)], R::Text, "a file's text"),
+    b!("READ", [p("file", T::File)], R::Text, "a file's text", effects: reads(&["files"])),
     b!("CHUNKS", [p("text", T::Text), p("options", T::Options)], R::Derived, "text cut into pieces — CHUNKS(text, { size | entities, overlap })"),
     b!("EXISTS", [p("walk", T::Any)], R::Boolean, "whether a walk lands anywhere"),
     b!("MAP", [p("collection", T::List), opt("settings", T::Options), p("function", T::Function)], R::Derived, "each member through a function"),
@@ -216,8 +241,8 @@ pub static STANDARD_LIBRARY: &[Builtin] = &[
     b!("GROUPBY", [p("collection", T::List), p("key", T::Function)], R::Derived, "the members grouped by a key"),
     b!("KEYBY", [p("collection", T::List), p("key", T::Function)], R::Derived, "the members by a unique key"),
     b!("MEMBERS", [p("type", T::Type)], R::Derived, "a closed type's values, in declaration order"),
-    b!("EXTRACT", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the records a model finds in content, of a declared shape"),
-    b!("EXTRACTONE", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the single record content describes, of a declared shape, or absent"),
+    b!("EXTRACT", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the records a model finds in content, of a declared shape", effects: AI_ROW),
+    b!("EXTRACTONE", [p("content", T::Any), p("shape", T::Shape), opt("settings", T::Options)], R::Derived, "the single record content describes, of a declared shape, or absent", effects: AI_ROW),
     b!("CURRENCY.GET_NUMBER_FROM_FIGURE", [p("figure", T::Text)], R::Number, "the numeric amount in a money figure — CURRENCY.GET_NUMBER_FROM_FIGURE(\"£1.2m\") is 1200000", family),
     b!("CURRENCY.GET_CODE_FROM_FIGURE", [p("figure", T::Text)], R::Text, "the ISO currency code in a money figure — CURRENCY.GET_CODE_FROM_FIGURE(\"£1.2m\") is \"GBP\"", family),
     b!("CURRENCY.FORMAT_FIGURE", [p("number", T::Number), p("code", T::Text)], R::MaybeAbsentText, "a number as a money figure — the inverse of GET_NUMBER_FROM_FIGURE — CURRENCY.FORMAT_FIGURE(1200000, \"EUR\") is \"€1.2M\"; a code with no symbol prints after the amount (\"1.2M CHF\"); an empty or unknown code prints the bare number", family),
@@ -225,7 +250,7 @@ pub static STANDARD_LIBRARY: &[Builtin] = &[
     b!("DATE.ADD_DAYS", [p("date", T::Temporal), p("days", T::Number)], R::Date, "a date shifted by whole days — DATE.ADD_DAYS(\"2026-03-12\", 7) is \"2026-03-19\"", family),
     b!("DATE.FORMAT", [p("value", T::Temporal), p("pattern", T::Text)], R::Text, "a date written out — DATE.FORMAT(\"2026-08-31\", \"MMMM D, YYYY\") is \"August 31, 2026\". Tokens: YYYY YY MMMM MMM MM M DD D dddd ddd HH H mm m ss s; anything else is printed as written", family),
     b!("DATE.FORMAT_ISO", [p("value", T::Temporal)], R::Date, "any readable date or timestamp normalised to a full ISO 8601 UTC timestamp", family),
-    b!("DATE.TODAY", [p("zone", T::Text)], R::Date, "the calendar date it is right now in a place — DATE.TODAY(\"Europe/Berlin\") is \"2026-03-12\" from 00:00 to 23:59 there. The zone is written down (an IANA name like \"Europe/Berlin\", \"America/New_York\", \"UTC\")", family),
+    b!("DATE.TODAY", [p("zone", T::Text)], R::Date, "the calendar date it is right now in a place — DATE.TODAY(\"Europe/Berlin\") is \"2026-03-12\" from 00:00 to 23:59 there. The zone is written down (an IANA name like \"Europe/Berlin\", \"America/New_York\", \"UTC\")", family, effects: CLOCK),
     b!("DATETIME.AT", [p("date", T::Temporal), p("time", T::Text), p("zone", T::Text)], R::Datetime, "the instant a wall-clock time on a date names in a place — DATETIME.AT(\"2026-06-15\", \"07:00\", \"Europe/Berlin\") is 05:00 UTC. Move days with DATE.ADD_DAYS on the date and anchor each end separately, and a daylight-saving change takes care of itself", family),
     b!("TEXT.REGEX_EXTRACT", [p("text", T::Text), p("pattern", T::Text), opt("group", T::Number)], R::Text, "the first regex match (the first capture group when the pattern has one) — null when nothing matches", family),
     b!("TEXT.SLUG", [p("text", T::Text)], R::Text, "a lowercase-hyphen slug — TEXT.SLUG(\"Acme Corp Ltd.\") is \"acme-corp-ltd\"", family),

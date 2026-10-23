@@ -1,0 +1,22 @@
+import { `@lf/email` as email, `@lf/attio` as attio } from adapters
+import { acme } from credentials
+
+inbox = connect email
+crm   = connect attio using acme
+
+function `Intake`(m: <inbox-[:Email]->>) {
+  berlin_today = Date.today("Europe/Berlin")
+  win_end      = DateTime.at(berlin_today, "07:00", "Europe/Berlin")
+  win_start    = DateTime.at(Date.addDays(berlin_today, -1), "07:00", "Europe/Berlin")
+  company = write crm-[:Companies]-> { Name: m.Subject }
+  write company-[:Notes]-> {
+    Title:   "Window"
+    Content: "${win_start} → ${win_end} (${berlin_today})"
+  }
+}
+
+function `Anchor Only`(m: <inbox-[:Email]->>) {
+  win = DateTime.at(Date.addDays(Date.parse(m.Subject), 1), "07:00", "Europe/Berlin")
+  company = write crm-[:Companies]-> { Name: m.Subject }
+  write company-[:Notes]-> { Title: "Window", Content: "${win}" }
+}
