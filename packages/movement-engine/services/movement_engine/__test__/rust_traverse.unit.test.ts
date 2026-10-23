@@ -1195,7 +1195,9 @@ describe('the expression tail, on both engines', () => {
     expect(park.timerParks).toHaveLength(1);
     const state = JSON.stringify(park.timerParks[0]?.state);
     expect(state).toContain('"top":{"kind":"sourcePosition"');
-    expect(state).toContain('"read":{"instanceName":"kg"}');
+    expect(state).toContain(
+      '"read":{"instanceName":"kg","instance":{"name":"kg","adapterSlug":"graph","credentialName":"graph_main"}}',
+    );
     expect(graph.calls).toMatchSnapshot();
   });
 
