@@ -18,6 +18,17 @@ name = "movement_parser"
 # cdylib is the WASM artifact; rlib lets `cargo test` link the crate natively.
 crate-type = ["cdylib", "rlib"]
 
+# `gen-vocabulary` rewrites the lowering vocabulary's data.rs from its JSON
+# (src/lowering/vocabulary/README.md). The feature keeps the binary out of
+# every other build, the WASM's among them.
+[features]
+generate = []
+
+[[bin]]
+name = "gen-vocabulary"
+path = "src/bin/gen-vocabulary.rs"
+required-features = ["generate"]
+
 [dependencies]
 # The lowering's one data-ordered map (a hop's `extra` settings) keeps its
 # insertion order, as the TypeScript object it is read as does.

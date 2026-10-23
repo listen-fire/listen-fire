@@ -1,0 +1,68 @@
+{
+  "ai_tiers": ["quick", "careful", "thorough"],
+  "file": { "fn": "file", "signature": "FILE(content, \"pdf\" | \"text\")", "artifact_types": ["pdf", "text"] },
+  "read": { "fn": "read", "signature": "READ(file)" },
+  "options": [
+    {
+      "fn": "chunks",
+      "signature": "CHUNKS(text, { size | entities, overlap })",
+      "arity": 2,
+      "index": 1,
+      "options": [
+        { "key": "size", "type": "number", "summary": "the most characters a piece may be" },
+        { "key": "entities", "type": "number", "summary": "the most records a piece is expected to yield, cutting on whole lines" },
+        { "key": "overlap", "type": "number", "summary": "how many characters each piece repeats from the one before it (none by default)" },
+        {
+          "key": "unit",
+          "type": "literal",
+          "summary": "what size counts — \"chars\"",
+          "values": ["chars", "tokens"],
+          "unavailable": [["tokens", "token chunking is not available yet; use unit: \"chars\""]]
+        }
+      ],
+      "exactly_one": [{ "keys": ["size", "entities"], "what": "how big a piece is" }],
+      "agree": "chunks"
+    }
+  ],
+  "families": [
+    {
+      "namespace": "CURRENCY",
+      "functions": [
+        { "name": "GET_NUMBER_FROM_FIGURE", "params": ["figure"] },
+        { "name": "GET_CODE_FROM_FIGURE", "params": ["figure"] },
+        { "name": "FORMAT_FIGURE", "params": ["number", "code"] }
+      ]
+    },
+    {
+      "namespace": "DATE",
+      "functions": [
+        { "name": "PARSE", "params": ["text"] },
+        { "name": "ADD_DAYS", "params": ["date", "days"] },
+        { "name": "FORMAT", "params": ["value", "pattern"] },
+        { "name": "FORMAT_ISO", "params": ["value"] },
+        { "name": "TODAY", "params": ["zone"] }
+      ]
+    },
+    {
+      "namespace": "DATETIME",
+      "functions": [{ "name": "AT", "params": ["date", "time", "zone"] }]
+    },
+    {
+      "namespace": "TEXT",
+      "functions": [
+        { "name": "REGEX_EXTRACT", "params": ["text", "pattern", "group?"] },
+        { "name": "SLUG", "params": ["text"] },
+        { "name": "PAIRS", "params": ["record", "separator?"] },
+        { "name": "SERIALISE", "params": ["value", "format"] }
+      ]
+    },
+    {
+      "namespace": "URL",
+      "functions": [{ "name": "HOST", "params": ["text"] }]
+    },
+    {
+      "namespace": "NUMBER",
+      "functions": [{ "name": "FORMAT", "params": ["number", "style"] }]
+    }
+  ]
+}

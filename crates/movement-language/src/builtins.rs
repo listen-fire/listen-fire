@@ -115,3 +115,78 @@ mod tests {
         assert_eq!(missing, vec!["fail", "callback"]);
     }
 }
+
+/// The lowering's vocabulary (the parser's `vocabulary.json`), the checker's
+/// standard library and this reference describe the same built-ins: a function
+/// added to, renamed in or dropped from one of them fails here until the
+/// others follow.
+#[cfg(test)]
+mod vocabulary_agrees {
+    use super::{REFERENCE, reference_line};
+    use movement_checker::types::stdlib::{Arity, STANDARD_LIBRARY, lookup_builtin};
+    use movement_parser::lowering::vocabulary::vocabulary;
+    use movement_parser::surface::table::{by_canonical, by_current};
+
+    /// Every family function, as the tree names it (`TEXT.SLUG`).
+    fn family_functions() -> Vec<String> {
+        vocabulary().families.iter().flat_map(|f| f.functions.iter().map(move |g| format!("{}.{}", f.namespace, g.name))).collect()
+    }
+
+    /// The reference's paragraph for a built-in the tree names `canonical`.
+    fn reference_for(canonical: &str) -> Option<&'static str> {
+        reference_line(by_canonical(canonical)?.current)
+    }
+
+    #[test]
+    fn every_built_in_the_vocabulary_names_is_in_the_library_and_the_reference() {
+        let v = vocabulary();
+        let contracts = [v.file.fn_, v.read.fn_].into_iter().chain(v.options.iter().map(|o| o.fn_)).map(str::to_string);
+        for name in contracts.chain(family_functions()) {
+            assert!(lookup_builtin(&name).is_some(), "{name} is in the vocabulary but not the standard library");
+            assert!(reference_for(&name).is_some(), "{name} is in the vocabulary but has no section in builtins.md");
+        }
+    }
+
+    #[test]
+    fn a_family_function_has_one_signature_and_arity_everywhere() {
+        for family in vocabulary().families {
+            for f in family.functions {
+                let builtin = lookup_builtin(f.signature.split('(').next().unwrap()).unwrap();
+                assert!(builtin.family, "{} is not a family function in the standard library", builtin.name);
+                assert_eq!(builtin.describe(), f.signature);
+                let required = builtin.params.iter().filter(|p| p.arity == Arity::One).count();
+                assert!(builtin.params.iter().all(|p| p.arity != Arity::Rest), "{}", builtin.name);
+                assert_eq!((f.arity.min, f.arity.max), (required, builtin.params.len()), "{}", builtin.name);
+            }
+        }
+    }
+
+    #[test]
+    fn every_family_function_in_the_library_or_the_reference_is_in_the_vocabulary() {
+        let known = family_functions();
+        for builtin in STANDARD_LIBRARY.iter().filter(|b| b.family) {
+            assert!(known.iter().any(|k| k == builtin.name), "{} is a family function the vocabulary lacks", builtin.name);
+        }
+        for heading in REFERENCE.lines().filter_map(|l| l.strip_prefix("### ")) {
+            let Some(spelling) = by_current(heading) else { continue };
+            if lookup_builtin(spelling.canonical).is_some_and(|b| b.family) {
+                assert!(known.iter().any(|k| k == spelling.canonical), "builtins.md's {heading} is a family function the vocabulary lacks");
+            }
+        }
+    }
+
+    #[test]
+    fn the_reference_names_every_option_and_tier() {
+        let v = vocabulary();
+        for contract in v.options {
+            let line = reference_for(contract.fn_).unwrap();
+            for option in contract.options {
+                assert!(line.contains(&format!("`{}", option.key)), "builtins.md's {} does not name `{}`", contract.fn_, option.key);
+            }
+        }
+        let ai = reference_line("ai").unwrap();
+        for tier in v.ai_tiers {
+            assert!(ai.contains(&format!("\"{tier}\"")), "builtins.md's ai does not name the tier \"{tier}\"");
+        }
+    }
+}
