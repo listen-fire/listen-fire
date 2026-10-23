@@ -917,7 +917,9 @@ impl Checker<'_> {
 
     /// The call statement (`checkStatement`'s call case).
     pub fn check_call_statement(&mut self, call: &CallStatement, scope: ScopeId) {
-        match self.read_call(call, scope, CallPosition::Statement) {
+        let reading = self.read_call(call, scope, CallPosition::Statement);
+        self.record_call_reading(call.span, scope, &reading);
+        match reading {
             CallReading::Function => {
                 self.check_call(call, scope);
             }
@@ -936,7 +938,9 @@ impl Checker<'_> {
     /// binds (`boundCallShape`'s value), or the collection op it computes;
     /// nothing for a built-in read as a value.
     pub fn check_call_rvalue(&mut self, call: &CallStatement, scope: ScopeId, span: Span) -> crate::checker::Bound {
-        match self.read_call(call, scope, CallPosition::Value) {
+        let reading = self.read_call(call, scope, CallPosition::Value);
+        self.record_call_reading(call.span, scope, &reading);
+        match reading {
             CallReading::Function => {
                 let returned = self.check_call(call, scope);
                 self.note_bound_self_call(&call.callee, span, scope);
@@ -1445,6 +1449,7 @@ impl Checker<'_> {
         let mut value = crate::types::position::ReturnShape::default();
         let callee = call.callee.clone();
         let resolution = self.scopes.resolve(scope, &callee);
+        let recorded_row = self.recording().then(|| self.callee_row(&callee, scope));
         let unknown_member = matches!(resolution, Resolution::Unknown).then(|| self.unknown_package_member(&call.callee)).flatten();
         if let Some(message) = unknown_member {
             self.report(codes::V5_UNKNOWN_MEMBER, message, call.span);
@@ -1465,6 +1470,16 @@ impl Checker<'_> {
         {
             let at = call_arg_span(first).start;
             self.named_orders.insert((at.line, at.col), crate::families::typed_spelling::ArgOrder { positional: names.clone(), settings: None });
+        }
+        if let Some(row) = recorded_row {
+            let is_movement = matches!(row, crate::story::CalleeRow::Movement(_));
+            // A plugin's positional arguments were bound to its parameters by name above.
+            let arg_params = match (&names, &bound) {
+                (Some(names), _) => Some(call.args.iter().enumerate().map(|(index, arg)| arg.name().map(str::to_string).or_else(|| names.get(index).cloned())).collect()),
+                (None, Some(bound)) => Some(bound.args.iter().map(|arg| arg.name().map(str::to_string)).collect()),
+                (None, None) => None,
+            };
+            self.record_node(call.span, scope, crate::story::What::Call { binding: None, callee: callee.clone(), is_movement, arg_params, row });
         }
         self.check_argument_bindings(&call.callee, &call.args, names.as_deref(), call.span, false);
         // A plugin's argument values are held to what it declares it takes.
@@ -1867,6 +1882,11 @@ impl Checker<'_> {
         }
         let suspends = self.movement_suspends(id);
         self.absorb_suspend(suspends);
+    }
+
+    /// Whether movement `id` may wait, as the walk settled it.
+    pub(crate) fn suspends(&self, id: SymbolId) -> bool {
+        self.inference.suspends.get(&self.declared_id(id)).copied().unwrap_or(false)
     }
 
     /// `movementEffects`, the suspend flag of it.

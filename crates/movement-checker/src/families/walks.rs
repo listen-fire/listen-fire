@@ -794,7 +794,7 @@ pub struct HeadWalk {
 impl crate::checker::Checker<'_> {
     /// The hops a head walks (`parsed.steps` of its probe), when it parses to
     /// a plain hop chain.
-    fn head_steps(head: &PathHead) -> Option<Vec<TraversalStep>> {
+    pub(crate) fn head_steps(head: &PathHead) -> Option<Vec<TraversalStep>> {
         let root = match &head.root {
             None => String::new(),
             Some(PathRoot::Name { name }) => crate::families::names::spell_name(name),
@@ -831,7 +831,7 @@ impl crate::checker::Checker<'_> {
     }
 
     /// `rootType`: where a head's walk starts.
-    fn head_root_type(&self, head: &PathHead, scope: ScopeId) -> Option<Position> {
+    pub(crate) fn head_root_type(&self, head: &PathHead, scope: ScopeId) -> Option<Position> {
         let symbol_pos = match &head.root {
             Some(PathRoot::Name { name }) => match self.scopes.resolve(scope, name) {
                 Resolution::Found(id) => self.scopes.symbol(id).types.pos.clone().or_else(|| self.nodes.walk_root(id)),
@@ -908,9 +908,11 @@ impl crate::checker::Checker<'_> {
     pub fn walk_head(&mut self, head: &PathHead, scope: ScopeId, awaited: bool) -> Option<HeadWalk> {
         let steps = Self::head_steps(head)?;
         let start = self.head_root_type(head, scope)?;
-        let (walk, diagnostics, watchable) = {
+        let recorded_start = self.recording().then(|| start.clone());
+        let (walk, diagnostics, watchable, landings, observed) = {
             let env = self.typing_env(scope);
             let mut typing = Typing::new(&env, head.span);
+            typing.observed = self.observing();
             let landed = typing.walk_steps(Some(start), &steps, awaited);
             let walk = HeadWalk {
                 locals: typing.locals.clone(),
@@ -918,8 +920,13 @@ impl crate::checker::Checker<'_> {
                 last_edge_schema: typing.last_edge_schema.clone(),
                 ordering: typing.last_ordering,
             };
-            (walk, std::mem::take(&mut typing.diagnostics), std::mem::take(&mut typing.watchable_reads))
+            let landings = recorded_start.is_some().then(|| typing.last_landings.clone());
+            (walk, std::mem::take(&mut typing.diagnostics), std::mem::take(&mut typing.watchable_reads), landings, typing.observed.take())
         };
+        if let (Some(start), Some(landings)) = (recorded_start, landings) {
+            self.record_landings(head.span, &start, &landings);
+        }
+        self.record_observed(head.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
         for diagnostic in diagnostics {
             self.push(diagnostic);

@@ -90,6 +90,35 @@ pub unsafe fn check_answer_with(
     write_answer(&answer, out_ptr_ptr, out_len_ptr)
 }
 
+/// `story_analysis(source, catalog snapshot JSON, options JSON)`:
+/// `check_program_with`'s inputs, answered with the story analysis
+/// (crate::story, `{storyAnalysisVersion, diagnostics, …}`) and 0, or
+/// `{error}` and 1.
+///
+/// # Safety
+/// The three input ranges must be readable; the out slots writable.
+#[allow(clippy::too_many_arguments)] // the C export's arguments, passed through
+pub unsafe fn story_analysis_with(
+    zones: &dyn crate::host::ZoneLookup,
+    src_ptr: *const u8,
+    src_len: u32,
+    catalog_ptr: *const u8,
+    catalog_len: u32,
+    options_ptr: *const u8,
+    options_len: u32,
+    out_ptr_ptr: *mut usize,
+    out_len_ptr: *mut usize,
+) -> u32 {
+    install_panic_hook();
+    let answer = match unsafe { inputs((src_ptr, src_len), (catalog_ptr, catalog_len), (options_ptr, options_len)) } {
+        Ok((source, catalog, options)) => {
+            crate::story::story_analysis_json(source, catalog, CheckOptions { upgrading_from: options.upgrading_from.as_deref(), zones })
+        }
+        Err(error) => serde_json::json!({ "error": error }),
+    };
+    write_answer(&answer, out_ptr_ptr, out_len_ptr)
+}
+
 /// `check_compatible(request JSON)`: the engine's `check.compatible` request
 /// (crate::compatible), answered `{fits}` or `{undescribed: true}` and 0, or
 /// `{error}` and 1.

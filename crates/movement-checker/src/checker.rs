@@ -110,6 +110,9 @@ pub struct Checker<'c> {
     /// Each scope a body of the program checked opens, with the text it
     /// covers (crate::query): what a position in the file can see.
     pub extents: Vec<(Span, ScopeId)>,
+    /// What the walk resolved, noted for the story analysis (crate::story);
+    /// `None`, and nothing noted, unless a story was asked for.
+    pub story: Option<Box<crate::story::Recording>>,
 }
 
 /// What a closure's caller supplies (`checkClosure`'s `suppliedParams`): the
@@ -269,6 +272,7 @@ impl<'c> Checker<'c> {
             file_names: Default::default(),
             packages: Default::default(),
             extents: Vec::new(),
+            story: None,
         }
     }
 
@@ -414,6 +418,9 @@ impl<'c> Checker<'c> {
                     self.within_type_limit(&assign.name, &mut types.field, &mut types.may_hold, Some(assign.span));
                     self.set_types(scope, &assign.name, types);
                 }
+                if self.recording() {
+                    self.record_assigned(&assign.name, &assign.value, scope);
+                }
                 self.note_shape_alias(&assign.name, &assign.value, scope);
                 self.note_undescribed_alias(&assign.name, &assign.value, scope);
                 self.note_closure_returns(&assign.name, &assign.value, scope);
@@ -445,16 +452,29 @@ impl<'c> Checker<'c> {
                 self.check_link(&link.link, scope);
             }
             Statement::Unlink(unlink) => {
+                if self.recording() {
+                    let touches = self.instance_named(&unlink.from, scope);
+                    let what = crate::story::What::Unlink { from: unlink.from.clone(), edge: unlink.edge.clone(), to: unlink.to.clone(), touches };
+                    self.record_node(unlink.span, scope, what);
+                }
                 self.resolve_name(&unlink.from, unlink.span, scope);
                 self.resolve_name(&unlink.to, unlink.span, scope);
                 self.report_absent_edge_end("unlink", &unlink.from, &unlink.edge, Some(&unlink.to), unlink.span, scope);
                 self.check_bare_link_edge(&unlink.from, &unlink.edge, unlink.span, crate::families::writes::LinkVerb::Unlink, scope);
             }
             Statement::Delete(delete) => {
+                if self.recording() {
+                    let touches = self.instance_named(&delete.name, scope);
+                    self.record_node(delete.span, scope, crate::story::What::Delete { subject: delete.name.clone(), touches });
+                }
                 self.resolve_name(&delete.name, delete.span, scope);
                 self.check_delete_rules(&delete.name, delete.span, scope);
             }
             Statement::Refresh(refresh) => {
+                if self.recording() {
+                    let touches = self.instance_named(&refresh.name, scope);
+                    self.record_node(refresh.span, scope, crate::story::What::Refresh { subject: refresh.name.clone(), touches });
+                }
                 match self.scopes.resolve(scope, &refresh.name) {
                     failure @ (Resolution::Pending | Resolution::Escaped { .. } | Resolution::Unknown) => {
                         self.report_resolution_failure(&refresh.name, refresh.name_span, failure)
@@ -487,6 +507,9 @@ impl<'c> Checker<'c> {
                 }
                 let constructed = self.check_construction(construct, scope);
                 let adapter = constructed.adapter.clone();
+                if let Some(name) = name {
+                    self.record_node(span, scope, crate::story::What::Instance { name: name.to_string(), adapter_type: adapter.clone() });
+                }
                 let instance = name.map(|_| std::rc::Rc::new(self.instance_of(construct, constructed)));
                 if name.is_none() {
                     self.report_construction_returned(construct, span);
@@ -644,15 +667,17 @@ impl<'c> Checker<'c> {
         self.check_slot_expression(slot, scope, write_field);
         self.report_block_read_back(&names, scope, slot.span);
         self.type_function_values(names.distinct_refs(), scope);
-        let (ty, may_hold, held, diagnostics, watchable) = {
+        let (ty, may_hold, held, diagnostics, watchable, observed) = {
             let env = self.typing_env(scope);
             let mut typing = Typing::new(&env, slot.span);
+            typing.observed = self.observing();
             let ty = if holds_value { typing.infer_exact(&parsed) } else { typing.infer(&parsed) };
             let may_hold = typing.may_hold_type(&parsed);
             let held = slot_held_walk(held_takes, inspect_held, ty.as_ref().or(may_hold.as_ref()))
                 .and_then(|walk| typing.handle_held_by(&parsed, &walk).or_else(|| crate::types::field::handle_within(ty.as_ref(), &walk)));
-            (ty, may_hold, held, typing.diagnostics, typing.watchable_reads)
+            (ty, may_hold, held, typing.diagnostics, typing.watchable_reads, typing.observed)
         };
+        self.record_observed(slot.span, scope, observed);
         self.effects.note_watchable_reads(&watchable);
         self.push_typed(diagnostics);
         SlotTyped { expr: Some(parsed), ty, may_hold, held }
@@ -678,13 +703,18 @@ impl<'c> Checker<'c> {
         let mut ruled_out = crate::families::walks::RuledOut::default();
         let mut all_prior_terminate = true;
         let mut arm_terminates = Vec::new();
+        let branch = self.record_node(statement.span, scope, crate::story::What::Branch { arms: Vec::new(), otherwise: None });
         for arm in &statement.arms {
             let arm_scope = self.scopes.open(Some(scope));
             self.note_extent(arm.span, arm_scope);
+            if let Some(crate::story::What::Branch { arms, .. }) = branch.and_then(|at| self.recorded_node_mut(at)) {
+                arms.push(crate::story::BranchArm { span: arm.span, scope: arm_scope, condition_span: arm.condition.span });
+            }
             self.declare_eliminated(&ruled_out, scope, arm_scope);
             self.check_condition_slot(&arm.condition, arm_scope, Some(arm_scope));
             self.check_statement_list(&arm.body, arm_scope);
             let terminating = terminates(&arm.body);
+            self.record_body(arm.span, "arm", terminating);
             arm_terminates.push(terminating);
             if all_prior_terminate && terminating {
                 self.narrow_condition_negation(&arm.condition, scope, scope);
@@ -697,6 +727,10 @@ impl<'c> Checker<'c> {
         let Some(else_arm) = &statement.else_arm else { return };
         let else_scope = self.scopes.open(Some(scope));
         self.note_extent(else_arm.span, else_scope);
+        if let Some(crate::story::What::Branch { otherwise, .. }) = branch.and_then(|at| self.recorded_node_mut(at)) {
+            *otherwise = Some((else_arm.span, else_scope));
+        }
+        self.record_body(else_arm.span, "else", terminates(&else_arm.body));
         self.declare_eliminated(&ruled_out, scope, else_scope);
         for arm in &statement.arms {
             self.narrow_condition_negation(&arm.condition, else_scope, else_scope);
@@ -799,12 +833,14 @@ impl<'c> Checker<'c> {
                     }
                 }
                 self.type_function_values(names.distinct_refs(), scope);
-                let (ty, diagnostics, watchable) = {
+                let (ty, diagnostics, watchable, observed) = {
                     let env = self.typing_env(scope);
                     let mut typing = Typing::new(&env, slot.span);
+                    typing.observed = self.observing();
                     let ty = typing.infer(expr);
-                    (ty, typing.diagnostics, typing.watchable_reads)
+                    (ty, typing.diagnostics, typing.watchable_reads, typing.observed)
                 };
+                self.record_observed(slot.span, scope, observed);
                 self.effects.note_watchable_reads(&watchable);
                 self.push_typed(diagnostics);
                 // Gating on a structured value is always true, never a decision.
@@ -853,6 +889,9 @@ impl<'c> Checker<'c> {
             self.type_param(body, &param.name, type_, scope, &of);
             self.note_undescribed_event(body, &param.name, type_, graph);
         }
+        // A `return` straight in the body is a step on its spine, not a lane
+        // it caps: only what caps every lane ends the story's movement.
+        self.record_body(movement.span, "movement", movement.body.iter().any(|s| !matches!(s, Statement::Return(_)) && leaves(s, true)));
         self.open_effect_frame();
         let what = format!("'{}'", movement.name);
         let mut returns = self.check_body(&movement.body, body, what.clone());
@@ -1079,6 +1118,14 @@ impl<'c> Checker<'c> {
     }
 
     fn check_link(&mut self, link: &movement_parser::ast::LinkExpression, scope: ScopeId) {
+        if self.recording() {
+            let to = match &link.to {
+                LinkTarget::Handle { name } => crate::story::LinkTo::Handle(name.clone()),
+                LinkTarget::Match { r#match, .. } => crate::story::LinkTo::Match(r#match.span),
+            };
+            let touches = self.instance_named(&link.from, scope);
+            self.record_node(link.span, scope, crate::story::What::Link { from: link.from.clone(), edge: link.edge.clone(), to, touches });
+        }
         self.resolve_name(&link.from, link.span, scope);
         let to = match &link.to {
             LinkTarget::Handle { name } => Some(name.as_str()),
@@ -1095,6 +1142,7 @@ impl<'c> Checker<'c> {
     }
 
     fn check_extract(&mut self, extract: &ExtractExpression, scope: ScopeId, binding: Option<&str>, statement: Span) {
+        self.record_node(extract.span, scope, crate::story::What::Extract { binding: None, node: None });
         self.report_extract_keyword_retired(extract, scope, binding, statement);
         self.check_ai_tier(extract.tier.as_deref(), extract.span);
         for input in &extract.from {
@@ -1147,6 +1195,15 @@ impl<'c> Checker<'c> {
         };
         let probe = format!("{root}{}.`__movement_head_probe__`", head.hops_raw);
         let parsed = expression_of_text(&probe);
+        if self.recording() {
+            let from = self.head_root_type(head, scope).as_ref().and_then(crate::story::traversal_from);
+            let steps = match &parsed {
+                Ok(movement_parser::lowering::expression::Expression::Traverse { steps, .. }) => steps.clone(),
+                _ => Vec::new(),
+            };
+            let walked = crate::story::Walked { root: root_name.clone(), from, steps, landings: Vec::new(), reads: Vec::new() };
+            self.record_node(head.span, scope, crate::story::What::Traversal(walked));
+        }
         let walks_off_root = matches!(&parsed, Ok(movement_parser::lowering::expression::Expression::Traverse { steps, .. }) if !steps.is_empty());
         if let Err(error) = &parsed {
             self.report_head_parse_error(error, head.span);
@@ -1219,6 +1276,7 @@ impl<'c> Checker<'c> {
                 self.check_path_head(head, scope);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref());
+                self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)
             }
             AwaitSource::First { head, .. } => {
@@ -1227,6 +1285,7 @@ impl<'c> Checker<'c> {
                 self.check_path_head(head, scope);
                 let walk = self.walk_head(head, scope, true);
                 self.check_awaitable(head, walk.as_ref());
+                self.record_awaited_walk(awaited.span, head, walk.as_ref(), scope);
                 awaited_walk(walk)
             }
             AwaitSource::Combinator { combinator, .. } => {
@@ -1235,12 +1294,16 @@ impl<'c> Checker<'c> {
                 Bound { receipt: Some(receipt), ..Bound::default() }
             }
             AwaitSource::Sleep { duration, .. } => {
+                let source = crate::story::AwaitedSource::Sleep { duration: duration.raw.clone() };
+                self.record_node(awaited.span, scope, crate::story::What::Await { binding: None, source });
                 self.check_sleep_duration(duration);
                 // A woken sleep binds `true`.
                 let plane = crate::types::position::PlaneType { field: Some(crate::types::Ty::Boolean), pos: None };
                 Bound { returned: Some(crate::types::position::ReturnShape { returns: true, plane, may_hold: None }), ..Bound::default() }
             }
             AwaitSource::Until { condition, every, .. } => {
+                let source = crate::story::AwaitedSource::Until { every: every.as_ref().map(|e| e.raw.clone()) };
+                self.record_node(awaited.span, scope, crate::story::What::Await { binding: None, source });
                 if let Some(every) = every {
                     self.check_until_cadence(every);
                 }
@@ -1298,11 +1361,26 @@ fn until_bound(returns: &crate::types::position::ReturnShape) -> Bound {
 /// `terminates` (checker/flow.ts): every path through the list leaves it —
 /// an `ERROR`, a `return`, or an `if` whose every arm and `else` leave.
 fn terminates(statements: &[Statement]) -> bool {
-    statements.iter().any(|statement| match statement {
-        Statement::Error(_) | Statement::Return(_) => true,
-        Statement::If(statement) => statement.else_arm.as_ref().is_some_and(|e| terminates(&e.body)) && statement.arms.iter().all(|arm| terminates(&arm.body)),
+    terminates_with(statements, true)
+}
+
+/// `terminates` with `returns` saying whether a `return` leaves the list
+/// (`Exits`): in a closure the combinator or callback runs, it is the
+/// closure's value, and only an `ERROR` leaves.
+pub(crate) fn terminates_with(statements: &[Statement], returns: bool) -> bool {
+    statements.iter().any(|statement| leaves(statement, returns))
+}
+
+/// Whether every path through `statement` leaves the list it is in.
+pub(crate) fn leaves(statement: &Statement, returns: bool) -> bool {
+    match statement {
+        Statement::Error(_) => true,
+        Statement::Return(_) => returns,
+        Statement::If(statement) => {
+            statement.else_arm.as_ref().is_some_and(|e| terminates_with(&e.body, returns)) && statement.arms.iter().all(|arm| terminates_with(&arm.body, returns))
+        }
         _ => false,
-    })
+    }
 }
 
 fn is_closure_type(type_: &ParamTypeRef) -> bool {

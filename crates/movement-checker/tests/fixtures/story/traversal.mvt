@@ -1,0 +1,21 @@
+import { `@lf/manual` as manual, `@lf/attio` as attio } from adapters
+import { acme } from credentials
+
+runs = connect manual
+crm  = connect attio using acme
+
+function `Top Ten`(go: <runs-[:Invocation]->>) {
+  crm-[c:Companies WHERE c.Categories == "Customer" ORDER BY c.`Created At` DESC LIMIT 10]-> {
+    write crm-[:Companies]-> {
+      unique by (`Name`)
+      Name: c.Name
+    }
+  }
+  if (exists(crm-[k:Companies WHERE k.Categories == "Customer" ORDER BY k.Name LIMIT 1]->)) {
+    crm-[top:Companies ORDER BY top.Name DESC LIMIT 1]-> {
+      write top-[:Notes]-> { Title: "Last by name", Content: top.Name }
+    }
+  }
+}
+
+listen to runs {} fire `Top Ten`

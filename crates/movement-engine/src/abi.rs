@@ -181,6 +181,38 @@ pub unsafe extern "C" fn standard_library(out_ptr_ptr: *mut usize, out_len_ptr: 
     unsafe { movement_checker::abi::standard_library_with(out_ptr_ptr, out_len_ptr) }
 }
 
+/// The checker's story analysis (`movement_checker::abi::story_analysis_with`),
+/// its zone database this engine's environment services.
+///
+/// # Safety
+/// The three input ranges must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // the C ABI's arguments
+pub unsafe extern "C" fn story_analysis(
+    src_ptr: *const u8,
+    src_len: u32,
+    catalog_ptr: *const u8,
+    catalog_len: u32,
+    options_ptr: *const u8,
+    options_len: u32,
+    out_ptr_ptr: *mut usize,
+    out_len_ptr: *mut usize,
+) -> u32 {
+    unsafe {
+        movement_checker::abi::story_analysis_with(
+            &crate::env_services::EnvZones,
+            src_ptr,
+            src_len,
+            catalog_ptr,
+            catalog_len,
+            options_ptr,
+            options_len,
+            out_ptr_ptr,
+            out_len_ptr,
+        )
+    }
+}
+
 /// The language service's answer (`movement_language::abi::language_query_with`),
 /// its zone database this engine's environment services.
 ///
@@ -440,6 +472,33 @@ mod tests {
         let (status, answer) = ask(json!({ "kind": "rename", "position": pos(hovered) }));
         assert_eq!(status, ERROR);
         assert!(answer["error"]["message"].as_str().unwrap().starts_with("the language query does not read"), "{answer}");
+    }
+
+    #[test]
+    fn the_story_analysis_is_the_checker_s() {
+        let catalog = r#"{"adapters":{"slack":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"channel":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+        let ask = |source: &str, options: &str| {
+            let (src, src_len) = input(source);
+            let (cat, cat_len) = input(catalog);
+            let (opt, opt_len) = input(options);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { story_analysis(src, src_len, cat, cat_len, opt, opt_len, &mut out_ptr, &mut out_len) };
+            unsafe { (dealloc(src, src_len), dealloc(cat, cat_len), dealloc(opt, opt_len)) };
+            (status, output(out_ptr, out_len))
+        };
+        let source = "import { `@lf/slack` as slack } from adapters\nchat = connect slack\n\nfunction scan(c: <chat-[:channel]->>) {\n  name = Text.upper(c.Name)\n  return name\n}\n";
+        let (status, answer) = ask(source, "{}");
+        assert_eq!(status, OK);
+        let options = movement_checker::CheckOptions { upgrading_from: None, zones: &crate::env_services::EnvZones };
+        assert_eq!(answer, movement_checker::story::story_analysis_json(source, catalog, options));
+        assert_eq!(answer["storyAnalysisVersion"], json!(movement_checker::story::STORY_ANALYSIS_VERSION));
+        assert!(answer["nodes"].as_array().unwrap().iter().any(|n| n["kind"] == "instance" && n["name"] == "chat"), "{answer}");
+
+        let (status, answer) = ask("function (", "{}");
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].is_string(), "{answer}");
+        let (status, answer) = ask(source, r#"{"languageVersion":"0.12.0"}"#);
+        assert_eq!(status, ERROR, "the options are the check's: {answer}");
     }
 
     #[test]

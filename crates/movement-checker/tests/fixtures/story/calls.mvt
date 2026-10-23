@@ -1,0 +1,25 @@
+import { `@lf/email` as email, `@lf/attio` as attio } from adapters
+import { acme } from credentials
+import { fetchUrl, summarise } from plugins
+
+inbox = connect email
+crm   = connect attio using acme
+
+function countdown(n: <number>): <number> {
+  if (n <= 0) { return 0 }
+  return countdown(n - 1)
+}
+
+function note(title: <text>) {
+  write crm-[:Companies]-> { unique by (FUZZY Name) Name: title }
+}
+
+function `Intake`(m: <inbox-[:Email]->>) {
+  left = countdown(3)
+  page = fetchUrl("https://example.com")
+  note(Text.upper(m.Subject))
+  shout = Text.upper(m.Subject)
+  summarise(m.Body)
+}
+
+listen to inbox { key: "intake" } fire `Intake`

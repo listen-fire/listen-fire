@@ -251,7 +251,7 @@ impl Checker<'_> {
                     *span,
                 );
             }
-            CallArg::Call { call, .. } => match self.read_call(call, scope, crate::families::calls::CallPosition::Argument) {
+            CallArg::Call { call, .. } => match self.read_call_recorded(call, scope) {
                 // A built-in called here is the value it computes.
                 CallReading::Value(expr) => self.check_expr_arg(fit, arg.name(), &expr, scope),
                 CallReading::Refused { code, message, span } => self.report(code, message, span),

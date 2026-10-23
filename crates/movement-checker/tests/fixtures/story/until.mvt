@@ -1,0 +1,24 @@
+import { `@lf/attio` as attio, `@lf/slack` as slack, `@lf/manual` as manual } from adapters
+import { acme_main, team_workspace } from credentials
+
+crm  = connect attio using acme_main
+team = connect slack using team_workspace
+runs = connect manual
+
+function `Wait For The Name`(go: <runs-[:Invocation]->>) {
+  co = write crm-[:Companies]-> {
+    unique by (FUZZY Name)
+    Name: go.Text
+  }
+
+  await until(() => {
+    refresh co
+    return co.Name == "Acme"
+  }, { every: 1h })
+
+  ops = only(team-[ch:Channels WHERE ch.Name == "general"]->)
+  if (ops == null) { fail("no #ops channel") }
+  write ops-[:Messages]-> { Message: "Renamed at last." }
+}
+
+listen to runs {} fire `Wait For The Name`

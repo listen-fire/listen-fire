@@ -134,6 +134,10 @@ pub struct Typing<'a> {
     /// Expressions a closure operand was refused in (`closureOperandRefused`),
     /// so a list or map holding one does not say so again.
     closure_operand_refused: std::collections::HashSet<usize>,
+    /// For the story analysis (crate::story): each walk typed inside the
+    /// expression, and whether it calls a model or reads the clock. `None`,
+    /// and nothing kept, unless a story is being recorded.
+    pub observed: Option<Box<crate::story::Observed>>,
 }
 
 impl<'a> Typing<'a> {
@@ -159,6 +163,7 @@ impl<'a> Typing<'a> {
             walk_orderings: HashMap::new(),
             walk_destinations: HashMap::new(),
             closure_operand_refused: std::collections::HashSet::new(),
+            observed: None,
         }
     }
 
@@ -781,7 +786,20 @@ impl<'a> Typing<'a> {
                     self.report_undescribed_event(root);
                 }
                 self.report_walk_off_maybe_absent(alias_root.as_deref(), steps, expression, start.as_ref());
+                let observed_start = self.observed.as_ref().map(|_| start.as_ref().and_then(crate::story::instance_of));
                 let destination = self.walk_steps(start, steps, false);
+                if let (Some(start), false) = (observed_start, steps.is_empty()) {
+                    let walked = crate::story::Walked {
+                        root: alias_root.clone(),
+                        from: None,
+                        steps: steps.clone(),
+                        landings: self.last_landings.iter().map(|l| l.as_ref().and_then(crate::story::landing_of)).collect(),
+                        reads: std::iter::once(start).chain(self.last_landings.iter().map(|l| l.as_ref().and_then(crate::story::instance_of))).collect(),
+                    };
+                    if let Some(observed) = self.observed.as_mut() {
+                        observed.paths.push(walked);
+                    }
+                }
                 self.walk_orderings.insert(key(expr), (self.last_ordering, self.last_ordering_edge.clone()));
                 if let Some(destination) = &destination {
                     self.walk_destinations.insert(key(expr), destination.clone());
@@ -886,10 +904,18 @@ impl<'a> Typing<'a> {
                 (self.at_type(inner.as_ref(), index, index_ty.as_ref()), vec![inner, index_ty])
             }
             Expression::Aggregate { fn_, expression, .. } => {
+                if *fn_ == AggregationFunction::Llm
+                    && let Some(observed) = self.observed.as_mut()
+                {
+                    observed.ai = true;
+                }
                 let inner = self.infer_at(expression, position);
                 (self.aggregate_type(*fn_, inner.as_ref(), expression), vec![inner])
             }
             Expression::Llm { prompt_expression, .. } => {
+                if let Some(observed) = self.observed.as_mut() {
+                    observed.ai = true;
+                }
                 let prompt = prompt_expression.as_ref().map(|p| self.infer_at(p, position));
                 (None, prompt.into_iter().collect())
             }
@@ -917,6 +943,11 @@ impl<'a> Typing<'a> {
                 (matches!(expr, Expression::KgExists { .. }).then_some(Ty::Boolean), types)
             }
             Expression::Meta { key: meta } => {
+                if matches!(meta.as_str(), "current_date" | "current_timestamp")
+                    && let Some(observed) = self.observed.as_mut()
+                {
+                    observed.now = true;
+                }
                 crate::families::walks::observe_meta(self, meta);
                 (movement_meta_key_type(meta), Vec::new())
             }
@@ -955,9 +986,14 @@ impl<'a> Typing<'a> {
                 self.bare_names.insert(key(expr), name.clone());
                 (self.bare_name_type(name), Vec::new())
             }
+            Expression::ExtractValue { .. } => {
+                if let Some(observed) = self.observed.as_mut() {
+                    observed.ai = true;
+                }
+                (None, Vec::new())
+            }
             Expression::ParentResult { .. }
             | Expression::ActionResult { .. }
-            | Expression::ExtractValue { .. }
             | Expression::Resource { .. }
             | Expression::LinkedObject { .. } => (None, Vec::new()),
         }

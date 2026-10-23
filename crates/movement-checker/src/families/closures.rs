@@ -328,6 +328,7 @@ impl Checker<'_> {
         // Running arms concurrently is still running them: the combinator
         // waits, so it parks.
         self.flag_suspend();
+        let recorded = self.record_node(combinator.span, scope, crate::story::What::Combinator { combinator: combinator.kind, binding: None, arms: Vec::new() });
         let arms = match &combinator.arms {
             CombinatorArms::Literal { arms, .. } | CombinatorArms::Arguments { arms, .. } => arms,
             CombinatorArms::Dynamic { expr, .. } => {
@@ -359,6 +360,9 @@ impl Checker<'_> {
         };
         let nullable = combinator_may_leave_slots_null(combinator);
         let slots: Vec<ReturnShape> = arms.iter().map(|arm| self.check_arm(arm, kind, scope, 0)).collect();
+        if let Some(at) = recorded {
+            self.record_arms(at, arms);
+        }
         // A closure is not data: an arm that hands one back would keep it in
         // the answer.
         for (arm, slot) in arms.iter().zip(&slots) {

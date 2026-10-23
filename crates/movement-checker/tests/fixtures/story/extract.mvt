@@ -1,0 +1,34 @@
+import { `@lf/email` as email, `@lf/attio` as attio } from adapters
+import { acme } from credentials
+
+inbox = connect email
+crm   = connect attio using acme
+
+node Company: "each company named in this message" {
+  name:      <text> "the company's name"
+  employees: <number> "its headcount"
+}
+
+node CompanyDetail: "the company" {
+  summary:   <text> "one line on what the company does"
+  employees: <number> "its headcount"
+}
+
+function `Enrich`(m: <inbox-[:Email]->>) {
+  content   = [m.Body]
+  companies = extract(content, Company, { tier: "careful" })
+
+  detailed = map(companies, (c) => {
+    details = extractOne([...content, Json.stringify(c)], CompanyDetail, { tier: "careful" })
+    return { ...c, ...details }
+  }, { initialConcurrency: 1, concurrency: 4, onError: "warn" })
+  map(detailed, (d) => {
+    write crm-[:Companies]-> { unique by (FUZZY Name) Name: d.name, Description: coalesce(d.summary, "") }
+  })
+
+  sender = extractOne(content, node Sender: "the company that sent this message" { name: <text> "its name" })
+  big    = coalesce(extractOne(content, CompanyDetail).employees, 0) > 50
+  write crm-[:Companies]-> { unique by (FUZZY Name) Name: coalesce(sender.name, "unknown"), Description: big ? "large" : "small" }
+}
+
+listen to inbox { key: "enrich" } fire `Enrich`

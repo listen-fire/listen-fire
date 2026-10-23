@@ -1,0 +1,41 @@
+import { `@lf/slack` as slack, `@lf/manual` as manual } from adapters
+import { team_workspace } from credentials
+
+team = connect slack using team_workspace
+runs = connect manual
+
+function `First Approval Wins`(go: <runs-[:Invocation]->>) {
+  approve = callback({ })
+
+  team-[ch:Channels WHERE ch.Topic == "approvals"]-> {
+    write ch-[:Messages]-> {
+      Message: "Approve this?"
+      Blocks: [
+        { type: "actions", elements: [
+          { type: "button", text: { type: "plain_text", text: "Approve" },
+            value: "${approve.id}" }
+        ] }
+      ]
+    }
+  }
+
+  r = race(
+    () => {
+      tap = await first(approve-[:Called]->)
+      return tap.At
+    },
+    () => { await sleep(1d) },
+  )
+
+  tapped = r[0]
+  general = only(team-[g:Channels WHERE g.Name == "general"]->)
+  if (general == null) { fail("no #general channel") }
+  if (tapped != null) {
+    write general-[:Messages]-> { Message: "Approved at ${tapped}." }
+  }
+  if (tapped == null) {
+    write general-[:Messages]-> { Message: "Nobody approved in time." }
+  }
+}
+
+listen to runs {} fire `First Approval Wins`

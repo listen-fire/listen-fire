@@ -1,0 +1,35 @@
+import { `@lf/email` as email, `@lf/attio` as attio, `@lf/manual` as manual } from adapters
+import { acme } from credentials
+
+inbox = connect email
+crm   = connect attio using acme
+runs  = connect manual
+
+function `Intake`(m: <inbox-[:Email]->>) {
+  person = write crm-[:People]-> { unique by (`Job Title`), Name: m.From }
+  employer = match person-[:Company]-> { unique by (Name), Name: "Acme" }
+  if (employer != null) {
+    link person -[:Company]-> employer
+    write employer-[:Notes]-> { Title: "Introduced", Content: m.Subject }
+  } else {
+    fail("no employer")
+  }
+}
+
+function `Rewire`(m: <inbox-[:Email]->>) {
+  a = write crm-[:Companies]-> { Name: m.Subject }
+  b = write crm-[:People]-> { Name: m.From }
+  unlink a -[:employs]-> b
+  stale = write crm-[:Companies]-> { Name: m.Subject }
+  delete stale
+}
+
+function `Reactivate`(go: <runs-[:Invocation]->>) {
+  crm-[record:Companies WHERE record.Categories == "Lead"]-> {
+    write record { Categories: "Customer" }
+  }
+}
+
+listen to inbox { key: "intake" } fire `Intake`
+listen to inbox { key: "rewire" } fire `Rewire`
+listen to runs {} fire `Reactivate`

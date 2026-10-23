@@ -343,6 +343,19 @@ impl Checker<'_> {
             self.check_hop_pins(schema, &read.pins, span_for);
         }
         let event_types = schema.and_then(|schema| event_types::derived_event_types(schema, subscribed.as_deref(), &read.pins));
+        if self.recording() {
+            let fires_movement = self.scopes.resolve_function(scope, &statement.movement).is_some_and(|id| self.scopes.symbol(id).kind == SymbolKind::Movement);
+            let what = crate::story::What::Listen {
+                instance: statement.instance.clone(),
+                adapter_type: adapter_name.clone(),
+                fires: statement.movement.clone(),
+                fires_movement,
+                events: subscribed.clone(),
+                narrowing: read.pins.clone(),
+                event_types: event_types.iter().flatten().map(|t| (t.key.clone(), t.display.clone())).collect(),
+            };
+            self.record_node(statement.span, scope, what);
+        }
         if let (Some((names, span)), Some(schema), Some(event_types)) = (&read.fields, schema, &event_types) {
             self.check_listen_fields(schema, event_types, names, *span);
         }
@@ -813,6 +826,7 @@ impl Checker<'_> {
                     .map(|param| (param.name.clone(), self.check_callback_param_type(param.type_.as_ref(), &param.name, Some(scope), None)))
                     .collect();
                 let (_, suspends) = self.check_closure_walked(closure, scope, None, "a callback body", 0);
+                self.record_body(closure.span, "callback", crate::checker::terminates_with(&closure.body, false));
                 if suspends {
                     self.refuse_unresumable_wait("a callback body", closure.span);
                 }

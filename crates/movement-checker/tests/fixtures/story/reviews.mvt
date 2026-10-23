@@ -1,0 +1,40 @@
+import { `@lf/email` as email, `@lf/slack` as slack, `@lf/attio` as attio, `@lf/ask` as ask } from adapters
+import { team_workspace, acme_main } from credentials
+
+inbox = connect email
+team  = connect slack using team_workspace
+crm   = connect attio using acme_main
+asks  = connect ask
+
+function `Triage Inbound`(msg: <inbox-[:Email]->>) {
+  `Company Name` = ai("the company this message is about")
+
+  q = write asks-[:Check]-> {
+    Prompt: "Pursue ${`Company Name`}?"
+    Detail: "${msg.Subject}"
+  }
+  deals = only(team-[ch:Channels WHERE ch.Name == "dealflow"]->)
+  if (deals == null) { fail("no #deals channel") }
+  write deals-[:Messages]-> { Message: "New: ${`Company Name`}. Pursue it? ${q.Url}" }
+
+  r = race(
+    () => {
+      a = await first(q-[:Response]->)
+      return a.Answer
+    },
+    () => { await sleep(2d) },
+  )
+
+  decision = r[0]
+  if (decision == true) {
+    write crm-[:Companies]-> {
+      unique by (FUZZY Name)
+      Name: `Company Name`
+    }
+  }
+  if (decision == null) {
+    write deals-[:Messages]-> { Message: "Nobody decided in time." }
+  }
+}
+
+listen to inbox { key: "intake" } fire `Triage Inbound`

@@ -173,7 +173,7 @@ impl Checker<'_> {
         match arg {
             CallArg::Expr { .. } | CallArg::Closure { .. } | CallArg::Type { .. } => {}
             CallArg::Call { call, .. } => {
-                match self.read_call(call, scope, crate::families::calls::CallPosition::Argument) {
+                match self.read_call_recorded(call, scope) {
                     crate::families::calls::CallReading::Value(_) => {}
                     crate::families::calls::CallReading::Refused { code, message, span } => self.report(code, message, span),
                     _ => {

@@ -212,6 +212,10 @@ impl Checker<'_> {
             self.check_bind_clause(write);
         }
         self.check_write_union(write, &fields, root.as_ref(), &root_description);
+        if self.recording() {
+            let action = if position_write { "update" } else { "create" };
+            self.record_write(write.span, scope, fields_json(&fields), !write.unique_by.is_empty(), handle.as_ref(), action, parents_json(&parents), local);
+        }
 
         let target_span = target_span(&write.target);
         if matches!(write.target, WriteTarget::Position { .. }) {
@@ -1322,6 +1326,9 @@ impl Checker<'_> {
         if let Some(variant) = &selected.variant {
             handle = self.handle_of_variant(handle, variant);
         }
+        if self.recording() {
+            self.record_write(matched.span, scope, fields_json(&fields), !matched.unique_by.is_empty(), handle.as_ref(), "find", parents_json(&parents), local);
+        }
         if let Some(root) = &root {
             let native_identity =
                 root.uniqueness_authorable == Some(false) || root.native_uniqueness.as_ref().is_some_and(|n| !n.is_empty());
@@ -1502,6 +1509,27 @@ pub(crate) fn record_of_may_hold(may_hold: &Ty) -> RecordOf {
     let Some(one) = crate::types::unions::join_positions(&positions.iter().map(|p| &**p).collect::<Vec<_>>()) else { return RecordOf::Unknown };
     let one = one.position;
     RecordOf::Record(if may_be_absent && !matches!(one, Position::MaybeEmpty(_)) { Position::MaybeEmpty(Box::new(one)) } else { one })
+}
+
+/// A write's fields as the story reads them: each line, a spread's written out.
+fn fields_json(fields: &[Field]) -> Vec<serde_json::Value> {
+    fields
+        .iter()
+        .map(|field| {
+            let mut entry = serde_json::json!({ "name": field.name, "value": field.value.as_ref(), "span": field.span });
+            if let Some(semantics) = &field.semantics {
+                entry["semantics"] = serde_json::json!(semantics);
+            }
+            if let Some(spread) = &field.spread {
+                entry["spread"] = serde_json::json!(spread);
+            }
+            entry
+        })
+        .collect()
+}
+
+fn parents_json(parents: &[Parent]) -> Vec<(String, Option<String>)> {
+    parents.iter().map(|p| (p.edge.clone(), p.type_.clone())).collect()
 }
 
 fn target_span(target: &WriteTarget) -> Span {

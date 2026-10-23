@@ -412,7 +412,18 @@ impl Checker<'_> {
     /// What `extract(…)` / `extractOne(…)` hands back: the shape's records, in
     /// the order the content gave them, or the one it describes (or none).
     pub fn extract_call_type(&self, call: &ExtractCallExpression, scope: ScopeId) -> Option<Ty> {
-        let node = match &call.shape {
+        let node = self.extract_call_graph(call, scope)?;
+        let record = Ty::record(Some(extracted_record_type(&node)));
+        Some(match call.finds {
+            ExtractCallFinds::Each => Ty::list(record),
+            ExtractCallFinds::One => maybe_absent(record),
+        })
+    }
+
+    /// The result graph `extract(content, Shape)` reads its shape as; none
+    /// for a shape worked out at run time.
+    pub fn extract_call_graph(&self, call: &ExtractCallExpression, scope: ScopeId) -> Option<ExtractNodeType> {
+        Some(match &call.shape {
             ExtractCallShape::Named { name, .. } => match self.scopes.resolve(scope, name) {
                 Resolution::Found(id) => {
                     let d = self.declared_extract_shape(id)?;
@@ -425,11 +436,6 @@ impl Checker<'_> {
                 shape_extract_graph(&declaration.name, &declaration.root, &declaration.name, &schema)
             }
             ExtractCallShape::Computed { .. } => return None,
-        };
-        let record = Ty::record(Some(extracted_record_type(&node)));
-        Some(match call.finds {
-            ExtractCallFinds::Each => Ty::list(record),
-            ExtractCallFinds::One => maybe_absent(record),
         })
     }
 }
@@ -469,6 +475,10 @@ const AI_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 impl Checker<'_> {
     /// `checkExtractCall`: the content, the settings, and the shape.
     pub fn check_extract_call(&mut self, call: &ExtractCallExpression, scope: ScopeId) {
+        if self.recording() {
+            let node = self.extract_call_graph(call, scope).map(|graph| crate::story::extract_node_json(&graph));
+            self.record_node(call.span, scope, crate::story::What::Extract { binding: None, node });
+        }
         self.check_extract_call_content(&call.content, scope);
         if let Some(config) = &call.config {
             self.check_extract_call_config(config);

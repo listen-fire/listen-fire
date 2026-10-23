@@ -18,6 +18,7 @@ mod meta;
 pub mod query;
 pub mod scope;
 pub mod slots;
+pub mod story;
 pub mod types;
 mod version;
 
@@ -46,11 +47,17 @@ pub fn check_program(program: &Program, catalog: &CatalogSnapshot, options: Chec
 /// own release's language: a pin is the host's to hold to the rule before
 /// asking (`language_version_diagnostic`).
 pub(crate) fn run_check<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: CheckOptions<'c>) -> (Vec<Diagnostic>, checker::Checker<'c>) {
+    run_check_with(program, catalog, options, false)
+}
+
+/// `run_check`, with the story's recorder on when `story` (crate::story).
+pub(crate) fn run_check_with<'c>(program: &Program, catalog: &'c CatalogSnapshot, options: CheckOptions<'c>, story: bool) -> (Vec<Diagnostic>, checker::Checker<'c>) {
     let resolves_files = catalog.files.is_some();
     let mut link = resolves_files.then(|| families::imports::link_imports(program, catalog));
     let problems = link.as_mut().map(|l| std::mem::take(&mut l.problems)).unwrap_or_default();
     let mut checker = checker::Checker::new(catalog, &options, resolves_files);
     checker.imports = families::imports::ImportState::new(link);
+    checker.story = story.then(Box::default);
     checker.run(&program.statements);
     let found = std::mem::take(&mut checker.diagnostics);
     let spelling: Vec<Diagnostic> = program
