@@ -94,7 +94,7 @@ const DEFAULT_CEILING: u64 = 2000;
 /// credentials they are called under, and the document store files cross by.
 pub struct Externals<'s> {
     pub project: &'s Project,
-    pub running: &'s [RunningExternal],
+    pub running: &'s [std::rc::Rc<RunningExternal>],
     pub credentials: &'s Credentials,
     pub documents: &'s Documents,
     pub tenant: &'s str,

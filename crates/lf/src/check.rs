@@ -4,6 +4,7 @@
 //! Its output: one line per diagnostic, then a count; exit 1 when any is an error.
 
 use std::io::Write;
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 use movement_checker::host::native::NativeZones;
@@ -96,7 +97,7 @@ pub struct Checking {
     pub catalog: Js,
     /// The externals the catalog was read from (their processes stay up
     /// until idle: crate::module_hosts).
-    pub _running: Vec<RunningExternal>,
+    pub _running: Vec<Rc<RunningExternal>>,
 }
 
 pub enum Opened {
@@ -117,7 +118,7 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     // A check starts only what the files import: a third-party graph is
     // read live, so its module runs for the check.
     let externals = needed_externals(scan_externals(project)?, &files, |_| false);
-    let running = start_externals(project, &externals, credentials, LOCAL_TENANT).await?;
+    let running: Vec<Rc<RunningExternal>> = start_externals(project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
         schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials).await?);

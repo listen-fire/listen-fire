@@ -20,7 +20,7 @@ use crate::doors::inbound_of;
 use crate::externals::{RunningExternal, rpc};
 use crate::check::LOCAL_TENANT;
 use crate::json::Js;
-use crate::runs::Session;
+use crate::runs::{FileSet, Session};
 use crate::secrets_slot::SecretsStore;
 use crate::secrets::{Credential, Credentials, credential_for};
 
@@ -58,7 +58,7 @@ impl Registered {
 
 /// The events the external's listens need: each listen's `events`, else
 /// the module's default subscription, else everything it can subscribe to.
-fn wanted_events(session: &Session, running: &RunningExternal) -> Vec<String> {
+fn wanted_events(set: &FileSet, running: &RunningExternal) -> Vec<String> {
     let declared = |key: &str| -> Vec<String> {
         running.listen.get(key).and_then(Js::as_array).into_iter().flatten().filter_map(Js::as_str).map(str::to_string).collect()
     };
@@ -67,7 +67,7 @@ fn wanted_events(session: &Session, running: &RunningExternal) -> Vec<String> {
         if defaults.is_empty() { declared("subscribableEvents") } else { defaults }
     };
     let mut events = BTreeSet::new();
-    for listen in session.listens().iter().filter(|l| l.adapter == running.external.manifest.name) {
+    for listen in set.listens.iter().filter(|l| l.adapter == running.external.manifest.name) {
         match listen.config.get("events").and_then(Js::as_array) {
             Some(named) => events.extend(named.iter().filter_map(Js::as_str).map(str::to_string)),
             None => events.extend(fallback.iter().cloned()),
@@ -81,8 +81,9 @@ fn wanted_events(session: &Session, running: &RunningExternal) -> Vec<String> {
 /// doors still answer whatever is registered.
 pub async fn reconcile(session: &mut Session) -> Vec<String> {
     let mut lines = Vec::new();
-    let names: Vec<String> = session
-        .running()
+    let set = session.file_set();
+    let names: Vec<String> = set
+        .running
         .iter()
         .filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
         .map(|r| r.external.manifest.name.clone())
@@ -107,8 +108,9 @@ pub async fn reconcile(session: &mut Session) -> Vec<String> {
 /// One external: the line to print and whether its credential changed; None
 /// when it has nothing registered and no listen.
 async fn reconcile_one(session: &Session, name: &str) -> Result<Option<(String, bool)>, String> {
-    let running = session.running().iter().find(|r| r.external.manifest.name == name).ok_or("not running")?;
-    let wanted = wanted_events(session, running);
+    let set = session.file_set();
+    let running = set.running.iter().find(|r| r.external.manifest.name == name).ok_or("not running")?;
+    let wanted = wanted_events(&set, running);
     let Some(credential) = credential_for(session.credentials(), name) else {
         return Ok((!wanted.is_empty()).then(|| (format!("no credential to register its webhook under: lf credential add --module {name} <name>"), false)));
     };

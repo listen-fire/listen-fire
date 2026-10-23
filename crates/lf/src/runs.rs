@@ -5,8 +5,9 @@
 //! line each run is reported by (`report`).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
+use std::rc::Rc;
 
 use indexmap::IndexMap;
 
@@ -45,15 +46,48 @@ const LOST_RUN_SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs
 /// Where `lf serve` listens unless told otherwise (`DEFAULT_PORT`).
 pub const DEFAULT_PORT: u16 = 4400;
 
+/// The files a session runs and what is built from them: the catalog they
+/// link against, their listens and the externals they import. An entry point
+/// takes the set once and works within it, so work begun before the set is
+/// replaced finishes on the files it began with.
+pub struct FileSet {
+    pub files: Vec<MovementFile>,
+    pub catalog: Js,
+    pub listens: Vec<Listen>,
+    pub running: Vec<Rc<RunningExternal>>,
+    #[expect(dead_code, reason = "a refresh describes only the externals it starts, keeping these")]
+    schemas: IndexMap<String, Js>,
+    /// Each file's count of check errors against this set's catalog, by name.
+    #[expect(dead_code, reason = "a refreshed set is taken only when no file's count rises")]
+    errors: std::cell::OnceCell<BTreeMap<String, usize>>,
+}
+
+impl FileSet {
+    /// The file a listen is in. Its listens are read from its own files, so
+    /// every listen's file is there.
+    pub fn file(&self, name: &str) -> &MovementFile {
+        self.files.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no file {name} in the set its listen was read from"))
+    }
+
+    /// The listens on a polled source (its manifest declares `poll`), each
+    /// with its source and the subscription its checkpoint is kept under.
+    fn polled_listens(&self) -> impl Iterator<Item = (&Listen, &RunningExternal, String)> {
+        self.listens.iter().filter_map(|listen| {
+            let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
+            let file = self.file(&listen.file);
+            let config = Js::Obj(listen.config.clone()).to_json();
+            Some((listen, &**running, format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name)))
+        })
+    }
+}
+
 pub struct Session {
     pub project: Project,
     pub store: std::rc::Rc<dyn RunHostStore>,
     secrets: Secrets,
-    running: Vec<RunningExternal>,
     pub documents: Documents,
-    files: Vec<MovementFile>,
-    catalog: Js,
-    listens: Vec<Listen>,
+    /// Never borrowed across an await: a refresh may replace it meanwhile.
+    file_set: RefCell<Rc<FileSet>>,
     /// `LF_CLOCK_AHEAD_MS`: what is due is judged this far ahead.
     due_offset_ms: i64,
     /// The principal every event acts as (`localIdentity`).
@@ -136,7 +170,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Before any module starts: what an earlier lf left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
-    let running = start_externals(&project, &externals, credentials, LOCAL_TENANT).await?;
+    let running: Vec<Rc<RunningExternal>> = start_externals(&project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
     let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
     let mut schemas = IndexMap::new();
@@ -153,7 +187,8 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         .clone()
         .or_else(|| crate::serve::host_url().map(str::to_string))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
-    Ok(Session { project, store, secrets, running, documents, files, catalog, listens, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
+    let file_set = RefCell::new(Rc::new(FileSet { files, catalog, listens, running, schemas, errors: Default::default() }));
+    Ok(Session { project, store, secrets, documents, file_set, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -276,9 +311,9 @@ impl RunFacts {
 }
 
 impl Session {
-    /// The externals the session started.
-    pub fn running(&self) -> &[RunningExternal] {
-        &self.running
+    /// The files the session runs now, and what is built from them.
+    pub fn file_set(&self) -> Rc<FileSet> {
+        self.file_set.borrow().clone()
     }
 
     /// The installs: the secrets module's credentials, then the environment's.
@@ -292,13 +327,8 @@ impl Session {
         Ok(())
     }
 
-    /// Every `listen` across the project's movements.
-    pub fn listens(&self) -> &[Listen] {
-        &self.listens
-    }
-
-    pub fn externals(&self) -> Externals<'_> {
-        Externals { project: &self.project, running: &self.running, credentials: self.secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
+    pub fn externals_in<'a>(&'a self, set: &'a FileSet) -> Externals<'a> {
+        Externals { project: &self.project, running: &set.running, credentials: self.secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
     }
 
     fn due_by(&self) -> String {
@@ -311,28 +341,28 @@ impl Session {
     /// it still runs. Each run names `delivery_id`, the delivery the event
     /// came in, when it came in one.
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>) -> Result<Fired, String> {
-        self.fire_to(external, event, dry_run, delivery_id, |_| true).await
+        self.fire_to(&self.file_set(), external, event, dry_run, delivery_id, |_| true).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
-    async fn fire_to(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
-        let event_types = self.event_types_of(external).await?;
+    async fn fire_to(&self, set: &FileSet, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
+        let event_types = self.event_types_of(set, external).await?;
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
         let mut fired = Fired::default();
-        let keyed = self.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
+        let keyed = set.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
         let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
-        let reached: Vec<&Listen> = self.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config) && routed(l) && to(l)).collect();
+        let reached: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config) && routed(l) && to(l)).collect();
         if keyed && reached.is_empty() {
             fired.redelivered.push(unrouted_line(external, event));
         }
         for listen in reached {
             let run_id = uuid::Uuid::new_v4().to_string();
-            let file = &self.files[listen.file];
+            let file = set.file(&listen.file);
             let pipeline = format!("listen:{}:{}", file.name, listen.movement_name);
             let receipt = key.filter(|_| !dry_run);
             let ran_before = |key: &str| format!("{}:{} has run the event {key} before: this delivery runs nothing", file.name, listen.movement_name);
-            if !dry_run && self.is_own_echo(external, event, &pipeline, &now_reads).await {
+            if !dry_run && self.is_own_echo(set, external, event, &pipeline, &now_reads).await {
                 // The echo's receipt is noted all the same, so its redelivery
                 // runs nothing however the record moves meanwhile.
                 if let Some(key) = receipt
@@ -346,7 +376,7 @@ impl Session {
                 continue;
             }
             let trigger = trigger_event_of(&pipeline, external, event, &event_types, &iso(0));
-            match self.run_listen(&run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id).await? {
+            match self.run_listen(set, &run_id, listen, trigger, dry_run, receipt.map(|key| (pipeline.as_str(), key)), delivery_id).await? {
                 Some(outcome) => fired.outcomes.push(outcome),
                 None => fired.redelivered.push(ran_before(key.unwrap_or_default())),
             }
@@ -358,11 +388,12 @@ impl Session {
     /// that fire `movement` (`listen to manual fire <movement>`).
     pub async fn run_manual(&self, movement: &str, text: Option<&str>, dry_run: bool) -> Result<Fired, String> {
         let manual = |l: &Listen| l.adapter == crate::units::MANUAL && l.movement_name == movement;
-        if !self.listens.iter().any(manual) {
+        let set = self.file_set();
+        if !set.listens.iter().any(manual) {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `lf run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(crate::units::MANUAL, &event, dry_run, None, |l| l.movement_name == movement).await
+        self.fire_to(&set, crate::units::MANUAL, &event, dry_run, None, |l| l.movement_name == movement).await
     }
 
     /// The cron unit's due ticks (scale from zero): for each cron listen, the
@@ -371,18 +402,18 @@ impl Session {
     /// occurrence's receipt keeps a second worker from firing it again. A
     /// listen seen for the first time starts from now: nothing before it is
     /// owed.
-    pub async fn fire_due_ticks(&self, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
-        let names = self.running.iter().filter(|r| !r.is_plugin()).map(|r| r.external.manifest.name.as_str());
+    async fn fire_due_ticks(&self, set: &FileSet, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
+        let names = set.running.iter().filter(|r| !r.is_plugin()).map(|r| r.external.manifest.name.as_str());
         if crate::units::unit_named(crate::units::CRON, names).is_none() {
             return Ok(Vec::new());
         }
         let now = iso(self.due_offset_ms);
         let now_ms = crate::units::ms_of(&now).ok_or("the clock reads no instant")?;
         let mut outcomes = Vec::new();
-        for (index, listen) in self.listens.iter().enumerate().filter(|(_, l)| l.adapter == crate::units::CRON) {
+        for (index, listen) in set.listens.iter().enumerate().filter(|(_, l)| l.adapter == crate::units::CRON) {
             let Some(schedule) = listen.config.get("schedule").and_then(Js::as_str) else { continue };
             let timezone = listen.config.get("timezone").and_then(Js::as_str);
-            let file = &self.files[listen.file];
+            let file = set.file(&listen.file);
             let subscription = format!("cron:{}:{}:{schedule}:{}", file.name, listen.movement_name, timezone.unwrap_or("UTC"));
             let after = self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?;
             let Some(after_ms) = after.as_ref().and_then(|c| c.get("after")).and_then(Js::as_str).and_then(crate::units::ms_of) else {
@@ -399,22 +430,11 @@ impl Session {
             let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
             let due = crate::units::iso_of(due_ms);
             let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(crate::units::CRON, &event, false, None, |l| std::ptr::eq(l, &self.listens[index])).await?;
+            let fired = self.fire_to(set, crate::units::CRON, &event, false, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
             self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
             outcomes.extend(fired.outcomes);
         }
         Ok(outcomes)
-    }
-
-    /// The listens on a polled source (its manifest declares `poll`), each
-    /// with its source and the subscription its checkpoint is kept under.
-    fn polled_listens(&self) -> impl Iterator<Item = (&Listen, &RunningExternal, String)> {
-        self.listens.iter().filter_map(|listen| {
-            let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
-            let file = &self.files[listen.file];
-            let config = Js::Obj(listen.config.clone()).to_json();
-            Some((listen, running, format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name)))
-        })
     }
 
     /// Give each polled listen seen for the first time its `poll_listen` work
@@ -422,8 +442,8 @@ impl Session {
     /// releases it for the next interval, so whichever worker claims it
     /// (under the work lease, so never two at once) polls, and a poll due
     /// while no worker ran is one poll on the next drain.
-    fn arm_polls(&self) -> Result<(), String> {
-        for (_, _, subscription) in self.polled_listens() {
+    fn arm_polls(&self, set: &FileSet) -> Result<(), String> {
+        for (_, _, subscription) in set.polled_listens() {
             if self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?.is_some() {
                 continue;
             }
@@ -440,14 +460,14 @@ impl Session {
     /// `idempotencyKey` runs nothing), then the source's checkpoint kept for
     /// the next poll — only once its events are in, so a failed poll is
     /// polled again from where the last good one ended.
-    async fn poll_once(&self, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
+    async fn poll_once(&self, set: &FileSet, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
         let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
         let params = poll_params(listen, state.as_ref());
         let raw = rpc(running, self.secrets.credentials(), LOCAL_TENANT, "poll", params).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
-            let one = self.fire_to(&listen.adapter, event, false, None, |l| std::ptr::eq(l, listen)).await?;
+            let one = self.fire_to(set, &listen.adapter, event, false, None, |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -462,12 +482,12 @@ impl Session {
     /// A `poll_listen` row: poll its listen, and say when it is next due — the
     /// listen's `every` (`pollIntervalSeconds` in the older language), else its source's interval. A row whose
     /// listen is gone is done, and its checkpoint forgotten.
-    async fn poll_row(&self, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
-        let Some((listen, running, _)) = self.polled_listens().find(|(_, _, s)| s == subscription) else {
+    async fn poll_row(&self, set: &FileSet, subscription: &str) -> Result<(Next, Vec<RunOutcome>), String> {
+        let Some((listen, running, _)) = set.polled_listens().find(|(_, _, s)| s == subscription) else {
             self.store.save_inbound_checkpoint(subscription, &Js::Null).map_err(|e| e.to_string())?;
             return Ok((Next::Done, Vec::new()));
         };
-        let fired = self.poll_once(listen, running, subscription).await?;
+        let fired = self.poll_once(set, listen, running, subscription).await?;
         for line in &fired.redelivered {
             eprintln!("lf: {line}");
         }
@@ -484,21 +504,22 @@ impl Session {
     /// `lf run --poll <movement>`: poll now, once, the source of every listen
     /// that fires `movement` on a polled source.
     pub async fn run_poll(&self, movement: &str) -> Result<Fired, String> {
-        let listens: Vec<_> = self.polled_listens().filter(|(l, _, _)| l.movement_name == movement).collect();
+        let set = self.file_set();
+        let listens: Vec<_> = set.polled_listens().filter(|(l, _, _)| l.movement_name == movement).collect();
         if listens.is_empty() {
             return Err(format!("no listen on a polled source fires '{movement}': a source is polled when its manifest declares `poll`"));
         }
         let mut fired = Fired::default();
         for (listen, running, subscription) in listens {
-            let one = self.poll_once(listen, running, &subscription).await?;
+            let one = self.poll_once(&set, listen, running, &subscription).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
         Ok(fired)
     }
 
-    async fn event_types_of(&self, external: &str) -> Result<Vec<Js>, String> {
-        let Some(running) = self.running.iter().find(|r| r.external.manifest.name == external) else { return Ok(Vec::new()) };
+    async fn event_types_of(&self, set: &FileSet, external: &str) -> Result<Vec<Js>, String> {
+        let Some(running) = set.running.iter().find(|r| r.external.manifest.name == external) else { return Ok(Vec::new()) };
         if !running.methods.iter().any(|m| m == "listEventTypes") {
             return Ok(Vec::new());
         }
@@ -511,8 +532,9 @@ impl Session {
     /// listen and the event's key), the receipt and the run are one write:
     /// None, and nothing run, for an event the listen has run before. The
     /// run names `delivery_id`, the delivery its event came in.
-    async fn run_listen(&self, run_id: &str, listen: &Listen, event: Js, dry_run: bool, receipt: Option<(&str, &str)>, delivery_id: Option<&str>) -> Result<Option<RunOutcome>, String> {
-        let file = &self.files[listen.file];
+    #[allow(clippy::too_many_arguments)] // the file set it runs within, then the run's own inputs
+    async fn run_listen(&self, set: &FileSet, run_id: &str, listen: &Listen, event: Js, dry_run: bool, receipt: Option<(&str, &str)>, delivery_id: Option<&str>) -> Result<Option<RunOutcome>, String> {
+        let file = set.file(&listen.file);
         let fired_at = iso(0);
         let facts = RunFacts {
             source: file.source.clone(),
@@ -537,7 +559,7 @@ impl Session {
         let held = with_run_lease(&*self.store, run_id, async |lease: &Lease| -> Result<bool, String> {
             let fence = Some(lease.token.as_str());
             let outcome = self
-                .record_segment(run_id, &facts, Some(&lease.token), &tally, dry_run.then_some(&captured), Entry::Run, None)
+                .record_segment(set, run_id, &facts, Some(&lease.token), &tally, dry_run.then_some(&captured), Entry::Run, None)
                 .await?;
             if let Settled::Continue = after_step(&*self.store, run_id, fence, &outcome)? {
                 clear_if_quiescent(&*self.store, run_id, fence)?;
@@ -560,6 +582,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)] // the TypeScript's input object, spelled out
     async fn record_segment(
         &self,
+        set: &FileSet,
         run_id: &str,
         facts: &RunFacts,
         fence: Option<&str>,
@@ -569,7 +592,7 @@ impl Session {
         completing: Option<&str>,
     ) -> Result<StepOutcome, String> {
         tally.borrow_mut().stepped += 1;
-        let ran = match self.segment(run_id, facts, fence, entry).await {
+        let ran = match self.segment(set, run_id, facts, fence, entry).await {
             Ok(ran) => ran,
             Err(Ended::LeaseLost) => return Ok(StepOutcome::LeaseLost),
             Err(Ended::Failed(message)) => {
@@ -614,8 +637,8 @@ impl Session {
     }
 
     /// One engine segment of the run, entered as `entry`, under `fence`.
-    async fn segment(&self, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> Result<Ran, Ended> {
-        let externals = self.externals();
+    async fn segment(&self, set: &FileSet, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> Result<Ran, Ended> {
+        let externals = self.externals_in(set);
         let segment_id = uuid::Uuid::new_v4().to_string();
         let host = SegmentHost::new(SegmentHostParts {
             segment_id: segment_id.clone(),
@@ -633,7 +656,7 @@ impl Session {
             movement_name: &facts.movement_name,
             event: &facts.event,
             fired_at: &facts.fired_at,
-            catalog: &self.catalog,
+            catalog: &set.catalog,
             dry_run: facts.dry_run,
             entry,
             cost_cap_microdollars: self.project.cost_cap_microdollars,
@@ -663,7 +686,7 @@ impl Session {
     /// guard says (crate::loop_guard). When the guard needs the record as it
     /// stands, it is read once per event and type, into `now_reads`. Any
     /// doubt (no guard, no readRecord, a failed read or answer) fires.
-    async fn is_own_echo(&self, external: &str, event: &Js, writer: &str, now_reads: &RefCell<HashMap<String, Option<Js>>>) -> bool {
+    async fn is_own_echo(&self, set: &FileSet, external: &str, event: &Js, writer: &str, now_reads: &RefCell<HashMap<String, Option<Js>>>) -> bool {
         let (Some(guard), Some(external_id)) = (&self.loop_guard, crate::loop_guard::event_record(event)) else { return false };
         let asked = Asked { adapter: external, external_id, writer, current: None };
         let record_type = match guard.is_echo(&asked) {
@@ -675,7 +698,7 @@ impl Session {
         let record = match read {
             Some(record) => record,
             None => {
-                let record = self.read_record(external, &record_type, external_id).await;
+                let record = self.read_record(set, external, &record_type, external_id).await;
                 now_reads.borrow_mut().insert(record_type.clone(), record.clone());
                 record
             }
@@ -693,8 +716,8 @@ impl Session {
     }
 
     /// The record as it stands now, or None when it can not be read.
-    async fn read_record(&self, external: &str, record_type: &str, external_id: &str) -> Option<Js> {
-        let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == external)?;
+    async fn read_record(&self, set: &FileSet, external: &str, record_type: &str, external_id: &str) -> Option<Js> {
+        let running = set.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == external)?;
         if !running.methods.iter().any(|m| m == "readRecord") {
             return None;
         }
@@ -757,12 +780,12 @@ impl Session {
     /// Step a parked run's leaves through one of the core's drains, under the
     /// run's lease. Ok(None) when the run is not parked or none of its leaves
     /// was stepped; Err(busy) when another process holds it.
-    async fn drive_parked_run(&self, run_id: &str, drain: Drain) -> Result<Parked, String> {
+    async fn drive_parked_run(&self, set: &FileSet, run_id: &str, drain: Drain) -> Result<Parked, String> {
         if self.store.run(run_id).map_err(|e| e.to_string())?.is_none() {
             return Err(format!("no run {run_id}"));
         }
         let held = with_run_lease(&*self.store, run_id, async |lease: &Lease| -> Result<Option<(Tally, bool, Option<Vec<Js>>)>, String> {
-            let Some(stepper) = self.parked_stepper(run_id, lease)? else { return Ok(None) };
+            let Some(stepper) = self.parked_stepper(set, run_id, lease)? else { return Ok(None) };
             let lease_lost = match &drain {
                 Drain::EveryParkedLeaf => {
                     let parked = self.store.leaves(run_id, true, None, None).map_err(|e| e.to_string())?;
@@ -792,13 +815,13 @@ impl Session {
 
     /// A parked run's step for the core's drains, under the lease. None when
     /// the run is not parked.
-    fn parked_stepper<'a>(&'a self, run_id: &str, lease: &'a Lease) -> Result<Option<LeafStepper<'a>>, String> {
+    fn parked_stepper<'a>(&'a self, set: &'a FileSet, run_id: &str, lease: &'a Lease) -> Result<Option<LeafStepper<'a>>, String> {
         let Some(row) = self.store.run(run_id).map_err(|e| e.to_string())? else { return Ok(None) };
         if row.status != "parked" {
             return Ok(None);
         }
         let facts = RunFacts::of_row(run_id, &row.input)?;
-        Ok(Some(LeafStepper { session: self, run_id: run_id.to_string(), facts, lease, tally: RefCell::new(Tally::default()), captured: RefCell::new(Vec::new()) }))
+        Ok(Some(LeafStepper { session: self, set, run_id: run_id.to_string(), facts, lease, tally: RefCell::new(Tally::default()), captured: RefCell::new(Vec::new()) }))
     }
 
     /// `lf resume <run>`: every parked leaf of the run, now.
@@ -807,7 +830,7 @@ impl Session {
         if row.status != "parked" {
             return Err(format!("run {run_id} is {}, not parked", row.status));
         }
-        match self.drive_parked_run(run_id, Drain::EveryParkedLeaf).await? {
+        match self.drive_parked_run(&self.file_set(), run_id, Drain::EveryParkedLeaf).await? {
             Parked::Busy => Err(run_busy(run_id)),
             Parked::NotStepped => Err(format!("run {run_id} is parked but has no parked leaf")),
             Parked::Stepped(outcome) => Ok(*outcome),
@@ -820,10 +843,11 @@ impl Session {
     /// beside an approval never fires early; `lf resume <run>` runs a run's
     /// every leaf out.
     pub async fn resume_all(&self, log: &mut impl Write) -> Result<Vec<RunOutcome>, String> {
-        let (_, mut outcomes) = self.drain_work(WORK_ROWS_PER_DRAIN, log).await?;
+        let set = self.file_set();
+        let (_, mut outcomes) = self.drain_work_in(&set, WORK_ROWS_PER_DRAIN, log).await?;
         for run_id in self.parked_runs()? {
             for drain in [Drain::DueTimers, Drain::Awaits(Vec::new())] {
-                match self.drive_parked_run(&run_id, drain).await? {
+                match self.drive_parked_run(&set, &run_id, drain).await? {
                     Parked::Busy => return Err(run_busy(&run_id)),
                     Parked::NotStepped => {}
                     Parked::Stepped(outcome) => outcomes.push(*outcome),
@@ -843,9 +867,13 @@ impl Session {
     /// elsewhere or they failed). How many rows were claimed, and what the
     /// runs they stepped came to.
     pub async fn drain_work(&self, limit: i64, log: &mut impl Write) -> Result<(usize, Vec<RunOutcome>), String> {
-        let mut outcomes = if self.pool.fires_cron() { self.fire_due_ticks(log).await? } else { Vec::new() };
+        self.drain_work_in(&self.file_set(), limit, log).await
+    }
+
+    async fn drain_work_in(&self, set: &FileSet, limit: i64, log: &mut impl Write) -> Result<(usize, Vec<RunOutcome>), String> {
+        let mut outcomes = if self.pool.fires_cron() { self.fire_due_ticks(set, log).await? } else { Vec::new() };
         if self.pool.takes(POLL_WORK_KIND) {
-            self.arm_polls()?;
+            self.arm_polls(set)?;
         }
         let due_by = self.due_by();
         let claim = ClaimDue { limit, lease_ms: WORK_LEASE_MS, due_by: Some(&due_by), kinds: self.pool.work_kinds() };
@@ -856,7 +884,7 @@ impl Session {
             let failed = if past_cap(&claimed) {
                 give_up_work(&*self.store, &claimed, "its last attempts never finished (each worker stopped, or outran its lease)").await?
             } else {
-                match self.do_work(&claimed.kind, &claimed.payload).await {
+                match self.do_work(set, &claimed.kind, &claimed.payload).await {
                     Ok((next, done)) => {
                         outcomes.extend(done);
                         let again = match next {
@@ -905,7 +933,7 @@ impl Session {
         Ok(())
     }
 
-    async fn do_work(&self, kind: &str, payload: &Js) -> Result<(Next, Vec<RunOutcome>), String> {
+    async fn do_work(&self, set: &FileSet, kind: &str, payload: &Js) -> Result<(Next, Vec<RunOutcome>), String> {
         let text = |k: &str| payload.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("a {kind} row has no {k}"));
         match kind {
             "fire_event" => {
@@ -913,7 +941,7 @@ impl Session {
                 let external = text("external")?;
                 // Rows queued before deliveries were kept name none.
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let fired = self.fire_event(&external, &event, false, delivery_id).await?;
+                let fired = self.fire_to(set, &external, &event, false, delivery_id, |_| true).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
                 }
@@ -930,7 +958,7 @@ impl Session {
                 if self.store.run(&run_id).map_err(|e| e.to_string())?.is_none() {
                     return Ok((Next::Done, Vec::new()));
                 }
-                Ok(match self.drive_parked_run(&run_id, Drain::DueTimers).await? {
+                Ok(match self.drive_parked_run(set, &run_id, Drain::DueTimers).await? {
                     Parked::Busy => (Next::Busy, Vec::new()),
                     Parked::NotStepped => (Next::Done, Vec::new()),
                     Parked::Stepped(outcome) => (Next::Done, vec![*outcome]),
@@ -947,7 +975,7 @@ impl Session {
                 }
                 let (mut busy, mut outcomes) = (false, Vec::new());
                 for (run_id, addresses) in by_run {
-                    match self.drive_parked_run(&run_id, Drain::Awaits(addresses)).await? {
+                    match self.drive_parked_run(set, &run_id, Drain::Awaits(addresses)).await? {
                         Parked::Busy => busy = true,
                         Parked::NotStepped => {}
                         Parked::Stepped(outcome) => outcomes.push(*outcome),
@@ -958,13 +986,13 @@ impl Session {
             "fire_callback" => {
                 let index = payload.get("callIndex").and_then(|n| if let Js::Num(n) = n { n.as_u64() } else { None });
                 let index = index.ok_or("a fire_callback row has no callIndex")? as usize;
-                Ok(match self.run_recorded_body(&text("callbackId")?, index).await? {
+                Ok(match self.run_recorded_body(set, &text("callbackId")?, index).await? {
                     BodyRun::Ran(outcomes) => (Next::Done, outcomes),
                     BodyRun::Busy => (Next::Busy, Vec::new()),
                     BodyRun::Refused => (Next::Done, Vec::new()),
                 })
             }
-            POLL_WORK_KIND => self.poll_row(&text("subscription")?).await,
+            POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
             other => Err(format!("not a work kind: {other}")),
         }
     }
@@ -1018,6 +1046,7 @@ fn run_busy(run_id: &str) -> String {
 /// A parked run's leaves, stepped one segment each (`parkedStepper`).
 struct LeafStepper<'a> {
     session: &'a Session,
+    set: &'a FileSet,
     run_id: String,
     facts: RunFacts,
     lease: &'a Lease,
@@ -1042,7 +1071,7 @@ impl Stepper for LeafStepper<'_> {
         };
         let recorded = self
             .session
-            .record_segment(&self.run_id, &self.facts, Some(&self.lease.token), &self.tally, self.facts.dry_run.then_some(&self.captured), entry, Some(&completing))
+            .record_segment(self.set, &self.run_id, &self.facts, Some(&self.lease.token), &self.tally, self.facts.dry_run.then_some(&self.captured), entry, Some(&completing))
             .await;
         recorded.unwrap_or_else(StepOutcome::Failed)
     }
@@ -1104,7 +1133,7 @@ impl Session {
         let call = record_callback_call(&*self.store, id, values, &backstop, &backstop).map_err(|e| e.to_string())?;
         let CallOutcome::Recorded { callback, call_index } = &call else { return Ok(Called { call, queued: false, outcomes: Vec::new() }) };
         let (callback_id, team_id, call_index) = (callback.id.clone(), callback.team_id.clone(), *call_index);
-        match self.run_recorded_body(&callback_id, call_index).await? {
+        match self.run_recorded_body(&self.file_set(), &callback_id, call_index).await? {
             BodyRun::Ran(outcomes) => Ok(Called { call, queued: false, outcomes }),
             BodyRun::Refused => Ok(Called { call, queued: false, outcomes: Vec::new() }),
             BodyRun::Busy => {
@@ -1127,12 +1156,12 @@ impl Session {
 
     /// Run one recorded call's body under its run's lease, then the awaits
     /// it resolves (`runRecordedBody`).
-    async fn run_recorded_body(&self, callback_id: &str, call_index: usize) -> Result<BodyRun, String> {
+    async fn run_recorded_body(&self, set: &FileSet, callback_id: &str, call_index: usize) -> Result<BodyRun, String> {
         let store_error = |e: crate::store::StoreError| e.to_string();
         let Some(callback) = self.store.callback(callback_id).map_err(store_error)? else { return Ok(BodyRun::Refused) };
         let Some(row) = self.store.run(&callback.run_id).map_err(store_error)? else { return Ok(BodyRun::Refused) };
         let run_id = row.id.clone();
-        let held = with_run_lease(&*self.store, &run_id, async |lease: &Lease| self.callback_body_under(&row, callback_id, call_index, lease).await).await?;
+        let held = with_run_lease(&*self.store, &run_id, async |lease: &Lease| self.callback_body_under(set, &row, callback_id, call_index, lease).await).await?;
         let Some(under) = held else { return Ok(BodyRun::Busy) };
         let (outcome, body, stepped) = match under? {
             UnderLease::NotStarted => return Ok(BodyRun::Busy),
@@ -1157,7 +1186,7 @@ impl Session {
     /// runs (at most once after start, a crash included), and the run's
     /// awaits on the callback are woken last, so what the body wrote is
     /// there for the continuation that reads it.
-    async fn callback_body_under(&self, row: &crate::store::RunRow, callback_id: &str, call_index: usize, lease: &Lease) -> Result<UnderLease, String> {
+    async fn callback_body_under(&self, set: &FileSet, row: &crate::store::RunRow, callback_id: &str, call_index: usize, lease: &Lease) -> Result<UnderLease, String> {
         let store_error = |e: crate::store::StoreError| e.to_string();
         let fence = Some(lease.token.as_str());
         let Some(callback) = self.store.callback(callback_id).map_err(store_error)? else { return Ok(UnderLease::Refused) };
@@ -1176,7 +1205,7 @@ impl Session {
             return Ok(UnderLease::NotStarted);
         }
         let mut body = Tally::default();
-        let outcome = self.callback_body_segment(row, &callback.state, &call.values, call_index, lease, &mut body).await?;
+        let outcome = self.callback_body_segment(set, row, &callback.state, &call.values, call_index, lease, &mut body).await?;
         match &outcome {
             BodyOutcome::LeaseLost => return Ok(UnderLease::Ran { outcome, body, stepped: None }),
             BodyOutcome::Cancelled(reason) => {
@@ -1196,7 +1225,7 @@ impl Session {
         if parks.is_empty() {
             return Ok(UnderLease::Ran { outcome, body, stepped: None });
         }
-        let Some(stepper) = self.parked_stepper(&callback.run_id, lease)? else { return Ok(UnderLease::Ran { outcome, body, stepped: None }) };
+        let Some(stepper) = self.parked_stepper(set, &callback.run_id, lease)? else { return Ok(UnderLease::Ran { outcome, body, stepped: None }) };
         drain_awaits(&*self.store, &callback.run_id, &parks, lease, &stepper).await?;
         let stepped = *stepper.tally.borrow();
         Ok(UnderLease::Ran { outcome, body, stepped: Some((stepped, stepper.rehearsed())) })
@@ -1204,14 +1233,15 @@ impl Session {
 
     /// A callback's body (`callbackBodySegment`): one engine segment entered
     /// at the callback, with the call's values.
-    async fn callback_body_segment(&self, row: &crate::store::RunRow, state: &Js, values: &Obj, call_index: usize, lease: &Lease, tally: &mut Tally) -> Result<BodyOutcome, String> {
+    #[allow(clippy::too_many_arguments)] // the file set it runs within, then the body's own inputs
+    async fn callback_body_segment(&self, set: &FileSet, row: &crate::store::RunRow, state: &Js, values: &Obj, call_index: usize, lease: &Lease, tally: &mut Tally) -> Result<BodyOutcome, String> {
         if !matches!(state.get("version"), Some(Js::Num(_))) {
             return Ok(BodyOutcome::Failed("the callback holds no state to run its body from".into()));
         }
         let facts = RunFacts::of_row(&row.id, &row.input)?;
         tally.stepped += 1;
         let entry = Entry::Fire { state: state.clone(), values: values.clone(), call_index };
-        Ok(match self.segment(&row.id, &facts, Some(&lease.token), entry).await {
+        Ok(match self.segment(set, &row.id, &facts, Some(&lease.token), entry).await {
             Err(Ended::LeaseLost) => BodyOutcome::LeaseLost,
             Err(Ended::Failed(message)) => BodyOutcome::Failed(message),
             Ok(ran) => {
@@ -1359,9 +1389,10 @@ mod tests {
                 assert_eq!(outcomes.len(), 1, "the starter movement's manual listen takes it");
                 session.store.run(&outcomes[0].run_id).unwrap().unwrap().delivery_id
             };
-            let (_, outcomes) = session.do_work("fire_event", &row(Some("d-1"))).await.unwrap();
+            let set = session.file_set();
+            let (_, outcomes) = session.do_work(&set, "fire_event", &row(Some("d-1"))).await.unwrap();
             assert_eq!(delivery_of(&outcomes).as_deref(), Some("d-1"));
-            let (_, outcomes) = session.do_work("fire_event", &row(None)).await.unwrap();
+            let (_, outcomes) = session.do_work(&set, "fire_event", &row(None)).await.unwrap();
             assert_eq!(delivery_of(&outcomes), None, "a row queued before deliveries were kept names none");
         });
         std::fs::remove_dir_all(root).ok();
@@ -1373,7 +1404,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: 0, adapter: "system".into(), config, movement_name: "alerts".into() }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into() }
     }
 
     #[test]

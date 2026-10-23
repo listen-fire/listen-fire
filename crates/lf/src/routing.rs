@@ -19,8 +19,8 @@ use crate::wire::js_of_json;
 /// One `listen` statement, with its instance's construction resolved (`FileListener`).
 #[derive(Debug, Clone)]
 pub struct Listen {
-    /// The file it is in, by its index in the project's files.
-    pub file: usize,
+    /// The file it is in, by name.
+    pub file: String,
     /// The adapter slug (the construction's callee, import alias resolved).
     pub adapter: String,
     /// The listen's config block, statically evaluated.
@@ -79,7 +79,7 @@ fn external_js(value: &Json) -> Js {
 /// parse routes nothing (`check` says why).
 pub fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
     let mut listens = Vec::new();
-    for (index, file) in files.iter().enumerate() {
+    for file in files {
         let Ok(program) = parse(&file.source) else { continue };
         let mut originals: HashMap<String, String> = HashMap::new();
         // Each instance's adapter, by the instance's name. (The construction's
@@ -114,7 +114,7 @@ pub fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
                 config.insert(arg.name.clone(), config_value_of(arg));
             }
             listens.push(Listen {
-                file: index,
+                file: file.name.clone(),
                 adapter,
                 config,
                 movement_name: listen.movement.clone(),
@@ -273,6 +273,25 @@ mod tests {
         let listen = &listens[0];
         assert_eq!((listen.adapter.as_str(), listen.movement_name.as_str()), ("acme_crm", "welcome"));
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
+    }
+
+    #[test]
+    fn a_listen_names_its_file_not_its_place() {
+        let file = |name: &str, movement: &str| MovementFile {
+            name: name.into(),
+            path: PathBuf::from(format!("{name}.mvt")),
+            source: format!("function {movement}() {{\n}}\n\nlisten to manual fire {movement}\n"),
+            version: None,
+        };
+        let pairs = |files: &[MovementFile]| {
+            let mut pairs: Vec<(String, String)> = collect_listens(files).into_iter().map(|l| (l.file, l.movement_name)).collect();
+            pairs.sort();
+            pairs
+        };
+        let (orders, alerts) = (file("orders/sync", "sync"), file("alerts", "alert"));
+        let forward = pairs(&[orders.clone(), alerts.clone()]);
+        assert_eq!(forward, vec![("alerts".to_string(), "alert".to_string()), ("orders/sync".to_string(), "sync".to_string())]);
+        assert_eq!(pairs(&[alerts, orders]), forward);
     }
 
     #[test]

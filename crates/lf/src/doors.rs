@@ -142,7 +142,7 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
     pub fn of_session(session: &'a Session, sink: EventSink<'a>, notify: &'a dyn Fn()) -> LfDoors<'a, SessionReader<'a>> {
         LfDoors {
             store: &*session.store,
-            served: session.running().iter().map(served_of).collect(),
+            served: session.file_set().running.iter().map(|r| served_of(r)).collect(),
             installs: session.credentials(),
             reader: SessionReader { session },
             sink,
@@ -394,7 +394,8 @@ pub struct SessionReader<'a> {
 
 impl SessionReader<'_> {
     async fn call(&self, external: &str, install: &Credential, method: &str, params: serde_json::Value) -> Result<Js, String> {
-        let running = self.session.running().iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
+        let set = self.session.file_set();
+        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
         // Signed by the install, carrying no user credential.
         let lease = running.reach.lease().await?;
         let target = Target { external: &running.external, base_url: &lease.address, declarations: &[], methods: &running.methods, settings: &running.settings, limits: &running.limits };
@@ -404,7 +405,7 @@ impl SessionReader<'_> {
     }
 
     fn lists(&self, external: &str, method: &str) -> bool {
-        self.session.running().iter().any(|r| r.external.manifest.name == external && r.methods.iter().any(|m| m == method))
+        self.session.file_set().running.iter().any(|r| r.external.manifest.name == external && r.methods.iter().any(|m| m == method))
     }
 }
 
@@ -434,7 +435,8 @@ impl Reader for SessionReader<'_> {
     }
 
     async fn check_inbound(&self, external: &str, install: &Credential, request: &Js, secret: Option<&str>, checkpoint: Option<&Js>) -> Result<Js, String> {
-        let running = self.session.running().iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
+        let set = self.session.file_set();
+        let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
         if !running.methods.iter().any(|m| m == "checkInbound") {
             return Err(format!("external \"{external}\" declares that it checks its own inbound but does not list checkInbound"));
         }
@@ -548,7 +550,8 @@ impl Store {
 /// external's only credential when the URL names none. None: the external
 /// takes no webhooks.
 pub fn hook_target(session: &Session, external: &str, install: Option<&str>) -> Option<(String, String)> {
-    let running = session.running().iter().find(|r| r.external.manifest.name == external)?;
+    let set = session.file_set();
+    let running = set.running.iter().find(|r| r.external.manifest.name == external)?;
     let setup = served_of(running).inbound?;
     let subscription = install.map(str::to_string).or_else(|| install_of(session.credentials(), external).map(|c| c.name.clone())).unwrap_or_default();
     Some((setup.declaration.provider_key, subscription))

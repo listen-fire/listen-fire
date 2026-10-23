@@ -321,12 +321,12 @@ fn setting_names(manifest: &Js) -> Vec<String> {
 /// under. `plugin` is a catalog key (module and name: `@lf/web/render`), or a
 /// bare name that only one module serves; a bare name several serve is refused
 /// naming them.
-pub fn plugin_target<'r>(running: &'r [RunningExternal], plugin: &str) -> Result<Option<(&'r RunningExternal, String)>, String> {
+pub fn plugin_target<'r>(running: &'r [std::rc::Rc<RunningExternal>], plugin: &str) -> Result<Option<(&'r RunningExternal, String)>, String> {
     let served: Vec<(&RunningExternal, String, String)> = running
         .iter()
         .flat_map(|r| {
             let package = r.plugin_package().unwrap_or("").to_string();
-            plugin_entries(r.plugins.as_ref()).into_iter().map(move |(name, _)| (r, package.clone(), name))
+            plugin_entries(r.plugins.as_ref()).into_iter().map(move |(name, _)| (&**r, package.clone(), name))
         })
         .collect();
     let spelled = |name: &str| name.replace('-', "_");

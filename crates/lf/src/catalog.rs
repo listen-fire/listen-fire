@@ -3,6 +3,8 @@
 //! manifest answer and schema, the credentials the secrets name, and the
 //! project's files. Written in the TypeScript's key order (crate::json).
 
+use std::rc::Rc;
+
 use indexmap::IndexMap;
 
 use crate::externals::{RunningExternal, plugin_entries};
@@ -19,7 +21,7 @@ fn instance_schema_key(credential_name: Option<&str>) -> String {
     credential_name.unwrap_or("").to_string()
 }
 
-pub fn catalog_of(running: &[RunningExternal], schemas: &IndexMap<String, Js>, credentials: &Credentials, files: &[MovementFile]) -> Js {
+pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Js>, credentials: &Credentials, files: &[MovementFile]) -> Js {
     let mut credential_specs = Obj::new();
     for credential in credentials {
         // An install's secret signs calls; it is no account a `using` may name.
@@ -204,7 +206,7 @@ fn trigger_config_vocabulary(supported_triggers: &[String], listen: &Obj) -> Obj
 /// `pluginsOf`: each plugin external's package, keyed by module and name, each
 /// spec tagged with the package it is imported from and the name a program
 /// spells it.
-fn plugins_of(running: &[RunningExternal]) -> Obj {
+fn plugins_of(running: &[Rc<RunningExternal>]) -> Obj {
     let mut plugins = Obj::new();
     for r in running {
         let Some(package) = r.plugins.as_ref().and_then(|d| d.get("package")).cloned() else { continue };
