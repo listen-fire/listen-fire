@@ -105,7 +105,7 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     assert.doesNotMatch(connected, /webhooks are signed with/);
 
     // 3. Henry signs in, headless: the browser's redirect pasted back.
-    const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--headless'], { answers: ['', ''] });
+    const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio', '--headless'], { answers: ['', ''] });
     const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
     assert.equal(new URL(authorize).searchParams.get('redirect_uri'), 'http://127.0.0.1:8976/callback');
     const consent = await fetch(authorize, { redirect: 'manual' });

@@ -1,6 +1,8 @@
 // `@lf/attio`: Attio as a module. The host hands it the install's OAuth
 // credential (the protocol's access token, optionally a base URL), a fetch and
-// its files; the module builds one client per token, so a workspace's cached
+// its files. A connection holds one of two credentials: an OAuth sign-in
+// (`attio`) or a static access token the user created in Attio
+// (`attio_token`); both reach the client as the same bearer token; the module builds one client per token, so a workspace's cached
 // attributes are shared by every install on that token. Attio's tokens do not
 // expire. `ctx.config.baseUrlOverride` (the dev loop's fake) wins over the
 // credential's own base URL. Deliveries are signed with the secret Attio
@@ -18,7 +20,7 @@ import { attioOAuth2 } from './oauth';
 export function attioClientFrom(ctx: ModuleContext): () => Promise<AttioAPIClient> {
   return async () => {
     const fields = await ctx.credential.fields();
-    const token = fields.access_token;
+    const token = fields.access_token ?? fields.accessToken;
     if (token === undefined || token === '') {
       throw new Error('Attio: the connected credential holds no access token. Connect Attio again.');
     }
@@ -41,6 +43,17 @@ export const attioModule = defineModule({
         // The id of the API token Attio assigns to the access token, captured
         // at connect; a delivery caused by our own write carries it as actor.
         { name: 'apiTokenId', label: 'API token id', secret: false, optional: true },
+      ],
+    },
+    // An access token made in Attio (Workspace settings, Developers), entered
+    // once and never refreshed. The field names are the contract with the
+    // platform's connect page.
+    {
+      name: 'attio_token',
+      kind: 'static',
+      fields: [
+        { name: 'accessToken', label: 'Access token' },
+        { name: 'baseUrl', label: 'Base URL', secret: false, optional: true },
       ],
     },
   ],
