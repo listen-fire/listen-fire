@@ -1250,6 +1250,20 @@ A file ref anywhere else is data to Listen-Fire, whatever keys it carries.
   data: it is never read as a file (the conformance CLI's `files-declared`
   check names such a field).
 
+## Watching for changes (`<slot>.watch`)
+
+A core slot may let lf hear of a change instead of asking on a timer. The movements slot is the first to ask for it ([movements.watch](movements-slot.md#methods)). The shape is the same for any slot that adopts it.
+
+`<slot>.watch` takes `{ cursor?: string, waitMs: number }` and answers `{ cursor: string, events: [...] }` or `{ resync: true }`.
+
+- `waitMs` is a non-negative integer. A module honours at most 30,000 ms (30 s) and may answer sooner, including at once with `events: []`. A missing or negative `waitMs`, or a cursor that is not a string, is `bad_request`.
+- A request with no `cursor` answers the module's current cursor and no events.
+- A `cursor` is a position in the module's own log of events, and only the module reads it. It is not one caller's: every caller that holds a cursor sees every event after it, so two lf processes watching one module each get each event.
+- The events after a cursor come in order. A cursor the module has answered is never answered again with fewer events.
+- A cursor the module never gave, or can no longer serve (it restarted, or its log moved on), is answered `{ resync: true }`. The caller then lists what it needs once and asks for a fresh cursor.
+- A module answers before the request timeout of the platform it runs behind. A platform that cuts a request off sooner than 30 s must have its module answer earlier with `events: []`; lf then asks again at once, since that answer was not immediate.
+- lf asks for 30 s and gives up on the request after 40 s. While a watch is held, a module that lf started is not stopped as idle, and the module's other methods are answered as usual.
+
 ## Limits and timeouts
 
 - **Push doors** (`emit`, `wake`): a JSON body of at most 1 MB, carrying 1 to
@@ -1259,6 +1273,7 @@ A file ref anywhere else is data to Listen-Fire, whatever keys it carries.
   `content-type: application/json`, up to 100 KB. A larger body is answered
   413. A body of any other content type is not read, so its signature cannot
   verify (401).
+- **Watch**: a `<slot>.watch` request is held up to 30 s ([Watching for changes](#watching-for-changes-slotwatch)); lf gives up on it after 40 s.
 - **Calls to your server**: Listen-Fire sets no timeout of its own; Node's
   `fetch` defaults apply (about 5 minutes for the response headers, and 5
   minutes between body chunks). A call is never retried in place, and the
@@ -1420,6 +1435,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `lf serve` and `lf drain` (without `--until-idle`) refuse a module that does not.
 - **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
