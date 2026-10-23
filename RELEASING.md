@@ -2,9 +2,9 @@
 
 This repository releases the language: the crates on crates.io, the `@listen-fire/*` packages on npm, the `lf` binaries and the documentation site. The platform's images are released from `lf-platform`, in the same GitHub organisation, under its own `v*` tags. The two version numbers were aligned once, at 0.12.0, and are independent from then on.
 
-## Full release 0.12.0 (run in this order, from a clean `main`)
+## Full release 0.12.1 (run in this order, from a clean `main`)
 
-Every crate and every `@listen-fire/*` package is at `0.12.0`.
+Every crate and every `@listen-fire/*` package is at `0.12.1`.
 The plain tags move npm `latest`, make the GitHub release a full release and publish the docs as the default.
 
 0. After bumping the version (and before anything below), rebuild the committed
@@ -21,8 +21,8 @@ The plain tags move npm `latest`, make the GitHub release a full release and pub
    ```
 2. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the GitHub release; `docs-v*` publishes the docs under `/docs/0.12/`.
    ```sh
-   git tag v0.12.0 && git tag lf-v0.12.0 && git tag docs-v0.12.0
-   git push origin v0.12.0 lf-v0.12.0 docs-v0.12.0
+   git tag v0.12.1 && git tag lf-v0.12.1 && git tag docs-v0.12.1
+   git push origin v0.12.1 lf-v0.12.1 docs-v0.12.1
    ```
 3. Publish the crates, in dependency order (wait a minute between each for the index).
    ```sh
@@ -34,7 +34,7 @@ The plain tags move npm `latest`, make the GitHub release a full release and pub
    cargo publish -p listen-fire
    cargo publish -p listen-fire-module-kit
    ```
-   `cargo install listen-fire` now picks 0.12.0.
+   `cargo install listen-fire` now picks 0.12.1.
 4. Publish the npm packages; none has `publishConfig.tag`, so each takes `latest`.
    ```sh
    pnpm -r build
@@ -47,7 +47,7 @@ The plain tags move npm `latest`, make the GitHub release a full release and pub
    for f in $(git ls-files '*/package.json' | grep -vE '^(apps/|examples/)'); do
      n=$(node -e "const j=require('./$f'); if(!j.private&&j.name) console.log(j.name)");
      [ -z "$n" ] && continue
-     npm view "$n@0.12.0" version >/dev/null 2>&1 || echo "MISSING $n"
+     npm view "$n@0.12.1" version >/dev/null 2>&1 || echo "MISSING $n"
    done
    pnpm -r --filter <missing-name> publish --access public --no-git-checks
    ```

@@ -18,6 +18,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.1] - 2026-10-23
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks nothing an author or operator wrote.
+
 - New module `@listen-fire/wake-cloud-tasks` fills the wake slot on Google Cloud Tasks: each wake becomes a task, one per coalescing window, that starts a Cloud Run drain job, so the scheduled drain can drop to an hourly safety net. The `lf` image carries it as `wake_cloud_tasks` (off by default); its fake Cloud Tasks ships in the package for hosts' tests. See `modules/wake-cloud-tasks/README.md`.
 - A model vendor that reports its budget spent on a success now closes the key before its 429: `@lf/anthropic` and `lf`'s Anthropic client throttle the API key until the reset named in `anthropic-ratelimit-*-remaining`/`-reset` (a count above zero changes nothing). Modules can use `vendorBudget` and `budgetAfter` from `@listen-fire/engine/public/limiter` (it also reads OpenAI's `x-ratelimit-*` headers). See `docs/contracts/limiter-slot.md`.
 - The adapter protocol's "Build your first adapter" walkthrough drives `lf` and `examples/lf-acme` (`lf check`, `lf catalog`, `lf run --webhook`, `lf serve`) instead of the platform's conformance CLI and dev loop.
@@ -26,6 +30,7 @@ named in [`RELEASING.md`](RELEASING.md).
 - **Embedders:** the movement artifact exports `language_query` (completion, hover, go-to-definition and code actions from the Rust language service) and `story_analysis` (what the check settled, as data: [story-analysis](docs/contracts/story-analysis.md), `Version: 1`), and `@listen-fire/movement-lang` binds them as `completionsAt`, `hoverAt`, `definitionAt`, `quickFixesIn` and `storyAnalysisInRust`. `movement.wasm` grows from 4,065,943 to 4,291,883 B (gzipped 1,271,683 to 1,342,191 B); `movement_parser.wasm` is unchanged. `listen-fire-engine` now depends on `listen-fire-language`, which is published first.
 - **Embedders:** the story analysis's effects now say what the program reads: a walk inside `exists(…)` (a hop `WHERE` included) reads its start and landings, `File.read` reads `files`, and `Date.today(zone)` sets `now`, as the earlier TypeScript rule did. `storyAnalysisVersion` stays 1; only the rows' contents change ([story-analysis](docs/contracts/story-analysis.md)).
 - **Platform:** presentation surfaces (the editor's completion and hover, the story view) can read the Rust service and analysis for every current pin, and drop the TypeScript dialect they keep for it.
+- Publishing (maintainers): the engine crate now depends on `listen-fire-language`, so the crates publish in the order parser, checker, language, engine, module-wire, listen-fire, module-kit (`RELEASING.md`). `@listen-fire/wake-cloud-tasks` is a new package at this release.
 
 ## [0.12.0] - 2026-10-23
 
@@ -2245,7 +2250,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/listen-fire/listen-fire/compare/v0.11.0...v0.12.0
 [0.12.0-rc.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...v0.12.0-rc.10
 [0.12.0-rc.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...v0.12.0-rc.9
