@@ -783,6 +783,7 @@ dependencies = [
  "jiff",
  "jiff-tzdb",
  "listen-fire-checker",
+ "listen-fire-language",
  "listen-fire-parser",
  "serde",
  "serde_json",
@@ -795,6 +796,7 @@ version = "0.12.0"
 dependencies = [
  "listen-fire-checker",
  "listen-fire-parser",
+ "serde",
  "serde_json",
 ]
 

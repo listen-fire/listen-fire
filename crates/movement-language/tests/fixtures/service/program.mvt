@@ -1,0 +1,15 @@
+import { `@lf/slack` as slack } from adapters
+import { greet } from "lib/greet"
+chat = connect slack
+
+function hello(run: <manual-[:Invocation]->>) {
+  greeting = Text.upper(run.`Text`)
+  return greet(greeting)
+}
+
+function scan(c: <chat-[:channel]->>) {
+  ms = c-[m:Messages WHERE m.Score > 1]->
+  return count(ms)
+}
+
+listen to manual fire hello

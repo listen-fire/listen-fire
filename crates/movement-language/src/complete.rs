@@ -33,11 +33,26 @@ pub struct Item {
     /// The text it replaces, when that is not the word before the cursor
     /// (a backticked name's partial text).
     pub replace: Option<Range>,
+    /// Set on an entry that writes nothing: choosing it hands the action to
+    /// the editor, which runs the adapter's connect flow.
+    pub connect_action: Option<ConnectAction>,
+}
+
+/// One of the `connectActions` an adapter's catalog entry declares, on the
+/// instance a completion was asked about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectAction {
+    /// The editor's handler for it.
+    pub kind: String,
+    /// The adapter the instance constructs.
+    pub adapter: String,
+    /// The credential the construction names, when it names one.
+    pub credential: Option<String>,
 }
 
 impl Item {
     fn new(label: impl Into<String>, kind: ItemKind, detail: Option<String>) -> Self {
-        Item { label: label.into(), kind, detail, insert: None, replace: None }
+        Item { label: label.into(), kind, detail, insert: None, replace: None, connect_action: None }
     }
 }
 
@@ -163,22 +178,26 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
         Context::Field { receiver, backtick } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
             let analysis = &analyzed.analysis;
-            if let Some(position) = walk::receiver(analysis, &receiver, at) {
-                return walk::fields(&position)
+            let mut items: Vec<Item> = match walk::receiver(analysis, &receiver, at) {
+                Some(position) => walk::fields(&position)
                     .into_iter()
                     .map(|(name, ty)| {
                         let insert = if backtick { None } else { Some(written_name(&name)).filter(|w| *w != name) };
                         Item { insert, ..Item::new(name, ItemKind::Field, ty) }
                     })
-                    .collect();
-            }
-            // A package's members, bound as `web.fetchUrl`.
-            let prefix = format!("{}.", walk::trailing_name(receiver.trim_end()).unwrap_or_default());
-            analysis
-                .visible(at)
-                .into_iter()
-                .filter_map(|v| v.symbol.name.strip_prefix(&prefix).map(|member| Item::new(member, ItemKind::Function, Some(v.symbol.kind.describe().to_string()))))
-                .collect()
+                    .collect(),
+                None => {
+                    // A package's members, bound as `web.fetchUrl`.
+                    let prefix = format!("{}.", walk::trailing_name(receiver.trim_end()).unwrap_or_default());
+                    analysis
+                        .visible(at)
+                        .into_iter()
+                        .filter_map(|v| v.symbol.name.strip_prefix(&prefix).map(|member| Item::new(member, ItemKind::Function, Some(v.symbol.kind.describe().to_string()))))
+                        .collect()
+                }
+            };
+            items.extend(connect_items(service, analysis, &receiver, at));
+            items
         }
         Context::Edge { receiver, backtick } => {
             let Some(analyzed) = service.analyze(source, Some(pos.line)) else { return Vec::new() };
@@ -296,6 +315,34 @@ fn items_for(service: &Service, source: &str, pos: Pos, context: Context) -> Vec
             items
         }
     }
+}
+
+/// The connect actions of the instance `receiver` names, when it is one
+/// whose adapter declares any.
+fn connect_items(service: &Service, analysis: &movement_checker::query::Analysis, receiver: &str, at: movement_parser::ast::Loc) -> Vec<Item> {
+    let trimmed = receiver.trim_end();
+    let Some(name) = walk::trailing_name(trimmed) else { return Vec::new() };
+    // `x.chat.` is a field of `x`, not the instance `chat`.
+    let head = trimmed.strip_suffix(trailing_word(trimmed)).unwrap_or(trimmed);
+    if head.ends_with('.') || head.ends_with("]->") {
+        return Vec::new();
+    }
+    let Some(id) = analysis.resolve(at, &name) else { return Vec::new() };
+    let symbol = analysis.symbol(id);
+    if symbol.kind != SymbolKind::Instance {
+        return Vec::new();
+    }
+    let built = symbol.instance.as_deref();
+    let Some(adapter) = symbol.adapter.clone().or_else(|| built.and_then(|i| i.adapter.clone())) else { return Vec::new() };
+    let actions = service.catalog.adapter(&adapter).and_then(|spec| spec.connect_actions.clone()).unwrap_or_default();
+    let credential = built.and_then(|i| i.credential.clone());
+    actions
+        .into_iter()
+        .map(|action| Item {
+            connect_action: Some(ConnectAction { kind: action.kind, adapter: adapter.clone(), credential: credential.clone() }),
+            ..Item::new(format!("+ {}", action.label), ItemKind::Module, Some(adapter.clone()))
+        })
+        .collect()
 }
 
 /// What an import's braces may name, by where it imports from.

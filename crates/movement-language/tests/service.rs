@@ -1,35 +1,11 @@
 //! Each query of the language service on small programs, whole and half-typed.
 
-use movement_language::{DiagSeverity, Item, ItemKind, Pos, Range, Service};
+use movement_language::{ConnectAction, DiagSeverity, Item, ItemKind, ModuleNamespace, ModuleRef, Pos, Range, Service};
 use movement_parser::catalog::types::CatalogSnapshot;
 
-const CATALOG: &str = r#"{"adapters":{
-  "cron":{"constructionArgs":[],"canFire":true,"triggerConfig":["schedule","timezone"],"triggerConfigRequired":["schedule"],"triggerConfigFormats":{"schedule":"cron","timezone":"timezone"},"schemas":{"":{"positions":{"Tick":{"properties":{"Fired at":"date"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Tick","eventPositions":[{"position":"Tick"}]}}},
-  "manual":{"constructionArgs":[],"canFire":true,"schemas":{"":{"positions":{"Invocation":{"properties":{"Text":"text","Run by (name)":"text"},"edges":{}}},"collections":{},"writableRoots":{},"eventPosition":"Invocation","eventPositions":[{"position":"Invocation"}]}}},
-  "slack":{"constructionArgs":[],"canFire":true,"description":"The team's chat.","triggerConfig":["channel","pollIntervalSeconds"],"triggerConfigRequired":["channel"],"schemas":{"":{"positions":{
-    "channel":{"properties":{"Name":"text"},"edges":{"Messages":{"target":"message","readable":true,"sequenced":"chronological","description":"What was said in the channel, oldest first."}},"description":"A place the team talks.","fieldDocs":{"Name":"The channel's name, without its #."}},
-    "message":{"properties":{"Body":"text","Score":"number"},"edges":{}}},
-    "collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},
-  "credentials":{"acme_bot":{"adapters":["slack"]},"other_crm":{"adapters":["attio"]}},
-  "plugins":{"@lf/web/fetch_url":{"args":["url"],"package":"@lf/web","name":"fetch_url","argTypes":{"url":"text"},"requiredArgs":["url"],"output":{"kind":"value","type":"text"},"description":"The page at a URL, as text."},"summarise":{"args":["text"]}},
-  "files":{"lib/greet":{"source":"export function greet(name: <text>) {\n  return \"Hi ${name}\"\n}\n"}}}"#;
+const CATALOG: &str = include_str!("fixtures/service/catalog.json");
 
-const PROGRAM: &str = "import { `@lf/slack` as slack } from adapters
-import { greet } from \"lib/greet\"
-chat = connect slack
-
-function hello(run: <manual-[:Invocation]->>) {
-  greeting = Text.upper(run.`Text`)
-  return greet(greeting)
-}
-
-function scan(c: <chat-[:channel]->>) {
-  ms = c-[m:Messages WHERE m.Score > 1]->
-  return count(ms)
-}
-
-listen to manual fire hello
-";
+const PROGRAM: &str = include_str!("fixtures/service/program.mvt");
 
 fn service() -> Service {
     Service::new(CatalogSnapshot::load(CATALOG).unwrap())
@@ -303,4 +279,32 @@ fn completion_on_a_line_that_breaks_the_parse_still_sees_the_scope() {
     let (text, pos) = typed(PROGRAM, "listen to manual fire hello\n", "function late(x: <num");
     let names: Vec<String> = labels(&service().complete(&text, pos)).into_iter().map(String::from).collect();
     assert!(names.contains(&"hello".to_string()), "{names:?}");
+}
+
+#[test]
+fn a_name_from_a_module_namespace_defines_as_that_module() {
+    let service = service();
+    let found = service.definition(PROGRAM, after(PROGRAM, "chat = connect sla", 0)).unwrap();
+    assert_eq!(found.file, None);
+    assert_eq!(found.module, Some(ModuleRef { namespace: ModuleNamespace::Adapters, name: "slack".into() }));
+    let source = format!("import {{ summarise }} from plugins\n{PROGRAM}");
+    let found = service.definition(&source, after(&source, "import { summa", 0)).unwrap();
+    assert_eq!(found.module, Some(ModuleRef { namespace: ModuleNamespace::Plugins, name: "summarise".into() }));
+    // A binding of the file's own is no module's.
+    let found = service.definition(PROGRAM, after(PROGRAM, "return greet(gree", 0)).unwrap();
+    assert_eq!(found.module, None);
+}
+
+#[test]
+fn an_instance_whose_adapter_declares_connect_actions_offers_them_after_a_dot() {
+    let (text, pos) = typed(PROGRAM, "  return count(ms)\n", "  x = chat.");
+    let items = service().complete(&text, pos);
+    let connect: Vec<&Item> = items.iter().filter(|i| i.connect_action.is_some()).collect();
+    assert_eq!(connect.len(), 1, "{items:?}");
+    assert_eq!(connect[0].label, "+ Connect a channel");
+    assert_eq!(connect[0].detail.as_deref(), Some("slack"));
+    assert_eq!(connect[0].connect_action, Some(ConnectAction { kind: "slack-channel-picker".into(), adapter: "slack".into(), credential: None }));
+    // A record's fields are not an instance's: no action.
+    let (text, pos) = typed(PROGRAM, "  greeting = Text.upper(run.`Text`)\n", "  y = run.");
+    assert!(service().complete(&text, pos).iter().all(|i| i.connect_action.is_none()));
 }

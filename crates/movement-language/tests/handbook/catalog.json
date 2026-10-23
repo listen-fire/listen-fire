@@ -1,0 +1,5579 @@
+{
+  "contractVersion": 1,
+  "adapters": {
+    "email": {
+      "canFire": true,
+      "constructionArgs": [],
+      "triggerConfig": [
+        "key"
+      ],
+      "triggerConfigRequired": [
+        "key"
+      ],
+      "triggerConfigRequiredWhy": {
+        "key": "the key is this listener's address, inbox+<key>@example.com; without one nothing can be sent to it and it never fires"
+      },
+      "schemas": {
+        "": {
+          "positions": {
+            "Email": {
+              "properties": {
+                "Message Id": "text",
+                "Subject": "text",
+                "From": "text",
+                "To": "text",
+                "HTML Body": "text",
+                "Plain Body": "text",
+                "Body": "text"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment",
+                  "sequenced": "document"
+                }
+              }
+            },
+            "Attachment": {
+              "properties": {
+                "Name": "text",
+                "Content Type": "text",
+                "Size": "number",
+                "URL": "text",
+                "File": "file"
+              },
+              "edges": {}
+            }
+          },
+          "collections": {},
+          "writableRoots": {},
+          "eventPosition": "Email",
+          "eventPositions": [
+            {
+              "position": "Email"
+            }
+          ]
+        }
+      }
+    },
+    "attio": {
+      "canFire": true,
+      "constructionArgs": [
+        {
+          "name": "credentials",
+          "kind": "credential",
+          "required": true
+        }
+      ],
+      "triggerConfig": [
+        "events"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "record.created",
+          "record.updated",
+          "record.deleted"
+        ]
+      },
+      "schemas": {
+        "acme": {
+          "positions": {
+            "Companies": {
+              "properties": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Domains": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Description": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Categories": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": false
+                },
+                "Team Size": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "People": {
+              "properties": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Email": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Job Title": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "Deals": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true,
+              "deletable": true
+            },
+            "Funds": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Pipeline": {
+              "properties": {
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "VC Deal Flow": {
+              "properties": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Stage": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": true
+                },
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "Task": {
+              "properties": {
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Note": {
+              "properties": {
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Comment": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "File": {
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "edges": {}
+            },
+            "Webhook Event": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              }
+            },
+            "Companies List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.created\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.created"
+            },
+            "People List": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.updated"
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "List": {
+                  "target": "List"
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.deleted"
+            }
+          },
+          "collections": {
+            "Companies": {
+              "target": "Companies",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "People": {
+              "target": "People",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Deals": {
+              "target": "Deals",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Funds": {
+              "target": "Funds",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Pipeline": {
+              "target": "Pipeline"
+            },
+            "VC Deal Flow": {
+              "target": "VC Deal Flow"
+            }
+          },
+          "unions": {
+            "Webhook Event": [
+              "[\"Webhook Event\",[[\"action\",\"record.created\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]"
+            ]
+          },
+          "writableRoots": {
+            "Companies": {
+              "fields": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Domains"
+                ]
+              ],
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            },
+            "People": {
+              "fields": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Email"
+                ]
+              ],
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            }
+          },
+          "createShapes": {
+            "Note": {
+              "fields": {
+                "Title": "text",
+                "Content": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Title",
+                "Content"
+              ]
+            },
+            "Task": {
+              "fields": {
+                "Content": "text",
+                "Deadline": "date"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Content"
+              ]
+            },
+            "File": {
+              "fields": {
+                "File": "file"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "requiredFields": [
+                "File"
+              ]
+            },
+            "VC Deal Flow": {
+              "fields": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "fuzzyResolution": true
+            },
+            "Companies List": {
+              "fields": {
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "ID": "text",
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "requiredFields": [
+                "listName"
+              ],
+              "fieldDocs": {
+                "listName": "Which list to add this companies record to — one of its lists."
+              },
+              "discriminated": {
+                "discriminant": "listName",
+                "variants": {
+                  "VC Deal Flow": {
+                    "fields": {
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      }
+                    },
+                    "resultShape": {
+                      "externalId": "text",
+                      "url": "text",
+                      "Name": "text",
+                      "ID": "text",
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      },
+                      "Added to list at": "date"
+                    },
+                    "requiredFields": [
+                      "listName"
+                    ],
+                    "fieldDocs": {
+                      "listName": "Which list to add this companies record to — one of its lists."
+                    },
+                    "edges": {
+                      "Notes": {
+                        "target": "Note"
+                      },
+                      "Tasks": {
+                        "target": "Task"
+                      },
+                      "Comments": {
+                        "target": "Comment"
+                      },
+                      "Companies": {
+                        "target": "Companies",
+                        "requiresLiveRecord": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true,
+          "eventPosition": "Webhook Event",
+          "eventPositions": [
+            {
+              "position": "Webhook Event"
+            }
+          ]
+        },
+        "acme_main": {
+          "positions": {
+            "Companies": {
+              "properties": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Domains": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Description": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Categories": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": false
+                },
+                "Team Size": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "People": {
+              "properties": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Email": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Job Title": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "Deals": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true,
+              "deletable": true
+            },
+            "Funds": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Pipeline": {
+              "properties": {
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "VC Deal Flow": {
+              "properties": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Stage": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": true
+                },
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "Task": {
+              "properties": {
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Note": {
+              "properties": {
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Comment": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "File": {
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "edges": {}
+            },
+            "Webhook Event": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              }
+            },
+            "Companies List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.created\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.created"
+            },
+            "People List": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.updated"
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "List": {
+                  "target": "List"
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.deleted"
+            }
+          },
+          "collections": {
+            "Companies": {
+              "target": "Companies",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "People": {
+              "target": "People",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Deals": {
+              "target": "Deals",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Funds": {
+              "target": "Funds",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Pipeline": {
+              "target": "Pipeline"
+            },
+            "VC Deal Flow": {
+              "target": "VC Deal Flow"
+            }
+          },
+          "unions": {
+            "Webhook Event": [
+              "[\"Webhook Event\",[[\"action\",\"record.created\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]"
+            ]
+          },
+          "writableRoots": {
+            "Companies": {
+              "fields": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Domains"
+                ]
+              ],
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            },
+            "People": {
+              "fields": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Email"
+                ]
+              ],
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            }
+          },
+          "createShapes": {
+            "Note": {
+              "fields": {
+                "Title": "text",
+                "Content": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Title",
+                "Content"
+              ]
+            },
+            "Task": {
+              "fields": {
+                "Content": "text",
+                "Deadline": "date"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Content"
+              ]
+            },
+            "File": {
+              "fields": {
+                "File": "file"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "requiredFields": [
+                "File"
+              ]
+            },
+            "VC Deal Flow": {
+              "fields": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "fuzzyResolution": true
+            },
+            "Companies List": {
+              "fields": {
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "ID": "text",
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "requiredFields": [
+                "listName"
+              ],
+              "fieldDocs": {
+                "listName": "Which list to add this companies record to — one of its lists."
+              },
+              "discriminated": {
+                "discriminant": "listName",
+                "variants": {
+                  "VC Deal Flow": {
+                    "fields": {
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      }
+                    },
+                    "resultShape": {
+                      "externalId": "text",
+                      "url": "text",
+                      "Name": "text",
+                      "ID": "text",
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      },
+                      "Added to list at": "date"
+                    },
+                    "requiredFields": [
+                      "listName"
+                    ],
+                    "fieldDocs": {
+                      "listName": "Which list to add this companies record to — one of its lists."
+                    },
+                    "edges": {
+                      "Notes": {
+                        "target": "Note"
+                      },
+                      "Tasks": {
+                        "target": "Task"
+                      },
+                      "Comments": {
+                        "target": "Comment"
+                      },
+                      "Companies": {
+                        "target": "Companies",
+                        "requiresLiveRecord": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true,
+          "eventPosition": "Webhook Event",
+          "eventPositions": [
+            {
+              "position": "Webhook Event"
+            }
+          ]
+        },
+        "main_crm": {
+          "positions": {
+            "Companies": {
+              "properties": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Domains": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Description": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Categories": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": false
+                },
+                "Team Size": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "People": {
+              "properties": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "propertyCapabilities": {
+                "Name": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Email": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Job Title": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in",
+                    "contains"
+                  ],
+                  "orderable": true
+                },
+                "Created At": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              },
+              "deletable": true
+            },
+            "Deals": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true,
+              "deletable": true
+            },
+            "Funds": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Pipeline": {
+              "properties": {
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "VC Deal Flow": {
+              "properties": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "propertyCapabilities": {
+                "Stage": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "in"
+                  ],
+                  "orderable": true
+                },
+                "Added to list at": {
+                  "filterOperators": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": true
+                }
+              }
+            },
+            "Task": {
+              "properties": {
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Note": {
+              "properties": {
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "edges": {}
+            },
+            "Comment": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "File": {
+              "properties": {
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "edges": {}
+            },
+            "Webhook Event": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              }
+            },
+            "Companies List": {
+              "properties": {
+                "Name": "text",
+                "ID": "text"
+              },
+              "edges": {},
+              "writeOnlyProperties": [
+                "listName"
+              ]
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.created\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.created"
+            },
+            "People List": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                },
+                "People": {
+                  "target": "People",
+                  "requiresLiveRecord": true
+                },
+                "Deals": {
+                  "target": "Deals",
+                  "requiresLiveRecord": true
+                },
+                "Funds": {
+                  "target": "Funds",
+                  "requiresLiveRecord": true
+                },
+                "List": {
+                  "target": "List"
+                },
+                "Pipeline": {
+                  "target": "Pipeline",
+                  "requiresLiveRecord": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "requiresLiveRecord": true
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.updated"
+            },
+            "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "Workspace": "text",
+                "Object": "text",
+                "Record": "text",
+                "List": "text",
+                "Entry": "text",
+                "Task": "text",
+                "Note": "text",
+                "Comment": "text",
+                "Attribute": "text"
+              },
+              "edges": {
+                "List": {
+                  "target": "List"
+                },
+                "Task": {
+                  "target": "Task"
+                },
+                "Note": {
+                  "target": "Note"
+                },
+                "Comment": {
+                  "target": "Comment"
+                }
+              },
+              "displayName": "Webhook Event where action=record.deleted"
+            }
+          },
+          "collections": {
+            "Companies": {
+              "target": "Companies",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "People": {
+              "target": "People",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Deals": {
+              "target": "Deals",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Funds": {
+              "target": "Funds",
+              "capability": {
+                "filter": "native",
+                "order": "bounded",
+                "supportsLimit": true
+              }
+            },
+            "Pipeline": {
+              "target": "Pipeline"
+            },
+            "VC Deal Flow": {
+              "target": "VC Deal Flow"
+            }
+          },
+          "unions": {
+            "Webhook Event": [
+              "[\"Webhook Event\",[[\"action\",\"record.created\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.updated\"]]]",
+              "[\"Webhook Event\",[[\"action\",\"record.deleted\"]]]"
+            ]
+          },
+          "writableRoots": {
+            "Companies": {
+              "fields": {
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Domains": "text",
+                "Description": "text",
+                "Categories": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "Lead",
+                      "Customer",
+                      "Open",
+                      "Snoozed",
+                      "Reviewed",
+                      "inbound"
+                    ]
+                  }
+                },
+                "Team Size": "number",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Domains"
+                ]
+              ],
+              "edges": {
+                "Team": {
+                  "target": "People",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "VC Deal Flow": {
+                  "target": "VC Deal Flow",
+                  "capability": {
+                    "filter": "native",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "Companies List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            },
+            "People": {
+              "fields": {
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "Email": "text",
+                "Job Title": "text",
+                "Created At": "date"
+              },
+              "nativeUniqueness": [
+                [
+                  "Email"
+                ]
+              ],
+              "edges": {
+                "Company": {
+                  "target": "Companies",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "writable": true
+                },
+                "Notes": {
+                  "target": "Note",
+                  "writable": true
+                },
+                "Tasks": {
+                  "target": "Task",
+                  "writable": true
+                },
+                "Comments": {
+                  "target": "Comment",
+                  "writable": true
+                },
+                "Lists": {
+                  "target": "People List",
+                  "writable": true
+                },
+                "Files": {
+                  "target": "File",
+                  "writable": true
+                }
+              },
+              "requiredFields": [
+                "Name"
+              ],
+              "fuzzyResolution": true
+            }
+          },
+          "createShapes": {
+            "Note": {
+              "fields": {
+                "Title": "text",
+                "Content": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Title": "text",
+                "Content": "text",
+                "Parent Object": "text",
+                "Parent Record ID": "text",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Title",
+                "Content"
+              ]
+            },
+            "Task": {
+              "fields": {
+                "Content": "text",
+                "Deadline": "date"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Content": "text",
+                "Deadline": "date",
+                "Completed": "boolean",
+                "Completed At": "date",
+                "Created At": "date"
+              },
+              "requiredFields": [
+                "Content"
+              ]
+            },
+            "File": {
+              "fields": {
+                "File": "file"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "File Id": "text",
+                "Name": "text",
+                "Content Type": "text",
+                "URL": "text",
+                "File": "file"
+              },
+              "requiredFields": [
+                "File"
+              ]
+            },
+            "VC Deal Flow": {
+              "fields": {
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Stage": {
+                  "kind": "enum",
+                  "options": [
+                    "Sourced",
+                    "Diligence",
+                    "Term Sheet",
+                    "Passed"
+                  ]
+                },
+                "Added to list at": "date"
+              },
+              "edges": {
+                "Notes": {
+                  "target": "Note"
+                },
+                "Tasks": {
+                  "target": "Task"
+                },
+                "Comments": {
+                  "target": "Comment"
+                },
+                "Companies": {
+                  "target": "Companies",
+                  "requiresLiveRecord": true
+                }
+              },
+              "fuzzyResolution": true
+            },
+            "Companies List": {
+              "fields": {
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Name": "text",
+                "ID": "text",
+                "listName": {
+                  "kind": "enum",
+                  "options": [
+                    "VC Deal Flow"
+                  ]
+                }
+              },
+              "requiredFields": [
+                "listName"
+              ],
+              "fieldDocs": {
+                "listName": "Which list to add this companies record to — one of its lists."
+              },
+              "discriminated": {
+                "discriminant": "listName",
+                "variants": {
+                  "VC Deal Flow": {
+                    "fields": {
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      }
+                    },
+                    "resultShape": {
+                      "externalId": "text",
+                      "url": "text",
+                      "Name": "text",
+                      "ID": "text",
+                      "listName": {
+                        "kind": "enum",
+                        "options": [
+                          "VC Deal Flow"
+                        ]
+                      },
+                      "Stage": {
+                        "kind": "enum",
+                        "options": [
+                          "Sourced",
+                          "Diligence",
+                          "Term Sheet",
+                          "Passed"
+                        ]
+                      },
+                      "Added to list at": "date"
+                    },
+                    "requiredFields": [
+                      "listName"
+                    ],
+                    "fieldDocs": {
+                      "listName": "Which list to add this companies record to — one of its lists."
+                    },
+                    "edges": {
+                      "Notes": {
+                        "target": "Note"
+                      },
+                      "Tasks": {
+                        "target": "Task"
+                      },
+                      "Comments": {
+                        "target": "Comment"
+                      },
+                      "Companies": {
+                        "target": "Companies",
+                        "requiresLiveRecord": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true,
+          "eventPosition": "Webhook Event",
+          "eventPositions": [
+            {
+              "position": "Webhook Event"
+            }
+          ]
+        }
+      }
+    },
+    "slack": {
+      "canFire": true,
+      "constructionArgs": [
+        {
+          "name": "credentials",
+          "kind": "credential",
+          "required": true
+        }
+      ],
+      "triggerConfig": [
+        "events",
+        "channels"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "app_mention",
+          "message",
+          "reaction_added"
+        ]
+      },
+      "schemas": {
+        "acme_slack": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date"
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "propertyCapabilities": {
+                "Timestamp": {
+                  "filterOperators": [
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": false
+                }
+              },
+              "writeOnlyProperties": [
+                "File",
+                "Blocks"
+              ]
+            },
+            "File": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Reaction": {
+              "properties": {
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              }
+            },
+            "Channel": {
+              "properties": {
+                "Id": "text",
+                "Name": {
+                  "kind": "enum",
+                  "options": [
+                    "dealflow",
+                    "general",
+                    "portfolio"
+                  ],
+                  "open": {}
+                },
+                "Topic": "text",
+                "Is Private": "boolean"
+              },
+              "edges": {
+                "Messages": {
+                  "target": "Message",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "sequenced": "chronological",
+                  "writable": true
+                },
+                "Members": {
+                  "target": "User"
+                }
+              }
+            },
+            "User": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {
+            "Channels": {
+              "target": "Channel"
+            },
+            "Users": {
+              "target": "User"
+            }
+          },
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Message": "text",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "fieldDocs": {
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). To make a control DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in a button's or select option's `value` — one callback per control, since its body is what that control means. A `datepicker`/`timepicker`/text input has no `value` field and no value until the tap, so carry the id on the element's `action_id` instead — e.g. `action_id: \"${c.id}\"` — and the picked value binds to the callback's first parameter. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example, a section plus an actions block with a button and a static_select:\n[\n  { type: \"section\", text: { type: \"mrkdwn\", text: \"*${deal.Name}*\" } },\n  { type: \"actions\", elements: [\n    { type: \"button\", text: { type: \"plain_text\", text: \"Approve\" },\n      value: \"${approve.id}\" },\n    { type: \"static_select\",\n      placeholder: { type: \"plain_text\", text: \"Tier\" },\n      options: [\n        { text: { type: \"plain_text\", text: \"Seed\" }, value: \"${seed.id}\" },\n      ] },\n  ] },\n]\nA message is either a File or Blocks, never both."
+              },
+              "writeUnion": {
+                "variants": [
+                  {
+                    "name": "a file post",
+                    "fields": [
+                      "Message",
+                      "File"
+                    ]
+                  },
+                  {
+                    "name": "an interactive post",
+                    "fields": [
+                      "Message",
+                      "Blocks"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "eventPosition": "Message",
+          "eventPositions": [
+            {
+              "position": "Message",
+              "on": [
+                "message",
+                "app_mention"
+              ]
+            },
+            {
+              "position": "Reaction",
+              "on": [
+                "reaction_added"
+              ]
+            }
+          ]
+        },
+        "team_chat": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date"
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "propertyCapabilities": {
+                "Timestamp": {
+                  "filterOperators": [
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": false
+                }
+              },
+              "writeOnlyProperties": [
+                "File",
+                "Blocks"
+              ]
+            },
+            "File": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Reaction": {
+              "properties": {
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              }
+            },
+            "Channel": {
+              "properties": {
+                "Id": "text",
+                "Name": {
+                  "kind": "enum",
+                  "options": [
+                    "dealflow",
+                    "general",
+                    "portfolio"
+                  ],
+                  "open": {}
+                },
+                "Topic": "text",
+                "Is Private": "boolean"
+              },
+              "edges": {
+                "Messages": {
+                  "target": "Message",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "sequenced": "chronological",
+                  "writable": true
+                },
+                "Members": {
+                  "target": "User"
+                }
+              }
+            },
+            "User": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {
+            "Channels": {
+              "target": "Channel"
+            },
+            "Users": {
+              "target": "User"
+            }
+          },
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Message": "text",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "fieldDocs": {
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). To make a control DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in a button's or select option's `value` — one callback per control, since its body is what that control means. A `datepicker`/`timepicker`/text input has no `value` field and no value until the tap, so carry the id on the element's `action_id` instead — e.g. `action_id: \"${c.id}\"` — and the picked value binds to the callback's first parameter. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example, a section plus an actions block with a button and a static_select:\n[\n  { type: \"section\", text: { type: \"mrkdwn\", text: \"*${deal.Name}*\" } },\n  { type: \"actions\", elements: [\n    { type: \"button\", text: { type: \"plain_text\", text: \"Approve\" },\n      value: \"${approve.id}\" },\n    { type: \"static_select\",\n      placeholder: { type: \"plain_text\", text: \"Tier\" },\n      options: [\n        { text: { type: \"plain_text\", text: \"Seed\" }, value: \"${seed.id}\" },\n      ] },\n  ] },\n]\nA message is either a File or Blocks, never both."
+              },
+              "writeUnion": {
+                "variants": [
+                  {
+                    "name": "a file post",
+                    "fields": [
+                      "Message",
+                      "File"
+                    ]
+                  },
+                  {
+                    "name": "an interactive post",
+                    "fields": [
+                      "Message",
+                      "Blocks"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "eventPosition": "Message",
+          "eventPositions": [
+            {
+              "position": "Message",
+              "on": [
+                "message",
+                "app_mention"
+              ]
+            },
+            {
+              "position": "Reaction",
+              "on": [
+                "reaction_added"
+              ]
+            }
+          ]
+        },
+        "team_workspace": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date"
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "propertyCapabilities": {
+                "Timestamp": {
+                  "filterOperators": [
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "within"
+                  ],
+                  "orderable": false
+                }
+              },
+              "writeOnlyProperties": [
+                "File",
+                "Blocks"
+              ]
+            },
+            "File": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Reaction": {
+              "properties": {
+                "Emoji": "text",
+                "Channel": "text",
+                "Reactor": "text"
+              },
+              "edges": {
+                "Message": {
+                  "target": "Message"
+                },
+                "Channel": {
+                  "target": "Channel"
+                },
+                "Reactor": {
+                  "target": "User"
+                }
+              }
+            },
+            "Channel": {
+              "properties": {
+                "Id": "text",
+                "Name": {
+                  "kind": "enum",
+                  "options": [
+                    "dealflow",
+                    "general",
+                    "portfolio"
+                  ],
+                  "open": {}
+                },
+                "Topic": "text",
+                "Is Private": "boolean"
+              },
+              "edges": {
+                "Messages": {
+                  "target": "Message",
+                  "capability": {
+                    "filter": "bounded",
+                    "order": "bounded",
+                    "supportsLimit": true
+                  },
+                  "sequenced": "chronological",
+                  "writable": true
+                },
+                "Members": {
+                  "target": "User"
+                }
+              }
+            },
+            "User": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {
+            "Channels": {
+              "target": "Channel"
+            },
+            "Users": {
+              "target": "User"
+            }
+          },
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Message": "text",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message": "text",
+                "User": "text",
+                "Channel": "text",
+                "Timestamp": "date",
+                "File": "file",
+                "Blocks": {
+                  "kind": "list",
+                  "of": "json"
+                }
+              },
+              "edges": {
+                "Files": {
+                  "target": "File",
+                  "sequenced": "document"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "sequenced": "chronological",
+                  "writable": true,
+                  "awaitable": true,
+                  "watchable": true
+                },
+                "Author": {
+                  "target": "User"
+                },
+                "Channel": {
+                  "target": "Channel"
+                }
+              },
+              "fieldDocs": {
+                "Message": "The message body. Required unless a File is attached or Blocks are set (at least one of Message / File / Blocks). Use Slack-native formatting (*bold*, _italic_, <url|text>).",
+                "File": "Optional file to upload with the message — the Message text rides as the file caption, one visible Slack message. Send-side only: a received message's files are on its Files edge — read `msg-[:Files]->.File`. A message is either a File or Blocks, never both.",
+                "Blocks": "Slack Block Kit blocks, exactly as in Slack's docs — assembled verbatim and passed through (no wrapping, no typed shape here; a malformed block surfaces as a loud Slack error at run time). To make a control DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in a button's or select option's `value` — one callback per control, since its body is what that control means. A `datepicker`/`timepicker`/text input has no `value` field and no value until the tap, so carry the id on the element's `action_id` instead — e.g. `action_id: \"${c.id}\"` — and the picked value binds to the callback's first parameter. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example, a section plus an actions block with a button and a static_select:\n[\n  { type: \"section\", text: { type: \"mrkdwn\", text: \"*${deal.Name}*\" } },\n  { type: \"actions\", elements: [\n    { type: \"button\", text: { type: \"plain_text\", text: \"Approve\" },\n      value: \"${approve.id}\" },\n    { type: \"static_select\",\n      placeholder: { type: \"plain_text\", text: \"Tier\" },\n      options: [\n        { text: { type: \"plain_text\", text: \"Seed\" }, value: \"${seed.id}\" },\n      ] },\n  ] },\n]\nA message is either a File or Blocks, never both."
+              },
+              "writeUnion": {
+                "variants": [
+                  {
+                    "name": "a file post",
+                    "fields": [
+                      "Message",
+                      "File"
+                    ]
+                  },
+                  {
+                    "name": "an interactive post",
+                    "fields": [
+                      "Message",
+                      "Blocks"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "eventPosition": "Message",
+          "eventPositions": [
+            {
+              "position": "Message",
+              "on": [
+                "message",
+                "app_mention"
+              ]
+            },
+            {
+              "position": "Reaction",
+              "on": [
+                "reaction_added"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "manual": {
+      "canFire": true,
+      "constructionArgs": [],
+      "schemas": {
+        "": {
+          "positions": {
+            "Invocation": {
+              "properties": {
+                "Fired at": "date",
+                "Run by (email)": "text",
+                "Run by (name)": "text",
+                "Text": "text",
+                "Content": "text"
+              },
+              "edges": {
+                "Files": {
+                  "target": "File"
+                }
+              }
+            },
+            "File": {
+              "properties": {
+                "Name": "text",
+                "Content Type": "text",
+                "Size": "number",
+                "File": "file"
+              },
+              "edges": {}
+            }
+          },
+          "collections": {},
+          "writableRoots": {},
+          "eventPosition": "Invocation",
+          "eventPositions": [
+            {
+              "position": "Invocation"
+            }
+          ]
+        }
+      }
+    },
+    "ask": {
+      "canFire": true,
+      "constructionArgs": [],
+      "schemas": {
+        "": {
+          "positions": {
+            "Check Response": {
+              "properties": {
+                "Answer": "boolean"
+              },
+              "edges": {}
+            },
+            "Provide Response": {
+              "properties": {
+                "Answer": "text"
+              },
+              "edges": {}
+            },
+            "Provide Response<number>": {
+              "properties": {
+                "Answer": "number"
+              },
+              "edges": {}
+            },
+            "Choose Response": {
+              "properties": {
+                "Answer": "text"
+              },
+              "edges": {}
+            },
+            "Choose Response<pursue | hold | pass>": {
+              "properties": {
+                "Answer": {
+                  "kind": "enum",
+                  "options": [
+                    "pursue",
+                    "hold",
+                    "pass"
+                  ]
+                }
+              },
+              "edges": {}
+            },
+            "Select Response": {
+              "properties": {
+                "Answer": {
+                  "kind": "list",
+                  "of": "text"
+                }
+              },
+              "edges": {}
+            },
+            "Select Response<sales | support | finance>": {
+              "properties": {
+                "Answer": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "sales",
+                      "support",
+                      "finance"
+                    ]
+                  }
+                }
+              },
+              "edges": {}
+            },
+            "Review Response": {
+              "properties": {
+                "Answer": "text"
+              },
+              "edges": {}
+            },
+            "Draft Response": {
+              "properties": {
+                "Answer": "json"
+              },
+              "edges": {}
+            },
+            "Correct Response": {
+              "properties": {
+                "Answer": "json"
+              },
+              "edges": {}
+            },
+            "Form Response": {
+              "properties": {
+                "Answer": "json"
+              },
+              "edges": {}
+            },
+            "Form Response<Company | Contact | Budget>": {
+              "properties": {
+                "Answer": "json",
+                "Company": "text",
+                "Contact": "text",
+                "Budget": "text"
+              },
+              "edges": {}
+            }
+          },
+          "collections": {
+            "Check": {
+              "target": "Check"
+            },
+            "Provide": {
+              "target": "Provide"
+            },
+            "Choose": {
+              "target": "Choose"
+            },
+            "Select": {
+              "target": "Select"
+            },
+            "Review": {
+              "target": "Review"
+            },
+            "Correct": {
+              "target": "Correct"
+            },
+            "Draft": {
+              "target": "Draft"
+            },
+            "Form": {
+              "target": "Form"
+            }
+          },
+          "writableRoots": {
+            "Check": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Check Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true
+                }
+              },
+              "requiredFields": [
+                "Prompt"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Provide": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Answer Type": {
+                  "kind": "enum",
+                  "options": [
+                    "text",
+                    "number",
+                    "date",
+                    "boolean"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Answer Type": {
+                  "kind": "enum",
+                  "options": [
+                    "text",
+                    "number",
+                    "date",
+                    "boolean"
+                  ]
+                },
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Provide Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true,
+                  "genericOver": {
+                    "field": "Answer Type",
+                    "onNonLiteral": "error"
+                  }
+                }
+              },
+              "requiredFields": [
+                "Prompt",
+                "Answer Type"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Answer Type": "The type of value to collect: text, number, date, or boolean.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Choose": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Options": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Options": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Choose Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true,
+                  "genericOver": {
+                    "field": "Options"
+                  }
+                }
+              },
+              "requiredFields": [
+                "Prompt",
+                "Options"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Options": "The options to choose from — the answer is exactly one of these.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Select": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Options": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Options": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Select Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true,
+                  "genericOver": {
+                    "field": "Options"
+                  }
+                }
+              },
+              "requiredFields": [
+                "Prompt",
+                "Options"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Options": "The options to choose from — the answer is the subset picked (possibly none).",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Review": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Review Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true
+                }
+              },
+              "requiredFields": [
+                "Prompt"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Draft": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Draft Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true
+                }
+              },
+              "requiredFields": [
+                "Prompt"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Correct": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Rows": {
+                  "kind": "list",
+                  "of": "json"
+                },
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Rows": {
+                  "kind": "list",
+                  "of": "json"
+                },
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Correct Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true
+                }
+              },
+              "requiredFields": [
+                "Prompt",
+                "Rows"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Rows": "The records to review — each a plain object of field name to current value. The answer reports which rows changed and which were dropped.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            },
+            "Form": {
+              "fields": {
+                "Prompt": "text",
+                "Detail": "text",
+                "Fields": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Cancelled": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Prompt": "text",
+                "Detail": "text",
+                "Fields": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Url": "text",
+                "State": {
+                  "kind": "enum",
+                  "options": [
+                    "open",
+                    "answered",
+                    "expired"
+                  ]
+                },
+                "Cancelled": "boolean"
+              },
+              "edges": {
+                "Response": {
+                  "target": "Form Response",
+                  "sequenced": "arrival",
+                  "writable": true,
+                  "awaitable": true,
+                  "resolvesEmpty": true,
+                  "watchable": true,
+                  "genericOver": {
+                    "field": "Fields",
+                    "onNonLiteral": "warn"
+                  }
+                }
+              },
+              "requiredFields": [
+                "Prompt",
+                "Fields"
+              ],
+              "fieldDocs": {
+                "Prompt": "The question to put to the person (immutable once written).",
+                "Detail": "Optional elaboration shown under the question.",
+                "Fields": "The named fields this form collects — the answer supplies a value for every one.",
+                "Cancelled": "Write `{ Cancelled: true }` to expire an open ask. Rejected once the ask has settled (answered or already expired)."
+              }
+            }
+          },
+          "createShapes": {
+            "Check Response": {
+              "fields": {
+                "Answer": "boolean"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "boolean"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "`true` if they approved, `false` if they declined."
+              }
+            },
+            "Provide Response": {
+              "fields": {
+                "Answer": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "text"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The value they supplied, typed by the declared `Answer Type` (text/number/date/boolean)."
+              }
+            },
+            "Provide Response<number>": {
+              "fields": {
+                "Answer": "number"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "number"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The value they supplied, typed by the declared `Answer Type` (text/number/date/boolean)."
+              }
+            },
+            "Choose Response": {
+              "fields": {
+                "Answer": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "text"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The option they chose — one of the offered `Options` (typed as those exact options when the ask lists them literally)."
+              }
+            },
+            "Choose Response<pursue | hold | pass>": {
+              "fields": {
+                "Answer": {
+                  "kind": "enum",
+                  "options": [
+                    "pursue",
+                    "hold",
+                    "pass"
+                  ]
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": {
+                  "kind": "enum",
+                  "options": [
+                    "pursue",
+                    "hold",
+                    "pass"
+                  ]
+                }
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The option they chose — one of the offered `Options` (typed as those exact options when the ask lists them literally)."
+              }
+            },
+            "Select Response": {
+              "fields": {
+                "Answer": {
+                  "kind": "list",
+                  "of": "text"
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": {
+                  "kind": "list",
+                  "of": "text"
+                }
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The subset of `Options` they chose, possibly empty (typed as those exact options when the ask lists them literally)."
+              }
+            },
+            "Select Response<sales | support | finance>": {
+              "fields": {
+                "Answer": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "sales",
+                      "support",
+                      "finance"
+                    ]
+                  }
+                }
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": {
+                  "kind": "list",
+                  "of": {
+                    "kind": "enum",
+                    "options": [
+                      "sales",
+                      "support",
+                      "finance"
+                    ]
+                  }
+                }
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The subset of `Options` they chose, possibly empty (typed as those exact options when the ask lists them literally)."
+              }
+            },
+            "Review Response": {
+              "fields": {
+                "Answer": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "text"
+              },
+              "fieldDocs": {
+                "Answer": "An acknowledgement (`'ack'`) — Review carries no other answer shape."
+              }
+            },
+            "Draft Response": {
+              "fields": {
+                "Answer": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "json"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "The structured artifact they composed."
+              }
+            },
+            "Correct Response": {
+              "fields": {
+                "Answer": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "json"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "`{ rows, dropped }` — the edited rows and the ids of any they dropped, as one structured object."
+              }
+            },
+            "Form Response": {
+              "fields": {
+                "Answer": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "json"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "One object carrying a value for every named `Field` (when the ask lists its `Fields` literally, each is also a property of its own — read `` r.`Budget` `` rather than digging into this object)."
+              }
+            },
+            "Form Response<Company | Contact | Budget>": {
+              "fields": {
+                "Answer": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Answer": "json",
+                "Company": "text",
+                "Contact": "text",
+                "Budget": "text"
+              },
+              "requiredFields": [
+                "Answer"
+              ],
+              "fieldDocs": {
+                "Answer": "One object carrying a value for every named `Field` (when the ask lists its `Fields` literally, each is also a property of its own — read `` r.`Budget` `` rather than digging into this object)."
+              }
+            }
+          },
+          "supportsInPlaceUpdate": true,
+          "genericLandings": {
+            "[\"generic-landing\",\"Provide Response\",[\"number\"]]": "Provide Response<number>",
+            "[\"generic-landing\",\"Choose Response\",[\"pursue\",\"hold\",\"pass\"]]": "Choose Response<pursue | hold | pass>",
+            "[\"generic-landing\",\"Select Response\",[\"sales\",\"support\",\"finance\"]]": "Select Response<sales | support | finance>",
+            "[\"generic-landing\",\"Form Response\",[\"Company\",\"Contact\",\"Budget\"]]": "Form Response<Company | Contact | Budget>"
+          }
+        }
+      }
+    },
+    "cron": {
+      "canFire": true,
+      "constructionArgs": [],
+      "triggerConfig": [
+        "events",
+        "schedule",
+        "timezone"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "tick"
+        ]
+      },
+      "triggerConfigRequired": [
+        "schedule"
+      ],
+      "triggerConfigFormats": {
+        "schedule": "cron",
+        "timezone": "timezone"
+      },
+      "schemas": {
+        "": {
+          "positions": {
+            "Tick": {
+              "properties": {
+                "Fired at": "date",
+                "Schedule": "text"
+              },
+              "edges": {}
+            }
+          },
+          "collections": {},
+          "writableRoots": {},
+          "eventPosition": "Tick",
+          "eventPositions": [
+            {
+              "position": "Tick"
+            }
+          ]
+        }
+      }
+    },
+    "telegram": {
+      "canFire": true,
+      "constructionArgs": [
+        {
+          "name": "credentials",
+          "kind": "credential",
+          "required": true
+        }
+      ],
+      "schemas": {
+        "team_telegram": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message Id": "text",
+                "Text": "text",
+                "Chat Id": "text",
+                "Chat Type": "text",
+                "Sender Id": "text",
+                "Sender Username": "text",
+                "Sender First Name": "text",
+                "Date": "text"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true
+                },
+                "Sender": {
+                  "target": "Linked User"
+                }
+              },
+              "writeOnlyProperties": [
+                "Reply Markup"
+              ]
+            },
+            "Attachment": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Linked User": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {
+            "Linked Users": {
+              "target": "Linked User"
+            }
+          },
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Text": "text",
+                "Reply Markup": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message Id": "text",
+                "Text": "text",
+                "Chat Id": "text",
+                "Chat Type": "text",
+                "Sender Id": "text",
+                "Sender Username": "text",
+                "Sender First Name": "text",
+                "Date": "text",
+                "Reply Markup": "json"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true
+                },
+                "Sender": {
+                  "target": "Linked User"
+                }
+              },
+              "requiredFields": [
+                "Text"
+              ],
+              "fieldDocs": {
+                "Text": "The message text. On an inbound message: the received text (or the media caption; empty for caption-less media). On a send: the message body — required.",
+                "Reply Markup": "Telegram's `reply_markup`, exactly as the Bot API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed keyboard surfaces as a loud Telegram error at run time). Usually an inline keyboard: rows of buttons, each `{ text, url }` (opens a link) or `{ text, callback_data }` (a tap this bot handles, capped by Telegram at 64 BYTES). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `callback_data` — it fits the 64-byte cap comfortably — one callback per button, since its body is what that button means. Telegram captures nothing at tap time, so a callback fired from a keyboard takes no values; anything a person has to fill in needs a `url` button instead. Buttons compose with everything else on the send. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ inline_keyboard: [\n  [ { text: \"Approve\", callback_data: \"${approve.id}\" },\n    { text: \"Decline\", callback_data: \"${decline.id}\" } ],\n] }"
+              }
+            }
+          },
+          "eventPosition": "Message",
+          "eventPositions": [
+            {
+              "position": "Message"
+            }
+          ]
+        }
+      }
+    },
+    "whatsapp": {
+      "canFire": true,
+      "constructionArgs": [],
+      "triggerConfig": [
+        "events"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "message",
+          "reaction",
+          "location"
+        ]
+      },
+      "defaultEvents": [
+        "message"
+      ],
+      "schemas": {
+        "": {
+          "positions": {
+            "Message": {
+              "properties": {
+                "Message Id": "text",
+                "From": "text",
+                "To": "text",
+                "Body": "text",
+                "WhatsApp Id": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true
+                },
+                "Typing": {
+                  "target": "Typing",
+                  "ephemeral": true,
+                  "readable": false,
+                  "writable": true
+                }
+              },
+              "writeOnlyProperties": [
+                "File",
+                "Interactive"
+              ]
+            },
+            "Attachment": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Reaction": {
+              "properties": {
+                "Emoji": "text",
+                "Reacted Message Id": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {}
+            },
+            "Location": {
+              "properties": {
+                "Latitude": "number",
+                "Longitude": "number",
+                "Name": "text",
+                "Address": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "edges": {}
+            },
+            "Typing": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {},
+          "writableRoots": {},
+          "createShapes": {
+            "Message": {
+              "fields": {
+                "Body": "text",
+                "File": "file",
+                "Interactive": "json"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Message Id": "text",
+                "From": "text",
+                "To": "text",
+                "Body": "text",
+                "WhatsApp Id": "text",
+                "Profile Name": "text",
+                "Timestamp": "text",
+                "File": "file",
+                "Interactive": "json"
+              },
+              "edges": {
+                "Attachments": {
+                  "target": "Attachment"
+                },
+                "Replies": {
+                  "target": "Message",
+                  "readable": false,
+                  "writable": true
+                },
+                "Reactions": {
+                  "target": "Reaction",
+                  "readable": false,
+                  "writable": true
+                },
+                "Typing": {
+                  "target": "Typing",
+                  "ephemeral": true,
+                  "readable": false,
+                  "writable": true
+                }
+              },
+              "fieldDocs": {
+                "Body": "The message text. Empty for media-only messages. At least one of Body / File on a send (the Body captions the file).",
+                "File": "A file to send (image / PDF / audio / video, routed by content type). At least one of Body / File. Send-side only: a received message's media is on its Attachments edge — read `msg-[:Attachments]->.File`.",
+                "Interactive": "WhatsApp's `interactive` object, exactly as the Cloud API spells it — passed through verbatim (no wrapping, no typed shape here; a malformed object surfaces as a loud WhatsApp error at run time, not at save time). Sending this REPLACES a plain-text send: the interactive type carries its own `body.text`, so the message's words go inside `interactive.body.text`, never in `Body` on the same send. Usually reply buttons: up to 3, each `{ type: \"reply\", reply: { id, title } }` (`title` capped at 20 characters). To make a tap DO something, mint a callback (`c = callback({ … })`) and put `\"${c.id}\"` in `reply.id` — WhatsApp allows up to 256 characters there, roomy for it — one callback per button, since its body is what that button means. WhatsApp captures nothing at tap time, so a callback fired from a button takes no values; anything a person has to fill in needs a plain-text reply instead. Build strings with \"${…}\" interpolation (never `+`, which is numeric addition). Example:\n{ type: \"button\",\n  body: { text: \"Ship the release?\" },\n  action: { buttons: [\n    { type: \"reply\", reply: { id: \"${approve.id}\", title: \"Approve\" } },\n    { type: \"reply\", reply: { id: \"${reject.id}\", title: \"Reject\" } } ] } }"
+              }
+            },
+            "Reaction": {
+              "fields": {
+                "Emoji": "text"
+              },
+              "resultShape": {
+                "externalId": "text",
+                "url": "text",
+                "Emoji": "text",
+                "Reacted Message Id": "text",
+                "Message Id": "text",
+                "From": "text",
+                "Profile Name": "text",
+                "Timestamp": "text"
+              },
+              "requiredFields": [
+                "Emoji"
+              ],
+              "fieldDocs": {
+                "Emoji": "The reaction emoji. Inbound: empty when the reaction was removed. On a write along msg-[:Reactions]->: the single emoji to react with — required."
+              }
+            }
+          },
+          "eventPosition": "Message",
+          "eventPositions": [
+            {
+              "position": "Message",
+              "on": [
+                "message"
+              ]
+            },
+            {
+              "position": "Reaction",
+              "on": [
+                "reaction"
+              ]
+            },
+            {
+              "position": "Location",
+              "on": [
+                "location"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "system": {
+      "canFire": true,
+      "constructionArgs": [],
+      "triggerConfig": [
+        "events",
+        "pollIntervalSeconds"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "Run Failed",
+          "Validation Issue",
+          "Deprecated Version",
+          "Release Applied"
+        ]
+      },
+      "defaultEvents": [
+        "Run Failed"
+      ],
+      "schemas": {
+        "": {
+          "positions": {
+            "Run Failed": {
+              "properties": {
+                "Automation": "text",
+                "Automation Id": "text",
+                "Run Id": "text",
+                "Version": "text",
+                "Reason": "text",
+                "Url": "text",
+                "At": "date"
+              },
+              "edges": {}
+            },
+            "Validation Issue": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Deprecated Version": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Release Applied": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            }
+          },
+          "collections": {},
+          "writableRoots": {},
+          "eventPosition": "Run Failed",
+          "eventPositions": [
+            {
+              "position": "Run Failed",
+              "on": [
+                "Run Failed"
+              ]
+            },
+            {
+              "position": "Validation Issue",
+              "on": [
+                "Validation Issue"
+              ]
+            },
+            {
+              "position": "Deprecated Version",
+              "on": [
+                "Deprecated Version"
+              ]
+            },
+            {
+              "position": "Release Applied",
+              "on": [
+                "Release Applied"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "kg": {
+      "canFire": true,
+      "constructionArgs": [],
+      "triggerConfig": [
+        "type",
+        "events",
+        "fields"
+      ],
+      "triggerConfigRequired": [
+        "type"
+      ],
+      "triggerConfigOptions": {
+        "events": [
+          "record.created",
+          "record.updated",
+          "record.deleted"
+        ]
+      },
+      "triggerConfigFormats": {
+        "fields": "fields"
+      },
+      "schemas": {
+        "": {
+          "positions": {
+            "Node Type": {
+              "properties": {},
+              "edges": {},
+              "undescribed": true
+            },
+            "Record Change": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Node Type",
+                  "subject": true,
+                  "requiresLiveRecord": true
+                }
+              }
+            },
+            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Company",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.created, type=Company"
+            },
+            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Company",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.updated, type=Company"
+            },
+            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {},
+              "displayName": "Record Change where action=record.deleted, type=Company"
+            },
+            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Person",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.created, type=Person"
+            },
+            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Person",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.updated, type=Person"
+            },
+            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {},
+              "displayName": "Record Change where action=record.deleted, type=Person"
+            },
+            "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Support Ticket",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.created, type=Support Ticket"
+            },
+            "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {
+                "Record": {
+                  "target": "Support Ticket",
+                  "subject": true
+                }
+              },
+              "displayName": "Record Change where action=record.updated, type=Support Ticket"
+            },
+            "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]": {
+              "properties": {
+                "action": {
+                  "kind": "enum",
+                  "options": [
+                    "record.created",
+                    "record.updated",
+                    "record.deleted"
+                  ]
+                },
+                "type": "text",
+                "record": "text"
+              },
+              "edges": {},
+              "displayName": "Record Change where action=record.deleted, type=Support Ticket"
+            },
+            "Company": {
+              "properties": {
+                "Name": "text",
+                "Domains": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Stage": "text"
+              },
+              "edges": {
+                "Team": {
+                  "target": "Person",
+                  "readable": true,
+                  "writable": true
+                },
+                "Support Tickets": {
+                  "target": "Support Ticket",
+                  "readable": true,
+                  "writable": true
+                }
+              }
+            },
+            "Person": {
+              "properties": {
+                "Name": "text",
+                "Email": "text"
+              },
+              "edges": {}
+            },
+            "Support Ticket": {
+              "properties": {
+                "Status": "text",
+                "Priority": "number"
+              },
+              "edges": {
+                "Reporter": {
+                  "target": "Person",
+                  "readable": true,
+                  "writable": true
+                }
+              }
+            }
+          },
+          "unions": {
+            "[\"Record Change\",[[\"type\",\"Company\"]]]": [
+              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Company\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Company\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Company\"]]]"
+            ],
+            "[\"Record Change\",[[\"type\",\"Person\"]]]": [
+              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Person\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Person\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Person\"]]]"
+            ],
+            "[\"Record Change\",[[\"type\",\"Support Ticket\"]]]": [
+              "[\"Record Change\",[[\"action\",\"record.created\"],[\"type\",\"Support Ticket\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.updated\"],[\"type\",\"Support Ticket\"]]]",
+              "[\"Record Change\",[[\"action\",\"record.deleted\"],[\"type\",\"Support Ticket\"]]]"
+            ]
+          },
+          "eventPosition": "Record Change",
+          "eventPositions": [
+            {
+              "position": "Record Change"
+            }
+          ],
+          "eventNarrowingKeys": [
+            "type"
+          ],
+          "eventNarrowingValues": {
+            "[]": {
+              "type": [
+                "Company",
+                "Person",
+                "Support Ticket"
+              ]
+            }
+          },
+          "collections": {
+            "Company": {
+              "target": "Company"
+            },
+            "Person": {
+              "target": "Person"
+            },
+            "Support Ticket": {
+              "target": "Support Ticket"
+            }
+          },
+          "supportsInPlaceUpdate": true,
+          "writableRoots": {
+            "Company": {
+              "fields": {
+                "Name": "text",
+                "Domains": {
+                  "kind": "list",
+                  "of": "text"
+                },
+                "Stage": "text"
+              },
+              "requiredFields": [],
+              "fuzzyResolution": true,
+              "resultShape": {
+                "externalId": "text",
+                "Name": "text"
+              }
+            },
+            "Person": {
+              "fields": {
+                "Name": "text",
+                "Email": "text"
+              },
+              "requiredFields": [],
+              "resultShape": {
+                "externalId": "text",
+                "Name": "text"
+              }
+            },
+            "Support Ticket": {
+              "fields": {
+                "Status": "text",
+                "Priority": "number"
+              },
+              "requiredFields": [],
+              "resultShape": {
+                "externalId": "text",
+                "Status": "text"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "credentials": {
+    "acme": {
+      "adapters": [
+        "attio"
+      ]
+    },
+    "acme_main": {
+      "adapters": [
+        "attio"
+      ]
+    },
+    "main_crm": {
+      "adapters": [
+        "attio"
+      ]
+    },
+    "acme_slack": {
+      "adapters": [
+        "slack"
+      ]
+    },
+    "team_chat": {
+      "adapters": [
+        "slack"
+      ]
+    },
+    "team_workspace": {
+      "adapters": [
+        "slack"
+      ]
+    },
+    "team_telegram": {
+      "adapters": [
+        "telegram"
+      ]
+    }
+  },
+  "plugins": {
+    "@lf/web/vc_url_retrieval": {
+      "args": [
+        "email"
+      ],
+      "priced": true,
+      "argTypes": {
+        "text": "text",
+        "email": "text"
+      },
+      "effects": {
+        "reads": [
+          "the web"
+        ],
+        "ai": true
+      },
+      "fedArgs": [
+        {
+          "name": "text",
+          "required": true
+        }
+      ],
+      "output": {
+        "kind": "records",
+        "fields": {
+          "name": "text",
+          "url": "text",
+          "file": {
+            "kind": "maybeAbsent",
+            "of": "file"
+          },
+          "text": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          }
+        }
+      },
+      "description": "Discover, classify, and fetch URLs in a message. Emits one ephemeral Url record per fetched resource.",
+      "package": "@lf/web",
+      "name": "vc_url_retrieval"
+    },
+    "@lf/web/fetch_url": {
+      "args": [
+        "url",
+        "email",
+        "password"
+      ],
+      "priced": true,
+      "argTypes": {
+        "url": "text",
+        "email": "text",
+        "password": "text"
+      },
+      "requiredArgs": [
+        "url"
+      ],
+      "effects": {
+        "reads": [
+          "the web"
+        ]
+      },
+      "output": {
+        "kind": "value",
+        "type": {
+          "kind": "maybeAbsent",
+          "of": "text"
+        }
+      },
+      "description": "Fetch one named URL and hand back its content. Emits a single ephemeral Url record.",
+      "package": "@lf/web",
+      "name": "fetch_url"
+    },
+    "@lf/web/linkedin_enrichment": {
+      "args": [],
+      "priced": true,
+      "argTypes": {},
+      "effects": {
+        "reads": [
+          "the web"
+        ],
+        "ai": true
+      },
+      "fedByExtraction": true,
+      "output": {
+        "kind": "record",
+        "fields": {
+          "linkedin_url": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "linkedin_profile": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          }
+        }
+      },
+      "description": "For an identified person without a LinkedIn profile, find their profile — searching the web for it unless the person already carries the address — and attach the profile URL and page content.",
+      "package": "@lf/web",
+      "name": "linkedin_enrichment"
+    },
+    "@lf/web/linkedin_research": {
+      "args": [
+        "url"
+      ],
+      "priced": true,
+      "argTypes": {
+        "url": "text"
+      },
+      "requiredArgs": [
+        "url"
+      ],
+      "effects": {
+        "reads": [
+          "the web"
+        ],
+        "ai": true
+      },
+      "output": {
+        "kind": "record",
+        "fields": {
+          "activity_summary": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "activity_confidence": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "current_role": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "current_organisation": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "activity_sources": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          }
+        }
+      },
+      "description": "From a LinkedIn profile address, research what that person is currently doing — their role, their organisation, and their recent public activity — and attach a summary, a confidence, and the sources it rests on.",
+      "package": "@lf/web",
+      "name": "linkedin_research"
+    },
+    "@lf/web/web_research": {
+      "args": [
+        "name",
+        "context",
+        "website",
+        "linkedin"
+      ],
+      "priced": true,
+      "argTypes": {
+        "name": "text",
+        "context": "text",
+        "website": "text",
+        "linkedin": "text"
+      },
+      "requiredArgs": [
+        "name"
+      ],
+      "effects": {
+        "reads": [
+          "the web"
+        ],
+        "ai": true
+      },
+      "output": {
+        "kind": "record",
+        "fields": {
+          "website": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "text": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          }
+        }
+      },
+      "description": "Find a company's own website from its name and what a message said about it, and fetch it. Stands down for a record that already carries a link.",
+      "package": "@lf/web",
+      "name": "web_research"
+    },
+    "@lf/web/research": {
+      "args": [
+        "name",
+        "context",
+        "questions",
+        "website",
+        "linkedin",
+        "url"
+      ],
+      "priced": true,
+      "argTypes": {
+        "name": "text",
+        "context": "text",
+        "questions": "text",
+        "website": "text",
+        "linkedin": "text",
+        "url": "text"
+      },
+      "requiredArgs": [
+        "name"
+      ],
+      "effects": {
+        "reads": [
+          "the web"
+        ],
+        "ai": true
+      },
+      "output": {
+        "kind": "record",
+        "fields": {
+          "summary": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "confidence": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "sources": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "website": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "linkedin": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          },
+          "dossier": {
+            "kind": "maybeAbsent",
+            "of": "text"
+          }
+        }
+      },
+      "description": "Research one person or company from whatever the record carries — a name, a line of context, a website, a profile address — and attach a dossier that answers what you ask, with its sources and a confidence.",
+      "package": "@lf/web",
+      "name": "research"
+    },
+    "@lf/web/render": {
+      "args": [
+        "text",
+        "pageSize",
+        "margin",
+        "name"
+      ],
+      "priced": false,
+      "argTypes": {
+        "text": "text",
+        "pageSize": {
+          "kind": "enum",
+          "options": [
+            "a4",
+            "letter"
+          ]
+        },
+        "margin": "number",
+        "name": "text"
+      },
+      "requiredArgs": [
+        "text"
+      ],
+      "effects": {
+        "reads": [
+          "the web"
+        ]
+      },
+      "output": {
+        "kind": "value",
+        "type": "file"
+      },
+      "description": "Draw text or HTML as a PDF file with the host's browser. HTML keeps its layout; plain text is wrapped in a page. Refuses when the host has no browser.",
+      "package": "@lf/web",
+      "name": "render"
+    },
+    "@lf/pdf/render": {
+      "args": [
+        "text",
+        "pageSize",
+        "margin",
+        "name"
+      ],
+      "priced": false,
+      "argTypes": {
+        "text": "text",
+        "pageSize": {
+          "kind": "enum",
+          "options": [
+            "a4",
+            "letter"
+          ]
+        },
+        "margin": "number",
+        "name": "text"
+      },
+      "requiredArgs": [
+        "text"
+      ],
+      "effects": {},
+      "output": {
+        "kind": "value",
+        "type": "file"
+      },
+      "description": "Draw plain text as a PDF file. A character the default writer has no glyph for prints as \"?\", with a warning on the run.",
+      "package": "@lf/pdf",
+      "name": "render"
+    }
+  }
+}

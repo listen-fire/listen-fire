@@ -181,6 +181,38 @@ pub unsafe extern "C" fn standard_library(out_ptr_ptr: *mut usize, out_len_ptr: 
     unsafe { movement_checker::abi::standard_library_with(out_ptr_ptr, out_len_ptr) }
 }
 
+/// The language service's answer (`movement_language::abi::language_query_with`),
+/// its zone database this engine's environment services.
+///
+/// # Safety
+/// The three input ranges must be readable; the out slots writable.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // the C ABI's arguments
+pub unsafe extern "C" fn language_query(
+    src_ptr: *const u8,
+    src_len: u32,
+    catalog_ptr: *const u8,
+    catalog_len: u32,
+    query_ptr: *const u8,
+    query_len: u32,
+    out_ptr_ptr: *mut usize,
+    out_len_ptr: *mut usize,
+) -> u32 {
+    unsafe {
+        movement_language::abi::language_query_with(
+            &crate::env_services::EnvZones,
+            src_ptr,
+            src_len,
+            catalog_ptr,
+            catalog_len,
+            query_ptr,
+            query_len,
+            out_ptr_ptr,
+            out_len_ptr,
+        )
+    }
+}
+
 /// `language_version()`: the language this artifact reads, which is its
 /// release's version (`movement_parser::version::LANGUAGE_VERSION`), as a
 /// JSON string, and 0.
@@ -228,6 +260,7 @@ fn standing_json(pin: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use movement_parser::abi::{alloc, dealloc, last_panic};
+    use movement_parser::catalog::types::CatalogSnapshot;
     use serde_json::{Value as Json, json};
 
     use super::*;
@@ -351,6 +384,62 @@ mod tests {
         assert_eq!(newer["message"], json!(format!("this automation pins language 99.0.0, newer than this release ({own}); upgrade the engine")));
         assert_eq!(standing_of("0.11.0").1["standing"], json!("olderKey"));
         assert_eq!(standing_of("5").1["standing"], json!("malformed"));
+    }
+
+    #[test]
+    fn the_language_query_answers_the_native_service() {
+        use movement_language::{Pos, Range, Service};
+        let catalog = r#"{"adapters":{"slack":{"constructionArgs":[],"canFire":true,"connectActions":[{"kind":"picker","label":"Connect a channel"}],"schemas":{"":{"positions":{"channel":{"properties":{"Name":"text"},"edges":{}}},"collections":{"Channels":{"target":"channel"}},"writableRoots":{}}}}},"credentials":{},"plugins":{}}"#;
+        let source = "import { `@lf/slack` as slack } from adapters\nchat = connect slack\n\nfunction scan(c: <chat-[:channel]->>) {\n  name = UPPER(c.Name)\n  return name\n}\n";
+        let service = Service::new(CatalogSnapshot::load(catalog).unwrap());
+        let ask = |query: Json| {
+            let (src, src_len) = input(source);
+            let (cat, cat_len) = input(catalog);
+            let query = query.to_string();
+            let (q, q_len) = input(&query);
+            let (mut out_ptr, mut out_len) = (0usize, 0usize);
+            let status = unsafe { language_query(src, src_len, cat, cat_len, q, q_len, &mut out_ptr, &mut out_len) };
+            unsafe { (dealloc(src, src_len), dealloc(cat, cat_len), dealloc(q, q_len)) };
+            (status, output(out_ptr, out_len))
+        };
+        let at = |line: u32, character: u32| Pos { line, character };
+        let pos = |p: Pos| json!({ "line": p.line, "character": p.character });
+
+        let completed = at(4, 17);
+        let (status, answer) = ask(json!({ "kind": "complete", "position": pos(completed) }));
+        assert_eq!(status, OK);
+        let labels: Vec<&str> = answer["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
+        let native: Vec<String> = service.complete(source, completed).into_iter().map(|i| i.label).collect();
+        assert_eq!(labels, native);
+        assert_eq!(answer["items"][0], json!({ "label": "Name", "kind": "field", "detail": "text" }));
+        assert_eq!(answer["word"], json!({ "start": pos(completed), "end": pos(completed) }));
+
+        let hovered = at(4, 4);
+        let (status, answer) = ask(json!({ "kind": "hover", "position": pos(hovered) }));
+        assert_eq!(status, OK);
+        assert_eq!(answer["contents"], json!(service.hover(source, hovered).unwrap().contents));
+
+        let defined = at(1, 17);
+        let (status, answer) = ask(json!({ "kind": "definition", "position": pos(defined) }));
+        assert_eq!(status, OK);
+        let native = service.definition(source, defined).unwrap();
+        assert_eq!(answer["file"], Json::Null);
+        assert_eq!(answer["range"]["start"], pos(native.range.start));
+        assert_eq!(answer["module"], json!({ "namespace": "adapters", "name": "slack" }));
+
+        let range = Range { start: at(4, 9), end: at(4, 9) };
+        let (status, answer) = ask(json!({ "kind": "codeActions", "position": pos(range.start), "range": { "start": pos(range.start), "end": pos(range.end) } }));
+        assert_eq!(status, OK);
+        let titles: Vec<&str> = answer.as_array().unwrap().iter().map(|a| a["title"].as_str().unwrap()).collect();
+        let native: Vec<String> = service.code_actions(source, range).into_iter().map(|a| a.title).collect();
+        assert!(!native.is_empty());
+        assert_eq!(titles, native);
+
+        let (status, answer) = ask(json!({ "kind": "hover", "position": pos(at(2, 0)) }));
+        assert_eq!((status, answer), (OK, Json::Null));
+        let (status, answer) = ask(json!({ "kind": "rename", "position": pos(hovered) }));
+        assert_eq!(status, ERROR);
+        assert!(answer["error"]["message"].as_str().unwrap().starts_with("the language query does not read"), "{answer}");
     }
 
     #[test]

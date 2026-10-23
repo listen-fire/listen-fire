@@ -206,7 +206,8 @@ impl Server {
         match method {
             "textDocument/completion" => {
                 let (Some((_, text)), Some(pos)) = (self.text(params), pos()) else { return Ok(Value::Null) };
-                let items: Vec<Value> = self.service.complete(text, pos).into_iter().map(item_json).collect();
+                // An entry that runs an adapter's connect flow is an editor's, not text a client can write.
+                let items: Vec<Value> = self.service.complete(text, pos).into_iter().filter(|item| item.connect_action.is_none()).map(item_json).collect();
                 Ok(json!({ "isIncomplete": false, "items": items }))
             }
             "textDocument/hover" => {

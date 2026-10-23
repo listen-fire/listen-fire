@@ -2,6 +2,7 @@
 //! a position in a movement file answers, from one check of it by the Rust
 //! checker. Written for the current language; `lf lsp` serves it.
 
+pub mod abi;
 mod builtins;
 mod complete;
 pub mod docs;
@@ -10,11 +11,13 @@ pub mod recover;
 pub mod text;
 mod walk;
 
-pub use complete::{Item, ItemKind};
+pub use complete::{ConnectAction, Item, ItemKind};
 pub use hover::Hover;
 pub use text::{Pos, Range};
 
+use movement_checker::host::ZoneLookup;
 use movement_checker::query::{Analysis, analyze};
+use movement_checker::scope::SymbolKind;
 use movement_checker::{CheckOptions, Severity};
 use movement_parser::ast::Span;
 use movement_parser::catalog::types::CatalogSnapshot;
@@ -27,9 +30,11 @@ use crate::text::{Text, loc_of, range_of};
 pub const PARSE_CODE: &str = "MOV_PARSE";
 
 /// A project's catalog: what every answer is checked against, in this
-/// release's language.
+/// release's language, and the zone database its time zones are checked
+/// against (the host's: native on a machine, the loader's on wasm32).
 pub struct Service {
     pub catalog: CatalogSnapshot,
+    zones: &'static dyn ZoneLookup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +66,34 @@ pub struct Diag {
 pub struct Location {
     pub file: Option<String>,
     pub range: Range,
+    /// The module a name imported from a module namespace names, for an
+    /// editor that navigates to the module rather than the import line.
+    pub module: Option<ModuleRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleRef {
+    pub namespace: ModuleNamespace,
+    /// The name in its namespace (`@lf/slack`), not the local alias.
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleNamespace {
+    Adapters,
+    Credentials,
+    Plugins,
+}
+
+impl ModuleNamespace {
+    /// The namespace as an import spells it (`from adapters`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModuleNamespace::Adapters => "adapters",
+            ModuleNamespace::Credentials => "credentials",
+            ModuleNamespace::Plugins => "plugins",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,12 +111,17 @@ pub(crate) struct Analyzed {
 }
 
 impl Service {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(catalog: CatalogSnapshot) -> Self {
-        Service { catalog }
+        Service::with_zones(catalog, &movement_checker::host::native::NativeZones)
+    }
+
+    pub fn with_zones(catalog: CatalogSnapshot, zones: &'static dyn ZoneLookup) -> Self {
+        Service { catalog, zones }
     }
 
     fn options(&self) -> CheckOptions<'static> {
-        CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones }
+        CheckOptions { upgrading_from: None, zones: self.zones }
     }
 
     /// The file checked, repaired around `cursor` (a 0-based line) when it
@@ -132,7 +170,7 @@ impl Service {
             let open = before.rfind('"')?;
             let rest = &line[open + 1..];
             let path = &rest[..rest.find('"')?];
-            return Some(Location { file: Some(path.to_string()), range: Range { start: Pos { line: 0, character: 0 }, end: Pos { line: 0, character: 0 } } });
+            return Some(Location { file: Some(path.to_string()), range: Range { start: Pos { line: 0, character: 0 }, end: Pos { line: 0, character: 0 } }, module: None });
         }
         let word = hover::word_at(&text, pos)?;
         if word.after_dot {
@@ -141,14 +179,28 @@ impl Service {
         let analyzed = self.analyze(source, Some(pos.line))?;
         let analysis = &analyzed.analysis;
         if let Some(imported) = analysis.imported(&word.name) {
-            return Some(Location { file: Some(imported.file.clone()), range: range_of(&imported.span) });
+            return Some(Location { file: Some(imported.file.clone()), range: range_of(&imported.span), module: None });
         }
         let id = analysis.resolve(loc_of(pos), &word.name)?;
         let symbol = analysis.symbol(id);
         if symbol.unit {
             return None;
         }
-        Some(Location { file: None, range: name_range(&text, &symbol.span, &symbol.name) })
+        let namespace = match symbol.kind {
+            SymbolKind::Adapter => Some(ModuleNamespace::Adapters),
+            SymbolKind::Credential => Some(ModuleNamespace::Credentials),
+            SymbolKind::Plugin => Some(ModuleNamespace::Plugins),
+            SymbolKind::FileImport
+            | SymbolKind::Binding
+            | SymbolKind::Instance
+            | SymbolKind::Param
+            | SymbolKind::Movement
+            | SymbolKind::Shape
+            | SymbolKind::Alias
+            | SymbolKind::Type => None,
+        };
+        let module = namespace.map(|namespace| ModuleRef { namespace, name: symbol.imported_name.clone().unwrap_or_else(|| symbol.name.clone()) });
+        Some(Location { file: None, range: name_range(&text, &symbol.span, &symbol.name), module })
     }
 
     /// The quick fixes for the diagnostics touching `range`: each one's own
