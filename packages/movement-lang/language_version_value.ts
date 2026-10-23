@@ -2,4 +2,4 @@
 // scripts/build-packages.cjs (a source and its build sit at different depths
 // beside package.json, so neither can require it by one relative path).
 // __test__/language_version.unit.test.ts holds it equal to package.json.
-export const PACKAGE_VERSION = '0.12.0-rc.10';
+export const PACKAGE_VERSION = '0.12.0';

@@ -18,6 +18,19 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.0] - 2026-10-23
+
+The first full release of the 0.12 line, and the first of this repository as the language alone: the hosted platform lives in `lf-platform` (same GitHub organisation), which installs the language from the crates and `@listen-fire/*` packages released here. The sections beneath, `0.12.0-rc.2` to `0.12.0-rc.10`, are the detail of how it was reached and stay as history; nothing in them is withdrawn.
+
+**Which pins this release reads.** The language is versioned by its release, and a saved movement is pinned to the release it was written against. 0.12.0 reads a pin with its own compatibility key, `0.12`, which is every `0.12.x` including the `0.12.0-rc.N` pre-releases. It no longer reads the integer pins 1 to 5 (the two-word names are gone), nor any `0.x` pin below the 0.12 key (a `0.11.0` pin among them), and refuses each by name with the remedy: validate it under this release and upgrade (`lf upgrade`, which sets `lf.yaml`'s `engine:` to the running release once nothing is left to fix). A pin newer than this release is refused with "upgrade the engine". Upgrading an automation from integer versions 1 to 4 to 5 remains the platform's, which keeps its own frozen parser for those pins. See `docs/contracts/language-versions.md`.
+
+- The language is the Rust parser, checker and engine, served to JavaScript as two committed wasm artifacts (`@listen-fire/movement-lang`), and `lf`, the command line that builds, checks, runs, serves and operates a project of movements.
+- The language is the one formerly numbered version 5 (Dancing Wren); its rules and rewrites are in the [Dancing Wren migration guide](docs/language/dancing-wren-migration.md). Breaking for embedders of the wasm artifacts: their entries take no version, and report their own release (`language_version`, `language_standing`).
+- Slots: a project's secrets, movements, store, limiter and models are slots a module can fill (`core: { secrets: … }`, `core: { movements: … }`), each with its wire in `docs/contracts/` and conformance cases in `@listen-fire/movement-engine` (`public/module-wire`).
+- Doors keep every delivery as a receipt and a provider's repeated delivery is kept out (`lf deliveries`, `lf deliveries replay`); `lf connect` offers to sign in at once for an OAuth module; a limit of `calls: N, per: <window>` is a rolling window in every limiter; a model call made inside a run names its run.
+- Node is 22.23.4 or a later 22.x patch (`engines.node`: `>=22.23.4 <23`); the dependency audit is clean at high severity and CI runs it.
+- The `@listen-fire/*` packages publish under npm `latest` and the docs of this release publish as the default under `/docs/0.12/`.
+
 ## [0.12.0-rc.10] - 2026-10-22
 
 - `lf connect` on a module declaring OAuth now asks "Sign in now?"; scripted use passes `--yes`.
@@ -2223,7 +2236,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.10...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/listen-fire/listen-fire/compare/v0.11.0...v0.12.0
 [0.12.0-rc.10]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.9...v0.12.0-rc.10
 [0.12.0-rc.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.8...v0.12.0-rc.9
 [0.12.0-rc.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.0-rc.7...v0.12.0-rc.8
