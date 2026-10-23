@@ -102,7 +102,7 @@ pub trait MovementsStore {
     /// display path is under `movements_dir`.
     fn files(&self, movements_dir: &Path) -> Result<Vec<MovementFile>, String> {
         let mut files = Vec::new();
-        for listed in in_order(self.list()?) {
+        for listed in ordered(self.list()?) {
             // Deleted between the two: not there.
             let Some(text) = self.read(&listed.path)? else { continue };
             files.push(movement_file(movements_dir, &listed.path, text));
@@ -111,7 +111,7 @@ pub trait MovementsStore {
     }
 }
 
-fn movement_file(movements_dir: &Path, path: &str, text: Text) -> MovementFile {
+pub(crate) fn movement_file(movements_dir: &Path, path: &str, text: Text) -> MovementFile {
     MovementFile { name: path.strip_suffix(MOVEMENT_EXTENSION).unwrap_or(path).to_string(), path: movements_dir.join(path), source: text.text, version: Some(text.version) }
 }
 
@@ -147,7 +147,7 @@ pub fn order(a: &str, b: &str) -> Ordering {
     }
 }
 
-fn in_order(mut listed: Vec<Listed>) -> Vec<Listed> {
+pub(crate) fn ordered(mut listed: Vec<Listed>) -> Vec<Listed> {
     listed.sort_by(|a, b| order(&a.path, &b.path));
     listed
 }
@@ -304,7 +304,7 @@ impl MovementsStore for ProcessMovements {
     /// the one kept: one open's second scan is one `list`.
     fn files(&self, movements_dir: &Path) -> Result<Vec<MovementFile>, String> {
         let mut files = Vec::new();
-        for listed in in_order(self.list()?) {
+        for listed in ordered(self.list()?) {
             let text = match self.kept(&listed) {
                 Some(text) => text,
                 None => match self.read(&listed.path)? {
@@ -447,7 +447,7 @@ mod tests {
         let listed = module.list().unwrap();
         let paths: Vec<&str> = listed.iter().map(|l| l.path.as_str()).collect();
         assert_eq!(paths, ["B.mvt", "a/b.mvt", "a.mvt"]);
-        assert_eq!(in_order(listed.clone()), listed, "a served list in the same order reads as the walk");
+        assert_eq!(ordered(listed.clone()), listed, "a served list in the same order reads as the walk");
         for (listed, file) in listed.iter().zip(&files) {
             let read = module.read(&listed.path).unwrap().unwrap();
             assert_eq!(listed.version.as_deref(), Some(read.version.as_str()), "a listed version is the one read answers");
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(order("a.mvt", "b.mvt"), Ordering::Less);
         assert_eq!(order("B.mvt", "a.mvt"), Ordering::Less);
         assert_eq!(order("a/b.mvt", "a/b.mvt"), Ordering::Equal);
-        let sorted = in_order(["b.mvt", "a.mvt", "a/b.mvt", "B.mvt"].map(|p| Listed { path: p.into(), version: None }).to_vec());
+        let sorted = ordered(["b.mvt", "a.mvt", "a/b.mvt", "B.mvt"].map(|p| Listed { path: p.into(), version: None }).to_vec());
         assert_eq!(sorted.iter().map(|l| l.path.as_str()).collect::<Vec<_>>(), ["B.mvt", "a/b.mvt", "a.mvt", "b.mvt"]);
     }
 

@@ -4,19 +4,20 @@
 //! the work queue drained, a callback called and a run cancelled, and the
 //! line each run is reported by (`report`).
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 
 use crate::callbacks::{CALLBACK_AWAIT_TYPE, CallFor, CallOutcome, queue_body, record_callback_call, refusal, resolvable_awaits};
 use crate::catalog::catalog_of;
-use crate::check::{LOCAL_TENANT, describe_external};
+use crate::check::{LOCAL_TENANT, check_file, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{RunningExternal, needed_externals, rpc, scan_externals, start_externals};
+use crate::externals::{External, RunningExternal, needed_externals, rpc, scan_externals, start_externals};
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::project::Project;
@@ -30,7 +31,8 @@ use crate::run_host::{
 };
 use crate::secrets::{Credentials, Secrets, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
-use crate::sources::{MovementFile, scan_movements};
+use crate::movements_slot::{Listed, movement_file, ordered};
+use crate::sources::{MOVEMENT_EXTENSION, MovementFile, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunStart, iso};
 use module_wire::results as wire_results;
@@ -55,11 +57,9 @@ pub struct FileSet {
     pub catalog: Js,
     pub listens: Vec<Listen>,
     pub running: Vec<Rc<RunningExternal>>,
-    #[expect(dead_code, reason = "a refresh describes only the externals it starts, keeping these")]
     schemas: IndexMap<String, Js>,
     /// Each file's count of check errors against this set's catalog, by name.
-    #[expect(dead_code, reason = "a refreshed set is taken only when no file's count rises")]
-    errors: std::cell::OnceCell<BTreeMap<String, usize>>,
+    errors: OnceCell<BTreeMap<String, usize>>,
 }
 
 impl FileSet {
@@ -102,7 +102,17 @@ pub struct Session {
     /// The loopGuard slot's module; None unless lf.yaml names one.
     loop_guard: Option<std::sync::Arc<dyn LoopGuard>>,
     /// When this session's drain last looked for lost runs.
-    swept_at: std::cell::Cell<Option<std::time::Instant>>,
+    swept_at: Cell<Option<Instant>>,
+    /// `LF_MOVEMENTS_REFRESH_MS`: how often a long-running loop asks the
+    /// movements module what changed.
+    refresh_every: Duration,
+    /// Set at open, so a one-shot command never refreshes.
+    refreshed_at: Cell<Instant>,
+    /// The files (path, version) of the last set a refresh did not take:
+    /// listed again, they are not checked or warned about again.
+    refused: RefCell<Option<Vec<(String, String)>>>,
+    /// Why the movements module last did not answer a refresh's list.
+    list_failed: RefCell<Option<String>>,
 }
 
 impl Drop for Session {
@@ -137,6 +147,26 @@ fn due_clock_offset() -> Result<i64, String> {
     }
 }
 
+/// How often `lf serve` and `lf drain` ask the movements module what changed,
+/// unless LF_MOVEMENTS_REFRESH_MS says otherwise.
+const DEFAULT_MOVEMENTS_REFRESH_MS: u64 = 5_000;
+
+fn movements_refresh_every() -> Result<Duration, String> {
+    refresh_interval_of(std::env::var("LF_MOVEMENTS_REFRESH_MS").ok().as_deref())
+}
+
+/// `0`: every pass.
+fn refresh_interval_of(raw: Option<&str>) -> Result<Duration, String> {
+    match raw {
+        None | Some("") => Ok(Duration::from_millis(DEFAULT_MOVEMENTS_REFRESH_MS)),
+        Some(raw) => raw
+            .trim()
+            .parse::<u64>()
+            .map(Duration::from_millis)
+            .map_err(|_| format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds")),
+    }
+}
+
 /// `store`: where the run state is kept; an ephemeral session keeps its own
 /// in a temporary state file instead.
 pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) -> Result<Session, String> {
@@ -159,6 +189,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Before the externals start too: a browser module's address is handed to them.
     crate::remote_slots::install(&project, credentials).await?;
     let due_offset_ms = due_clock_offset()?;
+    let refresh_every = movements_refresh_every()?;
     let (store, ephemeral_dir) = if ephemeral {
         let dir = std::env::temp_dir().join(format!("lf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -188,7 +219,34 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         .or_else(|| crate::serve::host_url().map(str::to_string))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
     let file_set = RefCell::new(Rc::new(FileSet { files, catalog, listens, running, schemas, errors: Default::default() }));
-    Ok(Session { project, store, secrets, documents, file_set, due_offset_ms, user, public_url, ephemeral_dir, pool: Default::default(), loop_guard, swept_at: Default::default() })
+    Ok(Session {
+        project,
+        store,
+        secrets,
+        documents,
+        file_set,
+        due_offset_ms,
+        user,
+        public_url,
+        ephemeral_dir,
+        pool: Default::default(),
+        loop_guard,
+        swept_at: Default::default(),
+        refresh_every,
+        refreshed_at: Cell::new(Instant::now()),
+        refused: Default::default(),
+        list_failed: Default::default(),
+    })
+}
+
+/// The checkpoint a cron listen's ticks are kept under; None for any other listen.
+fn cron_subscription(file: &str, listen: &Listen) -> Option<String> {
+    if listen.adapter != crate::units::CRON {
+        return None;
+    }
+    let schedule = listen.config.get("schedule").and_then(Js::as_str)?;
+    let timezone = listen.config.get("timezone").and_then(Js::as_str).unwrap_or("UTC");
+    Some(format!("cron:{file}:{}:{schedule}:{timezone}", listen.movement_name))
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -410,11 +468,11 @@ impl Session {
         let now = iso(self.due_offset_ms);
         let now_ms = crate::units::ms_of(&now).ok_or("the clock reads no instant")?;
         let mut outcomes = Vec::new();
-        for (index, listen) in set.listens.iter().enumerate().filter(|(_, l)| l.adapter == crate::units::CRON) {
+        for (index, listen) in set.listens.iter().enumerate() {
+            let file = set.file(&listen.file);
+            let Some(subscription) = cron_subscription(&file.name, listen) else { continue };
             let Some(schedule) = listen.config.get("schedule").and_then(Js::as_str) else { continue };
             let timezone = listen.config.get("timezone").and_then(Js::as_str);
-            let file = set.file(&listen.file);
-            let subscription = format!("cron:{}:{}:{schedule}:{}", file.name, listen.movement_name, timezone.unwrap_or("UTC"));
             let after = self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?;
             let Some(after_ms) = after.as_ref().and_then(|c| c.get("after")).and_then(Js::as_str).and_then(crate::units::ms_of) else {
                 self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&now) })).map_err(|e| e.to_string())?;
@@ -1077,6 +1135,212 @@ impl Stepper for LeafStepper<'_> {
     }
 }
 
+// ── Refreshing the files ────────────────────────────────────────────────────
+
+/// What a refresh's header says before it lists why nothing was taken.
+const KEPT: &str = "movements: kept the files lf has;";
+
+/// How a listing differs from the files held, each by path, in the listing's
+/// order: the files whose version is the one held, those to read (a new
+/// path, a moved version, or no version said), and the held paths not listed.
+#[derive(Debug, PartialEq)]
+struct Changes {
+    unchanged: Vec<String>,
+    to_read: Vec<String>,
+    removed: Vec<String>,
+}
+
+fn path_of(file: &MovementFile) -> String {
+    format!("{}{MOVEMENT_EXTENSION}", file.name)
+}
+
+fn listing_changes(held: &[MovementFile], listed: &[Listed]) -> Changes {
+    let held_at = |path: &str| held.iter().find(|f| path_of(f) == path);
+    let (unchanged, to_read) = listed.iter().partition::<Vec<&Listed>, _>(|l| l.version.is_some() && held_at(&l.path).is_some_and(|f| f.version == l.version));
+    let removed = held.iter().map(path_of).filter(|path| !listed.iter().any(|l| &l.path == path)).collect();
+    let paths = |listed: Vec<&Listed>| listed.into_iter().map(|l| l.path.clone()).collect();
+    Changes { unchanged: paths(unchanged), to_read: paths(to_read), removed }
+}
+
+/// Each file's error diagnostics against `catalog`, in the files' order.
+fn error_diagnostics(files: &[MovementFile], catalog: &Js) -> Result<Vec<Vec<crate::check::FileDiagnostic>>, String> {
+    use movement_parser::catalog::types::CatalogSnapshot;
+    let catalog = CatalogSnapshot::load(&movement_parser::util::form::read_json_text(&catalog.to_json())).map_err(|e| format!("the catalog does not load: {e}"))?;
+    files.iter().map(|file| Ok(check_file(file, &catalog)?.into_iter().filter(|d| d.severity == "error").collect())).collect()
+}
+
+/// Each file's count of check errors against the set's own catalog, by name.
+fn file_errors(set: &FileSet) -> Result<BTreeMap<String, usize>, String> {
+    let diagnostics = error_diagnostics(&set.files, &set.catalog)?;
+    Ok(set.files.iter().zip(diagnostics).map(|(file, errors)| (file.name.clone(), errors.len())).collect())
+}
+
+impl Session {
+    /// A long-running loop's refresh (`lf serve`, `lf drain`): at most once
+    /// per LF_MOVEMENTS_REFRESH_MS, the movements module is asked what
+    /// changed, and a changed set that checks replaces the one running.
+    pub async fn refresh_movements(&self, log: &mut impl Write) -> Result<(), String> {
+        if self.refreshed_at.get().elapsed() < self.refresh_every {
+            return Ok(());
+        }
+        self.refreshed_at.set(Instant::now());
+        self.refresh_movements_now(log).await
+    }
+
+    /// One `list`, and a `read` only for a file whose listed version moved.
+    /// A changed set is taken whole or not at all: imports link across
+    /// files, so a partly taken set may be one that never existed together.
+    /// One that does not check (a file has more errors than it had) keeps
+    /// the running set, said once; work begun before a swap finishes on the
+    /// files it began with.
+    pub(crate) async fn refresh_movements_now(&self, log: &mut impl Write) -> Result<(), String> {
+        let env: Vec<(String, String)> = std::env::vars().collect();
+        let listing = crate::movements_slot::of_project(&self.project, &env).and_then(|store| Ok((ordered(store.list()?), store)));
+        let (listed, store) = match listing {
+            Ok(answer) => {
+                self.list_failed.replace(None);
+                answer
+            }
+            Err(message) => {
+                if self.list_failed.borrow().as_deref() != Some(message.as_str()) {
+                    let _ = writeln!(log, "{KEPT} the movements module did not answer: {message}");
+                }
+                self.list_failed.replace(Some(message));
+                return Ok(());
+            }
+        };
+        let set = self.file_set();
+        let changes = listing_changes(&set.files, &listed);
+        if changes.to_read.is_empty() && changes.removed.is_empty() {
+            self.refused.replace(None);
+            return Ok(());
+        }
+        let listed_pairs: Option<Vec<(String, String)>> = listed.iter().map(|l| Some((l.path.clone(), l.version.clone()?))).collect();
+        if listed_pairs.is_some() && *self.refused.borrow() == listed_pairs {
+            return Ok(());
+        }
+
+        let mut read = HashMap::new();
+        for path in &changes.to_read {
+            read.insert(path.clone(), store.read(path)?);
+        }
+        let held = |path: &str| set.files.iter().find(|f| path_of(f) == path);
+        let (mut files, mut changed, mut pairs) = (Vec::new(), Vec::new(), Vec::new());
+        for listed in &listed {
+            let file = match read.remove(&listed.path) {
+                None => held(&listed.path).expect("an unchanged file is held").clone(),
+                // Gone between the list and the read.
+                Some(None) => continue,
+                Some(Some(text)) => match held(&listed.path) {
+                    Some(kept) if kept.source == text.text => kept.clone(),
+                    kept => {
+                        changed.push(format!("movements: {} {}", listed.path, if kept.is_some() { "changed" } else { "added" }));
+                        movement_file(&self.project.movements_dir, &listed.path, text)
+                    }
+                },
+            };
+            pairs.push((listed.path.clone(), listed.version.clone().or_else(|| file.version.clone()).unwrap_or_default()));
+            files.push(file);
+        }
+        for gone in set.files.iter().filter(|f| !files.iter().any(|kept| kept.name == f.name)) {
+            changed.push(format!("movements: {} removed", path_of(gone)));
+        }
+        if changed.is_empty() {
+            self.refused.replace(None);
+            return Ok(());
+        }
+        if self.refused.borrow().as_ref() == Some(&pairs) {
+            return Ok(());
+        }
+
+        let missing = missing_credentials(&files, &self.secrets);
+        if !missing.is_empty() {
+            return self.refuse(log, pairs, missing.iter().map(missing_line).collect());
+        }
+        let credentials = self.secrets.credentials();
+        let registered = |e: &External| crate::subscriptions::has_registered_webhook(credentials, &e.manifest.name);
+        let new_externals: Vec<External> = needed_externals(scan_externals(&self.project)?, &files, registered)
+            .into_iter()
+            .filter(|e| !set.running.iter().any(|r| r.external.manifest.name == e.manifest.name))
+            .collect();
+        let (mut running, mut schemas) = (set.running.clone(), set.schemas.clone());
+        let mut started = Vec::new();
+        for external in &new_externals {
+            let name = &external.manifest.name;
+            match self.start_external(external).await {
+                Ok((one, schema)) => {
+                    running.push(one);
+                    schemas.extend(schema.map(|s| (name.clone(), s)));
+                    started.push(format!("movements: started {name}"));
+                }
+                Err(message) => {
+                    self.refused.replace(Some(pairs));
+                    let _ = writeln!(log, "{KEPT} {name}, which they import, did not start: {message}");
+                    return Ok(());
+                }
+            }
+        }
+
+        let catalog = catalog_of(&running, &schemas, credentials, &files);
+        let baseline = match set.errors.get() {
+            Some(counts) => counts.clone(),
+            None => {
+                let counts = file_errors(&set)?;
+                let _ = set.errors.set(counts.clone());
+                counts
+            }
+        };
+        let (mut counts, mut rose) = (BTreeMap::new(), Vec::new());
+        for (file, errors) in files.iter().zip(error_diagnostics(&files, &catalog)?) {
+            if errors.len() > baseline.get(&file.name).copied().unwrap_or(0) {
+                rose.extend(errors.iter().map(|d| format!("{}:{}:{} {} {} {}", file.path.display(), d.line, d.column, d.severity, d.code, d.message)));
+            }
+            counts.insert(file.name.clone(), errors.len());
+        }
+        if !rose.is_empty() {
+            return self.refuse(log, pairs, rose);
+        }
+
+        let listens = collect_listens(&files);
+        let taken = Rc::new(FileSet { files, catalog, listens, running, schemas, errors: OnceCell::from(counts) });
+        self.file_set.replace(taken.clone());
+        self.refused.replace(None);
+        for line in changed.iter().chain(&started) {
+            let _ = writeln!(log, "{line}");
+        }
+        // A cron listen that returns is then seen for the first time, and owes nothing.
+        let crons = |s: &FileSet| s.listens.iter().filter_map(|l| cron_subscription(&l.file, l)).collect::<BTreeSet<_>>();
+        for left in crons(&set).difference(&crons(&taken)) {
+            self.store.save_inbound_checkpoint(left, &Js::Null).map_err(|e| e.to_string())?;
+        }
+        for line in crate::subscriptions::webhook_events_moved(&set, &taken) {
+            let _ = writeln!(log, "movements: {line}");
+        }
+        Ok(())
+    }
+
+    /// One external a refreshed set newly imports, started and described.
+    async fn start_external(&self, external: &External) -> Result<(Rc<RunningExternal>, Option<Js>), String> {
+        let credentials = self.secrets.credentials();
+        let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;
+        let schema = match one.is_plugin() {
+            true => None,
+            false => Some(describe_external(&one, credentials).await?),
+        };
+        Ok((Rc::new(one), schema))
+    }
+
+    /// A set not taken: why, said once, after the header.
+    fn refuse(&self, log: &mut impl Write, pairs: Vec<(String, String)>, why: Vec<String>) -> Result<(), String> {
+        self.refused.replace(Some(pairs));
+        let _ = writeln!(log, "{KEPT} the new ones do not check:");
+        for line in why {
+            let _ = writeln!(log, "{line}");
+        }
+        Ok(())
+    }
+}
+
 // ── Callbacks ───────────────────────────────────────────────────────────────
 
 /// How long after a call its durable rows (its body's, its awaiters' wake)
@@ -1436,5 +1700,174 @@ mod tests {
         assert_eq!(identity((Some("grace"), Some("grace@acme.test")), &[("LF_USER", "linus")]), ("local:linus".into(), "grace@acme.test".into()));
         assert_eq!(identity((None, None), &[("USERNAME", "win")]), ("local:win".into(), "win@localhost".into()));
         assert_eq!(identity((None, None), &[]), ("local:lf".into(), "lf@localhost".into()));
+    }
+
+    // ── A long-running session's refresh ────────────────────────────────────
+
+    fn held(name: &str, version: &str) -> MovementFile {
+        MovementFile { name: name.into(), path: format!("/m/{name}.mvt").into(), source: String::new(), version: Some(version.into()) }
+    }
+
+    fn listed(path: &str, version: Option<&str>) -> crate::movements_slot::Listed {
+        crate::movements_slot::Listed { path: path.into(), version: version.map(str::to_string) }
+    }
+
+    #[test]
+    fn the_refresh_reads_only_what_the_listing_changed() {
+        let files = [held("a", "1"), held("lib/b", "2"), held("c", "3")];
+        let same = listing_changes(&files, &[listed("a.mvt", Some("1")), listed("lib/b.mvt", Some("2")), listed("c.mvt", Some("3"))]);
+        assert_eq!((same.unchanged, same.to_read, same.removed), (vec!["a.mvt".into(), "lib/b.mvt".into(), "c.mvt".into()], vec![], vec![]));
+        let moved = listing_changes(&files, &[listed("a.mvt", Some("1")), listed("lib/b.mvt", Some("9")), listed("c.mvt", Some("3"))]);
+        assert_eq!((moved.unchanged, moved.to_read), (vec!["a.mvt".to_string(), "c.mvt".into()], vec!["lib/b.mvt".to_string()]));
+        let unsaid = listing_changes(&files, &[listed("a.mvt", None), listed("lib/b.mvt", Some("2")), listed("c.mvt", Some("3"))]);
+        assert_eq!(unsaid.to_read, vec!["a.mvt".to_string()], "a file listed with no version is read every time");
+        let gone = listing_changes(&files, &[listed("a.mvt", Some("1")), listed("d.mvt", Some("4"))]);
+        assert_eq!((gone.unchanged, gone.to_read, gone.removed), (vec!["a.mvt".to_string()], vec!["d.mvt".to_string()], vec!["lib/b.mvt".to_string(), "c.mvt".into()]));
+        let order = listing_changes(&files, &[listed("z.mvt", Some("5")), listed("c.mvt", Some("3")), listed("y.mvt", None), listed("a.mvt", Some("1"))]);
+        assert_eq!((order.unchanged, order.to_read), (vec!["c.mvt".to_string(), "a.mvt".into()], vec!["z.mvt".to_string(), "y.mvt".into()]), "the listing's order");
+    }
+
+    #[test]
+    fn the_refresh_interval_is_a_whole_number_of_milliseconds() {
+        let ms = std::time::Duration::from_millis;
+        assert_eq!(refresh_interval_of(None), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
+        assert_eq!(refresh_interval_of(Some("")), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
+        assert_eq!(refresh_interval_of(Some("0")), Ok(ms(0)), "every pass");
+        assert_eq!(refresh_interval_of(Some(" 250 ")), Ok(ms(250)));
+        for raw in ["-1", "1.5", "5s", "soon"] {
+            assert_eq!(refresh_interval_of(Some(raw)), Err(format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds")));
+        }
+    }
+
+    const MANUAL_V1: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
+
+    /// A started project (`lf init`, its own empty secrets) with `files`
+    /// written into its movements folder.
+    fn refresh_project(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("lf-runs-refresh-{}", uuid::Uuid::new_v4()));
+        crate::init::run(&root, &mut Vec::new()).unwrap();
+        let secrets = root.join(".lf/secrets.yaml");
+        std::fs::write(&secrets, "{}\n").unwrap();
+        std::fs::set_permissions(&secrets, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        for (path, text) in files {
+            put(&root, path, text);
+        }
+        root
+    }
+
+    fn put(root: &std::path::Path, path: &str, text: &str) {
+        let at = root.join("movements").join(path);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, text).unwrap();
+    }
+
+    fn remove(root: &std::path::Path, path: &str) {
+        std::fs::remove_file(root.join("movements").join(path)).unwrap();
+    }
+
+    /// `body` on a session over `root`, as lf serve runs one: one thread, one LocalSet.
+    fn with_session(root: &std::path::Path, body: impl AsyncFnOnce(&mut Session)) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let project = crate::project::load_project(root).unwrap();
+            let mut session = open_session(project, false, &StoreSpec::Sqlite(root.join(".lf/state.db"))).await.unwrap();
+            body(&mut session).await;
+        });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    async fn refreshed(session: &Session) -> String {
+        let mut log = Vec::new();
+        session.refresh_movements_now(&mut log).await.unwrap();
+        String::from_utf8(log).unwrap()
+    }
+
+    /// What the one run `movement` started returned, its value as text.
+    async fn returns(session: &Session, movement: &str) -> String {
+        let fired = session.run_manual(movement, None, false).await.unwrap();
+        assert_eq!(fired.outcomes.len(), 1, "one listen fires {movement}");
+        let outcome = &fired.outcomes[0];
+        assert_eq!(outcome.status, "completed", "{:?}", outcome.error);
+        outcome.returned.as_ref().and_then(|r| r.get("value")).and_then(Js::as_str).unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn a_changed_file_runs_its_new_text_after_a_refresh() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            assert_eq!(returns(session, "hello").await, "v1");
+            put(&root, "hello.mvt", &MANUAL_V1.replace("v1", "v2"));
+            assert_eq!(refreshed(session).await, "movements: hello.mvt changed\n");
+            assert_eq!(returns(session, "hello").await, "v2");
+            assert_eq!(refreshed(session).await, "", "nothing changed since");
+        });
+    }
+
+    #[test]
+    fn a_new_files_manual_listen_runs_after_a_refresh() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            assert!(session.run_manual("extra", None, false).await.is_err(), "no listen fires extra yet");
+            put(&root, "extra.mvt", &MANUAL_V1.replace("hello", "extra").replace("v1", "extra"));
+            assert_eq!(refreshed(session).await, "movements: extra.mvt added\n");
+            assert_eq!(returns(session, "extra").await, "extra");
+        });
+    }
+
+    #[test]
+    fn a_removed_files_cron_stops_and_its_parked_run_still_resumes() {
+        let tick = "function tock(t: <cron-[:Tick]->>) {\n  fail(\"tick ${t.`Fired at`} on ${t.`Schedule`}\")\n}\nlisten to cron { schedule: \"* * * * *\" } fire tock\n";
+        let nap = "function nap(run: <manual-[:Invocation]->>) {\n  await sleep(1h)\n  return \"woke\"\n}\nlisten to manual fire nap\n";
+        let root = refresh_project(&[("tick.mvt", tick), ("nap.mvt", nap)]);
+        with_session(&root.clone(), async |session| {
+            let subscription = "cron:tick:tock:* * * * *:UTC";
+            session.drain_work(WORK_ROWS_PER_DRAIN, &mut Vec::new()).await.unwrap();
+            assert!(session.store.inbound_checkpoint(subscription).unwrap().is_some(), "the first sighting saved now");
+            let fired = session.run_manual("nap", None, false).await.unwrap();
+            assert_eq!(fired.outcomes[0].status, "parked");
+            let nap_run = fired.outcomes[0].run_id.clone();
+
+            remove(&root, "tick.mvt");
+            remove(&root, "nap.mvt");
+            assert_eq!(refreshed(session).await, "movements: nap.mvt removed\nmovements: tick.mvt removed\n");
+            assert_eq!(session.store.inbound_checkpoint(subscription).unwrap(), None, "a cron that left is forgotten");
+
+            session.due_offset_ms = 2 * 3_600_000;
+            let (_, outcomes) = session.drain_work(WORK_ROWS_PER_DRAIN, &mut Vec::new()).await.unwrap();
+            let woke = outcomes.iter().find(|o| o.run_id == nap_run).expect("the parked run resumed");
+            assert_eq!(woke.status, "completed", "{:?}", woke.error);
+            assert_eq!(woke.returned.as_ref().and_then(|r| r.get("value")).and_then(Js::as_str), Some("woke"));
+            let runs = session.store.runs(1000).unwrap();
+            assert!(!runs.iter().any(|r| r.file == "tick"), "the removed cron fired nothing");
+        });
+    }
+
+    #[test]
+    fn a_broken_edit_keeps_the_previous_text_running_and_warns_once() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            put(&root, "hello.mvt", "function hello(");
+            let log = refreshed(session).await;
+            let lines: Vec<&str> = log.lines().collect();
+            assert_eq!(lines[0], "movements: kept the files lf has; the new ones do not check:", "{log}");
+            assert!(lines[1].contains("hello.mvt:") && lines[1].contains(" error MOV_PARSE "), "{log}");
+            assert_eq!(returns(session, "hello").await, "v1", "the previous text runs");
+            assert_eq!(refreshed(session).await, "", "warned once");
+
+            put(&root, "hello.mvt", &MANUAL_V1.replace("v1", "v3"));
+            assert_eq!(refreshed(session).await, "movements: hello.mvt changed\n");
+            assert_eq!(returns(session, "hello").await, "v3");
+
+            put(&root, "lib/greet.mvt", "export function greet(name: <text>) {\n  return \"Hello, ${name}!\"\n}\n");
+            put(&root, "hello.mvt", "import { greet } from \"lib/greet\"\n\nfunction hello(run: <manual-[:Invocation]->>) {\n  return greet(\"v4\")\n}\nlisten to manual fire hello\n");
+            assert_eq!(refreshed(session).await, "movements: hello.mvt changed\nmovements: lib/greet.mvt added\n");
+            assert_eq!(returns(session, "hello").await, "Hello, v4!");
+
+            put(&root, "lib/greet.mvt", "export function greet(name: <number>) {\n  return \"Hello, ${name}!\"\n}\n");
+            let log = refreshed(session).await;
+            assert!(log.starts_with("movements: kept the files lf has; the new ones do not check:\n"), "{log}");
+            assert!(log.lines().skip(1).all(|l| l.contains("hello.mvt:")), "the importer it breaks is named: {log}");
+            assert_eq!(returns(session, "hello").await, "Hello, v4!", "the set that checked runs on");
+        });
     }
 }

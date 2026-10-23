@@ -83,6 +83,9 @@ pub async fn drain(session: &Session, options: &DrainOptions, out: &mut impl Wri
     let past_deadline = || deadline.is_some_and(|d| Instant::now() >= d);
     let mut code = 0;
     while !past_deadline() {
+        if let Err(message) = session.refresh_movements(&mut std::io::stderr()).await {
+            eprintln!("movements: {message}");
+        }
         // As `lf resume`: a row that fails is retried later, its reason on stderr.
         let (claimed, outcomes) = session.drain_work(ROWS_PER_CLAIM, &mut std::io::stderr()).await?;
         if !outcomes.is_empty() {

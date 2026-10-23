@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EXAMPLE, project as exampleProject } from './example';
+import { EXAMPLE, project as exampleProject, served } from './example';
 import { lf } from './interactive';
 import { serveMovementsModule, type MovementsModule } from './movements_module/serve';
 
@@ -76,6 +76,42 @@ test('a movements module whose own settings neither the environment nor the secr
     assert.notEqual(refused.code, 0, refused.out);
     assert.match(refused.out, /core\.movements: acme_movements: the movements module's own settings come from LF_SECRET__… or the secrets file, not from the secrets slot/);
     assert.deepEqual(module.calls, [], 'the module is never asked');
+  } finally {
+    await module.close();
+  }
+});
+
+/** Resolves once `ready` holds, checked every 50ms; rejects after `ms`. */
+async function until(ready: () => boolean, what: string, ms = 20_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(`not ${what} in ${ms}ms`);
+    await new Promise((done) => setTimeout(done, 50));
+  }
+}
+
+test('lf serve asks only list while nothing changes, and reads only the file that did', async () => {
+  const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET } });
+  const asked = () => module.calls.filter((call) => call.startsWith('movements.'));
+  const open = ['movements.list', 'movements.read hello.mvt', 'movements.read lib/greet.mvt', 'movements.list'];
+  try {
+    const server = await served(project(module), [], { ...ENV, LF_MOVEMENTS_REFRESH_MS: '0' });
+    try {
+      await until(() => asked().length >= open.length + 3, 'three refreshes');
+      assert.deepEqual(asked().slice(0, open.length), open, 'the open reads each file once');
+      assert.deepEqual(new Set(asked().slice(open.length)), new Set(['movements.list']), 'nothing changed: only list');
+
+      const before = asked().length;
+      module.put('hello.mvt', (await hello()).replace('return greet(run.`Run by (name)`)', 'return greet("again")'));
+      await server.waitFor(/^movements: hello\.mvt changed$/);
+      assert.deepEqual(
+        asked().slice(before).filter((call) => call.startsWith('movements.read')),
+        ['movements.read hello.mvt'],
+        'only the file whose version moved is read',
+      );
+    } finally {
+      await server.stop();
+    }
   } finally {
     await module.close();
   }

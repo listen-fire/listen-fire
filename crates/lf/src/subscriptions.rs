@@ -76,6 +76,25 @@ fn wanted_events(set: &FileSet, running: &RunningExternal) -> Vec<String> {
     events.into_iter().collect()
 }
 
+/// A refreshed set's webhook needs, said rather than registered: the
+/// registration is written to the secrets, which stay fixed for the session,
+/// so it follows the listens when lf serve starts again. A line per
+/// external whose listens now want other events.
+pub fn webhook_events_moved(before: &FileSet, after: &FileSet) -> Vec<String> {
+    after
+        .running
+        .iter()
+        .filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
+        .filter_map(|r| {
+            let wanted = wanted_events(after, r);
+            (wanted != wanted_events(before, r)).then(|| {
+                let events = if wanted.is_empty() { "none".to_string() } else { wanted.join(", ") };
+                format!("{}'s listens now want the webhook events {events}; its registration changes when lf serve restarts", r.external.manifest.name)
+            })
+        })
+        .collect()
+}
+
 /// Register or remove each external's webhook, as its listens need; a line
 /// per external it touched. One that fails is said and the rest go on: the
 /// doors still answer whatever is registered.

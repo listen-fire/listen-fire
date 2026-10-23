@@ -16,6 +16,10 @@ export interface MovementsModule {
   url: string;
   /** What it holds now: text by path. */
   held(): Record<string, string>;
+  /** Another writer's change: `text` at `path`, at a new version. */
+  put(path: string, text: string): void;
+  /** Another writer's delete. */
+  remove(path: string): void;
   /** Each call, as `method path`: never a text. */
   calls: string[];
   /** Each write request: the path and the version it expected, never a text. */
@@ -87,6 +91,8 @@ export async function serveMovementsModule(
     tenants,
     writes,
     held: () => Object.fromEntries([...files].map(([path, { text }]) => [path, text])),
+    put,
+    remove: (path) => void files.delete(path),
     close: () => served.close(),
   };
 }
