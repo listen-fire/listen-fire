@@ -1,0 +1,20 @@
+# The wake slot on Google Cloud Tasks (the module in /srv/lf/modules/wake-cloud-tasks),
+# installed in the image. Not the default: name it in lf.yaml (core: { wake: wake_cloud_tasks })
+# and give it its settings as LF_SECRET__WAKE_CLOUD_TASKS__QUEUE, __JOB,
+# __INVOKER_SERVICE_ACCOUNT and optionally __COALESCE_WINDOW_MS (see lf.yaml).
+# On Google Cloud leave __CLIENT_EMAIL and __PRIVATE_KEY unset to use the
+# service's own identity. Also needs LF_SECRET__WAKE_CLOUD_TASKS__EXTERNAL=wake_cloud_tasks.
+name: wake_cloud_tasks
+kind: core
+slot: wake
+# A core module is started by `command` (`module:` is for adapters), from this
+# folder, so the paths are absolute.
+command: [node, --require, /srv/lf/packages/module-kit/node_modules/tsx/dist/cjs/index.cjs, /srv/lf/modules/wake-cloud-tasks/serve.ts]
+settings:
+  - { name: queue, label: "the Cloud Tasks queue: projects/<project>/locations/<location>/queues/<name>" }
+  - { name: job, label: "the Cloud Run job a task starts: projects/<project>/locations/<location>/jobs/<name>" }
+  - { name: invoker_service_account, label: "the service account whose OAuth token each task carries to run the job (it needs run.jobs.run)" }
+  - { name: coalesce_window_ms, label: "how long one task stands for, in milliseconds (default 60000, 1000 to 3600000); the same on every process", optional: true }
+  - { name: client_email, label: "a service account's email to call Cloud Tasks as (empty to use the environment's own Google credentials)", optional: true }
+  - { name: private_key, label: "that service account's private key", secret: true, optional: true }
+  - { name: base_url, label: "another endpoint speaking Cloud Tasks' REST API (a fake or a proxy); empty for Google's", optional: true }

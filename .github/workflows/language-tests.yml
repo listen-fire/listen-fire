@@ -71,3 +71,5 @@ jobs:
         run: corepack pnpm --filter './modules/slack' test
       - name: affinity tests
         run: corepack pnpm --filter './modules/affinity' test
+      - name: wake-cloud-tasks tests
+        run: corepack pnpm --filter './modules/wake-cloud-tasks' test

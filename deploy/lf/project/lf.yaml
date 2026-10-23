@@ -34,6 +34,18 @@ core:
 #   LF_SECRET__DOCUMENT_AI__PROJECT=… __LOCATION=eu __PROCESSOR_ID=…
 #   LF_SECRET__DOCUMENT_AI__BUCKET=…  (files past 15 pages or 20 MB)
 #   LF_SECRET__MODELS_OCR__EXTERNAL=models_ocr  (the models settings again, as __VENDOR=gemini, …)
+# A wake for workers started on demand (the wake slot, empty by default: nobody
+# is told, and work waits for a scheduled `lf drain`). On Cloud Run, with the drain as a job, each row's due
+# time becomes a Google Cloud Tasks task that starts the job; keep an hourly
+# scheduled drain as the safety net, and give every process the same settings:
+#   core:
+#     store: "@lf/postgres-store"
+#     wake: wake_cloud_tasks
+#   LF_SECRET__WAKE_CLOUD_TASKS__EXTERNAL=wake_cloud_tasks
+#   LF_SECRET__WAKE_CLOUD_TASKS__QUEUE=projects/…/locations/…/queues/…
+#   LF_SECRET__WAKE_CLOUD_TASKS__JOB=projects/…/locations/…/jobs/…
+#   LF_SECRET__WAKE_CLOUD_TASKS__INVOKER_SERVICE_ACCOUNT=…@….iam.gserviceaccount.com
+#   LF_SECRET__WAKE_CLOUD_TASKS__COALESCE_WINDOW_MS=60000  (optional, the default)
 # Credentials shared by every worker, in a vault rather than the environment and
 # the secrets file (the secrets slot, `@lf/file-secrets` by default). A module
 # of your own fills it; its own settings come from the environment, never

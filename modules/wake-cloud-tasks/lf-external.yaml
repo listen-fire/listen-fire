@@ -1,0 +1,17 @@
+# The install entry for lf: put this file in <project>/externals/wake_cloud_tasks/
+# (with the package installed there), run `lf connect wake_cloud_tasks`, and
+# name it in lf.yaml:
+#   core:
+#     wake: wake_cloud_tasks
+name: wake_cloud_tasks
+kind: core
+slot: wake
+command: [node, node_modules/@listen-fire/wake-cloud-tasks/dist/serve.js]
+settings:
+  - { name: queue, label: "the Cloud Tasks queue: projects/<project>/locations/<location>/queues/<name>" }
+  - { name: job, label: "the Cloud Run job a task starts: projects/<project>/locations/<location>/jobs/<name>" }
+  - { name: invoker_service_account, label: "the service account whose OAuth token each task carries to run the job (it needs run.jobs.run)" }
+  - { name: coalesce_window_ms, label: "how long one task stands for, in milliseconds (default 60000, 1000 to 3600000); the same on every process", optional: true }
+  - { name: client_email, label: "a service account's email to call Cloud Tasks as (empty to use the environment's own Google credentials)", optional: true }
+  - { name: private_key, label: "that service account's private key", secret: true, optional: true }
+  - { name: base_url, label: "another endpoint speaking Cloud Tasks' REST API (a fake or a proxy); empty for Google's", optional: true }

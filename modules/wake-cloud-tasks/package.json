@@ -1,0 +1,70 @@
+{
+  "name": "@listen-fire/wake-cloud-tasks",
+  "license": "Apache-2.0",
+  "version": "0.12.0",
+  "description": "The wake slot's module on Google Cloud Tasks (`@lf/wake-cloud-tasks`): a host saying work is due now or at an instant becomes a Cloud Tasks task, named for its coalescing window, that starts a Cloud Run drain job. Served as a process lf starts (kind: core, slot: wake), and importable in-process (`/cloud_tasks`).",
+  "engines": {
+    "node": ">=22.23.4 <23"
+  },
+  "scripts": {
+    "code:type-check": "tsc --pretty --noEmit && node ../../scripts/check-module-boundary.cjs",
+    "test": "jest --config jest.config.cjs",
+    "prepack": "node ../../scripts/build-packages.cjs .",
+    "postpack": "node ../../scripts/build-packages.cjs --restore ."
+  },
+  "main": "index.ts",
+  "types": "index.ts",
+  "bin": {
+    "lf-wake-cloud-tasks": "./dist/serve.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@listen-fire/engine-contracts": "workspace:^",
+    "@listen-fire/module-runtime": "workspace:^",
+    "google-auth-library": "10.3.0"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/node": "20.16.5",
+    "engine-contracts": "workspace:@listen-fire/engine-contracts@*",
+    "module-runtime": "workspace:@listen-fire/module-runtime@*",
+    "tsx": "4.21.0",
+    "typescript": "5.5.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/listen-fire/listen-fire.git",
+    "directory": "modules/wake-cloud-tasks"
+  },
+  "files": [
+    "dist",
+    "lf-external.yaml"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "bin": {
+      "lf-wake-cloud-tasks": "./dist/serve.js"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./*": {
+        "types": "./dist/*.d.ts",
+        "default": "./dist/*.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "typesVersions": {
+      "*": {
+        "*": [
+          "dist/*",
+          "*"
+        ]
+      }
+    }
+  }
+}
