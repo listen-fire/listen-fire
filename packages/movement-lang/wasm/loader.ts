@@ -65,7 +65,15 @@ type CatalogFunction = 'catalog_query';
 type WasmFunction = ParserFunction | LoweringFunction | CatalogFunction;
 
 /** The Rust checker's exports, which only the engine's artifact carries. */
-type CheckerFunction = 'check_program' | 'check_answer' | 'check_compatible' | 'standard_library' | 'language_version' | 'language_standing';
+type CheckerFunction =
+  | 'check_program'
+  | 'check_answer'
+  | 'check_compatible'
+  | 'standard_library'
+  | 'language_version'
+  | 'language_standing'
+  | 'language_query'
+  | 'story_analysis';
 
 interface ParserExports extends BufferExports {
   call(fn: WasmFunction, args: number[]): number;
@@ -255,6 +263,31 @@ export function callLanguageVersion(): { ok: boolean; json: unknown } {
  */
 export function callLanguageStanding(pin: string): { ok: boolean; json: unknown } {
   return callChecker('language_standing', [pin], []);
+}
+
+/**
+ * The language service (crates/movement-language/src/abi.rs
+ * `language_query`): the source, the snapshot and the query as JSON, and the
+ * reply — the native service's answer (an object, an array or `null`), or
+ * `{error}` for a snapshot or a query that does not read.
+ *
+ * @internal Used by the service's wrapper (service/language_service.ts).
+ */
+export function callLanguageQuery(source: string, snapshotJson: string, queryJson: string): { ok: boolean; json: unknown } {
+  return callChecker('language_query', [source, snapshotJson, queryJson], []);
+}
+
+/**
+ * The checker's story analysis (crates/movement-checker/src/story.rs
+ * `story_analysis`): `callCheckProgram`'s inputs, and the reply —
+ * `{storyAnalysisVersion, diagnostics, scopes, symbols, writes, nodes,
+ * bodies, shapes}`, or `{error}` for a source that does not parse or a
+ * snapshot that does not load.
+ *
+ * @internal Used by the analysis's wrapper (checker/story_analysis.ts).
+ */
+export function callStoryAnalysis(source: string, snapshotJson: string, options: CheckCallOptions): { ok: boolean; json: unknown } {
+  return callChecker('story_analysis', [source, snapshotJson, optionsJson(options)], []);
 }
 
 function callChecker(fn: CheckerFunction, inputs: string[], extra: number[]): { ok: boolean; json: unknown } {
@@ -510,7 +543,16 @@ function readExports(raw: Record<string, unknown>): ParserExports {
     catalog_query: exported('catalog_query'),
   };
   const checker: ParserExports['checker'] = {};
-  for (const fn of ['check_program', 'check_answer', 'check_compatible', 'standard_library', 'language_version', 'language_standing'] as const) {
+  for (const fn of [
+    'check_program',
+    'check_answer',
+    'check_compatible',
+    'standard_library',
+    'language_version',
+    'language_standing',
+    'language_query',
+    'story_analysis',
+  ] as const) {
     if (typeof raw[fn] !== 'function') continue;
     const call = exported(fn);
     checker[fn] = (...args) => number(call(...args), fn);

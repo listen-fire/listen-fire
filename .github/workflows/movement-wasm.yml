@@ -105,9 +105,9 @@ jobs:
       # Full workspace install: movement-lang's tests resolve workspace
       # packages through symlinks a filtered install omits.
       - run: pnpm install --frozen-lockfile
-      - name: Wasm loader, environment services and expression parser pins
+      - name: Wasm loader, environment services, expression parser pins, language service and story analysis
         working-directory: packages/movement-lang
-        run: pnpm run test --testPathPattern 'catalog_depth|loader|env_services|parse_expression'
+        run: pnpm run test --testPathPattern 'catalog_depth|loader|env_services|parse_expression|language_service|story_analysis'
       # The catalog differential needs the assembled checks corpus, which
       # lf-platform assembles (its `checks:corpus`, ~16 min with a test
       # database), so it runs there, not here.

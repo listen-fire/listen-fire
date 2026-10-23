@@ -30,6 +30,12 @@ export class RustCheckRefused extends Error {
     super(message);
     this.name = 'RustCheckRefused';
   }
+
+  /** The refusal an artifact's `{error: {message}}` reply carries. */
+  static of(json: unknown): RustCheckRefused {
+    const error = isRecord(json) && isRecord(json.error) ? json.error : undefined;
+    return new RustCheckRefused(typeof error?.message === 'string' ? error.message : 'the Rust checker refused the check');
+  }
 }
 
 /** The language the artifact reads: its release's version. */
@@ -63,7 +69,7 @@ export function checkSourceInRust(source: string, snapshot: CatalogSnapshot, opt
   if (refusal !== undefined) return [refusal];
   const reply = callCheckProgram(source, JSON.stringify(snapshot), callOptions(options));
   const json: unknown = reply.json;
-  if (!reply.ok) throw refused(json);
+  if (!reply.ok) throw RustCheckRefused.of(json);
   const diagnostics = isRecord(json) ? json.diagnostics : undefined;
   if (!Array.isArray(diagnostics)) throw new Error('the Rust checker answered no diagnostics');
   return diagnostics.map(diagnosticOf);
@@ -117,7 +123,7 @@ export function checkAnswerInRust(source: string, snapshot: CatalogSnapshot, opt
   if (refusal !== undefined) return { diagnostics: [refusal], stamps: [] };
   const reply = callCheckAnswer(source, JSON.stringify(snapshot), callOptions(options));
   const json: unknown = reply.json;
-  if (!reply.ok) throw refused(json);
+  if (!reply.ok) throw RustCheckRefused.of(json);
   if (!isRecord(json) || !Array.isArray(json.diagnostics) || !Array.isArray(json.stamps)) {
     throw new Error(`the Rust checker answered no check: ${JSON.stringify(json)?.slice(0, 200)}`);
   }
@@ -141,7 +147,7 @@ export function compatibleInRust(request: {
 }): { fits: boolean } | { undescribed: true } {
   const reply = callCheckCompatible(JSON.stringify(request));
   const json: unknown = reply.json;
-  if (!reply.ok) throw refused(json);
+  if (!reply.ok) throw RustCheckRefused.of(json);
   if (isRecord(json) && json.undescribed === true) return { undescribed: true };
   if (isRecord(json) && typeof json.fits === 'boolean') return { fits: json.fits };
   throw new Error(`the Rust checker answered check.compatible with ${JSON.stringify(json)}`);
@@ -149,11 +155,6 @@ export function compatibleInRust(request: {
 
 function callOptions(options: RustCheckOptions): { upgradingFrom?: string } {
   return options.upgradingFrom === undefined ? {} : { upgradingFrom: options.upgradingFrom };
-}
-
-function refused(json: unknown): RustCheckRefused {
-  const error = isRecord(json) && isRecord(json.error) ? json.error : undefined;
-  return new RustCheckRefused(typeof error?.message === 'string' ? error.message : 'the Rust checker refused the check');
 }
 
 function stampOf(value: unknown): Stamp {
@@ -212,7 +213,10 @@ function linkedKindOf(value: unknown): LinkedKind {
   throw new Error(`the Rust checker answered the import kind ${JSON.stringify(value)}`);
 }
 
-function diagnosticOf(value: unknown): Diagnostic {
+/** One diagnostic of an artifact's reply, validated.
+ *
+ * @internal Used by the story analysis's wrapper (checker/story_analysis.ts). */
+export function diagnosticOf(value: unknown): Diagnostic {
   if (!isRecord(value) || typeof value.code !== 'string' || typeof value.message !== 'string') {
     throw new Error(`the Rust checker answered a diagnostic that is not one: ${JSON.stringify(value)}`);
   }
