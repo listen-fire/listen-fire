@@ -6,7 +6,8 @@
 //! `LF_BLESS=1 cargo test -p listen-fire-language --test handbook_parity`.
 //!
 //! answers.json: `{lists, programs: [{construct, probes: [{at, complete:
-//! {items, word}, hover, definition, codeActions}]}]}`. Completion lists
+//! {items, word}, codeActions, hover?, definition?}]}]}`, hover and
+//! definition asked only at each line's first identifier. Completion lists
 //! repeat across probes, so each is written once in `lists` and a probe's
 //! `complete.items` is its index there. The docs link's versioned base is
 //! written `<docs>`, so a release does not re-bless.
@@ -23,30 +24,29 @@ fn corpus() -> PathBuf {
 }
 
 /// Where a probe asks: after each `.`, `-[`, backtick, `using ` and `{ `,
-/// and at each identifier's start.
-fn probes(source: &str) -> Vec<Pos> {
+/// and at the first identifier of each line. Only that first identifier is
+/// also asked for its hover and definition (`true`).
+fn probes(source: &str) -> Vec<(Pos, bool)> {
     let mut found = Vec::new();
     for (line, text) in source.split('\n').enumerate() {
         let at = |byte: usize| Pos { line: line as u32, character: text[..byte].encode_utf16().count() as u32 };
-        let mut previous: Option<char> = None;
+        if let Some(first) = text.char_indices().find(|(_, c)| c.is_alphabetic() || *c == '_').map(|(byte, _)| byte) {
+            found.push((at(first), true));
+        }
         for (byte, c) in text.char_indices() {
-            let starts_word = (c.is_alphabetic() || c == '_') && !previous.is_some_and(|p| p.is_alphanumeric() || p == '_');
-            if starts_word {
-                found.push(at(byte));
-            }
             if c == '.' || c == '`' {
-                found.push(at(byte + 1));
+                found.push((at(byte + 1), false));
             }
             for marker in ["-[", "using ", "{ "] {
                 if text[byte..].starts_with(marker) {
-                    found.push(at(byte + marker.len()));
+                    found.push((at(byte + marker.len()), false));
                 }
             }
-            previous = Some(c);
         }
     }
-    found.sort();
-    found.dedup();
+    // A position probed both ways keeps its hover and definition.
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    found.dedup_by(|later, kept| later.0 == kept.0);
     found
 }
 
@@ -77,7 +77,7 @@ fn answers() -> (Value, usize) {
             None => &plain,
         };
         let mut asked = Vec::new();
-        for at in probes(source) {
+        for (at, first) in probes(source) {
             probed += 1;
             let completed = unversioned(answer(service, source, Query::Complete(at)));
             let items = completed["items"].clone();
@@ -88,13 +88,16 @@ fn answers() -> (Value, usize) {
                     lists.len() - 1
                 }
             };
-            asked.push(json!({
+            let mut probe = json!({
                 "at": pos_json(at),
                 "complete": { "items": index, "word": completed["word"] },
-                "hover": unversioned(answer(service, source, Query::Hover(at))),
-                "definition": answer(service, source, Query::Definition(at)),
                 "codeActions": answer(service, source, Query::CodeActions(Range { start: at, end: at })),
-            }));
+            });
+            if first {
+                probe["hover"] = unversioned(answer(service, source, Query::Hover(at)));
+                probe["definition"] = answer(service, source, Query::Definition(at));
+            }
+            asked.push(probe);
         }
         out.push(json!({ "construct": program["construct"], "probes": asked }));
     }
