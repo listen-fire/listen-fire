@@ -543,6 +543,10 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             let project = load()?;
             let store = store_of(&args, &project)?;
             let pool = args.kinds.as_deref().map(drain::Pool::of).transpose()?.unwrap_or_default();
+            if !args.until_idle {
+                let env: Vec<(String, String)> = std::env::vars().collect();
+                movements_slot::require_watch(&project, &env, "lf drain")?;
+            }
             let mut session = runs::open_session(project, false, &store).await?;
             session.pool = pool;
             drain::drain(&session, &drain::DrainOptions { until_idle: args.until_idle, max_seconds: args.max_seconds }, &mut out).await

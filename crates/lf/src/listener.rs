@@ -53,7 +53,7 @@ fn body_limit(path: &str) -> usize {
 /// The webhook door's own limit, the hosted door's: a delivery is a
 /// notification, and a provider's bigger one carries ids to pull.
 const MAX_DELIVERY_BYTES: usize = 100 * 1024;
-/// How often due work is drained (and the movements' refresh considered) when nothing pokes it.
+/// How often due work is drained when nothing pokes it.
 const TICK: Duration = Duration::from_millis(1000);
 /// Where a provider's OAuth redirect for `lf credential add --public` lands.
 const PUBLIC_CALLBACK_PATH: &str = "/oauth/callback";
@@ -107,7 +107,7 @@ pub fn doors_only(flag: bool, env: Option<&str>) -> Result<bool, String> {
 /// What every request the listener answers shares.
 struct Listening {
     session: Rc<Session>,
-    /// Wakes this process's tick: under `--doors-only`, a refresh only.
+    /// Wakes this process's drain; nothing waits on it under `--doors-only`.
     poke: Rc<Notify>,
     doors_only: bool,
 }
@@ -126,6 +126,8 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let _ = HOST_URL.set(format!("http://127.0.0.1:{port}"));
     let _ = HOST_TOKEN.set(crate::http_out::hex(&crate::http_out::random_bytes(24)?));
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    crate::movements_slot::require_watch(&project, &env, "lf serve")?;
     let mut session = open_session(project, ephemeral, store).await?;
     // Before the doors answer, so a delivery is verified by the secret the
     // source issued.
@@ -142,14 +144,20 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
         let listening = listening.clone();
         async move { route(&listening, request).await.unwrap_or_else(|message| Response::json(500, &Js::Obj(obj! { "error" => Js::Str(message) }))) }
     }));
-    let tick = tokio::task::spawn_local(tick_forever(session.clone(), poke.clone(), doors_only));
+    // In both modes: a doors-only process takes a changed set too, so a
+    // newly imported external's door answers.
+    let watching = tokio::task::spawn_local({
+        let session = session.clone();
+        async move { match session.watch_movements(&mut std::io::stdout()).await {} }
+    });
+    let drain = (!doors_only).then(|| tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())));
     println!("lf serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
     if doors_only {
         println!("doors only: nothing drains in this process; workers (`lf drain`) run what the doors queue");
     }
 
     stopped().await;
-    for task in [doors, tick] {
+    for task in [doors, watching].into_iter().chain(drain) {
         task.abort();
         let _ = task.await;
     }
@@ -179,24 +187,16 @@ async fn stopped() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// The tick: one pass at a time in this process (the run lease keeps any
+/// The drain: one pass at a time in this process (the run lease keeps any
 /// other lf process from stepping the same run meanwhile); a poke while a
-/// pass runs is one more pass after it. Each pass refreshes the movements,
-/// then drains, unless the process is doors only: its refresh is so a
-/// newly imported external's door answers.
-async fn tick_forever(session: Rc<Session>, poke: Rc<Notify>, doors_only: bool) {
+/// pass runs is one more pass after it.
+async fn drain_forever(session: Rc<Session>, poke: Rc<Notify>) {
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = tick.tick() => {}
             () = poke.notified() => {}
-        }
-        if let Err(message) = session.refresh_movements(&mut std::io::stdout()).await {
-            println!("movements: {message}");
-        }
-        if doors_only {
-            continue;
         }
         match session.drain_work(WORK_ROWS_PER_DRAIN, &mut std::io::stdout()).await {
             Ok((_, outcomes)) => log_runs(&outcomes),

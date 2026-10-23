@@ -31,7 +31,7 @@ use crate::run_host::{
 };
 use crate::secrets::{Credentials, Secrets, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
-use crate::movements_slot::{Listed, movement_file, ordered};
+use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, scan_movements};
 use crate::backend::{RunHostStore, StoreSpec, open_store};
 use crate::store::{ClaimDue, POLL_WORK_KIND, Release, RunStart, iso};
@@ -103,16 +103,16 @@ pub struct Session {
     loop_guard: Option<std::sync::Arc<dyn LoopGuard>>,
     /// When this session's drain last looked for lost runs.
     swept_at: Cell<Option<Instant>>,
-    /// `LF_MOVEMENTS_REFRESH_MS`: how often a long-running loop asks the
-    /// movements module what changed.
-    refresh_every: Duration,
-    /// Set at open, so a one-shot command never refreshes.
-    refreshed_at: Cell<Instant>,
+    /// `LF_MOVEMENTS_REFRESH_MS`: how long the watch loop waits before it
+    /// asks again a movements module that answered at once with nothing, or
+    /// did not answer.
+    watch_pause: Duration,
     /// The files (path, version) of the last set a refresh did not take:
     /// listed again, they are not checked or warned about again.
     refused: RefCell<Option<Vec<(String, String)>>>,
-    /// Why the movements module last did not answer a refresh's list.
-    list_failed: RefCell<Option<String>>,
+    /// Why the movements module last did not answer the watch loop (its
+    /// watch, or its list): said once until it answers again.
+    watch_failed: RefCell<Option<String>>,
 }
 
 impl Drop for Session {
@@ -147,24 +147,27 @@ fn due_clock_offset() -> Result<i64, String> {
     }
 }
 
-/// How often `lf serve` and `lf drain` ask the movements module what changed,
-/// unless LF_MOVEMENTS_REFRESH_MS says otherwise.
+/// How long the watch loop pauses after a movements module answered at once
+/// with nothing (it cannot hold a watch) or did not answer, unless
+/// LF_MOVEMENTS_REFRESH_MS says otherwise.
 const DEFAULT_MOVEMENTS_REFRESH_MS: u64 = 5_000;
+/// The shortest pause: `0` would ask such a module without a break.
+const LEAST_WATCH_PAUSE: Duration = Duration::from_millis(100);
 
-fn movements_refresh_every() -> Result<Duration, String> {
-    refresh_interval_of(std::env::var("LF_MOVEMENTS_REFRESH_MS").ok().as_deref())
+fn movements_watch_pause() -> Result<Duration, String> {
+    watch_pause_of(std::env::var("LF_MOVEMENTS_REFRESH_MS").ok().as_deref())
 }
 
-/// `0`: every pass.
-fn refresh_interval_of(raw: Option<&str>) -> Result<Duration, String> {
-    match raw {
-        None | Some("") => Ok(Duration::from_millis(DEFAULT_MOVEMENTS_REFRESH_MS)),
+fn watch_pause_of(raw: Option<&str>) -> Result<Duration, String> {
+    let pause = match raw {
+        None | Some("") => Duration::from_millis(DEFAULT_MOVEMENTS_REFRESH_MS),
         Some(raw) => raw
             .trim()
             .parse::<u64>()
             .map(Duration::from_millis)
-            .map_err(|_| format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds")),
-    }
+            .map_err(|_| format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds"))?,
+    };
+    Ok(pause.max(LEAST_WATCH_PAUSE))
 }
 
 /// `store`: where the run state is kept; an ephemeral session keeps its own
@@ -189,7 +192,7 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     // Before the externals start too: a browser module's address is handed to them.
     crate::remote_slots::install(&project, credentials).await?;
     let due_offset_ms = due_clock_offset()?;
-    let refresh_every = movements_refresh_every()?;
+    let watch_pause = movements_watch_pause()?;
     let (store, ephemeral_dir) = if ephemeral {
         let dir = std::env::temp_dir().join(format!("lf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -232,10 +235,9 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         pool: Default::default(),
         loop_guard,
         swept_at: Default::default(),
-        refresh_every,
-        refreshed_at: Cell::new(Instant::now()),
+        watch_pause,
         refused: Default::default(),
-        list_failed: Default::default(),
+        watch_failed: Default::default(),
     })
 }
 
@@ -1175,40 +1177,139 @@ fn file_errors(set: &FileSet) -> Result<BTreeMap<String, usize>, String> {
     Ok(set.files.iter().zip(diagnostics).map(|(file, errors)| (file.name.clone(), errors.len())).collect())
 }
 
-impl Session {
-    /// A long-running loop's refresh (`lf serve`, `lf drain`): at most once
-    /// per LF_MOVEMENTS_REFRESH_MS, the movements module is asked what
-    /// changed, and a changed set that checks replaces the one running.
-    pub async fn refresh_movements(&self, log: &mut impl Write) -> Result<(), String> {
-        if self.refreshed_at.get().elapsed() < self.refresh_every {
-            return Ok(());
+/// How long a watch asks the movements module to hold: the contract's cap.
+const WATCH_WAIT: Duration = crate::movements_slot::WATCH_WAIT_CAP;
+/// An answer with nothing in it, back sooner than this, is a module that
+/// answered at once rather than held: the loop pauses before it asks again.
+const ANSWERED_AT_ONCE: Duration = Duration::from_secs(1);
+
+/// The listing the events say there is now: each one applied, in order, to
+/// the files (path, version) lf last saw listed. An add or a change without
+/// a version is a file listed without one, which is read and compared.
+fn apply_events(held: &[Listed], events: &[Change]) -> Vec<Listed> {
+    let mut listing = held.to_vec();
+    for change in events {
+        match change.kind {
+            ChangeKind::Added | ChangeKind::Changed => match listing.iter_mut().find(|l| l.path == change.path) {
+                Some(listed) => listed.version = change.version.clone(),
+                None => listing.push(Listed { path: change.path.clone(), version: change.version.clone() }),
+            },
+            ChangeKind::Removed => listing.retain(|l| l.path != change.path),
         }
-        self.refreshed_at.set(Instant::now());
-        self.refresh_movements_now(log).await
+    }
+    ordered(listing)
+}
+
+impl Session {
+    /// `lf serve` and `lf drain`'s one refresher, for the process's life:
+    /// the module's cursor taken, then the files listed once (so nothing
+    /// changed between the open and the cursor is missed), then each change
+    /// it reports taken as a listing is (`take_listing`). A `resync` starts
+    /// over from the cursor; a failure is said once and asked again after
+    /// the pause.
+    pub async fn watch_movements(&self, log: &mut impl Write) -> std::convert::Infallible {
+        let env: Vec<(String, String)> = std::env::vars().collect();
+        let store = loop {
+            match crate::movements_slot::of_project(&self.project, &env) {
+                Ok(store) => break store,
+                Err(message) => {
+                    self.watch_failure(log, &message);
+                    tokio::time::sleep(self.watch_pause).await;
+                }
+            }
+        };
+        let mut cursor = None;
+        loop {
+            if let Some(pause) = self.watch_once(&*store, &mut cursor, log).await {
+                tokio::time::sleep(pause).await;
+            }
+        }
     }
 
-    /// One `list`, and a `read` only for a file whose listed version moved.
+    /// One step of the watch loop: the pause it owes before the next.
+    pub(crate) async fn watch_once(&self, store: &dyn MovementsStore, cursor: &mut Option<String>, log: &mut impl Write) -> Option<Duration> {
+        let Some(from) = cursor.clone() else {
+            match store.watch(None, Duration::ZERO).await {
+                Ok(Watched::Events { cursor: now, .. }) => {
+                    match self.refresh_movements_now(store, log).await {
+                        Ok(true) => {}
+                        Ok(false) => return Some(self.watch_pause),
+                        Err(message) => {
+                            let _ = writeln!(log, "movements: {message}");
+                        }
+                    }
+                    *cursor = Some(now);
+                    return None;
+                }
+                Ok(Watched::Resync) => self.watch_failure(log, "it answered resync to a watch without a cursor"),
+                Err(message) => self.watch_failure(log, &message),
+            }
+            return Some(self.watch_pause);
+        };
+        let asked = Instant::now();
+        match store.watch(Some(&from), WATCH_WAIT).await {
+            Ok(Watched::Events { cursor: next, events }) => {
+                self.watch_failed.replace(None);
+                *cursor = Some(next);
+                if events.is_empty() {
+                    return (asked.elapsed() < ANSWERED_AT_ONCE).then_some(self.watch_pause);
+                }
+                let seen: Vec<Listed> = match &*self.refused.borrow() {
+                    Some(pairs) => pairs.iter().map(|(path, version)| Listed { path: path.clone(), version: Some(version.clone()).filter(|v| !v.is_empty()) }).collect(),
+                    None => self.file_set().files.iter().map(|f| Listed { path: path_of(f), version: f.version.clone() }).collect(),
+                };
+                if let Err(message) = self.take_listing(apply_events(&seen, &events), store, log).await {
+                    let _ = writeln!(log, "movements: {message}");
+                }
+                None
+            }
+            Ok(Watched::Resync) => {
+                self.watch_failed.replace(None);
+                *cursor = None;
+                None
+            }
+            Err(message) => {
+                self.watch_failure(log, &message);
+                Some(self.watch_pause)
+            }
+        }
+    }
+
+    /// Why the watch loop got nothing from the module.
+    fn watch_failure(&self, log: &mut impl Write, message: &str) {
+        self.say_once(log, format!("{KEPT} the movements module did not answer watch: {message}"));
+    }
+
+    /// A failure line, said once until the module answers again.
+    fn say_once(&self, log: &mut impl Write, line: String) {
+        if self.watch_failed.borrow().as_deref() != Some(line.as_str()) {
+            let _ = writeln!(log, "{line}");
+        }
+        self.watch_failed.replace(Some(line));
+    }
+
+    /// One `list`, and a `read` only for a file whose listed version
+    /// moved: false when the module did not list (said once).
+    pub(crate) async fn refresh_movements_now(&self, store: &dyn MovementsStore, log: &mut impl Write) -> Result<bool, String> {
+        match store.list() {
+            Ok(listed) => {
+                self.watch_failed.replace(None);
+                self.take_listing(ordered(listed), store, log).await.map(|()| true)
+            }
+            Err(message) => {
+                self.say_once(log, format!("{KEPT} the movements module did not answer: {message}"));
+                Ok(false)
+            }
+        }
+    }
+
+    /// A listing taken: a `read` only for a file whose listed version moved.
     /// A changed set is taken whole or not at all: imports link across
     /// files, so a partly taken set may be one that never existed together.
     /// One that does not check (a file has more errors than it had) keeps
     /// the running set, said once; work begun before a swap finishes on the
     /// files it began with.
-    pub(crate) async fn refresh_movements_now(&self, log: &mut impl Write) -> Result<(), String> {
-        let env: Vec<(String, String)> = std::env::vars().collect();
-        let listing = crate::movements_slot::of_project(&self.project, &env).and_then(|store| Ok((ordered(store.list()?), store)));
-        let (listed, store) = match listing {
-            Ok(answer) => {
-                self.list_failed.replace(None);
-                answer
-            }
-            Err(message) => {
-                if self.list_failed.borrow().as_deref() != Some(message.as_str()) {
-                    let _ = writeln!(log, "{KEPT} the movements module did not answer: {message}");
-                }
-                self.list_failed.replace(Some(message));
-                return Ok(());
-            }
-        };
+    async fn take_listing(&self, listed: Vec<Listed>, store: &dyn MovementsStore, log: &mut impl Write) -> Result<(), String> {
         let set = self.file_set();
         let changes = listing_changes(&set.files, &listed);
         if changes.to_read.is_empty() && changes.removed.is_empty() {
@@ -1730,13 +1831,135 @@ mod tests {
     #[test]
     fn the_refresh_interval_is_a_whole_number_of_milliseconds() {
         let ms = std::time::Duration::from_millis;
-        assert_eq!(refresh_interval_of(None), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
-        assert_eq!(refresh_interval_of(Some("")), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
-        assert_eq!(refresh_interval_of(Some("0")), Ok(ms(0)), "every pass");
-        assert_eq!(refresh_interval_of(Some(" 250 ")), Ok(ms(250)));
+        assert_eq!(watch_pause_of(None), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
+        assert_eq!(watch_pause_of(Some("")), Ok(ms(DEFAULT_MOVEMENTS_REFRESH_MS)));
+        assert_eq!(watch_pause_of(Some("0")), Ok(ms(100)), "never less than 100 ms");
+        assert_eq!(watch_pause_of(Some(" 250 ")), Ok(ms(250)));
         for raw in ["-1", "1.5", "5s", "soon"] {
-            assert_eq!(refresh_interval_of(Some(raw)), Err(format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds")));
+            assert_eq!(watch_pause_of(Some(raw)), Err(format!("LF_MOVEMENTS_REFRESH_MS is \"{raw}\": it must be a whole number of milliseconds")));
         }
+    }
+
+    #[test]
+    fn apply_events_moves_the_listing() {
+        let seen = [listed("a.mvt", Some("1")), listed("lib/b.mvt", Some("2")), listed("c.mvt", Some("3"))];
+        let event = |kind, path: &str, version: Option<&str>| Change { kind, path: path.into(), version: version.map(str::to_string) };
+        let events = [
+            event(ChangeKind::Changed, "a.mvt", Some("9")),
+            event(ChangeKind::Removed, "c.mvt", None),
+            event(ChangeKind::Added, "a/d.mvt", Some("4")),
+            event(ChangeKind::Added, "e.mvt", None),
+            event(ChangeKind::Removed, "e.mvt", None),
+            event(ChangeKind::Changed, "lib/b.mvt", None),
+        ];
+        assert_eq!(
+            apply_events(&seen, &events),
+            [listed("a/d.mvt", Some("4")), listed("a.mvt", Some("9")), listed("lib/b.mvt", None)],
+            "in order, the later event winning; a change without a version is a file to read; the walk's order"
+        );
+        assert_eq!(apply_events(&seen, &[]), ordered(seen.to_vec()));
+    }
+
+    /// A movements module that answers each watch from a script (the
+    /// folder's own watch once the script is spent) and counts its lists.
+    struct Scripted {
+        folder: crate::movements_slot::FolderMovements,
+        answers: RefCell<std::collections::VecDeque<Result<Watched, String>>>,
+        lists: Cell<usize>,
+    }
+
+    impl Scripted {
+        fn over(root: &std::path::Path, answers: Vec<Result<Watched, String>>) -> Scripted {
+            Scripted { folder: crate::movements_slot::FolderMovements::at(&root.join("movements")), answers: RefCell::new(answers.into()), lists: Cell::new(0) }
+        }
+    }
+
+    impl MovementsStore for Scripted {
+        fn list(&self) -> Result<Vec<Listed>, String> {
+            self.lists.set(self.lists.get() + 1);
+            self.folder.list()
+        }
+        fn read(&self, path: &str) -> Result<Option<crate::movements_slot::Text>, String> {
+            self.folder.read(path)
+        }
+        fn write(&self, path: &str, text: &str, expected: Option<&str>) -> Result<crate::movements_slot::Written, crate::movements_slot::WriteError> {
+            self.folder.write(path, text, expected)
+        }
+        fn watch<'a>(&'a self, cursor: Option<&'a str>, wait: Duration) -> crate::secrets_family::LocalFuture<'a, Result<Watched, String>> {
+            match self.answers.borrow_mut().pop_front() {
+                Some(answer) => Box::pin(async move { answer }),
+                None => self.folder.watch(cursor, wait),
+            }
+        }
+    }
+
+    fn events(cursor: &str, events: Vec<Change>) -> Result<Watched, String> {
+        Ok(Watched::Events { cursor: cursor.into(), events })
+    }
+
+    async fn step(session: &Session, store: &dyn MovementsStore, cursor: &mut Option<String>) -> (Option<Duration>, String) {
+        let mut log = Vec::new();
+        let pause = session.watch_once(store, cursor, &mut log).await;
+        (pause, String::from_utf8(log).unwrap())
+    }
+
+    #[test]
+    fn an_event_swaps_the_set() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            let store = crate::movements_slot::FolderMovements::at(&root.join("movements"));
+            let mut cursor = None;
+            assert_eq!(step(session, &store, &mut cursor).await, (None, String::new()), "the cursor taken, then one list: nothing changed since the open");
+            assert!(cursor.is_some());
+            let v2 = MANUAL_V1.replace("v1", "v2");
+            put(&root, "hello.mvt", &v2);
+            let asked = std::time::Instant::now();
+            let (pause, log) = step(session, &store, &mut cursor).await;
+            assert_eq!((pause, log.as_str()), (None, "movements: hello.mvt changed\n"), "an event is taken, with no pause after it");
+            assert!(asked.elapsed() < Duration::from_secs(3), "the edit is seen at once: {:?}", asked.elapsed());
+            assert_eq!(returns(session, "hello").await, "v2");
+        });
+    }
+
+    #[test]
+    fn a_resync_lists_once() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            let v2 = MANUAL_V1.replace("v1", "v2");
+            let store = Scripted::over(&root, vec![events("e:0", vec![]), Ok(Watched::Resync), events("e2:0", vec![])]);
+            let mut cursor = None;
+            assert_eq!(step(session, &store, &mut cursor).await, (None, String::new()));
+            assert_eq!((store.lists.get(), cursor.as_deref()), (1, Some("e:0")), "the cursor first, then one list");
+            put(&root, "hello.mvt", &v2);
+            assert_eq!(step(session, &store, &mut cursor).await, (None, String::new()), "resync: no pause, nothing said");
+            assert_eq!((store.lists.get(), cursor.as_deref()), (1, None), "listed on the next step, from a new cursor");
+            assert_eq!(step(session, &store, &mut cursor).await, (None, "movements: hello.mvt changed\n".to_string()), "the list sees what the events missed");
+            assert_eq!((store.lists.get(), cursor.as_deref()), (2, Some("e2:0")));
+            assert_eq!(returns(session, "hello").await, "v2");
+        });
+    }
+
+    #[test]
+    fn a_failing_watch_is_reported_once_and_retried() {
+        let root = refresh_project(&[("hello.mvt", MANUAL_V1)]);
+        with_session(&root.clone(), async |session| {
+            let down = || Err("the movements module acme: movements.watch: could not be reached".to_string());
+            let at_once = events("e:1", vec![]);
+            let store = Scripted::over(&root, vec![events("e:0", vec![]), down(), down(), at_once, down()]);
+            let mut cursor = None;
+            step(session, &store, &mut cursor).await;
+            let said = "movements: kept the files lf has; the movements module did not answer watch: the movements module acme: movements.watch: could not be reached\n";
+            let pause = Some(session.watch_pause);
+            assert_eq!(step(session, &store, &mut cursor).await, (pause, said.to_string()));
+            assert_eq!(step(session, &store, &mut cursor).await, (pause, String::new()), "said once");
+            assert_eq!(cursor.as_deref(), Some("e:0"), "retried with the same cursor");
+            assert_eq!(step(session, &store, &mut cursor).await, (pause, String::new()), "an empty answer at once: the pause");
+            assert_eq!(cursor.as_deref(), Some("e:1"));
+            assert_eq!(step(session, &store, &mut cursor).await, (pause, said.to_string()), "said again after an answer");
+            let malformed = Scripted::over(&root, vec![Err(crate::movements_slot::watched_of("the movements module acme", &Js::parse(br#"{"secret":"text"}"#).unwrap()).unwrap_err())]);
+            let (_, log) = step(session, &malformed, &mut cursor).await;
+            assert_eq!(log, "movements: kept the files lf has; the movements module did not answer watch: the movements module acme: movements.watch answered an object with secret, not the slot's shape\n", "named by its shape");
+        });
     }
 
     const MANUAL_V1: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
@@ -1778,7 +2001,9 @@ mod tests {
 
     async fn refreshed(session: &Session) -> String {
         let mut log = Vec::new();
-        session.refresh_movements_now(&mut log).await.unwrap();
+        let env: Vec<(String, String)> = std::env::vars().collect();
+        let store = crate::movements_slot::of_project(&session.project, &env).unwrap();
+        session.refresh_movements_now(&*store, &mut log).await.unwrap();
         String::from_utf8(log).unwrap()
     }
 

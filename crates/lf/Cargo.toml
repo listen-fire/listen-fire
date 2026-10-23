@@ -39,7 +39,7 @@ required-features = ["cli"]
 # `lf check` and a manual run with. Each omitted piece refuses by name when a
 # project asks for it.
 default = ["cli", "anthropic", "oauth", "postgres", "serve", "pdf"]
-cli = ["dep:module-wire", "dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:indexmap", "dep:tokio", "dep:hyper", "dep:hyper-util", "dep:hmac", "dep:base64", "dep:http-body-util", "dep:bytes", "dep:rusqlite", "dep:getrandom", "dep:uuid", "dep:sha2", "dep:jiff", "dep:url"]
+cli = ["dep:module-wire", "dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:indexmap", "dep:tokio", "dep:hyper", "dep:hyper-util", "dep:hmac", "dep:base64", "dep:http-body-util", "dep:bytes", "dep:rusqlite", "dep:getrandom", "dep:uuid", "dep:sha2", "dep:jiff", "dep:url", "dep:notify"]
 # HTTPS out, pure-Rust TLS: the pieces below that speak to a provider, a token
 # endpoint or a database over TLS need it; nothing else does.
 tls = ["dep:rustls", "dep:tokio-rustls", "dep:webpki-roots"]
@@ -96,6 +96,9 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # The run host's Postgres backend (src/pg_store.rs): the hosted product's
 # automations tables. Every value crosses as text, so no type features.
 tokio-postgres = { version = "0.7", optional = true }
+# The movements folder watched (src/movements_slot.rs `FolderWatch`):
+# FSEvents on macOS, inotify on Linux, so `lf serve` sees an edit at once.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"], optional = true }
 # Random bytes: a callback id (`newCallbackId`), and a sign-in's state and
 # PKCE verifier (src/oauth2.rs).
 getrandom = { version = "0.4", optional = true }

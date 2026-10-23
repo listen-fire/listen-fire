@@ -31,13 +31,14 @@ export interface MovementsModule {
   close(): Promise<void>;
 }
 
-/** `holds: false` answers every watch at once (a module that cannot wait);
+/** `watches: false` leaves `movements.watch` out of the manifest (a module
+ *  from before the method); `holds: false` answers every watch at once (a module that cannot wait);
  *  otherwise a watch is held until an event or `min(waitMs, 30000)`.
  *  `readOnly` is the reason it gives for refusing every write; `changeBeforeWrite`
  *  names a file whose version moves on once, just before its first write is
  *  answered (another writer got there first). */
 export async function serveMovementsModule(
-  options: { files?: Record<string, string>; listen?: string | number; print?: boolean; readOnly?: string; changeBeforeWrite?: string; holds?: boolean } = {},
+  options: { files?: Record<string, string>; listen?: string | number; print?: boolean; readOnly?: string; changeBeforeWrite?: string; holds?: boolean; watches?: boolean } = {},
 ): Promise<MovementsModule> {
   let counter = 0;
   const files = new Map<string, { text: string; version: string }>();
@@ -81,7 +82,7 @@ export async function serveMovementsModule(
   };
 
   const served = await serveSlot({
-    manifest: { protocolVersion: 2, name: 'acme_movements', kind: 'core', slot: 'movements', methods: [...MOVEMENTS_METHODS] },
+    manifest: { protocolVersion: 2, name: 'acme_movements', kind: 'core', slot: 'movements', methods: MOVEMENTS_METHODS.filter((method) => options.watches !== false || method !== 'movements.watch') },
     ...(options.listen !== undefined ? { listen: options.listen } : {}),
     ...(options.print !== undefined ? { print: options.print } : {}),
     answer: async (method, params, settings) => {

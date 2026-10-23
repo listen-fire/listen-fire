@@ -77,15 +77,26 @@ pub struct DrainOptions {
 }
 
 /// Each run a row stepped is reported as `lf resume` reports it, as it
-/// ends. The exit code is 1 when any of them failed.
+/// ends. The exit code is 1 when any of them failed. A worker that runs
+/// until stopped follows the movements module's changes meanwhile; one run
+/// `--until-idle` keeps the files it opened with.
 pub async fn drain(session: &Session, options: &DrainOptions, out: &mut impl Write) -> Result<i32, String> {
+    if options.until_idle {
+        return passes(session, options, out).await;
+    }
+    // The deadline ends both, a watch in flight with them.
+    let mut log = std::io::stderr();
+    tokio::select! {
+        drained = passes(session, options, out) => drained,
+        never = session.watch_movements(&mut log) => match never {},
+    }
+}
+
+async fn passes(session: &Session, options: &DrainOptions, out: &mut impl Write) -> Result<i32, String> {
     let deadline = options.max_seconds.map(|s| Instant::now() + Duration::from_secs(s));
     let past_deadline = || deadline.is_some_and(|d| Instant::now() >= d);
     let mut code = 0;
     while !past_deadline() {
-        if let Err(message) = session.refresh_movements(&mut std::io::stderr()).await {
-            eprintln!("movements: {message}");
-        }
         // As `lf resume`: a row that fails is retried later, its reason on stderr.
         let (claimed, outcomes) = session.drain_work(ROWS_PER_CLAIM, &mut std::io::stderr()).await?;
         if !outcomes.is_empty() {

@@ -9,8 +9,10 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SlotClient, startModule } from 'movement-engine/public/module-wire';
 import { EXAMPLE, project as exampleProject, served } from './example';
 import { lf } from './interactive';
+import { lfBinary } from './lf_bin';
 import { serveMovementsModule, type MovementsModule } from './movements_module/serve';
 
 const ENV = { LF_SECRET__ACME_MOVEMENTS__EXTERNAL: 'acme_movements', LF_SECRET__ACME_MOVEMENTS__TENANT: 't1' };
@@ -90,28 +92,146 @@ async function until(ready: () => boolean, what: string, ms = 20_000): Promise<v
   }
 }
 
-test('lf serve asks only list while nothing changes, and reads only the file that did', async () => {
+const OPEN = ['movements.list', 'movements.read hello.mvt', 'movements.read lib/greet.mvt', 'movements.list'];
+/** After the open: the cursor taken, one list, then a held watch. */
+const WATCHING = ['movements.watch', 'movements.list', 'movements.watch'];
+
+/** The starter greeting through `lib/greet.mvt`, its text changed. */
+async function edited(): Promise<string> {
+  return (await hello()).replace('return greet(run.`Run by (name)`)', 'return greet("again")');
+}
+
+test('lf serve only watches while nothing changes, and reads only the file that did', async () => {
   const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET } });
   const asked = () => module.calls.filter((call) => call.startsWith('movements.'));
-  const open = ['movements.list', 'movements.read hello.mvt', 'movements.read lib/greet.mvt', 'movements.list'];
   try {
-    const server = await served(project(module), [], { ...ENV, LF_MOVEMENTS_REFRESH_MS: '0' });
+    const server = await served(project(module), [], ENV);
     try {
-      await until(() => asked().length >= open.length + 3, 'three refreshes');
-      assert.deepEqual(asked().slice(0, open.length), open, 'the open reads each file once');
-      assert.deepEqual(new Set(asked().slice(open.length)), new Set(['movements.list']), 'nothing changed: only list');
+      await until(() => asked().length >= OPEN.length + WATCHING.length, 'a held watch');
+      assert.deepEqual(asked().slice(0, OPEN.length), OPEN, 'the open reads each file once');
+      assert.deepEqual(asked().slice(OPEN.length), WATCHING, 'nothing changed: the cursor, one list, then a watch held');
 
       const before = asked().length;
-      module.put('hello.mvt', (await hello()).replace('return greet(run.`Run by (name)`)', 'return greet("again")'));
+      module.put('hello.mvt', await edited());
       await server.waitFor(/^movements: hello\.mvt changed$/);
-      assert.deepEqual(
-        asked().slice(before).filter((call) => call.startsWith('movements.read')),
-        ['movements.read hello.mvt'],
-        'only the file whose version moved is read',
-      );
+      await until(() => asked().length >= before + 2, 'the next watch');
+      assert.deepEqual(asked().slice(before), ['movements.read hello.mvt', 'movements.watch'], 'only the file whose version moved is read, and no list');
     } finally {
       await server.stop();
     }
+  } finally {
+    await module.close();
+  }
+});
+
+test('an event after the first watch is run within one second', async () => {
+  const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET } });
+  const asked = () => module.calls.filter((call) => call.startsWith('movements.'));
+  try {
+    const server = await served(project(module), [], ENV);
+    try {
+      await until(() => asked().length >= OPEN.length + WATCHING.length, 'a held watch');
+      const put = Date.now();
+      module.put('hello.mvt', await edited());
+      await server.waitFor(/^movements: hello\.mvt changed$/);
+      const took = Date.now() - put;
+      assert.ok(took < 1_000, `the changed set was taken ${took} ms after the edit`);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    await module.close();
+  }
+});
+
+test('a run reads through the module while a watch is held', async () => {
+  const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET } });
+  const asked = () => module.calls.filter((call) => call.startsWith('movements.'));
+  try {
+    const dir = project(module);
+    const server = await served(dir, [], ENV);
+    try {
+      await until(() => asked().length >= OPEN.length + WATCHING.length, 'a held watch');
+      const door = Date.now();
+      const answered = await fetch(`http://127.0.0.1:${server.port}/hooks/nobody/x`, { method: 'POST', body: '{}' });
+      assert.ok(Date.now() - door < 1_000, 'lf serve answers its doors while the watch is held');
+      assert.ok(answered.status >= 400, `answered ${answered.status}`);
+    } finally {
+      await server.stop();
+    }
+    // lf's own client of the module, one process: a read answers while a
+    // watch through the same client is held, so the watch is not queued
+    // before the slot's other calls.
+    const runner = await startModule(lfBinary(), ['--contract-movements-slot', '--dir', dir], { env: ENV });
+    try {
+      const client = new SlotClient(runner.address, {});
+      const now = (await client.call('movements.watch', { waitMs: 0 })) as { cursor: string };
+      const held = client.call('movements.watch', { cursor: now.cursor, waitMs: 5_000 });
+      const asking = Date.now();
+      const read = (await client.call('movements.read', { path: 'lib/greet.mvt' })) as { text: string };
+      assert.equal(read.text, GREET);
+      assert.ok(Date.now() - asking < 1_000, `the read waited ${Date.now() - asking} ms behind the held watch`);
+      assert.deepEqual(await held, { cursor: now.cursor, events: [] }, 'the watch was still held');
+    } finally {
+      await runner.close();
+    }
+  } finally {
+    await module.close();
+  }
+});
+
+test("a restarted module's resync is one list", async () => {
+  const files = { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET };
+  const first = await serveMovementsModule({ listen: 0, files });
+  // The test module counts its versions from v1 in each process: put once
+  // more, so the restarted one's hello.mvt is at a version lf never held.
+  first.put('hello.mvt', files['hello.mvt']);
+  const asked = (module: MovementsModule) => module.calls.filter((call) => call.startsWith('movements.'));
+  const port = Number(new URL(first.url).port);
+  let second: MovementsModule | undefined;
+  let firstOpen = true;
+  try {
+    const server = await served(project(first), [], { ...ENV, LF_MOVEMENTS_REFRESH_MS: '200' });
+    try {
+      await until(() => asked(first).length >= OPEN.length + WATCHING.length, 'a held watch');
+      firstOpen = false;
+      await first.close();
+      await server.waitFor(/^movements: kept the files lf has; the movements module did not answer watch: /);
+      // The same address, a new process: a new epoch, and the edit made while it was down.
+      second = await serveMovementsModule({ listen: port, files: { ...files, 'hello.mvt': await edited() } });
+      await server.waitFor(/^movements: hello\.mvt changed$/);
+      await until(() => asked(second!).filter((call) => call === 'movements.watch').length >= 3, 'a watch held again');
+      assert.deepEqual(
+        asked(second).slice(0, 5),
+        ['movements.watch', 'movements.watch', 'movements.list', 'movements.read hello.mvt', 'movements.watch'],
+        'the old cursor answered resync; then the cursor, one list, and the changed file read',
+      );
+      assert.equal(asked(second).filter((call) => call === 'movements.list').length, 1, 'one list');
+      const failures = server.lines.filter((line) => line.includes('did not answer watch'));
+      assert.equal(new Set(failures).size, failures.length, `each failure said once: ${failures.join('\n')}`);
+    } finally {
+      await server.stop();
+    }
+  } finally {
+    if (firstOpen) await first.close();
+    await second?.close();
+  }
+});
+
+test('lf serve and lf drain refuse a module that does not answer movements.watch; a one-shot does not need it', async () => {
+  const module = await serveMovementsModule({ listen: 0, files: { 'hello.mvt': await hello(), 'lib/greet.mvt': GREET }, watches: false });
+  try {
+    const dir = project(module);
+    for (const [command, args] of [['lf serve', ['serve', '--port', '0']], ['lf drain', ['drain']]] as const) {
+      const refused = await lf(dir, [...args], { env: ENV }).done;
+      assert.equal(refused.code, 1, refused.out);
+      assert.equal(refused.out, `lf: the movements module acme_movements does not answer movements.watch; ${command} needs it\n`);
+    }
+    const idle = await lf(dir, ['drain', '--until-idle'], { env: ENV }).done;
+    assert.equal(idle.code, 0, idle.out);
+    const run = await lf(dir, ['run', 'hello'], { env: ENV }).done;
+    assert.equal(run.code, 0, run.out);
+    assert.equal(module.calls.filter((call) => call === 'movements.watch').length, 0, 'nothing asked it to watch');
   } finally {
     await module.close();
   }
