@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn a_parked_run_resumes_from_its_stored_state() {
         #[derive(Default)]
-        struct Timers(Vec<TimerPark>);
+        struct Timers(Vec<TimerPark>, Vec<String>);
         impl Store for Timers {
             fn keeps_parks(&self) -> bool {
                 true
@@ -672,6 +672,13 @@ mod tests {
             fn commit_timer_park(&mut self, park: TimerPark) -> HostFuture<()> {
                 self.0.push(park);
                 ready(Ok(()))
+            }
+            fn save_source(&mut self, source: &str) -> HostFuture<String> {
+                self.1.push(source.to_string());
+                ready(Ok((self.1.len() - 1).to_string()))
+            }
+            fn load_source(&mut self, hash: &str) -> HostFuture<Option<String>> {
+                ready(Ok(hash.parse::<usize>().ok().and_then(|i| self.1.get(i).cloned())))
             }
         }
         let (mut inbox, mut timers) = (Inbox, Timers::default());

@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- **For embedders, a breaking change to the Rust embedding API (an API change, not a language change; within 0.12).** `embed::Store` now requires `save_source` and `load_source`, which keep a library's text under its hash and read it back. Before, they had a default that refused, so an embedder whose run linked a library and then parked failed at park time with "park.sources.save not served". A `Store` that omits them no longer compiles (error E0046 names the missing method); implement both over the same place the store keeps its parks. The TypeScript `RunHostStore` already required its `sources`.
+
 ## [0.12.3] - 2026-10-23
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: the first change below fixes a write that could reach the wrong workspace.

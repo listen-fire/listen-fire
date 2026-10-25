@@ -116,6 +116,7 @@ impl World {
 #[derive(Debug, Default)]
 pub struct Parks {
     pub timers: Vec<TimerPark>,
+    sources: Vec<String>,
 }
 
 impl Store for Parks {
@@ -131,7 +132,14 @@ impl Store for Parks {
         ready(Ok(()))
     }
     fn save_source(&mut self, source: &str) -> HostFuture<String> {
-        ready(Ok(format!("src-{}", source.len())))
+        let index = self.sources.iter().position(|kept| kept == source).unwrap_or_else(|| {
+            self.sources.push(source.to_string());
+            self.sources.len() - 1
+        });
+        ready(Ok(format!("src-{index}")))
+    }
+    fn load_source(&mut self, hash: &str) -> HostFuture<Option<String>> {
+        ready(Ok(hash.strip_prefix("src-").and_then(|i| i.parse::<usize>().ok()).and_then(|i| self.sources.get(i).cloned())))
     }
 }
 

@@ -2,7 +2,7 @@
 
 The movement engine. Embed it in a Rust program with `embed`: implement the
 host traits your movements need (`Adapters` for the systems they read and
-write, `Store` to park a `sleep`, `Models`, `Judge`, `Files`, `Modules`,
+write, `Store` to park a `sleep` (it must also keep and return library texts by hash: `save_source`, `load_source`), `Models`, `Judge`, `Files`, `Modules`,
 `Secrets`, `Clock`, `Trace`), then `embed::check` a movement and
 `embed::run` it on an event. Every host call returns a future (an
 in-memory host returns `ready(…)`), and the run starts every request the

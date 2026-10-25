@@ -159,6 +159,23 @@ pub struct MintedCallback {
 /// Where a run's parked flows live, and the run's control: its locks and
 /// its cancel gate. `keeps_parks` false (the default) tells the engine the
 /// host cannot park, and a `sleep` or an `await` fails the run.
+///
+/// Saving and loading a library's text (`save_source`, `load_source`) are
+/// required, with no default: a run that links a library and then parks names
+/// the library's text by hash in the park, and a store that cannot keep it
+/// would fail only at park time. A store without them does not compile
+/// (error E0046 names the missing method); the remedy is to keep each text
+/// under its content hash and answer a load from the same place.
+///
+/// ```compile_fail,E0046
+/// use movement_engine::embed::Store;
+/// struct NoSources;
+/// impl Store for NoSources {
+///     fn keeps_parks(&self) -> bool {
+///         true
+///     }
+/// }
+/// ```
 pub trait Store {
     fn keeps_parks(&self) -> bool {
         false
@@ -201,12 +218,9 @@ pub trait Store {
         unserved("park.callbacks.calls")
     }
     /// A library's text kept once by its content: answered with its hash.
-    fn save_source(&mut self, _source: &str) -> HostFuture<String> {
-        unserved("park.sources.save")
-    }
-    fn load_source(&mut self, _hash: &str) -> HostFuture<Option<String>> {
-        unserved("park.sources.load")
-    }
+    fn save_source(&mut self, source: &str) -> HostFuture<String>;
+    /// A kept text by its hash; `None` when none is kept under it.
+    fn load_source(&mut self, hash: &str) -> HostFuture<Option<String>>;
     /// The cross-run write locks: answered with a token once held. One
     /// process running one segment at a time holds a lock as soon as it asks.
     fn acquire_locks(&mut self, names: &[String]) -> HostFuture<String> {

@@ -618,7 +618,7 @@ answer:  Array<{ at: string; values: Record<string, unknown> }>   // at: ISO 860
 
 ### `park.sources`
 
-The library texts a park pins ([park-state.md](park-state.md), version 2's `libraries`), each kept once by its content. A park names a library by the hash `save` answers; a resume reads the text back by that hash, whatever the team has saved since. The text is opaque to the host. Only the Rust engine asks (park state version 2).
+The library texts a park pins ([park-state.md](park-state.md), version 2's `libraries`), each kept once by its content. A park names a library by the hash `save` answers; a resume reads the text back by that hash, whatever the team has saved since. The text is opaque to the host. Only the Rust engine asks (park state version 2). A host that parks must serve it: the engine's own `RunHostStore` and the Rust embedding's `Store` both require saving and loading library texts, with no refusing default, so a run that links a library and then parks never fails for want of it.
 
 #### `park.sources.save`
 
