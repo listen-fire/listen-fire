@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/evertrace",
   "license": "Apache-2.0",
-  "version": "0.12.5",
+  "version": "0.12.6",
   "description": "Evertrace (signals about founders, saved searches, lists) as a module: polled for new signals and list additions, with a write surface over searches, lists and list entries. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"

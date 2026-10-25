@@ -20,6 +20,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.6] - 2026-10-25
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It is the last release in which every package moves together. From now on modules release on their own versions: a module's contract with `lf` is the adapter protocol minor its manifest states, and its imports of the core are wide peers (`>=0.12.0 <1.0.0`). `lf --version` lists the modules bundled beside it. **For slot module authors:** lf now reads a slot module's manifest before anything else it asks, so a slot module must answer `manifest` first (one served by the module kit or by `lf`'s own slot server already does).
+
 - **Adapter protocol 2.N.** A module's manifest states the minor of adapter protocol 2 it uses, `protocolMinor`, beside `protocolVersion: 2`. The module kits (TypeScript and Rust) and the slot servers compute it from the methods the manifest lists: 2.1 is a `<slot>.watch` method, 2.2 is `work.enqueueIfAbsent`; an author may raise it, never lower it. `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, naming its package and version when found, what it speaks and what to upgrade; a core module's manifest is now read and checked too, before any other method it is asked: as `lf drain` (and `lf serve --doors-only`) opens for the modules it starts up front, before any work is claimed, and at the first call otherwise. A module stating no minor (every one published up to 0.12.5) is read as 2.0 and loads as before, and an `lf` up to 0.12.5 ignores the field. The refusals of a movements module without `movements.watch` and of a store module without `work.enqueueIfAbsent` now name the minor that added the method. See the protocol's [Versioning](docs/contracts/adapter-protocol.md#versioning).
 
 - `lf --version` prints `lf <version>`, then the adapter protocol range it speaks (`adapter protocol 2.0–2.2`), then the modules bundled beside it with their versions (the bundle's `VERSIONS` file). Modules release on versions of their own, so the binary's version no longer says what the bundle carries.
@@ -2293,7 +2297,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...HEAD
+[0.12.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...v0.12.3

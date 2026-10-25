@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/affinity",
   "license": "Apache-2.0",
-  "version": "0.12.5",
+  "version": "0.12.6",
   "description": "Affinity (organizations, people, opportunities, lists, notes, files) as a module: read, written, and signed webhooks. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"
