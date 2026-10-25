@@ -604,20 +604,24 @@ impl Session {
         Ok(outcomes)
     }
 
-    /// Give each polled listen seen for the first time its `poll_listen` work
-    /// row, due now. The row then lives as long as the listen: each poll
-    /// releases it for the next interval, so whichever worker claims it
-    /// (under the work lease, so never two at once) polls, and a poll due
-    /// while no worker ran is one poll on the next drain.
+    /// Give each polled listen not yet polled its `poll_listen` work row,
+    /// due now. The row then lives as long as the listen: each poll releases
+    /// it for the next interval, so whichever worker claims it (under the
+    /// work lease, so never two at once) polls, and a poll due while no
+    /// worker ran is one poll on the next drain. The row is queued only
+    /// where none is (`enqueue_if_absent`): workers arming one listen at
+    /// once queue it once, and an arm never moves the due time of the row
+    /// another worker holds, which would poll it again at once.
     fn arm_polls(&self, set: &FileSet) -> Result<(), String> {
         for (_, _, subscription) in set.polled_listens() {
+            // Polled before: its row is there, and its checkpoint says so.
             if self.store.inbound_checkpoint(&subscription).map_err(|e| e.to_string())?.is_some() {
                 continue;
             }
-            self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "armed" => Js::Bool(true) })).map_err(|e| e.to_string())?;
             let payload = Js::Obj(obj! { "subscription" => Js::str(&subscription) });
-            self.store.enqueue(POLL_WORK_KIND, &format!("{POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())?;
-            crate::wake::queued(POLL_WORK_KIND, None);
+            if self.store.enqueue_if_absent(POLL_WORK_KIND, &format!("{POLL_WORK_KIND}:{subscription}"), &payload, None, None).map_err(|e| e.to_string())? {
+                crate::wake::queued(POLL_WORK_KIND, None);
+            }
         }
         Ok(())
     }

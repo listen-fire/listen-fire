@@ -234,6 +234,9 @@ pub trait RunHostStore {
     // ── The work queue ──────────────────────────────────────────────────────
     /// `team_id` absent: the store's own tenant's row.
     fn enqueue(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<()>;
+    /// Insert when no row has the key, in one write; a row there in any
+    /// state (due, leased, dead) is left as it is. Whether it was queued.
+    fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<bool>;
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>>;
     fn complete(&self, id: &str, claim: &str) -> Result<()>;
     fn release_work(&self, id: &str, claim: &str, due_at: Option<&str>, why: Release) -> Result<()>;
@@ -423,6 +426,9 @@ impl RunHostStore for Store {
     // The state file has one tenant, so a row's team is not kept.
     fn enqueue(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, _team_id: Option<&str>) -> Result<()> {
         Store::enqueue(self, kind, key, payload, due_at)
+    }
+    fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, _team_id: Option<&str>) -> Result<bool> {
+        Store::enqueue_if_absent(self, kind, key, payload, due_at)
     }
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>> {
         Store::claim_due(self, claim)

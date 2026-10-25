@@ -257,6 +257,9 @@ impl RunHostStore for ProcessStore {
     fn enqueue(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<()> {
         self.unit("work.enqueue", obj! { "kind" => s(kind), "key" => s(key), "payload" => payload.clone(), "dueAt" => opt(due_at), "teamId" => opt(team_id) })
     }
+    fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<bool> {
+        self.flag("work.enqueueIfAbsent", obj! { "kind" => s(kind), "key" => s(key), "payload" => payload.clone(), "dueAt" => opt(due_at), "teamId" => opt(team_id) })
+    }
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>> {
         let mut params = obj! { "limit" => Js::Num(claim.limit.into()), "leaseMs" => Js::Num(claim.lease_ms.into()), "dueBy" => opt(claim.due_by) };
         // Absent, not null, for every kind: a module written before pools reads the same claim.

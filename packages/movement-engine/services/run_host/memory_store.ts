@@ -224,6 +224,11 @@ export function memoryRunHostStore(options: { now?: () => number } = {}): RunHos
         if (teamId !== undefined) row.teamId = teamId;
         row.armed += 1;
       },
+      async enqueueIfAbsent({ kind, key, payload, dueAt, teamId }) {
+        if (work.has(key)) return false;
+        work.set(key, { id: randomUUID(), kind, key, payload: stored(payload), dueAt: dueAt !== undefined ? Date.parse(dueAt) : now(), teamId, claim: undefined, leasedUntil: 0, armed: 0, armedAtClaim: 0 });
+        return true;
+      },
       async claimDue({ limit, leaseMs, dueBy, kinds }) {
         const by = dueBy !== undefined ? Date.parse(dueBy) : now();
         const claimed: ClaimedWork[] = [];

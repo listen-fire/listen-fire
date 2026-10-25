@@ -133,6 +133,31 @@ export const runHostContractCases: ContractCase[] = [
     },
   },
   {
+    name: 'work: a key queued if absent is queued once; a row there, due later or leased, is left as it was',
+    async run({ store }) {
+      const key = uniqueKey('poll_listen');
+      assert.equal(await store.work.enqueueIfAbsent({ kind: 'poll_listen', key, payload: { n: 1 }, dueAt: FUTURE(10) }), true);
+      assert.equal(await store.work.enqueueIfAbsent({ kind: 'poll_listen', key, payload: { n: 2 }, dueAt: PAST(1) }), false);
+      assert.equal(await claimKey(store, key), undefined, 'still due later: the second arm moved nothing');
+      await store.work.enqueue({ kind: 'poll_listen', key, payload: { n: 3 }, dueAt: PAST(1) });
+      const held = await claimKey(store, key);
+      assert.deepEqual(held?.payload, { n: 3 });
+      assert.ok(held);
+      // Another worker arms the same listen while the row is held: nothing changes,
+      // so the holder's release decides when it is next due.
+      assert.equal(await store.work.enqueueIfAbsent({ kind: 'poll_listen', key, payload: { n: 4 }, dueAt: PAST(1) }), false);
+      await store.work.release({ ...held, dueAt: FUTURE(30) });
+      assert.equal(await claimKey(store, key), undefined, 'due at the release time, not polled again at once');
+      const later = await store.work.claimDue({ limit: 1000, leaseMs: 60_000, dueBy: FUTURE(31) });
+      const again = later.find((w) => w.key === key);
+      assert.deepEqual(again?.payload, { n: 3 }, 'the payload the row had');
+      for (const w of later) if (w.key === key) await store.work.complete(w);
+      assert.equal(await store.work.enqueueIfAbsent({ kind: 'poll_listen', key, payload: { n: 5 }, dueAt: PAST(1) }), true, 'completed and gone, it is queued again');
+      const last = await claimKey(store, key);
+      if (last) await store.work.complete(last);
+    },
+  },
+  {
     name: 'work: only due, unleased rows are claimed; a live lease blocks a second claim',
     async run({ store }) {
       const due = uniqueKey('wake_await');

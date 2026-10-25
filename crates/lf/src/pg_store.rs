@@ -899,6 +899,20 @@ impl RunHostStore for PgStore {
         self.enqueue_row(kind, key, payload, due_at, team_id.unwrap_or(&self.tenant))
     }
 
+    fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<bool> {
+        if !WORK_KINDS.contains(&kind) {
+            return Err(StoreError::Invalid(format!("not a work kind: {kind}")));
+        }
+        let (payload, team_id) = (payload.to_json(), team_id.unwrap_or(&self.tenant));
+        let inserted = self.execute(
+            "insert into lf.work (kind, key, team_id, payload, due_at, updated_at)
+             values ($1::text, $2::text, $3::text::uuid, $4::text::jsonb, coalesce($5::text::timestamptz, now()), date_trunc('milliseconds', clock_timestamp()))
+             on conflict (key) do nothing",
+            &[&kind, &key, &team_id, &payload, &due_at],
+        )?;
+        Ok(inserted == 1)
+    }
+
     /// One statement, so two drainers cannot race: SKIP LOCKED hands each a
     /// disjoint set, and MATERIALIZED fixes the selection before the update.
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>> {

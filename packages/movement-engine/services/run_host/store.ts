@@ -135,6 +135,11 @@ export interface WorkQueue {
    *  a leased row the new one does (a re-arm during the work). The payload is
    *  always the new one. */
   enqueue(input: { kind: string; key: string; payload: unknown; dueAt?: string; teamId?: string }): Promise<void>;
+  /** Insert when no row has the key, in one write; a row there in any state
+   *  (due, leased, buried) is left as it is. Whether it was queued: arming a
+   *  listen's standing row from several workers queues it once, and never
+   *  moves the due time of a row another worker holds. */
+  enqueueIfAbsent(input: { kind: string; key: string; payload: unknown; dueAt?: string; teamId?: string }): Promise<boolean>;
   /** Lease up to `limit` rows due by `dueBy`, unleased or with a lapsed lease;
    *  only rows of `kinds` when it is given (a drain pool's), else every kind. */
   claimDue(input: { limit: number; leaseMs: number; dueBy?: string; kinds?: readonly string[] }): Promise<ClaimedWork[]>;

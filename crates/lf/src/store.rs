@@ -1007,6 +1007,18 @@ impl Store {
         Ok(())
     }
 
+    pub fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>) -> Result<bool> {
+        if !WORK_KINDS.contains(&kind) {
+            return Err(StoreError::Invalid(format!("not a work kind: {kind}")));
+        }
+        let now = iso(0);
+        let inserted = self.db.execute(
+            "insert into work (kind, key, payload, due_at) values (?, ?, ?, ?) on conflict (key) do nothing",
+            params![kind, key, text_of(payload), due_at.unwrap_or(&now)],
+        )?;
+        Ok(inserted == 1)
+    }
+
     pub fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>> {
         let now = iso(0);
         let due_by = claim.due_by.map(str::to_string).unwrap_or_else(|| now.clone());
@@ -1275,7 +1287,20 @@ mod tests {
     }
 
     #[test]
-    fn enqueue_against_a_row_whose_lease_lapsed_keeps_the_earlier_due_time() {
+    fn an_arm_if_absent_leaves_a_held_row_due_when_its_holder_says() {
+        let (store, _) = state_file();
+        assert!(store.enqueue_if_absent("poll_listen", "p", &no_payload(), None).unwrap(), "queued");
+        let held = store.claim_due(&claim(10, 60_000)).unwrap();
+        assert_eq!(held.len(), 1);
+        assert!(!store.enqueue_if_absent("poll_listen", "p", &no_payload(), None).unwrap(), "a second worker's arm queues nothing");
+        let next = iso(3_600_000);
+        store.release_work(&held[0].id, &held[0].claim, Some(&next), Release::Rescheduled).unwrap();
+        assert_eq!(work_row(&store, "p").0, next, "due when the holder said, not at once");
+        assert!(store.claim_due(&claim(10, 60_000)).unwrap().is_empty());
+    }
+
+    #[test]
+        fn enqueue_against_a_row_whose_lease_lapsed_keeps_the_earlier_due_time() {
         let (store, _) = state_file();
         let due = iso(-60_000);
         store.enqueue("resume_timer", "k", &no_payload(), Some(&due)).unwrap();

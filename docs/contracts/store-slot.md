@@ -81,6 +81,7 @@ The first request is always `store.open`. The others are the run host's store fa
 | `leases.release` | `{ runId, token }` | `null` |
 | `leases.dropRunState` | `{ runId, fence }` | boolean |
 | `work.enqueue` | `{ kind, key, payload, dueAt, teamId }` | `null` |
+| `work.enqueueIfAbsent` | `{ kind, key, payload, dueAt, teamId }` | boolean: whether it was queued. One write: the row is inserted only when no row has the key; a row there in any state (due, leased, dead) is left as it is, its due time and payload untouched. lf arms a polled listen's standing row with it, so several workers arming it at once queue it once and never move the due time of a row another holds |
 | `work.claimDue` | `{ limit, leaseMs, dueBy, kinds? }`; `kinds` (a drain pool's) leases only rows of those kinds, absent every kind; a dead row is never claimed | `[{ id, kind, key, payload, claim, attempts }]`; `attempts` counts the row's claims, this one included, less those released `busy`, since it was queued or released `rescheduled` |
 | `work.complete` | `{ id, claim }` | `null` |
 | `work.release` | `{ id, claim, dueAt, why? }`; `why` is `failed` (the claim was an attempt; the default), `busy` (its run was held elsewhere: the attempt is given back) or `rescheduled` (done, and due again: the attempts start over) | `null` |

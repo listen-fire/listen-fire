@@ -385,6 +385,9 @@ slot! {
         "leases.release" => fn release_lease(LeasesRelease { run_id: String, token: String }) -> ();
         "leases.dropRunState" => fn drop_run_state(LeasesDropRunState { run_id: String, fence: Option<String> }) -> bool;
         "work.enqueue" => fn enqueue(WorkEnqueue { kind: String, key: String, payload: Js, due_at: Option<String>, team_id: Option<String> }) -> ();
+        /// Insert when no row has the key, in one write; a row there in any
+        /// state (due, leased, dead) is left as it is. Whether it was queued.
+        "work.enqueueIfAbsent" => fn enqueue_if_absent(WorkEnqueueIfAbsent { kind: String, key: String, payload: Js, due_at: Option<String>, team_id: Option<String> }) -> bool;
         /// `kinds` (a drain pool's) leases only rows of those kinds; absent, every kind.
         "work.claimDue" => fn claim_due(WorkClaimDue { limit: i64, lease_ms: i64, due_by: Option<String>, kinds: Option<Vec<String>> }) -> Vec<ClaimedWork>;
         "work.complete" => fn complete_work(WorkComplete { id: String, claim: String }) -> ();

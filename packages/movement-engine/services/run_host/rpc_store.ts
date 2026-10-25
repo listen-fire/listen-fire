@@ -323,6 +323,7 @@ export class RpcStoreBackend {
         enqueue: async (input) => {
           await call('work.enqueue', input, Nothing);
         },
+        enqueueIfAbsent: (input) => call('work.enqueueIfAbsent', input, z.boolean()),
         claimDue: (input) => call('work.claimDue', input, z.array(Work)),
         complete: async (work) => {
           await call('work.complete', claimOf(work), Nothing);

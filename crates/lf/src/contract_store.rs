@@ -39,7 +39,7 @@ pub const STORE_METHODS: &[&str] = &[
     "correlations.dropRun", "leases.claim", "leases.renew", "leases.release", "leases.dropRunState", "work.enqueue", "work.claimDue",
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
-    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId",
+    "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -314,6 +314,7 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
             store.enqueue(p.str("kind")?, p.str("key")?, &p.value("payload"), p.opt_str("dueAt")?, p.opt_str("teamId")?)?;
             none
         }
+        "work.enqueueIfAbsent" => Ok(Js::Bool(store.enqueue_if_absent(p.str("kind")?, p.str("key")?, &p.value("payload"), p.opt_str("dueAt")?, p.opt_str("teamId")?)?)),
         "work.claimDue" => {
             let kinds = p.opt_strings("kinds")?;
             let claim = ClaimDue { limit: p.int("limit")?, lease_ms: p.int("leaseMs")?, due_by: p.opt_str("dueBy")?, kinds: kinds.as_deref() };
