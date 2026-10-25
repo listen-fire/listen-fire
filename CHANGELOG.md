@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A refresh under `lf serve` or `lf drain` reads again only the files whose text changed: each file's parse and listens are kept while its text is, and only the check runs over the whole set (imports link across files). A run starts from a copy of its file's parse, kept for the process (the engine's `keep_parses`, 128 files), rather than parsing it again. On a 200-file set, a refresh after one file changed went from 450 ms to 245 ms (the rest is the whole-set check), and a run's parse from 0.35 ms to a 0.08 ms copy.
+
 - An edit under a running `lf serve` or `lf drain` that leaves a module imported by no movement now stops that module's process, once the runs that began before the edit are done with it (`movements: dropped <external>, which no file imports now`). A module a set that does not check started is stopped with it. Before, a refresh only ever started modules. A first-party module, which shares one process with the others, is left out of that process's next start instead.
 
 - A module's webhook registration follows an edit under a running `lf serve`: when a refresh changes the events a module's listens name, lf registers the webhook for them (changed in place where the module can), and removes it once no listen needs it, as `lf serve`'s start does. Before, the refresh only printed that the registration would change at the next restart. A registration that fails is printed once per message and tried again at the next change.

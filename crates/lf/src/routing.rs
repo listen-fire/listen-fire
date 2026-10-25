@@ -11,9 +11,7 @@ use movement_parser::ast::{NamedArg, RValue, Statement};
 use movement_parser::util::form::external_text;
 use serde_json::Value as Json;
 
-use crate::check::parse;
 use crate::json::{Js, Obj};
-use crate::sources::MovementFile;
 use crate::wire::js_of_json;
 
 /// One `listen` statement, with its instance's construction resolved (`FileListener`).
@@ -75,51 +73,48 @@ fn external_js(value: &Json) -> Js {
     }
 }
 
-/// `collectListens`: every listen across the files. A file that does not
-/// parse routes nothing (`check` says why).
-pub fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
+/// `collectListens` for one file: the listens of `file`, whose program is
+/// `program` (crate::sources::Parsed reads them with its parse).
+pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Listen> {
     let mut listens = Vec::new();
-    for file in files {
-        let Ok(program) = parse(&file.source) else { continue };
-        let mut originals: HashMap<String, String> = HashMap::new();
-        // Each instance's adapter, by the instance's name. (The construction's
-        // credential is not part of a local listen: the run resolves it.)
-        let mut constructions: HashMap<String, String> = HashMap::new();
-        let mut declared = Vec::new();
-        for statement in &program.statements {
-            match statement {
-                Statement::Import(import) => {
-                    for name in &import.names {
-                        if let Some(alias) = &name.alias {
-                            originals.insert(alias.clone(), name.name.clone());
-                        }
+    let mut originals: HashMap<String, String> = HashMap::new();
+    // Each instance's adapter, by the instance's name. (The construction's
+    // credential is not part of a local listen: the run resolves it.)
+    let mut constructions: HashMap<String, String> = HashMap::new();
+    let mut declared = Vec::new();
+    for statement in &program.statements {
+        match statement {
+            Statement::Import(import) => {
+                for name in &import.names {
+                    if let Some(alias) = &name.alias {
+                        originals.insert(alias.clone(), name.name.clone());
                     }
                 }
-                Statement::Assign(assign) => {
-                    if let RValue::Construct { construct } = &assign.value {
-                        let adapter = originals.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
-                        constructions.insert(assign.name.clone(), adapter);
-                    }
+            }
+            Statement::Assign(assign) => {
+                if let RValue::Construct { construct } = &assign.value {
+                    let adapter = originals.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
+                    constructions.insert(assign.name.clone(), adapter);
                 }
-                Statement::Listen(listen) => declared.push(listen),
-                _ => {}
             }
+            Statement::Listen(listen) => declared.push(listen),
+            _ => {}
         }
-        for listen in declared {
-            // A unit the file does not bind itself is the host's own.
-            let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
-            let Some(adapter) = constructions.get(&listen.instance).cloned().or(unit) else { continue };
-            let mut config = Obj::new();
-            for arg in &listen.config {
-                config.insert(arg.name.clone(), config_value_of(arg));
-            }
-            listens.push(Listen {
-                file: file.name.clone(),
-                adapter,
-                config,
-                movement_name: listen.movement.clone(),
-            });
+    }
+    for listen in declared {
+        // A unit the file does not bind itself is the host's own.
+        let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
+        let Some(adapter) = constructions.get(&listen.instance).cloned().or(unit) else { continue };
+        let mut config = Obj::new();
+        for arg in &listen.config {
+            config.insert(arg.name.clone(), config_value_of(arg));
         }
+        listens.push(Listen {
+            file: file.to_string(),
+            adapter,
+            config,
+            movement_name: listen.movement.clone(),
+        });
     }
     listens
 }
@@ -258,7 +253,13 @@ pub fn trigger_event_of(pipeline_input_id: &str, adapter_type: &str, event: &Js,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::{MovementFile, Parsed};
     use std::path::PathBuf;
+
+    /// Every listen across the files.
+    fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
+        files.iter().flat_map(|file| Parsed::of(file).listens).collect()
+    }
 
     fn js(text: &str) -> Js {
         Js::parse(text.as_bytes()).unwrap()

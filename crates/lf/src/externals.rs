@@ -20,7 +20,7 @@ use serde_json::json;
 use crate::json::{Js, Obj};
 use crate::module_hosts::{Launch, Lease, ModuleProcess, Mount};
 use crate::project::Project;
-use crate::sources::MovementFile;
+use crate::sources::Parsed;
 use crate::credential_calls::{Sending, Target, send};
 use crate::oauth2::{Declaration, declarations_of};
 use crate::protocol::shape_error;
@@ -372,10 +372,10 @@ async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, meth
 /// import no external is named for is found in a plugin external's
 /// manifest, so then every plugin external is needed. `also`: any other
 /// external the caller needs.
-pub fn needed_externals(externals: Vec<External>, files: &[MovementFile], also: impl Fn(&External) -> bool) -> Vec<External> {
+pub fn needed_externals(externals: Vec<External>, files: &[std::rc::Rc<Parsed>], also: impl Fn(&External) -> bool) -> Vec<External> {
     let mut imported = Vec::new();
     for file in files {
-        let Ok(program) = crate::check::parse(&file.source) else { continue };
+        let Ok(program) = &file.program else { continue };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
             if let ImportSource::Builtin { namespace } = &import.source
@@ -765,7 +765,7 @@ mod tests {
 
     #[test]
     fn only_the_imported_externals_are_needed() {
-        let file = |source: &str| MovementFile { name: "m".into(), path: PathBuf::from("m.mvt"), source: source.into(), version: None };
+        let file = |source: &str| std::rc::Rc::new(Parsed::of(&crate::sources::MovementFile { name: "m".into(), path: PathBuf::from("m.mvt"), source: source.into(), version: None }));
         let all = || {
             vec![
                 installed("attio", "adapter", Some("@lf/attio")),

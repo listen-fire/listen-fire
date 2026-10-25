@@ -21,7 +21,7 @@ use crate::project::Project;
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
 use crate::secrets::{Credentials, MissingCredential, Secrets, missing_credentials};
-use crate::sources::{MovementFile, scan_movements};
+use crate::sources::{MovementFile, Parsed, scan_movements};
 
 /// The one tenant a local project is (`LOCAL_TENANT`).
 pub const LOCAL_TENANT: &str = "local";
@@ -57,14 +57,19 @@ pub struct FileDiagnostic {
 
 /// Every diagnostic one file has. A file that does not parse has one, its parse refusal.
 pub fn check_file(file: &MovementFile, catalog: &CatalogSnapshot) -> Result<Vec<FileDiagnostic>, String> {
-    if let Err(refused) = parse(&file.source) {
+    check_parsed(file, &parse(&file.source), catalog)
+}
+
+/// `check_file`, the file already parsed (`parsed`, its text's parse).
+pub fn check_parsed(file: &MovementFile, parsed: &Result<Program, ParseError>, catalog: &CatalogSnapshot) -> Result<Vec<FileDiagnostic>, String> {
+    if let Err(refused) = parsed {
         return Ok(vec![FileDiagnostic {
             line: refused.line,
             column: refused.column,
             end_line: refused.line,
             end_column: refused.column,
             code: "MOV_PARSE".into(),
-            message: refused.message,
+            message: refused.message.clone(),
             severity: "error",
             fix: None,
         }]);
@@ -111,13 +116,14 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     let secrets = Secrets::open(project, &env)?;
     let credentials = secrets.credentials();
     let files = scan_movements(project)?;
-    let missing = missing_credentials(&files, &secrets);
+    let parsed = Parsed::each(&files, &[]);
+    let missing = missing_credentials(&parsed, &secrets);
     if !missing.is_empty() {
         return Ok(Opened::MissingCredentials(missing));
     }
     // A check starts only what the files import: a third-party graph is
     // read live, so its module runs for the check.
-    let externals = needed_externals(scan_externals(project)?, &files, |_| false);
+    let externals = needed_externals(scan_externals(project)?, &parsed, |_| false);
     let running: Vec<Rc<RunningExternal>> = start_externals(project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {

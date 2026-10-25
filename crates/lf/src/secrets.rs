@@ -17,7 +17,7 @@ use movement_parser::ast::{ImportSource, Statement};
 
 use crate::project::Project;
 use crate::secrets_slot::SecretsStore;
-use crate::sources::MovementFile;
+use crate::sources::Parsed;
 
 pub const ENV_PREFIX: &str = "LF_SECRET__";
 
@@ -320,12 +320,12 @@ pub struct MissingCredential {
 }
 
 /// Every credential the project's programs import, that the secrets do not hold.
-pub fn missing_credentials(files: &[MovementFile], secrets: &Secrets) -> Vec<MissingCredential> {
+pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<MissingCredential> {
     let credentials = secrets.credentials();
     let mut missing = Vec::new();
     for file in files {
         // `lf check` reports a file that does not parse.
-        let Ok(program) = crate::check::parse(&file.source) else { continue };
+        let Ok(program) = &file.program else { continue };
         for statement in &program.statements {
             let Statement::Import(import) = statement else { continue };
             if !matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {

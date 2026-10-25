@@ -283,11 +283,81 @@ fn declaration_at<'p>(program: &'p ast::Program, path: &str) -> Option<&'p ast::
 }
 
 /// `parseProgram`: the typed AST and its JSON, or the parser's refusal as
-/// `{message, loc}`.
+/// `{message, loc}`. A host that keeps parses (`keep_parses`) is handed a
+/// copy of the one it kept for the same text.
 pub fn parse(source: &str) -> Result<File, Json> {
+    if let Some(kept) = KEPT.with(|kept| kept.borrow_mut().take_copy(source)) {
+        return Ok(kept);
+    }
     let program = movement_parser::stmt::parse_program(source, false).map_err(|e| json!(e))?;
     let tree = serde_json::to_value(&program).expect("an AST is always JSON");
-    Ok(File { program, tree, stamps: BTreeMap::new() })
+    let file = File { program, tree, stamps: BTreeMap::new() };
+    KEPT.with(|kept| kept.borrow_mut().keep(source, &file));
+    Ok(file)
+}
+
+/// Keep up to `capacity` parsed files on this thread, by their text, for a
+/// host that runs the same files segment after segment (lf, a process that
+/// lives for many runs): a segment then starts from a copy of the parse,
+/// which costs a fraction of parsing. Past the capacity the least recently
+/// used is let go. 0, the default, keeps none.
+pub fn keep_parses(capacity: usize) {
+    KEPT.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        kept.capacity = capacity;
+        while kept.files.len() > capacity {
+            kept.let_go_least_recent();
+        }
+    });
+}
+
+thread_local! {
+    static KEPT: std::cell::RefCell<Kept> = std::cell::RefCell::new(Kept::default());
+}
+
+/// The parses kept, each with when it was last used.
+#[derive(Default)]
+struct Kept {
+    capacity: usize,
+    files: std::collections::HashMap<String, (File, u64)>,
+    clock: u64,
+}
+
+impl Kept {
+    fn take_copy(&mut self, source: &str) -> Option<File> {
+        self.clock += 1;
+        let (file, used) = self.files.get_mut(source)?;
+        *used = self.clock;
+        Some(file.clone())
+    }
+
+    fn keep(&mut self, source: &str, file: &File) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.files.len() >= self.capacity {
+            self.let_go_least_recent();
+        }
+        self.clock += 1;
+        self.files.insert(source.to_string(), (file.clone(), self.clock));
+    }
+
+    fn let_go_least_recent(&mut self) {
+        if let Some(oldest) = self.files.iter().min_by_key(|(_, (_, used))| *used).map(|(text, _)| text.clone()) {
+            self.files.remove(&oldest);
+        }
+    }
+}
+
+/// The texts kept now, least recently used first.
+#[cfg(test)]
+fn kept_texts() -> Vec<String> {
+    KEPT.with(|kept| {
+        let kept = kept.borrow();
+        let mut texts: Vec<(&String, u64)> = kept.files.iter().map(|(text, (_, used))| (text, *used)).collect();
+        texts.sort_by_key(|(_, used)| *used);
+        texts.into_iter().map(|(text, _)| text.clone()).collect()
+    })
 }
 
 /// The program joined with the check's answer: its link's files parsed, and
@@ -491,5 +561,26 @@ mod tests {
         assert_eq!(checked.stamp(&format!("{closure}/body/0/write/spreads/0")), Some(Stamp::SpreadFields(vec!["name".into()])));
         assert!(matches!(checked.code("@lib~1deals/statements/0"), Some(crate::code::CodeAt::Movement(_))));
         assert_eq!(checked.code("/statements/9"), None);
+    }
+    /// A host that keeps parses (lf) is handed a copy of the one it kept for
+    /// the same text, the least recently used let go past the capacity.
+    #[test]
+    fn a_kept_parse_is_the_parse_and_the_kept_are_bounded() {
+        keep_parses(2);
+        let texts = ["movement a() {\n}", "movement b() {\n}", "movement c() {\n}"];
+        let fresh = parse(texts[0]).unwrap();
+        assert_eq!(kept_texts(), [texts[0]]);
+        let again = parse(texts[0]).unwrap();
+        assert!(again.program == fresh.program && again.tree == fresh.tree, "the kept copy is the parse");
+        parse(texts[1]).unwrap();
+        parse(texts[0]).unwrap();
+        parse(texts[2]).unwrap();
+        assert_eq!(kept_texts(), [texts[0], texts[2]], "past two, the least recently used goes");
+        assert!(parse("movement (").is_err(), "a refusal is refused again, never kept");
+        assert_eq!(kept_texts().len(), 2);
+        keep_parses(0);
+        assert!(kept_texts().is_empty(), "keeping none lets every kept parse go");
+        parse(texts[1]).unwrap();
+        assert!(kept_texts().is_empty(), "and keeps nothing after");
     }
 }
