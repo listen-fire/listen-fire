@@ -110,6 +110,9 @@ struct HostState {
     last_used: Instant,
     /// Bumped on each start, so a stale idle timer leaves a newer process be.
     generation: u64,
+    /// The holds that keep it up (`Keep::Up`): while any is held, no idle
+    /// stop fires.
+    kept_up: usize,
     /// This host's own idle period, where it is not the process-wide one.
     /// Only a test sets it: `configure` is global, so a parallel test that
     /// loads a project would change the period under it.
@@ -227,6 +230,28 @@ impl ModuleProcess {
         Ok(Lease { address, host: Some(self.host.clone()) })
     }
 
+    /// A claim on the process for as long as the hold is kept: `Keep::Up`
+    /// suspends its idle stop (a worker that must not pay a start inside a
+    /// run), `Keep::Idle` leaves it to stop when idle.
+    pub fn hold(&self, keep: Keep) -> Hold {
+        if keep == Keep::Up {
+            lock(&self.host.state).kept_up += 1;
+        }
+        Hold { host: self.host.clone(), keep }
+    }
+
+    /// Whether its process is up now.
+    #[cfg(test)]
+    pub fn is_running(&self) -> bool {
+        lock(&self.host.state).running.is_some()
+    }
+
+    /// Whether a hold keeps it from the idle stop now.
+    #[cfg(test)]
+    pub fn is_kept_up(&self) -> bool {
+        lock(&self.host.state).kept_up > 0
+    }
+
     fn host_label(&self) -> String {
         match &self.host.key {
             HostKey::Shared => "the shared module host".to_string(),
@@ -249,7 +274,7 @@ fn host_for(key: HostKey, launch: Launch) -> Arc<Host> {
         key: key.clone(),
         socket: crate::module_transport::fresh_socket_path(),
         starting: tokio::sync::Mutex::new(()),
-        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0, idle_timeout: None }),
+        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0, kept_up: 0, idle_timeout: None }),
     });
     pool.hosts.insert(key, host.clone());
     host
@@ -282,6 +307,30 @@ fn joined(address: &str, mount: Option<&str>) -> String {
         (Some(path), Some(socket)) => format!("http+unix://{}/{path}/", crate::http_out::encode_uri_component(socket)),
         (Some(path), None) => format!("{}/{path}/", address.trim_end_matches('/')),
         (None, _) => address.to_string(),
+    }
+}
+
+/// Whether a hold keeps its process from the idle stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keep {
+    Up,
+    Idle,
+}
+
+/// A claim on a module's process (`ModuleProcess::hold`), let go when dropped.
+pub struct Hold {
+    host: Arc<Host>,
+    keep: Keep,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let mut state = lock(&self.host.state);
+        if self.keep == Keep::Up {
+            state.kept_up = state.kept_up.saturating_sub(1);
+            // Its idle period counts from now, not from its last call.
+            state.last_used = Instant::now();
+        }
     }
 }
 
@@ -342,11 +391,11 @@ fn stop_when_idle(host: Arc<Host>, generation: u64) {
             }
             let idle = state.idle_timeout.unwrap_or_else(idle_timeout);
             let unused = state.last_used.elapsed();
-            if state.in_flight == 0 && unused >= idle {
+            if state.in_flight == 0 && state.kept_up == 0 && unused >= idle {
                 state.running = None;
                 return;
             }
-            wait = idle.saturating_sub(unused).max(Duration::from_millis(100));
+            wait = if state.kept_up > 0 { idle } else { idle.saturating_sub(unused).max(Duration::from_millis(100)) };
         }
     });
 }
@@ -734,6 +783,31 @@ mod tests {
         let process = ModuleProcess::isolated(&name, sh("echo listening 3"));
         drop(process.lease().await.unwrap());
         tokio::time::timeout(Duration::from_secs(5), module_exited()).await.expect("its end was told");
+    }
+
+    #[tokio::test]
+    async fn a_hold_that_keeps_it_up_suspends_the_idle_stop() {
+        let name = format!("kept-{}", uuid::Uuid::new_v4());
+        let process = ModuleProcess::isolated(&name, sh("echo listening 4; sleep 30"));
+        lock(&process.host.state).idle_timeout = Some(Duration::from_millis(200));
+        let kept = process.hold(Keep::Up);
+        drop(process.lease().await.unwrap());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(process.is_running(), "kept up, it outlives its idle period");
+        drop(kept);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!process.is_running(), "let go, it is stopped when idle");
+    }
+
+    #[tokio::test]
+    async fn a_hold_that_does_not_keep_it_up_leaves_the_idle_stop_be() {
+        let name = format!("held-{}", uuid::Uuid::new_v4());
+        let process = ModuleProcess::isolated(&name, sh("echo listening 5; sleep 30"));
+        lock(&process.host.state).idle_timeout = Some(Duration::from_millis(200));
+        let _held = process.hold(Keep::Idle);
+        drop(process.lease().await.unwrap());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!process.is_running(), "idle, it was stopped");
     }
 
     #[tokio::test]

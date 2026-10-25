@@ -23,7 +23,7 @@ use crate::callbacks::CallOutcome;
 use crate::doors::Webhook;
 use crate::json::{Js, Obj};
 use crate::project::Project;
-use crate::runs::{Cancelled, Fired, Returned, Session, cancel_run, open_session, report};
+use crate::runs::{Cancelled, Fired, Opening, Returned, Role, Session, cancel_run, open_session, report};
 
 
 /// Where this process serves, once `serve` listens: every external started
@@ -77,7 +77,7 @@ pub async fn call_command(project: Project, store: &StoreSpec, args: CallArgs<'_
         eprintln!("lf call --body: the file must hold a JSON object of values");
         return Ok(2);
     };
-    let session = open_session(project, false, store).await?;
+    let session = open_session(project, &Opening { ephemeral: false, store, role: Role::Command }).await?;
     let called = session.call_callback(id, &values).await?;
     if json {
         let (result, message) = match &called.call {

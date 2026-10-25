@@ -17,7 +17,9 @@ use crate::catalog::catalog_of;
 use crate::check::{LOCAL_TENANT, check_file, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{External, RunningExternal, needed_externals, rpc, scan_externals, start_externals};
+use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, scan_externals, start_externals};
+use crate::module_hosts::{Hold, Keep};
+use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::project::Project;
@@ -60,6 +62,20 @@ pub struct FileSet {
     schemas: IndexMap<String, Js>,
     /// Each file's count of check errors against this set's catalog, by name.
     errors: OnceCell<BTreeMap<String, usize>>,
+    /// The set's claims on its externals' processes: a worker's keep them
+    /// up for as long as the set is held.
+    _holds: Vec<Hold>,
+}
+
+/// The set's claim on each external's process lf started.
+fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
+    running
+        .iter()
+        .filter_map(|r| match &r.reach {
+            Reach::Process(process) => Some(process.hold(keep)),
+            Reach::Url(_) => None,
+        })
+        .collect()
 }
 
 impl FileSet {
@@ -81,8 +97,39 @@ impl FileSet {
     }
 }
 
+/// What a session is opened for, which its module processes follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// One command (`lf run`, `lf resume`, `lf call`, …): a module stops when idle.
+    Command,
+    /// `lf drain`: every module the files use is started as the session
+    /// opens and kept up for the worker's life, so no run pays a start.
+    Drain,
+    /// `lf serve`: a module stops when idle, and starts again for the
+    /// delivery or the run that needs it.
+    Serve,
+}
+
+impl Role {
+    fn keep(self) -> Keep {
+        match self {
+            Role::Drain => Keep::Up,
+            Role::Command | Role::Serve => Keep::Idle,
+        }
+    }
+}
+
+/// How a session is opened: where its run state is kept (an ephemeral
+/// session keeps its own in a temporary state file instead), and its role.
+pub struct Opening<'s> {
+    pub ephemeral: bool,
+    pub store: &'s StoreSpec,
+    pub role: Role,
+}
+
 pub struct Session {
     pub project: Project,
+    pub role: Role,
     pub store: std::rc::Rc<dyn RunHostStore>,
     secrets: Secrets,
     pub documents: Documents,
@@ -170,9 +217,8 @@ fn watch_pause_of(raw: Option<&str>) -> Result<Duration, String> {
     Ok(pause.max(LEAST_WATCH_PAUSE))
 }
 
-/// `store`: where the run state is kept; an ephemeral session keeps its own
-/// in a temporary state file instead.
-pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) -> Result<Session, String> {
+pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Session, String> {
+    let Opening { ephemeral, store, role } = *opening;
     let env: Vec<(String, String)> = std::env::vars().collect();
     let secrets = Secrets::open(&project, &env)?;
     let credentials = secrets.credentials();
@@ -207,10 +253,8 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
     let running: Vec<Rc<RunningExternal>> = start_externals(&project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
     let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
-    let mut schemas = IndexMap::new();
-    for r in running.iter().filter(|r| !r.is_plugin()) {
-        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials).await?);
-    }
+    let described = join_all(running.iter().filter(|r| !r.is_plugin()).map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials).await?)) }).collect()).await;
+    let schemas = described.into_iter().collect::<Result<IndexMap<String, Js>, String>>()?;
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
     let catalog = catalog_of(&running, &schemas, credentials, &files);
@@ -221,9 +265,11 @@ pub async fn open_session(project: Project, ephemeral: bool, store: &StoreSpec) 
         .clone()
         .or_else(|| crate::serve::host_url().map(str::to_string))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
-    let file_set = RefCell::new(Rc::new(FileSet { files, catalog, listens, running, schemas, errors: Default::default() }));
+    let _holds = hold_all(&running, role.keep());
+    let file_set = RefCell::new(Rc::new(FileSet { files, catalog, listens, running, schemas, errors: Default::default(), _holds }));
     Ok(Session {
         project,
+        role,
         store,
         secrets,
         documents,
@@ -1403,7 +1449,8 @@ impl Session {
         }
 
         let listens = collect_listens(&files);
-        let taken = Rc::new(FileSet { files, catalog, listens, running, schemas, errors: OnceCell::from(counts) });
+        let _holds = hold_all(&running, self.role.keep());
+        let taken = Rc::new(FileSet { files, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
         self.file_set.replace(taken.clone());
         self.refused.replace(None);
         for line in changed.iter().chain(&started) {
@@ -1741,7 +1788,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(&root).unwrap();
-            let session = open_session(project, false, &StoreSpec::Sqlite(root.join(".lf/state.db"))).await.unwrap();
+            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command }).await.unwrap();
             let event = crate::units::manual_event(&iso(0), &session.user, None);
             let row = |delivery_id: Option<&str>| {
                 let mut payload = obj! { "external" => Js::str(crate::units::MANUAL), "event" => event.clone() };
@@ -1962,6 +2009,89 @@ mod tests {
         });
     }
 
+    // ── Module processes ────────────────────────────────────────────────────
+
+    /// A project whose movements each import one of `names`: each an
+    /// lf-acme copy (examples/lf-acme) that waits `start_delay` seconds
+    /// before it starts, as a slow module does.
+    fn acme_project(names: &[&str], start_delay: &str) -> std::path::PathBuf {
+        let root = refresh_project(&[]);
+        let server = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/lf-acme/externals/acme_crm/server.mjs")).unwrap();
+        let mut secrets = String::new();
+        for name in names {
+            let dir = root.join("externals").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("server.mjs"), server.replace("'acme_crm'", &format!("'{name}'"))).unwrap();
+            let manifest = format!(
+                "name: {name}\nkind: adapter\nprotocol: 2\ncommand: [sh, -c, \"sleep {start_delay}; exec node server.mjs\"]\nauth: {{ kind: bearer, field: token }}\nenv:\n  ACME_CRM_STATE: \"{{lf}}/state.json\"\n"
+            );
+            std::fs::write(dir.join("lf-external.yaml"), manifest).unwrap();
+            secrets.push_str(&format!("{name}:\n  external: {name}\n  token: dev-token\n"));
+            put(&root, &format!("{name}.mvt"), &acme_movement(name));
+        }
+        std::fs::write(root.join(".lf/secrets.yaml"), secrets).unwrap();
+        root
+    }
+
+    fn acme_movement(name: &str) -> String {
+        format!("import {{ {name} }} from adapters\nimport {{ {name} as cred }} from credentials\n\ncrm = connect {name} using cred\n\nfunction welcome(company: <crm-[:Company]->>) {{\n  write crm-[:Company]-> {{ Name: \"Welcome ${{company.Name}}\" }}\n}}\n\nlisten to crm {{ events: [\"company.created\"] }} fire welcome\n")
+    }
+
+    /// `body` on a session over `root` opened as `role`.
+    fn with_session_as(root: &std::path::Path, role: Role, body: impl AsyncFnOnce(&mut Session)) {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let project = crate::project::load_project(root).unwrap();
+            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role }).await.unwrap();
+            body(&mut session).await;
+        });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn processes(set: &FileSet) -> Vec<(String, crate::module_hosts::ModuleProcess)> {
+        set.running
+            .iter()
+            .filter_map(|r| match &r.reach {
+                Reach::Process(process) => Some((r.external.manifest.name.clone(), process.clone())),
+                Reach::Url(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_drain_starts_its_modules_together_and_keeps_them_up() {
+        let root = acme_project(&["acme_a", "acme_b", "acme_c"], "1");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let project = crate::project::load_project(&root).unwrap();
+            let opened = Instant::now();
+            let session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Drain }).await.unwrap();
+            let took = opened.elapsed();
+            // One after another, three one-second starts take three seconds and more.
+            assert!(took < Duration::from_millis(2500), "the three modules started together, in {took:?}");
+            let started = processes(&session.file_set());
+            assert_eq!(started.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["acme_a", "acme_b", "acme_c"]);
+            for (name, process) in &started {
+                assert!(process.is_running() && process.is_kept_up(), "{name} is up and kept up for the drain's life");
+            }
+            drop(session);
+            for (name, process) in &started {
+                assert!(!process.is_kept_up(), "{name} is let go with the drain");
+            }
+        });
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_command_leaves_its_modules_to_stop_when_idle() {
+        let root = acme_project(&["acme_d"], "0");
+        with_session_as(&root.clone(), Role::Command, async |session| {
+            for (name, process) in processes(&session.file_set()) {
+                assert!(process.is_running() && !process.is_kept_up(), "{name} is up, and stops when idle");
+            }
+        });
+    }
+
     const MANUAL_V1: &str = "function hello(run: <manual-[:Invocation]->>) {\n  return \"v1\"\n}\nlisten to manual fire hello\n";
 
     /// A started project (`lf init`, its own empty secrets) with `files`
@@ -1993,7 +2123,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, async {
             let project = crate::project::load_project(root).unwrap();
-            let mut session = open_session(project, false, &StoreSpec::Sqlite(root.join(".lf/state.db"))).await.unwrap();
+            let mut session = open_session(project, &Opening { ephemeral: false, store: &StoreSpec::Sqlite(root.join(".lf/state.db")), role: Role::Command }).await.unwrap();
             body(&mut session).await;
         });
         std::fs::remove_dir_all(root).ok();

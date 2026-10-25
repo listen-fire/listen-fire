@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf drain` starts every module its movements import together as it opens, before it claims any work, and keeps them up until it exits: a run no longer waits on a module's start, and the idle stop (`moduleIdleTimeout`) no longer stops a module mid-drain. Every command's open starts the modules together rather than one after another (three modules that each take a second to start: the first run of a fresh `lf drain` went from 3.4 s to 2.0 s).
+
 ## [0.12.4] - 2026-10-25
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: it updates two dependencies past security advisories. Rust embedders: it makes one trait method required, below.

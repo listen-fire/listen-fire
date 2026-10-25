@@ -5,9 +5,10 @@
 //! module kit's runner; `LF_SERVE_MODULE` names another command). A plugin
 //! external serves a package of plugins instead of an adapter.
 //!
-//! Only the externals the movements import are started, when first called
-//! (crate::module_hosts keeps them up while used and stops them idle); a
-//! trusted module shares one serve-module process with the others.
+//! Only the externals the movements import are started, all at once when a
+//! project opens (crate::module_hosts keeps them up while used and stops
+//! them idle, unless a worker keeps them up); a trusted module shares one
+//! serve-module process with the others.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -398,7 +399,8 @@ pub fn needed_externals(externals: Vec<External>, files: &[MovementFile], also: 
 }
 
 /// Read every external's manifest, its process started on that first call
-/// (and its runtime checked before).
+/// (and its runtime checked before). The externals start together: a
+/// project's start is its slowest module's, not the sum of them.
 pub async fn start_externals(project: &Project, externals: &[External], credentials: &Credentials, tenant: &str) -> Result<Vec<RunningExternal>, String> {
     crate::module_hosts::configure(project.module_idle_timeout, project.call_timeout);
     // Every process registered before any starts, so the shared host
@@ -411,48 +413,50 @@ pub async fn start_externals(project: &Project, externals: &[External], credenti
         let install = install_of(credentials, &external.manifest.name);
         reaches.push(reach(project, external, install_field(install, BASE_URL_OVERRIDE_FIELD))?);
     }
-    let mut running = Vec::new();
-    for (external, reach) in externals.iter().zip(reaches) {
-        let name = &external.manifest.name;
-        let install = install_of(credentials, name);
-        let lease = reach.lease().await?;
-        let target = Target { external, base_url: &lease.address, declarations: &[], methods: &[], settings: &[], limits: &crate::limiter::ModuleLimits::default() };
-        let raw = call(&target, credentials, tenant, "manifest", json!({})).await?;
-        drop(lease);
-        let version = raw.get("protocolVersion");
-        if !matches!(version, Some(Js::Num(n)) if n.as_f64() == Some(MANIFEST_PROTOCOL_VERSION as f64)) {
-            let got = version.map(Js::to_json).unwrap_or_else(|| "nothing".into());
-            return Err(format!(
-                "external \"{name}\": protocolVersion: expected {MANIFEST_PROTOCOL_VERSION}, got {got} — this adapter targets an older adapter protocol; update it to protocol version {MANIFEST_PROTOCOL_VERSION}."
-            ));
-        }
-        let manifest = WireManifest::read(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
-        if manifest.adapter_type != *name {
-            return Err(format!("external folder \"{name}\" serves \"{}\"; the names must agree", manifest.adapter_type));
-        }
-        let credential_declarations = with_install_endpoints(declarations_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?, install);
-        let limits = crate::limiter::module_limits_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
-        if external.manifest.kind == "plugin" && manifest.plugins.is_none() {
-            return Err(format!("external \"{name}\" is a plugin external, but its manifest declares no plugins"));
-        }
-        running.push(RunningExternal {
-            external: external.clone(),
-            reach,
-            supported_triggers: manifest.supported_triggers,
-            listen: manifest.listen,
-            methods: manifest.methods,
-            runtime_capabilities: manifest.runtime_capabilities,
-            webhook_event_type_id: manifest.webhook_event_type_id,
-            plugins: manifest.plugins,
-            credential_declarations,
-            settings: setting_names(&raw),
-            limits,
-            manifest_answer: raw,
-            inbound: manifest.inbound,
-            poll_interval_seconds: manifest.poll_interval_seconds,
-        });
+    let started = movement_engine::executor::join_all(externals.iter().zip(reaches).map(|(external, reach)| start_external(external, reach, credentials, tenant)).collect()).await;
+    started.into_iter().collect()
+}
+
+/// One external's process started and its manifest read.
+async fn start_external(external: &External, reach: Reach, credentials: &Credentials, tenant: &str) -> Result<RunningExternal, String> {
+    let name = &external.manifest.name;
+    let install = install_of(credentials, name);
+    let lease = reach.lease().await?;
+    let target = Target { external, base_url: &lease.address, declarations: &[], methods: &[], settings: &[], limits: &crate::limiter::ModuleLimits::default() };
+    let raw = call(&target, credentials, tenant, "manifest", json!({})).await?;
+    drop(lease);
+    let version = raw.get("protocolVersion");
+    if !matches!(version, Some(Js::Num(n)) if n.as_f64() == Some(MANIFEST_PROTOCOL_VERSION as f64)) {
+        let got = version.map(Js::to_json).unwrap_or_else(|| "nothing".into());
+        return Err(format!(
+            "external \"{name}\": protocolVersion: expected {MANIFEST_PROTOCOL_VERSION}, got {got} — this adapter targets an older adapter protocol; update it to protocol version {MANIFEST_PROTOCOL_VERSION}."
+        ));
     }
-    Ok(running)
+    let manifest = WireManifest::read(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
+    if manifest.adapter_type != *name {
+        return Err(format!("external folder \"{name}\" serves \"{}\"; the names must agree", manifest.adapter_type));
+    }
+    let credential_declarations = with_install_endpoints(declarations_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?, install);
+    let limits = crate::limiter::module_limits_of(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
+    if external.manifest.kind == "plugin" && manifest.plugins.is_none() {
+        return Err(format!("external \"{name}\" is a plugin external, but its manifest declares no plugins"));
+    }
+    Ok(RunningExternal {
+        external: external.clone(),
+        reach,
+        supported_triggers: manifest.supported_triggers,
+        listen: manifest.listen,
+        methods: manifest.methods,
+        runtime_capabilities: manifest.runtime_capabilities,
+        webhook_event_type_id: manifest.webhook_event_type_id,
+        plugins: manifest.plugins,
+        credential_declarations,
+        settings: setting_names(&raw),
+        limits,
+        manifest_answer: raw,
+        inbound: manifest.inbound,
+        poll_interval_seconds: manifest.poll_interval_seconds,
+    })
 }
 
 /// The manifest answer's facts `check` reads, validated as `WireManifestResult` is.

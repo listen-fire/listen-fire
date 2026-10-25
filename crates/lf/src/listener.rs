@@ -32,7 +32,7 @@ fn deliver_public_redirect(_: &std::path::Path, _: &str) -> (u16, String) {
 }
 use crate::obj;
 use crate::project::Project;
-use crate::runs::{Called, DEFAULT_PORT, RunOutcome, Session, WORK_ROWS_PER_DRAIN, open_session};
+use crate::runs::{Called, DEFAULT_PORT, Opening, Role, RunOutcome, Session, WORK_ROWS_PER_DRAIN, open_session};
 use crate::serve::{HOST_TOKEN, HOST_URL, MODELS_DOOR_URL, externals_host_url, host_token};
 
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -128,7 +128,7 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     let _ = HOST_TOKEN.set(crate::http_out::hex(&crate::http_out::random_bytes(24)?));
     let env: Vec<(String, String)> = std::env::vars().collect();
     crate::movements_slot::require_watch(&project, &env, "lf serve")?;
-    let mut session = open_session(project, ephemeral, store).await?;
+    let mut session = open_session(project, &Opening { ephemeral, store, role: Role::Serve }).await?;
     // Before the doors answer, so a delivery is verified by the secret the
     // source issued.
     for line in crate::subscriptions::reconcile(&mut session).await {

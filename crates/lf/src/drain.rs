@@ -10,6 +10,10 @@
 //!                     (crate::store::WORK_KINDS), and `cron` for the cron
 //!                     listens' due ticks, which are not rows
 //!
+//! Every module the movements import is started as the worker opens,
+//! together, and kept up until it exits (crate::runs::Role::Drain): a run
+//! never waits on a module's start.
+//!
 //! With neither it polls forever, once a second while nothing is due. Any
 //! number of workers can drain one Postgres store at once: a row is claimed
 //! by one of them (SKIP LOCKED), and a run is stepped by whoever holds its
