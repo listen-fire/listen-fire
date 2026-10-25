@@ -18,6 +18,89 @@ use crate::outgoing_auth::OutgoingAuth;
 
 pub use module_wire::envelope::{ADAPTER_TEAM_HEADER, CREDENTIAL_REFUSED_CODE, PROTOCOL_VERSION, shape_error};
 
+/// The highest minor of adapter protocol 2 this lf speaks: it reads a module
+/// stating 2.0 to 2.`SPEAKS_MINOR` (`PROTOCOL_MINOR`).
+pub const SPEAKS_MINOR: u64 = 2;
+
+/// The module a refusal names: an external, or a core module of a slot, with
+/// its package and version when lf found its `package.json`.
+pub struct Speaker<'a> {
+    pub name: &'a str,
+    pub slot: Option<&'a str>,
+    pub package: Option<Package>,
+}
+
+/// A module's `package.json` name and version.
+pub struct Package {
+    pub name: String,
+    pub version: String,
+}
+
+impl Package {
+    /// The package in `dir`, when it has a `package.json` naming both.
+    pub fn in_dir(dir: &std::path::Path) -> Option<Package> {
+        let text = std::fs::read(dir.join("package.json")).ok()?;
+        let json = Js::parse(&text).ok()?;
+        let field = |key: &str| json.get(key).and_then(Js::as_str).map(str::to_string);
+        Some(Package { name: field("name")?, version: field("version")? })
+    }
+}
+
+/// Whether this lf reads a module whose manifest is `raw`, and if not, why,
+/// naming both sides (`protocolStanding`, in the same words). An unstated
+/// minor is 2.0 and always passes.
+pub fn protocol_standing(raw: &Js, speaker: &Speaker) -> Result<(), String> {
+    const MAJOR: u64 = 2;
+    let named = match speaker.slot {
+        None => format!("external \"{}\"", speaker.name),
+        Some(slot) => format!("core module \"{}\" ({slot} slot)", speaker.name),
+    };
+    let subject = match &speaker.package {
+        None => named,
+        Some(package) => format!("{named} ({} {})", package.name, package.version),
+    };
+    let host = format!("this lf ({}) speaks {MAJOR}.0–{MAJOR}.{SPEAKS_MINOR}", env!("CARGO_PKG_VERSION"));
+    let version = raw.get("protocolVersion");
+    let major = match version {
+        Some(Js::Num(n)) => n.as_f64(),
+        _ => None,
+    };
+    if let Some(version) = version.filter(|_| major.is_some_and(|m| m > MAJOR as f64)) {
+        return Err(format!("{subject}: speaks adapter protocol {}; {host}. Upgrade lf.", version.to_json()));
+    }
+    if major != Some(MAJOR as f64) {
+        let got = version.map(Js::to_json).unwrap_or_else(|| "nothing".into());
+        let module = if speaker.slot.is_some() { "module" } else { "adapter" };
+        return Err(format!(
+            "{subject}: protocolVersion: expected {MAJOR}, got {got} — this {module} targets an older adapter protocol; update it to protocol version {MAJOR}."
+        ));
+    }
+    let minor = match raw.get("protocolMinor") {
+        None => return Ok(()),
+        Some(Js::Num(n)) => n.as_f64().filter(|m| m.fract() == 0.0 && *m >= 0.0),
+        Some(_) => None,
+    };
+    let Some(minor) = minor else {
+        let got = raw.get("protocolMinor").map(Js::to_json).unwrap_or_default();
+        return Err(format!("{subject}: protocolMinor: expected a whole number, got {got}."));
+    };
+    if minor <= SPEAKS_MINOR as f64 {
+        return Ok(());
+    }
+    let stated = format!("{MAJOR}.{minor}");
+    let older = speaker.package.as_ref().map_or("a version of it".to_string(), |p| format!("a {}", p.name));
+    Err(format!(
+        "{subject} speaks adapter protocol {stated}; {host}. Upgrade lf to a release that speaks {stated} (the protocol's Changes list names it), or use {older} that speaks {MAJOR}.{SPEAKS_MINOR} or lower."
+    ))
+}
+
+/// What a method a slot gained within version 2 is called in a refusal:
+/// `work.enqueueIfAbsent (adapter protocol 2.2)`.
+pub fn method_with_minor(method: &str) -> String {
+    let listing = Js::Obj([("methods".to_string(), Js::strings([method]))].into_iter().collect());
+    format!("{method} (adapter protocol 2.{})", module_wire::envelope::protocol_minor_of(&listing))
+}
+
 /// What a request carries beside its params: the one credential the
 /// connection names, the install's settings, and the limits door the
 /// module asks before each request to its provider (crate::limits_door).
@@ -220,6 +303,116 @@ async fn post(call: Call<'_>, carried: Carried, beside: &mut Beside) -> Result<J
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LF: &str = env!("CARGO_PKG_VERSION");
+
+    fn manifest(json: &str) -> Js {
+        Js::parse(json.as_bytes()).unwrap()
+    }
+
+    fn slack(package: bool) -> Speaker<'static> {
+        Speaker {
+            name: "slack",
+            slot: None,
+            package: package.then(|| Package { name: "@listen-fire/slack".into(), version: "0.13.1".into() }),
+        }
+    }
+
+    #[test]
+    fn an_unstated_minor_and_every_minor_up_to_this_lfs_pass() {
+        for raw in [r#"{"protocolVersion":2}"#, r#"{"protocolVersion":2,"protocolMinor":0}"#, r#"{"protocolVersion":2,"protocolMinor":1}"#, r#"{"protocolVersion":2,"protocolMinor":2}"#] {
+            assert_eq!(protocol_standing(&manifest(raw), &slack(true)), Ok(()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_newer_minor_is_refused_naming_the_package_and_the_range() {
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":3}"#), &slack(true)).unwrap_err(),
+            format!(
+                "external \"slack\" (@listen-fire/slack 0.13.1) speaks adapter protocol 2.3; this lf ({LF}) speaks 2.0–2.2. Upgrade lf to a release that speaks 2.3 (the protocol's Changes list names it), or use a @listen-fire/slack that speaks 2.2 or lower."
+            )
+        );
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":3}"#), &slack(false)).unwrap_err(),
+            format!(
+                "external \"slack\" speaks adapter protocol 2.3; this lf ({LF}) speaks 2.0–2.2. Upgrade lf to a release that speaks 2.3 (the protocol's Changes list names it), or use a version of it that speaks 2.2 or lower."
+            )
+        );
+    }
+
+    #[test]
+    fn a_newer_major_is_refused() {
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":3}"#), &slack(false)).unwrap_err(),
+            format!("external \"slack\": speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.2. Upgrade lf.")
+        );
+    }
+
+    #[test]
+    fn an_older_major_is_refused_in_the_words_it_always_was() {
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":1}"#), &slack(false)).unwrap_err(),
+            "external \"slack\": protocolVersion: expected 2, got 1 — this adapter targets an older adapter protocol; update it to protocol version 2."
+        );
+        assert!(protocol_standing(&manifest("{}"), &slack(false)).unwrap_err().contains("got nothing"));
+    }
+
+    #[test]
+    fn a_minor_that_is_not_a_whole_number_is_refused() {
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":1.5}"#), &slack(false)).unwrap_err(),
+            "external \"slack\": protocolMinor: expected a whole number, got 1.5."
+        );
+    }
+
+    #[test]
+    fn a_slot_modules_refusal_names_its_slot() {
+        let acme = Speaker { name: "acme_store", slot: Some("store"), package: None };
+        assert!(
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":9}"#), &acme)
+                .unwrap_err()
+                .starts_with(&format!("core module \"acme_store\" (store slot) speaks adapter protocol 2.9; this lf ({LF}) speaks 2.0–2.2."))
+        );
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":3}"#), &acme).unwrap_err(),
+            format!("core module \"acme_store\" (store slot): speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.2. Upgrade lf.")
+        );
+        assert_eq!(
+            protocol_standing(&manifest(r#"{"protocolVersion":1}"#), &acme).unwrap_err(),
+            "core module \"acme_store\" (store slot): protocolVersion: expected 2, got 1 — this module targets an older adapter protocol; update it to protocol version 2."
+        );
+    }
+
+    #[test]
+    fn a_method_a_slot_gained_is_named_with_its_minor() {
+        assert_eq!(method_with_minor("movements.watch"), "movements.watch (adapter protocol 2.1)");
+        assert_eq!(method_with_minor("work.enqueueIfAbsent"), "work.enqueueIfAbsent (adapter protocol 2.2)");
+    }
+
+    /// lf speaks what the kit's wire knows, and both are the TypeScript's:
+    /// `PROTOCOL_MINOR` and every row of `PROTOCOL_MINORS` in protocol.ts.
+    #[test]
+    fn the_minors_are_the_typescript_protocols() {
+        use module_wire::envelope::{MinorUse, PROTOCOL_MINOR, PROTOCOL_MINORS};
+        assert_eq!(SPEAKS_MINOR, PROTOCOL_MINOR);
+        let protocol = include_str!("../../../packages/engine-contracts/protocol.ts");
+        assert!(protocol.contains(&format!("export const PROTOCOL_MINOR = {SPEAKS_MINOR};")), "protocol.ts states another PROTOCOL_MINOR");
+        let start = protocol.find("export const PROTOCOL_MINORS").expect("protocol.ts has PROTOCOL_MINORS");
+        let end = start + protocol[start..].find("];").expect("the table ends");
+        let rows: Vec<&str> = protocol[start..end].lines().map(str::trim).filter(|l| l.starts_with("{ minor: ")).collect();
+        let ours: Vec<String> = PROTOCOL_MINORS
+            .iter()
+            .map(|e| {
+                let uses = match e.uses {
+                    MinorUse::Method(name) => format!("{{ method: '{name}' }}"),
+                    MinorUse::MethodEndingWith(ending) => format!("{{ methodEndingWith: '{ending}' }}"),
+                };
+                format!("{{ minor: {}, feature: '{}', uses: {uses} }},", e.minor, e.feature)
+            })
+            .collect();
+        assert_eq!(rows, ours);
+    }
 
     #[test]
     fn each_failure_carries_the_typescript_errors_words() {

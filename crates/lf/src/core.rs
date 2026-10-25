@@ -330,6 +330,8 @@ pub fn set_up(project: &Project, module: &CoreModule, settings: &BTreeMap<String
         if answered != Some(slot.name()) {
             return Err(format!("{}'s manifest names the slot {}, not {}", module.name, answered.unwrap_or("(none)"), slot.name()));
         }
+        let speaker = crate::protocol::Speaker { name: &module.name, slot: Some(slot.name()), package: crate::protocol::Package::in_dir(&process.dir) };
+        crate::protocol::protocol_standing(&manifest, &speaker)?;
         return Ok(vec![format!("{} answered as a {} module", module.name, slot.name())]);
     }
     if let Some(process) = &module.process {

@@ -225,7 +225,7 @@ test('lf serve and lf drain refuse a module that does not answer movements.watch
     for (const [command, args] of [['lf serve', ['serve', '--port', '0']], ['lf drain', ['drain']]] as const) {
       const refused = await lf(dir, [...args], { env: ENV }).done;
       assert.equal(refused.code, 1, refused.out);
-      assert.equal(refused.out, `lf: the movements module acme_movements does not answer movements.watch; ${command} needs it\n`);
+      assert.equal(refused.out, `lf: the movements module acme_movements does not answer movements.watch (adapter protocol 2.1); ${command} needs it\n`);
     }
     const idle = await lf(dir, ['drain', '--until-idle'], { env: ENV }).done;
     assert.equal(idle.code, 0, idle.out);

@@ -2,12 +2,14 @@
 // slot a process module fills, together with the externals, so no run waits
 // on a module's start; `lf serve --doors-only` starts only the slots a door
 // calls (the limiter, the wake), never the models; a one-shot command
-// starts a slot's module at its first call, as ever.
+// starts a slot's module at its first call, as ever. A slot module whose
+// manifest states another major of the adapter protocol is refused by name
+// when it is set up.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { lfBinary } from './lf_bin';
 import { project, served } from './example';
@@ -74,4 +76,16 @@ test('lf serve --doors-only starts the slots a door calls, never the models', as
   } finally {
     await server.stop();
   }
+});
+
+test('lf connect refuses a slot module answering a newer protocol major, naming its slot', () => {
+  const dir = project();
+  const folder = join(dir, 'externals', 'acme_future');
+  mkdirSync(folder, { recursive: true });
+  copyFileSync(join(FAKES, 'manifest_module/serve.mjs'), join(folder, 'serve.mjs'));
+  writeFileSync(join(folder, 'manifest.json'), JSON.stringify({ protocolVersion: 3, name: 'acme_future', kind: 'core', slot: 'models', methods: ['models.call'] }));
+  writeFileSync(join(folder, 'lf-external.yaml'), ['name: acme_future', 'kind: core', 'slot: models', 'command: [node, serve.mjs]', ''].join('\n'));
+  const connected = lfIn(dir, 'connect', 'acme_future');
+  assert.equal(connected.code, 1, connected.out);
+  assert.match(connected.out, /core module "acme_future" \(models slot\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.2\. Upgrade lf\./);
 });

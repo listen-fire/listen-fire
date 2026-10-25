@@ -23,7 +23,7 @@ use crate::project::Project;
 use crate::sources::Parsed;
 use crate::credential_calls::{Sending, Target, send};
 use crate::oauth2::{Declaration, declarations_of};
-use crate::protocol::shape_error;
+use crate::protocol::{Package, Speaker, shape_error};
 use crate::secrets::{Credential, Credentials, credential_for, install_of, signer_of};
 
 /// The install fields that point a module somewhere other than its
@@ -58,9 +58,6 @@ fn with_install_endpoints(mut declarations: Vec<Declaration>, install: Option<&C
 }
 
 pub const EXTERNAL_MANIFEST: &str = "lf-external.yaml";
-
-/// The manifest protocol version (`MANIFEST_PROTOCOL_VERSION`).
-const MANIFEST_PROTOCOL_VERSION: u64 = 2;
 
 /// The trigger types a manifest may name (`triggerTypeSchema`).
 const TRIGGER_TYPES: &[&str] = &["snapshot", "poll", "changes-feed", "webhook", "mutation", "extraction"];
@@ -425,13 +422,7 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
     let target = Target { external, base_url: &lease.address, declarations: &[], methods: &[], settings: &[], limits: &crate::limiter::ModuleLimits::default() };
     let raw = call(&target, credentials, tenant, "manifest", json!({})).await?;
     drop(lease);
-    let version = raw.get("protocolVersion");
-    if !matches!(version, Some(Js::Num(n)) if n.as_f64() == Some(MANIFEST_PROTOCOL_VERSION as f64)) {
-        let got = version.map(Js::to_json).unwrap_or_else(|| "nothing".into());
-        return Err(format!(
-            "external \"{name}\": protocolVersion: expected {MANIFEST_PROTOCOL_VERSION}, got {got} — this adapter targets an older adapter protocol; update it to protocol version {MANIFEST_PROTOCOL_VERSION}."
-        ));
-    }
+    crate::protocol::protocol_standing(&raw, &Speaker { name, slot: None, package: package_of(external) })?;
     let manifest = WireManifest::read(&raw).map_err(|expected| shape_error("manifest", name, &raw, &expected))?;
     if manifest.adapter_type != *name {
         return Err(format!("external folder \"{name}\" serves \"{}\"; the names must agree", manifest.adapter_type));
@@ -457,6 +448,13 @@ async fn start_external(external: &External, reach: Reach, credentials: &Credent
         inbound: manifest.inbound,
         poll_interval_seconds: manifest.poll_interval_seconds,
     })
+}
+
+/// The package an external serves, for a refusal to name: its built-in
+/// module's folder in the release's bundle, else its own folder.
+fn package_of(external: &External) -> Option<Package> {
+    let bundled = external.manifest.module.as_deref().and_then(bundled_module).map(PathBuf::from);
+    Package::in_dir(bundled.as_deref().unwrap_or(&external.dir))
 }
 
 /// The manifest answer's facts `check` reads, validated as `WireManifestResult` is.

@@ -45,12 +45,15 @@ impl Refusal {
 /// What a module of a slot answers `manifest` with (engine-contracts
 /// `slots/wire.ts` `WireSlotManifest`).
 pub fn manifest(name: &str, slot: &str, methods: &[&str]) -> Js {
+    let listed = Js::Arr(methods.iter().map(|m| Js::str(*m)).collect());
+    let minor = module_wire::envelope::protocol_minor_of(&Js::from(obj! { "methods" => listed.clone() }));
     Js::from(obj! {
         "protocolVersion" => Js::Num(2.into()),
+        "protocolMinor" => Js::Num(minor.into()),
         "name" => Js::str(name),
         "kind" => Js::str("core"),
         "slot" => Js::str(slot),
-        "methods" => Js::Arr(methods.iter().map(|m| Js::str(*m)).collect()),
+        "methods" => listed,
     })
 }
 

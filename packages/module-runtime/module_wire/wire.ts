@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { z } from 'zod';
 
-import { PROTOCOL_VERSION } from 'engine-contracts';
+import { PROTOCOL_VERSION, protocolMinorOf } from 'engine-contracts';
 import { SlotAnswerEnvelope, SlotRequestEnvelope, type WireSlotManifestShape } from 'engine-contracts/slots';
 
 /** A module answered `ok: false`. */
@@ -200,6 +200,13 @@ export class SlotRefusal extends Error {
   }
 }
 
+/** A slot manifest as written, stating the minor of adapter protocol 2 its
+ *  methods use: a hand-written one needs no change when a slot gains one. */
+function stamped(manifest: WireSlotManifestShape): WireSlotManifestShape {
+  const { protocolVersion, protocolMinor, ...rest } = manifest;
+  return { protocolVersion, protocolMinor: Math.max(protocolMinorOf(manifest), protocolMinor ?? 0), ...rest };
+}
+
 /** The envelope rules for one request whose body is already read as JSON,
  *  without a server: the manifest answer, the protocol version refusal, an
  *  unknown method and a module's `SlotRefusal` codes, a malformed body.
@@ -216,7 +223,7 @@ export async function answerSlotRequest(manifest: WireSlotManifestShape, answer:
   }
   const { method, params, settings } = envelope.data;
   try {
-    const result = method === 'manifest' ? manifest : await answer(method, params, settings ?? {});
+    const result = method === 'manifest' ? stamped(manifest) : await answer(method, params, settings ?? {});
     return { status: 200, body: { ok: true, result: result ?? null } };
   } catch (error) {
     const refusal = error instanceof SlotRefusal ? error : undefined;

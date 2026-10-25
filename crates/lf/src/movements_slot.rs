@@ -856,7 +856,11 @@ pub fn of_project(project: &Project, env: &[(String, String)]) -> Result<Rc<dyn 
 pub fn require_watch(project: &Project, env: &[(String, String)], command: &str) -> Result<(), String> {
     match of_project(project, env)?.answers_watch()? {
         true => Ok(()),
-        false => Err(format!("the movements module {} does not answer movements.watch; {command} needs it", project.core.movements.name)),
+        false => Err(format!(
+            "the movements module {} does not answer {}; {command} needs it",
+            project.core.movements.name,
+            crate::protocol::method_with_minor("movements.watch")
+        )),
     }
 }
 

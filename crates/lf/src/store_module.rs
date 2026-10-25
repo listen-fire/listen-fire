@@ -14,6 +14,7 @@ use crate::core::ProcessModule;
 use crate::json::{Js, Obj};
 use crate::obj;
 use crate::slot_client::SlotClient;
+use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
     BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Result, RunRow, RunStart, StoreError,
 };
@@ -40,16 +41,18 @@ impl ProcessStore {
     }
 
     fn call(&self, method: &str, params: Obj) -> Result<Js> {
-        self.client.call(method, params).map_err(|error| {
-            if error.code == LEASE_LOST {
-                let run_id = error.data.as_ref().and_then(|d| d.get("runId")).and_then(Js::as_str).unwrap_or_default();
-                return StoreError::LeaseLost { run_id: run_id.to_string() };
-            }
-            if error.code == "transport" {
-                return StoreError::Backend(error.message);
-            }
-            StoreError::Backend(format!("{}: {method}: {}", self.client.label, error.message))
-        })
+        self.client.call(method, params).map_err(|error| self.refused(method, error))
+    }
+
+    fn refused(&self, method: &str, error: crate::slot_client::SlotError) -> StoreError {
+        if error.code == LEASE_LOST {
+            let run_id = error.data.as_ref().and_then(|d| d.get("runId")).and_then(Js::as_str).unwrap_or_default();
+            return StoreError::LeaseLost { run_id: run_id.to_string() };
+        }
+        if error.code == "transport" {
+            return StoreError::Backend(error.message);
+        }
+        StoreError::Backend(format!("{}: {method}: {}", self.client.label, error.message))
     }
 
     fn malformed(&self, method: &str, answer: &Js) -> StoreError {
@@ -258,7 +261,20 @@ impl RunHostStore for ProcessStore {
         self.unit("work.enqueue", obj! { "kind" => s(kind), "key" => s(key), "payload" => payload.clone(), "dueAt" => opt(due_at), "teamId" => opt(team_id) })
     }
     fn enqueue_if_absent(&self, kind: &str, key: &str, payload: &Js, due_at: Option<&str>, team_id: Option<&str>) -> Result<bool> {
-        self.flag("work.enqueueIfAbsent", obj! { "kind" => s(kind), "key" => s(key), "payload" => payload.clone(), "dueAt" => opt(due_at), "teamId" => opt(team_id) })
+        const METHOD: &str = "work.enqueueIfAbsent";
+        let params = obj! { "kind" => s(kind), "key" => s(key), "payload" => payload.clone(), "dueAt" => opt(due_at), "teamId" => opt(team_id) };
+        // A module written before the method: armed polls need it, so the
+        // refusal names it and the minor that added it.
+        match self.client.call(METHOD, params) {
+            Ok(Js::Bool(queued)) => Ok(queued),
+            Ok(other) => Err(self.malformed(METHOD, &other)),
+            Err(error) if error.code == METHOD_NOT_IMPLEMENTED_CODE => Err(StoreError::Backend(format!(
+                "{} does not answer {}; arming a polled listen needs it",
+                self.client.label,
+                crate::protocol::method_with_minor(METHOD)
+            ))),
+            Err(error) => Err(self.refused(METHOD, error)),
+        }
     }
     fn claim_due(&self, claim: &ClaimDue<'_>) -> Result<Vec<ClaimedWork>> {
         let mut params = obj! { "limit" => Js::Num(claim.limit.into()), "leaseMs" => Js::Num(claim.lease_ms.into()), "dueBy" => opt(claim.due_by) };

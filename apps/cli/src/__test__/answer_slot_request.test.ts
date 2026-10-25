@@ -9,9 +9,20 @@ import { SlotRefusal, answerSlotRequest } from 'movement-engine/public/module-wi
 const manifest = { name: 'acme', slot: 'models', protocolVersion: 2, methods: ['models.call'] } as unknown as Parameters<typeof answerSlotRequest>[0];
 const request = (method: string, extra: object = {}) => ({ protocolVersion: PROTOCOL_VERSION, method, params: {}, ...extra });
 
-test('the manifest method answers the manifest without asking the module', async () => {
+test('the manifest method answers the manifest without asking the module, stating its protocol minor', async () => {
   const answered = await answerSlotRequest(manifest, async () => assert.fail('asked'), request('manifest'));
-  assert.deepEqual(answered, { status: 200, body: { ok: true, result: manifest } });
+  assert.deepEqual(answered, { status: 200, body: { ok: true, result: { protocolVersion: 2, protocolMinor: 0, name: 'acme', slot: 'models', methods: ['models.call'] } } });
+  assert.deepEqual(Object.keys((answered.body as { result: object }).result).slice(0, 2), ['protocolVersion', 'protocolMinor']);
+});
+
+test('the stated minor is what the methods use, raised but never lowered by the manifest written', async () => {
+  const minorOf = async (written: object) => {
+    const answered = await answerSlotRequest({ ...manifest, ...written }, async () => null, request('manifest'));
+    return Reflect.get(Reflect.get(answered.body as object, 'result'), 'protocolMinor');
+  };
+  assert.equal(await minorOf({ slot: 'movements', methods: ['movements.list', 'movements.watch'] }), 1);
+  assert.equal(await minorOf({ slot: 'store', methods: ['work.enqueueIfAbsent'], protocolMinor: 0 }), 2);
+  assert.equal(await minorOf({ protocolMinor: 2 }), 2);
 });
 
 test('a method is answered with its params and settings, and no result is null', async () => {

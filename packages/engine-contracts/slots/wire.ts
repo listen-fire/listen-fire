@@ -14,7 +14,7 @@
 
 import { z } from 'zod';
 
-import { CORE_SLOTS, PROTOCOL_VERSION } from '../protocol';
+import { CORE_SLOTS, PROTOCOL_VERSION, WireManifestProtocolMinor } from '../protocol';
 
 export const SlotRequestEnvelope = z.object({
   protocolVersion: z.literal(PROTOCOL_VERSION),
@@ -40,6 +40,7 @@ export const SlotAnswerEnvelope = z.union([
 /** What a core module answers `manifest` with. */
 export const WireSlotManifest = z.object({
   protocolVersion: z.literal(2),
+  protocolMinor: WireManifestProtocolMinor,
   name: z.string().min(1),
   kind: z.literal('core'),
   slot: z.enum(CORE_SLOTS),

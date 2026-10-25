@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- **Adapter protocol 2.N.** A module's manifest states the minor of adapter protocol 2 it uses, `protocolMinor`, beside `protocolVersion: 2`. The module kits (TypeScript and Rust) and the slot servers compute it from the methods the manifest lists: 2.1 is a `<slot>.watch` method, 2.2 is `work.enqueueIfAbsent`; an author may raise it, never lower it. `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, naming its package and version when found, what it speaks and what to upgrade; a core module's manifest is now checked too when `lf connect` sets it up. A module stating no minor (every one published up to 0.12.5) is read as 2.0 and loads as before, and an `lf` up to 0.12.5 ignores the field. The refusals of a movements module without `movements.watch` and of a store module without `work.enqueueIfAbsent` now name the minor that added the method. See the protocol's [Versioning](docs/contracts/adapter-protocol.md#versioning).
+
 ## [0.12.5] - 2026-10-25
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: `lf drain` starts every module, the core modules included, as it opens and keeps them up; `lf serve --doors-only` starts only what its doors call; webhook registrations follow movement edits without a restart; a module no movement imports any more stops; a refresh is faster. **Breaking for store module authors:** every store module must answer `work.enqueueIfAbsent` (one conditional insert); arming a polled listen fails naming the method otherwise. The platform's store implements it in its matching release.

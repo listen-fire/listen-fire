@@ -1,6 +1,7 @@
 # The adapter protocol
 
 Version: 2
+Minor: 2
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -99,25 +100,29 @@ Every module kind — adapter, plugin, and every core slot (store, models, judge
 
 ## Versioning
 
-- A request carries `"protocolVersion": "2"`. A server built on the reference
-  kit answers any other version with the error code `protocol_version`.
-- Your `manifest` answer carries `"protocolVersion": 2` (a number).
-- Installing probes your server: Listen-Fire calls `manifest` with the secret
-  and refuses the install unless it answers `protocolVersion: 2`.
-- An install made before its secret is supplied stores the version the
-  manifest file claims. The probe runs when the secret is linked.
-- Additions that older servers can ignore (a new optional field, a new
-  optional method) do not change the version. A change in meaning does.
-- Within a version, the two sides learn what the other speaks from the
-  manifest, never from the version: a method is called only when it is listed
-  in `methods`, and a declaration (`credentials`, `inbound`, `poll`,
-  `periodic`) is acted on only when it is present. An older server sends
-  neither and is unchanged; an older host ignores both.
-- The version is an integer on the manifest and its decimal string on a
-  request. `MANIFEST_PROTOCOL_VERSION` and `PROTOCOL_VERSION`
-  (`packages/engine-contracts/protocol.ts`) hold it, and a test holds them
-  equal to the version at the top of this page. [The contracts
-  index](README.md) lists what each release supports.
+The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
+
+- **The major is a change in meaning.** A request carries `"protocolVersion": "2"` (the major alone). A server built on the reference kit answers any other with the error code `protocol_version`.
+- **The minor is an addition.** Each feature added within version 2 that a manifest can show (a method a slot gains) raises the minor by one. An older server never lists it, and an older host never calls it.
+- **Your `manifest` answer carries both, as numbers:** `"protocolVersion": 2` and `"protocolMinor": N`.
+  - The minor is computed, not the kit's latest: the highest minor among the features your manifest lists ([Minors of version 2](#minors-of-version-2)). The reference kits stamp it. An author may raise it for a host feature the manifest cannot show (`protocolMinor` on the module's definition), never lower it.
+  - So rebuilding a module with a newer kit never makes an older host refuse it.
+  - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
+- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.2. They refuse a manifest that states another major (newer or older), or a minor above 2. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A feature a module must have is checked by name where it is needed, and the refusal names its minor: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
+- **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
+- An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
+- **Where it is held.** `MANIFEST_PROTOCOL_VERSION`, `PROTOCOL_VERSION` and `PROTOCOL_MINOR` (`packages/engine-contracts/protocol.ts`) hold the major and the minor, and a test holds them equal to the lines at the top of this page. The table of minors is `PROTOCOL_MINORS` there, and its Rust twin (`crates/module-wire`) is test-held equal to it. [The contracts index](README.md) lists what each release supports.
+
+### Minors of version 2
+
+| minor | what a manifest using it lists | since |
+|---|---|---|
+| 2.0 | everything before minors were counted | 0.12.0 |
+| 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
+| 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
+
+The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
 
 ## Authentication
 
@@ -150,6 +155,7 @@ The manifest file registers your server with a team:
 ```json
 {
   "protocolVersion": 2,
+  "protocolMinor": 0,
   "adapterType": "acme_crm",
   "displayName": "Acme CRM",
   "description": "Our internal CRM.",
@@ -1037,8 +1043,9 @@ page = web.fetchUrl(u)
   [limiter](limiter-slot.md), [loopGuard](loop-guard-slot.md),
   [models](models-slot.md), [judge](judge-slot.md), [files](files-slot.md),
   [browser](browser-slot.md), each over [the transport](#transport). A core
-  module answers `manifest` with `{ protocolVersion: 2, name, kind: "core",
-  slot, methods }`.
+  module answers `manifest` with `{ protocolVersion: 2, protocolMinor, name,
+  kind: "core", slot, methods }` (`protocolMinor` as [Versioning](#versioning)
+  says: optional, computed from `methods`).
   Without `kind`, a module is an adapter, or a plugin package when it
   declares `plugins`.
 - **Settings.** Construction arguments the install supplies (an Airtable
@@ -1435,6 +1442,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; lf 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
 - **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `lf serve` and `lf drain` (without `--until-idle`) refuse a module that does not.
 - **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.

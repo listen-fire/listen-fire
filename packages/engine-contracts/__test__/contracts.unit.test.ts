@@ -13,6 +13,7 @@ import {
   HostModelRequest,
   MANIFEST_PROTOCOL_VERSION,
   PARK_STATE_VERSION,
+  PROTOCOL_MINOR,
   PROTOCOL_VERSION,
   STORY_ANALYSIS_VERSION,
   SYSTEM_CALLER_VERSION,
@@ -67,6 +68,7 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
     expect(versionLine('host-families.md')).toBe(HOST_FAMILIES_VERSION);
     expect(versionLine('adapter-protocol.md')).toBe(MANIFEST_PROTOCOL_VERSION);
     expect(String(versionLine('adapter-protocol.md'))).toBe(PROTOCOL_VERSION);
+    expect(/^Minor: (\d+)$/m.exec(read('adapter-protocol.md'))?.[1]).toBe(String(PROTOCOL_MINOR));
     expect(versionLine('system-caller.md')).toBe(SYSTEM_CALLER_VERSION);
     expect(versionLine('story-analysis.md')).toBe(STORY_ANALYSIS_VERSION);
   });
@@ -76,7 +78,17 @@ describe('the contract versions are the ones docs/contracts/ states', () => {
     const indexed = Object.fromEntries(
       rows.map(([, name, file, current, supported, deprecated]) => {
         expect(file).toBe(`${name}.md`);
-        return [name, { current: Number(current), supported: versionList(supported.trim()), deprecated: versionList(deprecated.trim()) }];
+        // A contract versioned 2.N says which minors it reads: `2 (minors 0–2)`.
+        const minors = /^(.*) \(minors 0–(\d+)\)$/.exec(supported.trim());
+        return [
+          name,
+          {
+            current: Number(current),
+            supported: versionList(minors === null ? supported.trim() : minors[1]),
+            deprecated: versionList(deprecated.trim()),
+            ...(minors === null ? {} : { minor: Number(minors[2]) }),
+          },
+        ];
       }),
     );
     expect(indexed).toEqual(CONTRACTS);

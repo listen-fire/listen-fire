@@ -39,6 +39,52 @@ impl Adapter for Tiny {
     }
 }
 
+/// An adapter listing a `<slot>.watch` method (adapter protocol 2.1), and
+/// raising its minor by hand past what its methods show.
+struct Watcher;
+
+impl Adapter for Watcher {
+    fn manifest(&self) -> AdapterManifest {
+        AdapterManifest::new("watcher").optional(["things.watch"])
+    }
+
+    async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
+        Ok(Vec::new())
+    }
+
+    async fn describe(&self, _: &Ctx, _: Describe) -> Answer<Option<TypeDescriptor>> {
+        Ok(None)
+    }
+
+    async fn get_related(&self, _: &Ctx, _: GetRelated) -> Answer<Vec<Related>> {
+        Ok(Vec::new())
+    }
+
+    async fn optional(&self, _: &Ctx, _: &str, _: Js) -> Answer<Js> {
+        Ok(Js::Null)
+    }
+}
+
+struct Raised;
+
+impl Adapter for Raised {
+    fn manifest(&self) -> AdapterManifest {
+        AdapterManifest::new("raised").declare("protocolMinor", Js::Num(2.into()))
+    }
+
+    async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
+        Ok(Vec::new())
+    }
+
+    async fn describe(&self, _: &Ctx, _: Describe) -> Answer<Option<TypeDescriptor>> {
+        Ok(None)
+    }
+
+    async fn get_related(&self, _: &Ctx, _: GetRelated) -> Answer<Vec<Related>> {
+        Ok(Vec::new())
+    }
+}
+
 #[derive(Default)]
 struct OnePermit {
     held: Cell<bool>,
@@ -64,7 +110,7 @@ impl Limiter for OnePermit {
 }
 
 fn host() -> Host {
-    Host::new().adapter(Tiny).limiter("one_permit", OnePermit::default()).token(Some("sesame".into()))
+    Host::new().adapter(Tiny).adapter(Watcher).adapter(Raised).limiter("one_permit", OnePermit::default()).token(Some("sesame".into()))
 }
 
 /// One POST; its status and body.
@@ -98,8 +144,13 @@ async fn over_tcp_each_module_answers_at_its_own_path() {
 
             let (status, body) = post(tcp().await, "/tiny", Some("sesame"), &call("manifest", "{}")).await;
             assert_eq!(status, 200);
-            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"kind":"adapter","adapterType":"tiny","#), "{body}");
+            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":0,"kind":"adapter","adapterType":"tiny","#), "{body}");
             assert!(body.contains(r#""wakeKeys"]"#), "{body}");
+            let (_, body) = post(tcp().await, "/watcher", Some("sesame"), &call("manifest", "{}")).await;
+            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":1,"kind":"adapter","adapterType":"watcher","#), "{body}");
+            let (_, body) = post(tcp().await, "/raised", Some("sesame"), &call("manifest", "{}")).await;
+            assert!(body.starts_with(r#"{"ok":true,"result":{"protocolVersion":2,"protocolMinor":2,"kind":"adapter","adapterType":"raised","#), "{body}");
+            assert_eq!(body.matches("protocolMinor").count(), 1, "{body}");
 
             let (_, body) = post(tcp().await, "/tiny", Some("sesame"), &call("listEntryPoints", "{}")).await;
             assert_eq!(
@@ -125,12 +176,12 @@ async fn over_tcp_each_module_answers_at_its_own_path() {
             let (_, body) = post(tcp().await, "/one_permit", Some("sesame"), &call("limiter.acquire", r#"{"key":"k","cost":1,"limits":[],"holdMs":1000}"#)).await;
             assert_eq!(body, r#"{"ok":true,"result":{"granted":false,"retryAt":"2026-10-19T00:00:01.000Z"}}"#);
             let (_, body) = post(tcp().await, "/one_permit", Some("sesame"), &call("manifest", "{}")).await;
-            assert!(body.contains(r#""kind":"core","adapterType":"one_permit""#) && body.contains(r#""slot":"limiter""#), "{body}");
+            assert!(body.contains(r#""protocolMinor":0,"kind":"core","adapterType":"one_permit""#) && body.contains(r#""slot":"limiter""#), "{body}");
 
             let (status, _) = post(tcp().await, "/tiny", None, &call("manifest", "{}")).await;
             assert_eq!(status, 401, "the token is required");
             let (status, body) = post(tcp().await, "/", Some("sesame"), &call("manifest", "{}")).await;
-            assert_eq!((status, body.as_str()), (404, "no module at / (this host serves /tiny, /one_permit)"));
+            assert_eq!((status, body.as_str()), (404, "no module at / (this host serves /tiny, /watcher, /raised, /one_permit)"));
             let (_, body) = post(tcp().await, "/tiny", Some("sesame"), r#"{"protocolVersion":"1","method":"manifest","params":{}}"#).await;
             assert!(body.contains(r#""code":"protocol_version""#), "{body}");
             let (status, _) = post(tcp().await, "/tiny", Some("sesame"), "not json").await;

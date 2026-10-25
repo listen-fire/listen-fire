@@ -17,7 +17,7 @@ import {
   compatibilityKey,
 } from 'movement-lang';
 
-import { MANIFEST_PROTOCOL_VERSION } from './protocol';
+import { MANIFEST_PROTOCOL_VERSION, PROTOCOL_MINOR } from './protocol';
 
 // The snapshot is the language's type, so its version lives beside it.
 export { CATALOG_SNAPSHOT_VERSION, DEPRECATED_CATALOG_SNAPSHOT_VERSIONS, SUPPORTED_CATALOG_SNAPSHOT_VERSIONS };
@@ -48,6 +48,9 @@ export interface ContractStanding {
   current: number;
   supported: readonly number[];
   deprecated: readonly number[];
+  /** The highest minor of `current` this release speaks, for a contract
+   *  versioned 2.N (the adapter protocol): it reads every minor from 0 up. */
+  minor?: number;
 }
 
 /** What this release speaks, contract by contract: the index
@@ -64,7 +67,7 @@ export const CONTRACTS = {
     supported: [...SUPPORTED_HOST_FAMILIES_VERSIONS],
     deprecated: [],
   },
-  'adapter-protocol': { current: MANIFEST_PROTOCOL_VERSION, supported: [MANIFEST_PROTOCOL_VERSION], deprecated: [] },
+  'adapter-protocol': { current: MANIFEST_PROTOCOL_VERSION, supported: [MANIFEST_PROTOCOL_VERSION], deprecated: [], minor: PROTOCOL_MINOR },
   'system-caller': { current: SYSTEM_CALLER_VERSION, supported: [SYSTEM_CALLER_VERSION], deprecated: [] },
   // The shape of what the check settled, for a surface that draws a movement's story (docs/contracts/story-analysis.md).
   'story-analysis': { current: STORY_ANALYSIS_VERSION, supported: [...SUPPORTED_STORY_ANALYSIS_VERSIONS], deprecated: [] },

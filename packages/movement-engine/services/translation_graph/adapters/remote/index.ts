@@ -31,7 +31,8 @@
 
 import { Readable } from 'node:stream';
 
-import { CREDENTIAL_REFUSED_CODE, isPlainObject, METHODS, WireManifestProtocolVersion } from 'engine-contracts';
+import { CREDENTIAL_REFUSED_CODE, isPlainObject, METHODS, protocolStanding } from 'engine-contracts';
+import { LANGUAGE_VERSION } from 'movement-lang';
 
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type {
@@ -229,16 +230,11 @@ export async function fetchRemoteManifest(
     cacheScopeId: '<none>',
     params: {},
   });
-  // Checked ahead of the full parse so an older server is refused for what it
-  // is, not for whichever other field happens to have changed shape.
-  const version = WireManifestProtocolVersion.safeParse(
-    raw !== null && typeof raw === 'object' ? Reflect.get(raw, 'protocolVersion') : undefined,
-  );
-  if (!version.success) {
-    throw new Error(
-      `Remote adapter "${config.adapterType}" at ${config.baseUrl} refused: ${version.error.issues[0]?.message ?? 'protocolVersion is not 2'}`,
-    );
-  }
+  // Checked ahead of the full parse so a server outside the range this engine
+  // speaks is refused for what it is, not for whichever other field happens
+  // to have changed shape.
+  const standing = protocolStanding(raw, { host: { name: '@listen-fire/engine', version: LANGUAGE_VERSION } });
+  if (!standing.ok) throw new Error(`Remote adapter "${config.adapterType}" at ${config.baseUrl} refused: ${standing.message}`);
   const result = parseWireResult(METHODS.manifest.result, raw, {
     method: 'manifest',
     adapter: config.adapterType,

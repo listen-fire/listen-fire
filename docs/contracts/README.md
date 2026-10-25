@@ -7,7 +7,7 @@ The movement core speaks seven contracts. Six are written down here with an inte
 | catalog-snapshot | [catalog-snapshot.md](catalog-snapshot.md) | 1 | 1 | none | `contractVersion` on the snapshot |
 | park-state | [park-state.md](park-state.md) | 2 | 1, 2 | none | `version` on the state |
 | host-families | [host-families.md](host-families.md) | 1 | 1 | none | `hostFamiliesVersion` on `segment.open` |
-| adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 | none | `protocolVersion` on every request and the manifest |
+| adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 (minors 0–2) | none | `protocolVersion` on every request and the manifest |
 | language-versions | [language-versions.md](language-versions.md) | the release | the release's compatibility key (0.12) | none | `languageVersion` beside every program |
 | system-caller | [system-caller.md](system-caller.md) | 1 | 1 | none | none: an in-process interface |
 | story-analysis | [story-analysis.md](story-analysis.md) | 1 | 1 | none | `storyAnalysisVersion` on the analysis |
@@ -21,7 +21,7 @@ The movement core speaks seven contracts. Six are written down here with an inte
 
 The rule mirrors the language's ([language-versions.md](language-versions.md)):
 
-- **An addition a reader can ignore keeps the version.** A new optional field, or a new optional method or family, whose absence means what it meant before.
+- **An addition a reader can ignore keeps the version.** A new optional field, or a new optional method or family, whose absence means what it meant before. The adapter protocol counts such additions as minors of its version (2.N): one a manifest can show, such as a method a slot gains, raises the minor, and a host reads every minor up to its own ([Versioning](adapter-protocol.md#versioning)).
 - **A change in meaning bumps it.** A field removed or renamed, a field whose meaning changed, a required field added, an answer reshaped.
 - **A break lands as a conditional, never a fork.** The writer sends the new version; a reader that reads both branches on the version at the point of difference. Never a second reader, a second host interface or a second engine.
 - **An unsupported version is refused at the boundary, loudly.** The refusal names the contract, the version it was handed and the versions it reads. It is never read as though it were the current version.

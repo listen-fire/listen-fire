@@ -35,14 +35,95 @@ export const ADAPTER_TEAM_HEADER = 'x-listen-fire-team';
  *  because manifests are hand-written files, where `2` is what an author types. */
 export const MANIFEST_PROTOCOL_VERSION = 2;
 
+/** The highest minor of version 2 this release speaks: a host reads 2.0 to
+ *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
+export const PROTOCOL_MINOR = 2;
+
+/** What a manifest shows of a feature: a method it lists, by name or by its
+ *  ending (`<slot>.watch`). Data, so the Rust twin
+ *  (module-wire `envelope::PROTOCOL_MINORS`) is test-held equal to it. */
+export type ProtocolMinorUse = { method: string } | { methodEndingWith: string };
+
+/** Each minor of version 2 and the feature that a manifest using it lists. A
+ *  minor whose feature a manifest cannot show (2.0's) has no row. */
+export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
+  { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
+  { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
+];
+
+function lists(methods: readonly string[], uses: ProtocolMinorUse): boolean {
+  return 'method' in uses ? methods.includes(uses.method) : methods.some((method) => method.endsWith(uses.methodEndingWith));
+}
+
+/** The minor a manifest states: the highest among the features it lists, so a
+ *  module rebuilt with a newer kit is never refused by an older host for a
+ *  feature it does not use. */
+export function protocolMinorOf(manifest: { methods: readonly string[] }): number {
+  return PROTOCOL_MINORS.reduce((highest, { minor, uses }) => (lists(manifest.methods, uses) ? Math.max(highest, minor) : highest), 0);
+}
+
+function olderProtocolText(got: unknown, module: 'adapter' | 'module'): string {
+  return (
+    `protocolVersion: expected ${MANIFEST_PROTOCOL_VERSION}, got ${JSON.stringify(got) ?? 'nothing'} — ` +
+    `this ${module} targets an older adapter protocol; update it to protocol version ${MANIFEST_PROTOCOL_VERSION}.`
+  );
+}
+
 /** A manifest's `protocolVersion`, shared by the server's `manifest` answer and
- *  the installable manifest file so both refuse an older adapter in the same
- *  words. */
+ *  the installable manifest file so both refuse a module in the same words,
+ *  naming which way it is out of step. */
 export const WireManifestProtocolVersion = z.literal(MANIFEST_PROTOCOL_VERSION, {
   error: (issue) =>
-    `protocolVersion: expected ${MANIFEST_PROTOCOL_VERSION}, got ${JSON.stringify(issue.input) ?? 'nothing'} — ` +
-    `this adapter targets an older adapter protocol; update it to protocol version ${MANIFEST_PROTOCOL_VERSION}.`,
+    typeof issue.input === 'number' && issue.input > MANIFEST_PROTOCOL_VERSION
+      ? `protocolVersion: expected ${MANIFEST_PROTOCOL_VERSION}, got ${issue.input} — this adapter targets a newer adapter protocol; upgrade to a release that speaks it.`
+      : olderProtocolText(issue.input, 'adapter'),
 });
+
+/** A manifest's `protocolMinor`: absent is unstated, read as 2.0. */
+export const WireManifestProtocolMinor = z.number().int().min(0).optional();
+
+/** Who a refusal names: the module (absent when the caller names it itself),
+ *  its slot for a core module, its package when the host found it, and the
+ *  host refusing it with its own version. */
+export interface ProtocolSpeaker {
+  name?: string;
+  slot?: string;
+  package?: { name: string; version: string };
+  host: { name: string; version: string };
+}
+
+/** Whether a host speaking 2.0 to 2.`PROTOCOL_MINOR` reads a module whose
+ *  manifest is `raw`, and if not, why in words naming both sides. lf's twin
+ *  is `protocol::protocol_standing` (crates/lf), in the same words. */
+export function protocolStanding(raw: unknown, speaker: ProtocolSpeaker): { ok: true } | { ok: false; message: string } {
+  const field = (key: string) => (raw !== null && typeof raw === 'object' ? Reflect.get(raw, key) : undefined);
+  const version = field('protocolVersion');
+  const minor = field('protocolMinor');
+  const named = speaker.name === undefined ? undefined : speaker.slot === undefined ? `external "${speaker.name}"` : `core module "${speaker.name}" (${speaker.slot} slot)`;
+  const subject = named === undefined ? undefined : speaker.package === undefined ? named : `${named} (${speaker.package.name} ${speaker.package.version})`;
+  const prefixed = (text: string) => (subject === undefined ? text : `${subject}: ${text}`);
+  const host = `this ${speaker.host.name} (${speaker.host.version}) speaks ${MANIFEST_PROTOCOL_VERSION}.0–${MANIFEST_PROTOCOL_VERSION}.${PROTOCOL_MINOR}`;
+  if (typeof version === 'number' && version > MANIFEST_PROTOCOL_VERSION) {
+    return { ok: false, message: prefixed(`${subject === undefined ? 'it ' : ''}speaks adapter protocol ${version}; ${host}. Upgrade ${speaker.host.name}.`) };
+  }
+  if (version !== MANIFEST_PROTOCOL_VERSION) {
+    return { ok: false, message: prefixed(olderProtocolText(version, speaker.slot === undefined ? 'adapter' : 'module')) };
+  }
+  if (minor === undefined) return { ok: true };
+  if (typeof minor !== 'number' || !Number.isInteger(minor) || minor < 0) {
+    return { ok: false, message: prefixed(`protocolMinor: expected a whole number, got ${JSON.stringify(minor)}.`) };
+  }
+  if (minor <= PROTOCOL_MINOR) return { ok: true };
+  const stated = `${MANIFEST_PROTOCOL_VERSION}.${minor}`;
+  const older = speaker.package === undefined ? 'a version of it' : `a ${speaker.package.name}`;
+  return {
+    ok: false,
+    message:
+      `${subject ?? 'it'} speaks adapter protocol ${stated}; ${host}. ` +
+      `Upgrade ${speaker.host.name} to a release that speaks ${stated} (the protocol's Changes list names it), ` +
+      `or use ${older} that speaks ${MANIFEST_PROTOCOL_VERSION}.${PROTOCOL_MINOR} or lower.`,
+  };
+}
 
 /** A credential's fields as stored, every value a string (`expires_at` an ISO
  *  time). */
@@ -993,6 +1074,7 @@ export const WireManifestResult = z.object({
   ...WireListenDeclarations.shape,
   ...WireModuleDeclarations.shape,
   protocolVersion: WireManifestProtocolVersion,
+  protocolMinor: WireManifestProtocolMinor,
   adapterType: z.string(),
   supportedTriggers: z.array(z.string()),
   // Whole-adapter capability (mirrors `Adapter.runtimeCapabilities()`):

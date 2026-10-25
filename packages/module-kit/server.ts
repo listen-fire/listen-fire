@@ -34,7 +34,7 @@
 //
 // Dependency-light by design: Node `http` types only, no express.
 
-import { fileDescriptorOf, fileValueOf, MANIFEST_PROTOCOL_VERSION, METHODS, PROTOCOL_VERSION, RpcRequest } from 'engine-contracts';
+import { fileDescriptorOf, fileValueOf, MANIFEST_PROTOCOL_VERSION, METHODS, PROTOCOL_VERSION, protocolMinorOf, RpcRequest } from 'engine-contracts';
 
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import type { z } from 'zod';
@@ -277,6 +277,7 @@ export async function readProtocolRequest(
 export function adapterManifestResult(adapter: Adapter, methods: readonly string[]): Record<string, unknown> {
   return {
     protocolVersion: MANIFEST_PROTOCOL_VERSION,
+    protocolMinor: protocolMinorOf({ methods }),
     adapterType: adapter.adapterType,
     supportedTriggers: adapter.supportedTriggers,
     runtimeCapabilities: adapter.runtimeCapabilities(),

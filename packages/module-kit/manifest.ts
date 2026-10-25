@@ -8,6 +8,7 @@
 import {
   MANIFEST_PROTOCOL_VERSION,
   METHODS,
+  protocolMinorOf,
   type MethodName,
   type WireManifestResultShape,
   type WirePluginSpecShape,
@@ -28,12 +29,14 @@ function moduleMethods(instance: object, names: readonly MethodName[]): MethodNa
 
 function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterModuleMethods): unknown {
   const { manifest } = definition;
+  const methods = [...adapterProtocolMethods(instance), ...moduleMethods(instance, ['poll', 'runPeriodic', 'refreshCredential'])];
   return {
     protocolVersion: MANIFEST_PROTOCOL_VERSION,
+    protocolMinor: statedMinor(definition, methods),
     adapterType: instance.adapterType,
     supportedTriggers: instance.supportedTriggers,
     runtimeCapabilities: instance.runtimeCapabilities(),
-    methods: [...adapterProtocolMethods(instance), ...moduleMethods(instance, ['poll', 'runPeriodic', 'refreshCredential'])],
+    methods,
     ...(instance.webhookEventTypeId !== undefined ? { webhookEventTypeId: instance.webhookEventTypeId } : {}),
     ...(manifest.description !== undefined ? { description: manifest.description } : {}),
     ...(manifest.subscribableEvents !== undefined ? { subscribableEvents: [...manifest.subscribableEvents] } : {}),
@@ -55,6 +58,12 @@ function adapterManifest(definition: AdapterModuleDefinition, instance: AdapterM
   };
 }
 
+/** The minor of adapter protocol 2 the manifest states: what its methods use,
+ *  raised by the definition's own `protocolMinor`, never lowered by it. */
+function statedMinor(definition: ModuleDefinition, methods: readonly string[]): number {
+  return Math.max(protocolMinorOf({ methods }), definition.protocolMinor ?? 0);
+}
+
 /** `hostLimits` is the author's word, never inferred from `limits`: it moves
  *  the counting from the host's calls to the module's own requests
  *  (`ctx.fetch` asks the host's limits door, `host_limits.ts`), which only
@@ -65,12 +74,14 @@ function declaredLimits(definition: ModuleDefinition): { limits?: unknown[]; hos
 }
 
 function pluginManifest(definition: PluginModuleDefinition, instance: PluginModuleMethods): unknown {
+  const methods = ['manifest', ...moduleMethods(instance, ['invokePlugin', 'refreshCredential'])];
   return {
     protocolVersion: MANIFEST_PROTOCOL_VERSION,
+    protocolMinor: statedMinor(definition, methods),
     adapterType: moduleSlug(definition.name),
     supportedTriggers: [],
     runtimeCapabilities: BASE_RUNTIME_CAPABILITIES,
-    methods: ['manifest', ...moduleMethods(instance, ['invokePlugin', 'refreshCredential'])],
+    methods,
     ...(definition.credentials.length > 0 ? { credentials: [...definition.credentials] } : {}),
     ...declaredLimits(definition),
     plugins: {
