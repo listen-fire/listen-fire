@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A module's webhook registration follows an edit under a running `lf serve`: when a refresh changes the events a module's listens name, lf registers the webhook for them (changed in place where the module can), and removes it once no listen needs it, as `lf serve`'s start does. Before, the refresh only printed that the registration would change at the next restart. A registration that fails is printed once per message and tried again at the next change.
+
 - `lf drain` starts every module its movements import together as it opens, before it claims any work, and keeps them up until it exits: a run no longer waits on a module's start, and the idle stop (`moduleIdleTimeout`) no longer stops a module mid-drain. Every command's open starts the modules together rather than one after another (three modules that each take a second to start: the first run of a fresh `lf drain` went from 3.4 s to 2.0 s).
 
 ## [0.12.4] - 2026-10-25

@@ -3,7 +3,9 @@
 //! external that lists `ensureEventSubscription` and takes webhooks is asked
 //! to register a webhook for the events its live listens name, pointed at the
 //! webhook door under lf.yaml's `publicUrl`; one whose listens are all gone
-//! has its webhook removed (`removeEventSubscription`).
+//! has its webhook removed (`removeEventSubscription`). Each refresh of the
+//! files does the same for the externals whose listens now want other
+//! events, and tries again the ones that failed.
 //!
 //! The registration is kept on the credential it is made under (the
 //! external's user credential, whose token reaches the source), and that
@@ -13,7 +15,8 @@
 //! registered: the same events and URL ask the module, which leaves the
 //! webhook as it is; other events change it in place; another URL replaces it.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::connect::spread;
 use crate::doors::inbound_of;
@@ -76,49 +79,69 @@ fn wanted_events(set: &FileSet, running: &RunningExternal) -> Vec<String> {
     events.into_iter().collect()
 }
 
-/// A refreshed set's webhook needs, said rather than registered: the
-/// registration is written to the secrets, which stay fixed for the session,
-/// so it follows the listens when lf serve starts again. A line per
-/// external whose listens now want other events.
-pub fn webhook_events_moved(before: &FileSet, after: &FileSet) -> Vec<String> {
-    after
-        .running
-        .iter()
-        .filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
-        .filter_map(|r| {
-            let wanted = wanted_events(after, r);
-            (wanted != wanted_events(before, r)).then(|| {
-                let events = if wanted.is_empty() { "none".to_string() } else { wanted.join(", ") };
-                format!("{}'s listens now want the webhook events {events}; its registration changes when lf serve restarts", r.external.manifest.name)
-            })
-        })
-        .collect()
+/// The externals in `set` whose webhook lf registers.
+fn registering(set: &FileSet) -> impl Iterator<Item = &RunningExternal> {
+    set.running.iter().map(|r| &**r).filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
 }
 
-/// Register or remove each external's webhook, as its listens need; a line
-/// per external it touched. One that fails is said and the rest go on: the
-/// doors still answer whatever is registered.
-pub async fn reconcile(session: &mut Session) -> Vec<String> {
-    let mut lines = Vec::new();
-    let set = session.file_set();
-    let names: Vec<String> = set
-        .running
-        .iter()
-        .filter(|r| !r.is_plugin() && r.methods.iter().any(|m| m == "ensureEventSubscription") && inbound_of(r).is_some())
+/// The failures a session's registrations last met, by external: a refresh
+/// tries each again, and says one only when its message is new.
+#[derive(Default)]
+pub struct Registrations {
+    failed: RefCell<BTreeMap<String, String>>,
+}
+
+impl Registrations {
+    /// `line`, unless it is the very failure last said for `name`.
+    fn failure(&self, name: &str, line: String) -> Option<String> {
+        let said = self.failed.borrow_mut().insert(name.to_string(), line.clone());
+        (said.as_ref() != Some(&line)).then_some(line)
+    }
+
+    fn success(&self, name: &str) {
+        self.failed.borrow_mut().remove(name);
+    }
+
+    fn failing(&self, name: &str) -> bool {
+        self.failed.borrow().contains_key(name)
+    }
+}
+
+/// Register or remove each external's webhook, as its listens need (`lf
+/// serve` starting); a line per external it touched. One that fails is said
+/// and the rest go on: the doors still answer whatever is registered.
+pub async fn reconcile(session: &Session) -> Vec<String> {
+    let names = registering(&session.file_set()).map(|r| r.external.manifest.name.clone()).collect();
+    register(session, names).await
+}
+
+/// A refresh's registrations: each external whose listens want other events
+/// in `after` than in `before`, and each whose last registration failed. A
+/// failure is said once per message; a success is always said.
+pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet) -> Vec<String> {
+    let names = registering(after)
+        .filter(|r| session.registrations.failing(&r.external.manifest.name) || wanted_events(after, r) != wanted_events(before, r))
         .map(|r| r.external.manifest.name.clone())
         .collect();
+    register(session, names).await
+}
+
+async fn register(session: &Session, names: Vec<String>) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut changed = false;
     for name in names {
         match reconcile_one(session, &name).await {
-            Ok(Some((line, wrote))) => {
-                changed |= wrote;
-                lines.push(format!("{name}: {line}"));
+            Ok(outcome) => {
+                session.registrations.success(&name);
+                if let Some((line, wrote)) = outcome {
+                    changed |= wrote;
+                    lines.push(format!("{name}: {line}"));
+                }
             }
-            Ok(None) => {}
-            Err(message) => lines.push(format!("{name}: its webhook is not registered — {message}")),
+            Err(message) => lines.extend(session.registrations.failure(&name, format!("{name}: its webhook is not registered — {message}"))),
         }
     }
-    if changed && let Err(message) = session.reload_credentials() {
+    if changed && let Err(message) = session.reload_secrets() {
         lines.push(format!("the secrets could not be read again after the webhooks changed: {message}"));
     }
     lines
@@ -128,9 +151,11 @@ pub async fn reconcile(session: &mut Session) -> Vec<String> {
 /// when it has nothing registered and no listen.
 async fn reconcile_one(session: &Session, name: &str) -> Result<Option<(String, bool)>, String> {
     let set = session.file_set();
+    let secrets = session.secrets();
+    let credentials = secrets.credentials();
     let running = set.running.iter().find(|r| r.external.manifest.name == name).ok_or("not running")?;
     let wanted = wanted_events(&set, running);
-    let Some(credential) = credential_for(session.credentials(), name) else {
+    let Some(credential) = credential_for(credentials, name) else {
         return Ok((!wanted.is_empty()).then(|| (format!("no credential to register its webhook under: lf credential add --module {name} <name>"), false)));
     };
     let registered = Registered::of(credential);
@@ -139,7 +164,7 @@ async fn reconcile_one(session: &Session, name: &str) -> Result<Option<(String, 
     let issued_by_provider = setup.declaration.secret_from_provider;
     let secret_field = setup.secret_field;
     let call = |method: &'static str, params: serde_json::Value| async move {
-        let raw = rpc(running, session.credentials(), LOCAL_TENANT, method, params).await?;
+        let raw = rpc(running, credentials, LOCAL_TENANT, method, params).await?;
         module_wire::results::check(method, name, &raw)
     };
 
@@ -210,4 +235,22 @@ async fn keep(credential: &Credential, fields: Vec<(String, String)>) -> Result<
 async fn forget(credential: &Credential, names: &[&str]) -> Result<(), String> {
     let replaced = writable(credential)?.replace(&credential.name, &|stored| Ok(stored.unwrap_or_default().into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect())).await;
     replaced.map_err(|e| e.refusal_for_webhook())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_is_said_once_per_message_and_again_after_a_success() {
+        let registrations = Registrations::default();
+        assert_eq!(registrations.failure("attio", "down".into()).as_deref(), Some("down"));
+        assert!(registrations.failing("attio"), "tried again at the next refresh");
+        assert_eq!(registrations.failure("attio", "down".into()), None, "the same failure again is not said");
+        assert_eq!(registrations.failure("attio", "refused".into()).as_deref(), Some("refused"), "a new message is");
+        assert_eq!(registrations.failure("slack", "down".into()).as_deref(), Some("down"), "each external its own");
+        registrations.success("attio");
+        assert!(!registrations.failing("attio"));
+        assert_eq!(registrations.failure("attio", "refused".into()).as_deref(), Some("refused"), "after a success it is news again");
+    }
 }

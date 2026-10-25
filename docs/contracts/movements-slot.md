@@ -119,6 +119,7 @@ lf asks `list`, then `read` for each file it does not already hold at the listed
 - A module that does not answer `movements.watch` (its manifest lacks it) is refused when `lf serve` or `lf drain` starts, by name: `the movements module <name> does not answer movements.watch; lf serve needs it` (`lf drain needs it` for `lf drain`). `lf drain --until-idle` and every one-shot command never watch and do not need it.
 - A held watch keeps a module that lf started from its idle stop, and does not hold up the module's other methods: a run reads its files while a watch is held.
 - A change that finds the set changed checks it first. A set that checks replaces the running one; a set that does not is kept out, with its diagnostics printed once, and the files lf had keep running. A module that fails to answer `watch` is reported once per distinct message, and the files lf has stay.
+- Under `lf serve`, a set taken moves each module's webhook registration with its listens, as `lf serve`'s start does: registered for the events they now name, removed once no listen needs it. A registration that fails is printed once per message and tried again at the next change.
 - A parked run resumes from its own recorded source, not from the files, and its imports link against the files lf holds now.
 - A platform running a session per tenant per job sees current files at each job.
 

@@ -130,7 +130,8 @@ pub enum EventSink<'a> {
 pub struct LfDoors<'a, R: Reader> {
     pub store: &'a dyn RunHostStore,
     pub served: Vec<Served>,
-    pub installs: &'a [Credential],
+    /// The installs, as read when the doors were opened for one request.
+    pub installs: std::borrow::Cow<'a, [Credential]>,
     pub reader: R,
     pub sink: EventSink<'a>,
     /// Poke the drain: work rows were queued.
@@ -143,7 +144,7 @@ impl<'a> LfDoors<'a, SessionReader<'a>> {
         LfDoors {
             store: &*session.store,
             served: session.file_set().running.iter().map(|r| served_of(r)).collect(),
-            installs: session.credentials(),
+            installs: std::borrow::Cow::Owned(session.secrets().credentials().clone()),
             reader: SessionReader { session },
             sink,
             notify,
@@ -224,7 +225,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
         // secret `lf connect` set is the install's.
         let secret = match own {
             None if setup.declaration.scheme == Scheme::Module => {
-                install_of(self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field))
+                install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field))
             }
             own => own,
         };
@@ -400,7 +401,7 @@ impl SessionReader<'_> {
         let lease = running.reach.lease().await?;
         let target = Target { external: &running.external, base_url: &lease.address, declarations: &[], methods: &running.methods, settings: &running.settings, limits: &running.limits };
         let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params };
-        let raw = send(&target, self.session.credentials(), None, Some(install), sending).await?;
+        let raw = send(&target, self.session.secrets().credentials(), None, Some(install), sending).await?;
         module_wire::results::check(method, external, &raw)
     }
 
@@ -449,7 +450,8 @@ impl Reader for SessionReader<'_> {
         }
         // The check reads the provider's keys (a verify token, an API key to
         // fetch the message with), so it carries the user credential.
-        let credentials = self.session.credentials();
+        let secrets = self.session.secrets();
+        let credentials = secrets.credentials();
         let carried = carried_credential(credentials, external, install);
         let lease = running.reach.lease().await?;
         let target = Target {
@@ -553,7 +555,7 @@ pub fn hook_target(session: &Session, external: &str, install: Option<&str>) -> 
     let set = session.file_set();
     let running = set.running.iter().find(|r| r.external.manifest.name == external)?;
     let setup = served_of(running).inbound?;
-    let subscription = install.map(str::to_string).or_else(|| install_of(session.credentials(), external).map(|c| c.name.clone())).unwrap_or_default();
+    let subscription = install.map(str::to_string).or_else(|| install_of(session.secrets().credentials(), external).map(|c| c.name.clone())).unwrap_or_default();
     Some((setup.declaration.provider_key, subscription))
 }
 

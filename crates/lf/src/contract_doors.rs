@@ -214,7 +214,7 @@ impl Observed<'_> {
         LfDoors {
             store: &self.bridge.store,
             served: self.served.clone(),
-            installs: &self.installs,
+            installs: std::borrow::Cow::Borrowed(&self.installs),
             reader: SuiteReader { wake_keys_fail: self.faults.wake_keys },
             sink: EventSink::Queue,
             notify: &|| {},

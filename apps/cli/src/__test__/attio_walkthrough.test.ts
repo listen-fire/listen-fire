@@ -10,7 +10,9 @@
 //   back as record.updated runs it again, until the project opts in to the
 //   loop guard (core: loopGuard): then it runs nothing and a second user's
 //   update runs it →
-//   lf runs → restarts keep the webhook, a removed listen removes it.
+//   lf runs → restarts keep the webhook; under a running lf serve the
+//   webhook follows each refresh (fewer events, the listen removed, back);
+//   a listen removed while lf is stopped is removed at the next start.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -227,16 +229,41 @@ test('the Attio walkthrough, end to end against the fake Attio', async () => {
     assert.equal(runs.code, 0, runs.out);
     assert.equal(runs.out.split('\n').filter((l) => /sync:stamp completed/.test(l)).length, 5, runs.out);
 
-    // A restart keeps the webhook it registered.
+    // A restart keeps the webhook it registered. Then the listens move under
+    // the running lf serve, and its webhook follows each refresh.
     serving = await served(dir, ['--port', String(port)]);
     try {
       await serving.waitFor(/^attio: webhook fake-webhook-\d+ is registered for record\.created,record\.updated at /);
       assert.equal((await webhooks()).length, 1);
+      const seen = (pattern: RegExp) => serving.lines.filter((l) => pattern.test(l)).length;
+      const movement = join(dir, 'movements/sync.mvt');
+      const off = join(dir, 'sync.mvt.off');
+
+      // Fewer events: the webhook is changed in place.
+      writeFileSync(movement, readFileSync(movement, 'utf8').replace('"record.created", "record.updated"', '"record.created"'));
+      await serving.waitFor(/^attio: registered webhook fake-webhook-\d+ for record\.created at /);
+      assert.deepEqual((await webhooks()).map((w) => w.subscriptions.map((s) => s.event_type)), [['record.created']]);
+
+      // The listen removed: its webhook is removed.
+      renameSync(movement, off);
+      await serving.waitFor(/^attio: no listen needs its webhook any more; removed webhook fake-webhook-\d+$/);
+      assert.deepEqual(await webhooks(), []);
+
+      // Back: a new webhook, its secret issued again, and a signed delivery runs.
+      renameSync(off, movement);
+      await until(() => seen(/^attio: registered webhook fake-webhook-\d+ for record\.created at /) === 2, serving.lines);
+      const registered = await webhooks();
+      assert.equal(registered.length, 1);
+      assert.equal(registered[0]?.target_url, door);
+      const acme = ((await fake.json('/attio/v2/objects/companies/records', { data: { values: { name: 'Acme Again' } } })) as { data: Company }).data;
+      const delivered = (await fake.json('/attio/control/deliver', { events: [{ event_type: 'record.created', id: { object_id: 'companies', record_id: acme.id.record_id } }] })) as { deliveries: Array<{ status: number }> };
+      assert.deepEqual(delivered.deliveries.map((d) => d.status), [200]);
+      await until(() => seen(/^run \S+ sync:stamp completed$/) === 1, serving.lines);
     } finally {
       await serving.stop();
     }
 
-    // The listen removed: the next start removes its webhook.
+    // The listen removed while lf is stopped: the next start removes its webhook.
     renameSync(join(dir, 'movements/sync.mvt'), join(dir, 'sync.mvt.off'));
     serving = await served(dir, ['--port', String(port)]);
     try {

@@ -31,7 +31,7 @@ use crate::run_host::{
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
-use crate::secrets::{Credentials, Secrets, missing_credentials};
+use crate::secrets::{Secrets, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, scan_movements};
@@ -106,7 +106,8 @@ pub enum Role {
     /// opens and kept up for the worker's life, so no run pays a start.
     Drain,
     /// `lf serve`: a module stops when idle, and starts again for the
-    /// delivery or the run that needs it.
+    /// delivery or the run that needs it; a refresh registers the webhooks
+    /// the new listens need (crate::subscriptions).
     Serve,
 }
 
@@ -131,7 +132,12 @@ pub struct Session {
     pub project: Project,
     pub role: Role,
     pub store: std::rc::Rc<dyn RunHostStore>,
-    secrets: Secrets,
+    /// Never borrowed across an await: a webhook registration replaces it
+    /// with what it wrote (crate::subscriptions).
+    secrets: RefCell<Rc<Secrets>>,
+    /// What `lf serve` has said of its webhooks' registration, so a failure
+    /// a refresh meets again is not said again.
+    pub registrations: crate::subscriptions::Registrations,
     pub documents: Documents,
     /// Never borrowed across an await: a refresh may replace it meanwhile.
     file_set: RefCell<Rc<FileSet>>,
@@ -271,7 +277,8 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         project,
         role,
         store,
-        secrets,
+        secrets: RefCell::new(Rc::new(secrets)),
+        registrations: Default::default(),
         documents,
         file_set,
         due_offset_ms,
@@ -422,19 +429,22 @@ impl Session {
         self.file_set.borrow().clone()
     }
 
-    /// The installs: the secrets module's credentials, then the environment's.
-    pub fn credentials(&self) -> &Credentials {
-        self.secrets.credentials()
+    /// The secrets as last read: the installs (`credentials()`), the
+    /// secrets module's then the environment's. Work holds what it took
+    /// while a registration reads them again.
+    pub fn secrets(&self) -> Rc<Secrets> {
+        self.secrets.borrow().clone()
     }
 
     /// Read the secrets again, after lf wrote to them (crate::subscriptions).
-    pub fn reload_credentials(&mut self) -> Result<(), String> {
-        self.secrets = Secrets::open(&self.project, &std::env::vars().collect::<Vec<_>>())?;
+    pub fn reload_secrets(&self) -> Result<(), String> {
+        let read = Secrets::open(&self.project, &std::env::vars().collect::<Vec<_>>())?;
+        self.secrets.replace(Rc::new(read));
         Ok(())
     }
 
-    pub fn externals_in<'a>(&'a self, set: &'a FileSet) -> Externals<'a> {
-        Externals { project: &self.project, running: &set.running, credentials: self.secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
+    pub fn externals_in<'a>(&'a self, set: &'a FileSet, secrets: &'a Secrets) -> Externals<'a> {
+        Externals { project: &self.project, running: &set.running, credentials: secrets.credentials(), documents: &self.documents, tenant: LOCAL_TENANT, loop_guard: self.loop_guard.as_deref() }
     }
 
     fn due_by(&self) -> String {
@@ -569,7 +579,7 @@ impl Session {
     async fn poll_once(&self, set: &FileSet, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
         let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
         let params = poll_params(listen, state.as_ref());
-        let raw = rpc(running, self.secrets.credentials(), LOCAL_TENANT, "poll", params).await?;
+        let raw = rpc(running, self.secrets().credentials(), LOCAL_TENANT, "poll", params).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
@@ -629,7 +639,7 @@ impl Session {
         if !running.methods.iter().any(|m| m == "listEventTypes") {
             return Ok(Vec::new());
         }
-        let raw = rpc(running, self.secrets.credentials(), LOCAL_TENANT, "listEventTypes", serde_json::json!({})).await?;
+        let raw = rpc(running, self.secrets().credentials(), LOCAL_TENANT, "listEventTypes", serde_json::json!({})).await?;
         let types = wire_results::check("listEventTypes", external, &raw)?;
         Ok(types.as_array().map(<[Js]>::to_vec).unwrap_or_default())
     }
@@ -744,7 +754,8 @@ impl Session {
 
     /// One engine segment of the run, entered as `entry`, under `fence`.
     async fn segment(&self, set: &FileSet, run_id: &str, facts: &RunFacts, fence: Option<&str>, entry: Entry) -> Result<Ran, Ended> {
-        let externals = self.externals_in(set);
+        let secrets = self.secrets();
+        let externals = self.externals_in(set, &secrets);
         let segment_id = uuid::Uuid::new_v4().to_string();
         let host = SegmentHost::new(SegmentHostParts {
             segment_id: segment_id.clone(),
@@ -828,7 +839,7 @@ impl Session {
             return None;
         }
         let params = serde_json::json!({ "recordType": record_type, "externalId": external_id });
-        let read = match rpc(running, self.secrets.credentials(), LOCAL_TENANT, "readRecord", params).await {
+        let read = match rpc(running, self.secrets().credentials(), LOCAL_TENANT, "readRecord", params).await {
             Ok(raw) => wire_results::check("readRecord", external, &raw),
             Err(message) => Err(message),
         };
@@ -1400,11 +1411,12 @@ impl Session {
             return Ok(());
         }
 
-        let missing = missing_credentials(&files, &self.secrets);
+        let secrets = self.secrets();
+        let missing = missing_credentials(&files, &secrets);
         if !missing.is_empty() {
             return self.refuse(log, pairs, missing.iter().map(missing_line).collect());
         }
-        let credentials = self.secrets.credentials();
+        let credentials = secrets.credentials();
         let registered = |e: &External| crate::subscriptions::has_registered_webhook(credentials, &e.manifest.name);
         let new_externals: Vec<External> = needed_externals(scan_externals(&self.project)?, &files, registered)
             .into_iter()
@@ -1461,15 +1473,18 @@ impl Session {
         for left in crons(&set).difference(&crons(&taken)) {
             self.store.save_inbound_checkpoint(left, &Js::Null).map_err(|e| e.to_string())?;
         }
-        for line in crate::subscriptions::webhook_events_moved(&set, &taken) {
-            let _ = writeln!(log, "movements: {line}");
+        if self.role == Role::Serve {
+            for line in crate::subscriptions::follow_refresh(self, &set, &taken).await {
+                let _ = writeln!(log, "{line}");
+            }
         }
         Ok(())
     }
 
     /// One external a refreshed set newly imports, started and described.
     async fn start_external(&self, external: &External) -> Result<(Rc<RunningExternal>, Option<Js>), String> {
-        let credentials = self.secrets.credentials();
+        let secrets = self.secrets();
+        let credentials = secrets.credentials();
         let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;
         let schema = match one.is_plugin() {
             true => None,
