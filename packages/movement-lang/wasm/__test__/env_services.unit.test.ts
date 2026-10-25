@@ -10,19 +10,39 @@ import path from 'node:path';
 
 import { answerEnvRequest } from '../env_services';
 
-const fixture: Array<{ request: unknown; answer: unknown }> = JSON.parse(
+const fixture: Array<{ request: { op?: string }; answer: unknown }> = JSON.parse(
   readFileSync(path.join(__dirname, '../../../../crates/movement-engine/tests/env/fixture.json'), 'utf8'),
 );
+const recordedWith: { tz: string; node: string } = JSON.parse(
+  readFileSync(path.join(__dirname, '../../../../crates/movement-engine/tests/env/versions.json'), 'utf8'),
+);
+
+// tz versions are a year and a letter ("2026e"), so a text compare orders them.
+const runningTz = process.versions.tz;
+const tzOlderThanFixture = runningTz !== undefined && runningTz < recordedWith.tz;
+
+const differing = (cases: typeof fixture) =>
+  cases.filter(({ request, answer }) => JSON.stringify(answerEnvRequest(request).value) !== JSON.stringify(answer)).map((c) => c.request);
+
+// A zone's rules move between tzdata releases, so a Node whose tz data is older
+// than the fixture's answers some zones differently through no fault of the
+// code: those cases are skipped, by name, rather than failed.
+const tzIt = tzOlderThanFixture ? it.skip : it;
 
 describe('the environment services', () => {
-  it('answer every fixture request as recorded', () => {
-    const differ = fixture.filter(({ request, answer }) => {
-      const got = answerEnvRequest(request).value;
-      return JSON.stringify(got) !== JSON.stringify(answer);
-    });
+  it('answer every fixture request but the zone conversions as recorded', () => {
     expect(fixture.length).toBeGreaterThan(5000);
-    expect(differ.map((c) => c.request)).toEqual([]);
+    expect(differing(fixture.filter(({ request }) => request.op !== 'tz_convert'))).toEqual([]);
   });
+
+  tzIt(
+    tzOlderThanFixture
+      ? `answer every zone conversion as recorded (SKIPPED: this Node's tz data is ${runningTz}, older than the fixture's ${recordedWith.tz} recorded under ${recordedWith.node}; run under that Node or newer)`
+      : 'answer every zone conversion as recorded',
+    () => {
+      expect(differing(fixture.filter(({ request }) => request.op === 'tz_convert'))).toEqual([]);
+    },
+  );
 
   it('refuse a request they cannot read', () => {
     expect(() => answerEnvRequest({ op: 'nope' })).toThrow('no environment service nope');

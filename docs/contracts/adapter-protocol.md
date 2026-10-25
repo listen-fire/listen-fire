@@ -10,7 +10,7 @@ your system. Your server calls Listen-Fire back when something happens.
 This document is the contract. The source of truth is the zod schema in
 `packages/engine-contracts/protocol.ts`; where this page
 and the schema disagree, the schema wins. The reference adapter is the fake
-CRM, a single file in lf-platform, `apps/api/src/scripts/dev/fake_crm_adapter.ts` (see
+CRM, a single file in this repository, `examples/lf-acme/externals/acme_crm/server.mjs` (see
 [Build your first adapter](#build-your-first-adapter)).
 
 Contents:
@@ -1247,7 +1247,7 @@ A file ref anywhere else is data to Listen-Fire, whatever keys it carries.
   short-lived. The reference kit answers `resolveFileRef` only for a ref that
   already carries a `url`; any other ref answers `method_not_implemented`.
   A ref returned at a field you do not declare a file reaches Listen-Fire as
-  data: it is never read as a file (the conformance CLI's `files-declared`
+  data: it is never read as a file (lf-platform's conformance CLI's `files-declared`
   check names such a field).
 
 ## Watching for changes (`<slot>.watch`)
@@ -1439,7 +1439,7 @@ from `apps/cli`.
 - **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).
 - **The ocr slot and the host's OCR door** (within version 2, no bump; 2026-10-20; additive). A ninth core slot, `ocr` ([ocr-slot.md](ocr-slot.md)), and `POST …/{adapterType}/ocr` for a module's `ctx.ocr`.
 - **One transport for every module kind** (within version 2, no bump; 2026-10-19). Every core slot's methods ride this envelope ([Transport](#transport)): a Unix socket on the host's box, loopback TCP without one, HTTPS for a remote module; the store, limiter and loop guard slots' stdin/stdout JSON-RPC wire is retired. New slot methods for models, judge, files and browser; a core module's manifest; per-install outgoing auth; `ctx.kv.compareAndSet`. Additive for adapters and plugins: an older server is unchanged.
-- **Conformance CLI.** lf-platform's `pnpm adapter:conformance` checks a server against this protocol; run it first when building an adapter ([Build your first adapter](#build-your-first-adapter)).
+- **Checking an adapter.** `lf check` and `lf catalog` read a server's `describe`, and `lf run --webhook` and `lf serve` drive its push doors ([Build your first adapter](#build-your-first-adapter)). lf-platform keeps its own conformance CLI for the hosted platform.
 - **Version 2** (current; the only version this release speaks). Breaking for a server built against version 1:
   - Requests carry `protocolVersion: "2"`, and the `manifest` answers `protocolVersion: 2`. Installing probes the server and refuses anything older.
   - Names on the wire are the natural display names; `typeId` and `fieldId` are the server's own ids.
