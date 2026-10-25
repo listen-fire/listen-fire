@@ -1,5 +1,5 @@
 # The image's default project: mount your own over /srv/lf/project to replace it.
-engine: 0.12.3
+engine: 0.12.4
 movements: movements
 externals: externals
 # Run state is kept by the Postgres store module. Its settings (the URL)

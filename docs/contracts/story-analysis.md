@@ -173,4 +173,4 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 ## Changes
 
 - **Version 1.** The first version: the scopes, symbols, writes, 14 node kinds, bodies and shapes, with `effects` on a movement's symbol.
-- **Version 1, additive: `fieldType` on an extraction field (after 0.12.3).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.
+- **Version 1, additive: `fieldType` on an extraction field (0.12.4).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.

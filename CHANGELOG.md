@@ -18,9 +18,14 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-- The story analysis carries an extraction field's type as data: an optional `fieldType` beside `type` on each `StoryExtractNode` field (the catalog's own spelling of the type; a borrowed field path resolved to its declared type; null where nothing resolved). Additive, the analysis stays at version 1. It reaches JavaScript with the next wasm rebuild.
+## [0.12.4] - 2026-10-25
 
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: it updates two dependencies past security advisories. Rust embedders: it makes one trait method required, below.
+
+- **Security.** `body-parser` (1.x) is pinned to 1.20.9 or later and `zod` (4.x) to 4.6.7 or later, past their October advisories. Under zod 4.6 an object field typed "any value" (`z.unknown()`) no longer accepts an absent key, so the wire contracts that carry such fields (the protocol, events, expressions, recordings, the run store) now mark them optional, as they always behaved. Nothing on the wire changes.
 - **For embedders, a breaking change to the Rust embedding API (an API change, not a language change; within 0.12).** `embed::Store` now requires `save_source` and `load_source`, which keep a library's text under its hash and read it back. Before, they had a default that refused, so an embedder whose run linked a library and then parked failed at park time with "park.sources.save not served". A `Store` that omits them no longer compiles (error E0046 names the missing method); implement both over the same place the store keeps its parks. The TypeScript `RunHostStore` already required its `sources`.
+- The story analysis carries an extraction field's type as data: an optional `fieldType` beside `type` on each `StoryExtractNode` field (the catalog's own spelling of the type; a borrowed field path resolved to its declared type; null where nothing resolved). Additive, the analysis stays at version 1.
+- The engine's timezone conversion test skips its zone cases when the running Node's tzdata is older than the fixture's (recorded under tzdata 2026e); the other cases still run. A test-only change.
 
 ## [0.12.3] - 2026-10-23
 
@@ -2271,7 +2276,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...HEAD
+[0.12.4]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/listen-fire/listen-fire/compare/v0.12.0...v0.12.1
