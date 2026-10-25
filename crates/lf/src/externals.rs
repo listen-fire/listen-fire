@@ -647,7 +647,7 @@ fn reach(project: &Project, external: &External, base_url_override: Option<&str>
 /// Where the release's built-in modules live: `LF_MODULES_DIR`, else
 /// `<prefix>/share/lf/modules` for a binary at `<prefix>/bin/lf` (what
 /// install.sh lays down), else `modules/` beside the binary.
-fn bundled_modules_root() -> Option<PathBuf> {
+pub(crate) fn bundled_modules_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("LF_MODULES_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
@@ -658,6 +658,26 @@ fn bundled_modules_root() -> Option<PathBuf> {
     release.or_else(|| {
         bin.ancestors().skip(1).find(|dir| dir.join("packages/module-kit").is_dir() && dir.join("modules").is_dir()).map(|dir| dir.join("modules"))
     })
+}
+
+/// The built-in modules' versions as `lf --version` lists them, with the bundle
+/// they come from: the bundle's `VERSIONS` file (one `name version` per line),
+/// else, for a workspace build that has none, each folder's `package.json`.
+pub(crate) fn bundled_module_versions() -> Option<(PathBuf, Vec<String>)> {
+    let root = bundled_modules_root()?;
+    if let Ok(listed) = std::fs::read_to_string(root.join("VERSIONS")) {
+        return Some((root, listed.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()));
+    }
+    let mut lines: Vec<String> = std::fs::read_dir(&root)
+        .ok()?
+        .filter_map(|entry| std::fs::read(entry.ok()?.path().join("package.json")).ok())
+        .filter_map(|bytes| {
+            let manifest = Js::parse(&bytes).ok()?;
+            Some(format!("{} {}", manifest.get("name")?.as_str()?, manifest.get("version")?.as_str()?))
+        })
+        .collect();
+    lines.sort();
+    Some((root, lines))
 }
 
 /// `@lf/<name>` names a built-in module of the release: its folder in the

@@ -405,7 +405,15 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
     }
     let mut out = std::io::stdout().lock();
     if args.version {
+        // The first line stays `lf <version>`: Homebrew's test and the upgrade tests read it.
         writeln!(out, "lf {}", env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+        writeln!(out, "adapter protocol 2.0–2.{}", protocol::SPEAKS_MINOR).map_err(|e| e.to_string())?;
+        if let Some((root, modules)) = externals::bundled_module_versions() {
+            writeln!(out, "bundled modules ({}):", root.display()).map_err(|e| e.to_string())?;
+            for line in modules {
+                writeln!(out, "  {line}").map_err(|e| e.to_string())?;
+            }
+        }
         return Ok(0);
     }
     if args.project_schema {

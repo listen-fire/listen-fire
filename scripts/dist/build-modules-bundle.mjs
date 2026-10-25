@@ -3,6 +3,7 @@
 //   modules/node_modules/   module-kit and the workspace packages it needs,
 //                           plus their third-party dependencies (tsx, zod, ...)
 //   modules/<name>/         one folder per module under repo modules/
+//   VERSIONS                `name version` per shipped package and module
 // so `module: "@lf/<name>"` in an external's manifest runs offline after
 // install. The modules are TypeScript served by serve-module under tsx, so the
 // user's machine needs node. Run from the repo root: node scripts/dist/build-modules-bundle.mjs <outDir> [os cpu libc]
@@ -92,6 +93,14 @@ for (const [name, source] of Object.entries(WORKSPACE)) {
   cpSync(source, join(bundle, 'node_modules', name), { recursive: true, filter: skip });
 }
 for (const name of modules) cpSync(join('modules', name), join(bundle, name), { recursive: true, filter: skip });
+
+// What the bundle carries, one `name version` per line, for `lf --version`:
+// modules release on their own versions, so the binary's own says nothing of them.
+const shipped = [...Object.values(WORKSPACE), ...modules.map((m) => `modules/${m}`)].map((source) => {
+  const { name, version } = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
+  return `${name} ${version}`;
+});
+writeFileSync(join(bundle, 'VERSIONS'), `${[...new Set(shipped)].sort().join('\n')}\n`);
 
 const missing = ['node_modules/module-kit/bin/serve-module.cjs', 'node_modules/tsx'].filter((p) => !existsSync(join(bundle, p)));
 if (missing.length > 0) throw new Error(`bundle is missing ${missing.join(', ')}`);

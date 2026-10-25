@@ -5,6 +5,8 @@ Unreleased in the same pull request. Tagging a release moves the Unreleased entr
 for the new version, with the date. When a new minor line is cut, move the previous minor's sections
 (with their link references) into `docs/changelog/v0.N.md` and list it under Earlier releases.
 
+This file is the language's changelog: the core (the parser, checker, language and engine crates, `lf`, and the `movement-lang`, `engine` and `engine-contracts` packages, which share the language's one version). Every other package (the modules, `module-kit`, `module-runtime`, the helpers) and the `module-wire` and `module-kit` crates keep a `CHANGELOG.md` of their own from 0.12.6; their earlier entries are here.
+
 This file is shared history. Up to the split into two repositories (0.12.0) it was one file for two
 audiences, an operator running a self-hosted installation and an author writing automations in the
 movement language, and both repositories keep it in full. From the split on, this repository's
@@ -19,6 +21,8 @@ named in [`RELEASING.md`](RELEASING.md).
 <!-- add merged PRs here -->
 
 - **Adapter protocol 2.N.** A module's manifest states the minor of adapter protocol 2 it uses, `protocolMinor`, beside `protocolVersion: 2`. The module kits (TypeScript and Rust) and the slot servers compute it from the methods the manifest lists: 2.1 is a `<slot>.watch` method, 2.2 is `work.enqueueIfAbsent`; an author may raise it, never lower it. `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, naming its package and version when found, what it speaks and what to upgrade; a core module's manifest is now read and checked too, before any other method it is asked: as `lf drain` (and `lf serve --doors-only`) opens for the modules it starts up front, before any work is claimed, and at the first call otherwise. A module stating no minor (every one published up to 0.12.5) is read as 2.0 and loads as before, and an `lf` up to 0.12.5 ignores the field. The refusals of a movements module without `movements.watch` and of a store module without `work.enqueueIfAbsent` now name the minor that added the method. See the protocol's [Versioning](docs/contracts/adapter-protocol.md#versioning).
+
+- `lf --version` prints `lf <version>`, then the adapter protocol range it speaks (`adapter protocol 2.0–2.2`), then the modules bundled beside it with their versions (the bundle's `VERSIONS` file). Modules release on versions of their own, so the binary's version no longer says what the bundle carries.
 
 ## [0.12.5] - 2026-10-25
 
