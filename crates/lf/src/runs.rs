@@ -75,8 +75,12 @@ pub struct FileSet {
 }
 
 /// Every process started, together.
-async fn start_all(processes: &[ModuleProcess]) -> Result<(), String> {
-    join_all(processes.iter().map(ModuleProcess::start).collect()).await.into_iter().collect()
+async fn start_and_check(slots: &[crate::slot_client::SlotProcess]) -> Result<(), String> {
+    let started = join_all(slots.iter().map(|slot| async move {
+        slot.process.start().await?;
+        slot.reached.checked().await
+    }).collect()).await;
+    started.into_iter().collect()
 }
 
 /// The set's claim on each external's process lf started.
@@ -303,10 +307,13 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
     // The slots' modules the role starts now, with the externals: a
     // worker's every one, a door's the ones a door calls.
-    let slot_processes: Vec<ModuleProcess> = crate::slot_client::slot_processes().into_iter().filter(|(kind, _)| role.starts_slot(kind)).map(|(_, process)| process).collect();
-    let (slots, running) = tokio::join!(start_all(&slot_processes), start_externals(&project, &externals, credentials, LOCAL_TENANT));
+    // Each one's manifest is read as it starts: one outside the protocol
+    // range lf speaks fails the open by name, before any work is claimed.
+    let slots: Vec<crate::slot_client::SlotProcess> = crate::slot_client::slot_processes().into_iter().filter(|slot| role.starts_slot(&slot.kind)).collect();
+    let slot_processes: Vec<ModuleProcess> = slots.iter().map(|slot| slot.process.clone()).collect();
+    let (started, running) = tokio::join!(start_and_check(&slots), start_externals(&project, &externals, credentials, LOCAL_TENANT));
     let running: Vec<Rc<RunningExternal>> = running?.into_iter().map(Rc::new).collect();
-    slots?;
+    started?;
     let _slot_holds = slot_processes.iter().map(|process| process.hold(role.keep())).collect();
     let described = join_all(running.iter().filter(|r| !r.is_plugin()).map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials).await?)) }).collect()).await;
     let schemas = described.into_iter().collect::<Result<IndexMap<String, Js>, String>>()?;

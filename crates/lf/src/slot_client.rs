@@ -14,9 +14,15 @@
 //! It is told where to listen (`MODULE_SOCKET`, else `PORT=0`) and which
 //! token to require (`MODULE_TOKEN`), and read off the `listening …` line it
 //! prints.
+//!
+//! Its manifest is read once, before any other method it is asked, and
+//! checked against the adapter protocol range lf speaks
+//! (crate::protocol::protocol_standing): a module outside it is refused by
+//! name at the first call, or as a session opens for one the session starts.
 
 use std::collections::BTreeMap;
-use std::sync::mpsc;
+use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use crate::core::ProcessModule;
@@ -38,39 +44,118 @@ pub struct SlotError {
     pub data: Option<Js>,
 }
 
+/// The code of a module refused for the adapter protocol it speaks: its
+/// message names the module itself, so it is passed on as it is.
+pub const PROTOCOL_REFUSED_CODE: &str = "protocol_refused";
+
 impl SlotError {
     fn transport(message: String) -> SlotError {
         SlotError { code: "transport".into(), message, data: None }
     }
+
+    /// An error whose message stands alone (it names the module already):
+    /// the module unreachable, or refused for its protocol.
+    pub fn stands_alone(&self) -> bool {
+        self.code == "transport" || self.code == PROTOCOL_REFUSED_CODE
+    }
 }
 
-type Job = (String, mpsc::Sender<Result<Js, SlotError>>);
+/// A method and its request body, and where its answer goes.
+type Job = (String, String, mpsc::Sender<Result<Js, SlotError>>);
+
+/// One slot module process reached from this thread: its slot (`kind`: the
+/// slot's name, `loop guard` for the loop guard's), its process, and the
+/// module as its client reaches it, so a session can read its manifest.
+#[derive(Clone)]
+pub struct SlotProcess {
+    pub kind: String,
+    pub process: ModuleProcess,
+    pub reached: Reached,
+}
 
 thread_local! {
-    /// The slots' module processes reached from this thread, by slot (`kind`),
-    /// one per process: a session opened here starts the ones its role needs.
-    static SLOT_PROCESSES: std::cell::RefCell<Vec<(String, ModuleProcess)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The slots' module processes reached from this thread, one per
+    /// process: a session opened here starts the ones its role needs.
+    static SLOT_PROCESSES: std::cell::RefCell<Vec<SlotProcess>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-fn started_on_this_thread(kind: &str, process: &ModuleProcess) {
+fn started_on_this_thread(slot: SlotProcess) {
     SLOT_PROCESSES.with(|all| {
         let mut all = all.borrow_mut();
-        all.retain(|(_, known)| !known.is_same_process(process));
-        all.push((kind.to_string(), process.clone()));
+        all.retain(|known| !known.process.is_same_process(&slot.process));
+        all.push(slot);
     });
 }
 
-/// The slots' module processes reached from this thread so far, each with
-/// its slot (`kind`: the slot's name, `loop guard` for the loop guard's).
-pub fn slot_processes() -> Vec<(String, ModuleProcess)> {
+/// The slots' module processes reached from this thread so far.
+pub fn slot_processes() -> Vec<SlotProcess> {
     SLOT_PROCESSES.with(|all| all.borrow().clone())
+}
+
+/// A slot module as its client reaches it: where, under what auth, and its
+/// manifest, read once and checked against the protocol range lf speaks.
+#[derive(Clone)]
+pub struct Reached {
+    label: String,
+    target: Target,
+    auth: Option<OutgoingAuth>,
+    standing: Arc<Standing>,
+}
+
+/// What a refusal names, the manifest request, and the manifest once read
+/// and accepted. A failed read is not kept: the next call reads again.
+struct Standing {
+    name: String,
+    slot: String,
+    dir: PathBuf,
+    manifest_body: String,
+    manifest: tokio::sync::OnceCell<Js>,
+}
+
+impl Reached {
+    /// The module's manifest, checked: a module outside the protocol range
+    /// lf speaks is refused by name (`core module "<name>" (<slot> slot) …`).
+    pub async fn manifest(&self) -> Result<Js, SlotError> {
+        let standing = &self.standing;
+        let read = standing.manifest.get_or_try_init(|| async {
+            let manifest = post_to(&self.label, &self.target, self.auth.as_ref(), standing.manifest_body.clone()).await?;
+            let package = crate::protocol::Package::in_dir(&standing.dir);
+            let speaker = crate::protocol::Speaker { name: &standing.name, slot: Some(&standing.slot), package };
+            crate::protocol::protocol_standing(&manifest, &speaker).map_err(|message| SlotError { code: PROTOCOL_REFUSED_CODE.into(), message, data: None })?;
+            Ok::<Js, SlotError>(manifest)
+        });
+        read.await.cloned()
+    }
+
+    /// `manifest`, its failure as one message.
+    pub async fn checked(&self) -> Result<(), String> {
+        match self.manifest().await {
+            Ok(_) => Ok(()),
+            Err(error) if error.code == PROTOCOL_REFUSED_CODE => Err(error.message),
+            Err(error) => Err(format!("{}: manifest: {}", self.label, error.message)),
+        }
+    }
+
+    /// One method: the manifest first if it is not yet read, so no other
+    /// method reaches a module lf does not speak to.
+    async fn send(&self, method: &str, body: String) -> Result<Js, SlotError> {
+        let manifest = self.manifest().await.map_err(|mut error| {
+            if !error.stands_alone() && method != "manifest" {
+                error.message = format!("its manifest: {}", error.message);
+            }
+            error
+        })?;
+        if method == "manifest" {
+            return Ok(manifest);
+        }
+        post_to(&self.label, &self.target, self.auth.as_ref(), body).await
+    }
 }
 
 pub struct SlotClient {
     /// The module, as messages name it ("the store module acme_store").
     pub label: String,
-    target: Target,
-    auth: Option<OutgoingAuth>,
+    reached: Reached,
     jobs: Option<mpsc::Sender<Job>>,
     worker: Option<std::thread::JoinHandle<()>>,
     settings: Obj,
@@ -123,23 +208,35 @@ impl SlotClient {
                     .collect();
                 let launch = Launch { program: program.clone(), args: args.to_vec(), dir: process.dir.clone(), env, start_timeout: START_TIMEOUT };
                 let process = ModuleProcess::own(&format!("{kind}:{name}"), &label, launch);
-                started_on_this_thread(kind, &process);
                 (Target::Process { process, token }, None)
             }
         };
+        // The loop guard's kind reads as words in messages; its slot is `loopGuard`.
+        let slot = if kind == "loop guard" { "loopGuard" } else { kind };
+        let standing = Standing {
+            name: name.to_string(),
+            slot: slot.to_string(),
+            dir: process.dir.clone(),
+            manifest_body: request_body("manifest", Obj::new(), &declared),
+            manifest: tokio::sync::OnceCell::new(),
+        };
+        let reached = Reached { label: label.clone(), target, auth, standing: Arc::new(standing) };
+        if let Target::Process { process, .. } = &reached.target {
+            started_on_this_thread(SlotProcess { kind: kind.to_string(), process: process.clone(), reached: reached.clone() });
+        }
         let (jobs, received) = mpsc::channel::<Job>();
-        let (worker_target, worker_label, worker_auth) = (target.clone(), label.clone(), auth.clone());
+        let worker_reached = reached.clone();
         let worker = std::thread::Builder::new()
             .name(format!("lf {name}"))
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
-                while let Ok((body, reply)) = received.recv() {
-                    let answered = runtime.block_on(send(&worker_label, &worker_target, worker_auth.as_ref(), body));
+                while let Ok((method, body, reply)) = received.recv() {
+                    let answered = runtime.block_on(worker_reached.send(&method, body));
                     let _ = reply.send(answered);
                 }
             })
             .map_err(|e| format!("{label}: no thread to call it from: {e}"))?;
-        Ok(SlotClient { label, target, auth, jobs: Some(jobs), worker: Some(worker), settings: declared })
+        Ok(SlotClient { label, reached, jobs: Some(jobs), worker: Some(worker), settings: declared })
     }
 
     /// The module's address, its process started if it is not running, kept
@@ -147,7 +244,7 @@ impl SlotClient {
     /// (`Authorization: Bearer …`). For a module lf hands on to others (the
     /// browser slot's), which lf cannot start again on their behalf.
     pub async fn hold(&self) -> Result<(Lease, Option<String>), String> {
-        let (lease, bearer) = self.target.lease().await.map_err(|e| self.text("start", e))?;
+        let (lease, bearer) = self.reached.target.lease().await.map_err(|e| self.text("start", e))?;
         Ok((lease, bearer.map(str::to_string)))
     }
 
@@ -157,14 +254,7 @@ impl SlotClient {
     }
 
     fn body(&self, method: &str, params: Obj) -> String {
-        Js::from(obj! {
-            "protocolVersion" => Js::str(PROTOCOL_VERSION),
-            "method" => Js::str(method),
-            "cacheScopeId" => Js::str("<slot>"),
-            "params" => Js::from(params),
-            "settings" => Js::from(self.settings.clone()),
-        })
-        .to_json()
+        request_body(method, params, &self.settings)
     }
 
     fn named(&self, method: &str, mut error: SlotError) -> SlotError {
@@ -178,7 +268,7 @@ impl SlotClient {
     pub fn call(&self, method: &str, params: Obj) -> Result<Js, SlotError> {
         let (reply, answer) = mpsc::channel();
         let jobs = self.jobs.as_ref().ok_or_else(|| SlotError::transport(format!("{} is closed", self.label)))?;
-        jobs.send((self.body(method, params), reply)).map_err(|_| SlotError::transport(format!("{} is closed", self.label)))?;
+        jobs.send((method.to_string(), self.body(method, params), reply)).map_err(|_| SlotError::transport(format!("{} is closed", self.label)))?;
         answer.recv().unwrap_or_else(|_| Err(SlotError::transport("no answer".into()))).map_err(|e| self.named(method, e))
     }
 
@@ -191,11 +281,11 @@ impl SlotClient {
     /// `call_async`, the module's error kept whole: for a caller that
     /// passes its code on (the OCR door, `unsupported_type`).
     pub async fn call_async_coded(&self, method: &str, params: Obj) -> Result<Js, SlotError> {
-        send(&self.label, &self.target, self.auth.as_ref(), self.body(method, params)).await.map_err(|e| self.named(method, e))
+        self.reached.send(method, self.body(method, params)).await.map_err(|e| self.named(method, e))
     }
 
     fn text(&self, method: &str, error: SlotError) -> String {
-        if error.code == "transport" { error.message } else { format!("{}: {method}: {}", self.label, error.message) }
+        if error.stands_alone() { error.message } else { format!("{}: {method}: {}", self.label, error.message) }
     }
 
     /// `call`, a failure as one message.
@@ -213,7 +303,18 @@ impl Drop for SlotClient {
     }
 }
 
-async fn send(label: &str, target: &Target, auth: Option<&OutgoingAuth>, body: String) -> Result<Js, SlotError> {
+fn request_body(method: &str, params: Obj, settings: &Obj) -> String {
+    Js::from(obj! {
+        "protocolVersion" => Js::str(PROTOCOL_VERSION),
+        "method" => Js::str(method),
+        "cacheScopeId" => Js::str("<slot>"),
+        "params" => Js::from(params),
+        "settings" => Js::from(settings.clone()),
+    })
+    .to_json()
+}
+
+async fn post_to(label: &str, target: &Target, auth: Option<&OutgoingAuth>, body: String) -> Result<Js, SlotError> {
     let (lease, bearer) = target.lease().await?;
     post(label, &lease.address, bearer, auth, body).await
 }

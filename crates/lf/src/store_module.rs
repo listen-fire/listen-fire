@@ -49,7 +49,7 @@ impl ProcessStore {
             let run_id = error.data.as_ref().and_then(|d| d.get("runId")).and_then(Js::as_str).unwrap_or_default();
             return StoreError::LeaseLost { run_id: run_id.to_string() };
         }
-        if error.code == "transport" {
+        if error.stands_alone() {
             return StoreError::Backend(error.message);
         }
         StoreError::Backend(format!("{}: {method}: {}", self.client.label, error.message))

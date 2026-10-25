@@ -59,6 +59,10 @@ const server = createServer(async (req, res) => {
   } catch {
     return reply(400, { error: 'bad_request' });
   }
+  // Asked before anything else, so answered before the store is open.
+  if (store === undefined && envelope.method === 'manifest') {
+    return reply(200, { ok: true, result: { protocolVersion: 2, name: 'acme_store', kind: 'core', slot: 'store', methods: ['store.open'] } });
+  }
   if (store === undefined) {
     const path = envelope.params?.settings?.path;
     if (envelope.method !== 'store.open' || typeof path !== 'string') {

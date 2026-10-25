@@ -226,6 +226,7 @@ mod tests {
                 let params = request.get("params").unwrap();
                 let field = |k: &str| params.get(k).and_then(Js::as_str).unwrap_or_default().to_string();
                 let result = match method.as_str() {
+                    "manifest" => crate::slot_server::manifest("acme_files", "files", &["files.put", "files.owns", "files.open"]),
                     "files.put" => {
                         let uri = format!("fake://{}", stored.len());
                         stored.push((uri.clone(), field("tenant"), field("bytes")));
@@ -260,7 +261,8 @@ mod tests {
         assert!(documents.owns(&uri, "local"));
         assert!(!documents.owns(&uri, "other"));
         assert_eq!(documents.open(&uri).unwrap(), b"hello");
-        assert_eq!(*methods.lock().unwrap(), ["files.put", "files.owns", "files.owns", "files.open"]);
+        // The manifest is read once, first, and checked against the protocol.
+        assert_eq!(*methods.lock().unwrap(), ["manifest", "files.put", "files.owns", "files.owns", "files.open"]);
         assert!(!dir.join("files").exists(), "nothing was written to the project's folder");
     }
 }

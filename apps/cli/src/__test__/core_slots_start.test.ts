@@ -78,14 +78,40 @@ test('lf serve --doors-only starts the slots a door calls, never the models', as
   }
 });
 
-test('lf connect refuses a slot module answering a newer protocol major, naming its slot', () => {
+/** The example project with one slot module answering `manifest` as `answered`
+ *  (and nothing else), filling the models slot. */
+function withManifestModule(answered: object): string {
   const dir = project();
   const folder = join(dir, 'externals', 'acme_future');
   mkdirSync(folder, { recursive: true });
   copyFileSync(join(FAKES, 'manifest_module/serve.mjs'), join(folder, 'serve.mjs'));
-  writeFileSync(join(folder, 'manifest.json'), JSON.stringify({ protocolVersion: 3, name: 'acme_future', kind: 'core', slot: 'models', methods: ['models.call'] }));
+  writeFileSync(join(folder, 'manifest.json'), JSON.stringify({ name: 'acme_future', kind: 'core', slot: 'models', methods: ['models.call'], ...answered }));
+  writeFileSync(join(folder, 'package.json'), JSON.stringify({ name: '@acme/future', version: '3.0.0' }));
   writeFileSync(join(folder, 'lf-external.yaml'), ['name: acme_future', 'kind: core', 'slot: models', 'command: [node, serve.mjs]', ''].join('\n'));
-  const connected = lfIn(dir, 'connect', 'acme_future');
+  appendFileSync(join(dir, 'lf.yaml'), '\ncore:\n  models: acme_future\n');
+  return dir;
+}
+
+test('lf connect refuses a slot module answering a newer protocol major, naming its slot', () => {
+  const connected = lfIn(withManifestModule({ protocolVersion: 3 }), 'connect', 'acme_future');
   assert.equal(connected.code, 1, connected.out);
-  assert.match(connected.out, /core module "acme_future" \(models slot\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.2\. Upgrade lf\./);
+  assert.match(connected.out, /core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.2\. Upgrade lf\./);
+});
+
+test('lf drain refuses at open a slot module outside the protocol range lf speaks, before it claims work', () => {
+  const major = lfIn(withManifestModule({ protocolVersion: 3 }), 'drain', '--until-idle');
+  assert.equal(major.code, 1, major.out);
+  assert.match(major.out, /^lf: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\): speaks adapter protocol 3; this lf \([^)]+\) speaks 2\.0–2\.2\. Upgrade lf\.$/m);
+  const minor = lfIn(withManifestModule({ protocolVersion: 2, protocolMinor: 99 }), 'drain', '--until-idle');
+  assert.equal(minor.code, 1, minor.out);
+  assert.match(
+    minor.out,
+    /^lf: core module "acme_future" \(models slot\) \(@acme\/future 3\.0\.0\) speaks adapter protocol 2\.99; this lf \([^)]+\) speaks 2\.0–2\.2\. Upgrade lf to a release that speaks 2\.99 \(the protocol's Changes list names it\), or use a @acme\/future that speaks 2\.2 or lower\.$/m,
+  );
+});
+
+test('lf drain opens with slot modules that state no minor, as before', () => {
+  const dir = withManifestModule({ protocolVersion: 2 });
+  const drained = lfIn(dir, 'drain', '--until-idle');
+  assert.equal(drained.code, 0, drained.out);
 });
