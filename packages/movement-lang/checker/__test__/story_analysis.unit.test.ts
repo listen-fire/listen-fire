@@ -124,6 +124,15 @@ describe('the story analysis over the wasm', () => {
     expect(compared).toBeGreaterThan(80);
   });
 
+  it('an extraction field carries its resolved type as data, through the rebuilt wasm', () => {
+    const extract = PROGRAMS.find(program => program.name === 'extract.mvt');
+    const analysis = storyAnalysisInRust(extract?.source ?? '', SNAPSHOT, OPTIONS);
+    const nodes = analysis.nodes.flatMap(node => (node.kind === 'extract' ? [node] : []));
+    const fields = nodes.flatMap(node => node.node?.fields ?? []);
+    expect(fields.length).toBeGreaterThan(0);
+    expect(fields.find(field => field.type === 'number')?.fieldType).toBe('number');
+  });
+
   it('a source that does not parse is refused', () => {
     expect(() => storyAnalysisInRust('function (', SNAPSHOT, OPTIONS)).toThrow(RustCheckRefused);
     expect(() => storyAnalysisInRust('function (', SNAPSHOT, OPTIONS)).toThrow(/line 1/);
