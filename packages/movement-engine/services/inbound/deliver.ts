@@ -41,7 +41,7 @@ export interface InboundSubscription {
   /** Existed before signed inbound became the rule for its provider: while it
    *  holds no usable secret it is verified as its provider's door always did. */
   grandfatheredUnsigned: boolean;
-  checkpoint: unknown;
+  checkpoint?: unknown;
 }
 
 /** How a subscription's deliveries are checked and read. */

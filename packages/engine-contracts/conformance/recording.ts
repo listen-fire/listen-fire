@@ -125,7 +125,7 @@ const METHODS: ReadonlySet<string> = new Set(hostMethodPaths());
 const requestCommon = {
   family: z.string(),
   method: z.string(),
-  args: z.unknown(),
+  args: z.unknown().optional(),
   /** The requests (by index into `requests`) the host had already answered
    *  when this one was made, less those another of them implies: a request
    *  answered before one of these was made was answered before this one

@@ -36,13 +36,13 @@ export interface ParkStore {
     address: string;
     reason: CoreParkReason;
     wakeAt: string | null;
-    state: unknown;
+    state?: unknown;
     rewritten?: boolean;
     fence?: string;
   }): Promise<void>;
   /** Claim a parked leaf for its resume (`parked` → `resuming`). Null when it
    *  is not parked: another resume took it, or a race cancelled it. */
-  claimLeaf(input: { runId: string; address: string; reason?: ParkReason }): Promise<{ state: unknown; reason: ParkReason } | null>;
+  claimLeaf(input: { runId: string; address: string; reason?: ParkReason }): Promise<{ state?: unknown; reason: ParkReason } | null>;
   /** The claimed leaf is done with: delete it unless its step parked it again
    *  (the row is `parked` again, and stays). Given `fence`, only while the run's
    *  lease is still that token's. */
@@ -64,7 +64,7 @@ export interface JoinStore {
   /** A completed branch's exports, written before its decrement. A rewrite
    *  keeps the branch's decrement claim. */
   persistBranchExport(input: { runId: string; frameAddress: string; branchAddress: string; branchIndex: number; exports: unknown }): Promise<void>;
-  collectBranchExports(input: { runId: string; frameAddress: string }): Promise<Array<{ branchAddress: string; branchIndex: number; exports: unknown }>>;
+  collectBranchExports(input: { runId: string; frameAddress: string }): Promise<Array<{ branchAddress: string; branchIndex: number; exports?: unknown }>>;
   /** Whether any join of the run still waits on a branch (a closed frame does not). */
   hasPendingJoins(input: { runId: string }): Promise<boolean>;
   /** Every join frame of the run, pending or closed. */
@@ -126,7 +126,7 @@ export interface ClaimedWork {
   id: string;
   kind: string;
   key: string;
-  payload: unknown;
+  payload?: unknown;
   claim: string;
 }
 
@@ -199,7 +199,7 @@ export interface CallbackRecord {
    *  call's body resumes. */
   address: string;
   params: CallbackParamSpec[];
-  state: unknown;
+  state?: unknown;
   calls: LedgerCall[];
   singleUse: boolean;
   /** When it stops taking calls (ISO 8601); null for never. */

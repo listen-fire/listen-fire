@@ -94,7 +94,7 @@ export const RpcRequest = z.object({
   protocolVersion: z.string(),
   method: z.string(),
   cacheScopeId: z.string(),
-  params: z.unknown(),
+  params: z.unknown().optional(),
   /** Within version 2: absent for a server that declares no credential. The
    *  one credential the connection names (`using`), under the declared
    *  alternative it fills. Never more than one: a module that needs two
@@ -134,7 +134,7 @@ export const WireRetryAfter = z.number().nonnegative();
 export const RpcResponse = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(true),
-    result: z.unknown(),
+    result: z.unknown().optional(),
     credentialUpdate: WireCredentialUpdate.optional(),
     cost: z.array(WireCostLine).optional(),
     retryAfter: WireRetryAfter.optional(),
@@ -156,7 +156,7 @@ export type RpcResponseShape = z.infer<typeof RpcResponse>;
 /** Mirror of `PositionIdentity` — stable external record OR unstable inline. */
 export const WirePositionIdentity = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('stable'), recordId: z.string(), data: z.unknown().optional() }),
-  z.object({ kind: z.literal('unstable'), data: z.unknown() }),
+  z.object({ kind: z.literal('unstable'), data: z.unknown().optional() }),
 ]);
 
 /** Mirror of `EphemeralOriginRef` — provenance for synthetic positions. */
@@ -248,7 +248,7 @@ export const WireTriggerEvent = z.object({
   objectType: z.string().optional(),
   triggerEntryId: z.string().optional(),
   triggerType: z.enum(['snapshot', 'poll', 'changes-feed', 'webhook', 'mutation', 'extraction']),
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
   changeType: z.enum(['create', 'update', 'delete']).optional(),
   actor: WireActor.optional(),
   snapshotRunId: z.string().optional(),
@@ -600,14 +600,14 @@ export const WireReadInput = z.object({
 
 export const WireTranslateFilterInput = z.object({
   // Expression is opaque on the wire.
-  expression: z.unknown(),
+  expression: z.unknown().optional(),
   entityType: z.string(),
 });
 
 export const WireFilterTranslationResult = z.object({
-  native: z.unknown(),
+  native: z.unknown().optional(),
   // Residual Expression stays opaque.
-  residual: z.unknown().nullable(),
+  residual: z.unknown().nullable().optional(),
 });
 
 // ── Resource / dedup / misc DTOs ─────────────────────────────────────────────
@@ -1029,7 +1029,7 @@ export type RelatedPageShape = z.infer<typeof RelatedPage>;
 // ── Event seams (preprocessInbound / listEventTypes) ─────────────────────────
 
 export const WireDiscriminableEvent = z.object({
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
   /** The provider's own id for this occurrence: a host that sees one key
    *  twice (a redelivery, an overlapping poll) runs it once. */
   idempotencyKey: z.string().min(1).optional(),
@@ -1361,7 +1361,7 @@ export const METHODS = {
   // The correlation keys an inbound payload resolves — the same keys a
   // pending `resolveAwait` returned — so the host can wake the parked runs.
   wakeKeys: {
-    params: z.object({ raw: z.unknown() }),
+    params: z.object({ raw: z.unknown().optional() }),
     result: z.array(z.string()),
   },
   readRecord: {

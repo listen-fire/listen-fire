@@ -1234,7 +1234,7 @@ class AffinityAPIClient {
         field_id: z.number(),
         entity_id: z.number(),
         list_entry_id: z.number().optional(),
-        value: z.any(),
+        value: z.any().optional(),
       }),
     });
     this.forgetFieldValues();

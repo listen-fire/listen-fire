@@ -1006,7 +1006,7 @@ export interface DeliveryContractBackend {
   delivery(input: { id: string }): Promise<DeliveryRow | null>;
   sweepDeliveries(input: { before: string; limit: number }): Promise<number>;
   /** The subscription's saved pull cursor. */
-  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint: unknown } | null>;
+  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint?: unknown } | null>;
   startRun(input: { id: string; file: string; movement: string; startedAt: string; input: string; deliveryId?: string }): Promise<void>;
   completeRun(runId: string): Promise<void>;
   runGet(input: { runId: string }): Promise<RunRow | null>;

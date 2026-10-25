@@ -84,11 +84,11 @@ export interface ParkSink {
     frameAddress: string;
     branchAddress: string;
     branchIndex: number;
-    exports: unknown;
+    exports?: unknown;
   }): Promise<void>;
   /** Collect all branches' persisted exports for a frame, ordered by branchIndex (§12.4). */
   collectBranchExports(input: { frameAddress: string }): Promise<
-    Array<{ branchAddress: string; branchIndex: number; exports: unknown }>
+    Array<{ branchAddress: string; branchIndex: number; exports?: unknown }>
   >;
   /**
    * Cancel every park under the given subtree prefixes (asks-as-adapter chunk C

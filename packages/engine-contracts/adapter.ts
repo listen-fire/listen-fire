@@ -1866,7 +1866,7 @@ export interface ReadInput {
 export interface DiscriminableEvent {
   /** The event body — what an `EventType.match` is evaluated against, and what
    *  becomes the seeded position's `data`. */
-  payload: unknown;
+  payload?: unknown;
   /** Re-identifying external key for the record this event concerns; the
    *  engine uses it for the KG bridge / correspondence lookup. */
   externalId?: string;

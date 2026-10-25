@@ -318,7 +318,7 @@ export const filterExpressionSchema: z.ZodType<FilterExpression> = z.union([
 // -- FieldMapping --
 
 export const fieldMappingSchema = z.object({
-  targetField: z.unknown(),
+  targetField: z.unknown().optional(),
   expression: lazyExpression.optional(),
   // Legacy fields (used when expression is absent; normalized to expression at evaluation time)
   traversal: z.array(traversalStepSchema).default([]),

@@ -43,7 +43,7 @@ export const triggerEventSchema = z.object({
   objectType: z.string().optional(),
   triggerEntryId: z.string().optional(),
   triggerType: triggerTypeSchema,
-  payload: z.unknown(),
+  payload: z.unknown().optional(),
   changeType: z.enum(['create', 'update', 'delete']).optional(),
   actor: actorSchema.optional(),
   snapshotRunId: z.string().optional(),

@@ -27,16 +27,16 @@ const Leaf = z.object({
   status: z.enum(['parked', 'resuming']),
   wakeAt: z.string().nullable(),
 });
-const Claimed = z.object({ reason: z.string(), state: z.unknown() }).nullable();
+const Claimed = z.object({ reason: z.string(), state: z.unknown().optional() }).nullable();
 const Correlated = z.object({ runId: z.string(), teamId: z.string(), address: z.string() });
-const Work = z.object({ id: z.string(), kind: z.string(), key: z.string(), payload: z.unknown(), claim: z.string() });
+const Work = z.object({ id: z.string(), kind: z.string(), key: z.string(), payload: z.unknown().optional(), claim: z.string() });
 const Callback = z.object({
   id: z.string(),
   teamId: z.string(),
   runId: z.string(),
   address: z.string(),
   params: z.array(z.object({ name: z.string(), type: z.enum(CALLBACK_PARAM_TYPES) })),
-  state: z.unknown(),
+  state: z.unknown().optional(),
   calls: z.array(z.object({ at: z.string(), values: z.record(z.string(), z.unknown()), bodyStartedAt: z.string().optional() })),
   singleUse: z.boolean(),
   expiresAt: z.string().nullable(),
@@ -214,8 +214,8 @@ export class RpcStoreBackend {
   }
 
   /** A subscription's saved pull cursor (`inbound.checkpoint`). */
-  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint: unknown } | null> {
-    return this.call('inbound.checkpoint', input, z.object({ checkpoint: z.unknown() }).nullable());
+  checkpoint(input: { subscriptionId: string }): Promise<{ checkpoint?: unknown } | null> {
+    return this.call('inbound.checkpoint', input, z.object({ checkpoint: z.unknown().optional() }).nullable());
   }
 
   /** An operator asks to cancel the run (the records contract's `requestCancel`). */
@@ -291,7 +291,7 @@ export class RpcStoreBackend {
           await call('joins.persistBranchExport', input, Nothing);
         },
         collectBranchExports: (input) =>
-          call('joins.collectBranchExports', input, z.array(z.object({ branchAddress: z.string(), branchIndex: z.number(), exports: z.unknown() }))),
+          call('joins.collectBranchExports', input, z.array(z.object({ branchAddress: z.string(), branchIndex: z.number(), exports: z.unknown().optional() }))),
         hasPendingJoins: (input) => call('joins.hasPendingJoins', input, z.boolean()),
         frames: (input) => call('joins.frames', input, z.array(z.string())),
         deleteFrames: async (input) => {
