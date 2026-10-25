@@ -14,6 +14,7 @@ import { callStoryAnalysis } from '../wasm/loader';
 import type { CollectionOpExpression, CombinatorKind, ExprSlot, FieldEntry, MembersExpression, ShapeNode, Span } from '../parser/ast';
 import type { TraversalStep } from '../expression/types';
 import { languageVersionDiagnostic } from '../language_version';
+import type { SchemaFieldType } from '../catalog/types';
 import type { CatalogSnapshot } from '../service/snapshot';
 import type { Diagnostic } from './diagnostic';
 import { RustCheckRefused, diagnosticOf, type RustCheckOptions } from './rust_checker';
@@ -152,10 +153,14 @@ export type StoryCallReading =
   | { kind: 'members'; members: MembersExpression }
   | { kind: 'refused'; refusal: { code: string; message: string; span: Span } };
 
-/** An extraction's graph: each field's `type` in the author's words. */
+/**
+ * An extraction's graph: each field's `type` in the author's words, and its
+ * `fieldType` as data (a borrowed field path resolved to the type it declares;
+ * null where the field has no resolved annotation).
+ */
 export interface StoryExtractNode {
   name: string;
-  fields: Array<{ name: string; at: Span; type?: string }>;
+  fields: Array<{ name: string; at: Span; type?: string; fieldType?: SchemaFieldType | null }>;
   children: StoryExtractNode[];
 }
 

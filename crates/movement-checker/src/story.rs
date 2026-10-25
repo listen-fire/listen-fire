@@ -232,9 +232,11 @@ pub(crate) fn extract_node_json(node: &ExtractNode) -> Json {
         .properties
         .iter()
         .map(|(name, field)| {
-            let mut entry = json!({ "name": name, "at": field.span });
+            let mut entry = json!({ "name": name, "at": field.span, "fieldType": Json::Null });
             if let Some(explicit) = &field.explicit {
                 entry["type"] = json!(crate::types::field::describe_field_type(explicit));
+                // The catalog's own spelling of a type, so a consumer reads the borrowed field's declared type as data.
+                entry["fieldType"] = serde_json::to_value(explicit.to_schema()).unwrap_or(Json::Null);
             }
             entry
         })

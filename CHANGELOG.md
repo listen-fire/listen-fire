@@ -18,6 +18,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- The story analysis carries an extraction field's type as data: an optional `fieldType` beside `type` on each `StoryExtractNode` field (the catalog's own spelling of the type; a borrowed field path resolved to its declared type; null where nothing resolved). Additive, the analysis stays at version 1. It reaches JavaScript with the next wasm rebuild.
+
 - **For embedders, a breaking change to the Rust embedding API (an API change, not a language change; within 0.12).** `embed::Store` now requires `save_source` and `load_source`, which keep a library's text under its hash and read it back. Before, they had a default that refused, so an embedder whose run linked a library and then parked failed at park time with "park.sources.save not served". A `Store` that omits them no longer compiles (error E0046 names the missing method); implement both over the same place the store keeps its parks. The TypeScript `RunHostStore` already required its `sources`.
 
 ## [0.12.3] - 2026-10-23

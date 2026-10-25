@@ -277,6 +277,18 @@ fn extractions_record_the_graph_they_resolved() {
 }
 
 #[test]
+fn an_extraction_field_carries_its_resolved_type_as_data() {
+    let source = "import { `@lf/attio` as attio } from adapters\nimport { acme } from credentials\n\ncrm = connect attio using acme\n\nfunction `Probe`(text: <text>) {\n  got = extractOne([text], node Pick: \"a pick\" { cats: <crm-[:Companies]->.`Categories`> \"the categories\"\n    size: <number> \"headcount\"\n  })\n}\n";
+    let answer = story_analysis_json(source, CATALOG, options());
+    assert!(answer.get("error").is_none(), "{answer}");
+    let node = on_line(&answer, "extract", 7)["node"].clone();
+    let by_name = |name: &str| node["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap().clone();
+    let categories = json!({ "kind": "list", "of": { "kind": "enum", "options": ["Lead", "Customer", "Open", "Snoozed", "Reviewed", "inbound"] } });
+    assert_eq!(by_name("cats")["fieldType"], categories, "{node}");
+    assert_eq!(by_name("size")["fieldType"], "number");
+}
+
+#[test]
 fn shapes_hold_each_node_declaration_with_its_base_folded_in() {
     let a = analysis("extract");
     let shapes = a["shapes"].as_array().unwrap();

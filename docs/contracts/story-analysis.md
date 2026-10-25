@@ -120,7 +120,7 @@ type StoryCallReading =
 
 interface StoryExtractNode {
   name: string;
-  fields: Array<{ name: string; at: Span; type?: string }>;   // type: in the author's words (`text`, `number`)
+  fields: Array<{ name: string; at: Span; type?: string; fieldType?: SchemaFieldType | null }>;   // type: in the author's words (`text`, `number`); fieldType: the same type as data, in the catalog's spelling (`"number"`, `{ kind: "enum", options }`), a borrowed field path resolved to its declared type; null with no resolved annotation
   children: StoryExtractNode[];
 }
 ```
@@ -173,3 +173,4 @@ The check takes no pin; the pin rule is the caller's. A caller handed a pin this
 ## Changes
 
 - **Version 1.** The first version: the scopes, symbols, writes, 14 node kinds, bodies and shapes, with `effects` on a movement's symbol.
+- **Version 1, additive: `fieldType` on an extraction field (after 0.12.3).** Optional and nullable, so a consumer that does not read it is unaffected; the version stays 1.
