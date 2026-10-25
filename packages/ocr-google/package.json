@@ -16,10 +16,13 @@
   "dependencies": {
     "@google-cloud/documentai": "9.4.0",
     "@google-cloud/storage": "7.12.1",
-    "@listen-fire/engine": "workspace:^",
     "exponential-backoff": "3.1.1"
   },
+  "peerDependencies": {
+    "@listen-fire/engine": ">=0.12.0 <1.0.0"
+  },
   "devDependencies": {
+    "@listen-fire/engine": "workspace:^",
     "@types/jest": "29.5.14",
     "@types/node": "20.16.5",
     "movement-engine": "workspace:@listen-fire/engine@*",

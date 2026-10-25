@@ -19,11 +19,14 @@
   },
   "type": "commonjs",
   "dependencies": {
-    "@listen-fire/engine-contracts": "workspace:^",
     "@listen-fire/module-runtime": "workspace:^",
     "google-auth-library": "10.3.0"
   },
+  "peerDependencies": {
+    "@listen-fire/engine-contracts": ">=0.12.0 <1.0.0"
+  },
   "devDependencies": {
+    "@listen-fire/engine-contracts": "workspace:^",
     "@types/jest": "29.5.14",
     "@types/node": "20.16.5",
     "engine-contracts": "workspace:@listen-fire/engine-contracts@*",

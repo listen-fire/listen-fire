@@ -52,9 +52,14 @@ for (const source of sources) {
   // sources the bundle ships.
   const { dependencies = {}, peerDependencies = {} } = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
   for (const [name, range] of Object.entries({ ...peerDependencies, ...dependencies })) {
-    if (!String(range).startsWith('workspace:')) thirdParty[name] = range;
+    // @listen-fire/* packages come from the workspace copies below, at whatever
+    // version this tree has: a core peer's literal range (>=0.12.0 <1.0.0) must
+    // never send npm to the registry for them.
+    if (!name.startsWith('@listen-fire/') && !String(range).startsWith('workspace:')) thirdParty[name] = range;
   }
 }
+const registryScoped = Object.keys(thirdParty).filter((name) => name.startsWith('@listen-fire/'));
+if (registryScoped.length > 0) throw new Error(`bundle root would install from npm: ${registryScoped.join(', ')}`);
 writeFileSync(join(bundle, 'package.json'), JSON.stringify({ private: true, dependencies: thirdParty }));
 // npm refuses a peer range mismatch that pnpm only warns about in the workspace
 // (openai's optional zod ^3 peer against the zod 4 everything else uses), so

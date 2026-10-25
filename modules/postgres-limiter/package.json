@@ -14,11 +14,14 @@
   },
   "type": "commonjs",
   "dependencies": {
-    "@listen-fire/engine": "workspace:^",
     "pg": "8.12.0",
     "zod": "4.1.12"
   },
+  "peerDependencies": {
+    "@listen-fire/engine": ">=0.12.0 <1.0.0"
+  },
   "devDependencies": {
+    "@listen-fire/engine": "workspace:^",
     "@types/jest": "29.5.14",
     "@types/node": "20.16.5",
     "@types/pg": "8.11.9",
