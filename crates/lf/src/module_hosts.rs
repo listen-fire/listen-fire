@@ -259,6 +259,20 @@ impl ModuleProcess {
         Hold { host: self.host.clone(), mount: self.mount.clone(), keep }
     }
 
+    /// Its process started, if it is not up, on lf's module thread: a slot's
+    /// own client (crate::slot_client) may lease it from its thread while
+    /// the caller's thread waits on that client.
+    pub async fn start(&self) -> Result<(), String> {
+        let process = self.clone();
+        watcher().spawn(async move { process.lease().await.map(drop) }).await.map_err(|e| format!("{}: {e}", self.host_label()))?
+    }
+
+    /// Whether `other` is the same process (a module reached again, under a
+    /// launch that may differ).
+    pub fn is_same_process(&self, other: &ModuleProcess) -> bool {
+        Arc::ptr_eq(&self.host, &other.host) && self.mount == other.mount
+    }
+
     /// Whether its process is up now.
     #[cfg(test)]
     pub fn is_running(&self) -> bool {

@@ -16,16 +16,31 @@ use crate::store::iso_at;
 
 pub struct ProcessLimiter {
     client: SlotClient,
+    /// `limiter.open`'s answer, asked before the first call: a session
+    /// reaches the module as it opens and starts its process with the
+    /// externals', rather than waiting on it first.
+    opened: std::sync::OnceLock<Result<(), String>>,
 }
 
 impl ProcessLimiter {
+    /// The module, opened at once (`lf connect` checks it answers).
     pub fn start(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessLimiter, String> {
-        let limiter = ProcessLimiter { client: SlotClient::start("limiter", name, process, settings)? };
-        limiter.call("limiter.open", obj! { "settings" => Js::from(limiter.client.settings()) })?;
+        let limiter = ProcessLimiter::reach(name, process, settings)?;
+        limiter.open()?;
         Ok(limiter)
     }
 
+    /// The module, opened by its first call.
+    pub fn reach(name: &str, process: &ProcessModule, settings: &BTreeMap<String, String>) -> Result<ProcessLimiter, String> {
+        Ok(ProcessLimiter { client: SlotClient::start("limiter", name, process, settings)?, opened: std::sync::OnceLock::new() })
+    }
+
+    fn open(&self) -> Result<(), String> {
+        self.opened.get_or_init(|| self.client.call_text("limiter.open", obj! { "settings" => Js::from(self.client.settings()) }).map(drop)).clone()
+    }
+
     fn call(&self, method: &str, params: Obj) -> Result<Js, String> {
+        self.open()?;
         self.client.call_text(method, params)
     }
 }

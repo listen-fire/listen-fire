@@ -46,6 +46,26 @@ impl SlotError {
 
 type Job = (String, mpsc::Sender<Result<Js, SlotError>>);
 
+thread_local! {
+    /// The slots' module processes reached from this thread, by slot (`kind`),
+    /// one per process: a session opened here starts the ones its role needs.
+    static SLOT_PROCESSES: std::cell::RefCell<Vec<(String, ModuleProcess)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn started_on_this_thread(kind: &str, process: &ModuleProcess) {
+    SLOT_PROCESSES.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|(_, known)| !known.is_same_process(process));
+        all.push((kind.to_string(), process.clone()));
+    });
+}
+
+/// The slots' module processes reached from this thread so far, each with
+/// its slot (`kind`: the slot's name, `loop guard` for the loop guard's).
+pub fn slot_processes() -> Vec<(String, ModuleProcess)> {
+    SLOT_PROCESSES.with(|all| all.borrow().clone())
+}
+
 pub struct SlotClient {
     /// The module, as messages name it ("the store module acme_store").
     pub label: String,
@@ -102,7 +122,9 @@ impl SlotClient {
                     .chain(process.env.iter().map(|(k, v)| (k.clone(), v.clone())))
                     .collect();
                 let launch = Launch { program: program.clone(), args: args.to_vec(), dir: process.dir.clone(), env, start_timeout: START_TIMEOUT };
-                (Target::Process { process: ModuleProcess::own(&format!("{kind}:{name}"), &label, launch), token }, None)
+                let process = ModuleProcess::own(&format!("{kind}:{name}"), &label, launch);
+                started_on_this_thread(kind, &process);
+                (Target::Process { process, token }, None)
             }
         };
         let (jobs, received) = mpsc::channel::<Job>();

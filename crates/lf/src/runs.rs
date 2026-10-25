@@ -18,7 +18,7 @@ use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
 use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, scan_externals, start_externals};
-use crate::module_hosts::{Hold, Keep};
+use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
 use crate::obj;
@@ -74,6 +74,11 @@ pub struct FileSet {
     _holds: Vec<Hold>,
 }
 
+/// Every process started, together.
+async fn start_all(processes: &[ModuleProcess]) -> Result<(), String> {
+    join_all(processes.iter().map(ModuleProcess::start).collect()).await.into_iter().collect()
+}
+
 /// The set's claim on each external's process lf started.
 fn hold_all(running: &[Rc<RunningExternal>], keep: Keep) -> Vec<Hold> {
     running
@@ -116,13 +121,39 @@ pub enum Role {
     /// delivery or the run that needs it; a refresh registers the webhooks
     /// the new listens need (crate::subscriptions).
     Serve,
+    /// `lf serve --doors-only`: as `Serve`, and the slots' modules a door
+    /// calls (`DOOR_SLOTS`) are started as it opens, never the others.
+    Doors,
 }
+
+/// The slots whose modules a door calls: the run state, the secrets and
+/// the movements it reads, the limiter its module calls go through, and the
+/// wake it tells of the work it queues. Never models, OCR, files, the loop
+/// guard, the judge or the browser: those serve runs.
+const DOOR_SLOTS: &[&str] = &["store", "secrets", "movements", "limiter", "wake"];
 
 impl Role {
     fn keep(self) -> Keep {
         match self {
             Role::Drain => Keep::Up,
-            Role::Command | Role::Serve => Keep::Idle,
+            Role::Command | Role::Serve | Role::Doors => Keep::Idle,
+        }
+    }
+
+    /// Whether the slot `kind`'s module is started as the session opens.
+    fn starts_slot(self, kind: &str) -> bool {
+        match self {
+            Role::Drain => true,
+            Role::Doors => DOOR_SLOTS.contains(&kind),
+            Role::Command | Role::Serve => false,
+        }
+    }
+
+    /// Whether a refresh registers the webhooks its listens need.
+    fn registers_webhooks(self) -> bool {
+        match self {
+            Role::Serve | Role::Doors => true,
+            Role::Command | Role::Drain => false,
         }
     }
 }
@@ -161,6 +192,8 @@ pub struct Session {
     pub pool: crate::drain::Pool,
     /// The loopGuard slot's module; None unless lf.yaml names one.
     loop_guard: Option<std::sync::Arc<dyn LoopGuard>>,
+    /// The session's claims on the slots' module processes it started.
+    _slot_holds: Vec<Hold>,
     /// When this session's drain last looked for lost runs.
     swept_at: Cell<Option<Instant>>,
     /// `LF_MOVEMENTS_REFRESH_MS`: how long the watch loop waits before it
@@ -266,9 +299,15 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     // Before any module starts: what an earlier lf left running is
     // stopped, and what this one starts is listed in the store.
     crate::module_hosts::track_in(store.clone());
-    let running: Vec<Rc<RunningExternal>> = start_externals(&project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
     // The files slot's module: @lf/local-files (crate::core), or one reached over the wire.
     let documents = Documents::with_module(&project.lf_dir, crate::remote_slots::files(&project, credentials)?);
+    // The slots' modules the role starts now, with the externals: a
+    // worker's every one, a door's the ones a door calls.
+    let slot_processes: Vec<ModuleProcess> = crate::slot_client::slot_processes().into_iter().filter(|(kind, _)| role.starts_slot(kind)).map(|(_, process)| process).collect();
+    let (slots, running) = tokio::join!(start_all(&slot_processes), start_externals(&project, &externals, credentials, LOCAL_TENANT));
+    let running: Vec<Rc<RunningExternal>> = running?.into_iter().map(Rc::new).collect();
+    slots?;
+    let _slot_holds = slot_processes.iter().map(|process| process.hold(role.keep())).collect();
     let described = join_all(running.iter().filter(|r| !r.is_plugin()).map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials).await?)) }).collect()).await;
     let schemas = described.into_iter().collect::<Result<IndexMap<String, Js>, String>>()?;
     // Scanned again after the externals start: one may have written a movement file.
@@ -298,6 +337,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
         ephemeral_dir,
         pool: Default::default(),
         loop_guard,
+        _slot_holds,
         swept_at: Default::default(),
         watch_pause,
         refused: Default::default(),
@@ -1498,7 +1538,7 @@ impl Session {
         for left in crons(&set).difference(&crons(&taken)) {
             self.store.save_inbound_checkpoint(left, &Js::Null).map_err(|e| e.to_string())?;
         }
-        if self.role == Role::Serve {
+        if self.role.registers_webhooks() {
             for line in crate::subscriptions::follow_refresh(self, &set, &taken).await {
                 let _ = writeln!(log, "{line}");
             }

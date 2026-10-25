@@ -367,7 +367,7 @@ pub fn of_project(project: &crate::project::Project, credentials: &crate::secret
     match &module.process {
         Some(process) => {
             let settings = crate::core::settings_of(credentials, module);
-            Ok(Arc::new(crate::limiter_module::ProcessLimiter::start(&module.name, process, &settings)?))
+            Ok(Arc::new(crate::limiter_module::ProcessLimiter::reach(&module.name, process, &settings)?))
         }
         None => Ok(Arc::new(MemoryLimiter::default())),
     }

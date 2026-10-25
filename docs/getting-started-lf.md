@@ -96,7 +96,8 @@ A movement imports only modules installed in `externals/`; installing is always 
 - It starts a module's process only when a run or a check needs it. A check needs one when the movement imports a live graph such as Attio's.
 - It keeps the process up while it is used, and stops it after `moduleIdleTimeout` seconds unused (in `lf.yaml`; default 300). The next call starts it again.
 - When a project opens, lf starts every module its movements import at once, so the open takes as long as the slowest module's start, not their sum.
-- `lf drain` keeps those modules up for as long as it runs: no idle stop, so no run waits on a module's start.
+- `lf drain` keeps those modules up for as long as it runs: no idle stop, so no run waits on a module's start. It also starts, with them, every slot module `lf.yaml`'s `core:` names that runs as a process of its own (models, ocr, limiter, wake, files, …), and keeps those up too. A built-in slot stays inside lf.
+- `lf serve --doors-only` starts, as it opens, only the slot modules a door calls: the limiter and the wake (and the store, secrets and movements modules, which every command opens). Never the models or ocr modules.
 - Under `lf serve` or `lf drain`, a module no movement imports any more after an edit is stopped once the runs that began before the edit are done with it. A first-party module shares its process with others, so it is left out of that process's next start instead.
 - First-party `@lf/*` modules, and any whose `lf-external.yaml` says `trusted: true`, share one Node process. Every other module gets a process of its own.
 - A module that crashes starts again on its next call. A run whose call it broke fails or retries as any failed call does.

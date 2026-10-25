@@ -18,12 +18,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf drain` starts the slot modules `lf.yaml`'s `core:` fills with a process of its own (models, ocr, limiter, wake, files, loop guard, judge) as it opens, together with the movements' modules, and keeps them up until it exits; `lf serve --doors-only` starts only the ones a door calls (the limiter and the wake), never models or ocr. A limiter module now opens on its first call rather than before anything else starts. With three such modules beside three adapters: a fresh drain's first run went from 2.5 s to 1.5 s, and doors-only no longer starts the wake module inside the first delivery.
 - A refresh under `lf serve` or `lf drain` reads again only the files whose text changed: each file's parse and listens are kept while its text is, and only the check runs over the whole set (imports link across files). A run starts from a copy of its file's parse, kept for the process (the engine's `keep_parses`, 128 files), rather than parsing it again. On a 200-file set, a refresh after one file changed went from 450 ms to 245 ms (the rest is the whole-set check), and a run's parse from 0.35 ms to a 0.08 ms copy.
-
 - An edit under a running `lf serve` or `lf drain` that leaves a module imported by no movement now stops that module's process, once the runs that began before the edit are done with it (`movements: dropped <external>, which no file imports now`). A module a set that does not check started is stopped with it. Before, a refresh only ever started modules. A first-party module, which shares one process with the others, is left out of that process's next start instead.
-
 - A module's webhook registration follows an edit under a running `lf serve`: when a refresh changes the events a module's listens name, lf registers the webhook for them (changed in place where the module can), and removes it once no listen needs it, as `lf serve`'s start does. Before, the refresh only printed that the registration would change at the next restart. A registration that fails is printed once per message and tried again at the next change.
-
 - `lf drain` starts every module its movements import together as it opens, before it claims any work, and keeps them up until it exits: a run no longer waits on a module's start, and the idle stop (`moduleIdleTimeout`) no longer stops a module mid-drain. Every command's open starts the modules together rather than one after another (three modules that each take a second to start: the first run of a fresh `lf drain` went from 3.4 s to 2.0 s).
 
 ## [0.12.4] - 2026-10-25

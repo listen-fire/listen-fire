@@ -128,7 +128,8 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     let _ = HOST_TOKEN.set(crate::http_out::hex(&crate::http_out::random_bytes(24)?));
     let env: Vec<(String, String)> = std::env::vars().collect();
     crate::movements_slot::require_watch(&project, &env, "lf serve")?;
-    let session = open_session(project, &Opening { ephemeral, store, role: Role::Serve }).await?;
+    let role = if doors_only { Role::Doors } else { Role::Serve };
+    let session = open_session(project, &Opening { ephemeral, store, role }).await?;
     // Before the doors answer, so a delivery is verified by the secret the
     // source issued. A refresh registers again what its listens move.
     for line in crate::subscriptions::reconcile(&session).await {
