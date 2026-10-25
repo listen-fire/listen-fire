@@ -18,6 +18,10 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.5] - 2026-10-25
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Operators: `lf drain` starts every module, the core modules included, as it opens and keeps them up; `lf serve --doors-only` starts only what its doors call; webhook registrations follow movement edits without a restart; a module no movement imports any more stops; a refresh is faster. **Breaking for store module authors:** every store module must answer `work.enqueueIfAbsent` (one conditional insert); arming a polled listen fails naming the method otherwise. The platform's store implements it in its matching release.
+
 - Several `lf drain` workers started at once (a job fleet from zero) poll a polled listen once: arming its standing work row is now one conditional write, so a worker's arm never moves the due time of the row another worker holds, which made that listen be polled again at once. **For store module authors:** the store slot has a new method, `work.enqueueIfAbsent` (insert when no row has the key, else leave the row as it is; answers whether it queued), which lf's SQLite and Postgres stores and the module kit's `Store` trait implement and the store contract cases check. A store module that does not answer it fails a polled listen's arm by name.
 - `lf drain` starts the slot modules `lf.yaml`'s `core:` fills with a process of its own (models, ocr, limiter, wake, files, loop guard, judge) as it opens, together with the movements' modules, and keeps them up until it exits; `lf serve --doors-only` starts only the ones a door calls (the limiter and the wake), never models or ocr. A limiter module now opens on its first call rather than before anything else starts. With three such modules beside three adapters: a fresh drain's first run went from 2.5 s to 1.5 s, and doors-only no longer starts the wake module inside the first delivery.
 - A refresh under `lf serve` or `lf drain` reads again only the files whose text changed: each file's parse and listens are kept while its text is, and only the check runs over the whole set (imports link across files). A run starts from a copy of its file's parse, kept for the process (the engine's `keep_parses`, 128 files), rather than parsing it again. On a 200-file set, a refresh after one file changed went from 450 ms to 245 ms (the rest is the whole-set check), and a run's parse from 0.35 ms to a 0.08 ms copy.
@@ -2283,7 +2287,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/listen-fire/listen-fire/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/listen-fire/listen-fire/compare/v0.12.1...v0.12.2
