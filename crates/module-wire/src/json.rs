@@ -24,6 +24,25 @@ pub enum Js {
 
 pub type Obj = IndexMap<String, Js>;
 
+/// A JavaScript object's own-key order: array-index keys (the canonical
+/// decimal of an integer below 2^32 - 1) first, ascending, then the rest in
+/// insertion order. The parser has the same function; this crate does not
+/// depend on the parser (so it releases on its own), and a test in `lf`
+/// holds the two equal.
+pub fn object_key_order<V>(map: &mut IndexMap<String, V>) {
+    fn array_index(key: &str) -> Option<u32> {
+        let n: u32 = key.parse().ok()?;
+        (n != u32::MAX && n.to_string() == key).then_some(n)
+    }
+    // A stable sort: the non-index keys tie, and keep their order.
+    map.sort_by(|a, _, b, _| match (array_index(a), array_index(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+}
+
 impl Js {
     pub fn get(&self, key: &str) -> Option<&Js> {
         match self {
@@ -102,7 +121,7 @@ impl Serialize for Js {
                 // Assignment order, with array-index keys first as JavaScript
                 // enumerates them.
                 let mut ordered = map.clone();
-                movement_parser::util::js::object_key_order(&mut ordered);
+                object_key_order(&mut ordered);
                 let mut out = serializer.serialize_map(Some(ordered.len()))?;
                 for (k, v) in &ordered {
                     out.serialize_entry(k, v)?;
@@ -159,7 +178,7 @@ impl<'de> Deserialize<'de> for Js {
                     map.insert(k, v);
                 }
                 // Enumerated as JavaScript enumerates it: array-index keys first.
-                movement_parser::util::js::object_key_order(&mut map);
+                object_key_order(&mut map);
                 Ok(Js::Obj(map))
             }
         }

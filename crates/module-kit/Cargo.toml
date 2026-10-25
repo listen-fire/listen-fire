@@ -2,8 +2,9 @@
 # Modules written in Rust: a trait per module kind, and the host process that
 # serves them over adapter protocol 2 (HTTP on TCP or a Unix socket). A host
 # never links into `lf`; lf speaks to it as to any other module server.
+# Not part of the core: it carries its own version and publishes on its own.
 name = "listen-fire-module-kit"
-version.workspace = true
+version = "0.12.5"
 edition.workspace = true
 publish = true
 license.workspace = true
@@ -13,7 +14,7 @@ rust-version.workspace = true
 description = "Write listen-fire modules (adapters, plugins, core slots) in Rust and serve them over adapter protocol 2"
 keywords = ["movement", "automation", "listen-fire", "adapter", "module"]
 categories = ["network-programming", "web-programming::http-server"]
-include = ["src/**/*", "Cargo.toml"]
+include = ["src/**/*", "Cargo.toml", "CHANGELOG.md"]
 
 [lib]
 name = "module_kit"

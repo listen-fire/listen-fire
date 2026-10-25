@@ -2,8 +2,10 @@
 resolver = "3"
 members = ["crates/lf", "crates/module-kit", "crates/module-wire", "crates/movement-checker", "crates/movement-engine", "crates/movement-language", "crates/movement-parser", "examples/rust-embed", "examples/rust-module"]
 
-# One release version for the toolchain: the three library crates and the
-# `listen-fire` facade (crates/lf, which installs `lf`) publish together.
+# The core's one version, the language's: the parser, checker, language and
+# engine crates and the `listen-fire` facade (crates/lf, which installs `lf`).
+# `scripts/release/sync-core-version.mjs` writes it from movement-lang's
+# package.json. module-wire and module-kit carry versions of their own.
 [workspace.package]
 version = "0.12.5"
 edition = "2024"

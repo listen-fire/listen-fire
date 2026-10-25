@@ -304,6 +304,19 @@ async fn post(call: Call<'_>, carried: Carried, beside: &mut Beside) -> Result<J
 mod tests {
     use super::*;
 
+    /// module-wire carries its own copy of the parser's key order (it does
+    /// not depend on the parser, so it releases on its own); the two must
+    /// agree on every key.
+    #[test]
+    fn module_wire_orders_object_keys_as_the_parser_does() {
+        let keys = ["b", "10", "a", "2", "01", "4294967295", "4294967294", "0", "-1", "1.5", "", " 3", "9", "c", "007", "4294967296"];
+        let mut wire: indexmap::IndexMap<String, ()> = keys.iter().map(|k| (k.to_string(), ())).collect();
+        let mut parser = wire.clone();
+        module_wire::json::object_key_order(&mut wire);
+        movement_parser::util::js::object_key_order(&mut parser);
+        assert_eq!(wire.keys().collect::<Vec<_>>(), parser.keys().collect::<Vec<_>>());
+    }
+
     const LF: &str = env!("CARGO_PKG_VERSION");
 
     fn manifest(json: &str) -> Js {

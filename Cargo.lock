@@ -871,7 +871,6 @@ name = "listen-fire-module-wire"
 version = "0.12.5"
 dependencies = [
  "indexmap",
- "listen-fire-parser",
  "serde",
  "serde_json",
 ]
