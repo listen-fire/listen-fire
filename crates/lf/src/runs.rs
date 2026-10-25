@@ -63,7 +63,7 @@ pub struct FileSet {
     /// Each file's count of check errors against this set's catalog, by name.
     errors: OnceCell<BTreeMap<String, usize>>,
     /// The set's claims on its externals' processes: a worker's keep them
-    /// up for as long as the set is held.
+    /// up for as long as the set is held, and a process no set holds stops.
     _holds: Vec<Hold>,
 }
 
@@ -1418,16 +1418,25 @@ impl Session {
         }
         let credentials = secrets.credentials();
         let registered = |e: &External| crate::subscriptions::has_registered_webhook(credentials, &e.manifest.name);
-        let new_externals: Vec<External> = needed_externals(scan_externals(&self.project)?, &files, registered)
-            .into_iter()
-            .filter(|e| !set.running.iter().any(|r| r.external.manifest.name == e.manifest.name))
-            .collect();
-        let (mut running, mut schemas) = (set.running.clone(), set.schemas.clone());
+        let needed = needed_externals(scan_externals(&self.project)?, &files, registered);
+        let is_needed = |name: &str| needed.iter().any(|e| e.manifest.name == name);
+        let new_externals: Vec<&External> = needed.iter().filter(|e| !set.running.iter().any(|r| r.external.manifest.name == e.manifest.name)).collect();
+        // An external no file imports now leaves the set; its process stops
+        // once no set holds it (the runs begun on this one end).
+        let (mut running, mut schemas): (Vec<Rc<RunningExternal>>, IndexMap<String, Js>) = (
+            set.running.iter().filter(|r| is_needed(&r.external.manifest.name)).cloned().collect(),
+            set.schemas.iter().filter(|(name, _)| is_needed(name)).map(|(name, schema)| (name.clone(), schema.clone())).collect(),
+        );
+        let dropped = set.running.iter().filter(|r| !is_needed(&r.external.manifest.name)).map(|r| format!("movements: dropped {}, which no file imports now", r.external.manifest.name));
         let mut started = Vec::new();
-        for external in &new_externals {
+        // What this refresh starts is held until the set takes it: a set
+        // not taken lets go of it, and so stops it.
+        let mut starting = Vec::new();
+        for external in new_externals {
             let name = &external.manifest.name;
             match self.start_external(external).await {
                 Ok((one, schema)) => {
+                    starting.extend(hold_all(std::slice::from_ref(&one), Keep::Idle));
                     running.push(one);
                     schemas.extend(schema.map(|s| (name.clone(), s)));
                     started.push(format!("movements: started {name}"));
@@ -1465,7 +1474,8 @@ impl Session {
         let taken = Rc::new(FileSet { files, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
         self.file_set.replace(taken.clone());
         self.refused.replace(None);
-        for line in changed.iter().chain(&started) {
+        drop(starting);
+        for line in changed.into_iter().chain(dropped).chain(started) {
             let _ = writeln!(log, "{line}");
         }
         // A cron listen that returns is then seen for the first time, and owes nothing.
@@ -2104,6 +2114,58 @@ mod tests {
             for (name, process) in processes(&session.file_set()) {
                 assert!(process.is_running() && !process.is_kept_up(), "{name} is up, and stops when idle");
             }
+        });
+    }
+
+    #[test]
+    fn an_external_no_file_imports_stops_after_the_swap_and_starts_again_when_imported() {
+        let root = acme_project(&["acme_e"], "0");
+        with_session_as(&root.clone(), Role::Drain, async |session| {
+            let [(_, process)] = &processes(&session.file_set())[..] else { panic!("acme_e runs") };
+            let process = process.clone();
+            remove(&root, "acme_e.mvt");
+            assert_eq!(refreshed(session).await, "movements: acme_e.mvt removed\nmovements: dropped acme_e, which no file imports now\n");
+            assert!(session.file_set().running.is_empty(), "the set has no externals");
+            assert!(!process.is_running(), "its process stopped once no set held it");
+
+            put(&root, "acme_e.mvt", &acme_movement("acme_e"));
+            assert_eq!(refreshed(session).await, "movements: acme_e.mvt added\nmovements: started acme_e\n");
+            assert!(process.is_running() && process.is_kept_up(), "imported again, it runs, kept up by the drain's new set");
+        });
+    }
+
+    #[test]
+    fn a_run_on_the_previous_set_keeps_its_external_until_it_lets_the_set_go() {
+        let root = acme_project(&["acme_f"], "0");
+        with_session_as(&root.clone(), Role::Command, async |session| {
+            let begun = session.file_set();
+            let [(_, process)] = &processes(&begun)[..] else { panic!("acme_f runs") };
+            let process = process.clone();
+            remove(&root, "acme_f.mvt");
+            assert_eq!(refreshed(session).await, "movements: acme_f.mvt removed\nmovements: dropped acme_f, which no file imports now\n");
+            assert!(process.is_running(), "a run still holds the set it began on");
+            drop(begun);
+            assert!(!process.is_running(), "the last holder let it go: stopped");
+        });
+    }
+
+    #[test]
+    fn an_external_a_refused_set_started_is_stopped_with_it() {
+        let root = acme_project(&["acme_g"], "0");
+        let server = std::fs::read_to_string(root.join("externals/acme_g/server.mjs")).unwrap();
+        // A second module only a broken file imports.
+        let dir = root.join("externals/acme_h");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.mjs"), server.replace("'acme_g'", "'acme_h'")).unwrap();
+        std::fs::write(dir.join("lf-external.yaml"), std::fs::read_to_string(root.join("externals/acme_g/lf-external.yaml")).unwrap().replace("acme_g", "acme_h")).unwrap();
+        let secrets = std::fs::read_to_string(root.join(".lf/secrets.yaml")).unwrap();
+        std::fs::write(root.join(".lf/secrets.yaml"), format!("{secrets}acme_h:\n  external: acme_h\n  token: dev-token\n")).unwrap();
+        with_session_as(&root.clone(), Role::Command, async |session| {
+            put(&root, "acme_h.mvt", &acme_movement("acme_h").replace("company.Name", "company.Nope"));
+            let log = refreshed(session).await;
+            assert!(log.starts_with("movements: kept the files lf has; the new ones do not check:\n"), "{log}");
+            assert!(!crate::module_hosts::external_is_running("acme_h"), "the module only the refused set imported was stopped with it");
+            assert!(crate::module_hosts::external_is_running("acme_g"), "the running set's module runs on");
         });
     }
 

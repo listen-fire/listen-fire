@@ -1,7 +1,8 @@
 //! Local module processes (Henry 2026-10-19, "local module processes"): a
 //! module's process starts the first time a run or a check needs it, stays
-//! up while it is used, and stops after an idle period; one that crashed
-//! starts again on its next use. Trusted modules (first-party `@lf/*`, or
+//! up while it is used, and stops after an idle period, or as soon as no
+//! file set holds it any more (`Hold`: no movement imports it); one that
+//! crashed starts again on its next use. Trusted modules (first-party `@lf/*`, or
 //! `trusted: true` in their install) share one Node host, each under its own
 //! path; any other module gets a process of its own, never shared.
 //!
@@ -110,9 +111,15 @@ struct HostState {
     last_used: Instant,
     /// Bumped on each start, so a stale idle timer leaves a newer process be.
     generation: u64,
-    /// The holds that keep it up (`Keep::Up`): while any is held, no idle
-    /// stop fires.
+    /// The holds on it (`ModuleProcess::hold`): when the last is let go it
+    /// stops, at once or as its last call ends.
+    held: usize,
+    /// Of those, the ones that keep it up (`Keep::Up`): while any is held,
+    /// no idle stop fires.
     kept_up: usize,
+    /// Its last hold was let go while a call was in flight: it stops as
+    /// that call ends.
+    let_go: bool,
     /// This host's own idle period, where it is not the process-wide one.
     /// Only a test sets it: `configure` is global, so a parallel test that
     /// loads a project would change the period under it.
@@ -137,6 +144,9 @@ struct Pool {
     hosts: HashMap<HostKey, Arc<Host>>,
     /// Every trusted module registered for the shared host, by path.
     mounts: BTreeMap<String, Mount>,
+    /// The holds on each mount: one let go by its last hold is left out of
+    /// the shared host's next start.
+    mount_holds: BTreeMap<String, usize>,
 }
 
 static POOL: LazyLock<Mutex<Pool>> = LazyLock::new(|| Mutex::new(Pool::default()));
@@ -232,12 +242,21 @@ impl ModuleProcess {
 
     /// A claim on the process for as long as the hold is kept: `Keep::Up`
     /// suspends its idle stop (a worker that must not pay a start inside a
-    /// run), `Keep::Idle` leaves it to stop when idle.
+    /// run), `Keep::Idle` leaves it to stop when idle. When the last hold is
+    /// let go nothing needs the module, and its process stops; a module in
+    /// the shared host is left out of that host's next start, and the host
+    /// stops when no module in it is held.
     pub fn hold(&self, keep: Keep) -> Hold {
-        if keep == Keep::Up {
-            lock(&self.host.state).kept_up += 1;
+        if let Some(mount) = &self.mount {
+            *pool().mount_holds.entry(mount.clone()).or_default() += 1;
         }
-        Hold { host: self.host.clone(), keep }
+        let mut state = lock(&self.host.state);
+        state.held += 1;
+        state.let_go = false;
+        if keep == Keep::Up {
+            state.kept_up += 1;
+        }
+        Hold { host: self.host.clone(), mount: self.mount.clone(), keep }
     }
 
     /// Whether its process is up now.
@@ -260,6 +279,13 @@ impl ModuleProcess {
     }
 }
 
+/// Whether the external `name`'s own process is up now.
+#[cfg(test)]
+pub fn external_is_running(name: &str) -> bool {
+    let host = pool().hosts.get(&HostKey::Own(format!("external:{name}"))).cloned();
+    host.is_some_and(|host| lock(&host.state).running.is_some())
+}
+
 fn host_for(key: HostKey, launch: Launch) -> Arc<Host> {
     let mut pool = pool();
     if let Some(host) = pool.hosts.get(&key) {
@@ -274,7 +300,7 @@ fn host_for(key: HostKey, launch: Launch) -> Arc<Host> {
         key: key.clone(),
         socket: crate::module_transport::fresh_socket_path(),
         starting: tokio::sync::Mutex::new(()),
-        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0, kept_up: 0, idle_timeout: None }),
+        state: Mutex::new(HostState { launch, running: None, in_flight: 0, last_used: Instant::now(), generation: 0, held: 0, kept_up: 0, let_go: false, idle_timeout: None }),
     });
     pool.hosts.insert(key, host.clone());
     host
@@ -320,16 +346,34 @@ pub enum Keep {
 /// A claim on a module's process (`ModuleProcess::hold`), let go when dropped.
 pub struct Hold {
     host: Arc<Host>,
+    mount: Option<String>,
     keep: Keep,
 }
 
 impl Drop for Hold {
     fn drop(&mut self) {
+        if let Some(mount) = &self.mount {
+            let mut pool = pool();
+            let holds = pool.mount_holds.entry(mount.clone()).or_default();
+            *holds = holds.saturating_sub(1);
+            if *holds == 0 {
+                pool.mount_holds.remove(mount);
+                pool.mounts.remove(mount);
+            }
+        }
         let mut state = lock(&self.host.state);
+        state.held = state.held.saturating_sub(1);
         if self.keep == Keep::Up {
             state.kept_up = state.kept_up.saturating_sub(1);
             // Its idle period counts from now, not from its last call.
             state.last_used = Instant::now();
+        }
+        if state.held == 0 {
+            if state.in_flight == 0 {
+                state.running = None;
+            } else {
+                state.let_go = true;
+            }
         }
     }
 }
@@ -353,6 +397,10 @@ impl Drop for Lease {
             let mut state = lock(&host.state);
             state.in_flight = state.in_flight.saturating_sub(1);
             state.last_used = Instant::now();
+            if state.let_go && state.in_flight == 0 {
+                state.let_go = false;
+                state.running = None;
+            }
         }
     }
 }
@@ -808,6 +856,36 @@ mod tests {
         drop(process.lease().await.unwrap());
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert!(!process.is_running(), "idle, it was stopped");
+    }
+
+    #[tokio::test]
+    async fn the_last_hold_let_go_stops_it_at_once_or_as_its_last_call_ends() {
+        let name = format!("let-go-{}", uuid::Uuid::new_v4());
+        let process = ModuleProcess::isolated(&name, sh("echo listening 6; sleep 30"));
+        let (first, second) = (process.hold(Keep::Idle), process.hold(Keep::Up));
+        drop(process.lease().await.unwrap());
+        drop(first);
+        assert!(process.is_running(), "another hold keeps it");
+        let call = process.lease().await.unwrap();
+        drop(second);
+        assert!(process.is_running(), "a call in flight finishes on it");
+        drop(call);
+        assert!(!process.is_running(), "the call over, it stopped");
+        drop(process.lease().await.unwrap());
+        assert!(process.is_running(), "used again, it starts again");
+    }
+
+    #[test]
+    fn a_shared_module_let_go_is_left_out_of_the_hosts_next_start() {
+        let mount = |path: &str| Mount { path: path.into(), module: format!("./{path}.ts"), dir: std::env::temp_dir(), env: BTreeMap::new() };
+        let (kept, gone) = (format!("kept{}", uuid::Uuid::new_v4().simple()), format!("gone{}", uuid::Uuid::new_v4().simple()));
+        let base = sh("echo listening 7; sleep 30");
+        let holds = [ModuleProcess::shared(mount(&kept), base.clone()).hold(Keep::Idle), ModuleProcess::shared(mount(&gone), base).hold(Keep::Idle)];
+        let [kept_hold, gone_hold] = holds;
+        drop(gone_hold);
+        let mounts = pool().mounts.keys().cloned().collect::<Vec<_>>();
+        assert!(mounts.contains(&kept) && !mounts.contains(&gone), "{mounts:?}");
+        drop(kept_hold);
     }
 
     #[tokio::test]
