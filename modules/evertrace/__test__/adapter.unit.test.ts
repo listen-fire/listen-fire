@@ -1640,6 +1640,7 @@ describe('pollEvertrace — list additions', () => {
       checkpoint: { createdAfter: CREATED_AT, entriesCreatedAfter: CREATED_AT },
     });
     expect(events.map((e) => e.tag)).toEqual(['evertrace:list_entry', 'evertrace:signal']);
+    expect(events.map((e) => e.eventType)).toEqual(['list_entry', 'signal']);
     expect(checkpoint).toEqual({
       createdAfter: CREATED_AT + 20,
       entriesCreatedAfter: CREATED_AT + 10,

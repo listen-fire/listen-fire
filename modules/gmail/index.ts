@@ -19,6 +19,8 @@ export const gmailModule = defineModule({
   manifest: GMAIL_MANIFEST,
   credentials: [GMAIL_CREDENTIAL],
   poll: { intervalSeconds: GMAIL_POLL_INTERVAL_SECONDS },
+  // Its poll events carry their kind (`eventType`), which a manifest cannot show.
+  protocolMinor: 3,
   create: (ctx) => {
     const client = gmailClientFrom(ctx);
     const adapter = new GmailAdapter({ client, readFile: (ref) => readHandedFile(ctx, ref), log: ctx.log });

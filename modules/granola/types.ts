@@ -15,6 +15,9 @@ export const GRANOLA_ATTENDEE_DISPLAY_NAME = 'Attendee';
 export const GRANOLA_ATTENDEES_FIELD = 'attendees';
 /** The discriminator `tag` every polled note event carries. */
 export const GRANOLA_NOTE_EVENT_TAG = 'granola:note';
+/** The event kind every polled note event is labelled with (`eventType`):
+ *  Granola has one kind, so a listen chooses none. */
+export const GRANOLA_NOTE_EVENT = 'note';
 
 /** The meta-root node a movement obtains by constructing the adapter
  *  (`granola(credentials:)`) — a single, contentless "Granola Meetings"

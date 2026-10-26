@@ -8,7 +8,7 @@ import type { DiscriminableEvent } from 'movement-engine/public/adapter';
 import type { PollAnswer, PollInput } from 'module-kit';
 
 import { noteHasContent, normalizeNote, type GranolaClient } from './api_client';
-import { GRANOLA_NOTE_EVENT_TAG, type GranolaCheckpoint } from './types';
+import { GRANOLA_NOTE_EVENT, GRANOLA_NOTE_EVENT_TAG, type GranolaCheckpoint } from './types';
 
 /** Granola's default cadence — overridable per automation via the `listen`
  *  option `pollIntervalSeconds`. */
@@ -64,6 +64,7 @@ export async function pollGranola(client: GranolaClient, input: PollInput): Prom
       payload: normalizeNote(note),
       externalId: note.id,
       tag: GRANOLA_NOTE_EVENT_TAG,
+      eventType: GRANOLA_NOTE_EVENT,
       occurredAt: note.updated_at,
     });
   }

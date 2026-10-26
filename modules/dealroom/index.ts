@@ -51,6 +51,8 @@ export const dealroomModule = defineModule({
     },
   ],
   poll: { intervalSeconds: DEALROOM_POLL_INTERVAL_SECONDS },
+  // Its poll events carry their kind (`eventType`), which a manifest cannot show.
+  protocolMinor: 3,
   create: (ctx) => {
     const client = dealroomClientFrom(ctx);
     return Object.assign(new DealroomAdapter(client), {

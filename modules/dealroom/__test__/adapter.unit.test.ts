@@ -861,6 +861,7 @@ describe('pollDealroom', () => {
     });
     expect(events.map((e) => e.externalId)).toEqual(['401', '402']);
     expect(events.every((e) => e.tag === 'dealroom:funding_round')).toBe(true);
+    expect(events.every((e) => e.eventType === 'funding_round')).toBe(true);
     expect(events[0].occurredAt).toBe(new Date(CREATED_MS).toISOString());
     expect((checkpoint as { createdAfter: number }).createdAfter).toBe(
       parseDealroomInstant('2026-09-10 09:00:00'),

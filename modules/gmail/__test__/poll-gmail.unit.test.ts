@@ -132,6 +132,15 @@ describe('which labels a listener watches', () => {
     expect(result.checkpoint).toMatchObject({ historyId: '5000' });
   });
 
+  it('labels each message with its event kind, message_received', async () => {
+    const { source } = pollWith({
+      messages: [wireMessage('m1')],
+      history: { INBOX: [{ added: [added('m1', '4001')], historyId: '5000' }] },
+    });
+    const result = await source.getEvents({ config: {}, checkpoint: MARK });
+    expect(result.events.map((e) => e.eventType)).toEqual(['message_received']);
+  });
+
   it('unions the history of every label and admits a spam arrival', async () => {
     const { source, calls } = pollWith({
       messages: [wireMessage('inbox-1'), wireMessage('pitch', ['SPAM'])],

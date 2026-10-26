@@ -22,6 +22,7 @@ import {
 import { eventConfigList } from 'movement-engine/public/inbound';
 import { DEALROOM_SEARCH_FIELDS } from './schema';
 import {
+  DEALROOM_FUNDING_ROUND_EVENT,
   DEALROOM_FUNDING_ROUND_EVENT_TAG,
   DEALROOM_FUNDING_ROUND_TYPE_ID,
   type DealroomCheckpoint,
@@ -88,6 +89,7 @@ export async function pollDealroom(client: DealroomApiClient, input: PollInput, 
     payload: round,
     externalId: String(round.id),
     tag: DEALROOM_FUNDING_ROUND_EVENT_TAG,
+    eventType: DEALROOM_FUNDING_ROUND_EVENT,
     occurredAt: new Date(parseDealroomInstant(round.created_utc) ?? now).toISOString(),
   }));
 

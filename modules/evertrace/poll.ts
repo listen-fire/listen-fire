@@ -105,6 +105,7 @@ export async function pollEvertrace(client: EvertraceApiClient, input: PollInput
           payload: signal,
           externalId: signal.id,
           tag: EVERTRACE_SIGNAL_EVENT_TAG,
+          eventType: EVERTRACE_SIGNAL_EVENT,
           occurredAt: new Date(signal.createdAt).toISOString(),
         });
       }
@@ -129,6 +130,7 @@ export async function pollEvertrace(client: EvertraceApiClient, input: PollInput
           payload: entry,
           externalId: encodeListEntryId({ listId: entry.listId, entryId: entry.id }),
           tag: EVERTRACE_LIST_ENTRY_EVENT_TAG,
+          eventType: EVERTRACE_LIST_ENTRY_EVENT,
           occurredAt: new Date(entry.createdAt).toISOString(),
         });
       }

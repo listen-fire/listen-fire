@@ -29,6 +29,7 @@ import { decodeGmailMessage, type GmailMessageRecord } from './mime';
 import { anyGmailLabel, combineGmailQueries } from './filter';
 import {
   GMAIL_MESSAGE_EVENT_TAG,
+  GMAIL_MESSAGE_RECEIVED_EVENT,
   type GmailCheckpoint,
   type GmailPendingArrival,
 } from './types';
@@ -208,6 +209,7 @@ export class GmailPollSource {
       // message the engine already ran is a no-op rather than a second run.
       idempotencyKey: `gmail:${message.id}`,
       tag: GMAIL_MESSAGE_EVENT_TAG,
+      eventType: GMAIL_MESSAGE_RECEIVED_EVENT,
       ...(message.date !== null ? { occurredAt: message.date } : {}),
     }));
 

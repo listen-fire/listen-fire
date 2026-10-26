@@ -382,6 +382,7 @@ describe('pollGranola', () => {
 
     expect(events.map((e) => e.externalId)).toEqual(['a', 'b']); // oldest first
     expect(events.every((e) => e.tag === 'granola:note')).toBe(true);
+    expect(events.every((e) => e.eventType === 'note')).toBe(true);
     expect((checkpoint as { updatedAfter: string }).updatedAfter).toBe('2026-06-19T11:00:00.000Z');
   });
 
