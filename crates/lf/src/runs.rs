@@ -25,7 +25,7 @@ use crate::obj;
 use crate::project::Project;
 use movement_parser::version::{LANGUAGE_VERSION, Standing, standing};
 use crate::remote::{Externals, SegmentAdapters};
-use crate::routing::{Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line};
+use crate::routing::{Arrival, Listen, address_matches_key, event_matches_trigger_scope, routes_by_key, trigger_event_of, unrouted_line};
 use crate::run_host::{
     BUSY_RETRY_MS, CANCELLED_BY_OPERATOR, FailedWork, Lease, Settled, StepOutcome, StepRequest, Stepper, WORKER_LOST, after_step, arm_timer_wake,
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
@@ -515,25 +515,26 @@ impl Session {
     /// it still runs. Each run names `delivery_id`, the delivery the event
     /// came in, when it came in one.
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>) -> Result<Fired, String> {
-        self.fire_to(&self.file_set(), external, event, dry_run, delivery_id, |_| true).await
+        self.fire_to(&self.file_set(), external, event, Arrival::Pushed, dry_run, delivery_id, |_| true).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
-    async fn fire_to(&self, set: &FileSet, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
+    #[allow(clippy::too_many_arguments)] // the file set, the event and how it came, then the firing's own options
+    async fn fire_to(&self, set: &FileSet, external: &str, event: &Js, arrival: Arrival, dry_run: bool, delivery_id: Option<&str>, to: impl Fn(&Listen) -> bool) -> Result<Fired, String> {
         let event_types = self.event_types_of(set, external).await?;
         let key = event.get("idempotencyKey").and_then(Js::as_str).filter(|k| !k.is_empty());
         let now_reads = RefCell::new(HashMap::new());
         let mut fired = Fired::default();
         let keyed = set.running.iter().any(|r| r.external.manifest.name == external && routes_by_key(&r.listen));
         let routed = |l: &Listen| !keyed || address_matches_key(event, &l.config);
-        let reached: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config) && routed(l) && to(l)).collect();
+        let reached: Vec<&Listen> = set.listens.iter().filter(|l| l.adapter == external && event_matches_trigger_scope(event, &l.config, arrival) && routed(l) && to(l)).collect();
         if keyed && reached.is_empty() {
             fired.redelivered.push(unrouted_line(external, event));
         }
         for listen in reached {
             let run_id = uuid::Uuid::new_v4().to_string();
             let file = set.file(&listen.file);
-            let pipeline = format!("listen:{}:{}", file.name, listen.movement_name);
+            let pipeline = listen.pipeline();
             let receipt = key.filter(|_| !dry_run);
             let ran_before = |key: &str| format!("{}:{} has run the event {key} before: this delivery runs nothing", file.name, listen.movement_name);
             if !dry_run && self.is_own_echo(set, external, event, &pipeline, &now_reads).await {
@@ -567,7 +568,7 @@ impl Session {
             return Err(format!("no listen fires '{movement}' on manual: add `listen to manual fire {movement}` to run it with `lf run {movement}`"));
         }
         let event = crate::units::manual_event(&iso(0), &self.user, text);
-        self.fire_to(&set, crate::units::MANUAL, &event, dry_run, None, |l| l.movement_name == movement).await
+        self.fire_to(&set, crate::units::MANUAL, &event, Arrival::Pushed, dry_run, None, |l| l.movement_name == movement).await
     }
 
     /// The cron unit's due ticks (scale from zero): for each cron listen, the
@@ -604,7 +605,7 @@ impl Session {
             let Some(due_ms) = parsed.latest_in(after_ms, now_ms) else { continue };
             let due = crate::units::iso_of(due_ms);
             let event = crate::units::tick_event(&due, schedule, timezone);
-            let fired = self.fire_to(set, crate::units::CRON, &event, false, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
+            let fired = self.fire_to(set, crate::units::CRON, &event, Arrival::Pushed, false, None, |l| std::ptr::eq(l, &set.listens[index])).await?;
             self.store.save_inbound_checkpoint(&subscription, &Js::Obj(obj! { "after" => Js::str(&due) })).map_err(|e| e.to_string())?;
             outcomes.extend(fired.outcomes);
         }
@@ -645,7 +646,7 @@ impl Session {
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
-            let one = self.fire_to(set, &listen.adapter, event, false, None, |l| std::ptr::eq(l, listen)).await?;
+            let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, None, |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
         }
@@ -1120,7 +1121,7 @@ impl Session {
                 let external = text("external")?;
                 // Rows queued before deliveries were kept name none.
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let fired = self.fire_to(set, &external, &event, false, delivery_id, |_| true).await?;
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |_| true).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
                 }
@@ -1840,10 +1841,11 @@ fn no_listen_line(delivery_id: &str, external: &str) -> String {
 }
 
 /// `poll`'s params (adapter protocol 2): the listen's options, the checkpoint
-/// the previous poll left, and `movementId`. Locally the automation is the
-/// movement the listen is declared in, which has no id but its name.
+/// the previous poll left, and `movementId`. Locally the listener is the
+/// listen's pipeline, `listen:<file>:<movement>`: a movement's name alone
+/// would not tell it from a same-named movement in another file.
 fn poll_params(listen: &Listen, state: Option<&Js>) -> serde_json::Value {
-    let mut params = serde_json::json!({ "config": crate::wire::json_of_js(&Js::Obj(listen.config.clone())), "movementId": listen.movement_name });
+    let mut params = serde_json::json!({ "config": crate::wire::json_of_js(&Js::Obj(listen.config.clone())), "movementId": listen.pipeline() });
     if let Some(checkpoint) = state.and_then(|s| s.get("checkpoint")) {
         params["checkpoint"] = crate::wire::json_of_js(checkpoint);
     }
@@ -1911,10 +1913,10 @@ mod tests {
     }
 
     #[test]
-    fn a_poll_request_names_the_listening_movement_and_carries_the_checkpoint() {
+    fn a_poll_request_names_the_listening_pipeline_and_carries_the_checkpoint() {
         let listen = polled(obj! { "every" => Js::str("5m") });
         let first = poll_params(&listen, None);
-        assert_eq!(first["movementId"], "alerts");
+        assert_eq!(first["movementId"], "listen:alerts:alerts");
         assert_eq!(first["config"]["every"], "5m");
         assert!(first.get("checkpoint").is_none());
         let state = Js::Obj(obj! { "armed" => Js::Bool(true), "checkpoint" => Js::str("c1") });

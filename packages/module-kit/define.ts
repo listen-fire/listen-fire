@@ -193,7 +193,8 @@ export interface PollInput {
   config: unknown;
   /** What the previous poll returned; absent the first time. */
   checkpoint?: unknown;
-  /** The automation the polled listen belongs to, where the host knows it. A
+  /** The automation the polled listen belongs to, where the host knows it
+   *  (`lf` sends the listen's pipeline, `listen:<file>:<movement>`). A
    *  source whose events concern automations themselves (the platform's own)
    *  needs it to keep an automation from being told about itself. */
   movementId?: string;

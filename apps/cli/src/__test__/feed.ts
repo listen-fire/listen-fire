@@ -11,10 +11,13 @@ export interface Note {
   id: string;
   title: string;
   at: number;
+  /** The note's `eventType`, when the feed sets one. */
+  type?: string;
 }
 
 /** A notes feed, polled: `feed.json` is what the provider holds, `polls.log`
- *  the checkpoint each poll was handed, and `replay` makes it forget the
+ *  the checkpoint each poll was handed, `listeners.log` the listener each poll
+ *  named, and `replay` makes it forget the
  *  checkpoint (an overlapping poll's duplicates), `fast` polls it every
  *  second rather than every minute. Each poll takes 300ms. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
@@ -26,7 +29,7 @@ module.exports = defineModule({
   kind: 'adapter',
   name: 'feed',
   credentials: [],
-  manifest: { adapterType: 'feed', displayName: 'Feed', supportedTriggers: ['poll'], methods: [], webhookEventTypeId: 'note' },
+  manifest: { adapterType: 'feed', displayName: 'Feed', supportedTriggers: ['poll'], methods: [], webhookEventTypeId: 'note', subscribableEvents: ['note.added', 'note.removed'] },
   poll: { intervalSeconds: existsSync(at('fast')) ? 1 : 60 },
   create: () => ({
     adapterType: 'feed',
@@ -40,13 +43,14 @@ module.exports = defineModule({
     createRecord: async () => { throw new Error('read-only'); },
     updateRecord: async () => { throw new Error('read-only'); },
     deleteRecord: async () => { throw new Error('read-only'); },
-    poll: async ({ checkpoint }) => {
+    poll: async ({ checkpoint, movementId }) => {
       appendFileSync(at('polls.log'), JSON.stringify(checkpoint ?? null) + '\\n');
+      appendFileSync(at('listeners.log'), JSON.stringify(movementId ?? null) + '\\n');
       await new Promise((done) => setTimeout(done, 300));
       const since = existsSync(at('replay')) || typeof checkpoint !== 'number' ? 0 : checkpoint;
       const notes = JSON.parse(readFileSync(at('feed.json'), 'utf8')).filter((n) => n.at > since);
       return {
-        events: notes.map((n) => ({ payload: n, externalId: n.id, idempotencyKey: n.id })),
+        events: notes.map((n) => ({ payload: n, externalId: n.id, idempotencyKey: n.id, ...(n.type ? { eventType: n.type } : {}) })),
         checkpoint: notes.reduce((high, n) => Math.max(high, n.at), since),
       };
     },
@@ -85,7 +89,16 @@ export function feed(dir: string, notes: Note[]): void {
 
 /** The checkpoint each poll so far was handed. */
 export function polls(dir: string): unknown[] {
-  const log = join(dir, 'externals/feed/polls.log');
+  return logged(dir, 'polls.log');
+}
+
+/** The listener each poll so far named (`movementId`). */
+export function listeners(dir: string): unknown[] {
+  return logged(dir, 'listeners.log');
+}
+
+function logged(dir: string, name: string): unknown[] {
+  const log = join(dir, 'externals/feed', name);
   if (!existsSync(log)) return [];
   return readFileSync(log, 'utf8')
     .split('\n')

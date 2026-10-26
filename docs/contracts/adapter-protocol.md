@@ -201,7 +201,9 @@ The manifest file registers your server with a team:
 - What a listen on your adapter may say, also optional:
   - `subscribableEvents`: the values of a listen's `events: [...]`
     (`listen to crm { events: ["company.created"] } fire welcome`). An event
-    is routed to that listen only when its `eventType` is one of them.
+    is routed to that listen only when its `eventType` is one of them. A
+    polled event may leave `eventType` unset: its poll was handed the
+    listen's `events`, so it is not narrowed again.
   - `defaultSubscribedEvents`: what a listen with no `events` receives
     (absent means every subscribable event).
   - `listenConfig`: further keys, as `[{ key, required?, format? }]`, where
@@ -441,7 +443,7 @@ an automation cannot delete any other.
 | `describeOpaqueId` | `{ fieldPath, value }` | a label, or `null` |
 | `invokeFieldFunction` | `{ recordType, fieldId, functionName, args: { instructions, data } }` | the composed value |
 | `edgesFrom` | `{ position, cursor? }` | see [describe](#describe) |
-| `poll` | `{ config, checkpoint? }` | `{ events, checkpoint? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared |
+| `poll` | `{ config, checkpoint?, movementId? }` | `{ events, checkpoint? }` ([Modules](#polled-sources-and-periodic-tasks)); needs `poll` declared |
 | `refreshCredential` | `{}` | `{ fields }` ([Modules](#credentials)); needs `credentials` declared |
 | `runPeriodic` | `{ name }` | `null` ([Modules](#polled-sources-and-periodic-tasks)); needs `periodic` declared |
 | `checkInbound` | `{ request, secret?, checkpoint? }` | `accepted` / `refused` / `reply` ([Modules](#a-module-that-checks-its-own-inbound)); needs `inbound.scheme: module` |
@@ -958,10 +960,13 @@ A source with no webhooks is polled:
 
 - The host calls `poll` every `intervalSeconds` for each listen on the
   module; a listen's own `every` overrides it.
-- `poll`: `{ config, checkpoint? }` → `{ events, checkpoint? }`. `config` is
-  the listen's options. `checkpoint` is whatever the previous poll returned,
-  absent the first time. Each event has the `emit` door's shape
-  ([emit](#emit-new-data)).
+- `poll`: `{ config, checkpoint?, movementId? }` → `{ events, checkpoint? }`.
+  `config` is the listen's options. `checkpoint` is whatever the previous poll
+  returned, absent the first time. `movementId` names the listener, where the
+  host knows it: `lf` sends the listen's pipeline, `listen:<file>:<movement>`.
+  Each event has the `emit` door's shape ([emit](#emit-new-data)).
+- A polled event may leave `eventType` unset. The listen's `events` narrows
+  only an event that sets one: the poll already chose from them.
 - Return only what is new since the checkpoint. A backfill is not a poll.
 
 Housekeeping on a schedule, per install (renewing a webhook the provider

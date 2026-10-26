@@ -26,6 +26,14 @@ pub struct Listen {
     pub movement_name: String,
 }
 
+impl Listen {
+    /// The listen's pipeline, `listen:<file>:<movement>`: what its receipts,
+    /// its runs and its polls name it by.
+    pub fn pipeline(&self) -> String {
+        format!("listen:{}:{}", self.file, self.movement_name)
+    }
+}
+
 /// `configValueOf`: a listen config value, statically evaluated; anything
 /// that does not reduce to a static value keeps its raw text.
 fn config_value_of(arg: &NamedArg) -> Js {
@@ -128,14 +136,26 @@ fn event_config_list(events: Option<&Js>) -> Vec<String> {
     }
 }
 
+/// How an event reached lf: pushed (a webhook, `emit`, a unit's tick), or
+/// returned by a poll of one listen's source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrival {
+    Pushed,
+    Polled,
+}
+
 /// `eventMatchesTriggerScope`: the listen's chosen events, and an
-/// Airtable-style table scope.
-pub fn event_matches_trigger_scope(event: &Js, config: &Obj) -> bool {
+/// Airtable-style table scope. A polled event may leave `eventType` unset
+/// (the adapter protocol's poll): the poll was handed the listen's config, so
+/// its events are already the chosen ones, and only one that names its type
+/// is narrowed.
+pub fn event_matches_trigger_scope(event: &Js, config: &Obj, arrival: Arrival) -> bool {
     let events = event_config_list(config.get("events"));
     if !events.is_empty() {
-        match event.get("eventType").and_then(Js::as_str) {
-            Some(t) if events.iter().any(|e| e == t) => {}
-            _ => return false,
+        match (event.get("eventType").and_then(Js::as_str), arrival) {
+            (Some(t), _) if events.iter().any(|e| e == t) => {}
+            (None, Arrival::Polled) => {}
+            (Some(_), _) | (None, Arrival::Pushed) => return false,
         }
     }
     if let Some(Js::Str(table)) = config.get("table")
@@ -301,10 +321,22 @@ mod tests {
             Js::Obj(map) => map,
             _ => unreachable!(),
         };
-        assert!(event_matches_trigger_scope(&js(r#"{"eventType":"company.created"}"#), &config));
-        assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config));
-        assert!(!event_matches_trigger_scope(&js(r#"{}"#), &config));
-        assert!(event_matches_trigger_scope(&js(r#"{}"#), &Obj::new()));
+        assert!(event_matches_trigger_scope(&js(r#"{"eventType":"company.created"}"#), &config, Arrival::Pushed));
+        assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config, Arrival::Pushed));
+        assert!(!event_matches_trigger_scope(&js(r#"{}"#), &config, Arrival::Pushed));
+        assert!(event_matches_trigger_scope(&js(r#"{}"#), &Obj::new(), Arrival::Pushed));
+    }
+
+    #[test]
+    fn a_polled_event_with_no_event_type_is_not_narrowed_by_the_chosen_events() {
+        let config = match js(r#"{"events":["company.created"],"table":"Company"}"#) {
+            Js::Obj(map) => map,
+            _ => unreachable!(),
+        };
+        assert!(event_matches_trigger_scope(&js(r#"{}"#), &config, Arrival::Polled));
+        assert!(event_matches_trigger_scope(&js(r#"{"eventType":"company.created"}"#), &config, Arrival::Polled));
+        assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config, Arrival::Polled));
+        assert!(!event_matches_trigger_scope(&js(r#"{"recordType":"Person"}"#), &config, Arrival::Polled));
     }
 
     #[test]

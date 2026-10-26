@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { lf, lfCommand, served } from './example';
-import { feed, feedProject, polls } from './feed';
+import { feed, feedProject, listeners, polls } from './feed';
 
 function seen(dir: string): number {
   return lf(dir, 'runs').out.split('\n').filter((l) => l.includes('notes:seen')).length;
@@ -121,4 +121,30 @@ test('the old `pollIntervalSeconds` spelling is refused, with the fix', () => {
   assert.notEqual(check.code, 0);
   assert.match(check.out, /MOV_V5_SPELLING/);
   assert.match(check.out, /every: 5m/);
+});
+
+test('a poll names its listener by the listen\'s pipeline, file and movement', () => {
+  const dir = feedProject();
+  lf(dir, 'run', '--poll', 'seen');
+  assert.deepEqual(listeners(dir), ['listen:notes:seen']);
+});
+
+test('a polled listen\'s `events` keeps the events the poll returns with no eventType', () => {
+  const dir = feedProject('listen to f { events: ["note.added"] } fire seen');
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  lf(dir, 'run', '--poll', 'seen');
+  assert.equal(seen(dir), 2);
+});
+
+test('a polled event that does carry an eventType is still narrowed by the listen\'s `events`', () => {
+  const dir = feedProject('listen to f { events: ["note.added"] } fire seen');
+  feed(dir, [
+    { id: 'n1', title: 'First', at: 1, type: 'note.added' },
+    { id: 'n2', title: 'Second', at: 2, type: 'note.removed' },
+  ]);
+  const run = lf(dir, 'run', '--poll', 'seen');
+  assert.match(run.out, /MOVENG_ERROR: seen First/);
+  assert.doesNotMatch(run.out, /seen Second/);
+  assert.equal(seen(dir), 1);
 });
