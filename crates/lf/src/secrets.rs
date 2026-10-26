@@ -243,9 +243,9 @@ pub fn apply_environment(credentials: &mut Credentials, env: &[(String, String)]
     for credential in credentials.iter() {
         if credential.external.is_empty() {
             return Err(format!(
-                "credential \"{}\" comes from the environment but {ENV_PREFIX}{}__EXTERNAL is not set",
+                "credential \"{}\" comes from the environment but {ENV_PREFIX}{upper}__EXTERNAL is not set (or {ENV_PREFIX}{upper}__MODULE, for a module's install)",
                 credential.name,
-                credential.name.to_uppercase()
+                upper = credential.name.to_uppercase()
             ));
         }
     }
@@ -253,8 +253,11 @@ pub fn apply_environment(credentials: &mut Credentials, env: &[(String, String)]
 }
 
 /// Each `LF_SECRET__<CREDENTIAL>__<FIELD>` over the credentials, one made for
-/// a name none has (its external still to be named).
+/// a name none has (its external still to be named). As in the file,
+/// `__EXTERNAL` names the owner of a hand-written entry and `__MODULE` the
+/// module whose install the entry is; neither is a field.
 fn overlay_environment(credentials: &mut Credentials, env: &[(String, String)]) -> Result<(), String> {
+    let mut owners_named: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for (key, value) in env {
         let Some(rest) = key.strip_prefix(ENV_PREFIX) else { continue };
         let lowered = rest.to_lowercase();
@@ -279,8 +282,17 @@ fn overlay_environment(credentials: &mut Credentials, env: &[(String, String)]) 
             }
         };
         let credential = &mut credentials[at];
-        if field == "external" {
+        if field == "external" || field == "module" {
+            let named = owners_named.entry(credential_name.to_string()).or_default();
+            named.insert(if field == "external" { "EXTERNAL" } else { "MODULE" });
+            if named.len() > 1 {
+                let upper = credential_name.to_uppercase();
+                return Err(format!("{ENV_PREFIX}{upper}__EXTERNAL and {ENV_PREFIX}{upper}__MODULE are both set; keep one (`MODULE` makes the entry the module's install)"));
+            }
             credential.external = value.clone();
+            if field == "module" {
+                credential.binding = Binding::Install;
+            }
         } else {
             let existing = credential.fields.keys().find(|f| f.to_lowercase() == field).cloned().unwrap_or_else(|| field.into());
             credential.fields.insert(existing.clone(), value.clone());
@@ -430,5 +442,21 @@ mod tests {
             let refused = apply_environment(&mut Vec::new(), &env(&[(malformed, "x")])).unwrap_err();
             assert!(refused.contains("expected LF_SECRET__<CREDENTIAL>__<FIELD>"), "{malformed}: {refused}");
         }
+    }
+
+    #[test]
+    fn an_entry_whose_module_the_environment_names_is_that_modules_install() {
+        let mut credentials = Vec::new();
+        apply_environment(&mut credentials, &env(&[("LF_SECRET__SYS__MODULE", "system"), ("LF_SECRET__SYS__KEY", "k")])).unwrap();
+        assert_eq!((credentials[0].external.as_str(), &credentials[0].binding), ("system", &Binding::Install));
+        assert_eq!(credentials[0].fields.get("key").map(String::as_str), Some("k"));
+        assert!(!credentials[0].fields.contains_key("module"), "`module` names the owner, as in the file; it is no field");
+
+        let mut legacy = Vec::new();
+        apply_environment(&mut legacy, &env(&[("LF_SECRET__SYS__EXTERNAL", "system"), ("LF_SECRET__SYS__KEY", "k")])).unwrap();
+        assert_eq!(legacy[0].binding, Binding::Legacy, "`external` is still a hand-written entry");
+
+        let both = apply_environment(&mut Vec::new(), &env(&[("LF_SECRET__SYS__EXTERNAL", "system"), ("LF_SECRET__SYS__MODULE", "system")])).unwrap_err();
+        assert!(both.contains("LF_SECRET__SYS__EXTERNAL and LF_SECRET__SYS__MODULE") && both.contains("keep one"), "{both}");
     }
 }
