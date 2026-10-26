@@ -248,6 +248,14 @@ const fieldValuesValidator = z.intersection(
 
 type FieldValue = z.infer<typeof fieldValuesValidator>;
 
+/** The part of a written row that says whose answers it changed. Lenient: it
+ *  steers what is forgotten, never whether the write succeeded. */
+const fieldValueOwnerValidator = z
+  .object({ entity_id: z.number().nullish(), list_entry_id: z.number().nullish() })
+  .passthrough()
+  .nullish()
+  .catch(null);
+
 const noteValidator = z.object({
   id: z.number(),
   content: z.string().nullish(),
@@ -433,12 +441,33 @@ class AffinityAPIClient {
     return record;
   }
 
-  /** A field-value row names its own id, never its owner — so a write to one
-   *  cannot say which record's values it changed. Every field-value answer for
-   *  this workspace goes; they are cheap to re-read and there are few of them
-   *  in a run that is writing at all. */
+  /** Every field-value answer for this workspace — for a write that cannot say
+   *  which record it touched (a delete answers only `success`), or one that
+   *  takes a whole record with it. */
   private forgetFieldValues(): void {
     forgetMemoisedReadsUnder(`${this.memoScope}field-values/`);
+  }
+
+  /**
+   * The answers a value row is part of, and no others: the record it sits on
+   * (whose query also returns the rows on that record's list entries) and,
+   * when it is list-scoped, its entry. A deal that fills one field on its entry
+   * otherwise re-reads its owners, its founder and every other record the run
+   * has already read — once per write, for the rest of the run.
+   *
+   * The row says which KIND of record `entity_id` is only through its field, so
+   * both kinds go; the wrong one was never read.
+   */
+  private forgetFieldValuesOf(row: { entity_id?: number | null; list_entry_id?: number | null } | null): void {
+    if (row?.entity_id == null) {
+      this.forgetFieldValues();
+      return;
+    }
+    forgetMemoisedReads(
+      this.fieldValuesKey('organization', row.entity_id),
+      this.fieldValuesKey('person', row.entity_id),
+      ...(row.list_entry_id != null ? [this.fieldValuesKey('list-entry', row.list_entry_id)] : []),
+    );
   }
 
   /** A record that did not exist a moment ago is exactly what a search was
@@ -1202,13 +1231,17 @@ class AffinityAPIClient {
    *  the caller's policy, and a caller that never hears about it has no policy
    *  at all — which is what a swallow here silently imposed on everyone. */
   async updateFieldValue({ id, value }: { id: number; value: unknown }) {
-    const result = await this.fetch({
+    // Affinity answers with the row as it now stands, which names the record it
+    // sits on. An answer that does not is no reason to fail a write that
+    // landed — it only means every answer goes.
+    const row = await this.fetch({
       route: `/field-values/${id}`,
       method: 'PUT',
       body: { value },
+      responseValidator: fieldValueOwnerValidator,
     });
-    this.forgetFieldValues();
-    return result;
+    this.forgetFieldValuesOf(row ?? null);
+    return row;
   }
 
   /** Remove a field value outright. Affinity has no "clear this field" verb —
@@ -1251,7 +1284,7 @@ class AffinityAPIClient {
         value: z.any().optional(),
       }),
     });
-    this.forgetFieldValues();
+    this.forgetFieldValuesOf({ entity_id, list_entry_id });
     return result;
   }
 

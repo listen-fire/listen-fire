@@ -32,6 +32,8 @@ interface Workspace {
   lists: Record<string, unknown>[];
   persons: Record<string, Record<string, unknown>>;
   organizations: Record<string, Record<string, unknown>>;
+  /** Field-value rows by id: what a `PUT /field-values/{id}` answers with. */
+  values?: Record<string, Record<string, unknown>>;
 }
 
 function serve(workspace: Workspace): { calls: string[] } {
@@ -96,6 +98,11 @@ function serve(workspace: Workspace): { calls: string[] } {
 
     if (url.pathname === '/field-values' && method === 'GET') return json([]);
     if (url.pathname === '/field-values' && method === 'POST') return json({ id: 7 });
+    const value = url.pathname.match(/^\/field-values\/(\d+)$/);
+    if (value && method === 'PUT') {
+      const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+      return json({ ...workspace.values?.[value[1]], value: body.value });
+    }
 
     return json({});
   }) as unknown as typeof fetch;
@@ -298,6 +305,52 @@ describe('within one run, a record is read once', () => {
     });
 
     expect(countOf(calls, 'GET /field-values')).toBe(2);
+  });
+
+  // A field value names the record it sits on, so writing one makes only THAT
+  // record's answer wrong. Forgetting every record's values made a deal that
+  // filled one field re-read its owners, its founder and its organization.
+  it('a value this run creates forgets only the answers that row belongs to', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.getFieldValues({ organization_id: 3 });
+      await client.getFieldValues({ list_entry_id: 70 });
+      await client.getFieldValues({ person_id: 5 });
+      await client.getFieldValues({ list_entry_id: 71 });
+
+      // A list-scoped value: on entry 70, which stands for organization 3.
+      await client.createFieldValue({ field_id: 2, entity_id: 3, list_entry_id: 70, value: 'Seed' });
+
+      await client.getFieldValues({ organization_id: 3 });
+      await client.getFieldValues({ list_entry_id: 70 });
+      await client.getFieldValues({ person_id: 5 });
+      await client.getFieldValues({ list_entry_id: 71 });
+    });
+
+    expect(countOf(calls, 'GET /field-values?organization_id=3')).toBe(2);
+    expect(countOf(calls, 'GET /field-values?list_entry_id=70')).toBe(2);
+    expect(countOf(calls, 'GET /field-values?person_id=5')).toBe(1);
+    expect(countOf(calls, 'GET /field-values?list_entry_id=71')).toBe(1);
+  });
+
+  it('a value this run updates forgets the answers of the record Affinity says it sits on', async () => {
+    const live = workspace();
+    live.values = { '40': { id: 40, field_id: 1, entity_id: 5, entity_type: 0, list_entry_id: null, value_type: 6 } };
+    const { calls } = serve(live);
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.getFieldValues({ organization_id: 3 });
+      await client.getFieldValues({ person_id: 5 });
+      await client.updateFieldValue({ id: 40, value: 'Climate' });
+      await client.getFieldValues({ organization_id: 3 });
+      await client.getFieldValues({ person_id: 5 });
+    });
+
+    expect(countOf(calls, 'GET /field-values?organization_id=3')).toBe(1);
+    expect(countOf(calls, 'GET /field-values?person_id=5')).toBe(2);
   });
 
   it('finds what this run created, rather than repeating its own not-found', async () => {

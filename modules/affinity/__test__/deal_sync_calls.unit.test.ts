@@ -67,12 +67,12 @@ describe('calls per deal in a warm run', () => {
       seedSyncedDeal(fake, owners, VELTHA, { emptyDealSource: true });
       return VELTHA;
     });
-    expect(counts).toEqual({ orgSearch: 3, personSearch: 1, fieldValueRead: 7, recordRead: 2, schema: 0, write: 1, total: 14 });
+    expect(counts).toEqual({ orgSearch: 3, personSearch: 1, fieldValueRead: 5, recordRead: 2, schema: 0, write: 1, total: 12 });
   });
 
   it('(c) a new deal', async () => {
     const counts = await warmDealCost(() => FRESH);
-    expect(counts).toEqual({ orgSearch: 4, personSearch: 1, fieldValueRead: 8, recordRead: 1, schema: 0, write: 10, total: 24 });
+    expect(counts).toEqual({ orgSearch: 4, personSearch: 1, fieldValueRead: 6, recordRead: 1, schema: 0, write: 10, total: 22 });
   });
 });
 
@@ -98,7 +98,7 @@ describe('calls for a run of deals', () => {
     await inARun(async () => {
       for (const { deal } of plan) await upsertDeal(adapter, dealFor(deal));
     });
-    expect(countCalls(fake.requests)).toEqual({ orgSearch: 20, personSearch: 12, fieldValueRead: 36, recordRead: 12, schema: 4, write: 21, total: 105 });
+    expect(countCalls(fake.requests)).toEqual({ orgSearch: 20, personSearch: 12, fieldValueRead: 28, recordRead: 12, schema: 4, write: 21, total: 97 });
   });
 });
 
