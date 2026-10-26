@@ -126,7 +126,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.0 | everything before minors were counted | 0.12.0 |
 | 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
 | 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
-| 2.3 | nothing: a polled source labels each poll event with its kind, `eventType` ([Polled sources](#polled-sources-and-periodic-tasks)). A manifest cannot show it, so the author states it (`protocolMinor: 3` on the module's definition) | lf 0.12.8 |
+| 2.3 | nothing. A rule for sources and a host behaviour, not a feature a module states: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | lf 0.12.8 |
 
 The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
 
@@ -967,7 +967,7 @@ A source with no webhooks is polled:
   Each event has the `emit` door's shape ([emit](#emit-new-data)).
 - Label each event with its kind, `eventType`, as a pushed event is: one of
   your `subscribableEvents`, or your one kind when you declare none (adapter
-  protocol 2.3). The host routes a polled event by it as it routes a pushed
+  protocol 2.3; it needs nothing of the host, so state no higher minor for it). The host routes a polled event by it as it routes a pushed
   one, so a listen's `events` keeps only the kinds it names.
 - An event with no `eventType` (a module older than 2.3) still reaches the
   listen that polled it, since the poll was made for that listen with its
@@ -1457,7 +1457,7 @@ from `apps/cli`.
 
 ## Changes
 
-- **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). A manifest cannot show it, so a module states it (`protocolMinor: 3`). An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) state 2.3, so a host that speaks only up to 2.2 refuses them by name.
+- **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
 - **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
 - **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; lf 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
 - **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `lf serve` and `lf drain` (without `--until-idle`) refuse a module that does not.

@@ -45,8 +45,9 @@ export const PROTOCOL_MINOR = 3;
 export type ProtocolMinorUse = { method: string } | { methodEndingWith: string };
 
 /** Each minor of version 2 and the feature that a manifest using it lists. A
- *  minor whose feature a manifest cannot show (2.0's; 2.3's, labelled poll
- *  events, which an author states as `protocolMinor`) has no row. */
+ *  minor that is no feature a manifest shows has no row: 2.0, and 2.3 (a rule
+ *  for sources, labelled poll events, and a host behaviour; no module states
+ *  it). */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },

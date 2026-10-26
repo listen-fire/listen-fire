@@ -51,8 +51,6 @@ export const evertraceModule = defineModule({
     },
   ],
   poll: { intervalSeconds: EVERTRACE_POLL_INTERVAL_SECONDS },
-  // Its poll events carry their kind (`eventType`), which a manifest cannot show.
-  protocolMinor: 3,
   create: (ctx) => {
     const client = evertraceClientFrom(ctx);
     return Object.assign(new EvertraceAdapter(client), {

@@ -51,8 +51,6 @@ export const granolaModule = defineModule({
     },
   ],
   poll: { intervalSeconds: GRANOLA_POLL_INTERVAL_SECONDS },
-  // Its poll events carry their kind (`eventType`), which a manifest cannot show.
-  protocolMinor: 3,
   create: (ctx) => {
     const client = granolaClientFrom(ctx);
     return Object.assign(new GranolaAdapter(client), {

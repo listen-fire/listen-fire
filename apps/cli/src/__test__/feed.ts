@@ -32,7 +32,6 @@ module.exports = defineModule({
   credentials: [],
   manifest: { adapterType: 'feed', displayName: 'Feed', supportedTriggers: ['poll'], methods: [], webhookEventTypeId: 'note', subscribableEvents: ['note.added', 'note.removed'] },
   poll: { intervalSeconds: existsSync(at('fast')) ? 1 : 60 },
-  protocolMinor: existsSync(at('unlabelled')) ? 0 : 3,
   create: () => ({
     adapterType: 'feed',
     supportedTriggers: ['poll'],

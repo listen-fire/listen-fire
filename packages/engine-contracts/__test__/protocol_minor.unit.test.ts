@@ -17,7 +17,7 @@ describe('the minor a manifest uses', () => {
 
   it('ends at the minor this release speaks', () => {
     expect(PROTOCOL_MINOR).toBe(3);
-    // 2.3 (labelled poll events) shows in no manifest: the author states it.
+    // 2.3 (labelled poll events) is a rule for sources and a host behaviour: no module states it.
     expect(Math.max(...PROTOCOL_MINORS.map((entry) => entry.minor))).toBeLessThanOrEqual(PROTOCOL_MINOR);
   });
 

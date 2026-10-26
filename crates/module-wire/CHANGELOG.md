@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `PROTOCOL_MINOR` is 3: adapter protocol 2.3, labelled poll events. It shows in no manifest, so `PROTOCOL_MINORS` gains no row; a module states it.
+- `PROTOCOL_MINOR` is 3: adapter protocol 2.3, labelled poll events. It is a rule for sources and a host behaviour, not a feature a module states, so `PROTOCOL_MINORS` gains no row.
 
 ## 0.12.6 - 2026-10-25
 

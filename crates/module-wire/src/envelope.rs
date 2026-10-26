@@ -27,7 +27,7 @@ pub struct ProtocolMinor {
 
 /// Each minor of version 2 whose feature a manifest can show
 /// (`PROTOCOL_MINORS`, test-held equal to it in crates/lf). 2.3, labelled
-/// poll events, shows in none: an author states it.
+/// poll events, is a rule for sources and a host behaviour: no module states it.
 pub const PROTOCOL_MINORS: &[ProtocolMinor] = &[
     ProtocolMinor { minor: 1, feature: "a <slot>.watch method", uses: MinorUse::MethodEndingWith(".watch") },
     ProtocolMinor { minor: 2, feature: "work.enqueueIfAbsent", uses: MinorUse::Method("work.enqueueIfAbsent") },
@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(protocol_minor_of(&listing(&["manifest", "movements.list", "movements.watch"])), 1);
         assert_eq!(protocol_minor_of(&listing(&["store.watch", "work.enqueueIfAbsent"])), 2);
         assert_eq!(protocol_minor_of(&Js::Null), 0);
-        // 2.3 (labelled poll events) shows in no manifest: the author states it.
+        // 2.3 (labelled poll events) is a rule for sources and a host behaviour: no module states it.
         assert!(PROTOCOL_MINORS.iter().map(|e| e.minor).max() <= Some(PROTOCOL_MINOR));
     }
 }
