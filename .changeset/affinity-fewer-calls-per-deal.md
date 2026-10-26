@@ -2,7 +2,7 @@
 "@listen-fire/affinity": patch
 ---
 
-Fewer Affinity calls per synced deal where the module runs inside a run's scope (in process on the platform), with the same matches, writes and change logs. A deal that matches and changes nothing makes 8 calls (was 10); one that fills a field makes 11 (was 15); a new deal makes 25 (was 27). Under `lf`, which serves the module in its own process with no run scope, the count is unchanged (28 for a deal that changes nothing); searches there ask for 50 results instead of 500.
+Fewer Affinity calls per synced deal, with the same matches, writes and change logs. A deal that matches and changes nothing makes 8 calls (was 10 in process, 26 under `lf`); one that fills a field makes 11 (was 15, 29 under `lf`); a new deal makes 25 (was 27, 45 under `lf`). The saving holds under `lf` with the module-kit release that answers a served module inside its run's scope; searches ask for 50 results instead of 500.
 
 - A list entry the matched organization already carries is not read again when an owner is linked onto it.
 - Writing a field value forgets only the cached values of the record it sits on (and its entry), not every record's. Owners, founders and organizations are no longer re-read after another record's write.

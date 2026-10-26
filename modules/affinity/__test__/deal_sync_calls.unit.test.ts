@@ -35,18 +35,19 @@ const company = (n: number) => ({
 });
 
 /**
- * Where the adapter runs decides what a call costs.
+ * Whether the adapter's calls run inside a run scope decides what a call costs.
  *
- * - `platform`: in process, each adapter call inside its run's segment, so a
- *   record or search read once in a run is read once (the run memo).
- * - `lf`: `lf` serves the module in a process of its own, and nothing opens a
- *   run scope around its calls there, so every read goes to Affinity. This is
- *   how Project A runs it. Measured through `lf run` of `Upsert Deal`
- *   (real_engine/): the requests match the `lf` rows here call for call, less
- *   the two `Deal Created` reads the copy run there could not check.
+ * - `run scope`: each adapter call inside its run's scope, so a record or
+ *   search read once in a run is read once (the run memo). In process on the
+ *   platform, and under `lf` since module-kit answers each served call inside
+ *   the run scope its `cacheScopeId` names. Measured through `lf run` of
+ *   `Upsert Deal` (real_engine/): the requests match these rows call for call,
+ *   less the two `Deal Created` reads the copy run there could not check.
+ * - `no run scope`: a host that opens none, as `lf` was before that module-kit
+ *   release, so every read goes to Affinity.
  */
-type Host = 'platform' | 'lf';
-const under = <T>(host: Host, fn: () => Promise<T>) => (host === 'platform' ? inARun(fn) : fn());
+type Host = 'run scope' | 'no run scope';
+const under = <T>(host: Host, fn: () => Promise<T>) => (host === 'run scope' ? inARun(fn) : fn());
 
 /** The calls one deal costs once the run is warm: the workspace's shape
  *  already read, and the owners already met on an earlier deal. */
@@ -104,14 +105,14 @@ const counts = (orgSearch: number, personSearch: number, fieldValueRead: number,
 
 describe.each([
   {
-    host: 'platform' as const,
+    host: 'run scope' as const,
     unchanged: counts(2, 1, 3, 2, 0, 0),
     oneField: counts(2, 1, 5, 2, 0, 1),
     fresh: counts(4, 1, 6, 1, 0, 13),
     run: counts(16, 12, 28, 12, 4, 27),
   },
   {
-    host: 'lf' as const,
+    host: 'no run scope' as const,
     unchanged: counts(3, 3, 10, 12, 0, 0),
     oneField: counts(3, 3, 12, 12, 0, 1),
     fresh: counts(6, 4, 8, 14, 0, 13),
