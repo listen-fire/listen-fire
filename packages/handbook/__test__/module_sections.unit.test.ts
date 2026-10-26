@@ -11,6 +11,7 @@ import { AFFINITY_MANIFEST } from '../../../modules/affinity/manifest';
 import { DEALROOM_MANIFEST } from '../../../modules/dealroom/manifest';
 import { EVERTRACE_MANIFEST } from '../../../modules/evertrace/manifest';
 import { GMAIL_MANIFEST } from '../../../modules/gmail/manifest';
+import { MCP_MANIFEST } from '../../../modules/mcp/manifest';
 import { SLACK_MANIFEST } from '../../../modules/slack/manifest';
 import { TELEGRAM_MANIFEST } from '../../../modules/telegram/manifest';
 import { WHATSAPP_MANIFEST } from '../../../modules/whatsapp/manifest';
@@ -21,6 +22,7 @@ const MODULES: Record<string, AdapterManifest> = {
   dealroom: DEALROOM_MANIFEST,
   evertrace: EVERTRACE_MANIFEST,
   gmail: GMAIL_MANIFEST,
+  mcp: MCP_MANIFEST,
   slack: SLACK_MANIFEST,
   telegram: TELEGRAM_MANIFEST,
   whatsapp: WHATSAPP_MANIFEST,
