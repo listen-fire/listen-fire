@@ -85,11 +85,24 @@ function serve(workspace: Workspace): { calls: string[] } {
       workspace.organizations['99'] = org;
       return json(org);
     }
+    if (url.pathname === '/persons' && method === 'POST') {
+      const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+      const created = { id: 98, ...body };
+      workspace.persons['98'] = created;
+      return json(created);
+    }
     const person = url.pathname.match(/^\/persons\/(\d+)$/);
     if (person) {
       if (method === 'PUT') {
         const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
         workspace.persons[person[1]] = { ...workspace.persons[person[1]], ...body };
+        // An employer is the same fact seen from both sides: the organization
+        // now lists the person.
+        for (const orgId of (body.organization_ids as number[] | undefined) ?? []) {
+          const org = workspace.organizations[String(orgId)];
+          const ids = (org.person_ids as number[] | undefined) ?? [];
+          if (!ids.includes(Number(person[1]))) org.person_ids = [...ids, Number(person[1])];
+        }
       }
       return json(workspace.persons[person[1]]);
     }
@@ -125,8 +138,14 @@ function workspace(): Workspace {
   return {
     fields: [field(1, 'Industry'), field(2, 'Stage', 1, 10)],
     lists: [{ id: 10, name: 'Pipeline', type: 1 }],
-    persons: { '5': { id: 5, first_name: 'Ada', last_name: 'L', emails: ['ada@x.test'], organization_ids: [] } },
-    organizations: { '3': { id: 3, name: 'Acme', domain: 'acme.test' } },
+    persons: {
+      '5': { id: 5, first_name: 'Ada', last_name: 'L', emails: ['ada@x.test'], organization_ids: [] },
+      '6': { id: 6, first_name: 'Bob', last_name: 'M', emails: ['bob@y.test'], organization_ids: [] },
+    },
+    organizations: {
+      '3': { id: 3, name: 'Acme', domain: 'acme.test', person_ids: [] },
+      '4': { id: 4, name: 'Other', domain: 'other.test', person_ids: [] },
+    },
   };
 }
 
@@ -382,6 +401,86 @@ describe('within one run, a record is read once', () => {
     });
 
     expect(countOf(calls, 'GET /organizations?term=Acme')).toBe(1);
+  });
+
+  // A founder linked to the deal's company is a person joining an
+  // organization: the organization now lists them. A read later in the run
+  // must see them there, whether it reads the company by id or finds it by a
+  // search.
+  it('an organization a person joined reads with that person, by id and by search', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.getOrganisationById(3);
+      await client.findManyOrganisations({ search: 'Acme', includeGlobal: true });
+      await client.listOrganisations({ term: 'acme.test' });
+      await client.getOrganisationById(4);
+      await client.listOrganisations({ term: 'Other' });
+
+      await client.updatePerson(5, { organization_ids: [3] });
+
+      expect((await client.getOrganisationById(3)).person_ids).toEqual([5]);
+      expect((await client.findManyOrganisations({ search: 'Acme', includeGlobal: true }))[0].person_ids).toEqual([5]);
+      expect((await client.listOrganisations({ term: 'acme.test' }))[0].person_ids).toEqual([5]);
+      await client.getOrganisationById(4);
+      await client.listOrganisations({ term: 'Other' });
+    });
+
+    expect(countOf(calls, 'GET /organizations/3')).toBe(2);
+    expect(countOf(calls, 'GET /organizations?term=Acme')).toBe(2);
+    expect(countOf(calls, 'GET /organizations?term=acme.test')).toBe(2);
+    expect(countOf(calls, 'GET /organizations/4')).toBe(1);
+    expect(countOf(calls, 'GET /organizations?term=Other')).toBe(1);
+  });
+
+  it('an organization a person was created into reads with that person', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.getOrganisationById(3);
+      await client.createPerson({ firstName: 'Cy', lastName: 'N', orgId: 3 });
+      await client.getOrganisationById(3);
+    });
+
+    expect(countOf(calls, 'GET /organizations/3')).toBe(2);
+  });
+
+  // Who a person works for is not what a search for them matches on (a name,
+  // an address), so joining a company only makes the searches that RETURNED
+  // them wrong. The team's owners, searched on every deal, stay answered.
+  it('a person who only changed employer forgets only the searches that returned them', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.findManyPeople({ search: 'ada@x.test' });
+      await client.findManyPeople({ search: 'bob@y.test' });
+
+      await client.updatePerson(5, { organization_ids: [3] });
+
+      expect((await client.findManyPeople({ search: 'ada@x.test' }))[0].organization_ids).toEqual([3]);
+      await client.findManyPeople({ search: 'bob@y.test' });
+    });
+
+    expect(countOf(calls, 'GET /persons?term=ada%40x.test')).toBe(2);
+    expect(countOf(calls, 'GET /persons?term=bob%40y.test')).toBe(1);
+  });
+
+  it('a person whose address changed, or a person created, forgets every person search', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.findManyPeople({ search: 'bob@y.test' });
+      await client.updatePerson(5, { emails: ['ada@x.test', 'ada@z.test'] });
+      await client.findManyPeople({ search: 'bob@y.test' });
+      await client.createPerson({ firstName: 'Cy', lastName: 'N' });
+      await client.findManyPeople({ search: 'bob@y.test' });
+    });
+
+    expect(countOf(calls, 'GET /persons?term=bob%40y.test')).toBe(3);
   });
 
   it('finds what this run created, rather than repeating its own not-found', async () => {

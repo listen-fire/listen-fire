@@ -307,6 +307,8 @@ const fieldValuesValidator = z.intersection(
 
 type FieldValue = z.infer<typeof fieldValuesValidator>;
 type AffinityOrganisationRecord = z.infer<typeof organisationValidator>;
+type OrganisationRefs = { id: number; person_ids?: number[] | null };
+type PersonRefs = { id: number; organization_ids?: number[] | null };
 type AffinityPersonSearchRecord = z.infer<typeof personValidator>;
 
 /** The part of a written row that says whose answers it changed. Lenient: it
@@ -490,6 +492,48 @@ class AffinityAPIClient {
 
   private searchKey(kind: 'person' | 'organization', page: [term: string, pageSize: number, pageToken: string | null]): string {
     return `${this.memoScope}search/${kind}/${JSON.stringify(page)}`;
+  }
+
+  /**
+   * Which of this run's remembered answers carry which record — `person:5` to
+   * the key of every record read and search page that includes person 5,
+   * either as itself or in an organization's `person_ids`. An employer is one
+   * fact held on both sides (the person's `organization_ids`, the
+   * organization's `person_ids`), so a person joining a company makes wrong
+   * exactly the answers that carry either of them, and nothing else.
+   *
+   * Held in the run's own memo, so it lives and dies with the run.
+   */
+  private answersIndex(): Promise<Map<string, Set<string>>> {
+    return memoisedRead(`${this.memoScope}index/answers`, async () => new Map<string, Set<string>>());
+  }
+
+  private async noteAnswer(key: string, carried: { organizations?: OrganisationRefs[]; persons?: PersonRefs[] }): Promise<void> {
+    const index = await this.answersIndex();
+    const refs = [
+      ...(carried.organizations ?? []).flatMap((org) => [`organization:${org.id}`, ...(org.person_ids ?? []).map((id) => `person:${id}`)]),
+      ...(carried.persons ?? []).flatMap((person) => [`person:${person.id}`, ...(person.organization_ids ?? []).map((id) => `organization:${id}`)]),
+    ];
+    for (const ref of refs) {
+      const keys = index.get(ref) ?? new Set<string>();
+      keys.add(key);
+      index.set(ref, keys);
+    }
+  }
+
+  /** Forget every remembered answer that carries one of these records. */
+  private async forgetAnswersCarrying(refs: string[]): Promise<void> {
+    const index = await this.answersIndex();
+    forgetMemoisedReads(...refs.flatMap((ref) => [...(index.get(ref) ?? [])]));
+  }
+
+  /** File a record we were handed (a write's own answer), and note what it carries. */
+  private async fileRecord(kind: 'organization', record: OrganisationRefs): Promise<void>;
+  private async fileRecord(kind: 'person', record: PersonRefs): Promise<void>;
+  private async fileRecord(kind: 'organization' | 'person', record: OrganisationRefs | PersonRefs): Promise<void> {
+    const key = this.recordKey(kind, record.id);
+    fillMemoisedRead(key, record);
+    await this.noteAnswer(key, kind === 'organization' ? { organizations: [record] } : { persons: [record] });
   }
 
   /** An entity read carries its list memberships inline, and each one IS the
@@ -732,7 +776,8 @@ class AffinityAPIClient {
    * term is the workspace itself, which pages the same way.
    */
   private organisationSearchPage(term: string, pageSize: number, pageToken?: string) {
-    return memoisedRead(this.searchKey('organization', [term, pageSize, pageToken ?? null]), () =>
+    const key = this.searchKey('organization', [term, pageSize, pageToken ?? null]);
+    return memoisedRead(key, () =>
       this.fetch({
         route: '/organizations',
         method: 'GET',
@@ -741,7 +786,10 @@ class AffinityAPIClient {
           organizations: organisationValidator.array(),
           next_page_token: z.string().nullish(),
         }),
-      }).then((page) => ({ records: page.organizations, next: page.next_page_token ?? null })),
+      }).then(async (page) => {
+        await this.noteAnswer(key, { organizations: page.organizations });
+        return { records: page.organizations, next: page.next_page_token ?? null };
+      }),
     );
   }
 
@@ -801,15 +849,18 @@ class AffinityAPIClient {
   }
 
   async getOrganisationById(id: number) {
-    return memoisedRead(this.recordKey('organization', id), async () =>
-      this.withMembershipsFiled(
+    const key = this.recordKey('organization', id);
+    return memoisedRead(key, async () => {
+      const org = this.withMembershipsFiled(
         await this.fetch({
           route: `/organizations/${id}`,
           method: 'GET',
           responseValidator: organisationValidator,
         }),
-      ),
-    );
+      );
+      await this.noteAnswer(key, { organizations: [org] });
+      return org;
+    });
   }
 
   async createOrganisation({ name, domain }: { name: string; domain?: string | null }) {
@@ -827,7 +878,7 @@ class AffinityAPIClient {
     // A company that did not exist a moment ago is precisely what the searches
     // in this run were asked about, and one of them has already answered "no".
     this.forgetSearches('organization');
-    fillMemoisedRead(this.recordKey('organization', org.id), org);
+    await this.fileRecord('organization', org);
 
     // The confirming read, which the line above just made free.
     await this.getOrganisationById(org.id);
@@ -884,7 +935,7 @@ class AffinityAPIClient {
 
     // The response IS the record as it now stands; a domain change also
     // changes what a domain search answers.
-    fillMemoisedRead(this.recordKey('organization', id), org);
+    await this.fileRecord('organization', org);
     this.forgetSearches('organization');
 
     return org;
@@ -894,7 +945,8 @@ class AffinityAPIClient {
    *  organization search is: the matcher's email search and a read narrowed by
    *  that email are one request. */
   private personSearchPage(term: string, pageSize: number, pageToken?: string) {
-    return memoisedRead(this.searchKey('person', [term, pageSize, pageToken ?? null]), () =>
+    const key = this.searchKey('person', [term, pageSize, pageToken ?? null]);
+    return memoisedRead(key, () =>
       this.fetch({
         route: '/persons',
         method: 'GET',
@@ -903,7 +955,10 @@ class AffinityAPIClient {
           persons: personValidator.array(),
           next_page_token: z.string().nullish(),
         }),
-      }).then((page) => ({ records: page.persons, next: page.next_page_token ?? null })),
+      }).then(async (page) => {
+        await this.noteAnswer(key, { persons: page.persons });
+        return { records: page.persons, next: page.next_page_token ?? null };
+      }),
     );
   }
 
@@ -920,15 +975,18 @@ class AffinityAPIClient {
   }
 
   async getPersonById(id: number) {
-    return memoisedRead(this.recordKey('person', id), async () =>
-      this.withMembershipsFiled(
+    const key = this.recordKey('person', id);
+    return memoisedRead(key, async () => {
+      const person = this.withMembershipsFiled(
         await this.fetch({
           route: `/persons/${id}`,
           method: 'GET',
           responseValidator: personValidator,
         }),
-      ),
-    );
+      );
+      await this.noteAnswer(key, { persons: [person] });
+      return person;
+    });
   }
 
   async createPerson({
@@ -955,8 +1013,12 @@ class AffinityAPIClient {
       payloadValidator: personPayloadValidator,
     });
 
+    // Nobody knows which terms a new person matches but Affinity, so every
+    // person search goes. A person created INTO a company also changes that
+    // company's people.
     this.forgetSearches('person');
-    fillMemoisedRead(this.recordKey('person', person.id), person);
+    if (orgId) await this.forgetAnswersCarrying([`organization:${orgId}`]);
+    await this.fileRecord('person', person);
 
     // The confirming read, which the line above just made free.
     await this.getPersonById(person.id);
@@ -972,10 +1034,18 @@ class AffinityAPIClient {
       responseValidator: personValidator,
       payloadValidator: personUpdatePayloadValidator,
     });
-    // The response IS the record as it now stands. An address or a name change
-    // also changes what a person search answers.
-    fillMemoisedRead(this.recordKey('person', id), person);
-    this.forgetSearches('person');
+    // Every answer that carries this person, or a company they now work for,
+    // is wrong: the person's own record and searches that returned them, and
+    // each organization's record and searches whose `person_ids` lists them or
+    // should. Only an address or a name changes WHICH searches find a person,
+    // so only then does every person search go.
+    await this.forgetAnswersCarrying([
+      `person:${id}`,
+      ...(payload.organization_ids ?? []).map((orgId) => `organization:${orgId}`),
+    ]);
+    if (Object.keys(payload).some((field) => field !== 'organization_ids')) this.forgetSearches('person');
+    // The response IS the record as it now stands.
+    await this.fileRecord('person', person);
     return person;
   }
 
