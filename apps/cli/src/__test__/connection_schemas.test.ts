@@ -1,7 +1,8 @@
 // Each connection of one module is typed by its own describe: two connections
 // of a module whose schema depends on the credential (describing_module) each
 // check against their own type, a field only the other has is refused, and a
-// run sends each connection its own credential.
+// run sends each connection its own credential. A credential no file imports
+// is not described.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,6 +21,9 @@ function notesProject(body: string): string {
   const secrets = parse(readFileSync(secretsPath, 'utf8')) as Record<string, unknown>;
   secrets.alpha_notes = { module: 'notes', credential: 'workspace', workspace: 'alpha' };
   secrets.beta_notes = { module: 'notes', credential: 'workspace', workspace: 'beta' };
+  // Bound to the module but imported by no file: never described, so the
+  // workspace it names, which the module refuses, fails nothing.
+  secrets.gone_notes = { module: 'notes', credential: 'workspace', workspace: 'gone' };
   writeFileSync(secretsPath, stringify(secrets), { mode: 0o600 });
   rmSync(join(dir, 'movements/companies.mvt'));
   writeFileSync(

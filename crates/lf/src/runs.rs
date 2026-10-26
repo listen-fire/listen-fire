@@ -31,7 +31,7 @@ use crate::run_host::{
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
-use crate::secrets::{Secrets, missing_credentials};
+use crate::secrets::{Secrets, imported_credentials, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
@@ -315,7 +315,16 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let running: Vec<Rc<RunningExternal>> = running?.into_iter().map(Rc::new).collect();
     started?;
     let _slot_holds = slot_processes.iter().map(|process| process.hold(role.keep())).collect();
-    let described = join_all(running.iter().filter(|r| !r.is_plugin()).map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials).await?)) }).collect()).await;
+    let imported = imported_credentials(&parsed);
+    let imported = &imported;
+    let described = join_all(
+        running
+            .iter()
+            .filter(|r| !r.is_plugin())
+            .map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials, imported, ConnectionSchemas::new()).await?)) })
+            .collect(),
+    )
+    .await;
     let schemas = described.into_iter().collect::<Result<IndexMap<String, ConnectionSchemas>, String>>()?;
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
@@ -1498,13 +1507,30 @@ impl Session {
             set.schemas.iter().filter(|(name, _)| is_needed(name)).map(|(name, schema)| (name.clone(), schema.clone())).collect(),
         );
         let dropped = set.running.iter().filter(|r| !is_needed(&r.external.manifest.name)).map(|r| format!("movements: dropped {}, which no file imports now", r.external.manifest.name));
+        let imported = imported_credentials(&parsed);
+        // A connection the files newly make, of a module already running, is
+        // described now; the ones described before are kept.
+        for r in running.iter().filter(|r| !r.is_plugin()) {
+            let name = &r.external.manifest.name;
+            let known = schemas.shift_remove(name).unwrap_or_default();
+            match describe_external(r, credentials, &imported, known).await {
+                Ok(described) => {
+                    schemas.insert(name.clone(), described);
+                }
+                Err(message) => {
+                    self.refused.replace(Some(pairs));
+                    let _ = writeln!(log, "{KEPT} {name}, which they import, did not describe: {message}");
+                    return Ok(());
+                }
+            }
+        }
         let mut started = Vec::new();
         // What this refresh starts is held until the set takes it: a set
         // not taken lets go of it, and so stops it.
         let mut starting = Vec::new();
         for external in new_externals {
             let name = &external.manifest.name;
-            match self.start_external(external).await {
+            match self.start_external(external, &imported).await {
                 Ok((one, schema)) => {
                     starting.extend(hold_all(std::slice::from_ref(&one), Keep::Idle));
                     running.push(one);
@@ -1562,13 +1588,13 @@ impl Session {
     }
 
     /// One external a refreshed set newly imports, started and described.
-    async fn start_external(&self, external: &External) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
+    async fn start_external(&self, external: &External, imported: &BTreeSet<String>) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
         let secrets = self.secrets();
         let credentials = secrets.credentials();
         let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;
         let schema = match one.is_plugin() {
             true => None,
-            false => Some(describe_external(&one, credentials).await?),
+            false => Some(describe_external(&one, credentials, imported, ConnectionSchemas::new()).await?),
         };
         Ok((Rc::new(one), schema))
     }

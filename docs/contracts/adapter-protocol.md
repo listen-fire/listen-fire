@@ -315,10 +315,11 @@ reads every declaration from it, the listen declarations included.
   removes a record of this type. Absent means no. A `delete` of a type that does not say `"deletable": true`
   is refused before the automation is saved (`MOV_DELETE_NOT_DECLARED`);
   automations pinned to an earlier version are unaffected.
-- `listEntryPoints` and `describe` are asked once per connection, carrying
-  that connection's credential: two connections of your module (two
-  workspaces, two servers) may answer different types, and each is checked
-  against its own. A check costs one round of them per connection.
+- `listEntryPoints` and `describe` are asked once per connection the
+  automations make, carrying that connection's credential: two connections
+  of your module (two workspaces, two servers) may answer different types,
+  and each is checked against its own. A check costs one round of them per
+  connection.
 - `edgesFrom` (optional) replaces `describe` for nested systems: `{ position, cursor? }`
   → `{ descriptor, targetPositions?, nextCursor? }` or `null`. The adapter
   handbook's schema chapter covers it.

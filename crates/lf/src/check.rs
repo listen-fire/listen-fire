@@ -3,6 +3,7 @@
 //! `check_program` export runs), against the catalog the externals answer.
 //! Its output: one line per diagnostic, then a count; exit 1 when any is an error.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -20,7 +21,7 @@ use crate::json::Js;
 use crate::project::Project;
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
-use crate::secrets::{Credential, Credentials, MissingCredential, Secrets, missing_credentials};
+use crate::secrets::{Credential, Credentials, MissingCredential, Secrets, imported_credentials, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
 /// The one tenant a local project is (`LOCAL_TENANT`).
@@ -125,9 +126,10 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     // read live, so its module runs for the check.
     let externals = needed_externals(scan_externals(project)?, &parsed, |_| false);
     let running: Vec<Rc<RunningExternal>> = start_externals(project, &externals, credentials, LOCAL_TENANT).await?.into_iter().map(Rc::new).collect();
+    let imported = imported_credentials(&parsed);
     let mut schemas = IndexMap::new();
     for r in running.iter().filter(|r| !r.is_plugin()) {
-        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials).await?);
+        schemas.insert(r.external.manifest.name.clone(), describe_external(r, credentials, &imported, ConnectionSchemas::new()).await?);
     }
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(project)?;
@@ -135,17 +137,22 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     Ok(Opened::Ready(Checking { files, catalog, _running: running }))
 }
 
-/// Every connection's schema (crate::catalog::connections_of), each described
-/// as that connection, as the hosted product describes each: one describe per
-/// credential bound to the external, so a check costs one per connection.
-pub async fn describe_external(running: &RunningExternal, credentials: &Credentials) -> Result<ConnectionSchemas, String> {
+/// Each connection's schema (crate::catalog::connections_of) the files can
+/// make, described as that connection, as the hosted product describes each:
+/// the credential-free instance when the external works without one, and one
+/// describe per credential bound to it that the files import (one bound but
+/// never imported is never asked, so a server it names that is down fails no
+/// check). `known` is kept: only a connection it lacks is described.
+pub async fn describe_external(running: &RunningExternal, credentials: &Credentials, imported: &BTreeSet<String>, known: ConnectionSchemas) -> Result<ConnectionSchemas, String> {
     let connections = connections_of(running, credentials);
-    let mut schemas = ConnectionSchemas::new();
-    if !connections.credential_required {
+    let mut schemas = known;
+    if !connections.credential_required && !schemas.contains_key("") {
         schemas.insert(String::new(), describe_as(running, credentials, None).await?);
     }
-    for credential in connections.credentials {
-        schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential)).await?);
+    for credential in connections.credentials.into_iter().filter(|c| imported.contains(&c.name)) {
+        if !schemas.contains_key(&credential.name) {
+            schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential)).await?);
+        }
     }
     Ok(schemas)
 }

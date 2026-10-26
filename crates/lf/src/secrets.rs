@@ -331,6 +331,22 @@ pub struct MissingCredential {
     pub message: String,
 }
 
+/// The credentials the files import (`import { … } from credentials`): the
+/// connections a check or a session describes.
+pub fn imported_credentials(files: &[Rc<Parsed>]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for file in files {
+        let Ok(program) = &file.program else { continue };
+        for statement in &program.statements {
+            let Statement::Import(import) = statement else { continue };
+            if matches!(&import.source, ImportSource::Builtin { namespace } if namespace == "credentials") {
+                names.extend(import.names.iter().map(|n| n.name.clone()));
+            }
+        }
+    }
+    names
+}
+
 /// Every credential the project's programs import, that the secrets do not hold.
 pub fn missing_credentials(files: &[Rc<Parsed>], secrets: &Secrets) -> Vec<MissingCredential> {
     let credentials = secrets.credentials();

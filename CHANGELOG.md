@@ -20,7 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
-- `lf` types each connection of a module by its own schema: it describes the module once per credential bound to it (`lf check` costs one describe per connection), as the hosted product does. Before, every connection was typed by the first credential's schema, so two workspaces (or two servers) of one module shared one set of types, and a field only one of them has could pass `lf check` on the other.
+- `lf` types each connection of a module by its own schema: it describes the module once per credential the movement files import (`lf check` costs one describe per connection), as the hosted product does. A credential no file imports is not described, so a server it names that is down fails no check. Before, every connection was typed by the first credential's schema, so two workspaces (or two servers) of one module shared one set of types, and a field only one of them has could pass `lf check` on the other.
+- A new bundled module, `@lf/mcp`, connects any remote MCP server over streamable HTTP: each connection names its server and signs in with a token or OAuth, and its tools become types that `lf check` checks (a tool that changes things is written, a read-only tool is read with its arguments pinned by the `WHERE`). See `modules/mcp/README.md`.
 
 ## [0.12.8] - 2026-10-26
 
