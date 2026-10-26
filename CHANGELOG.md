@@ -20,6 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- A hop whose WHERE pins a list reads that list's own columns under `lf`: `` org-[le:`List Entries` WHERE le.`listName` == "Master Deals List"]-> { return le.`Deal Created` } `` checks and runs, where `lf` refused `Deal Created` (it read only what every list has). The member a literal picks is the one the module's write already names for that value, so no module changes. The list's columns read in the body and in the WHERE's other conjuncts, in either order, and an entry of another list is dropped before any of its fields is read. A literal no list has stays the `listName` enum's refusal; a hop with no literal, or a host's own narrowing (the hosted platform's), works as before.
+
 ## [0.12.6] - 2026-10-25
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. It is the last release in which every package moves together. From now on modules release on their own versions: a module's contract with `lf` is the adapter protocol minor its manifest states, and its imports of the core are wide peers (`>=0.12.0 <1.0.0`). `lf --version` lists the modules bundled beside it. **For slot module authors:** lf now reads a slot module's manifest before anything else it asks, so a slot module must answer `manifest` first (one served by the module kit or by `lf`'s own slot server already does).
