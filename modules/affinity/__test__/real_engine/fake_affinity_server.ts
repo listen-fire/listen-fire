@@ -4,7 +4,9 @@
 //   node --require tsx/cjs fake_affinity_server.ts <plan.json> <requests.log>
 //
 // `plan.json` seeds the workspace: { owners: [email…], deals: [{ name, host,
-// founders: [{ first, last, linkedin }], seed: "synced" | "empty-field" | "new" }] }.
+// founders: [{ first, last, linkedin }], seed: "synced" | "empty-field" | "new",
+// portfolio?: { dealCreated, ownership } }], portfolio?: true }: with `portfolio`
+// the workspace has a second list, and a deal naming one sits on it too.
 // Every request is appended to `requests.log`, one `METHOD /path?query` a line.
 // It prints `listening on <port>` once it is up.
 
@@ -12,7 +14,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { FakeAffinity, seedSyncedDeal, seedWorkspace } from '../deal_sync_fixture';
+import { FakeAffinity, seedPortfolioEntry, seedSyncedDeal, seedWorkspace } from '../deal_sync_fixture';
 
 interface PlanFounder {
   first: string;
@@ -21,17 +23,25 @@ interface PlanFounder {
 }
 interface Plan {
   owners: string[];
-  deals: Array<{ name: string; host: string; founders: PlanFounder[]; seed: 'synced' | 'empty-field' | 'new' }>;
+  deals: Array<{
+    name: string;
+    host: string;
+    founders: PlanFounder[];
+    seed: 'synced' | 'empty-field' | 'new';
+    portfolio?: { dealCreated: string; ownership: string };
+  }>;
+  portfolio?: boolean;
 }
 
 const [planFile, logFile] = process.argv.slice(2);
 const plan = JSON.parse(readFileSync(planFile, 'utf8')) as Plan;
 
-const fake = new FakeAffinity();
+const fake = new FakeAffinity({ portfolio: plan.portfolio });
 const { owners } = seedWorkspace(fake, plan.owners);
 for (const deal of plan.deals) {
   if (deal.seed === 'new') continue;
-  seedSyncedDeal(fake, owners, { ...deal, founder: deal.founders[0] }, { emptyDealSource: deal.seed === 'empty-field' });
+  const seeded = seedSyncedDeal(fake, owners, { ...deal, founder: deal.founders[0] }, { emptyDealSource: deal.seed === 'empty-field' });
+  if (deal.portfolio) seedPortfolioEntry(fake, seeded, deal.portfolio);
 }
 fake.install();
 const answer = global.fetch;

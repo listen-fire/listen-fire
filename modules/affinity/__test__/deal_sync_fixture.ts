@@ -25,6 +25,9 @@ import { AffinityAPIClient } from '../api_client';
 export const LIST_ID = 10;
 export const LIST_NAME = 'Master Deals List';
 const ENTRY_TYPE = `List Entry — ${LIST_NAME}`;
+/** A second organization list, served only to a fake built with it: its own
+ *  column, which no Master Deals entry has. */
+export const PORTFOLIO_LIST = { id: 11, name: 'Portfolio' } as const;
 
 const FIELD = {
   founders: 300,
@@ -37,6 +40,7 @@ const FIELD = {
   diverse: 316,
   sourcing: 317,
   linkedin: 320,
+  ownership: 330,
 } as const;
 
 /** What a synced entry already holds for the fields `Upsert Deal` fills. */
@@ -78,6 +82,7 @@ const FIELDS = [
   field(FIELD.sourcing, `[${LIST_NAME}] Sourcing/Intro IM`, 1, 6, { listId: LIST_ID }),
   field(FIELD.linkedin, 'LinkedIn URL', 0, 6),
 ];
+const PORTFOLIO_FIELDS = [field(FIELD.ownership, `[${PORTFOLIO_LIST.name}] Ownership %`, 1, 6, { listId: PORTFOLIO_LIST.id })];
 
 interface Org {
   id: number;
@@ -119,6 +124,13 @@ export class FakeAffinity {
   /** Every request on the wire, `METHOD /path?query`. */
   requests: string[] = [];
   private nextId = 5000;
+  private readonly lists: { id: number; name: string; type: number }[];
+  private readonly fields: ReturnType<typeof field>[];
+
+  constructor(options: { portfolio?: boolean } = {}) {
+    this.lists = [{ id: LIST_ID, name: LIST_NAME, type: 1 }, ...(options.portfolio ? [{ ...PORTFOLIO_LIST, type: 1 }] : [])];
+    this.fields = [...FIELDS, ...(options.portfolio ? PORTFOLIO_FIELDS : [])];
+  }
 
   /** How many search results Affinity puts on a page when the request names
    *  no `page_size` — its documented default and cap. */
@@ -148,8 +160,8 @@ export class FakeAffinity {
     return person;
   }
 
-  entry(orgId: number): Entry {
-    const entry: Entry = { id: this.id(), list_id: LIST_ID, entity_id: orgId, created_at: '2026-01-05T00:00:00.000Z' };
+  entry(orgId: number, listId: number = LIST_ID): Entry {
+    const entry: Entry = { id: this.id(), list_id: listId, entity_id: orgId, created_at: '2026-01-05T00:00:00.000Z' };
     this.entries.set(entry.id, entry);
     return entry;
   }
@@ -180,7 +192,7 @@ export class FakeAffinity {
   }
 
   private rowBody(row: ValueRow) {
-    const fieldDef = FIELDS.find((f) => f.id === row.field_id);
+    const fieldDef = this.fields.find((f) => f.id === row.field_id);
     return { ...row, value_type: fieldDef?.value_type ?? 6 };
   }
 
@@ -214,10 +226,13 @@ export class FakeAffinity {
       }
       if (path === '/fields') {
         const entityType = url.searchParams.get('entity_type');
-        return json(FIELDS.filter((f) => entityType === null || String(f.entity_type) === entityType));
+        return json(this.fields.filter((f) => entityType === null || String(f.entity_type) === entityType));
       }
-      if (path === '/lists') return json([{ id: LIST_ID, name: LIST_NAME, type: 1 }]);
-      if ((m = path.match(/^\/lists\/(\d+)$/))) return json({ id: Number(m[1]), name: LIST_NAME, type: 1 });
+      if (path === '/lists') return json(this.lists);
+      if ((m = path.match(/^\/lists\/(\d+)$/))) {
+        const list = this.lists.find((l) => l.id === Number(m![1]));
+        return json(list ?? { id: Number(m[1]), name: LIST_NAME, type: 1 });
+      }
 
       if (path === '/organizations' && method === 'GET') {
         const term = (url.searchParams.get('term') ?? '').toLowerCase();
@@ -265,7 +280,7 @@ export class FakeAffinity {
       }
 
       if ((m = path.match(/^\/lists\/(\d+)\/list-entries$/)) && method === 'POST') {
-        const entry = this.entry(Number(body.entity_id));
+        const entry = this.entry(Number(body.entity_id), Number(m[1]));
         return json(entry);
       }
       if ((m = path.match(/^\/lists\/(\d+)\/list-entries\/(\d+)$/))) {
@@ -290,7 +305,7 @@ export class FakeAffinity {
         return json(rows.map((r) => this.rowBody(r)));
       }
       if (path === '/field-values' && method === 'POST') {
-        const fieldDef = FIELDS.find((f) => f.id === body.field_id);
+        const fieldDef = this.fields.find((f) => f.id === body.field_id);
         const row = this.value({
           fieldId: Number(body.field_id),
           entityId: Number(body.entity_id),
@@ -606,6 +621,20 @@ export function seedSyncedDeal(
     fake.value({ fieldId: FIELD.owners, entityId: org.id, entityType: 1, listEntryId: entry.id, value: owner.id });
   }
   return { org, founder, entry };
+}
+
+/** A synced deal's organization on the Portfolio list too (a fake built with
+ *  it), and its Master Deals entry dated: two entries of two lists, each with a
+ *  column the other has not. */
+export function seedPortfolioEntry(
+  fake: FakeAffinity,
+  seeded: { org: Org; entry: Entry },
+  input: { dealCreated: string; ownership: string },
+) {
+  fake.value({ fieldId: FIELD.dealCreated, entityId: seeded.org.id, entityType: 1, listEntryId: seeded.entry.id, value: input.dealCreated });
+  const entry = fake.entry(seeded.org.id, PORTFOLIO_LIST.id);
+  fake.value({ fieldId: FIELD.ownership, entityId: seeded.org.id, entityType: 1, listEntryId: entry.id, value: input.ownership });
+  return entry;
 }
 
 export function dealFor(input: { name: string; host: string; founder: { first: string; last: string; linkedin: string } }): Deal {
