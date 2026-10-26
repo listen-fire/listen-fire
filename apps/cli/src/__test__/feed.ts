@@ -11,7 +11,7 @@ export interface Note {
   id: string;
   title: string;
   at: number;
-  /** The note's `eventType`, when the feed sets one. */
+  /** The note's kind, its `eventType`: `note.added` unless it says. */
   type?: string;
 }
 
@@ -19,7 +19,8 @@ export interface Note {
  *  the checkpoint each poll was handed, `listeners.log` the listener each poll
  *  named, and `replay` makes it forget the
  *  checkpoint (an overlapping poll's duplicates), `fast` polls it every
- *  second rather than every minute. Each poll takes 300ms. */
+ *  second rather than every minute, `unlabelled` leaves its events' kind
+ *  unset (a module older than adapter protocol 2.3). Each poll takes 300ms. */
 const FEED_MODULE = `const { readFileSync, appendFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { defineModule } = require(${JSON.stringify(join(MODULE_KIT, 'define.ts'))});
@@ -31,6 +32,7 @@ module.exports = defineModule({
   credentials: [],
   manifest: { adapterType: 'feed', displayName: 'Feed', supportedTriggers: ['poll'], methods: [], webhookEventTypeId: 'note', subscribableEvents: ['note.added', 'note.removed'] },
   poll: { intervalSeconds: existsSync(at('fast')) ? 1 : 60 },
+  protocolMinor: existsSync(at('unlabelled')) ? 0 : 3,
   create: () => ({
     adapterType: 'feed',
     supportedTriggers: ['poll'],
@@ -50,7 +52,7 @@ module.exports = defineModule({
       const since = existsSync(at('replay')) || typeof checkpoint !== 'number' ? 0 : checkpoint;
       const notes = JSON.parse(readFileSync(at('feed.json'), 'utf8')).filter((n) => n.at > since);
       return {
-        events: notes.map((n) => ({ payload: n, externalId: n.id, idempotencyKey: n.id, ...(n.type ? { eventType: n.type } : {}) })),
+        events: notes.map((n) => ({ payload: n, externalId: n.id, idempotencyKey: n.id, ...(existsSync(at('unlabelled')) ? {} : { eventType: n.type ?? 'note.added' }) })),
         checkpoint: notes.reduce((high, n) => Math.max(high, n.at), since),
       };
     },

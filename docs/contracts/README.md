@@ -7,7 +7,7 @@ The movement core speaks seven contracts. Six are written down here with an inte
 | catalog-snapshot | [catalog-snapshot.md](catalog-snapshot.md) | 1 | 1 | none | `contractVersion` on the snapshot |
 | park-state | [park-state.md](park-state.md) | 2 | 1, 2 | none | `version` on the state |
 | host-families | [host-families.md](host-families.md) | 1 | 1 | none | `hostFamiliesVersion` on `segment.open` |
-| adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 (minors 0–2) | none | `protocolVersion` on every request and the manifest |
+| adapter-protocol | [adapter-protocol.md](adapter-protocol.md) | 2 | 2 (minors 0–3) | none | `protocolVersion` on every request and the manifest |
 | language-versions | [language-versions.md](language-versions.md) | the release | the release's compatibility key (0.12) | none | `languageVersion` beside every program |
 | system-caller | [system-caller.md](system-caller.md) | 1 | 1 | none | none: an in-process interface |
 | story-analysis | [story-analysis.md](story-analysis.md) | 1 | 1 | none | `storyAnalysisVersion` on the analysis |

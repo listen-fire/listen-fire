@@ -617,21 +617,21 @@ describe('fetchRemoteManifest refuses an older server', () => {
 
   it('refuses a newer major or a newer minor, naming what each side speaks', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.2`;
+    const speaks = `this @listen-fire/engine (${LANGUAGE_VERSION}) speaks 2.0–2.3`;
     postRpcMock.mockResolvedValueOnce({ ...v2, protocolVersion: 3 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
       `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 3; ${speaks}. Upgrade @listen-fire/engine.`,
     );
-    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 3 });
+    postRpcMock.mockResolvedValueOnce({ ...v2, protocolMinor: 4 });
     await expect(fetchRemoteManifest(config, 's3cr3t')).rejects.toThrow(
-      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.3; ${speaks}. ` +
-        "Upgrade @listen-fire/engine to a release that speaks 2.3 (the protocol's Changes list names it), or use a version of it that speaks 2.2 or lower.",
+      `Remote adapter "remote-email" at ${config.baseUrl} refused: it speaks adapter protocol 2.4; ${speaks}. ` +
+        "Upgrade @listen-fire/engine to a release that speaks 2.4 (the protocol's Changes list names it), or use a version of it that speaks 2.3 or lower.",
     );
   });
 
   it('reads an unstated minor, and every minor up to its own, as before', async () => {
     const v2 = { protocolVersion: 2, adapterType: 'remote-email', supportedTriggers: [], runtimeCapabilities, methods: [] };
-    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }]) {
+    for (const stated of [{}, { protocolMinor: 0 }, { protocolMinor: 2 }, { protocolMinor: 3 }]) {
       postRpcMock.mockResolvedValueOnce({ ...v2, ...stated });
       await expect(fetchRemoteManifest(config, 's3cr3t')).resolves.toMatchObject({ adapterType: 'remote-email' });
     }

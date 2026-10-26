@@ -646,6 +646,9 @@ impl Session {
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
+            if event.get("eventType").and_then(Js::as_str).is_none() {
+                note_unlabelled_poll_event(&listen.adapter);
+            }
             let one = self.fire_to(set, &listen.adapter, event, Arrival::Polled, false, None, |l| std::ptr::eq(l, listen)).await?;
             fired.outcomes.extend(one.outcomes);
             fired.redelivered.extend(one.redelivered);
@@ -1838,6 +1841,17 @@ pub fn read_event_file(path: &std::path::Path) -> Result<(String, Js), String> {
 /// delivery is kept (`lf deliveries` lists it) and ran nothing.
 fn no_listen_line(delivery_id: &str, external: &str) -> String {
     format!("delivery {delivery_id}: no listen takes its {external} event; it is kept and ran nothing")
+}
+
+/// A poll event with no `eventType` (a module older than adapter protocol
+/// 2.3) still reaches the listen that polled it; lf says so once per module
+/// per process, so an unlabelled source is never silent.
+fn note_unlabelled_poll_event(module: &str) {
+    static NOTED: std::sync::LazyLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::LazyLock::new(Default::default);
+    let first = NOTED.lock().map(|mut noted| noted.insert(module.to_string())).unwrap_or(false);
+    if first {
+        eprintln!("{module}: a polled event carries no eventType; it was delivered to the listen that polled it — label poll events (adapter protocol 2.3)");
+    }
 }
 
 /// `poll`'s params (adapter protocol 2): the listen's options, the checkpoint

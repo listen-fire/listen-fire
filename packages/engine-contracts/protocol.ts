@@ -37,7 +37,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 2;
+export const PROTOCOL_MINOR = 3;
 
 /** What a manifest shows of a feature: a method it lists, by name or by its
  *  ending (`<slot>.watch`). Data, so the Rust twin
@@ -45,7 +45,8 @@ export const PROTOCOL_MINOR = 2;
 export type ProtocolMinorUse = { method: string } | { methodEndingWith: string };
 
 /** Each minor of version 2 and the feature that a manifest using it lists. A
- *  minor whose feature a manifest cannot show (2.0's) has no row. */
+ *  minor whose feature a manifest cannot show (2.0's; 2.3's, labelled poll
+ *  events, which an author states as `protocolMinor`) has no row. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },

@@ -145,10 +145,11 @@ pub enum Arrival {
 }
 
 /// `eventMatchesTriggerScope`: the listen's chosen events, and an
-/// Airtable-style table scope. A polled event may leave `eventType` unset
-/// (the adapter protocol's poll): the poll was handed the listen's config, so
-/// its events are already the chosen ones, and only one that names its type
-/// is narrowed.
+/// Airtable-style table scope. A source labels each event with its kind
+/// (`eventType`), pushed or polled, and the chosen events narrow by it. A
+/// polled event with no label (a module older than adapter protocol 2.3)
+/// still reaches its listen: the poll was made for that listen with its
+/// config (the caller says so, crate::runs).
 pub fn event_matches_trigger_scope(event: &Js, config: &Obj, arrival: Arrival) -> bool {
     let events = event_config_list(config.get("events"));
     if !events.is_empty() {

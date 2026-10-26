@@ -1,7 +1,7 @@
 # The adapter protocol
 
 Version: 2
-Minor: 2
+Minor: 3
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -113,7 +113,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - The minor is computed, not the kit's latest: the highest minor among the features your manifest lists ([Minors of version 2](#minors-of-version-2)). The reference kits stamp it. An author may raise it for a host feature the manifest cannot show (`protocolMinor` on the module's definition), never lower it.
   - So rebuilding a module with a newer kit never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.2. They refuse a manifest that states another major (newer or older), or a minor above 2. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.3. They refuse a manifest that states another major (newer or older), or a minor above 3. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
 - **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A feature a module must have is checked by name where it is needed, and the refusal names its minor: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
@@ -126,6 +126,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.0 | everything before minors were counted | 0.12.0 |
 | 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
 | 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
+| 2.3 | nothing: a polled source labels each poll event with its kind, `eventType` ([Polled sources](#polled-sources-and-periodic-tasks)). A manifest cannot show it, so the author states it (`protocolMinor: 3` on the module's definition) | lf 0.12.8 |
 
 The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
 
@@ -201,9 +202,8 @@ The manifest file registers your server with a team:
 - What a listen on your adapter may say, also optional:
   - `subscribableEvents`: the values of a listen's `events: [...]`
     (`listen to crm { events: ["company.created"] } fire welcome`). An event
-    is routed to that listen only when its `eventType` is one of them. A
-    polled event may leave `eventType` unset: its poll was handed the
-    listen's `events`, so it is not narrowed again.
+    is routed to that listen only when its `eventType` is one of them,
+    pushed or polled.
   - `defaultSubscribedEvents`: what a listen with no `events` receives
     (absent means every subscribable event).
   - `listenConfig`: further keys, as `[{ key, required?, format? }]`, where
@@ -965,8 +965,13 @@ A source with no webhooks is polled:
   returned, absent the first time. `movementId` names the listener, where the
   host knows it: `lf` sends the listen's pipeline, `listen:<file>:<movement>`.
   Each event has the `emit` door's shape ([emit](#emit-new-data)).
-- A polled event may leave `eventType` unset. The listen's `events` narrows
-  only an event that sets one: the poll already chose from them.
+- Label each event with its kind, `eventType`, as a pushed event is: one of
+  your `subscribableEvents`, or your one kind when you declare none (adapter
+  protocol 2.3). The host routes a polled event by it as it routes a pushed
+  one, so a listen's `events` keeps only the kinds it names.
+- An event with no `eventType` (a module older than 2.3) still reaches the
+  listen that polled it, since the poll was made for that listen with its
+  config. `lf` says so once per module per process.
 - Return only what is new since the checkpoint. A backfill is not a poll.
 
 Housekeeping on a schedule, per install (renewing a webhook the provider
@@ -1452,6 +1457,8 @@ from `apps/cli`.
 
 ## Changes
 
+- **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). A manifest cannot show it, so a module states it (`protocolMinor: 3`). An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) state 2.3, so a host that speaks only up to 2.2 refuses them by name.
+- **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.
 - **Adapter protocol 2.N** (within version 2, no bump; 2026-10-25; lf 0.12.6). The manifest may state `protocolMinor`, the minor of version 2 it uses, computed by the kits from the features it lists ([Versioning](#versioning)). `lf` and the engine speak 2.0 to 2.2 and refuse a module outside that range by name, a core module included. The rule from here on: an addition a manifest can show bumps the minor. An unstated minor is 2.0, so every module published before is unchanged; an older host ignores the field.
 - **`<slot>.watch`** (within version 2, no bump; 2026-10-23; additive for adapters). A held, bounded request that answers a cursor and the events after it ([Watching for changes](#watching-for-changes-slotwatch)). Adapters and other slots are unchanged. A movements module must answer `movements.watch`: `lf serve` and `lf drain` (without `--until-idle`) refuse a module that does not.
 - **Delivery ids** (within version 2, no bump; 2026-10-22; additive). `inbound.deliveryId: { header }` in a declared scheme, `deliveryId` in `checkInbound`'s `accepted` answer and in `emit`'s body name the provider's id for a delivery, and the host keeps a repeat of it out. An older server declares and sends none and is unchanged; an older host ignores the field. See [Declared inbound signatures](#declared-inbound-signatures) and [emit](#emit-new-data).

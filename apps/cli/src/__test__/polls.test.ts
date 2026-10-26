@@ -129,15 +129,18 @@ test('a poll names its listener by the listen\'s pipeline, file and movement', (
   assert.deepEqual(listeners(dir), ['listen:notes:seen']);
 });
 
-test('a polled listen\'s `events` keeps the events the poll returns with no eventType', () => {
+test('an unlabelled poll event reaches the listen that polled it, and lf says so once per module', () => {
   const dir = feedProject('listen to f { events: ["note.added"] } fire seen');
+  writeFileSync(join(dir, 'externals/feed/unlabelled'), '');
   const check = lf(dir, 'check');
   assert.equal(check.code, 0, check.out);
-  lf(dir, 'run', '--poll', 'seen');
+  const run = lf(dir, 'run', '--poll', 'seen');
   assert.equal(seen(dir), 2);
+  const notice = 'feed: a polled event carries no eventType; it was delivered to the listen that polled it — label poll events (adapter protocol 2.3)';
+  assert.equal(run.out.split(notice).length - 1, 1, run.out);
 });
 
-test('a polled event that does carry an eventType is still narrowed by the listen\'s `events`', () => {
+test('a labelled poll event fires a listen whose `events` names its kind, and no other', () => {
   const dir = feedProject('listen to f { events: ["note.added"] } fire seen');
   feed(dir, [
     { id: 'n1', title: 'First', at: 1, type: 'note.added' },
