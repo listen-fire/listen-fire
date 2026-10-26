@@ -6,13 +6,13 @@ import { META_RECORD_TYPE, makeStablePosition } from 'engine-contracts';
 import type { Expression } from 'engine-contracts/expression/expression';
 
 import { McpAdapter } from '../adapter';
-import { TOKEN_CREDENTIAL, addressOf, closeConnections, connectionFor } from '../client';
+import { McpConnection, TOKEN_CREDENTIAL, addressOf } from '../client';
 import { startFakeMcpServer, type FakeMcpServer } from './fake_server';
 
 const ROOT = makeStablePosition({ adapterType: 'mcp', recordType: META_RECORD_TYPE, recordId: 'root', data: {} });
 
 function adapterFor(fields: Record<string, string>): McpAdapter {
-  return new McpAdapter(async () => connectionFor(addressOf(TOKEN_CREDENTIAL, fields)));
+  return new McpAdapter(async () => new McpConnection(addressOf(TOKEN_CREDENTIAL, fields), fetch));
 }
 
 describe('the MCP adapter against a fake server', () => {
@@ -20,10 +20,7 @@ describe('the MCP adapter against a fake server', () => {
   beforeAll(async () => {
     fake = await startFakeMcpServer({ kind: 'issues', token: 't0k' });
   });
-  afterAll(async () => {
-    closeConnections();
-    await fake.close();
-  });
+  afterAll(() => fake.close());
 
   const adapter = (): McpAdapter => adapterFor({ url: fake.url, token: 't0k' });
 
@@ -75,6 +72,18 @@ describe('the MCP adapter against a fake server', () => {
     } finally {
       await keyed.close();
     }
+  });
+
+  it('sends every request through the fetch the host hands the call', async () => {
+    const seen: string[] = [];
+    const hostFetch: typeof fetch = (input, init) => {
+      seen.push(String(input instanceof Request ? input.url : input));
+      return fetch(input, init);
+    };
+    const adapter = new McpAdapter(async () => new McpConnection(addressOf(TOKEN_CREDENTIAL, { url: fake.url, token: 't0k' }), hostFetch));
+    await adapter.listEntryPoints();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((url) => url === fake.url)).toBe(true);
   });
 
   it('refuses a credential with no server url, or one not over http', () => {

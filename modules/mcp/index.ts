@@ -9,12 +9,13 @@
 import { defineModule, type ModuleContext } from 'module-kit';
 
 import { McpAdapter, type ConnectionSource } from './adapter';
-import { OAUTH_CREDENTIAL, TOKEN_CREDENTIAL, addressOf, connectionFor } from './client';
+import { McpConnection, OAUTH_CREDENTIAL, TOKEN_CREDENTIAL, addressOf } from './client';
 import { MCP_MANIFEST } from './manifest';
 
-/** The connection the context's credential names. */
+/** The connection the context's credential names, reached through the host's
+ *  fetch, as every module's provider requests are. */
 export function connectionFrom(ctx: ModuleContext): ConnectionSource {
-  return async () => connectionFor(addressOf(ctx.credential.name, await ctx.credential.fields()));
+  return async () => new McpConnection(addressOf(ctx.credential.name, await ctx.credential.fields()), ctx.fetch);
 }
 
 const URL_FIELD = { name: 'url', label: 'The MCP server URL (streamable HTTP)', secret: false } as const;

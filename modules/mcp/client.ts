@@ -46,49 +46,42 @@ function failure(address: ServerAddress, error: unknown): Error {
   return new Error(`MCP server ${address.url}: ${message}`);
 }
 
-/** A session with one server, opened on first use and kept while the process
- *  lives; any failure closes it, so the next call opens a fresh one. */
+/** The tools each server last listed, by server and sign-in: a describe lists
+ *  them afresh, and the calls after it read them from here. */
+const listed = new Map<string, McpTool[]>();
+/** Servers whose tool lists are kept at once; the oldest is forgotten past it. */
+const KEPT = 64;
+
+function keyOf(address: ServerAddress): string {
+  return JSON.stringify([address.url, address.header.name, address.header.value]);
+}
+
+/**
+ * One adapter call's reach to its server, through the host's fetch for that
+ * call (`ctx.fetch`: the limiter's door under lf, the host's own client in
+ * process). A session lives for the one exchange it opens for: the host's
+ * fetch belongs to the call, so a session kept past it would send later
+ * calls' requests through a fetch whose call has ended.
+ */
 export class McpConnection {
-  private client?: Promise<Client>;
-  private tools?: McpTool[];
-
-  constructor(readonly address: ServerAddress) {}
-
-  private open(): Promise<Client> {
-    if (this.client === undefined) {
-      const opening = (async () => {
-        const client = new Client({ name: 'listen-fire', version: '1' });
-        const transport = new StreamableHTTPClientTransport(new URL(this.address.url), {
-          requestInit: { headers: { [this.address.header.name]: this.address.header.value } },
-        });
-        await client.connect(transport);
-        return client;
-      })();
-      this.client = opening;
-      opening.catch(() => this.drop(opening));
-    }
-    return this.client;
-  }
-
-  /** Close the session, if one is open. */
-  close(): void {
-    if (this.client !== undefined) this.drop(this.client);
-  }
-
-  private drop(which: Promise<Client>): void {
-    if (this.client !== which) return;
-    this.client = undefined;
-    this.tools = undefined;
-    void which.then((c) => c.close()).catch(() => undefined);
-  }
+  constructor(
+    readonly address: ServerAddress,
+    private readonly fetch: typeof globalThis.fetch,
+  ) {}
 
   private async session<T>(work: (client: Client) => Promise<T>): Promise<T> {
-    const client = this.open();
+    const client = new Client({ name: 'listen-fire', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(this.address.url), {
+      requestInit: { headers: { [this.address.header.name]: this.address.header.value } },
+      fetch: this.fetch,
+    });
     try {
-      return await work(await client);
+      await client.connect(transport);
+      return await work(client);
     } catch (error) {
-      this.drop(client);
       throw failure(this.address, error);
+    } finally {
+      await client.close().catch(() => undefined);
     }
   }
 
@@ -104,13 +97,19 @@ export class McpConnection {
       } while (cursor !== undefined);
       return all;
     });
-    this.tools = tools;
+    const key = keyOf(this.address);
+    listed.delete(key);
+    listed.set(key, tools);
+    if (listed.size > KEPT) {
+      const [oldest] = listed.keys();
+      if (oldest !== undefined) listed.delete(oldest);
+    }
     return tools;
   }
 
   /** The tools last listed, listed now if none were. */
   async knownTools(): Promise<McpTool[]> {
-    return this.tools ?? this.listTools();
+    return listed.get(keyOf(this.address)) ?? this.listTools();
   }
 
   async tool(name: string): Promise<McpTool> {
@@ -123,32 +122,4 @@ export class McpConnection {
   async call(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
     return this.session((client) => client.callTool({ name, arguments: args }) as Promise<McpCallResult>);
   }
-}
-
-const connections = new Map<string, McpConnection>();
-/** Sessions kept at once; the oldest is closed past it. */
-const KEPT = 64;
-
-/** The session for a server and sign-in: one per pair, shared by every call
- *  this process serves under it. A refreshed token is a new pair. */
-export function connectionFor(address: ServerAddress): McpConnection {
-  const key = JSON.stringify([address.url, address.header.name, address.header.value]);
-  const found = connections.get(key);
-  if (found !== undefined) return found;
-  const made = new McpConnection(address);
-  connections.set(key, made);
-  if (connections.size > KEPT) {
-    const [oldest] = connections.entries();
-    if (oldest !== undefined) {
-      connections.delete(oldest[0]);
-      oldest[1].close();
-    }
-  }
-  return made;
-}
-
-/** Close every session this process holds. */
-export function closeConnections(): void {
-  for (const connection of connections.values()) connection.close();
-  connections.clear();
 }
