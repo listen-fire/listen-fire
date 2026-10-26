@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/engine",
   "license": "Apache-2.0",
-  "version": "0.12.8",
+  "version": "0.12.9",
   "description": "The movement engine for this release's language and its host contract: the Rust engine's shim, the EngineHost families, the run host, the embed kit, and the adapter and model types they reach. Every shell (the hosted product, the `lf` command line, an embedder) runs the same engine. A run pinned to a release this one does not read is refused by name. Embedders reach it only through public/* (the exports map); the internals resolve only under the `movement-engine-internals` condition, which only test runners set",
   "engines": {
     "node": ">=22.23.4 <23"

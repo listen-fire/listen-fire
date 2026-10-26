@@ -20,6 +20,15 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.9] - 2026-10-26
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:
+
+- A webhook `lf serve` registers may move: it is now registered as the credential the listen's own `using` names, where it was the first credential for every connection. The old webhook is removed when no listen uses its credential.
+- A delivery to a path with no credential (`/hooks/<external>`) now reaches the listens of the first hand-written credential only; `/hooks/<external>/<credential>` reaches that connection's listens, and the module's own install door still reaches every listen.
+
+MCP servers connect as adapters: tools are typed per server and `lf` describes each connection as itself. Inbound events route by connection, each connection registering its own webhook. `lf connect` asks for an OAuth app only when no token alternative exists.
+
 - `lf` types each connection of a module by its own schema: it describes the module once per credential the movement files import (`lf check` costs one describe per connection), as the hosted product does. A credential no file imports is not described, so a server it names that is down fails no check. Before, every connection was typed by the first credential's schema, so two workspaces (or two servers) of one module shared one set of types, and a field only one of them has could pass `lf check` on the other.
 - A new bundled module, `@lf/mcp`, connects any remote MCP server over streamable HTTP: each connection names its server and signs in with a token or OAuth, and its tools become types that `lf check` checks (a tool that changes things is written, a read-only tool is read with its arguments pinned by the `WHERE`). See `modules/mcp/README.md`.
 - `lf connect` no longer demands an OAuth app from a module whose users may sign in with a token instead (`@lf/attio`, `@lf/mcp`): it asks, no by default, and `--yes` sets none up unless the OAuth endpoints are given. `lf credential add` of the OAuth credential then says how to set the app up.
@@ -2317,7 +2326,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.9...HEAD
+[0.12.9]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...v0.12.9
 [0.12.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...v0.12.8
 [0.12.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...v0.12.7
 [0.12.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...v0.12.6

@@ -47,10 +47,10 @@ The core is at the new version; the plain tags move npm `latest`, make the GitHu
    ```
 7. Push the three tags, in separate pushes: GitHub creates no push event when more than three tags arrive in one push, and a tag pushed together with others has gone unbuilt before. `v*` marks the crates and npm release; `lf-v*` builds the `lf` binaries and the GitHub release; `docs-v*` publishes the docs under `/docs/0.12/`. Then tag the packages (`changeset tag`) and push those; no workflow reads them.
    ```sh
-   git tag v0.12.8 && git tag lf-v0.12.8 && git tag docs-v0.12.8
-   git push origin v0.12.8
-   git push origin lf-v0.12.8
-   git push origin docs-v0.12.8
+   git tag v0.12.9 && git tag lf-v0.12.9 && git tag docs-v0.12.9
+   git push origin v0.12.9
+   git push origin lf-v0.12.9
+   git push origin docs-v0.12.9
    corepack pnpm changeset tag && git push origin --tags
    ```
 8. Publish the crates. The script publishes, in dependency order, each crate whose `name@version` is not yet on crates.io, waiting until cargo's package index (index.crates.io, which lags the crates.io website) carries each one before publishing the next. If the index is slow it stops after ten minutes; rerun it to continue, since a crate already published is skipped. `--dry-run` prints what it would publish.

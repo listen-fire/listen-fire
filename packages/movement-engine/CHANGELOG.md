@@ -1,5 +1,13 @@
 # @listen-fire/engine
 
+## 0.12.9
+
+### Patch Changes
+
+- 510d923: `lf connect` sets up an OAuth app only when it is needed: a module whose users may also sign in otherwise (a token: `@lf/attio`'s `attio_token`, `@lf/mcp`'s `mcp_token`) is asked whether to (no by default), and `--yes` sets none up unless `--oauth-authorize-url`/`--oauth-token-url` are given. Adding that module's OAuth credential without an app is refused, naming how to set one up.
+- 783f329: `lf` describes an adapter once per connection: each credential bound to the module that the movement files import is asked `listEntryPoints` and `describe` as itself (one bound but never imported is not asked), and each connection is typed by its own answer, as the hosted product types it. Before, every connection of a module was typed by the first credential's answer, so a call another connection's schema allowed could pass `lf check`.
+- f15adc8: Under `lf`, two connections of one module (`a = connect attio using AttioA`, `b = connect attio using AttioB`) no longer share inbound events. A delivery to a connection's door (`/api/public/webhook-sync/<provider>/<credential>`, `/hooks/<external>/<credential>`) runs only the listens whose construction names that credential, and listens whose construction names none. A delivery to the module's own install still reaches every listen. `lf serve` registers a webhook per connection, as that connection's credential, for that connection's listens' events; a credential no listen uses has its webhook removed. A polled listen polls as its own connection's credential. A queued event row from before this release reaches every listen, as it did.
+
 ## 0.12.8
 
 ### Patch Changes

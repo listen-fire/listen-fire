@@ -1,7 +1,7 @@
 {
   "name": "@listen-fire/mcp",
   "license": "Apache-2.0",
-  "version": "0.12.7",
+  "version": "0.12.8",
   "description": "Any remote MCP server as a module: its tools, read from the server when a connection is described, become types a movement writes (a tool that changes things) or reads (a read-only tool). Streamable HTTP only; signed in with a token or OAuth. Loaded in process by the platform, served by serve-module everywhere else.",
   "engines": {
     "node": ">=22.23.4 <23"
