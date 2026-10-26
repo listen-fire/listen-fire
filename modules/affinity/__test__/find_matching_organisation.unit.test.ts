@@ -48,7 +48,7 @@ describe('findMatchingOrganisation searches by the domain Affinity actually stor
 
     const match = await findMatchingOrganisation(client, models, { name: 'Veltha Labs', domain: input });
 
-    expect(findManyOrganisations).toHaveBeenCalledWith({ search: 'veltha.ai', includeGlobal: true });
+    expect(findManyOrganisations).toHaveBeenCalledWith(expect.objectContaining({ search: 'veltha.ai', includeGlobal: true }));
     expect(match).toEqual(VELTHA);
   });
 
@@ -69,8 +69,8 @@ describe('findMatchingOrganisation searches by the domain Affinity actually stor
     const match = await findMatchingOrganisation(client, models, { name: 'Veltha', domain: 'nowhere.example' });
 
     expect(match).toEqual(VELTHA);
-    expect(findManyOrganisations).toHaveBeenCalledWith({ search: 'nowhere.example', includeGlobal: true });
-    expect(findManyOrganisations).toHaveBeenCalledWith({ search: 'Veltha', includeGlobal: true });
+    expect(findManyOrganisations).toHaveBeenCalledWith(expect.objectContaining({ search: 'nowhere.example', includeGlobal: true }));
+    expect(findManyOrganisations).toHaveBeenCalledWith(expect.objectContaining({ search: 'Veltha', includeGlobal: true }));
   });
 });
 
@@ -135,7 +135,7 @@ describe('findMatchingOrganisation weighs global records only through the judge'
     });
 
     expect(findManyOrganisations).toHaveBeenCalledTimes(1);
-    expect(findManyOrganisations).toHaveBeenCalledWith({ search: 'Fyvie', includeGlobal: true });
+    expect(findManyOrganisations).toHaveBeenCalledWith(expect.objectContaining({ search: 'Fyvie', includeGlobal: true }));
     const { system, query } = judgeInput();
     expect(query.query).toEqual({
       name: 'Fyvie',

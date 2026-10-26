@@ -140,8 +140,9 @@ Only return the JSON, nothing else. If you cannot evaluate a field, set its valu
     // matters: `normalizeEmail` returns null for BOTH sides, and a null===null
     // compare would "match" the first person who happens to have no email.
     if (wanted) {
-      const people = await this.client.findManyPeople({ search: wanted });
-      const person = people.find((person) => normalizeEmail(person.primary_email) === wanted);
+      const ownsPrimary = (person: AffinityPersonRecord) => normalizeEmail(person.primary_email) === wanted;
+      const people = await this.client.findManyPeople({ search: wanted, enough: ownsPrimary });
+      const person = people.find(ownsPrimary);
       if (person) return person;
 
       const personByOtherEmails = people.find((person) =>
@@ -180,10 +181,9 @@ Expect the user to provide a name. If for any reason the name cannot be processe
     }
 
     const nameClean = parsedNameWithoutAffixes.name;
-    const people = await this.client.findManyPeople({ search: nameClean });
-    const person = people.find(
-      (person) => `${person.first_name} ${person.last_name}` === nameClean,
-    );
+    const named = (person: AffinityPersonRecord) => `${person.first_name} ${person.last_name}` === nameClean;
+    const people = await this.client.findManyPeople({ search: nameClean, enough: named });
+    const person = people.find(named);
     if (person) return person;
 
     const bestPersonMatch = await this.models.chatStructured({

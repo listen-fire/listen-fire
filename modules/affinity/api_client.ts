@@ -46,13 +46,51 @@ const AFFINITY_LIMITS: readonly WireDeclaredLimitShape[] = [{ scope: 'credential
  *  than a default we inherit. */
 const AFFINITY_PAGE_SIZE = 500;
 
+/** What a search that is looking for ONE record asks for first. A match is
+ *  near the top or the caller's rules settle without it; the full 500 is
+ *  asked for only when this page is not the whole answer and holds nothing
+ *  the caller's first rule would pick (`firstPageOrAll`). */
+const SEARCH_PAGE_SIZE = 50;
+
 /** A search's query: the term (none for the whole workspace) and the page. */
-function searchQuery(term: string, pageToken: string | undefined): Record<string, string> {
+function searchQuery(term: string, pageSize: number, pageToken: string | undefined): Record<string, string> {
   return {
     ...(term ? { term } : {}),
-    page_size: String(AFFINITY_PAGE_SIZE),
+    page_size: String(pageSize),
     ...(pageToken !== undefined ? { page_token: pageToken } : {}),
   };
+}
+
+type SearchPage<T> = (pageSize: number, pageToken?: string) => Promise<{ records: T[]; next: string | null }>;
+
+/**
+ * What an identity search shows its caller: the page of 50 when it is all
+ * Affinity holds for the term, or when it already holds the record the
+ * caller's FIRST rule picks; otherwise the first 500, as the search always
+ * answered.
+ *
+ * Affinity does not document how it orders a search, so 50 is never trusted
+ * to hold a match a later rule (or the judge) would have found among 500. The
+ * first rule is safe to settle early on because the 50 are the first 50 of
+ * the 500, in the same order: the record it picks there is the one it picks
+ * there. A page token is only good for the page size that minted it, so the
+ * 500 starts from the top.
+ */
+async function firstPageOrAll<T>(page: SearchPage<T>, enough?: (record: T) => boolean): Promise<T[]> {
+  const first = await page(SEARCH_PAGE_SIZE);
+  if (!first.next || (enough && first.records.some(enough))) return first.records;
+  return (await page(AFFINITY_PAGE_SIZE)).records;
+}
+
+/** Every record a term names: 50 when that is all of them, else every page at
+ *  500 from the top. No term is the whole workspace — a list, not a search —
+ *  read at 500 from the start. */
+async function everyMatch<T>(term: string, page: SearchPage<T>): Promise<T[]> {
+  if (term) {
+    const first = await page(SEARCH_PAGE_SIZE);
+    if (!first.next) return first.records;
+  }
+  return everyPage((token) => page(AFFINITY_PAGE_SIZE, token));
 }
 
 /** Every record behind a first page, following Affinity's token page by page. */
@@ -268,6 +306,8 @@ const fieldValuesValidator = z.intersection(
 );
 
 type FieldValue = z.infer<typeof fieldValuesValidator>;
+type AffinityOrganisationRecord = z.infer<typeof organisationValidator>;
+type AffinityPersonSearchRecord = z.infer<typeof personValidator>;
 
 /** The part of a written row that says whose answers it changed. Lenient: it
  *  steers what is forgotten, never whether the write succeeded. */
@@ -448,7 +488,7 @@ class AffinityAPIClient {
     return `${this.memoScope}field-values/${kind}/${id}`;
   }
 
-  private searchKey(kind: 'person' | 'organization', page: [term: string, pageToken: string | null]): string {
+  private searchKey(kind: 'person' | 'organization', page: [term: string, pageSize: number, pageToken: string | null]): string {
     return `${this.memoScope}search/${kind}/${JSON.stringify(page)}`;
   }
 
@@ -691,12 +731,12 @@ class AffinityAPIClient {
    * narrowed by the same domain are one request, whichever comes first. No
    * term is the workspace itself, which pages the same way.
    */
-  private organisationSearchPage(term: string, pageToken?: string) {
-    return memoisedRead(this.searchKey('organization', [term, pageToken ?? null]), () =>
+  private organisationSearchPage(term: string, pageSize: number, pageToken?: string) {
+    return memoisedRead(this.searchKey('organization', [term, pageSize, pageToken ?? null]), () =>
       this.fetch({
         route: '/organizations',
         method: 'GET',
-        query: searchQuery(term, pageToken),
+        query: searchQuery(term, pageSize, pageToken),
         responseValidator: z.object({
           organizations: organisationValidator.array(),
           next_page_token: z.string().nullish(),
@@ -708,17 +748,21 @@ class AffinityAPIClient {
   async findManyOrganisations({
     search,
     includeGlobal,
+    enough,
   }: {
     search: string;
     includeGlobal: boolean;
+    /** The caller's first rule: a page of 50 holding a record it picks is the
+     *  answer (`firstPageOrAll`). */
+    enough?: (org: AffinityOrganisationRecord) => boolean;
   }) {
-    // ONE page, deliberately. This is the create path's identity search, and
-    // `includeGlobal` points it at Affinity's whole global dataset — walking
-    // every page of that to answer "does this record already exist?" would pay
-    // an unbounded number of calls for a match that is in the first page or
-    // nowhere useful. The ROOT reads (`listOrganisations`) walk every page,
-    // because there the count IS the answer.
-    const { records } = await this.organisationSearchPage(search);
+    // ONE page of 500 at most, deliberately. This is the create path's identity
+    // search, and `includeGlobal` points it at Affinity's whole global dataset
+    // — walking every page of that to answer "does this record already exist?"
+    // would pay an unbounded number of calls for a match that is in the first
+    // page or nowhere useful. The ROOT reads (`listOrganisations`) walk every
+    // page, because there the count IS the answer.
+    const records = await firstPageOrAll((size, token) => this.organisationSearchPage(search, size, token), enough);
 
     // The GLOBAL filter is ours, applied to the same answer — so both callers
     // share one search rather than each paying for the term.
@@ -739,7 +783,7 @@ class AffinityAPIClient {
    * still filters what comes back.
    */
   async listOrganisations({ term }: { term?: string } = {}) {
-    const orgs = await everyPage((token) => this.organisationSearchPage(term ?? '', token));
+    const orgs = await everyMatch(term ?? '', (size, token) => this.organisationSearchPage(term ?? '', size, token));
     return orgs.filter((org) => !org.global);
   }
 
@@ -849,12 +893,12 @@ class AffinityAPIClient {
   /** One page of a person search, remembered by term exactly as the
    *  organization search is: the matcher's email search and a read narrowed by
    *  that email are one request. */
-  private personSearchPage(term: string, pageToken?: string) {
-    return memoisedRead(this.searchKey('person', [term, pageToken ?? null]), () =>
+  private personSearchPage(term: string, pageSize: number, pageToken?: string) {
+    return memoisedRead(this.searchKey('person', [term, pageSize, pageToken ?? null]), () =>
       this.fetch({
         route: '/persons',
         method: 'GET',
-        query: searchQuery(term, pageToken),
+        query: searchQuery(term, pageSize, pageToken),
         responseValidator: z.object({
           persons: personValidator.array(),
           next_page_token: z.string().nullish(),
@@ -863,8 +907,8 @@ class AffinityAPIClient {
     );
   }
 
-  async findManyPeople({ search }: { search: string }) {
-    return (await this.personSearchPage(search)).records;
+  async findManyPeople({ search, enough }: { search: string; enough?: (person: AffinityPersonSearchRecord) => boolean }) {
+    return firstPageOrAll((size, token) => this.personSearchPage(search, size, token), enough);
   }
 
   /** Enumerate the instance's persons — the TG root-collection read
@@ -872,7 +916,7 @@ class AffinityAPIClient {
    *  the org list's does: a substring match over name and email, so a superset
    *  of any equality on either. */
   async listPersons({ term }: { term?: string } = {}) {
-    return everyPage((token) => this.personSearchPage(term ?? '', token));
+    return everyMatch(term ?? '', (size, token) => this.personSearchPage(term ?? '', size, token));
   }
 
   async getPersonById(id: number) {

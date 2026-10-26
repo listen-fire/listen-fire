@@ -130,18 +130,19 @@ async function findMatchingOrganisation(
   const normalisedDomain = domain ? domainHost(domain) : null;
   if (normalisedDomain) {
     // Prioritize domain matching
-    const orgsByDomain = await client.findManyOrganisations({
-      search: normalisedDomain,
-      includeGlobal: true,
-    });
     const parsedDomain = parse(normalisedDomain);
-    const orgByDomain = orgsByDomain.find((org) =>
+    const holdsDomain = (org: AffinityOrganisation) =>
       org.domain
         ? domainHost(org.domain) === normalisedDomain ||
           parsedDomain.domain === parse(org.domain)?.domain ||
-          org.domains?.map((domain) => domainHost(domain)).includes(normalisedDomain)
-        : false,
-    );
+          !!org.domains?.map((domain) => domainHost(domain)).includes(normalisedDomain)
+        : false;
+    const orgsByDomain = await client.findManyOrganisations({
+      search: normalisedDomain,
+      includeGlobal: true,
+      enough: holdsDomain,
+    });
+    const orgByDomain = orgsByDomain.find(holdsDomain);
     if (orgByDomain) {
       return decide('domain', orgByDomain);
     }
@@ -157,17 +158,17 @@ async function findMatchingOrganisation(
 
   // One search answers both sets: Affinity's name search spans the workspace
   // AND its global dataset, each record flagged `global`.
-  const orgsByName = await client.findManyOrganisations({
-    search: name,
-    includeGlobal: true,
-  });
-
   // An exact name adopts without asking only inside the workspace. A global
   // record shares its name with every company of that name; it has to get
   // past the judge.
-  const orgByName = orgsByName.find(
-    (org) => !org.global && org.name?.toLowerCase() === name.toLowerCase(),
-  );
+  const namedInWorkspace = (org: AffinityOrganisation) =>
+    !org.global && org.name?.toLowerCase() === name.toLowerCase();
+  const orgsByName = await client.findManyOrganisations({
+    search: name,
+    includeGlobal: true,
+    enough: namedInWorkspace,
+  });
+  const orgByName = orgsByName.find(namedInWorkspace);
   if (orgByName) {
     return decide('exact-private', orgByName);
   }
