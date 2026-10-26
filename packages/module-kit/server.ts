@@ -40,6 +40,7 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 import type { z } from 'zod';
 import type { Adapter } from 'module-runtime/adapter';
 import type { ServedFile } from './served_files';
+import { runScopes, type RunScopes } from './run_scopes';
 
 import { Readable } from 'node:stream';
 import type { MethodName, RpcResponseShape, WireCredentialShape, WireHostLimitsDoorShape } from 'engine-contracts';
@@ -206,6 +207,8 @@ export interface ProtocolAnswer {
 /** A request that passed the envelope, version, method and params checks. */
 export interface CheckedRequest {
   method: MethodName;
+  /** The caller's run scope: the run's adapter instance (`run_scopes.ts`). */
+  cacheScopeId: string;
   /** The request's own params, not zod's parsed copy: the wire schemas are
    *  structural mirrors that drop keys they don't name, and validation is the
    *  gate, not a transform. */
@@ -265,6 +268,7 @@ export async function readProtocolRequest(
     ok: true,
     request: {
       method,
+      cacheScopeId: parsed.cacheScopeId,
       params,
       ...(parsed.credential !== undefined ? { credential: parsed.credential } : {}),
       ...(parsed.settings !== undefined ? { settings: parsed.settings } : {}),
@@ -426,8 +430,11 @@ export function createAdapterProtocolHandler(opts: {
   warn?: (message: string) => void;
   /** Hold a resolved file's bytes for one fetch; its URL (see `answerAdapterRequest`). */
   exposeFile?: (file: ServedFile) => string;
+  /** Where each call's run scope is kept. Default: this handler's own. */
+  runScopes?: RunScopes;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { adapter, authenticate } = opts;
+  const scopes = opts.runScopes ?? runScopes();
   const warn = opts.warn ?? ((message: string) => console.warn(message));
   const advertisedMethods = opts.methods ?? implementedMethods(adapter);
 
@@ -441,16 +448,19 @@ export function createAdapterProtocolHandler(opts: {
       sendAnswer(res, read.answer);
       return;
     }
+    const request = read.request;
     sendAnswer(
       res,
-      await answerAdapterRequest(
-        {
-          adapter,
-          warn,
-          manifest: () => adapterManifestResult(adapter, advertisedMethods),
-          ...(opts.exposeFile !== undefined ? { exposeFile: opts.exposeFile } : {}),
-        },
-        read.request,
+      await scopes.around(request.cacheScopeId, () =>
+        answerAdapterRequest(
+          {
+            adapter,
+            warn,
+            manifest: () => adapterManifestResult(adapter, advertisedMethods),
+            ...(opts.exposeFile !== undefined ? { exposeFile: opts.exposeFile } : {}),
+          },
+          request,
+        ),
       ),
     );
   };

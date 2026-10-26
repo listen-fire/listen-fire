@@ -16,6 +16,7 @@ import { METHODS, type MethodName, type RpcResponseShape, type WireCostLineShape
 import type { CredentialFields, ModuleCredential, ModuleDefinition, ModuleFiles, ModuleKv, ModuleLog, ModuleModels, ModuleOcr, ModuleSpend } from './define';
 
 import { limitedFetch } from './host_limits';
+import { runScopes, type RunScopes } from './run_scopes';
 import { moduleContext, noCredential } from './in_process';
 import { servedFiles, type ServedFile, type ServedFiles } from './served_files';
 import { loadedModule, moduleManifest, type LoadedModule } from './manifest';
@@ -58,6 +59,8 @@ export interface ModuleServerOptions {
    *  Never taken from a request's Host header (a caller could name any host);
    *  absent, a file without a URL of its own is not served. */
   publicUrl?: string;
+  /** Where each call's run scope is kept. Default: this handler's own. */
+  runScopes?: RunScopes;
 }
 
 function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
@@ -209,6 +212,7 @@ async function answer(
 /** The HTTP handler that serves one module over adapter protocol 2. */
 export function createModuleProtocolHandler(options: ModuleServerOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const files = servedFiles();
+  const scopes = options.runScopes ?? runScopes();
   return async function handle(req, res) {
     if (files.serve(req, res)) return;
     if (options.authenticate && !options.authenticate(req.headers)) {
@@ -220,6 +224,7 @@ export function createModuleProtocolHandler(options: ModuleServerOptions): (req:
       sendAnswer(res, read.answer);
       return;
     }
-    sendAnswer(res, await answer(options, req, read.request, files));
+    const request = read.request;
+    sendAnswer(res, await scopes.around(request.cacheScopeId, () => answer(options, req, request, files)));
   };
 }

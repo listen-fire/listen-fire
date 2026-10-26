@@ -21,3 +21,4 @@ export {
   createAdapterProtocolHandler,
   type ProtocolAnswer,
 } from './server';
+export * from './run_scopes';

@@ -48,6 +48,11 @@ in the body, not the path.
 
 - `protocolVersion` is the string `"2"`.
 - `cacheScopeId` is opaque. You may scope a per-call cache by it, or ignore it.
+  - A host sends one id per adapter instance per run segment, so the calls of
+    one run share it and two runs never do. `<none>` and `<slot>` name no run:
+    a host's own reads (a manifest, an inbound check) and a slot's calls.
+  - A module served by module-kit is answered inside the run scope this id
+    names (its read memo and call ceiling), as it is in process.
 - `params` is the method's input (see [Methods](#methods)).
 
 You answer with HTTP 200 and one of two bodies:
