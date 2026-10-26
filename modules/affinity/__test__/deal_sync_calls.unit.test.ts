@@ -34,9 +34,24 @@ const company = (n: number) => ({
   founder: { first: `Founder${n}`, last: `Of${n}`, linkedin: `https://linkedin.com/in/f${n}` },
 });
 
+/**
+ * Where the adapter runs decides what a call costs.
+ *
+ * - `platform`: in process, each adapter call inside its run's segment, so a
+ *   record or search read once in a run is read once (the run memo).
+ * - `lf`: `lf` serves the module in a process of its own, and nothing opens a
+ *   run scope around its calls there, so every read goes to Affinity. This is
+ *   how Project A runs it. Measured through `lf run` of `Upsert Deal`
+ *   (real_engine/): the requests match the `lf` rows here call for call, less
+ *   the two `Deal Created` reads the copy run there could not check.
+ */
+type Host = 'platform' | 'lf';
+const under = <T>(host: Host, fn: () => Promise<T>) => (host === 'platform' ? inARun(fn) : fn());
+
 /** The calls one deal costs once the run is warm: the workspace's shape
  *  already read, and the owners already met on an earlier deal. */
 async function warmDealCost(
+  host: Host,
   setup: (fake: FakeAffinity, owners: ReturnType<typeof seedWorkspace>['owners']) => typeof VELTHA,
 ): Promise<CallCounts> {
   const fake = new FakeAffinity();
@@ -45,7 +60,7 @@ async function warmDealCost(
   const deal = setup(fake, owners);
   fake.install();
   const adapter = adapterOver(fake);
-  return inARun(async () => {
+  return under(host, async () => {
     await upsertDeal(adapter, dealFor(NORDA));
     const before = fake.requests.length;
     await upsertDeal(adapter, dealFor(deal));
@@ -53,52 +68,80 @@ async function warmDealCost(
   });
 }
 
-describe('calls per deal in a warm run', () => {
-  it('(a) everything exists and nothing changes', async () => {
-    const counts = await warmDealCost((fake, owners) => {
-      seedSyncedDeal(fake, owners, VELTHA);
-      return VELTHA;
-    });
-    expect(counts).toEqual({ orgSearch: 2, personSearch: 1, fieldValueRead: 3, recordRead: 2, schema: 0, write: 0, total: 8 });
+/** Half the recap's deals already exist untouched, a few gain a field, a few
+ *  are new — in an order that puts every kind after every other. */
+async function sixDealRun(host: Host): Promise<CallCounts> {
+  const fake = new FakeAffinity();
+  const { owners } = seedWorkspace(fake);
+  const plan: Array<{ deal: ReturnType<typeof company>; seed: 'synced' | 'empty-field' | 'new' }> = [
+    { deal: company(1), seed: 'synced' },
+    { deal: company(2), seed: 'new' },
+    { deal: company(3), seed: 'empty-field' },
+    { deal: company(4), seed: 'synced' },
+    { deal: company(5), seed: 'new' },
+    { deal: company(6), seed: 'synced' },
+  ];
+  for (const { deal, seed } of plan) {
+    if (seed !== 'new') seedSyncedDeal(fake, owners, deal, { emptyDealSource: seed === 'empty-field' });
+  }
+  fake.install();
+  const adapter = adapterOver(fake);
+  await under(host, async () => {
+    for (const { deal } of plan) await upsertDeal(adapter, dealFor(deal));
   });
+  return countCalls(fake.requests);
+}
 
-  it('(b) everything exists and one field changes', async () => {
-    const counts = await warmDealCost((fake, owners) => {
-      seedSyncedDeal(fake, owners, VELTHA, { emptyDealSource: true });
-      return VELTHA;
-    });
-    expect(counts).toEqual({ orgSearch: 2, personSearch: 1, fieldValueRead: 5, recordRead: 2, schema: 0, write: 1, total: 11 });
-  });
-
-  it('(c) a new deal', async () => {
-    const counts = await warmDealCost(() => FRESH);
-    expect(counts).toEqual({ orgSearch: 4, personSearch: 1, fieldValueRead: 6, recordRead: 1, schema: 0, write: 10, total: 22 });
-  });
+const counts = (orgSearch: number, personSearch: number, fieldValueRead: number, recordRead: number, schema: number, write: number) => ({
+  orgSearch,
+  personSearch,
+  fieldValueRead,
+  recordRead,
+  schema,
+  write,
+  total: orgSearch + personSearch + fieldValueRead + recordRead + schema + write,
 });
 
-describe('calls for a run of deals', () => {
-  // Half the recap's deals already exist untouched, a few gain a field, a few
-  // are new — in an order that puts every kind after every other.
+describe.each([
+  {
+    host: 'platform' as const,
+    unchanged: counts(2, 1, 3, 2, 0, 0),
+    oneField: counts(2, 1, 5, 2, 0, 1),
+    fresh: counts(4, 1, 6, 1, 0, 13),
+    run: counts(16, 12, 28, 12, 4, 27),
+  },
+  {
+    host: 'lf' as const,
+    unchanged: counts(3, 3, 10, 12, 0, 0),
+    oneField: counts(3, 3, 12, 12, 0, 1),
+    fresh: counts(6, 4, 8, 14, 0, 13),
+    run: counts(24, 20, 58, 76, 4, 27),
+  },
+])('calls under $host', ({ host, unchanged, oneField, fresh, run }) => {
+  it('(a) a warm deal where everything exists and nothing changes', async () => {
+    expect(
+      await warmDealCost(host, (fake, owners) => {
+        seedSyncedDeal(fake, owners, VELTHA);
+        return VELTHA;
+      }),
+    ).toEqual(unchanged);
+  });
+
+  it('(b) a warm deal where everything exists and one field changes', async () => {
+    expect(
+      await warmDealCost(host, (fake, owners) => {
+        seedSyncedDeal(fake, owners, VELTHA, { emptyDealSource: true });
+        return VELTHA;
+      }),
+    ).toEqual(oneField);
+  });
+
+  it('(c) a warm new deal', async () => {
+    expect(await warmDealCost(host, () => FRESH)).toEqual(fresh);
+  });
+
   it('(d) six deals: unchanged, new, one field changed, unchanged, new, unchanged', async () => {
-    const fake = new FakeAffinity();
-    const { owners } = seedWorkspace(fake);
-    const plan: Array<{ deal: ReturnType<typeof company>; seed: 'synced' | 'empty-field' | 'new' }> = [
-      { deal: company(1), seed: 'synced' },
-      { deal: company(2), seed: 'new' },
-      { deal: company(3), seed: 'empty-field' },
-      { deal: company(4), seed: 'synced' },
-      { deal: company(5), seed: 'new' },
-      { deal: company(6), seed: 'synced' },
-    ];
-    for (const { deal, seed } of plan) {
-      if (seed !== 'new') seedSyncedDeal(fake, owners, deal, { emptyDealSource: seed === 'empty-field' });
-    }
-    fake.install();
-    const adapter = adapterOver(fake);
-    await inARun(async () => {
-      for (const { deal } of plan) await upsertDeal(adapter, dealFor(deal));
-    });
-    expect(countCalls(fake.requests)).toEqual({ orgSearch: 16, personSearch: 12, fieldValueRead: 28, recordRead: 12, schema: 4, write: 21, total: 93 });
+    expect(await sixDealRun(host)).toEqual(run);
   });
 });
 

@@ -32,7 +32,20 @@ const FIELD = {
   dealSource: 311,
   owners: 312,
   dealCreated: 313,
+  stageOrder: 314,
+  deepDive: 315,
+  diverse: 316,
+  sourcing: 317,
   linkedin: 320,
+} as const;
+
+/** What a synced entry already holds for the fields `Upsert Deal` fills. */
+export const SYNCED_ENTRY = {
+  stage: 'IM Review / More Research Before Outreach',
+  status: 'Current Dealflow',
+  source: 'Quality Dealflow',
+  deepDive: 'AI Agents',
+  diverse: 'No',
 } as const;
 
 const field = (
@@ -59,6 +72,10 @@ const FIELDS = [
   field(FIELD.dealSource, `[${LIST_NAME}] Deal Source`, 1, 6, { listId: LIST_ID }),
   field(FIELD.owners, `[${LIST_NAME}] Owners`, 1, 0, { listId: LIST_ID, multiple: true }),
   field(FIELD.dealCreated, `[${LIST_NAME}] Deal Created`, 1, 4, { listId: LIST_ID }),
+  field(FIELD.stageOrder, `[${LIST_NAME}] Stage Order`, 1, 6, { listId: LIST_ID }),
+  field(FIELD.deepDive, `[${LIST_NAME}] Deep Dive`, 1, 6, { listId: LIST_ID }),
+  field(FIELD.diverse, `[${LIST_NAME}] At least one ethincally diverse founder`, 1, 6, { listId: LIST_ID }),
+  field(FIELD.sourcing, `[${LIST_NAME}] Sourcing/Intro IM`, 1, 6, { listId: LIST_ID }),
   field(FIELD.linkedin, 'LinkedIn URL', 0, 6),
 ];
 
@@ -471,7 +488,17 @@ export async function upsertDeal(adapter: AffinityAdapter, deal: Deal): Promise<
   }
 
   // entry = write org-[:`List Entries`]-> { listName: …, Status ?: …, `Deal Source` ?: … }
-  const entryFields = { listName: LIST_NAME, Status: deal.status, 'Deal Source': deal.source };
+  // Every field the movement sets on the entry, each set-if-empty. Sourcing and
+  // Deal Created are left out: a live sync asks for neither (empty and null),
+  // and an empty value is never sent.
+  const entryFields = {
+    listName: LIST_NAME,
+    'Stage Order': SYNCED_ENTRY.stage,
+    Status: deal.status,
+    'Deal Source': deal.source,
+    'Deep Dive': SYNCED_ENTRY.deepDive,
+    'At least one ethincally diverse founder': SYNCED_ENTRY.diverse,
+  };
   const parentLinks = [{ recordType: 'Organization', externalId: orgId, edgeName: 'List Entries' }];
   const entryMatch = await adapter.resolveEntity({
     recordType: 'Organization List Entry',
@@ -484,7 +511,7 @@ export async function upsertDeal(adapter: AffinityAdapter, deal: Deal): Promise<
   if (entryMatch.candidates[0]) {
     entryId = entryMatch.candidates[0].externalId;
     entryFound = await adapter.readRecord({ recordType: 'Organization List Entry', externalId: entryId, fieldIds: Object.keys(entryFields) });
-    const fields = toWrite(entryFound, entryFields, new Set(['Status', 'Deal Source']));
+    const fields = toWrite(entryFound, entryFields, new Set(Object.keys(entryFields).filter((key) => key !== 'listName')));
     await adapter.updateRecord({ recordType: 'Organization List Entry', externalId: entryId, fields, parentLinks, mutationContext: MUTATION });
     changes.push(fillLine('Status', entryFound?.Status, deal.status), fillLine('Deal Source', entryFound?.['Deal Source'], deal.source));
   } else {
@@ -546,8 +573,8 @@ export const OWNERS = ['daria@project-a.vc', 'oskar@project-a.vc'];
 /** A team of owners, and a company already synced: its organization, its
  *  founder (employed there, on `Founders`), its Master Deals entry with every
  *  field the deal sets already filled and both owners linked. */
-export function seedWorkspace(fake: FakeAffinity) {
-  const owners = OWNERS.map((email, i) => fake.person({ first: `Owner${i}`, last: 'Team', email }));
+export function seedWorkspace(fake: FakeAffinity, ownerEmails: readonly string[] = OWNERS) {
+  const owners = ownerEmails.map((email, i) => fake.person({ first: `Owner${i}`, last: 'Team', email }));
   // Affinity's global dataset shares the name; the judge never adopts it here.
   fake.org({ name: 'Veltha Global Holdings', domain: 'veltha-holdings.example', global: true });
   return { owners };
@@ -556,18 +583,25 @@ export function seedWorkspace(fake: FakeAffinity) {
 export function seedSyncedDeal(
   fake: FakeAffinity,
   owners: Person[],
-  input: { name: string; host: string; founder: { first: string; last: string; linkedin: string } },
+  input: { name: string; host: string; founder: { first: string; last: string; linkedin: string }; founders?: { first: string; last: string; linkedin: string }[] },
   options: { emptyDealSource?: boolean; orgName?: string } = {},
 ) {
-  const org = fake.org({ name: options.orgName ?? input.name, domain: input.host });
-  const founder = fake.person({ first: input.founder.first, last: input.founder.last, orgIds: [org.id] });
-  fake.value({ fieldId: FIELD.founders, entityId: org.id, entityType: 1, value: founder.id });
-  fake.value({ fieldId: FIELD.linkedin, entityId: founder.id, entityType: 0, value: input.founder.linkedin });
+  const org = fake.org({ name: options.orgName ?? input.name, domain: input.host || null });
+  const people = (input.founders ?? [input.founder]).map((f) => {
+    const person = fake.person({ first: f.first, last: f.last, orgIds: [org.id] });
+    fake.value({ fieldId: FIELD.founders, entityId: org.id, entityType: 1, value: person.id });
+    fake.value({ fieldId: FIELD.linkedin, entityId: person.id, entityType: 0, value: f.linkedin });
+    return person;
+  });
+  const founder = people[0];
   const entry = fake.entry(org.id);
-  fake.value({ fieldId: FIELD.status, entityId: org.id, entityType: 1, listEntryId: entry.id, value: 'Current Dealflow' });
-  if (!options.emptyDealSource) {
-    fake.value({ fieldId: FIELD.dealSource, entityId: org.id, entityType: 1, listEntryId: entry.id, value: 'Quality Dealflow' });
-  }
+  const onEntry = (fieldId: number, value: unknown) =>
+    fake.value({ fieldId, entityId: org.id, entityType: 1, listEntryId: entry.id, value });
+  onEntry(FIELD.stageOrder, SYNCED_ENTRY.stage);
+  onEntry(FIELD.status, SYNCED_ENTRY.status);
+  if (!options.emptyDealSource) onEntry(FIELD.dealSource, SYNCED_ENTRY.source);
+  onEntry(FIELD.deepDive, SYNCED_ENTRY.deepDive);
+  onEntry(FIELD.diverse, SYNCED_ENTRY.diverse);
   for (const owner of owners) {
     fake.value({ fieldId: FIELD.owners, entityId: org.id, entityType: 1, listEntryId: entry.id, value: owner.id });
   }
