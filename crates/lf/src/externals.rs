@@ -345,6 +345,11 @@ pub fn plugin_target<'r>(running: &'r [std::rc::Rc<RunningExternal>], plugin: &s
 
 /// One call to a running external, under the credential its secrets name.
 pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
+    rpc_as(running, credentials, credential_for(credentials, &running.external.manifest.name), tenant, method, params).await
+}
+
+/// One call made as `credential` (one connection's), or as none.
+pub async fn rpc_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
     let lease = running.reach.lease().await?;
     let target = Target {
         external: &running.external,
@@ -354,11 +359,14 @@ pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &
         settings: &running.settings,
         limits: &running.limits,
     };
-    call(&target, credentials, tenant, method, params).await
+    call_as(&target, credentials, credential, tenant, method, params).await
 }
 
 async fn call(target: &Target<'_>, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
-    let credential = credential_for(credentials, &target.external.manifest.name);
+    call_as(target, credentials, credential_for(credentials, &target.external.manifest.name), tenant, method, params).await
+}
+
+async fn call_as(target: &Target<'_>, credentials: &Credentials, credential: Option<&Credential>, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
     let signer = signer_of(credentials, &target.external.manifest.name, credential);
     Ok(send(target, credentials, credential, signer, Sending { tenant, method, cache_scope_id: "<none>", params }).await?)
 }

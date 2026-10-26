@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use crate::externals::{RunningExternal, plugin_entries};
 use crate::json::{Js, Obj};
 use crate::obj;
-use crate::secrets::{Binding, Credentials};
+use crate::secrets::{Binding, Credential, Credentials};
 use crate::sources::MovementFile;
 
 /// `CATALOG_SNAPSHOT_VERSION`.
@@ -21,7 +21,51 @@ fn instance_schema_key(credential_name: Option<&str>) -> String {
     credential_name.unwrap_or("").to_string()
 }
 
-pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Js>, credentials: &Credentials, files: &[MovementFile]) -> Js {
+/// Each connection's schema, by the key the catalog files it under
+/// (`instanceSchemaKey`): `''` for the instance made with no credential.
+pub type ConnectionSchemas = IndexMap<String, Js>;
+
+/// What one adapter external's instances are made with.
+pub struct Connections<'c> {
+    /// Its instances take a credential at all.
+    pub credentialed: bool,
+    /// An instance must name one.
+    pub credential_required: bool,
+    /// The credentials an instance may name and the module declares, in the
+    /// secrets file's order.
+    pub credentials: Vec<&'c Credential>,
+}
+
+/// The connections an adapter external can be made as: the credentials bound
+/// to it, and the credential-free instance when it works without one. Each is
+/// described, and typed, on its own: two connections of one module may serve
+/// different schemas (two workspaces, two MCP servers).
+pub fn connections_of<'c>(r: &RunningExternal, credentials: &'c Credentials) -> Connections<'c> {
+    let name = &r.external.manifest.name;
+    // The hosted product holds a remote install's secret itself, so there
+    // it constructs credential-free; here the secrets file names it.
+    let installed = credentials.iter().any(|c| c.external == *name && c.binding == Binding::Install);
+    let remote_secret = r.external.manifest.auth.is_some() && !installed;
+    let credentialed = !r.credential_declarations.is_empty() || remote_secret;
+    // A module whose credentials are all optional works without one
+    // (email receives with none; sending refuses by name when it is
+    // called), so constructing it with no `using` is a whole instance.
+    let credential_required = remote_secret || !r.credential_declarations.iter().all(optional_credential);
+    // A credential bound to a declaration the module lacks is refused by name
+    // at check (MOV_CREDENTIAL_*); it is not asked anything.
+    let connects = |c: &Credential| match &c.binding {
+        Binding::Install => false,
+        Binding::Credential(declared) => r.credential_declarations.iter().any(|d| d.name == *declared),
+        Binding::Legacy => true,
+    };
+    let credentials = match credentialed {
+        true => credentials.iter().filter(|c| c.external == *name && connects(c)).collect(),
+        false => Vec::new(),
+    };
+    Connections { credentialed, credential_required, credentials }
+}
+
+pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, ConnectionSchemas>, credentials: &Credentials, files: &[MovementFile]) -> Js {
     let mut credential_specs = Obj::new();
     for credential in credentials {
         // An install's secret signs calls; it is no account a `using` may name.
@@ -35,8 +79,6 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Js
         }
         credential_specs.insert(credential.name.clone(), Js::from(spec));
     }
-    let mut enumerated = credential_specs.clone();
-    movement_parser::util::js::object_key_order(&mut enumerated);
     let mut adapters = Obj::new();
     let external_names: Vec<&str> = running.iter().filter(|r| !r.is_plugin()).map(|r| r.external.manifest.name.as_str()).collect();
     for unit in movement_parser::version::RUN_HOST_UNITS {
@@ -46,29 +88,19 @@ pub fn catalog_of(running: &[Rc<RunningExternal>], schemas: &IndexMap<String, Js
     }
     for r in running.iter().filter(|r| !r.is_plugin()) {
         let name = &r.external.manifest.name;
-        // The hosted product holds a remote install's secret itself, so there
-        // it constructs credential-free; here the secrets file names it.
-        let installed = credentials.iter().any(|c| c.external == *name && c.binding == Binding::Install);
-        let remote_secret = r.external.manifest.auth.is_some() && !installed;
-        let credentialed = !r.credential_declarations.is_empty() || remote_secret;
-        // A module whose credentials are all optional works without one
-        // (email receives with none; sending refuses by name when it is
-        // called), so constructing it with no `using` is a whole instance.
-        let credential_required = remote_secret || !r.credential_declarations.iter().all(optional_credential);
+        let connections = connections_of(r, credentials);
+        // Each connection's own answer, in the key order a JavaScript object
+        // holds them; a connection whose describe gave none is untyped, never
+        // typed by another's.
         let mut adapter_schemas = Obj::new();
-        if let Some(schema) = schemas.get(name) {
-            if !credential_required {
-                adapter_schemas.insert(instance_schema_key(None), schema.clone());
-            }
-            for (credential_name, spec) in &enumerated {
-                let serves = spec.get("adapters").and_then(Js::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(name)));
-                if credentialed && serves {
-                    adapter_schemas.insert(instance_schema_key(Some(credential_name)), schema.clone());
-                }
+        if let Some(described) = schemas.get(name) {
+            for (key, schema) in described {
+                adapter_schemas.insert(key.clone(), schema.clone());
             }
         }
-        let construction_args = if credentialed {
-            vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(credential_required) })]
+        movement_parser::util::js::object_key_order(&mut adapter_schemas);
+        let construction_args = if connections.credentialed {
+            vec![Js::from(obj! { "name" => Js::str("credentials"), "kind" => Js::str("credential"), "required" => Js::Bool(connections.credential_required) })]
         } else {
             Vec::new()
         };

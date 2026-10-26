@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use indexmap::IndexMap;
 
 use crate::callbacks::{CALLBACK_AWAIT_TYPE, CallFor, CallOutcome, queue_body, record_callback_call, refusal, resolvable_awaits};
-use crate::catalog::catalog_of;
+use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
@@ -66,7 +66,7 @@ pub struct FileSet {
     pub catalog: Js,
     pub listens: Vec<Listen>,
     pub running: Vec<Rc<RunningExternal>>,
-    schemas: IndexMap<String, Js>,
+    schemas: IndexMap<String, ConnectionSchemas>,
     /// Each file's count of check errors against this set's catalog, by name.
     errors: OnceCell<BTreeMap<String, usize>>,
     /// The set's claims on its externals' processes: a worker's keep them
@@ -316,7 +316,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     started?;
     let _slot_holds = slot_processes.iter().map(|process| process.hold(role.keep())).collect();
     let described = join_all(running.iter().filter(|r| !r.is_plugin()).map(|r| async move { Ok::<_, String>((r.external.manifest.name.clone(), describe_external(r, credentials).await?)) }).collect()).await;
-    let schemas = described.into_iter().collect::<Result<IndexMap<String, Js>, String>>()?;
+    let schemas = described.into_iter().collect::<Result<IndexMap<String, ConnectionSchemas>, String>>()?;
     // Scanned again after the externals start: one may have written a movement file.
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
@@ -1493,7 +1493,7 @@ impl Session {
         let new_externals: Vec<&External> = needed.iter().filter(|e| !set.running.iter().any(|r| r.external.manifest.name == e.manifest.name)).collect();
         // An external no file imports now leaves the set; its process stops
         // once no set holds it (the runs begun on this one end).
-        let (mut running, mut schemas): (Vec<Rc<RunningExternal>>, IndexMap<String, Js>) = (
+        let (mut running, mut schemas): (Vec<Rc<RunningExternal>>, IndexMap<String, ConnectionSchemas>) = (
             set.running.iter().filter(|r| is_needed(&r.external.manifest.name)).cloned().collect(),
             set.schemas.iter().filter(|(name, _)| is_needed(name)).map(|(name, schema)| (name.clone(), schema.clone())).collect(),
         );
@@ -1562,7 +1562,7 @@ impl Session {
     }
 
     /// One external a refreshed set newly imports, started and described.
-    async fn start_external(&self, external: &External) -> Result<(Rc<RunningExternal>, Option<Js>), String> {
+    async fn start_external(&self, external: &External) -> Result<(Rc<RunningExternal>, Option<ConnectionSchemas>), String> {
         let secrets = self.secrets();
         let credentials = secrets.credentials();
         let one = start_externals(&self.project, std::slice::from_ref(external), credentials, LOCAL_TENANT).await?.into_iter().next().ok_or("it did not answer its manifest")?;

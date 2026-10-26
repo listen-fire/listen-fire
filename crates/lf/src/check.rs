@@ -14,13 +14,13 @@ use movement_parser::catalog::types::CatalogSnapshot;
 use movement_parser::util::form::{external_text, form_of_text, read_json_text};
 use serde_json::json;
 
-use crate::catalog::catalog_of;
-use crate::externals::{RunningExternal, needed_externals, rpc, scan_externals, start_externals};
+use crate::catalog::{ConnectionSchemas, catalog_of, connections_of};
+use crate::externals::{RunningExternal, needed_externals, rpc_as, scan_externals, start_externals};
 use crate::json::Js;
 use crate::project::Project;
 use crate::protocol::shape_error;
 use crate::schema::describe_external_schema;
-use crate::secrets::{Credentials, MissingCredential, Secrets, missing_credentials};
+use crate::secrets::{Credential, Credentials, MissingCredential, Secrets, missing_credentials};
 use crate::sources::{MovementFile, Parsed, scan_movements};
 
 /// The one tenant a local project is (`LOCAL_TENANT`).
@@ -135,11 +135,27 @@ pub async fn open_checking(project: &Project) -> Result<Opened, String> {
     Ok(Opened::Ready(Checking { files, catalog, _running: running }))
 }
 
+/// Every connection's schema (crate::catalog::connections_of), each described
+/// as that connection, as the hosted product describes each: one describe per
+/// credential bound to the external, so a check costs one per connection.
+pub async fn describe_external(running: &RunningExternal, credentials: &Credentials) -> Result<ConnectionSchemas, String> {
+    let connections = connections_of(running, credentials);
+    let mut schemas = ConnectionSchemas::new();
+    if !connections.credential_required {
+        schemas.insert(String::new(), describe_as(running, credentials, None).await?);
+    }
+    for credential in connections.credentials {
+        schemas.insert(credential.name.clone(), describe_as(running, credentials, Some(credential)).await?);
+    }
+    Ok(schemas)
+}
+
 /// `describeExternal`: its entry points and one `describe` per entry point,
-/// projected as the hosted product projects them.
-pub async fn describe_external(running: &RunningExternal, credentials: &Credentials) -> Result<Js, String> {
+/// asked as one connection, projected as the hosted product projects them.
+async fn describe_as(running: &RunningExternal, credentials: &Credentials, credential: Option<&Credential>) -> Result<Js, String> {
     let name = &running.external.manifest.name;
-    let entries = rpc(running, credentials, LOCAL_TENANT, "listEntryPoints", json!({})).await?;
+    let rpc = |method: &'static str, params: serde_json::Value| rpc_as(running, credentials, credential, LOCAL_TENANT, method, params);
+    let entries = rpc("listEntryPoints", json!({})).await?;
     let entry_list = entries
         .as_array()
         .filter(|list| list.iter().all(is_entry_point))
@@ -148,7 +164,7 @@ pub async fn describe_external(running: &RunningExternal, credentials: &Credenti
     let mut descriptors = IndexMap::new();
     for entry in &entry_list {
         let type_id = entry.get("typeId").and_then(Js::as_str).unwrap_or_default().to_string();
-        let descriptor = rpc(running, credentials, LOCAL_TENANT, "describe", json!({ "typeId": type_id })).await?;
+        let descriptor = rpc("describe", json!({ "typeId": type_id })).await?;
         match &descriptor {
             Js::Null => {}
             d if is_type_descriptor(d) => {

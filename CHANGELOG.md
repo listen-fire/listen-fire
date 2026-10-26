@@ -20,6 +20,8 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+- `lf` types each connection of a module by its own schema: it describes the module once per credential bound to it (`lf check` costs one describe per connection), as the hosted product does. Before, every connection was typed by the first credential's schema, so two workspaces (or two servers) of one module shared one set of types, and a field only one of them has could pass `lf check` on the other.
+
 ## [0.12.8] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote.
