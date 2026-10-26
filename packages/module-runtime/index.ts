@@ -15,3 +15,4 @@ export * from './secrets/family';
 export * from './secrets/memory';
 export * from './secrets/oauth2';
 export * from './vendor_wait';
+export * from './run_scope';
