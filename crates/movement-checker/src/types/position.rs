@@ -769,17 +769,14 @@ pub enum EdgeLanding {
     NotTraversable,
 }
 
-/// `refineSelected`: a hop whose WHERE the host registered a refinement for
-/// lands on that refinement, not the whole type.
-pub fn refine_selected(target: Position, filter: Option<&movement_parser::lowering::expression::Expression>) -> Position {
-    let (Some(filter), Position::Position(p)) = (filter, &target) else { return target };
-    let Some(refinements) = &p.instance.schema.refinements else { return target };
-    let Ok(filter) = serde_json::to_value(filter) else { return target };
+/// `refineSelected`: the refinement the host registered for a hop's WHERE,
+/// if it registered one.
+pub fn refine_selected(target: &Position, filter: &movement_parser::lowering::expression::Expression) -> Option<Position> {
+    let Position::Position(p) = target else { return None };
+    let refinements = p.instance.schema.refinements.as_ref()?;
+    let filter = serde_json::to_value(filter).ok()?;
     let key = movement_parser::catalog::helpers::refinement_key(&p.position, &filter);
-    match refinements.get(&key).and_then(|refined| position_ref_in(&p.instance, refined)) {
-        Some(refined) => refined,
-        None => target,
-    }
+    refinements.get(&key).and_then(|refined| position_ref_in(&p.instance, refined))
 }
 
 /// The `@`-prefixed edges a write handle carries (`-[:@old]->`).

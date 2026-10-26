@@ -25,7 +25,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use super::field::*;
 use super::narrowing::{PresenceProof, exists_subject, is_position_terminal, negative_presence_proofs, presence_proofs};
 use super::unions::{join_field_types, join_positions, joined_under, one_record_of};
-use super::position::{EdgeLanding, Position, describe_position, edge_landing, refine_selected, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
+use super::pinned_member::pinned_member;
+use super::position::{EdgeLanding, Position, describe_position, edge_landing, position_ref_in, refine_selected, instance_of_ref, lookup_property_type, narrow_present, narrow_present_node};
 use super::stdlib::{bare_coercer_returns, movement_meta_key_type, stdlib_function_by_id};
 
 /// What the typing asks of the scope it types in (the TypeScript's
@@ -212,7 +213,7 @@ impl<'a> Typing<'a> {
             // caller's record's child: what the body needs of it is the
             // parameter's need.
             Some(EdgeLanding::Landed { landing, edge: schema }) => (
-                super::position::with_parameter_of(from, Some(refine_selected(landing.clone(), edge.expression_filter.as_deref()))),
+                super::position::with_parameter_of(from, Some(self.selected_member(landing.clone(), edge.expression_filter.as_deref()))),
                 schema.clone(),
             ),
             Some(EdgeLanding::Untyped { edge }) => (None, edge.clone()),
@@ -220,6 +221,17 @@ impl<'a> Typing<'a> {
         };
         crate::families::walks::observe_step(self, from, edge, landing.as_ref());
         stepped
+    }
+
+    /// Where a hop's WHERE narrows its landing: the host's refinement when it
+    /// registered one, else the member the WHERE pins by a literal.
+    fn selected_member(&self, target: Position, filter: Option<&Expression>) -> Position {
+        let Some(filter) = filter else { return target };
+        if let Some(refined) = refine_selected(&target, filter) {
+            return refined;
+        }
+        let Position::Position(p) = &target else { return target };
+        pinned_member(&p.instance.schema, &p.position, filter).and_then(|member| position_ref_in(&p.instance, &member)).unwrap_or(target)
     }
 
     /// `stepEveryMember`: `who-[:edge]->` off one of several records — every

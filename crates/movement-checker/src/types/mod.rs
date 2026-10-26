@@ -6,6 +6,7 @@
 //! - `field`: value types (`Ty`) — absence, unions, tuples, equality, fit, spelling.
 //! - `position`: where a record stands (`Position`), closures, edge landings, property reads.
 //! - `narrowing`: what a condition proves present.
+//! - `pinned_member`: the member of a discriminated type a hop's WHERE pins.
 //! - `stdlib`: built-in signatures.
 //! - `infer`: `Typing`, which types an expression against a `TypeEnv`.
 //! - `declared`: node declarations as schemas, and the structural comparator.
@@ -16,6 +17,7 @@ pub mod event_address;
 pub mod field;
 pub mod infer;
 pub mod narrowing;
+pub mod pinned_member;
 pub mod position;
 pub mod scope_env;
 pub mod stdlib;

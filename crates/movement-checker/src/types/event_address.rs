@@ -36,20 +36,38 @@ fn address_narrowing(filter: Option<&Expression>) -> Option<Vec<(String, String)
 }
 
 fn collect_pins(expr: &Expression, into: &mut Vec<(String, String)>) -> bool {
-    if let Expression::Logical { op: LogicalOp::And, operands } = expr {
-        return operands.iter().all(|child| collect_pins(child, into));
-    }
-    let Expression::Compare { op: movement_parser::lowering::expression::FilterOperator::Eq, left, right } = expr else { return false };
-    let (key, value) = match (side(left), side(right)) {
-        (Some(Side::Read(key)), Some(Side::Literal(value))) | (Some(Side::Literal(value)), Some(Side::Read(key))) => (key, value),
-        _ => return false,
-    };
-    match into.iter().find(|(k, _)| *k == key) {
-        Some((_, existing)) => *existing == value,
-        None => {
-            into.push((key, value));
-            true
+    conjuncts(expr).into_iter().all(|conjunct| {
+        let Some((key, value)) = pin_of(conjunct) else { return false };
+        match into.iter().find(|(k, _)| *k == key) {
+            Some((_, existing)) => *existing == value,
+            None => {
+                into.push((key, value));
+                true
+            }
         }
+    })
+}
+
+/// The `` `key` == "literal" `` conjuncts of a WHERE, in the order written,
+/// beside whatever else it tests: each holds of every record the WHERE admits.
+pub fn conjunct_pins(filter: &Expression) -> Vec<(String, String)> {
+    conjuncts(filter).into_iter().filter_map(pin_of).collect()
+}
+
+/// A WHERE's top-level `AND`s, flattened.
+fn conjuncts(expr: &Expression) -> Vec<&Expression> {
+    match expr {
+        Expression::Logical { op: LogicalOp::And, operands } => operands.iter().flat_map(conjuncts).collect(),
+        other => vec![other],
+    }
+}
+
+/// `` `key` == "literal" ``, either way round.
+fn pin_of(expr: &Expression) -> Option<(String, String)> {
+    let Expression::Compare { op: movement_parser::lowering::expression::FilterOperator::Eq, left, right } = expr else { return None };
+    match (side(left), side(right)) {
+        (Some(Side::Read(key)), Some(Side::Literal(value))) | (Some(Side::Literal(value)), Some(Side::Read(key))) => Some((key, value)),
+        _ => None,
     }
 }
 
