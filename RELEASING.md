@@ -53,7 +53,7 @@ The core is at the new version; the plain tags move npm `latest`, make the GitHu
    git push origin docs-v0.12.6
    corepack pnpm changeset tag && git push origin --tags
    ```
-8. Publish the crates. The script publishes, in dependency order, each crate whose `name@version` is not yet on crates.io, waiting for the index between them. `--dry-run` prints what it would publish.
+8. Publish the crates. The script publishes, in dependency order, each crate whose `name@version` is not yet on crates.io, waiting until cargo's package index (index.crates.io, which lags the crates.io website) carries each one before publishing the next. If the index is slow it stops after ten minutes; rerun it to continue, since a crate already published is skipped. `--dry-run` prints what it would publish.
    ```sh
    scripts/release/publish-crates.sh --dry-run
    scripts/release/publish-crates.sh
@@ -64,10 +64,10 @@ The core is at the new version; the plain tags move npm `latest`, make the GitHu
    corepack pnpm -r build
    corepack pnpm -r publish --access public --no-git-checks
    ```
-10. Verify every public package landed (a recursive publish in one burst has dropped packages twice); republish any that are missing with `--filter`:
+10. Verify every public package landed (a recursive publish in one burst has dropped packages twice; the loop has no `!`, which an interactive zsh would read as history); republish any that are missing with `--filter`:
     ```sh
     for f in $(git ls-files '*/package.json' | grep -vE '^(apps/|examples/)'); do
-      n=$(node -e "const j=require('./$f'); if(!j.private&&j.name) console.log(j.name+' '+j.version)");
+      n=$(node -e "const j=require('./$f'); j.private || (j.name && console.log(j.name+' '+j.version))");
       [ -z "$n" ] && continue
       npm view "${n% *}@${n#* }" version >/dev/null 2>&1 || echo "MISSING $n"
     done

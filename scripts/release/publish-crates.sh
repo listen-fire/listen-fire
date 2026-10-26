@@ -31,8 +31,21 @@ crates=(
 # crates.io refuses requests without a User-Agent that says who is asking.
 user_agent="listen-fire-release-script (https://github.com/listen-fire/listen-fire)"
 
-on_index() {
+on_api() {
   curl -fs -o /dev/null -A "$user_agent" "https://crates.io/api/v1/crates/$1/$2"
+}
+
+# cargo resolves dependencies from the sparse index, which lags the API: wait
+# on the index itself before publishing a crate that depends on this one.
+on_index() {
+  local name=$1 prefix
+  case ${#name} in
+    1) prefix=1 ;;
+    2) prefix=2 ;;
+    3) prefix="3/${name:0:1}" ;;
+    *) prefix="${name:0:2}/${name:2:2}" ;;
+  esac
+  curl -fs -A "$user_agent" "https://index.crates.io/$prefix/$name" | grep -q "\"vers\":\"$2\""
 }
 
 version_of() {
@@ -40,10 +53,22 @@ version_of() {
     node -e 'const m = JSON.parse(require("fs").readFileSync(0, "utf8")); const p = m.packages.find((p) => p.name === process.argv[1]); if (!p) process.exit(1); console.log(p.version)' "$1"
 }
 
+wait_for_index() {
+  for _ in $(seq 1 60); do
+    on_index "$1" "$2" && return 0
+    sleep 10
+  done
+  echo "$1@$2 did not reach the sparse index in 10 minutes; rerun this script to continue" >&2
+  exit 1
+}
+
 for crate in "${crates[@]}"; do
   version=$(version_of "$crate")
-  if on_index "$crate" "$version"; then
+  if on_api "$crate" "$version"; then
     echo "skip $crate@$version (on crates.io)"
+    # A crate published by an earlier, interrupted run may not be on the
+    # index yet; the next crate cannot resolve it until it is.
+    $dry_run || wait_for_index "$crate" "$version"
     continue
   fi
   if $dry_run; then
@@ -52,10 +77,5 @@ for crate in "${crates[@]}"; do
   fi
   echo "publish $crate@$version"
   cargo publish -p "$crate"
-  # cargo publish returns before the index serves the version.
-  for _ in $(seq 1 30); do
-    on_index "$crate" "$version" && break
-    sleep 10
-  done
-  on_index "$crate" "$version" || { echo "$crate@$version did not reach the index in 5 minutes" >&2; exit 1; }
+  wait_for_index "$crate" "$version"
 done
