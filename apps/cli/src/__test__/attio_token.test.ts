@@ -37,3 +37,18 @@ test('lf credential add for Attio names both credentials, and attio_token prompt
   const entry = (secrets as Record<string, Record<string, unknown>>).henry_attio;
   assert.deepEqual(entry, { module: 'attio', credential: 'attio_token', accessToken: 'attio-secret-token' });
 });
+
+test('lf connect @lf/attio for tokens asks for no OAuth app; the OAuth credential is then refused naming the remedy', async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'lf-attio-token-only-')), 'attio-token-only');
+  assert.equal(lfSync(join(dir, '..'), 'init', 'attio-token-only').code, 0);
+  const connected = await ok(lf(dir, ['connect', '@lf/attio', '--yes'], { answers: [] }));
+  assert.doesNotMatch(connected, /client id/);
+  assert.match(connected, /attio: no OAuth app, so its OAuth sign-in \(attio\) is off/);
+
+  const refused = await lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio'], { answers: [] }).done;
+  assert.equal(refused.code, 1, refused.out);
+  assert.match(refused.out, /module "attio" has no OAuth app set up, so its "attio" credential cannot sign in: lf connect attio and answer yes to the OAuth app/);
+
+  const adding = lf(dir, ['credential', 'add', '--module', '@lf/attio', 'henry_attio', '--credential', 'attio_token'], { answers: ['attio-secret-token', ''] });
+  assert.match(await ok(adding), /added henry_attio \(attio, credential attio_token\)/);
+});

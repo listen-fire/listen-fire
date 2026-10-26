@@ -93,9 +93,13 @@ pub async fn add_credential(project: &Project, input: AddInput<'_>, prompter: &m
         return Err(format!("there is already a credential \"{name}\"; change it with lf credential update {name}").into());
     }
     secrets.store().entries_writable(&name)?;
+    // Refused before any question: an OAuth sign-in needs the install's app.
+    let client = match &declaration.kind {
+        DeclarationKind::OAuth2(_) => Some(client_of(&module, declaration, &facts.declarations, install)?),
+        _ => None,
+    };
     let mut fields: Vec<(String, String)> = ask_fields(declaration, &Fields::new(), prompter).await?.into_iter().filter(|(_, v)| !v.is_empty()).collect();
-    if let DeclarationKind::OAuth2(oauth2) = &declaration.kind {
-        let client = client_of(&module, install)?;
+    if let (DeclarationKind::OAuth2(oauth2), Some(client)) = (&declaration.kind, client) {
         let mode = redirect_mode(project, input.redirect, install)?;
         let grant = authorize_at_provider(oauth2, &client, &mode, prompter, &format!("\"{name}\" ({module})")).await?;
         fields = crate::connect::spread(fields, fields_vec(&grant));
@@ -143,7 +147,7 @@ pub async fn update_credential(project: &Project, input: UpdateInput<'_>, prompt
     if let (DeclarationKind::OAuth2(oauth2), true) = (&declaration.kind, input.reauthorize) {
         // A hand-written entry holds its own app; a bound one uses the install's.
         let own_app = credential.binding == Binding::Legacy && credential.fields.contains_key(CLIENT_ID_FIELD);
-        let client = client_of(&credential.external, if own_app { Some(credential) } else { install })?;
+        let client = client_of(&credential.external, declaration, &facts.declarations, if own_app { Some(credential) } else { install })?;
         let mode = redirect_mode(project, input.redirect, install)?;
         let grant = authorize_at_provider(oauth2, &client, &mode, prompter, &format!("\"{name}\" ({})", credential.external)).await?;
         edited.extend(grant);
@@ -280,9 +284,20 @@ async fn ask_fields(declaration: &Declaration, current: &BTreeMap<String, String
     Ok(answers)
 }
 
-fn client_of(module: &str, holder: Option<&Credential>) -> Result<ClientApp, String> {
+/// The install's OAuth app, or a refusal naming how to set it up: a module
+/// whose users may sign in otherwise is installed without one unless asked
+/// (crate::connect), so its remedy says how to ask.
+fn client_of(module: &str, declaration: &Declaration, declarations: &[Declaration], holder: Option<&Credential>) -> Result<ClientApp, String> {
     let holder = holder.filter(|h| h.fields.get(CLIENT_ID_FIELD).is_some_and(|id| !id.is_empty()));
-    let Some(holder) = holder else { return Err(format!("module \"{module}\" has no OAuth app set up: lf connect {module}")) };
+    let Some(holder) = holder else {
+        if declarations.iter().all(|d| d.oauth2().is_some()) {
+            return Err(format!("module \"{module}\" has no OAuth app set up: lf connect {module}"));
+        }
+        return Err(format!(
+            "module \"{module}\" has no OAuth app set up, so its \"{}\" credential cannot sign in: lf connect {module} and answer yes to the OAuth app, or lf connect {module} --oauth-authorize-url <url> --oauth-token-url <url>",
+            declaration.name
+        ));
+    };
     Ok(ClientApp {
         client_id: holder.fields[CLIENT_ID_FIELD].clone(),
         client_secret: holder.fields.get(CLIENT_SECRET_FIELD).filter(|s| !s.is_empty()).cloned(),

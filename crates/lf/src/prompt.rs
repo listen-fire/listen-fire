@@ -72,6 +72,16 @@ impl Prompter {
         Ok(line.is_some_and(|answer| !matches!(answer.trim().to_ascii_lowercase().as_str(), "n" | "no")))
     }
 
+    /// A yes-or-no question whose answer is no unless it says yes.
+    pub async fn confirm_no(&mut self, question: &str) -> Result<bool, String> {
+        write_out(&format!("{question} [y/N]: "));
+        let line = self.lines.next_line().await.map_err(|e| e.to_string())?;
+        if !self.terminal {
+            write_out("\n");
+        }
+        Ok(line.is_some_and(|answer| matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")))
+    }
+
     /// A line of progress, between questions.
     pub fn print(&self, line: &str) {
         write_out(&format!("{line}\n"));

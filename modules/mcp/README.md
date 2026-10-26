@@ -46,19 +46,15 @@ A property's `null` alternative (`["string", "null"]`) is dropped. `lf check` re
 
 ## Connecting
 
-Install it once per project, then add one credential per server. With tokens only, install it with its two-line `externals/mcp/lf-external.yaml` (`lf connect @lf/mcp` asks for an OAuth app, which a token does not need):
-
-```yaml
-name: mcp
-module: "@lf/mcp"
-```
+Install it once per project, then add one credential per server. `lf connect` asks whether to set up an OAuth app (no by default; `--yes` sets none up), since a token needs none.
 
 ```sh
+lf connect @lf/mcp
 lf credential add --module @lf/mcp linear --credential mcp_token
 ```
 
 - `mcp_token` holds the server `url`, a `token`, and optionally a `header`. Without a header the token is sent as `Authorization: Bearer <token>`; with one, the token is sent under that header as written (`X-Api-Key`). Any number of servers can be connected this way.
-- `mcp` is an OAuth sign-in. Its `url` is the server's. The authorization server's endpoints and your app there belong to the install: `lf connect @lf/mcp --oauth-authorize-url <…/authorize> --oauth-token-url <…/token>`, then `lf credential add --module @lf/mcp <name> --credential mcp`. The sign-in uses PKCE. OAuth therefore reaches one server's authorization server per project.
+- `mcp` is an OAuth sign-in. Its `url` is the server's. The authorization server's endpoints and your app there belong to the install: `lf connect @lf/mcp --oauth-authorize-url <…/authorize> --oauth-token-url <…/token>`, then `lf credential add --module @lf/mcp <name> --credential mcp`. Without an OAuth app, adding an `mcp` credential is refused, naming that command. The sign-in uses PKCE. OAuth therefore reaches one server's authorization server per project.
 
 `lf check` describes each connection the movement files import, once each, as that connection.
 
@@ -67,4 +63,3 @@ lf credential add --module @lf/mcp linear --credential mcp_token
 - Resources, prompts, sampling and elicitation; listening to the server's notifications; stdio servers.
 - A read that leaves out a required argument passes `lf check` and fails the run, naming the argument. Nothing marks a field the `WHERE` must pin yet.
 - OAuth endpoints found from the server's protected-resource metadata, per-connection OAuth endpoints, and dynamic client registration.
-- `lf connect @lf/mcp` asking for the OAuth app only when a credential will sign in with it.

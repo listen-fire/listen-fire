@@ -262,6 +262,23 @@ fn expects_one_sign_in(facts: &ManifestFacts) -> bool {
     matches!((required.next(), required.next()), (Some(only), None) if only.oauth2().is_some())
 }
 
+/// Whether the install's OAuth app is set up: always for a module with no
+/// other way to sign in, an install that has one, or one given its OAuth
+/// endpoints. A module whose users may sign in otherwise (a token) is asked
+/// (None), the default being no; `--yes` sets none up.
+fn oauth_app_wanted(declarations: &[Declaration], fields: &[(String, String)], options: &ConnectOptions<'_>) -> Option<bool> {
+    let given = |flag: Option<&str>| flag.is_some_and(|url| !url.is_empty());
+    let has_app = fields.iter().any(|(k, v)| k == CLIENT_ID_FIELD && !v.is_empty());
+    let only_oauth = declarations.iter().all(|d| d.oauth2().is_some());
+    if only_oauth || has_app || given(options.oauth_authorize_url) || given(options.oauth_token_url) {
+        return Some(true);
+    }
+    match options.sign_in {
+        None => Some(false),
+        Some(_) => None,
+    }
+}
+
 /// The setup's last step: `lf credential add` for the first user, if they want it now.
 async fn offer_sign_in(project: &Project, module: &str, redirect: &crate::credential_cmd::RedirectChoice, prompter: &mut Prompter) -> Result<(), EntryError> {
     if !prompter.confirm("Sign in now?").await? {
@@ -365,8 +382,21 @@ async fn set_up(project: &Project, external: &External, secrets: &Secrets, promp
     }
 
     let oauth2: Vec<&Declaration> = facts.declarations.iter().filter(|d| d.oauth2().is_some()).collect();
-    if !oauth2.is_empty() {
-        let names: Vec<&str> = oauth2.iter().map(|d| d.name.as_str()).collect();
+    let names: Vec<&str> = oauth2.iter().map(|d| d.name.as_str()).collect();
+    let wanted = match oauth_app_wanted(&facts.declarations, &fields, options) {
+        _ if oauth2.is_empty() => false,
+        Some(wanted) => wanted,
+        None => {
+            let question = format!("{name}'s users may also sign in with OAuth 2 ({}); set up your OAuth app at the provider now?", names.join(", "));
+            prompter.confirm_no(&question).await?
+        }
+    };
+    if !oauth2.is_empty() && !wanted {
+        prompter.print(&format!(
+            "{name}: no OAuth app, so its OAuth sign-in ({}) is off; lf connect {name} again sets one up",
+            names.join(", ")
+        ));
+    } else if !oauth2.is_empty() {
         prompter.print(&format!("{name} signs users in with OAuth 2 ({}): your app at the provider, once for every credential", names.join(", ")));
         let client_id = prompter.ask("your app's client id", Ask { default: current(&fields, CLIENT_ID_FIELD).as_deref(), ..Ask::default() }).await?;
         put(&mut fields, CLIENT_ID_FIELD, client_id);

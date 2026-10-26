@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -39,15 +39,17 @@ function triage(company: <crm-[:Company]->>) {
 listen to crm { events: ["company.created"] } fire triage
 `;
 
-/** The example project with `@lf/mcp` installed (its lf-external.yaml, as
- *  `lf connect` writes it) and the movement in place of the example's. */
+/** The example project with the movement in place of the example's. */
 function mcpProject(movement: string): string {
   const dir = project();
-  mkdirSync(join(dir, 'externals/mcp'));
-  writeFileSync(join(dir, 'externals/mcp/lf-external.yaml'), 'name: mcp\nmodule: "@lf/mcp"\n');
   rmSync(join(dir, 'movements/companies.mvt'));
   writeFileSync(join(dir, 'movements/triage.mvt'), movement);
   return dir;
+}
+
+/** `lf connect @lf/mcp --yes`, for tokens only: no OAuth app is asked for. */
+async function connectForTokens(dir: string): Promise<string> {
+  return ok(lf(dir, ['connect', '@lf/mcp', '--yes'], { answers: [] }));
 }
 
 /** `lf credential add` for a token credential, its fields answered as asked. */
@@ -59,6 +61,7 @@ async function twoServers(): Promise<{ issues: FakeMcpServer; crm: FakeMcpServer
   const issues = await startFakeMcpServer({ kind: 'issues', token: 'linear-token' });
   const crm = await startFakeMcpServer({ kind: 'crm', token: 'crm-key', header: 'X-Api-Key' });
   const dir = mcpProject(TRIAGE);
+  await connectForTokens(dir);
   assert.match(await addToken(dir, 'linear', issues.url, 'linear-token'), /added linear \(mcp, credential mcp_token\)/);
   assert.match(await addToken(dir, 'crm_mcp', crm.url, 'crm-key', 'X-Api-Key'), /added crm_mcp \(mcp, credential mcp_token\)/);
   return { issues, crm, dir, close: async () => (await issues.close(), await crm.close()) };
@@ -150,6 +153,28 @@ test('a call the server refuses fails the run with the server’s text; a read m
   }
 });
 
+test('lf connect @lf/mcp for tokens asks for no OAuth app, and an OAuth credential is then refused naming the remedy', async () => {
+  const dir = mcpProject(TRIAGE);
+  const quiet = await connectForTokens(dir);
+  console.log(quiet.trim());
+  assert.match(quiet, /installed @lf\/mcp as externals\/mcp/);
+  assert.doesNotMatch(quiet, /client id/);
+  assert.match(quiet, /mcp: no OAuth app, so its OAuth sign-in \(mcp\) is off; lf connect mcp again sets one up/);
+
+  // Asked, an empty answer is no.
+  const asked = await ok(lf(dir, ['connect', '@lf/mcp'], { answers: [''] }));
+  assert.match(asked, /set up your OAuth app at the provider now\? \[y\/N\]/);
+  assert.doesNotMatch(asked, /client id/);
+
+  const refused = await lf(dir, ['credential', 'add', '--module', '@lf/mcp', 'ops', '--credential', 'mcp'], { answers: [] }).done;
+  assert.equal(refused.code, 1, refused.out);
+  console.log(refused.out.trim());
+  assert.match(
+    refused.out,
+    /module "mcp" has no OAuth app set up, so its "mcp" credential cannot sign in: lf connect mcp and answer yes to the OAuth app, or lf connect mcp --oauth-authorize-url <url> --oauth-token-url <url>/,
+  );
+});
+
 interface Fake {
   url: string;
   stop(): Promise<void>;
@@ -183,7 +208,6 @@ test('OAuth: lf connect with the provider’s endpoints, a headless sign-in, and
         .replace(/customers = .*\n/, '')
         .replace(/  note = [\s\S]*?\n  }\n/, ''),
     );
-    rmSync(join(dir, 'externals/mcp'), { recursive: true });
     const F = provider.url;
     const connected = await ok(
       lf(dir, ['connect', '@lf/mcp', '--yes', '--oauth-authorize-url', `${F}/oauth/authorize`, '--oauth-token-url', `${F}/oauth/token`], {
