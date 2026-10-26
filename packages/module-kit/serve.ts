@@ -18,6 +18,7 @@ import { hostOcr } from './host_ocr';
 import { fileKv } from './file_kv';
 import { emptyOcrSlot, refusingFiles, refusingKv, refusingModels } from './in_process';
 import { createModuleProtocolHandler } from './module_server';
+import { warnIfRunScopesSplit } from './run_scopes';
 import { emptyBrowserSlot, type BrowserSlot } from 'module-runtime/browser';
 import { remoteBrowserSlot } from 'module-runtime/module-wire';
 
@@ -320,6 +321,7 @@ export async function main(argv: readonly string[], env: Readonly<Record<string,
           options: moduleOptionsOf(loadModuleDefinition(mount.module, mount.cwd ?? process.cwd()), { ...env, ...mount.env }),
         }))
       : [{ path: '', options: moduleOptionsOf(loadModuleDefinition(specifier ?? '', process.cwd()), env) }];
+  warnIfRunScopesSplit(jsonLineLog('serve-module', (line) => process.stderr.write(line)));
   const socket = env.MODULE_SOCKET !== undefined && env.MODULE_SOCKET !== '' ? env.MODULE_SOCKET : undefined;
   const served = await serveModules({
     mounts,

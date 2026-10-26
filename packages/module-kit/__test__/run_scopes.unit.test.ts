@@ -13,7 +13,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineModule } from '../define';
 import { refusingFiles, refusingKv } from '../in_process';
 import { createModuleProtocolHandler } from '../module_server';
-import { runScopes, type RunScopes } from '../run_scopes';
+import { loadedRunScopeFiles, runScopes, warnIfRunScopesSplit, type RunScopes } from '../run_scopes';
 
 const READ_ONCE: PluginDeclaration = {
   priced: false,
@@ -114,4 +114,35 @@ test('a scope with a call in flight is not released for being idle', async () =>
   expect(scopes.open()).toBe(2);
   finish();
   await held;
+});
+
+describe('a module on another copy of the run scope', () => {
+  const kits = '/app/node_modules/@listen-fire/module-kit/index.js';
+  const mine = '/app/node_modules/@listen-fire/module-runtime/run_scope.js';
+  const other = '/app/node_modules/@listen-fire/engine/node_modules/@listen-fire/module-runtime/run_scope.js';
+
+  function warnings() {
+    const lines: string[] = [];
+    const log = { debug: () => undefined, info: () => undefined, warn: (message: string) => void lines.push(message), error: () => undefined };
+    return { lines, log };
+  }
+
+  test('is told once at start, naming both copies', () => {
+    const { lines, log } = warnings();
+    expect(warnIfRunScopesSplit(log, [kits, mine, other])).toBe(true);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('run scopes cannot reach every module');
+    expect(lines[0]).toContain(mine);
+    expect(lines[0]).toContain(other);
+  });
+
+  test('one copy says nothing', () => {
+    const { lines, log } = warnings();
+    expect(warnIfRunScopesSplit(log, [kits, mine, mine])).toBe(false);
+    expect(lines).toEqual([]);
+  });
+
+  test('this process holds exactly the copy the kit uses', () => {
+    expect(loadedRunScopeFiles()).toHaveLength(1);
+  });
 });

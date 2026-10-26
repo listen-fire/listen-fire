@@ -11,6 +11,8 @@
 
 import { RunScope, inRunScope } from 'module-runtime/run_scope';
 
+import type { ModuleLog } from './define';
+
 export interface RunScopes {
   /** Answer `call` inside the run scope `cacheScopeId` names. */
   around<T>(cacheScopeId: string, call: () => Promise<T>): Promise<T>;
@@ -77,4 +79,26 @@ export function runScopes(options: { idleMs?: number; most?: number; now?: () =>
     },
     open: () => kept.size,
   };
+}
+
+const RUN_SCOPE_FILE = /[\\/]module-runtime[\\/]run_scope\.(?:[cm]?[jt]s)$/;
+
+/** The files of module-runtime's run scope that this process has loaded. The
+ *  scope lives in an AsyncLocalStorage each copy of that file creates for
+ *  itself, so a module that loaded a different copy than the kit reads a scope
+ *  the kit never opens, and its memo and ceiling silently do not exist. */
+export function loadedRunScopeFiles(loaded: Iterable<string> = Object.keys(require.cache)): string[] {
+  return [...new Set([...loaded].filter((file) => RUN_SCOPE_FILE.test(file)))];
+}
+
+/** Say once, at start, when the process holds more than one copy of the run
+ *  scope: the kit's scopes then do not reach the module that loaded the other.
+ *  Returns whether it said so. */
+export function warnIfRunScopesSplit(log: ModuleLog, loaded: Iterable<string> = Object.keys(require.cache)): boolean {
+  const copies = loadedRunScopeFiles(loaded);
+  if (copies.length < 2) return false;
+  log.warn(
+    `run scopes cannot reach every module: ${copies.length} copies of module-runtime's run_scope are loaded (${copies.join(', ')}), so a module on a different copy than the kit's has no run cache or call ceiling; install one version of @listen-fire/module-runtime`,
+  );
+  return true;
 }
