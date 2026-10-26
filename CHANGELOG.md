@@ -20,6 +20,11 @@ named in [`RELEASING.md`](RELEASING.md).
 
 <!-- add merged PRs here -->
 
+## [0.12.7] - 2026-10-26
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote.
+
+- A module served under `lf` keeps its run's per-run caches, as it does in process: each call is answered inside the run scope the run names, so a module's read memo and call ceiling work under `lf` (the Affinity module's saving under `lf` is the larger one; see `@listen-fire/affinity`'s own `CHANGELOG.md` for the call counts). `serve-module` says on stderr, once at start, when the process holds more than one copy of the run scope, since a module on a different copy than the kit's would silently have no run cache.
 - A hop whose WHERE pins a list reads that list's own columns under `lf`: `` org-[le:`List Entries` WHERE le.`listName` == "Master Deals List"]-> { return le.`Deal Created` } `` checks and runs, where `lf` refused `Deal Created` (it read only what every list has). The member a literal picks is the one the module's write already names for that value, so no module changes. The list's columns read in the body and in the WHERE's other conjuncts, in either order, and an entry of another list is dropped before any of its fields is read. A literal no list has stays the `listName` enum's refusal; a hop with no literal, or a host's own narrowing (the hosted platform's), works as before.
 
 ## [0.12.6] - 2026-10-25
@@ -2299,7 +2304,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...HEAD
+[0.12.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...v0.12.7
 [0.12.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/listen-fire/listen-fire/compare/v0.12.3...v0.12.4
