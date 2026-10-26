@@ -19,6 +19,9 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- A polled listen with `events` runs again under `lf`: a polled source now labels each event with its kind (`eventType`, adapter protocol 2.3), and `lf` narrows by it as it does a pushed event. The bundled Gmail, Evertrace, Dealroom and Granola modules label theirs. An event from an older module with no label still reaches the listen that polled it, and `lf` prints once per module: `<module>: a polled event carries no eventType; …`. Before, every such event was dropped silently.
+- A poll now names its listener by the listen's pipeline, `listen:<file>:<movement>` (`movementId`), so a source can tell a listener from a same-named movement in another file.
+- `LF_SECRET__<ENTRY>__MODULE=<module>` makes an entry from the environment that module's install, as `module:` does in the secrets file: a separately run adapter's key can come from the environment alone, and its connection needs no `using`. `LF_SECRET__<ENTRY>__EXTERNAL` is unchanged.
 
 ## [0.12.7] - 2026-10-26
 
