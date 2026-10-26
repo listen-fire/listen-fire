@@ -8,7 +8,10 @@
 //!   POST /api/public/adapter/<external>/wake  { keys }    resume what is parked
 //!
 //! An install is a credential in the secrets file; its name is the
-//! "subscription" in the URL. A delivery's signature is checked by the scheme
+//! "subscription" in the URL. A delivery to a connection's credential runs
+//! only the listens whose construction names that credential (or none); one
+//! to the module's own install, which serves every connection, reaches every
+//! listen. A delivery's signature is checked by the scheme
 //! the external's manifest declares (`inbound`), or, for an external that
 //! declares none, by its `lf-external.yaml` `webhook:` block (the protocol's
 //! own scheme). A signed delivery with no usable secret is refused, as
@@ -32,7 +35,7 @@ use crate::inbound::{
 use crate::json::Js;
 use crate::obj;
 use crate::run_host::{await_wake_work, queue_await_wake};
-use crate::runs::{Fired, Session};
+use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
 use crate::backend::RunHostStore;
 use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
@@ -157,6 +160,13 @@ impl<R: Reader> LfDoors<'_, R> {
         self.installs.iter().find(|c| c.name == name)
     }
 
+    /// The connection a delivery to `source`'s door came for: the credential
+    /// its URL names. None when that is the module's install, whose door
+    /// serves every connection.
+    fn delivering_credential<'s>(&self, source: &'s Source) -> Option<&'s str> {
+        self.install(&source.install).filter(|c| c.binding != Binding::Install).map(|_| source.install.as_str())
+    }
+
     fn setup_of(&self, external: &str) -> Option<&InboundSetup> {
         self.served.iter().find(|s| s.external == external).and_then(|s| s.inbound.as_ref())
     }
@@ -173,7 +183,8 @@ impl<R: Reader> LfDoors<'_, R> {
         let mut failures = Vec::new();
         for kept in &receipt.events {
             let (external, event) = (kept.get("external").and_then(Js::as_str).unwrap_or_default(), kept.get("event").unwrap_or(&Js::Null));
-            match session.fire_event(external, event, false, Some(&receipt.id)).await {
+            let delivered = Delivered { id: Some(&receipt.id), credential: kept.get("credential").and_then(Js::as_str) };
+            match session.fire_event(external, event, false, delivered).await {
                 Ok(one) => {
                     for line in &one.redelivered {
                         eprintln!("lf: {line}");
@@ -288,6 +299,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// nothing and runs nothing.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
+        let credential = self.delivering_credential(kept.source);
         let receipt = NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: kept.external_id.map(str::to_string),
@@ -295,10 +307,10 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             source: kept.door,
             inline: matches!(self.sink, EventSink::Inline { .. }),
             replay_of: None,
-            events: kept.receipts.iter().map(|event| kept_event(adapter_type, event.clone())).collect(),
+            events: kept.receipts.iter().map(|event| kept_event(adapter_type, credential, event.clone())).collect(),
         };
         let mut work: Vec<NewWork> = match &self.sink {
-            EventSink::Queue | EventSink::Listed(_) => kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), &receipt.id)).collect(),
+            EventSink::Queue | EventSink::Listed(_) => kept.receipts.iter().map(|event| fire_event_work(adapter_type, credential, event.clone(), &receipt.id)).collect(),
             EventSink::Inline { .. } => Vec::new(),
         };
         work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
@@ -364,7 +376,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             .iter()
             .map(|pushed| {
                 let external = pushed.get("external").and_then(Js::as_str).unwrap_or_default();
-                fire_event_work(external, pushed.get("event").cloned().unwrap_or(Js::Null), &receipt.id)
+                fire_event_work(external, None, pushed.get("event").cloned().unwrap_or(Js::Null), &receipt.id)
             })
             .collect();
         if !self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work).map_err(|e| e.to_string())? {
@@ -481,22 +493,27 @@ fn carried_credential<'a>(credentials: &'a Credentials, external: &str, named: &
     }
 }
 
-/// One of a delivery's events as its receipt keeps it: the event and the
-/// external it came from, all a replay needs to queue it again.
-fn kept_event(external: &str, event: Js) -> Js {
-    Js::Obj(obj! { "external" => Js::str(external), "event" => event })
+/// One of a delivery's events as its receipt keeps it: the event, the
+/// external it came from and the connection it came for (when its door named
+/// one), all a replay needs to queue it again.
+fn kept_event(external: &str, credential: Option<&str>, event: Js) -> Js {
+    let mut kept = obj! { "external" => Js::str(external), "event" => event };
+    if let Some(credential) = credential {
+        kept.insert("credential".into(), Js::str(credential));
+    }
+    Js::Obj(kept)
 }
 
 /// A queued event's `fire_event` row, for the drain: the run it starts
-/// names its delivery.
-pub fn fire_event_work(external: &str, event: Js, delivery_id: &str) -> NewWork {
-    NewWork {
-        kind: "fire_event".into(),
-        key: format!("fire_event:{}", uuid::Uuid::new_v4()),
-        payload: Js::Obj(obj! { "external" => Js::str(external), "event" => event, "deliveryId" => Js::str(delivery_id) }),
-        due_at: None,
-        team_id: None,
+/// names its delivery, and only the listens of the connection it came for
+/// take it (a row with no `credential`, as every row queued before rows
+/// named one, reaches every listen).
+pub fn fire_event_work(external: &str, credential: Option<&str>, event: Js, delivery_id: &str) -> NewWork {
+    let mut payload = obj! { "external" => Js::str(external), "event" => event, "deliveryId" => Js::str(delivery_id) };
+    if let Some(credential) = credential {
+        payload.insert("credential".into(), Js::str(credential));
     }
+    NewWork { kind: "fire_event".into(), key: format!("fire_event:{}", uuid::Uuid::new_v4()), payload: Js::Obj(payload), due_at: None, team_id: None }
 }
 
 // ── The pull cursor ─────────────────────────────────────────────────────────
@@ -601,7 +618,7 @@ pub async fn receive_webhook(session: &Session, webhook: Webhook<'_>) -> Result<
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -614,19 +631,35 @@ mod tests {
     /// An adapter whose deliveries are lists of notes, each a `note.created`
     /// event, served by a module host on a thread of the test. While `down`
     /// is set its event types fail, and so does every event fired to it.
-    mod inbox {
-        use std::sync::Arc;
+    /// It registers webhooks, each call noted in `registrations` with the
+    /// token of the credential it was made as.
+    pub(crate) mod inbox {
         use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
 
         use module_kit::*;
 
         pub struct Inbox {
             pub down: Arc<AtomicBool>,
+            pub registrations: Arc<Mutex<Vec<Js>>>,
+            /// Polled too: each poll noted in `registrations`, and one note returned.
+            pub polled: bool,
         }
 
         impl Adapter for Inbox {
             fn manifest(&self) -> AdapterManifest {
-                AdapterManifest::new("inbox").triggers(["webhook"]).optional(["listEventTypes", "preprocessInbound"]).declare("subscribableEvents", Js::strings(["note.created"]))
+                let credential = Js::parse(br#"[{"name":"inbox","kind":"static","fields":[{"name":"token","optional":true}]}]"#).unwrap();
+                let mut methods = vec!["listEventTypes", "preprocessInbound", "ensureEventSubscription", "removeEventSubscription"];
+                methods.extend(self.polled.then_some("poll"));
+                let manifest = AdapterManifest::new("inbox")
+                    .triggers(["webhook"])
+                    .optional(methods)
+                    .declare("subscribableEvents", Js::strings(["note.created"]))
+                    .declare("credentials", credential);
+                match self.polled {
+                    true => manifest.declare("poll", Js::parse(br#"{"intervalSeconds":60}"#).unwrap()),
+                    false => manifest,
+                }
             }
 
             async fn list_entry_points(&self, _: &Ctx) -> Answer<Vec<EntryPoint>> {
@@ -652,8 +685,28 @@ mod tests {
                 Ok(None)
             }
 
-            async fn optional(&self, _: &Ctx, method: &str, params: Js) -> Answer<Js> {
+            async fn optional(&self, ctx: &Ctx, method: &str, params: Js) -> Answer<Js> {
+                let token = ctx.credential.as_ref().and_then(|c| c.get("fields")).and_then(|f| f.get("token")).cloned().unwrap_or(Js::Null);
                 match method {
+                    "ensureEventSubscription" => {
+                        // As registered: the webhook is left as it is.
+                        if params.get("current").and_then(|c| c.get("events")).is_some_and(|e| Some(e) == params.get("events")) {
+                            return Ok(Js::Null);
+                        }
+                        let mut registrations = self.registrations.lock().unwrap();
+                        let id = format!("wh-{}", registrations.len() + 1);
+                        registrations.push(Js::Obj(obj! { "token" => token, "callbackUrl" => params.get("callbackUrl").cloned().unwrap_or(Js::Null), "events" => params.get("events").cloned().unwrap_or(Js::Null) }));
+                        Ok(Js::Obj(obj! { "externalId" => Js::str(&id) }))
+                    }
+                    "poll" => {
+                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "polled" => Js::Bool(true) }));
+                        let note = Js::parse(br#"{"payload":{"id":"p-1"},"externalId":"p-1","eventType":"note.created","recordType":"Note"}"#).unwrap();
+                        Ok(Js::Obj(obj! { "events" => Js::Arr(vec![note]) }))
+                    }
+                    "removeEventSubscription" => {
+                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "removed" => params.get("externalId").cloned().unwrap_or(Js::Null) }));
+                        Ok(Js::Null)
+                    }
                     "listEventTypes" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
                     "listEventTypes" => Ok(Js::Arr(vec![Js::Obj(obj! { "tag" => Js::str("note.created"), "positionType" => Js::str("Note") })])),
                     "preprocessInbound" => {
@@ -679,14 +732,14 @@ mod tests {
         }
 
         /// The inbox at `/inbox`, on a loopback port of its own thread.
-        pub fn serve(down: Arc<AtomicBool>) -> u16 {
+        pub fn serve(down: Arc<AtomicBool>, registrations: Arc<Mutex<Vec<Js>>>, polled: bool) -> u16 {
             let (sent, port) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
                 tokio::task::LocalSet::new().block_on(&runtime, async move {
                     let listener = Listener::bind(&Address::Tcp(([127, 0, 0, 1], 0).into())).await.unwrap();
                     sent.send(listener.address().parse::<u16>().unwrap()).unwrap();
-                    Host::new().adapter(Inbox { down }).serve(listener).await.unwrap();
+                    Host::new().adapter(Inbox { down, registrations, polled }).serve(listener).await.unwrap();
                 });
             });
             port.recv().unwrap()
@@ -696,15 +749,43 @@ mod tests {
     /// A project whose `inbox` external takes signed webhooks, each delivery
     /// named by its `x-inbox-delivery` header, and whose one movement takes
     /// its notes; the inbox can be taken down.
-    struct InboxProject {
-        root: std::path::PathBuf,
+    pub(crate) struct InboxProject {
+        pub root: std::path::PathBuf,
         down: Arc<AtomicBool>,
+        pub registrations: Arc<std::sync::Mutex<Vec<Js>>>,
     }
+
+    /// Two connections of the inbox, each under a credential of its own, and
+    /// a movement on each; the install `inbox` serves both.
+    pub(crate) const TWO_CONNECTIONS: &str = "import { inbox } from adapters\nimport { inbox_a, inbox_b } from credentials\n\na = connect inbox using inbox_a\nb = connect inbox using inbox_b\n\nfunction noted_a(note: <a-[:Note]->>) {\n  return \"a\"\n}\n\nfunction noted_b(note: <b-[:Note]->>) {\n  return \"b\"\n}\n\nlisten to a { events: [\"note.created\"] } fire noted_a\nlisten to b { events: [\"note.created\", \"note.updated\"] } fire noted_b\n";
+
+    /// Their secrets: each connection's own webhook secret and token, and the install's.
+    pub(crate) const TWO_CREDENTIALS: &str = "inbox:\n  module: inbox\n  webhook_secret: shared\ninbox_a:\n  external: inbox\n  webhook_secret: secret-a\n  token: a\ninbox_b:\n  external: inbox\n  webhook_secret: secret-b\n  token: b\n";
 
     impl InboxProject {
         fn new() -> InboxProject {
+            InboxProject::with(
+                "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n",
+                &format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n"),
+                "",
+            )
+        }
+
+        /// The project with `movement` as its one movement file, `secrets`
+        /// its secrets and `lf_yaml` appended to its lf.yaml.
+        pub(crate) fn with(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
+            InboxProject::made(movement, secrets, lf_yaml, false)
+        }
+
+        /// As `with`, the inbox polled as well.
+        pub(crate) fn polled(movement: &str, secrets: &str) -> InboxProject {
+            InboxProject::made(movement, secrets, "", true)
+        }
+
+        fn made(movement: &str, secrets: &str, lf_yaml: &str, polled: bool) -> InboxProject {
             let down = Arc::new(AtomicBool::new(false));
-            let port = inbox::serve(down.clone());
+            let registrations = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let port = inbox::serve(down.clone(), registrations.clone(), polled);
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();
             std::fs::create_dir_all(root.join("externals/inbox")).unwrap();
@@ -715,18 +796,16 @@ mod tests {
                 ),
             )
             .unwrap();
-            std::fs::write(
-                root.join("movements/noted.mvt"),
-                "import { inbox } from adapters\n\ni = connect inbox\n\nfunction noted(note: <i-[:Note]->>) {\n  return \"seen\"\n}\n\nlisten to i { events: [\"note.created\"] } fire noted\n",
-            )
-            .unwrap();
-            let secrets = root.join(".lf/secrets.yaml");
-            std::fs::write(&secrets, format!("inbox:\n  external: inbox\n  webhook_secret: {SECRET}\n")).unwrap();
-            std::fs::set_permissions(&secrets, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-            InboxProject { root, down }
+            std::fs::write(root.join("movements/noted.mvt"), movement).unwrap();
+            let lf = root.join("lf.yaml");
+            std::fs::write(&lf, format!("{}{lf_yaml}", std::fs::read_to_string(&lf).unwrap())).unwrap();
+            let secrets_file = root.join(".lf/secrets.yaml");
+            std::fs::write(&secrets_file, secrets).unwrap();
+            std::fs::set_permissions(&secrets_file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+            InboxProject { root, down, registrations }
         }
 
-        async fn session(&self) -> Session {
+        pub(crate) async fn session(&self) -> Session {
             let project = crate::project::load_project(&self.root).unwrap();
             crate::runs::open_session(project, &crate::runs::Opening { ephemeral: false, store: &StoreSpec::Sqlite(self.root.join(".lf/state.db")), role: crate::runs::Role::Serve }).await.unwrap()
         }
@@ -740,7 +819,11 @@ mod tests {
 
     /// The signed headers of one delivery to the inbox, under `id`.
     fn signed(body: &[u8], id: &str) -> Vec<(String, String)> {
-        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(SECRET.as_bytes()).unwrap();
+        signed_with(SECRET, body, id)
+    }
+
+    fn signed_with(secret: &str, body: &[u8], id: &str) -> Vec<(String, String)> {
+        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(secret.as_bytes()).unwrap();
         hmac::Mac::update(&mut mac, body);
         let signature: String = hmac::Mac::finalize(mac).into_bytes().iter().map(|b| format!("{b:02x}")).collect();
         vec![("x-listen-fire-signature".into(), signature), ("x-inbox-delivery".into(), id.into())]
@@ -757,7 +840,7 @@ mod tests {
         session.store.deliveries(&DeliveryQuery { subscription_id: None, since: None, limit: 10 }).unwrap()
     }
 
-    fn in_local<F: std::future::Future>(future: F) -> F::Output {
+    pub(crate) fn in_local<F: std::future::Future>(future: F) -> F::Output {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         tokio::task::LocalSet::new().block_on(&runtime, future)
     }
@@ -808,6 +891,76 @@ mod tests {
             assert!(fired.outcomes.is_empty());
             assert_eq!(fired.redelivered, ["delivery d-1 was kept before: it runs nothing"]);
             assert_eq!(kept(&session).len(), 2);
+        });
+    }
+
+    /// One delivery of `body` to `subscription`'s door, signed with
+    /// `secret`, its events run inside the request: the movements it ran.
+    async fn movements_run_by(session: &Session, subscription: &str, secret: &str, id: &str) -> Vec<String> {
+        let headers = signed_with(secret, NOTE, id);
+        let delivery = Delivery { provider: "inbox", subscription_id: subscription, raw_body: NOTE, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Hook };
+        let (answer, fired) = deliver_inline(session, delivery, &|| {}).await;
+        assert_eq!(answer.status, 200, "{}", answer.body.to_json());
+        let mut movements: Vec<String> = fired.outcomes.into_iter().map(|o| o.movement).collect();
+        movements.sort();
+        movements
+    }
+
+    #[test]
+    fn a_delivery_fires_only_the_listens_of_the_connection_it_came_for() {
+        let project = InboxProject::with(TWO_CONNECTIONS, TWO_CREDENTIALS, "");
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(movements_run_by(&session, "inbox_a", "secret-a", "d-1").await, ["noted_a"]);
+            assert_eq!(movements_run_by(&session, "inbox_b", "secret-b", "d-2").await, ["noted_b"]);
+            // The install serves every connection: its door's delivery names
+            // none, and reaches each (the platform's shared bot).
+            assert_eq!(movements_run_by(&session, "inbox", "shared", "d-3").await, ["noted_a", "noted_b"]);
+
+            let receipts = kept(&session);
+            let of = |id: &str| receipts.iter().find(|r| r.external_id.as_deref() == Some(id)).map(|r| session.store.delivery(&r.id).unwrap().unwrap().events.unwrap()).unwrap();
+            assert_eq!(of("d-2")[0].get("credential"), Some(&Js::str("inbox_b")), "a kept event names the connection it came for, for a replay");
+            assert_eq!(of("d-3")[0].get("credential"), None);
+        });
+    }
+
+    #[test]
+    fn a_queued_delivery_runs_its_connections_listens_and_an_older_row_every_listen() {
+        let project = InboxProject::with(TWO_CONNECTIONS, TWO_CREDENTIALS, "");
+        in_local(async {
+            let session = project.session().await;
+            let headers = signed_with("secret-b", NOTE, "d-1");
+            let delivery = Delivery { provider: "inbox", subscription_id: "inbox_b", raw_body: NOTE, headers: &headers, method: "POST", path: "", query: "", source: DeliverySource::Webhook };
+            let doors = LfDoors::of_session(&session, EventSink::Queue, &|| {});
+            assert_eq!(answer_delivery(&doors, delivery).await.status, 200);
+            drop(doors);
+            let drained = || async {
+                crate::drain::drain(&session, &crate::drain::DrainOptions { until_idle: true, max_seconds: None }, &mut Vec::new()).await.unwrap();
+                let mut movements: Vec<String> = session.store.runs(10).unwrap().into_iter().map(|r| r.movement).collect();
+                movements.sort();
+                movements
+            };
+            assert_eq!(drained().await, ["noted_b"]);
+
+            // A row queued before rows named their connection reaches every listen, as it did.
+            let event = Js::parse(br#"{"payload":{"id":"n-2"},"externalId":"n-2","eventType":"note.created","recordType":"Note"}"#).unwrap();
+            let older = Js::Obj(obj! { "external" => Js::str("inbox"), "event" => event });
+            session.store.enqueue("fire_event", "fire_event:older", &older, None, None).unwrap();
+            assert_eq!(drained().await, ["noted_a", "noted_b", "noted_b"]);
+        });
+    }
+
+    #[test]
+    fn a_polled_listen_polls_as_its_own_connection() {
+        let project = InboxProject::polled(TWO_CONNECTIONS, TWO_CREDENTIALS);
+        in_local(async {
+            let session = project.session().await;
+            for movement in ["noted_b", "noted_a"] {
+                let fired = session.run_poll(movement).await.unwrap();
+                assert_eq!(fired.outcomes.iter().map(|o| o.movement.as_str()).collect::<Vec<_>>(), [movement]);
+            }
+            let polled: Vec<String> = project.registrations.lock().unwrap().iter().map(Js::to_json).collect();
+            assert_eq!(polled, [r#"{"token":"b","polled":true}"#, r#"{"token":"a","polled":true}"#]);
         });
     }
 

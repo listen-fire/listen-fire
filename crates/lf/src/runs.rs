@@ -17,7 +17,7 @@ use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, scan_externals, start_externals};
+use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_as, scan_externals, start_externals};
 use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
@@ -31,7 +31,7 @@ use crate::run_host::{
     clear_if_quiescent, drain_due_timers, drain_run, fail_lost_runs, fail_run, give_up_work, next_timer_wake, past_cap, run_complete_without, run_quiescent,
     settle_if_cancel_requested, with_run_lease, work_failed,
 };
-use crate::secrets::{Secrets, imported_credentials, missing_credentials};
+use crate::secrets::{Secrets, credential_for, imported_credentials, missing_credentials};
 use crate::segment::{Ended, Entry, Ran, SegmentHost, SegmentHostParts, SegmentInput, run_segment};
 use crate::movements_slot::{Change, ChangeKind, Listed, MovementsStore, Watched, movement_file, ordered};
 use crate::sources::{MOVEMENT_EXTENSION, MovementFile, Parsed, scan_movements};
@@ -371,6 +371,16 @@ fn cron_subscription(file: &str, listen: &Listen) -> Option<String> {
     Some(format!("cron:{file}:{}:{schedule}:{timezone}", listen.movement_name))
 }
 
+/// The delivery an event came in, as its runs and its routing read it.
+#[derive(Clone, Copy, Default)]
+pub struct Delivered<'a> {
+    /// The delivery's receipt; None for an event that came in none.
+    pub id: Option<&'a str>,
+    /// The connection it came for (crate::routing::Listen::hears); None
+    /// reaches every listen.
+    pub credential: Option<&'a str>,
+}
+
 /// What firing one event came to: the runs it started, and a line for each
 /// way it ran nothing: a listen it was a redelivery to (its `idempotencyKey`
 /// seen there before) or an echo of, or mail no listen is keyed for.
@@ -521,10 +531,10 @@ impl Session {
     /// Route one event to every listen it matches, and run each (`fireEvent`).
     /// An event with an `idempotencyKey` runs a listen once: a redelivery
     /// runs nothing. A dry run notes no receipt, so the real delivery after
-    /// it still runs. Each run names `delivery_id`, the delivery the event
-    /// came in, when it came in one.
-    pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivery_id: Option<&str>) -> Result<Fired, String> {
-        self.fire_to(&self.file_set(), external, event, Arrival::Pushed, dry_run, delivery_id, |_| true).await
+    /// it still runs. Each run names the delivery the event came in, when it
+    /// came in one, and only the listens of the connection it came for take it.
+    pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
+        self.fire_to(&self.file_set(), external, event, Arrival::Pushed, dry_run, delivered.id, |l| l.hears(delivered.credential)).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
@@ -651,7 +661,14 @@ impl Session {
     async fn poll_once(&self, set: &FileSet, listen: &Listen, running: &RunningExternal, subscription: &str) -> Result<Fired, String> {
         let state = self.store.inbound_checkpoint(subscription).map_err(|e| e.to_string())?;
         let params = poll_params(listen, state.as_ref());
-        let raw = rpc(running, self.secrets().credentials(), LOCAL_TENANT, "poll", params).await?;
+        let secrets = self.secrets();
+        let credentials = secrets.credentials();
+        // Polled as its own connection: the credential its construction names, else the source's.
+        let credential = match &listen.credential {
+            Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
+            None => credential_for(credentials, &listen.adapter),
+        };
+        let raw = rpc_as(running, credentials, credential, LOCAL_TENANT, "poll", params).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
@@ -1131,9 +1148,11 @@ impl Session {
             "fire_event" => {
                 let event = payload.get("event").cloned().ok_or("a fire_event row has no event")?;
                 let external = text("external")?;
-                // Rows queued before deliveries were kept name none.
+                // Rows queued before deliveries were kept name none, and
+                // rows queued before they named their connection name none.
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |_| true).await?;
+                let credential = payload.get("credential").and_then(Js::as_str);
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| l.hears(credential)).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
                 }
@@ -1949,7 +1968,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into() }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None }
     }
 
     #[test]

@@ -24,6 +24,10 @@ pub struct Listen {
     /// The listen's config block, statically evaluated.
     pub config: Obj,
     pub movement_name: String,
+    /// The credential its construction names (`connect … using X`), by its
+    /// name in the secrets (an import alias resolved); None when the
+    /// construction names none, and for a host unit.
+    pub credential: Option<String>,
 }
 
 impl Listen {
@@ -31,6 +35,19 @@ impl Listen {
     /// its runs and its polls name it by.
     pub fn pipeline(&self) -> String {
         format!("listen:{}:{}", self.file, self.movement_name)
+    }
+
+    /// Whether an event delivered for `credential` reaches this listen (the
+    /// platform's per-trigger credential narrowing): a listen whose
+    /// construction names a credential hears only that credential's
+    /// deliveries. A listen that names none hears every delivery, and a
+    /// delivery that names none (addressed to the module's install, which
+    /// serves every connection) reaches every listen.
+    pub fn hears(&self, credential: Option<&str>) -> bool {
+        match (self.credential.as_deref(), credential) {
+            (Some(own), Some(delivered)) => own == delivered,
+            _ => true,
+        }
     }
 }
 
@@ -81,14 +98,16 @@ fn external_js(value: &Json) -> Js {
     }
 }
 
+/// The construction argument `connect … using X` writes the credential to.
+const CREDENTIAL_ARG: &str = "credentials";
+
 /// `collectListens` for one file: the listens of `file`, whose program is
 /// `program` (crate::sources::Parsed reads them with its parse).
 pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Listen> {
     let mut listens = Vec::new();
     let mut originals: HashMap<String, String> = HashMap::new();
-    // Each instance's adapter, by the instance's name. (The construction's
-    // credential is not part of a local listen: the run resolves it.)
-    let mut constructions: HashMap<String, String> = HashMap::new();
+    // Each instance's adapter and credential, by the instance's name.
+    let mut constructions: HashMap<String, (String, Option<String>)> = HashMap::new();
     let mut declared = Vec::new();
     for statement in &program.statements {
         match statement {
@@ -102,7 +121,12 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
             Statement::Assign(assign) => {
                 if let RValue::Construct { construct } = &assign.value {
                     let adapter = originals.get(&construct.callee).cloned().unwrap_or_else(|| construct.callee.clone());
-                    constructions.insert(assign.name.clone(), adapter);
+                    let credential = construct
+                        .args
+                        .iter()
+                        .find(|a| a.name == CREDENTIAL_ARG)
+                        .and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw));
+                    constructions.insert(assign.name.clone(), (adapter, credential));
                 }
             }
             Statement::Listen(listen) => declared.push(listen),
@@ -112,7 +136,8 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
     for listen in declared {
         // A unit the file does not bind itself is the host's own.
         let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
-        let Some(adapter) = constructions.get(&listen.instance).cloned().or(unit) else { continue };
+        let Some((adapter, credential)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None))) else { continue };
+        let credential = credential.map(|local| originals.get(&local).cloned().unwrap_or(local));
         let mut config = Obj::new();
         for arg in &listen.config {
             config.insert(arg.name.clone(), config_value_of(arg));
@@ -122,6 +147,7 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
             adapter,
             config,
             movement_name: listen.movement.clone(),
+            credential,
         });
     }
     listens
@@ -295,6 +321,19 @@ mod tests {
         let listen = &listens[0];
         assert_eq!((listen.adapter.as_str(), listen.movement_name.as_str()), ("acme_crm", "welcome"));
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
+    }
+
+    #[test]
+    fn a_listen_names_its_constructions_credential_and_hears_only_its_deliveries() {
+        let source = "import { inbox } from adapters\nimport { inbox_main as a_cred, `Inbox B` } from credentials\n\na = connect inbox using a_cred\nb = connect inbox using `Inbox B`\nc = connect inbox\n\nfunction noted() {\n}\n\nlisten to a fire noted\nlisten to b fire noted\nlisten to c fire noted\nlisten to manual fire noted\n";
+        let files = vec![MovementFile { name: "noted".into(), path: PathBuf::from("noted.mvt"), source: source.into(), version: None }];
+        let listens = collect_listens(&files);
+        let credentials: Vec<Option<&str>> = listens.iter().map(|l| l.credential.as_deref()).collect();
+        assert_eq!(credentials, [Some("inbox_main"), Some("Inbox B"), None, None], "an alias is resolved to the secrets' name");
+        let (a, c) = (&listens[0], &listens[2]);
+        assert!(a.hears(Some("inbox_main")) && !a.hears(Some("Inbox B")), "a listen hears only its own connection's deliveries");
+        assert!(a.hears(None), "a delivery that names no credential reaches every listen");
+        assert!(c.hears(Some("inbox_main")) && c.hears(None), "a listen whose construction names none hears every delivery");
     }
 
     #[test]

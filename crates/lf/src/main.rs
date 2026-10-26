@@ -490,7 +490,7 @@ async fn run(argv: Vec<String>) -> Result<i32, String> {
             }
             let session = runs::open_session(project, &runs::Opening { ephemeral: args.ephemeral, store: &store, role: runs::Role::Command }).await?;
             let (external, event) = runs::read_event_file(event_file)?;
-            report_fired(&session.fire_event(&external, &event, args.dry_run, None).await?, args.json, &mut out)
+            report_fired(&session.fire_event(&external, &event, args.dry_run, runs::Delivered::default()).await?, args.json, &mut out)
         }
         "resume" => {
             let project = load()?;
