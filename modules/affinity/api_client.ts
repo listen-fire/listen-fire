@@ -423,6 +423,16 @@ class AffinityAPIClient {
     return `${this.memoScope}search/${kind}/${term}`;
   }
 
+  /** An entity read carries its list memberships inline, and each one IS the
+   *  entry `getListEntry` would fetch. The deal that matched an organization
+   *  then links owners onto its entry; that read is already answered. */
+  private withMembershipsFiled<R extends { list_entries?: z.infer<typeof listEntryValidator>[] | null }>(record: R): R {
+    for (const entry of record.list_entries ?? []) {
+      fillMemoisedRead(this.listEntryKey(entry.list_id, entry.id), entry);
+    }
+    return record;
+  }
+
   /** A field-value row names its own id, never its owner — so a write to one
    *  cannot say which record's values it changed. Every field-value answer for
    *  this workspace goes; they are cheap to re-read and there are few of them
@@ -696,12 +706,14 @@ class AffinityAPIClient {
   }
 
   async getOrganisationById(id: number) {
-    return memoisedRead(this.recordKey('organization', id), () =>
-      this.fetch({
-        route: `/organizations/${id}`,
-        method: 'GET',
-        responseValidator: organisationValidator,
-      }),
+    return memoisedRead(this.recordKey('organization', id), async () =>
+      this.withMembershipsFiled(
+        await this.fetch({
+          route: `/organizations/${id}`,
+          method: 'GET',
+          responseValidator: organisationValidator,
+        }),
+      ),
     );
   }
 
@@ -817,12 +829,14 @@ class AffinityAPIClient {
   }
 
   async getPersonById(id: number) {
-    return memoisedRead(this.recordKey('person', id), () =>
-      this.fetch({
-        route: `/persons/${id}`,
-        method: 'GET',
-        responseValidator: personValidator,
-      }),
+    return memoisedRead(this.recordKey('person', id), async () =>
+      this.withMembershipsFiled(
+        await this.fetch({
+          route: `/persons/${id}`,
+          method: 'GET',
+          responseValidator: personValidator,
+        }),
+      ),
     );
   }
 

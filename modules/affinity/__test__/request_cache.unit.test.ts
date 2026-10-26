@@ -218,6 +218,27 @@ describe('within one run, a record is read once', () => {
     expect(countOf(calls, 'GET /persons/5')).toBe(2);
   });
 
+  // The organization a deal matched already says which lists it sits on, and
+  // each membership row is the entry itself — so linking an owner onto that
+  // entry need not ask Affinity for it again.
+  it('an entity read answers a read of the list entries it carries inline', async () => {
+    const live = workspace();
+    live.organizations['3'] = {
+      ...live.organizations['3'],
+      list_entries: [{ id: 70, list_id: 10, entity_id: 3, created_at: '2026-01-05T00:00:00.000Z' }],
+    };
+    const { calls } = serve(live);
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    const entry = await inARun(async () => {
+      await client.getOrganisationById(3);
+      return client.getListEntry({ listId: 10, listEntryId: 70 });
+    });
+
+    expect(entry).toMatchObject({ id: 70, list_id: 10, entity_id: 3 });
+    expect(countOf(calls, 'GET /lists/10/list-entries/70')).toBe(0);
+  });
+
   it('is not a cache at all outside a run', async () => {
     const { calls } = serve(workspace());
     const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
