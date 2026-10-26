@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use movement_parser::ast::{PathHead, PathRoot, TraversalBlock};
-use movement_parser::catalog::types::{FieldType, InstanceSchema};
+use movement_parser::catalog::types::{FieldType, InstanceSchema, JsMap};
 use movement_parser::lowering::expression::{EdgeDirection, EdgeStep, Expression, FilterOperator, TraversalStep};
 use serde_json::Value as Json;
 
@@ -367,15 +367,22 @@ pub(crate) fn member_gate(step: &EdgeStep, origin: &Js, read: &Read) -> Option<M
     selection(step.expression_filter.as_deref()?, step, origin, read)
 }
 
+/// The host's narrowing of the hop when it registered one (`selectedMembers`,
+/// beside the `refinements` the checker typed it by), else the member its
+/// WHERE pins by a literal — the member the checker typed it by either way.
 fn selection(filter: &Expression, step: &EdgeStep, origin: &Js, read: &Read) -> Option<MemberGate> {
     let schema = read.graph.schema.as_ref()?;
-    let selected = schema.selected_members.as_ref()?;
     let declared = record_type(origin)
         .and_then(|from| schema.positions.get(&from)?.edges.get(&step.edge_type_id).map(|e| e.target.clone()))
         .or_else(|| schema.collections.get(&step.edge_type_id).map(|c| c.target.clone()))?;
-    let filter = serde_json::to_value(filter).expect("an expression is JSON");
-    let key = movement_parser::catalog::helpers::refinement_key(&declared, &filter);
-    selected.get(&key).map(|member| MemberGate { member_type: member.clone(), declared_target: declared })
+    let key = movement_parser::catalog::helpers::refinement_key(&declared, &serde_json::to_value(filter).expect("an expression is JSON"));
+    let registered = |table: &Option<JsMap<String>>| table.as_ref().and_then(|t| t.get(&key)).cloned();
+    let member = match (registered(&schema.selected_members), registered(&schema.refinements)) {
+        (Some(member), _) => member,
+        (None, Some(_)) => return None,
+        (None, None) => movement_checker::types::pinned_member::pinned_member(schema, &declared, filter)?,
+    };
+    Some(MemberGate { member_type: member, declared_target: declared })
 }
 
 impl MemberGate {

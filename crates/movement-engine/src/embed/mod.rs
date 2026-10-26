@@ -26,6 +26,8 @@ mod end_to_end;
 mod hosts;
 #[cfg(test)]
 mod library_records;
+#[cfg(test)]
+mod list_entry_members;
 mod serve;
 #[cfg(test)]
 mod test_time;
