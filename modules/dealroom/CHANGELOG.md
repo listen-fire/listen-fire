@@ -1,5 +1,11 @@
 # @listen-fire/dealroom
 
+## 0.12.7
+
+### Patch Changes
+
+- 7cd7476: Each poll event is labelled with its kind, `eventType` `funding_round` (adapter protocol 2.3). Its stated protocol minor is unchanged: an older host routes a labelled event correctly.
+
 ## 0.12.6
 
 ### Patch Changes

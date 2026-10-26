@@ -19,6 +19,11 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+
+## [0.12.8] - 2026-10-26
+
+A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote.
+
 - A polled listen with `events` runs again under `lf`: a polled source now labels each event with its kind (`eventType`, adapter protocol 2.3), and `lf` narrows by it as it does a pushed event. The bundled Gmail, Evertrace, Dealroom and Granola modules label theirs. An event from an older module with no label still reaches the listen that polled it, and `lf` prints once per module: `<module>: a polled event carries no eventType; …`. Before, every such event was dropped silently.
 - A poll now names its listener by the listen's pipeline, `listen:<file>:<movement>` (`movementId`), so a source can tell a listener from a same-named movement in another file.
 - `LF_SECRET__<ENTRY>__MODULE=<module>` makes an entry from the environment that module's install, as `module:` does in the secrets file: a separately run adapter's key can come from the environment alone, and its connection needs no `using`. `LF_SECRET__<ENTRY>__EXTERNAL` is unchanged.
@@ -2307,7 +2312,8 @@ Releases before v0.11 are kept one file per minor line, newest first:
 - [v0.2.x](docs/changelog/v0.2.md) (v0.2.0)
 - [v0.1.x](docs/changelog/v0.1.md) (v0.1.0 to v0.1.2)
 
-[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...HEAD
+[Unreleased]: https://github.com/listen-fire/listen-fire/compare/v0.12.8...HEAD
+[0.12.8]: https://github.com/listen-fire/listen-fire/compare/v0.12.7...v0.12.8
 [0.12.7]: https://github.com/listen-fire/listen-fire/compare/v0.12.6...v0.12.7
 [0.12.6]: https://github.com/listen-fire/listen-fire/compare/v0.12.5...v0.12.6
 [0.12.5]: https://github.com/listen-fire/listen-fire/compare/v0.12.4...v0.12.5
