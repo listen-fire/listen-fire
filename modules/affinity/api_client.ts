@@ -46,6 +46,27 @@ const AFFINITY_LIMITS: readonly WireDeclaredLimitShape[] = [{ scope: 'credential
  *  than a default we inherit. */
 const AFFINITY_PAGE_SIZE = 500;
 
+/** A search's query: the term (none for the whole workspace) and the page. */
+function searchQuery(term: string, pageToken: string | undefined): Record<string, string> {
+  return {
+    ...(term ? { term } : {}),
+    page_size: String(AFFINITY_PAGE_SIZE),
+    ...(pageToken !== undefined ? { page_token: pageToken } : {}),
+  };
+}
+
+/** Every record behind a first page, following Affinity's token page by page. */
+async function everyPage<T>(page: (pageToken?: string) => Promise<{ records: T[]; next: string | null }>): Promise<T[]> {
+  const all: T[] = [];
+  let token: string | undefined;
+  for (;;) {
+    const { records, next } = await page(token);
+    all.push(...records);
+    if (!next) return all;
+    token = next;
+  }
+}
+
 /**
  * How long a workspace's own SHAPE is treated as settled: the field catalog,
  * the lists, and who the key belongs to.
@@ -427,8 +448,8 @@ class AffinityAPIClient {
     return `${this.memoScope}field-values/${kind}/${id}`;
   }
 
-  private searchKey(kind: string, term: string): string {
-    return `${this.memoScope}search/${kind}/${term}`;
+  private searchKey(kind: 'person' | 'organization', page: [term: string, pageToken: string | null]): string {
+    return `${this.memoScope}search/${kind}/${JSON.stringify(page)}`;
   }
 
   /** An entity read carries its list memberships inline, and each one IS the
@@ -664,6 +685,26 @@ class AffinityAPIClient {
     }
   }
 
+  /**
+   * One page of Affinity's answer to an organization search, in its own order,
+   * remembered for the run by TERM — so the matcher's domain search and a read
+   * narrowed by the same domain are one request, whichever comes first. No
+   * term is the workspace itself, which pages the same way.
+   */
+  private organisationSearchPage(term: string, pageToken?: string) {
+    return memoisedRead(this.searchKey('organization', [term, pageToken ?? null]), () =>
+      this.fetch({
+        route: '/organizations',
+        method: 'GET',
+        query: searchQuery(term, pageToken),
+        responseValidator: z.object({
+          organizations: organisationValidator.array(),
+          next_page_token: z.string().nullish(),
+        }),
+      }).then((page) => ({ records: page.organizations, next: page.next_page_token ?? null })),
+    );
+  }
+
   async findManyOrganisations({
     search,
     includeGlobal,
@@ -677,21 +718,12 @@ class AffinityAPIClient {
     // an unbounded number of calls for a match that is in the first page or
     // nowhere useful. The ROOT reads (`listOrganisations`) walk every page,
     // because there the count IS the answer.
-    const orgs = await memoisedRead(this.searchKey('organization/match', search), () =>
-      this.fetch({
-        route: '/organizations',
-        query: { term: search },
-        method: 'GET',
-        responseValidator: z.object({
-          organizations: organisationValidator.array(),
-        }),
-      }),
-    );
+    const { records } = await this.organisationSearchPage(search);
 
     // The GLOBAL filter is ours, applied to the same answer — so both callers
     // share one search rather than each paying for the term.
     // Only include entries from the user's private CRM, not Affinity's full records
-    return includeGlobal ? orgs.organizations : orgs.organizations.filter((org) => !org.global);
+    return includeGlobal ? records : records.filter((org) => !org.global);
   }
 
   /**
@@ -707,17 +739,7 @@ class AffinityAPIClient {
    * still filters what comes back.
    */
   async listOrganisations({ term }: { term?: string } = {}) {
-    const orgs = await memoisedRead(this.searchKey('organization/list', term ?? ''), () =>
-      this.fetchAllPages({
-        route: '/organizations',
-        ...(term ? { query: { term } } : {}),
-        pageValidator: z.object({
-          organizations: organisationValidator.array(),
-          next_page_token: z.string().nullish(),
-        }),
-        select: (page) => page.organizations,
-      }),
-    );
+    const orgs = await everyPage((token) => this.organisationSearchPage(term ?? '', token));
     return orgs.filter((org) => !org.global);
   }
 
@@ -824,19 +846,25 @@ class AffinityAPIClient {
     return org;
   }
 
-  async findManyPeople({ search }: { search: string }) {
-    const response = await memoisedRead(this.searchKey('person/match', search), () =>
+  /** One page of a person search, remembered by term exactly as the
+   *  organization search is: the matcher's email search and a read narrowed by
+   *  that email are one request. */
+  private personSearchPage(term: string, pageToken?: string) {
+    return memoisedRead(this.searchKey('person', [term, pageToken ?? null]), () =>
       this.fetch({
         route: '/persons',
-        query: { term: search },
         method: 'GET',
+        query: searchQuery(term, pageToken),
         responseValidator: z.object({
           persons: personValidator.array(),
+          next_page_token: z.string().nullish(),
         }),
-      }),
+      }).then((page) => ({ records: page.persons, next: page.next_page_token ?? null })),
     );
+  }
 
-    return response.persons;
+  async findManyPeople({ search }: { search: string }) {
+    return (await this.personSearchPage(search)).records;
   }
 
   /** Enumerate the instance's persons — the TG root-collection read
@@ -844,17 +872,7 @@ class AffinityAPIClient {
    *  the org list's does: a substring match over name and email, so a superset
    *  of any equality on either. */
   async listPersons({ term }: { term?: string } = {}) {
-    return memoisedRead(this.searchKey('person/list', term ?? ''), () =>
-      this.fetchAllPages({
-        route: '/persons',
-        ...(term ? { query: { term } } : {}),
-        pageValidator: z.object({
-          persons: personValidator.array(),
-          next_page_token: z.string().nullish(),
-        }),
-        select: (page) => page.persons,
-      }),
-    );
+    return everyPage((token) => this.personSearchPage(term ?? '', token));
   }
 
   async getPersonById(id: number) {

@@ -59,7 +59,7 @@ describe('calls per deal in a warm run', () => {
       seedSyncedDeal(fake, owners, VELTHA);
       return VELTHA;
     });
-    expect(counts).toEqual({ orgSearch: 3, personSearch: 1, fieldValueRead: 3, recordRead: 2, schema: 0, write: 0, total: 9 });
+    expect(counts).toEqual({ orgSearch: 2, personSearch: 1, fieldValueRead: 3, recordRead: 2, schema: 0, write: 0, total: 8 });
   });
 
   it('(b) everything exists and one field changes', async () => {
@@ -67,7 +67,7 @@ describe('calls per deal in a warm run', () => {
       seedSyncedDeal(fake, owners, VELTHA, { emptyDealSource: true });
       return VELTHA;
     });
-    expect(counts).toEqual({ orgSearch: 3, personSearch: 1, fieldValueRead: 5, recordRead: 2, schema: 0, write: 1, total: 12 });
+    expect(counts).toEqual({ orgSearch: 2, personSearch: 1, fieldValueRead: 5, recordRead: 2, schema: 0, write: 1, total: 11 });
   });
 
   it('(c) a new deal', async () => {
@@ -98,7 +98,7 @@ describe('calls for a run of deals', () => {
     await inARun(async () => {
       for (const { deal } of plan) await upsertDeal(adapter, dealFor(deal));
     });
-    expect(countCalls(fake.requests)).toEqual({ orgSearch: 20, personSearch: 12, fieldValueRead: 28, recordRead: 12, schema: 4, write: 21, total: 97 });
+    expect(countCalls(fake.requests)).toEqual({ orgSearch: 16, personSearch: 12, fieldValueRead: 28, recordRead: 12, schema: 4, write: 21, total: 93 });
   });
 });
 

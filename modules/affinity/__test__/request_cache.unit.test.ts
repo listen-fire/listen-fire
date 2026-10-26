@@ -353,6 +353,37 @@ describe('within one run, a record is read once', () => {
     expect(countOf(calls, 'GET /field-values?person_id=5')).toBe(2);
   });
 
+  // A deal's organization is matched by its domain, and the same deal then
+  // reads the organizations with that domain to see whether it is already on a
+  // list. Both ask Affinity the same question; the term is what is cached, not
+  // who asked.
+  it('one search per term, whether the matcher or a read asked it', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      expect((await client.findManyOrganisations({ search: 'acme.test', includeGlobal: true })).map((o) => o.id)).toEqual([3]);
+      expect((await client.listOrganisations({ term: 'acme.test' })).map((o) => o.id)).toEqual([3]);
+      expect((await client.findManyPeople({ search: 'ada@x.test' })).map((p) => p.id)).toEqual([5]);
+      expect((await client.listPersons({ term: 'ada@x.test' })).map((p) => p.id)).toEqual([5]);
+    });
+
+    expect(countOf(calls, 'GET /organizations?term=acme.test')).toBe(1);
+    expect(countOf(calls, 'GET /persons?term=ada%40x.test')).toBe(1);
+  });
+
+  it('a read that came first answers the matcher too', async () => {
+    const { calls } = serve(workspace());
+    const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
+
+    await inARun(async () => {
+      await client.listOrganisations({ term: 'Acme' });
+      await client.findManyOrganisations({ search: 'Acme', includeGlobal: false });
+    });
+
+    expect(countOf(calls, 'GET /organizations?term=Acme')).toBe(1);
+  });
+
   it('finds what this run created, rather than repeating its own not-found', async () => {
     const { calls } = serve(workspace());
     const client = new AffinityAPIClient({ apiKey: 'k', baseUrl: BASE });
