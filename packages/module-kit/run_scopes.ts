@@ -11,8 +11,6 @@
 
 import { RunScope, inRunScope } from 'module-runtime/run_scope';
 
-import type { ModuleLog } from './define';
-
 export interface RunScopes {
   /** Answer `call` inside the run scope `cacheScopeId` names. */
   around<T>(cacheScopeId: string, call: () => Promise<T>): Promise<T>;
@@ -94,7 +92,7 @@ export function loadedRunScopeFiles(loaded: Iterable<string> = Object.keys(requi
 /** Say once, at start, when the process holds more than one copy of the run
  *  scope: the kit's scopes then do not reach the module that loaded the other.
  *  Returns whether it said so. */
-export function warnIfRunScopesSplit(log: ModuleLog, loaded: Iterable<string> = Object.keys(require.cache)): boolean {
+export function warnIfRunScopesSplit(log: { warn(message: string): void }, loaded: Iterable<string> = Object.keys(require.cache)): boolean {
   const copies = loadedRunScopeFiles(loaded);
   if (copies.length < 2) return false;
   log.warn(
