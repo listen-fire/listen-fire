@@ -543,6 +543,7 @@ mod tests {
                 config: Obj::new(),
                 movement_name: "m".into(),
                 credential: case["listen"].as_str().map(str::to_string),
+                payload: None,
             };
             assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
         }
