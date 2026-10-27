@@ -427,11 +427,11 @@ impl<'s> SegmentAdapters<'s> {
             }
             "iterateRelatedPage" => self.related_page(&instance, &plain, args).await?,
             "createRecord" => {
-                let input = self.to_wire_write_input(&instance, &plain, args).await?;
+                let input = self.to_wire_write_input(&plain, args).await?;
                 self.rpc(&instance, method, input).await?
             }
             "updateRecord" => {
-                let input = self.to_wire_write_input(&instance, &plain, args).await?;
+                let input = self.to_wire_write_input(&plain, args).await?;
                 let result = self.rpc(&instance, method, input).await?;
                 with_association(result, &plain)
             }
@@ -561,7 +561,7 @@ impl<'s> SegmentAdapters<'s> {
 
     /// `toWireWriteInput`: the parent set as a list, every file (in a field
     /// or a resource) exposed at a fetchable URL.
-    async fn to_wire_write_input(&self, instance: &Instance, plain: &Js, args: &Hv) -> Result<Js, CallFailure> {
+    async fn to_wire_write_input(&self, plain: &Js, args: &Hv) -> Result<Js, CallFailure> {
         let mut out = match plain {
             Js::Obj(map) => map.clone(),
             _ => Obj::new(),
@@ -569,7 +569,7 @@ impl<'s> SegmentAdapters<'s> {
         if let Some(Hv::Obj(fields)) = args.get("fields") {
             let mut exposed = Obj::new();
             for (name, value) in fields {
-                exposed.insert(name.clone(), self.expose_files(instance, value).await?);
+                exposed.insert(name.clone(), self.expose_files(value).await?);
             }
             out.insert("fields".into(), Js::Obj(exposed));
         }
@@ -595,7 +595,7 @@ impl<'s> SegmentAdapters<'s> {
         if let Some(Hv::List(resources)) = args.get("resources") {
             let mut written = Vec::new();
             for resource in resources {
-                let exposed = self.expose_files(instance, resource).await?;
+                let exposed = self.expose_files(resource).await?;
                 written.push(wire_resource_shaped(&Hv::of_js(&exposed)));
             }
             out.insert("resources".into(), Js::Arr(written));
@@ -605,12 +605,12 @@ impl<'s> SegmentAdapters<'s> {
 
     /// `exposeWriteFileRefs`: every file in a written value as the wire's
     /// spelling, its bytes at a URL.
-    async fn expose_files(&self, instance: &Instance, value: &Hv) -> Result<Js, CallFailure> {
+    async fn expose_files(&self, value: &Hv) -> Result<Js, CallFailure> {
         let mut files = Vec::new();
         collect_files(value, &mut files);
         let mut wired = Vec::with_capacity(files.len());
         for descriptor in files {
-            wired.push(self.file_to_wire(instance, &descriptor).await?);
+            wired.push(self.file_to_wire(&descriptor).await?);
         }
         let mut wired = wired.into_iter();
         Ok(rebuild_with_files(value, &mut wired))
@@ -618,7 +618,7 @@ impl<'s> SegmentAdapters<'s> {
 
     /// `fileRefToWire`: the descriptor's metadata, its owner in the wire's
     /// spelling, and a fetchable `url`.
-    async fn file_to_wire(&self, instance: &Instance, file: &Obj) -> Result<Js, CallFailure> {
+    async fn file_to_wire(&self, file: &Obj) -> Result<Js, CallFailure> {
         let mut out = obj! { "__brand" => Js::str("FileRef") };
         for key in ["name", "contentType", "size"] {
             if let Some(v) = file.get(key) {
@@ -631,7 +631,7 @@ impl<'s> SegmentAdapters<'s> {
         if let Some(url @ Js::Str(_)) = file.get("url") {
             out.insert("url".into(), url.clone());
         } else if file.get("source").is_some() {
-            let (bytes, content_type) = self.redeem(instance, file).await?;
+            let (bytes, content_type) = self.redeem(file).await?;
             let url = self.externals.documents.expose(&bytes).await.map_err(CallFailure::adapter)?;
             out.insert("url".into(), Js::Str(url));
             if !out.contains_key("contentType")
@@ -644,8 +644,9 @@ impl<'s> SegmentAdapters<'s> {
     }
 
     /// `redeemFileRef`: a file's bytes from its owner — the document store,
-    /// or the external that owns it, through its `resolveFileRef`.
-    async fn redeem(&self, _instance: &Instance, file: &Obj) -> Result<(Vec<u8>, Option<String>), CallFailure> {
+    /// or the external that owns it, through its `resolveFileRef`. A write
+    /// redeems a file to expose it; a read (`files.resolveFileText`) to read it.
+    pub async fn redeem(&self, file: &Obj) -> Result<(Vec<u8>, Option<String>), CallFailure> {
         let ext = self.externals;
         match owner_of(file.get("source")) {
             Some(Owner::Document { object_uri }) => {

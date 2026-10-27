@@ -47,6 +47,10 @@ named in [`RELEASING.md`](RELEASING.md).
 - `lf` polls a listen on a positioned connection (`connect notes using X { space: "alpha" }`) in that position, under a checkpoint of its own, so two connections that differ only in position are two sources. A listen on a connection with no position keeps its checkpoint. Webhook registration does not carry the position yet.
 - The checker refuses an unknown value in two more places it already refused one elsewhere (`MOV_ENUM_UNKNOWN_VALUE`): each text literal of a list written into a list of enum (`Tags: ["Hot", "Cold"]` into an Airtable multiple select), and a comparison in a WHERE written inside a parameter's type (`<crm-[c:Companies WHERE c.Stage == "Lost"]->>`). A program that checks today and fails now was writing or matching a value the field cannot hold.
 
+### Fixed
+
+- `lf` reads a file a module owns (a Gmail attachment) for an extraction or `File.read`, through the module's `resolveFileRef` as a write already did; before, the extraction saw nothing and the run warned `MOVENG_FILE_BYTES_UNAVAILABLE`.
+
 ## [0.12.9] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:

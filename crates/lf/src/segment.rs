@@ -1226,7 +1226,7 @@ async fn file_text(host: &SegmentHost<'_>, file: &Obj, remaining: Option<f64>) -
     let bytes = match owner_of(file.get("source")) {
         Some(Owner::Document { object_uri }) if host.documents.owns(&object_uri, TEAM) => host.documents.open(&object_uri),
         Some(Owner::Document { object_uri }) => Err(format!("the file {object_uri} is not a stored document of this project")),
-        Some(Owner::Adapter { adapter_type, .. }) => Err(format!("a file '{adapter_type}' owns is not read by lf yet")),
+        Some(Owner::Adapter { .. }) => host.adapters.redeem(file).await.map(|(bytes, _)| bytes).map_err(|failure| failure.message().to_string()),
         None => Err("a file with no owner has no bytes".into()),
     };
     let bytes = match bytes {
