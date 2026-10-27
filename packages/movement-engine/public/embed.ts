@@ -1,4 +1,6 @@
-// Embedding the engine in another product's own process: the in-process host
+// Embedding the engine in another product's own process: the embedded host
+// that routes a tenant's events, parks and resumes its runs and caches its
+// catalog (`createEmbeddedHost`); and the parts it is built from: the in-process host
 // to fill with the embedder's own parts (its adapters, models, files, parks),
 // the write locks it starts from, the instance schema it reads off each
 // adapter it loaded, the routing table it reads off a customer's movement
@@ -16,3 +18,18 @@ export { pricedModels, type ExtractCallModelClient, type ModelClient } from '../
 export type { LlmCallInput, LlmCallResult } from '../services/translation_graph/engine/batched_extraction/llm_call';
 export type { ExtractCallLlmInput, ExtractCallLlmResult } from '../services/translation_graph/engine/batched_extraction/llm_call';
 export type { SegmentLimits } from 'engine-contracts';
+export {
+  createEmbeddedHost,
+  memoryEmbeddedHostStore,
+  type ConnectableSecrets,
+  type Delivery,
+  type EmbeddedHost,
+  type EmbeddedHostOptions,
+  type EmbeddedHostStore,
+  type EmbeddedRun,
+  type EmbeddedRunLimits,
+  type EmbeddedRunOutcome,
+  type SaveAnswer,
+  type SavedProgram,
+  type StoredConnection,
+} from '../services/embed/embedded_host';

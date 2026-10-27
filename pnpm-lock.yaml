@@ -96,9 +96,6 @@ importers:
       '@listen-fire/engine':
         specifier: workspace:*
         version: link:../../packages/movement-engine
-      '@listen-fire/engine-contracts':
-        specifier: workspace:*
-        version: link:../../packages/engine-contracts
       '@listen-fire/module-kit':
         specifier: workspace:*
         version: link:../../packages/module-kit
@@ -1373,6 +1370,9 @@ importers:
       '@listen-fire/engine-contracts':
         specifier: workspace:^
         version: link:../engine-contracts
+      '@listen-fire/module-kit':
+        specifier: workspace:^
+        version: link:../module-kit
       '@listen-fire/module-runtime':
         specifier: workspace:^
         version: link:../module-runtime

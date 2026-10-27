@@ -25,6 +25,7 @@
   "type": "commonjs",
   "dependencies": {
     "@listen-fire/engine-contracts": "workspace:^",
+    "@listen-fire/module-kit": "workspace:^",
     "@listen-fire/module-runtime": "workspace:^",
     "@listen-fire/movement-lang": "workspace:^",
     "safe-stable-stringify": "2.5.0",

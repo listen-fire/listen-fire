@@ -1,0 +1,5 @@
+---
+"@listen-fire/engine": patch
+---
+
+Embedders get the whole host in one call: `createEmbeddedHost({ modules, store?, secrets?, engine?, limits?, now? })` from `public/embed`. A tenant connects a module under the name its movements import (`connect(tenant, { name, module, credential })`, which loads the module in process over that tenant's credential); `save` checks a movement against the tenant's catalog, built from its connections and kept until they change or `schemaChanged(tenant)` is called; `dispatch(tenant, { adapterType, connection?, event })` runs every listen that hears the event, narrowed by connection as `lf` and the hosted product route; `tick(now?)` steps on parked runs whose timer is due. Its store (connections, saved movements, run records, the run host's store) and its vault are the embedder's to supply, in memory by default. The routing rule is public too: `listenerHearsDelivery` and `listenHearsCredential` in `public/inbound`. The engine package now depends on `@listen-fire/module-kit`.

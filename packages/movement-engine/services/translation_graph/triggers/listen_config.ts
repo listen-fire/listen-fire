@@ -15,6 +15,7 @@
 // the same.
 
 import type { DiscriminableEvent } from '../adapter';
+import type { FileListener } from '../movement/file_listeners';
 
 export function eventConfigList(events: unknown): string[] {
   if (Array.isArray(events)) return events.filter((e): e is string => typeof e === 'string');
@@ -62,4 +63,35 @@ export function eventMatchesTriggerScope(event: DiscriminableEvent, config: unkn
   }
 
   return true;
+}
+
+/**
+ * Whether a delivery for `delivered` reaches a listen whose construction names
+ * `listened` (the credential each names, by its imported name): the
+ * platform's per-trigger credential narrowing, which lf keeps too
+ * (crates/lf/src/routing.rs, `Listen::hears`). A listen that names a
+ * credential hears only that credential's deliveries; a listen that names
+ * none hears every delivery, and a delivery that names none (addressed to the
+ * module's install, which serves every connection) reaches every listen.
+ */
+export function listenHearsCredential(listened: string | undefined, delivered: string | undefined): boolean {
+  return listened === undefined || delivered === undefined || listened === delivered;
+}
+
+/**
+ * Whether an event from `adapterType`, delivered for the connection named
+ * `credentialName` (absent: the module's install), reaches `listener`: the
+ * listen is on that adapter, hears that credential, and its scope admits the
+ * event. The whole routing rule an embedded host applies to each listen of a
+ * tenant's saved programs.
+ */
+export function listenerHearsDelivery(
+  listener: Pick<FileListener, 'adapter' | 'credentialName' | 'config'>,
+  delivery: { adapterType: string; credentialName?: string; event: DiscriminableEvent },
+): boolean {
+  return (
+    listener.adapter === delivery.adapterType &&
+    listenHearsCredential(listener.credentialName, delivery.credentialName) &&
+    eventMatchesTriggerScope(delivery.event, listener.config)
+  );
 }
