@@ -193,14 +193,7 @@ export async function sendGmailMessage(input: GmailOutboundInput): Promise<Write
     adapterType: GMAIL_ADAPTER_TYPE,
     externalId: sent.id,
     recordType: GMAIL_MESSAGE_DISPLAY_NAME,
-    data: {
-      id: sent.id,
-      ...(sent.threadId ? { threadId: sent.threadId } : {}),
-      from: mailbox,
-      to: message.to,
-      ...(message.cc.length > 0 ? { cc: message.cc } : {}),
-      subject: message.subject,
-    },
+    data: outboundHandle(message, { 'Message Id': sent.id, 'Thread Id': sent.threadId, From: mailbox }),
   };
 }
 
@@ -229,19 +222,30 @@ export async function draftGmailMessage(input: GmailOutboundInput): Promise<Writ
       `${replyTo ? ` (reply in thread ${replyTo.threadId})` : ''}`,
   );
 
-  const threadId = draft.message?.threadId ?? replyTo?.threadId;
   return {
     adapterType: GMAIL_ADAPTER_TYPE,
     externalId: draft.id,
     recordType: GMAIL_DRAFT_DISPLAY_NAME,
-    data: {
+    data: outboundHandle(message, {
       Id: draft.id,
-      ...(draft.message ? { 'Message Id': draft.message.id } : {}),
-      ...(threadId ? { 'Thread Id': threadId } : {}),
-      To: message.to,
-      ...(message.cc.length > 0 ? { Cc: message.cc } : {}),
-      Subject: message.subject,
-    },
+      'Message Id': draft.message?.id,
+      'Thread Id': draft.message?.threadId ?? replyTo?.threadId,
+    }),
+  };
+}
+
+/** A write's handle data, under the catalog's field names: the engine keeps it
+ *  on the handle, and a program reads it back by those names. */
+function outboundHandle(
+  message: ComposedMessage,
+  named: Record<string, string | null | undefined>,
+): Record<string, unknown> {
+  const ids = Object.entries(named).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '');
+  return {
+    ...Object.fromEntries(ids),
+    To: message.to,
+    ...(message.cc.length > 0 ? { Cc: message.cc } : {}),
+    Subject: message.subject,
   };
 }
 

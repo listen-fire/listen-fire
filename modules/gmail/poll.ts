@@ -27,6 +27,7 @@ import type { GmailClientSource } from './adapter';
 import {
   GmailApiError,
   type GmailApiClient,
+  type GmailLabel,
   type GmailHistoryAddition,
   type GmailHistoryType,
   type GmailLabelAddition,
@@ -117,19 +118,27 @@ export function listenQuery(config: unknown): string | undefined {
 }
 
 export const GMAIL_LABELS_SHAPE_ERROR =
-  "a Gmail listener's 'labels' must be a non-empty list of Gmail label ids — " +
-  'e.g. labels: ["INBOX", "SPAM"]';
+  "a Gmail listener's 'labels' must be a non-empty list of Gmail labels, by " +
+  'name or id — e.g. labels: ["INBOX", "SPAM"] or labels: ["Deals"]';
+
+/** Gmail's own labels, which every mailbox has and no person made. */
+const SYSTEM_LABELS = new Set(['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT']);
+
+export function isSystemLabel(id: string): boolean {
+  return SYSTEM_LABELS.has(id) || id.startsWith('CATEGORY_');
+}
 
 /**
- * The labels whose arrivals fire the listener. Absent ⇒ the inbox alone. A
- * malformed value THROWS rather than falling back to the inbox: the checker
- * refuses it at save, so one reaching here is a listener that would otherwise
- * quietly watch something other than what its author wrote.
+ * The labels the listen names, as written. Absent ⇒ undefined: the inbox for
+ * arrivals, and any USER label for `label_added`. A malformed value THROWS
+ * rather than falling back: the checker refuses it at save, so one reaching
+ * here is a listener that would otherwise quietly watch something other than
+ * what its author wrote.
  */
-export function listenLabels(config: unknown): string[] {
+export function listenLabelsAsWritten(config: unknown): string[] | undefined {
   const raw =
     typeof config === 'object' && config !== null ? Reflect.get(config, 'labels') : undefined;
-  if (raw === undefined) return [...DEFAULT_LABELS];
+  if (raw === undefined) return undefined;
   if (!Array.isArray(raw) || raw.length === 0) throw new Error(GMAIL_LABELS_SHAPE_ERROR);
   const labels: string[] = [];
   for (const label of raw) {
@@ -137,6 +146,79 @@ export function listenLabels(config: unknown): string[] {
     if (!labels.includes(label.trim())) labels.push(label.trim());
   }
   return labels;
+}
+
+/** The labels whose arrivals fire the listener. Absent ⇒ the inbox alone. */
+export function listenLabels(config: unknown): string[] {
+  return listenLabelsAsWritten(config) ?? [...DEFAULT_LABELS];
+}
+
+/**
+ * The labels a listen names, as ids (what history and a message carry) and
+ * names (what Gmail's search takes). A system label is its own id and name; a
+ * user label may be written either way, and is looked up once per poll. One
+ * the mailbox does not have fails the poll, naming the labels it does have.
+ */
+async function resolveLabels(client: GmailApiClient, written: readonly string[]): Promise<GmailLabel[]> {
+  if (written.every(isSystemLabel)) return written.map((id) => ({ id, name: id }));
+  const known = await client.listLabels();
+  return written.map((label) => {
+    if (isSystemLabel(label)) return { id: label, name: label };
+    const found =
+      known.find((k) => k.id === label) ??
+      known.find((k) => k.name === label) ??
+      known.find((k) => k.name.toLowerCase() === label.toLowerCase());
+    if (found === undefined) {
+      const theirs = known.filter((k) => !isSystemLabel(k.id)).map((k) => k.name);
+      throw new Error(
+        `a Gmail listener names the label '${label}', which ${client.credentials.mailbox} does not have — ` +
+          `its labels are ${theirs.length > 0 ? theirs.join(', ') : 'none of its own'} (or a system label such as INBOX)`,
+      );
+    }
+    return found;
+  });
+}
+
+/**
+ * What one poll reads. Each label the listen names is read for the kinds it
+ * asked for. With no labels, arrivals are the inbox's, and label additions
+ * are read from the whole mailbox and count for USER labels only: Gmail's own
+ * labels (the inbox, unread, starred…) change as mail is read and filed, and
+ * none of that is "a label was added" in any useful sense.
+ */
+interface WatchPlan {
+  reads: { labelId?: string; types: GmailHistoryType[] }[];
+  /** The labels arrivals are searched over (by name); empty when no arrivals. */
+  arrivalNames: string[];
+  /** Whether an added label counts. */
+  counts: (label: string) => boolean;
+  /** The labels a label event is searched over (by name): none when any user
+   *  label counts. */
+  addedNames: string[];
+}
+
+function watchPlan(kinds: ReadonlySet<GmailEventKind>, named: GmailLabel[] | undefined): WatchPlan {
+  const arrivals = kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT);
+  const additions = kinds.has(GMAIL_LABEL_ADDED_EVENT);
+  if (named !== undefined) {
+    const ids = new Set(named.map((label) => label.id));
+    const names = named.map((label) => label.name);
+    return {
+      reads: named.map((label) => ({ labelId: label.id, types: historyTypesOf(kinds) })),
+      arrivalNames: arrivals ? names : [],
+      counts: (label) => additions && ids.has(label),
+      addedNames: names,
+    };
+  }
+  return {
+    reads: [
+      ...(arrivals ? DEFAULT_LABELS.map((labelId) => ({ labelId, types: ['messageAdded' as const] })) : []),
+      ...(additions ? [{ types: ['labelAdded' as const] }] : []),
+    ],
+    arrivalNames: arrivals ? [...DEFAULT_LABELS] : [],
+    counts: (label) => additions && !isSystemLabel(label),
+    addedNames: [],
+  };
 }
 
 /**
@@ -186,8 +268,11 @@ export class GmailPollSource {
   constructor(private readonly client: GmailClientSource) {}
 
   async getEvents(input: PollInput): Promise<PollAnswer> {
-    const labels = listenLabels(input.config);
+    const written = listenLabelsAsWritten(input.config);
     const client = await this.client();
+    const kinds = listenKinds(input.config);
+    const plan = watchPlan(kinds, written === undefined ? undefined : await resolveLabels(client, written));
+    const labels = plan.arrivalNames;
 
     const now = Date.now();
     const mark = checkpointOf(input.checkpoint);
@@ -205,12 +290,11 @@ export class GmailPollSource {
       };
     }
 
-    const kinds = listenKinds(input.config);
     const { refs, labelled, historyId, resynced } = await this.changes({
       client,
       historyId: mark.historyId,
       lastSeenAt: mark.lastSeenAt,
-      labels,
+      plan,
       kinds,
       query,
       now,
@@ -252,7 +336,7 @@ export class GmailPollSource {
     // Oldest first — a run processes the mail in the order it arrived. Label
     // additions follow, in the order history recorded them.
     events.sort((a, b) => (a.occurredAt ?? '').localeCompare(b.occurredAt ?? ''));
-    events.push(...(await this.labelEvents({ client, labelled, labels, query })));
+    events.push(...(await this.labelEvents({ client, labelled, labels: plan.addedNames, query })));
 
     // `lastSeenAt` is the moment this poll LOOKED, not the newest message's own
     // date: a resync from it asks Gmail for everything since the last look,
@@ -282,22 +366,21 @@ export class GmailPollSource {
     client: GmailApiClient;
     historyId: string;
     lastSeenAt: string | undefined;
-    labels: readonly string[];
+    plan: WatchPlan;
     kinds: ReadonlySet<GmailEventKind>;
     query: string | undefined;
     now: number;
   }): Promise<{ refs: GmailMessageRef[]; labelled: GmailLabelAddition[]; historyId?: string; resynced: boolean }> {
-    const { client } = input;
-    const types = historyTypesOf(input.kinds);
+    const { client, plan } = input;
     try {
       const reads: LabelHistory[] = [];
-      for (const labelId of input.labels) {
-        reads.push(await readLabelHistory({ client, startHistoryId: input.historyId, labelId, types }));
+      for (const read of plan.reads) {
+        reads.push(await readLabelHistory({ client, startHistoryId: input.historyId, ...read }));
       }
       return {
         ...takeChanges(reads, {
           arrivals: input.kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT),
-          labels: input.kinds.has(GMAIL_LABEL_ADDED_EVENT) ? input.labels : [],
+          counts: plan.counts,
         }),
         resynced: false,
       };
@@ -312,7 +395,7 @@ export class GmailPollSource {
     const sinceMs = input.lastSeenAt ? Date.parse(input.lastSeenAt) : NaN;
     const since = Number.isNaN(sinceMs) ? input.now - RESYNC_FALLBACK_MS : sinceMs;
     const { messages } = await client.listMessages({
-      ...searchOf({ labels: input.labels, terms: [afterTerm(since), input.query] }),
+      ...searchOf({ labels: plan.arrivalNames, terms: [afterTerm(since), input.query] }),
       maxResults: MAX_PER_TICK,
     });
     return { refs: dedupe(messages), labelled: [], historyId: profile.historyId, resynced: true };
@@ -429,7 +512,8 @@ interface LabelHistory {
 async function readLabelHistory(input: {
   client: GmailApiClient;
   startHistoryId: string;
-  labelId: string;
+  /** Absent: the whole mailbox. */
+  labelId?: string;
   types: readonly GmailHistoryType[];
 }): Promise<LabelHistory> {
   const added: GmailHistoryAddition[] = [];
@@ -438,7 +522,7 @@ async function readLabelHistory(input: {
   for (;;) {
     const page = await input.client.listHistory({
       startHistoryId: input.startHistoryId,
-      labelId: input.labelId,
+      ...(input.labelId !== undefined ? { labelId: input.labelId } : {}),
       types: input.types,
       ...(pageToken !== undefined ? { pageToken } : {}),
     });
@@ -504,9 +588,9 @@ function lastOrder(read: LabelHistory): bigint | undefined {
 
 /**
  * The union of every label's changes the listen asked for, and the mark the
- * next tick reads from. A label addition counts only for a label in `labels`:
- * Gmail's label filter returns every change to a message CARRYING the label,
- * which includes other labels being added to it.
+ * next tick reads from. A label addition counts only for a label the plan
+ * counts: Gmail's label filter returns every change to a message CARRYING the
+ * label, which includes other labels being added to it.
  *
  * When everything was read and taken, the mark is the mailbox's marker — the
  * LOWEST the reads reported, since a message landing on one label between two
@@ -517,14 +601,14 @@ function lastOrder(read: LabelHistory): bigint | undefined {
  */
 function takeChanges(
   reads: LabelHistory[],
-  wanted: { arrivals: boolean; labels: readonly string[] },
+  wanted: { arrivals: boolean; counts: (label: string) => boolean },
 ): { refs: GmailMessageRef[]; labelled: GmailLabelAddition[]; historyId?: string } {
   const seen = new Set<string>();
   const all: HistoryChange[] = [];
   for (const read of reads) {
     const changes: HistoryChange[] = [
       ...(wanted.arrivals ? read.added : []).map((ref) => ({ kind: 'arrived' as const, ref })),
-      ...read.labelled.filter((ref) => wanted.labels.includes(ref.label)).map((ref) => ({ kind: 'labelled' as const, ref })),
+      ...read.labelled.filter((ref) => wanted.counts(ref.label)).map((ref) => ({ kind: 'labelled' as const, ref })),
     ];
     for (const change of changes) {
       const key = changeKey(change);

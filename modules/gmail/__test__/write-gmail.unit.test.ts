@@ -126,7 +126,7 @@ describe('sending a new message', () => {
 
     expect(result.externalId).toBe('sent-1');
     expect(result.adapterType).toBe('gmail');
-    expect(result.data).toMatchObject({ id: 'sent-1', from: MAILBOX, subject: 'Your figures' });
+    expect(result.data).toEqual({ 'Message Id': 'sent-1', 'Thread Id': 'thread-new', From: MAILBOX, To: ['rita@northwind.example', 'books@example.com'], Cc: ['anil@example.com'], Subject: 'Your figures' });
   });
 
   it('sends both bodies as alternatives when HTML rides along', async () => {

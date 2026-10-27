@@ -67,7 +67,7 @@ export const INTENT_INDEX: IntentEntry[] = [
   { intent: "Slack's message field, files, taps, Block Kit", chapter: 'system:slack' },
   { intent: "Telegram's message field, opening a chat, taps", chapter: 'system:telegram' },
   { intent: "WhatsApp's message field, files, taps", chapter: 'system:whatsapp' },
-  { intent: 'A mailbox: run on arriving mail, search, send, reply', chapter: 'system:gmail' },
+  { intent: 'A mailbox: run on arriving or labelled mail, search, send, reply, draft', chapter: 'system:gmail' },
   { intent: 'Create a record with several parents', chapter: 'writes', section: 'multi-parent-writes' },
   { intent: 'Write a nested object or list', chapter: 'writes', section: 'structured-values' },
   { intent: 'Connect a record to one that already exists', chapter: 'writes', section: 'link' },

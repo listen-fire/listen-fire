@@ -20,14 +20,14 @@ A listener fires once per message that has arrived since the last look, a minute
 ### running when a message is labelled
 
 \`\`\`
-listen to gmail { events: ["label_added"], labels: ["Label_12"] } fire file_deal
+listen to gmail { events: ["label_added"], labels: ["Deals"] } fire file_deal
 
 function file_deal(msg: <gmail-[:Message]->>) {
   which = msg.\`Added Label\`
 }
 \`\`\`
 
-\`label_added\` fires once per message and label when one of the listen's \`labels\` is added to a message already in the mailbox — a person filing mail, or a filter doing it later. It delivers the message, with \`Added Label\` set to the label added. \`labels\` are label ids: the system ones by name, a user label by the id Gmail gave it. \`query\` narrows these too. A message ARRIVING with the label is \`message_received\`, not this; ask for both with \`events: ["message_received", "label_added"]\`. Removing a label and adding it again does not fire twice. After a long quiet spell (Gmail forgets the mark after about a week) the labels added in the gap are skipped, never delivered late as new.
+\`label_added\` fires once per message and label when one of the listen's \`labels\` is added to a message already in the mailbox — a person filing mail, or a filter doing it later. It delivers the message, with \`Added Label\` set to the id of the label added. Name a user label as you see it in Gmail (\`"Deals"\`) or by its id; a label the mailbox does not have fails the listener, naming the ones it has. With NO \`labels\`, \`label_added\` fires for any of the mailbox's own labels and never for Gmail's (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs) — those change as mail is read and filed. \`query\` narrows these too. A message ARRIVING with the label is \`message_received\`, not this; ask for both with \`events: ["message_received", "label_added"]\`. Removing a label and adding it again does not fire twice. After a long quiet spell (Gmail forgets the mark after about a week) the labels added in the gap are skipped, never delivered late as new.
 
 ### reading the message
 
@@ -38,7 +38,7 @@ function triage(msg: <gmail-[:Message]->>) {
 }
 \`\`\`
 
-\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are Gmail's label ids — \`INBOX\`, \`UNREAD\` and the rest in capitals, a user label by its own name.
+\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are Gmail's label ids — \`INBOX\`, \`UNREAD\` and the rest in capitals, a user label by the id Gmail gave it (\`Label_12\`). A listener's \`labels\` also take a user label by its name.
 
 ### searching the mailbox
 
@@ -121,11 +121,12 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     'Body reach Gmail’s own search; a walk with no WHERE stops at ' +
     `${GMAIL_SEARCH_CEILING} messages, since each one costs a request. A ` +
     'listener’s `query` option is a Gmail search string written exactly as ' +
-    'in Gmail’s search box; its `labels` option (Gmail label ids, default ' +
+    'in Gmail’s search box; its `labels` option (Gmail labels by name or id, default ' +
     '`["INBOX"]`) says which arrivals count, so add `"SPAM"` when mail that ' +
     'must not be missed can land in Spam. `events: ["label_added"]` fires ' +
     'instead when one of those labels is added to a message already there, ' +
-    'once per message and label, with `Added Label` set. The first poll ' +
+    'once per message and label, with `Added Label` set; with no `labels` it ' +
+    'counts the mailbox’s own labels only, never Gmail’s system ones. The first poll ' +
     'delivers nothing.',
   handbookSection: {
     title: 'Gmail: one connected mailbox',
@@ -139,7 +140,8 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     'option (e.g. `labels: ["INBOX", "SPAM"]` to include Spam). `label_added` ' +
     '(`events: ["label_added"]`) fires once per message and label when one of ' +
     'the `labels` is added to a message already in the mailbox, delivering the ' +
-    'message with `Added Label` set. The first poll sets the mark and emits ' +
+    'message with `Added Label` set; with no `labels` it counts any user ' +
+    'label, never a Gmail system one. The first poll sets the mark and emits ' +
     'nothing, so going live never replays the back catalogue; after Gmail ' +
     'forgets the mark (about a quiet week) label additions in the gap are ' +
     'skipped, never delivered late. Nothing fires on an edit, a label removed, ' +

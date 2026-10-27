@@ -146,6 +146,16 @@ const historyListSchema = z.object({
   historyId: z.string().nullish(),
 });
 
+const labelListSchema = z.object({
+  labels: z.array(z.object({ id: z.string(), name: z.string(), type: z.string().nullish() })).nullish(),
+});
+/** A label the mailbox has: its id (what history and a message carry) and
+ *  its name (what a person sees, and what Gmail's search takes). */
+export interface GmailLabel {
+  id: string;
+  name: string;
+}
+
 const attachmentSchema = z.object({
   size: z.number().nullish(),
   data: z.string().nullish(),
@@ -424,6 +434,12 @@ export class GmailApiClient {
    *  works AND the source of the first poll's change marker. */
   async getProfile(): Promise<GmailProfile> {
     return this.call('users.getProfile', 'read', gmailProfileSchema, (api) => api.users.getProfile({ userId: SELF }));
+  }
+
+  /** Every label the mailbox has, system and user alike. */
+  async listLabels(): Promise<GmailLabel[]> {
+    const page = await this.call('users.labels.list', 'read', labelListSchema, (api) => api.users.labels.list({ userId: SELF }));
+    return (page.labels ?? []).map(({ id, name }) => ({ id, name }));
   }
 
   /** One page of message ids matching a Gmail search query. */
