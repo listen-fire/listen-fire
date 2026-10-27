@@ -34,7 +34,6 @@ const PACKAGES = [
   { dir: 'packages/movement-lang', assets: [/^wasm\/[^/]+\.wasm$/] },
   { dir: 'packages/engine-contracts' },
   { dir: 'packages/module-runtime' },
-  { dir: 'packages/module-kit' },
   { dir: 'packages/movement-engine' },
   // The builtins chapter reads the language's reference where the repo keeps
   // it, and a build from beside its own output (chapters/builtins.ts).
@@ -44,6 +43,7 @@ const PACKAGES = [
   { dir: 'packages/model-providers' },
   { dir: 'packages/files-s3' },
   { dir: 'packages/ocr-google' },
+  { dir: 'packages/module-kit' },
   { dir: 'modules/google-sheets' },
   // packages/handbook joins here once it exists (PLAN-01 Task 4).
   ...fs

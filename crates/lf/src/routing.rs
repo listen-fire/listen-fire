@@ -323,6 +323,25 @@ mod tests {
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
     }
 
+    /// The table of cases the engine's TypeScript is held to as well
+    /// (`listenHearsCredential`, `listenerHearsDelivery`).
+    #[test]
+    fn hears_matches_the_shared_table_of_cases() {
+        let table: Json = serde_json::from_str(include_str!("../../../packages/engine-contracts/conformance/listen-hears.json")).unwrap();
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let listen = Listen {
+                file: "f".into(),
+                adapter: "notes".into(),
+                config: Obj::new(),
+                movement_name: "m".into(),
+                credential: case["listen"].as_str().map(str::to_string),
+            };
+            assert_eq!(listen.hears(case["delivery"].as_str()), case["hears"].as_bool().unwrap(), "{}", case["case"]);
+        }
+    }
+
     #[test]
     fn a_listen_names_its_constructions_credential_and_hears_only_its_deliveries() {
         let source = "import { inbox } from adapters\nimport { inbox_main as a_cred, `Inbox B` } from credentials\n\na = connect inbox using a_cred\nb = connect inbox using `Inbox B`\nc = connect inbox\n\nfunction noted() {\n}\n\nlisten to a fire noted\nlisten to b fire noted\nlisten to c fire noted\nlisten to manual fire noted\n";
