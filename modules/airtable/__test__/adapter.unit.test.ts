@@ -156,8 +156,18 @@ describe('AirtableAdapter.describe', () => {
     expect(byId.get('fldName')!.writable).toBe(true);
     expect(byId.get('fldAmount')!.kind).toBe('number');
     expect(byId.get('fldClosed')!.kind).toBe('boolean');
-    expect(byId.get('fldTags')!.kind).toBe('string');
+    expect(byId.get('fldTags')!.kind).toBe('enum');
     expect(byId.get('fldTags')!.cardinality).toBe('many');
+    expect(byId.get('fldTags')!.enumValues).toEqual(['Hot', 'Warm']);
+    expect(byId.get('fldStage')!.kind).toBe('enum');
+    expect(byId.get('fldStage')!.cardinality).toBe('one');
+    expect(byId.get('fldStage')!.enumValues).toEqual(['Open', 'Won']);
+    // A select with no choices stays text: an empty enum would refuse every value.
+    expect(byId.get('fldRegion')!.kind).toBe('string');
+    expect(byId.get('fldRegion')!.enumValues).toBeUndefined();
+    expect(byId.get('fldSource')!.kind).toBe('string');
+    expect(byId.get('fldSource')!.cardinality).toBe('many');
+    expect(byId.get('fldSource')!.enumValues).toBeUndefined();
     expect(byId.get('fldCreated')!.kind).toBe('date');
     // Read-only field types are surfaced but writable:false.
     expect(byId.get('fldCreated')!.writable).toBe(false);
@@ -963,5 +973,18 @@ movement m(x: <air-[:\`Record Change\`]->>) {
     // base hop. Both standpoints must promise it, because both dispatch into
     // the same `createRecord`.
     expect(projection.schema.writableRoots.Deals?.fields).toMatchObject({ Name: 'text' });
+  });
+
+  it('select choices reach the projection as enums, one value or many; an empty select stays text', async () => {
+    const { adapter } = makeMultiBaseAdapter({
+      teamId: 'team-air-checker-enums',
+      bases: [crm(), ops()],
+      base: 'CRM',
+    });
+    const { projection } = await projectUnpositioned(adapter);
+    const deals = projection.schema.positions.Deals?.properties;
+    expect(deals?.Stage).toMatchObject({ kind: 'enum', options: ['Open', 'Won'] });
+    expect(deals?.Tags).toMatchObject({ kind: 'list', of: { kind: 'enum', options: ['Hot', 'Warm'] } });
+    expect(deals?.Region).toBe('text');
   });
 });

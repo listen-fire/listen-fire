@@ -220,12 +220,24 @@ function valueShapeFor(fieldType: string | undefined): ValueShape {
   }
 }
 
+// A select's choices come from the base schema (`options.choices[].name`). A
+// select with none listed stays text: an empty enum would refuse every value,
+// including ones Airtable would accept.
+function selectChoices(field: AirtableFieldMeta): string[] {
+  if (field.type !== 'singleSelect' && field.type !== 'multipleSelects') return [];
+  const choices = (field.options as { choices?: Array<{ name?: unknown }> } | undefined)?.choices;
+  if (!Array.isArray(choices)) return [];
+  return choices.flatMap((c) => (typeof c?.name === 'string' && c.name !== '' ? [c.name] : []));
+}
+
 function fieldDescriptor(field: AirtableFieldMeta): SchemaFieldDescriptor {
   const shape = valueShapeFor(field.type);
+  const choices = selectChoices(field);
   return {
     fieldId: field.id,
     displayName: field.name,
-    kind: shape.kind,
+    kind: choices.length > 0 ? 'enum' : shape.kind,
+    ...(choices.length > 0 ? { enumValues: choices } : {}),
     cardinality: shape.cardinality,
     writable: !READ_ONLY_FIELD_TYPES.has(field.type ?? ''),
     required: false,
