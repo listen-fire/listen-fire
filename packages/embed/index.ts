@@ -55,6 +55,8 @@ import {
 } from 'movement-engine/public/run-host';
 import { createMemoryVault, createSecretsFamily, type SecretFields, type SecretsBackend } from 'movement-engine/public/secrets';
 
+import { MANUAL, MANUAL_MANIFEST, manualAdapter, manualEvent } from './manual';
+
 type CatalogSnapshot = RunInput['catalog'];
 
 /** A program a tenant saved: its source, the release it was checked under,
@@ -175,6 +177,10 @@ export interface EmbeddedHost {
   save(tenant: string, program: { name: string; source: string }): Promise<SaveAnswer>;
   /** Run every listen of the tenant's programs that hears `delivery`. */
   dispatch(tenant: string, delivery: Delivery): Promise<EmbeddedRunOutcome[]>;
+  /** Run one program now: every `listen to manual` it declares fires, with
+   *  `text` as the Invocation's `Text` (lf's `lf run <movement> --text`).
+   *  None, when the program is not saved or declares no such listen. */
+  run(tenant: string, request: { program: string; text?: string }): Promise<EmbeddedRunOutcome[]>;
   /** Step on every run whose timer is due by `now`: one outcome per segment. */
   tick(now?: Date): Promise<EmbeddedRunOutcome[]>;
 }
@@ -194,6 +200,8 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   const secrets = createSecretsFamily({ backend: vault });
   const modules = new Map(options.modules.map((module) => [module.manifest.adapterType, module]));
   const limits = options.limits ?? {};
+  // The run host's `manual` unit, unless a module of that type replaces it.
+  const manualUnit = modules.has(MANUAL) ? undefined : manualAdapter();
   const loaded = new Map<string, { module: AdapterModuleDefinition; instance: InProcessAdapterModule }>();
   const catalogs = new Map<string, Promise<CatalogSnapshot>>();
   const runHost: RunHost = {
@@ -254,8 +262,10 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
       entry.schemas[connection.name] = schema;
       adapters.set(connection.adapterType, entry);
     }
+    const units: CatalogAdapterInput[] =
+      manualUnit !== undefined ? [{ manifest: MANUAL_MANIFEST, schemas: { '': (await introspectAdapter(manualUnit, MANUAL_MANIFEST)).schema } }] : [];
     return buildCatalogSnapshot({
-      adapters: [...adapters.values()],
+      adapters: [...units, ...adapters.values()],
       credentials: Object.fromEntries(
         connections.map(({ name, adapterType }) => {
           const declared = moduleOf(adapterType).credentials[0];
@@ -284,6 +294,7 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
   /** The instance a run resolves: the tenant's connection holding that
    *  credential, or, for a module that declares none, its one connection. */
   const resolve = async (tenant: string, adapterType: string, credentialsId: string | undefined) => {
+    if (adapterType === MANUAL && manualUnit !== undefined) return manualUnit;
     const ofType = (await store.connections.list(tenant)).filter((c) => c.adapterType === adapterType);
     const connection =
       credentialsId !== undefined ? ofType.find((c) => c.credentialRef === credentialsId) : ofType.length === 1 && ofType[0].credentialRef === undefined ? ofType[0] : undefined;
@@ -451,6 +462,17 @@ export function createEmbeddedHost(options: EmbeddedHostOptions): EmbeddedHost {
           });
           if (heard) outcomes.push(await fire(tenant, program, listener, delivery));
         }
+      }
+      return outcomes;
+    },
+
+    async run(tenant, { program: name, text }) {
+      const program = (await store.programs.list(tenant)).find((p) => p.name === name);
+      if (program === undefined) return [];
+      const delivery: Delivery = { adapterType: MANUAL, event: manualEvent({ firedAt: now(), ...(text !== undefined ? { text } : {}) }) };
+      const outcomes: EmbeddedRunOutcome[] = [];
+      for (const listener of program.listeners) {
+        if (listener.adapter === MANUAL) outcomes.push(await fire(tenant, program, listener, delivery));
       }
       return outcomes;
     },

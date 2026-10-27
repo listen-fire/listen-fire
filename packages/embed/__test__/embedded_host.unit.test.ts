@@ -174,6 +174,33 @@ describe('the embedded host', () => {
     expect(refused.saved ? '' : refused.problems.join('\n')).toMatch(/MOV_IMPORT_UNKNOWN/);
   });
 
+  it("runs one program now through the run host's manual unit, its text the Invocation's Text", async () => {
+    const { host, notes, written } = setup();
+    await host.connect('acme', { name: 'north', module: notes, credential: { book: 'acme-north' } });
+    const source = `import { notes } from adapters
+import { north } from credentials
+
+book = connect notes using north
+
+function file(run: <manual-[:Invocation]->>) {
+  write book-[:Note]-> { Title: "Filed \${run.Text}" }
+}
+
+listen to manual fire file
+`;
+    expect(await host.save('acme', { name: 'file', source })).toEqual({ saved: true, listens: 1 });
+    expect(await host.save('acme', { name: 'copy', source: copier('north', 'C') })).toEqual({ saved: true, listens: 1 });
+
+    const [ran, ...more] = await host.run('acme', { program: 'file', text: 'by hand' });
+    expect(more).toEqual([]);
+    expect(ran).toMatchObject({ tenant: 'acme', program: 'file', movement: 'file', outcome: { ok: true, parked: false } });
+    expect(written).toEqual([{ tenant: 'acme', book: 'acme-north', Title: 'Filed by hand' }]);
+
+    // A program with no manual listen, or none saved by that name, runs nothing.
+    expect(await host.run('acme', { program: 'copy' })).toEqual([]);
+    expect(await host.run('globex', { program: 'file' })).toEqual([]);
+  });
+
   it('refuses a module that is not among its modules', async () => {
     const { host } = setup();
     const other = notesModule([], new Map());
