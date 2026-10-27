@@ -34,7 +34,7 @@ import { AirtableAdapter } from '../adapter';
 import { AirtableAPIClient } from '../api_client';
 import { AIRTABLE_MANIFEST } from '../manifest';
 import { testFiles } from '../testing';
-import { airtableEventTypes, eventsFromPayload, type AirtableEventData } from '../webhook';
+import { AIRTABLE_SUBSCRIBABLE_EVENTS, airtableEventTypes, eventsFromPayload, type AirtableEventData } from '../webhook';
 
 const BASE = 'appHIRE01';
 const CANDIDATES = 'tblCAND01';
@@ -374,11 +374,13 @@ function fakeHiring(feed: unknown[]) {
  * The instance schema the platform's catalog hands the checker for a
  * base-positioned connection: the real adapter's entries and descriptors,
  * through the engine's projection — and then the one step the platform's
- * catalog adds, which lives in the platform repository: a signature's
- * `(base, table)` address retargets every edge of the event node that lands on
- * the unnarrowed `Table` at the table it names (lf-platform
- * listen_narrowing.ts, `graftAddress`). That is what makes both `Record` and
- * `Old Record` typed as `Candidates`. Emulated here, by the same rule.
+ * catalog adds, which lives in the platform repository: the address a
+ * signature names (`table`) gets positions of its own, one per `action`, each a
+ * copy of the event node whose edges onto the unnarrowed `Table` land on the
+ * table it names (lf-platform listen_narrowing.ts, `graftAddress`; lf's port is
+ * crates/lf/src/listen_narrowing.rs). That is what makes both `Record` and
+ * `Old Record` typed as `Candidates`, and what the listen's `field` is checked
+ * against. Emulated here, by the same rule.
  */
 async function hiringSchema(adapter: AirtableAdapter): Promise<InstanceSchema> {
   const entries = await adapter.listEntryPoints();
@@ -398,7 +400,16 @@ async function hiringSchema(adapter: AirtableAdapter): Promise<InstanceSchema> {
   const retargeted = Object.fromEntries(
     Object.entries(eventNode.edges).map(([name, edge]) => [name, edge.target === 'Table' ? { ...edge, target: 'Candidates' } : edge]),
   );
-  return { ...schema, positions: { ...schema.positions, 'Record Change': { ...eventNode, edges: retargeted } } };
+  const keyOf = (pins: Array<[string, string]>) => JSON.stringify(['Record Change', pins]);
+  const grafted = Object.fromEntries(
+    AIRTABLE_SUBSCRIBABLE_EVENTS.map((action) => [keyOf([['action', action], ['table', CANDIDATES]]), { ...eventNode, edges: retargeted }]),
+  );
+  return {
+    ...schema,
+    eventNarrowingKeys: ['table'],
+    positions: { ...schema.positions, ...grafted },
+    unions: { ...schema.unions, [keyOf([['table', CANDIDATES]])]: Object.keys(grafted) },
+  };
 }
 
 const PROGRAM = `import { airtable } from adapters
@@ -406,7 +417,7 @@ import { acme } from credentials
 
 hiring = connect airtable using acme { base: "Hiring" }
 
-function schedule_interview(change: <hiring-[:\`Record Change\`]->>) {
+function schedule_interview(change: <hiring-[e:\`Record Change\` WHERE e.table == "${CANDIDATES}"]->>) {
   was = change-[:\`Old Record\`]->.Stage
   now = change-[:Record]->.Stage
   if (was != "Interview" && now == "Interview") {
@@ -479,5 +490,11 @@ describe('end to end: "when Stage becomes Interview", on the engine run path', (
   it('the previous Stage is typed as the Stage enum: comparing it to a choice Stage lacks is refused at the check', async () => {
     const typo = PROGRAM.replace('was != "Interview"', 'was != "Interveiw"');
     await expect(deliver({ feed: [STAGE_TO_INTERVIEW], source: typo })).rejects.toThrow(/MOV_ENUM_UNKNOWN_VALUE .*Interveiw/);
+  });
+
+  it('a signature that names no table leaves the row undescribed, so reading its Stage is refused at the check', async () => {
+    const unaddressed = PROGRAM.replace(/<hiring-\[e:`Record Change` WHERE [^\]]*\]->>/, '<hiring-[:`Record Change`]->>');
+    expect(unaddressed).not.toBe(PROGRAM);
+    await expect(deliver({ feed: [STAGE_TO_INTERVIEW], source: unaddressed })).rejects.toThrow(/MOV_UNDESCRIBED_POSITION .*name its table in the movement's signature/);
   });
 });
