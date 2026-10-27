@@ -153,6 +153,9 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     });
     let drain = (!doors_only).then(|| tokio::task::spawn_local(drain_forever(session.clone(), poke.clone())));
     println!("lf serving on http://127.0.0.1:{port}/hooks/<external>/<install>");
+    for line in hook_urls(&session, &format!("http://127.0.0.1:{port}")) {
+        println!("{line}");
+    }
     if doors_only {
         println!("doors only: nothing drains in this process; workers (`lf drain`) run what the doors queue");
     }
@@ -165,6 +168,30 @@ pub async fn run(project: Project, serving: Serving<'_>) -> Result<i32, String> 
     // The last holder: the session goes; its module processes stop as lf exits (crate::module_hosts::stop_all).
     drop(session);
     Ok(0)
+}
+
+/// Each connection a listen hears deliveries for, with the URL its sender
+/// posts to: under lf.yaml's `publicUrl` when it names one, else this
+/// listener's own.
+fn hook_urls(session: &Session, local: &str) -> Vec<String> {
+    let set = session.file_set();
+    let base = session.project.public_url.as_deref().unwrap_or(local);
+    let mut seen = std::collections::BTreeSet::new();
+    for listen in &set.listens {
+        let Some(credential) = &listen.credential else { continue };
+        let takes_hooks = set.running.iter().any(|r| r.external.manifest.name == listen.adapter && crate::doors::inbound_of(r).is_some());
+        if takes_hooks {
+            seen.insert((listen.adapter.clone(), credential.clone()));
+        }
+    }
+    seen.into_iter().filter_map(|(external, credential)| Some(format!("{external} {credential}: {}", hook_url(base, &external, &credential)?))).collect()
+}
+
+/// `<base>/hooks/<external>/<credential>`, each segment percent-encoded.
+fn hook_url(base: &str, external: &str, credential: &str) -> Option<String> {
+    let mut url = url::Url::parse(base).ok()?;
+    url.path_segments_mut().ok()?.pop_if_empty().extend(["hooks", external, credential]);
+    Some(url.to_string())
 }
 
 #[cfg(unix)]
@@ -544,6 +571,12 @@ mod tests {
     /// What a run returned is never a door's answer: a webhook's sender hears
     /// which runs it started, never their values (and under `--doors-only`
     /// it is answered before any run).
+    #[test]
+    fn a_connections_hook_url_encodes_its_credential() {
+        assert_eq!(hook_url("http://127.0.0.1:8977", "webhook", "Stripe Hook").as_deref(), Some("http://127.0.0.1:8977/hooks/webhook/Stripe%20Hook"));
+        assert_eq!(hook_url("https://lf.example/base/", "webhook", "StripeHook").as_deref(), Some("https://lf.example/base/hooks/webhook/StripeHook"));
+    }
+
     #[test]
     fn the_hooks_answer_never_carries_what_a_run_returned() {
         let outcome = RunOutcome {

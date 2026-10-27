@@ -933,11 +933,27 @@ impl Run<'_> {
                 )));
             }
         };
-        let Some(Binding::Instance(source_instance)) = file.resolve(&type_ref.graph) else {
-            return Err(Stop::Thrown(Failure::unsupported(
+        let source_instance = match file.resolve(&type_ref.graph) {
+            Some(Binding::Instance(instance)) => instance,
+            // A listen that declares what its events carry (`payload:
+            // <Payment>`) fires a parameter typed by that node: the event is
+            // its payload, held as a value is (as an extraction's is), and
+            // not a position on any connection. The host has already checked
+            // the payload fits the node.
+            Some(Binding::Shape(_)) if type_ref.hops_raw.is_none() => {
+                *self.file_scope.borrow_mut() = Some(file.clone());
+                self.call_stack.borrow_mut().push(movement.name.clone());
+                let movement_scope = file.child();
+                let payload = event_get(&self.event, "payload");
+                movement_scope.declare(param.name.clone(), Binding::Value(ValueBinding { value: payload, trail: Some(Trail::default()), many: false }));
+                return Ok((movement, index, movement_scope));
+            }
+            _ => {
+                return Err(Stop::Thrown(Failure::unsupported(
                 &format!("a movement parameter typed against '{}'", type_ref.graph),
-                "type the parameter against a constructed adapter instance",
-            )));
+                    "type the parameter against a constructed adapter instance, or a node the listen declares as its payload",
+                )));
+            }
         };
         self.seed(&source_instance, type_ref).await.map_err(Stop::Thrown)?;
         if event_text(&self.event, "triggerType").as_deref() == Some("snapshot") {
@@ -3056,6 +3072,19 @@ mod tests {
         // declared position.
         // (Its data is the event's own object, named by the id it was sent with.)
         assert!(seen[3].args["position"].to_string().contains(r#"["recordType","message"]"#), "{}", seen[3].args["position"]);
+    }
+
+    /// A movement whose parameter is typed by a node the program declares
+    /// (a listen's `payload: <Payment>`) holds the event's payload as that
+    /// value: its fields read straight off it, with no adapter asked.
+    #[test]
+    fn a_parameter_typed_by_a_declared_node_holds_the_payload() {
+        let source = "node Payment {\n  id: <text>\n  amount: <number>\n}\nfunction m(e: <Payment>) {\n  return { id: e.id, more: e.amount + 1 }\n}";
+        let mut input = segment_input(source, json!(["o", [["id", "pay_1"], ["amount", 1200.0]]]), &[]);
+        input["recordsReturned"] = json!(true);
+        let (done, seen) = drive_input(input, plain_host(json!({})));
+        assert_eq!(done["result"]["returned"], json!(["o", [["id", "pay_1"], ["more", 1201.0]]]), "{done}");
+        assert!(seen.iter().all(|r| r.family != "adapters"), "no adapter is asked: {:?}", seen.iter().map(|r| (r.family, r.method.clone())).collect::<Vec<_>>());
     }
 
     /// A host that records what the movement returned gets it in the

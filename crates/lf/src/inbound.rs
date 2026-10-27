@@ -431,6 +431,11 @@ pub trait InboundStore {
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String>;
     /// Poke whatever drains the work rows.
     fn notify(&self);
+    /// Why the delivery's events are refused before anything is kept: none
+    /// fits what the listens they would reach declare. None to keep them.
+    fn refuse_events(&self, _source: &Source, _events: &[Js]) -> Option<String> {
+        None
+    }
 }
 
 /// Everything one delivery leaves behind (`InboundStore::keep`).
@@ -474,6 +479,8 @@ enum Refusal {
     RefusedWith(u16),
     MethodNotAllowed,
     CannotPreprocess,
+    /// No listen takes what the delivery carries: the line naming the fields.
+    PayloadMismatch(String),
 }
 
 /// What a delivery that got in came to.
@@ -501,6 +508,9 @@ impl Refusal {
             Refusal::RefusedWith(status) => (status, "signature_invalid"),
             Refusal::MethodNotAllowed => (405, "method_not_allowed"),
             Refusal::CannotPreprocess => (500, "adapter cannot preprocess inbound"),
+            Refusal::PayloadMismatch(message) => {
+                return Answer::of(400, Js::Obj(obj! { "error" => Js::str("payload_mismatch"), "message" => Js::Str(message) }));
+            }
         };
         Answer::error(status, code)
     }
@@ -586,6 +596,11 @@ async fn receive_delivery<S: InboundStore>(store: &S, provider_key: &str, delive
         }
         (store.preprocess(&source, &body, subscription.checkpoint.as_ref()).await?, Wakes::Read(body), external_id)
     };
+
+    if let Some(message) = store.refuse_events(&source, &extraction.events) {
+        eprintln!("Webhook delivery refused for subscription {}: {message}", delivery.subscription_id);
+        return refused(Refusal::PayloadMismatch(message));
+    }
 
     // Capture: one receipt per event. A receipt that cannot be stored drops
     // its event from the count; the rest go on.
