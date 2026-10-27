@@ -229,7 +229,8 @@ describe('GoogleDriveAdapter.createRecord — folder', () => {
     expect(calls.findFolder).toEqual([{ name: 'Acme Corp', parentId: PARENT_FOLDER }]);
     expect(calls.createFolder).toEqual([{ name: 'Acme Corp', parentId: PARENT_FOLDER }]);
     expect(result.externalId).toBe('fldrNEW01');
-    expect(result.data!.url).toBe('https://drive.google.com/drive/folders/fldrNEW01');
+    expect(result.data).toMatchObject({ Id: 'fldrNEW01', Name: 'Acme Corp' });
+    expect(result.data!.Url).toBe('https://drive.google.com/drive/folders/fldrNEW01');
   });
 
   it('reuses an existing folder found by name (tier-1), skipping create', async () => {

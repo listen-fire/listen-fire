@@ -51,6 +51,19 @@ import {
  *  host: module-kit `readHandedFile`). */
 export type ReadHandedFile = (ref: FileRef) => Promise<Uint8Array>;
 
+/** What a create hands back for the write's handle. The engine keeps this bag
+ *  on the handle keyed by the catalog's field names, so the new record reads
+ *  (Id, Name, Url, and a file's Mime Type and Size) like any other. */
+function handleData(
+  kind: 'folder' | 'file',
+  item: { id: string; name: string; mimeType?: string; webViewLink?: string | null; size?: number | null },
+): Record<string, unknown> {
+  const base = { Id: item.id, Name: item.name, Url: item.webViewLink || driveUrl(item.id, kind) };
+  return kind === 'folder' ? base : { ...base, 'Mime Type': item.mimeType ?? null, Size: item.size ?? null };
+}
+
+const DRIVE_DOC_MIME = 'application/vnd.google-apps.document';
+
 // ── createRecord — dispatch on type ───────────────────────────────────────────
 
 export async function createRecord(input: {
@@ -109,7 +122,7 @@ async function createFolder(input: {
     return {
       adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
       externalId: existingId,
-      data: { name: folderName, url: driveUrl(existingId, 'folder') },
+      data: handleData('folder', { id: existingId, name: folderName }),
     };
   }
 
@@ -118,7 +131,7 @@ async function createFolder(input: {
   return {
     adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
     externalId: folder.id,
-    data: { name: folderName, url: folder.webViewLink || driveUrl(folder.id, 'folder') },
+    data: handleData('folder', { id: folder.id, name: folderName, webViewLink: folder.webViewLink }),
   };
 }
 
@@ -209,16 +222,7 @@ async function copyFile(input: {
   return {
     adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
     externalId: copy.id,
-    // Keyed by the catalog's field names: the engine keeps this bag on the
-    // write's handle, so the copy reads (Id, Name, Mime Type, Url, Size)
-    // like any other file afterwards.
-    data: {
-      Id: copy.id,
-      Name: copy.name,
-      'Mime Type': copy.mimeType,
-      Url: copy.webViewLink ?? driveUrl(copy.id, 'file'),
-      Size: copy.size,
-    },
+    data: handleData('file', { id: copy.id, name: copy.name, mimeType: copy.mimeType, webViewLink: copy.webViewLink, size: copy.size }),
   };
 }
 
@@ -240,7 +244,7 @@ async function createDocument(input: {
   return {
     adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
     externalId: doc.id,
-    data: { name: title, url: doc.webViewLink || driveUrl(doc.id, 'file') },
+    data: handleData('file', { id: doc.id, name: title, mimeType: DRIVE_DOC_MIME, webViewLink: doc.webViewLink }),
   };
 }
 
@@ -295,7 +299,7 @@ async function createUpload(input: {
   return {
     adapterType: GOOGLE_DRIVE_ADAPTER_TYPE,
     externalId: result.id,
-    data: { name, url: result.webViewLink || driveUrl(result.id, 'file') },
+    data: handleData('file', { id: result.id, name, mimeType: resolved.contentType ?? 'application/octet-stream', webViewLink: result.webViewLink }),
   };
 }
 

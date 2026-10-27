@@ -128,6 +128,30 @@ test('a granted file is copied into a granted folder, and a later write copies t
   }
 });
 
+test('a created folder and file carry their Id and Url on the write handle', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await driveProject(fake);
+    writeFileSync(
+      join(dir, 'movements/hello.mvt'),
+      program(`  sub = write folder-[:Folders]-> { Name: "Clients" }
+  note = write folder-[:Files]-> { Name: "Notes", Content: "hello" }
+  return "\${sub.Id}|\${sub.Url} / \${note.Id}|\${note.Url}|\${note.\`Mime Type\`}"`),
+    );
+    const run = lfSync(dir, 'run', 'copy');
+    assert.equal(run.code, 0, run.out);
+    const [folder, file] = (/returned "(.*)"/.exec(run.out)?.[1] ?? '').split(' / ').map((part) => part.split('|'));
+    assert.match(folder[0], /\S+/, run.out);
+    assert.match(folder[1], /^https:\/\/drive\.google\.com\/drive\/folders\//, run.out);
+    assert.match(file[0], /\S+/, run.out);
+    assert.match(file[1], /^https:\/\/drive\.google\.com\/file\/d\//, run.out);
+    assert.equal(file[2], DOC, run.out);
+    assert.notEqual(folder[0], file[0]);
+  } finally {
+    await fake.stop();
+  }
+});
+
 test('copying a file the app was not granted fails the run with the reason', async () => {
   const fake = await fakeChannels();
   try {
