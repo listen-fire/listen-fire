@@ -3,6 +3,7 @@
 //! is what lf keeps behind them.
 //!
 //!   POST /api/public/webhook-sync/<provider>/<install>   a provider's delivery
+//!        (`…/<install>/<key>`: one of the install's scoped webhooks, crate::subscriptions)
 //!        (`/hooks/<external>/<install>` is the same door under lf's older name)
 //!   POST /api/public/adapter/<external>/emit  { events }  an external's new data
 //!   POST /api/public/adapter/<external>/wake  { keys }    resume what is parked
@@ -37,6 +38,7 @@ use crate::obj;
 use crate::run_host::{await_wake_work, queue_await_wake};
 use crate::runs::{Delivered, Fired, Session};
 use crate::secrets::{Binding, Credential, Credentials, install_of, signer_of};
+use crate::subscriptions::{has_scoped, scoped_secret};
 use crate::backend::RunHostStore;
 use crate::store::{DeliverySource, NewDelivery, NewWork, Store, StoreError, iso};
 
@@ -183,7 +185,7 @@ impl<R: Reader> LfDoors<'_, R> {
         let mut failures = Vec::new();
         for kept in &receipt.events {
             let (external, event) = (kept.get("external").and_then(Js::as_str).unwrap_or_default(), kept.get("event").unwrap_or(&Js::Null));
-            let delivered = Delivered { id: Some(&receipt.id), credential: kept.get("credential").and_then(Js::as_str) };
+            let delivered = Delivered::of_row(kept, Some(&receipt.id));
             match session.fire_event(external, event, false, delivered).await {
                 Ok(one) => {
                     for line in &one.redelivered {
@@ -227,16 +229,27 @@ impl<R: Reader> LfDoors<'_, R> {
 }
 
 impl<R: Reader> InboundStore for LfDoors<'_, R> {
+    /// `id` is a credential's name, or `<credential>/<key>` for one of its
+    /// scoped webhooks (crate::subscriptions), whose secret is its own.
     async fn find_subscription(&self, id: &str) -> Result<Option<Subscription>, String> {
-        let Some(credential) = self.install(id) else { return Ok(None) };
+        let (name, key) = subscription_of(id);
+        let Some(credential) = self.install(name) else { return Ok(None) };
         let Some(setup) = self.setup_of(&credential.external) else { return Ok(None) };
-        let own = credential.fields.get(&setup.secret_field);
+        // A scoped webhook lf holds no record of has no door.
+        if let Some(key) = key
+            && !has_scoped(credential, key)
+        {
+            return Ok(None);
+        }
+        // A scoped webhook's own secret (the source issued it), else the
+        // credential's, as for its unscoped webhook.
+        let own = key.and_then(|key| scoped_secret(credential, key)).or_else(|| credential.fields.get(&setup.secret_field).cloned());
         // A module that checks its own inbound may be addressed by a user
         // credential (it carries the provider keys the check reads) while the
         // secret `lf connect` set is the install's.
         let secret = match own {
             None if setup.declaration.scheme == Scheme::Module => {
-                install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field))
+                install_of(&self.installs, &credential.external).and_then(|install| install.fields.get(&setup.secret_field)).cloned()
             }
             own => own,
         };
@@ -244,7 +257,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             id: id.to_string(),
             team_id: LOCAL_TENANT.into(),
             provider_key: setup.provider_key(),
-            secret: secret.cloned().unwrap_or_default(),
+            secret: secret.unwrap_or_default(),
             checkpoint: self.store.inbound_checkpoint(id).map_err(|e| e.to_string())?,
         }))
     }
@@ -258,7 +271,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     }
 
     async fn source_for(&self, subscription: &Subscription) -> Result<Option<Source>, String> {
-        let Some(credential) = self.install(&subscription.id) else { return Ok(None) };
+        let Some(credential) = self.install(subscription_of(&subscription.id).0) else { return Ok(None) };
         let Some(setup) = self.setup_of(&credential.external) else { return Ok(None) };
         Ok(Some(Source {
             declaration: setup.declaration.clone(),
@@ -299,7 +312,7 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
     /// nothing and runs nothing.
     async fn keep(&self, kept: Kept<'_>) -> Result<bool, String> {
         let adapter_type = &kept.source.adapter_type;
-        let credential = self.delivering_credential(kept.source);
+        let came_for = Delivered { id: None, credential: self.delivering_credential(kept.source), subscription: subscription_of(kept.subscription_id).1 };
         let receipt = NewDelivery {
             id: uuid::Uuid::new_v4().to_string(),
             external_id: kept.external_id.map(str::to_string),
@@ -307,10 +320,12 @@ impl<R: Reader> InboundStore for LfDoors<'_, R> {
             source: kept.door,
             inline: matches!(self.sink, EventSink::Inline { .. }),
             replay_of: None,
-            events: kept.receipts.iter().map(|event| kept_event(adapter_type, credential, event.clone())).collect(),
+            events: kept.receipts.iter().map(|event| kept_event(adapter_type, event.clone(), came_for)).collect(),
         };
         let mut work: Vec<NewWork> = match &self.sink {
-            EventSink::Queue | EventSink::Listed(_) => kept.receipts.iter().map(|event| fire_event_work(adapter_type, credential, event.clone(), &receipt.id)).collect(),
+            EventSink::Queue | EventSink::Listed(_) => {
+                kept.receipts.iter().map(|event| fire_event_work(adapter_type, event.clone(), Delivered { id: Some(&receipt.id), ..came_for })).collect()
+            }
             EventSink::Inline { .. } => Vec::new(),
         };
         work.extend(kept.wake_keys.iter().map(|key| await_wake_work(adapter_type, kept.team_id, key)));
@@ -376,7 +391,7 @@ impl<R: Reader> PushStore for LfDoors<'_, R> {
             .iter()
             .map(|pushed| {
                 let external = pushed.get("external").and_then(Js::as_str).unwrap_or_default();
-                fire_event_work(external, None, pushed.get("event").cloned().unwrap_or(Js::Null), &receipt.id)
+                fire_event_work(external, pushed.get("event").cloned().unwrap_or(Js::Null), Delivered { id: Some(&receipt.id), ..Delivered::default() })
             })
             .collect();
         if !self.store.keep_delivery(&caller.subscription_id, None, &receipt, &work).map_err(|e| e.to_string())? {
@@ -409,11 +424,24 @@ impl SessionReader<'_> {
     async fn call(&self, external: &str, install: &Credential, method: &str, params: serde_json::Value) -> Result<Js, String> {
         let set = self.session.file_set();
         let running = set.running.iter().find(|r| r.external.manifest.name == external).ok_or_else(|| format!("no external {external}"))?;
-        // Signed by the install, carrying no user credential.
+        // As the user credential the door names, as the platform reads a
+        // delivery as its subscription's credential: a source that is pulled
+        // on a ping (Airtable's payload feed) reads with it. A door that names
+        // the install carries no user credential, and the install signs.
+        let secrets = self.session.secrets();
+        let credentials = secrets.credentials();
+        let carried = matches!(install.binding, Binding::Credential(_)).then_some(install);
         let lease = running.reach.lease().await?;
-        let target = Target { external: &running.external, base_url: &lease.address, declarations: &[], methods: &running.methods, settings: &running.settings, limits: &running.limits };
+        let target = Target {
+            external: &running.external,
+            base_url: &lease.address,
+            declarations: &running.credential_declarations,
+            methods: &running.methods,
+            settings: &running.settings,
+            limits: &running.limits,
+        };
         let sending = Sending { tenant: LOCAL_TENANT, method, cache_scope_id: "<none>", params, settings: None };
-        let raw = send(&target, self.session.secrets().credentials(), None, Some(install), sending).await?;
+        let raw = send(&target, credentials, carried, signer_of(credentials, external, carried).or(Some(install)), sending).await?;
         module_wire::results::check(method, external, &raw)
     }
 
@@ -480,6 +508,15 @@ impl Reader for SessionReader<'_> {
     }
 }
 
+/// A subscription id's credential, and its scoped webhook's key when it
+/// names one (`<credential>/<key>`). A credential's name never holds a `/`.
+pub fn subscription_of(id: &str) -> (&str, Option<&str>) {
+    match id.split_once('/') {
+        Some((credential, key)) => (credential, Some(key)),
+        None => (id, None),
+    }
+}
+
 /// The user credential a module's own inbound check carries: the one the URL
 /// names, else the external's only one; none when it has several.
 fn carried_credential<'a>(credentials: &'a Credentials, external: &str, named: &'a Credential) -> Option<&'a Credential> {
@@ -494,25 +531,24 @@ fn carried_credential<'a>(credentials: &'a Credentials, external: &str, named: &
 }
 
 /// One of a delivery's events as its receipt keeps it: the event, the
-/// external it came from and the connection it came for (when its door named
-/// one), all a replay needs to queue it again.
-fn kept_event(external: &str, credential: Option<&str>, event: Js) -> Js {
+/// external it came from and the connection and subscription it came for
+/// (when its door named them), all a replay needs to queue it again.
+fn kept_event(external: &str, event: Js, came_for: Delivered<'_>) -> Js {
     let mut kept = obj! { "external" => Js::str(external), "event" => event };
-    if let Some(credential) = credential {
-        kept.insert("credential".into(), Js::str(credential));
-    }
+    came_for.write_into(&mut kept);
     Js::Obj(kept)
 }
 
 /// A queued event's `fire_event` row, for the drain: the run it starts
-/// names its delivery, and only the listens of the connection it came for
-/// take it (a row with no `credential`, as every row queued before rows
-/// named one, reaches every listen).
-pub fn fire_event_work(external: &str, credential: Option<&str>, event: Js, delivery_id: &str) -> NewWork {
-    let mut payload = obj! { "external" => Js::str(external), "event" => event, "deliveryId" => Js::str(delivery_id) };
-    if let Some(credential) = credential {
-        payload.insert("credential".into(), Js::str(credential));
+/// names its delivery (`delivered.id`), and only the listens of the
+/// connection and subscription it came for take it (a row with neither, as
+/// every row queued before rows named them, reaches every listen).
+pub fn fire_event_work(external: &str, event: Js, delivered: Delivered<'_>) -> NewWork {
+    let mut payload = obj! { "external" => Js::str(external), "event" => event };
+    if let Some(id) = delivered.id {
+        payload.insert("deliveryId".into(), Js::str(id));
     }
+    delivered.write_into(&mut payload);
     NewWork { kind: "fire_event".into(), key: format!("fire_event:{}", uuid::Uuid::new_v4()), payload: Js::Obj(payload), due_at: None, team_id: None }
 }
 
@@ -644,6 +680,9 @@ pub(crate) mod tests {
             pub registrations: Arc<Mutex<Vec<Js>>>,
             /// Polled too: each poll noted in `registrations`, and one note returned.
             pub polled: bool,
+            /// A webhook per shelf (`subscriptionScopeKeys: [shelf]`), each
+            /// with a secret of its own, `secret-<shelf>`.
+            pub scoped: bool,
         }
 
         impl Adapter for Inbox {
@@ -656,6 +695,12 @@ pub(crate) mod tests {
                     .optional(methods)
                     .declare("subscribableEvents", Js::strings(["note.created"]))
                     .declare("credentials", credential);
+                let manifest = match self.scoped {
+                    true => manifest
+                        .declare("subscriptionScopeKeys", Js::strings(["shelf"]))
+                        .declare("listenConfig", Js::parse(br#"[{"key":"shelf"}]"#).unwrap()),
+                    false => manifest,
+                };
                 match self.polled {
                     true => manifest.declare("poll", Js::parse(br#"{"intervalSeconds":60}"#).unwrap()),
                     false => manifest,
@@ -695,8 +740,15 @@ pub(crate) mod tests {
                         }
                         let mut registrations = self.registrations.lock().unwrap();
                         let id = format!("wh-{}", registrations.len() + 1);
-                        registrations.push(Js::Obj(obj! { "token" => token, "callbackUrl" => params.get("callbackUrl").cloned().unwrap_or(Js::Null), "events" => params.get("events").cloned().unwrap_or(Js::Null) }));
-                        Ok(Js::Obj(obj! { "externalId" => Js::str(&id) }))
+                        let mut made = obj! { "token" => token, "callbackUrl" => params.get("callbackUrl").cloned().unwrap_or(Js::Null), "events" => params.get("events").cloned().unwrap_or(Js::Null) };
+                        let mut answer = obj! { "externalId" => Js::str(&id) };
+                        if let Some(scope) = params.get("scope") {
+                            made.insert("scope".into(), scope.clone());
+                            let shelf = scope.get("shelf").and_then(Js::as_str).unwrap_or_default();
+                            answer.insert("secret".into(), Js::str(format!("secret-{shelf}")));
+                        }
+                        registrations.push(Js::Obj(made));
+                        Ok(Js::Obj(answer))
                     }
                     "poll" => {
                         self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "polled" => Js::Bool(true) }));
@@ -704,7 +756,11 @@ pub(crate) mod tests {
                         Ok(Js::Obj(obj! { "events" => Js::Arr(vec![note]) }))
                     }
                     "removeEventSubscription" => {
-                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "removed" => params.get("externalId").cloned().unwrap_or(Js::Null) }));
+                        let mut removed = obj! { "token" => token, "removed" => params.get("externalId").cloned().unwrap_or(Js::Null) };
+                        if let Some(scope) = params.get("scope") {
+                            removed.insert("scope".into(), scope.clone());
+                        }
+                        self.registrations.lock().unwrap().push(Js::Obj(removed));
                         Ok(Js::Null)
                     }
                     "listEventTypes" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
@@ -732,14 +788,14 @@ pub(crate) mod tests {
         }
 
         /// The inbox at `/inbox`, on a loopback port of its own thread.
-        pub fn serve(down: Arc<AtomicBool>, registrations: Arc<Mutex<Vec<Js>>>, polled: bool) -> u16 {
+        pub fn serve(inbox: Inbox) -> u16 {
             let (sent, port) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
                 tokio::task::LocalSet::new().block_on(&runtime, async move {
                     let listener = Listener::bind(&Address::Tcp(([127, 0, 0, 1], 0).into())).await.unwrap();
                     sent.send(listener.address().parse::<u16>().unwrap()).unwrap();
-                    Host::new().adapter(Inbox { down, registrations, polled }).serve(listener).await.unwrap();
+                    Host::new().adapter(inbox).serve(listener).await.unwrap();
                 });
             });
             port.recv().unwrap()
@@ -762,6 +818,13 @@ pub(crate) mod tests {
     /// Their secrets: each connection's own webhook secret and token, and the install's.
     pub(crate) const TWO_CREDENTIALS: &str = "inbox:\n  module: inbox\n  webhook_secret: shared\ninbox_a:\n  external: inbox\n  webhook_secret: secret-a\n  token: a\ninbox_b:\n  external: inbox\n  webhook_secret: secret-b\n  token: b\n";
 
+    /// Which inbox a project's external is.
+    #[derive(Default)]
+    struct Flavour {
+        polled: bool,
+        scoped: bool,
+    }
+
     impl InboxProject {
         fn new() -> InboxProject {
             InboxProject::with(
@@ -774,18 +837,23 @@ pub(crate) mod tests {
         /// The project with `movement` as its one movement file, `secrets`
         /// its secrets and `lf_yaml` appended to its lf.yaml.
         pub(crate) fn with(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, false)
+            InboxProject::made(movement, secrets, lf_yaml, Flavour::default())
         }
 
         /// As `with`, the inbox polled as well.
         pub(crate) fn polled(movement: &str, secrets: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, "", true)
+            InboxProject::made(movement, secrets, "", Flavour { polled: true, scoped: false })
         }
 
-        fn made(movement: &str, secrets: &str, lf_yaml: &str, polled: bool) -> InboxProject {
+        /// As `with`, the inbox's webhooks scoped by shelf.
+        pub(crate) fn scoped(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
+            InboxProject::made(movement, secrets, lf_yaml, Flavour { polled: false, scoped: true })
+        }
+
+        fn made(movement: &str, secrets: &str, lf_yaml: &str, flavour: Flavour) -> InboxProject {
             let down = Arc::new(AtomicBool::new(false));
             let registrations = Arc::new(std::sync::Mutex::new(Vec::new()));
-            let port = inbox::serve(down.clone(), registrations.clone(), polled);
+            let port = inbox::serve(inbox::Inbox { down: down.clone(), registrations: registrations.clone(), polled: flavour.polled, scoped: flavour.scoped });
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();
             std::fs::create_dir_all(root.join("externals/inbox")).unwrap();

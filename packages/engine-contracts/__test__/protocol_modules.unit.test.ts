@@ -75,6 +75,11 @@ describe('a module manifest', () => {
     expect(WireManifestResult.parse(manifest)).toEqual(manifest);
   });
 
+  it('keeps the listen config keys that scope an event subscription', () => {
+    const manifest = { ...OLD_MANIFEST, subscriptionScopeKeys: ['base', 'table'] };
+    expect(WireManifestResult.parse(manifest)).toEqual(manifest);
+  });
+
   it('accepts each declared signature scheme', () => {
     for (const scheme of INBOUND_SIGNATURE_SCHEMES) {
       const manifest = { ...MODULE_MANIFEST, inbound: { ...MODULE_MANIFEST.inbound, scheme } };

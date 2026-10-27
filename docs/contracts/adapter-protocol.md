@@ -199,6 +199,11 @@ The manifest file registers your server with a team:
   the connection (`connect airtable using acme { base: "CRM" }`); the host
   describes the module once per value a program constructs it with, and sends
   that value on every call of the connection as `"settings": { "base": "CRM" }`.
+- `subscriptionScopeKeys` (optional): the listen config keys whose values scope
+  an event subscription (Airtable's `["base", "table"]`: a webhook watches one
+  table). The host keeps one subscription per credential and scope, and sends a
+  listen's values of those keys as `scope` on `ensureEventSubscription` and
+  `removeEventSubscription` (`{ "base": "app…", "table": "tbl…" }`).
 - Optional fields: `handbookSection` (`{ title, content }`, prose the authoring
   handbook shows about your system), `vocabulary` (an icon and event phrasing),
   `webhookEventTypeId`.

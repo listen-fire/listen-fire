@@ -387,6 +387,40 @@ pub struct Delivered<'a> {
     /// The connection it came for (crate::routing::Listen::hears); None
     /// reaches every listen.
     pub credential: Option<&'a str>,
+    /// The webhook subscription it came through, by its key
+    /// (crate::routing::subscription_key); None for a credential's own door,
+    /// which the credential alone narrows.
+    pub subscription: Option<&'a str>,
+}
+
+impl<'a> Delivered<'a> {
+    /// What a kept event or a queued `fire_event` row says it came for,
+    /// under delivery `id`. Rows from before rows named a connection or a
+    /// subscription name none.
+    pub fn of_row(row: &'a Js, id: Option<&'a str>) -> Delivered<'a> {
+        let text = |key: &str| row.get(key).and_then(Js::as_str);
+        Delivered { id, credential: text("credential"), subscription: text("subscription") }
+    }
+
+    /// Its connection and subscription, written into a kept event or a row.
+    pub fn write_into(&self, row: &mut Obj) {
+        if let Some(credential) = self.credential {
+            row.insert("credential".into(), Js::str(credential));
+        }
+        if let Some(subscription) = self.subscription {
+            row.insert("subscription".into(), Js::str(subscription));
+        }
+    }
+
+    /// Whether `listen` takes it, under the module's `scope_keys`.
+    fn reaches(&self, listen: &Listen, scope_keys: &[String]) -> bool {
+        listen.hears_through(self.credential, self.subscription, scope_keys)
+    }
+}
+
+/// The external's `subscriptionScopeKeys`, when it is running.
+fn scope_keys_of(set: &FileSet, external: &str) -> Vec<String> {
+    set.running.iter().find(|r| r.external.manifest.name == external).map(|r| r.subscription_scope_keys()).unwrap_or_default()
 }
 
 /// What firing one event came to: the runs it started, and a line for each
@@ -542,7 +576,9 @@ impl Session {
     /// it still runs. Each run names the delivery the event came in, when it
     /// came in one, and only the listens of the connection it came for take it.
     pub async fn fire_event(&self, external: &str, event: &Js, dry_run: bool, delivered: Delivered<'_>) -> Result<Fired, String> {
-        self.fire_to(&self.file_set(), external, event, Arrival::Pushed, dry_run, delivered.id, |l| l.hears(delivered.credential)).await
+        let set = self.file_set();
+        let scope_keys = scope_keys_of(&set, external);
+        self.fire_to(&set, external, event, Arrival::Pushed, dry_run, delivered.id, |l| delivered.reaches(l, &scope_keys)).await
     }
 
     /// `fire_event`, to the listens `to` keeps of those the event reaches.
@@ -1159,8 +1195,9 @@ impl Session {
                 // Rows queued before deliveries were kept name none, and
                 // rows queued before they named their connection name none.
                 let delivery_id = payload.get("deliveryId").and_then(Js::as_str);
-                let credential = payload.get("credential").and_then(Js::as_str);
-                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| l.hears(credential)).await?;
+                let delivered = Delivered::of_row(payload, delivery_id);
+                let scope_keys = scope_keys_of(set, &external);
+                let fired = self.fire_to(set, &external, &event, Arrival::Pushed, false, delivery_id, |l| delivered.reaches(l, &scope_keys)).await?;
                 for line in &fired.redelivered {
                     eprintln!("lf: {line}");
                 }

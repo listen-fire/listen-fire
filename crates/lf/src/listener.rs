@@ -441,14 +441,21 @@ pub async fn doors_route<S: InboundStore + PushStore>(stores: &S, request: &Requ
         let answer = answer_push(stores, push, &decoded(external)?, &request.headers, &request.body).await;
         return Ok(Some(Response::json(answer.status, &answer.body)));
     }
-    if let Some([provider, install]) = segments(&request.path, "/api/public/webhook-sync/").as_deref() {
+    // `<provider>/<credential>`, or `<provider>/<credential>/<key>` for one
+    // of the credential's scoped webhooks (crate::subscriptions): its
+    // subscription id is `<credential>/<key>`.
+    let door = segments(&request.path, "/api/public/webhook-sync/");
+    if let Some((provider, subscription)) = match door.as_deref() {
+        Some([provider, install]) => Some((decoded(provider)?, decoded(install)?)),
+        Some([provider, install, key]) => Some((decoded(provider)?, format!("{}/{}", decoded(install)?, decoded(key)?))),
+        _ => None,
+    } {
         if request.body.len() > MAX_DELIVERY_BYTES {
             return Ok(Some(send(Answer::payload_too_large(), || {})));
         }
-        let (provider, install) = (decoded(provider)?, decoded(install)?);
         let delivery = Delivery {
             provider: &provider,
-            subscription_id: &install,
+            subscription_id: &subscription,
             raw_body: &request.body,
             headers: &request.headers,
             method: &request.method,

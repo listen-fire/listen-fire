@@ -53,6 +53,52 @@ impl Listen {
             _ => true,
         }
     }
+
+    /// Whether an event delivered for `credential` through the webhook
+    /// subscription `subscription` (a scope's key, `subscription_key`)
+    /// reaches this listen: it hears the credential, and its own scope under
+    /// the module's `scope_keys` is that subscription's. A delivery through
+    /// no subscription (a credential's own door, or a row queued before
+    /// rows named one) is narrowed by the credential alone.
+    pub fn hears_through(&self, credential: Option<&str>, subscription: Option<&str>, scope_keys: &[String]) -> bool {
+        self.hears(credential)
+            && subscription.is_none_or(|key| scope_of(&self.config, scope_keys).is_ok_and(|scope| subscription_key(&scope) == key))
+    }
+}
+
+/// A webhook subscription's scope: the listen config's value of each of the
+/// module's `subscriptionScopeKeys`, in their order (the platform's channel
+/// scope, Airtable's base and table). Empty for a module that declares none.
+pub type Scope = Vec<(String, String)>;
+
+/// The scope `config` names under `keys`; the keys it gives no non-empty
+/// text when it misses any (the platform refuses such a listen's channel).
+pub fn scope_of(config: &Obj, keys: &[String]) -> Result<Scope, Vec<String>> {
+    let mut scope = Scope::new();
+    let mut missing = Vec::new();
+    for key in keys {
+        match config.get(key).and_then(Js::as_str).filter(|v| !v.is_empty()) {
+            Some(value) => scope.push((key.clone(), value.to_string())),
+            None => missing.push(key.clone()),
+        }
+    }
+    if missing.is_empty() { Ok(scope) } else { Err(missing) }
+}
+
+/// The scope's key: its values in order, joined by `.`, each byte outside
+/// `[A-Za-z0-9_-]` written `~` and two hex digits. A URL path segment that
+/// no sender rewrites (`~` is unreserved), and one per scope.
+pub fn subscription_key(scope: &Scope) -> String {
+    let escaped = |value: &str| -> String {
+        value
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' => (b as char).to_string(),
+                other => format!("~{other:02x}"),
+            })
+            .collect()
+    };
+    scope.iter().map(|(_, value)| escaped(value)).collect::<Vec<_>>().join(".")
 }
 
 /// `configValueOf`: a listen config value, statically evaluated; anything
@@ -360,6 +406,33 @@ mod tests {
         let listen = &listens[0];
         assert_eq!((listen.adapter.as_str(), listen.movement_name.as_str()), ("acme_crm", "welcome"));
         assert_eq!(Js::Obj(listen.config.clone()).to_json(), r#"{"events":["company.created"]}"#);
+    }
+
+    #[test]
+    fn a_listens_scope_is_its_configs_values_of_the_scope_keys_in_order() {
+        let config = match js(r#"{"table":"tblC","base":"appH","events":["record.updated"]}"#) {
+            Js::Obj(config) => config,
+            _ => unreachable!(),
+        };
+        let keys = ["base".to_string(), "table".to_string()];
+        let scope = scope_of(&config, &keys).unwrap();
+        assert_eq!(scope, [("base".to_string(), "appH".to_string()), ("table".to_string(), "tblC".to_string())]);
+        assert_eq!(subscription_key(&scope), "appH.tblC");
+        assert_eq!(scope_of(&config, &["base".to_string(), "shelf".to_string()]), Err(vec!["shelf".to_string()]));
+        assert_eq!(scope_of(&config, &[]), Ok(vec![]), "a module that declares no scope keys has the empty scope");
+        assert_eq!(subscription_key(&vec![("a".into(), "x.y/z ü".into())]), "x~2ey~2fz~20~c3~bc", "a key is one path segment, its separator unambiguous");
+    }
+
+    #[test]
+    fn a_delivery_through_a_subscription_reaches_only_the_listens_of_its_scope() {
+        let mut listen = Listen { file: "f".into(), adapter: "airtable".into(), config: Obj::new(), movement_name: "m".into(), credential: Some("acme".into()), args: vec![] };
+        listen.config.insert("base".into(), Js::str("appH"));
+        listen.config.insert("table".into(), Js::str("tblC"));
+        let keys = ["base".to_string(), "table".to_string()];
+        assert!(listen.hears_through(Some("acme"), Some("appH.tblC"), &keys));
+        assert!(!listen.hears_through(Some("acme"), Some("appH.tblI"), &keys), "another table's subscription");
+        assert!(!listen.hears_through(Some("other"), Some("appH.tblC"), &keys), "another credential's");
+        assert!(listen.hears_through(Some("acme"), None, &keys), "a delivery through no subscription is the credential's");
     }
 
     #[test]

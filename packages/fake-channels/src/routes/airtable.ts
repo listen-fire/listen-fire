@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 import type { EntityStore } from '../store';
 
 const SVC = 'airtable';
@@ -29,6 +29,83 @@ function payloadFeedType(webhookId: string): string {
 /** Map an Airtable change kind back to the table-change bucket Listen-Fire's adapter
  *  reads (`createdRecordsById` / `changedRecordsById` / `destroyedRecordIds`). */
 type ChangeType = 'add' | 'update' | 'remove';
+
+/** One record change, as the fake's dev-loop doors take it: cell values by
+ *  field NAME, and (for an update) the changed cells' previous values. */
+interface RecordChange {
+  changeType: ChangeType;
+  tableId: string;
+  recordId: string;
+  fields: Record<string, unknown>;
+  previous?: Record<string, unknown>;
+}
+
+function changeOf(body: unknown): RecordChange | undefined {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const changeType = b.changeType as ChangeType | undefined;
+  const tableId = b.tableId as string | undefined;
+  const recordId = b.recordId as string | undefined;
+  if (!changeType || !tableId || !recordId) return undefined;
+  return {
+    changeType,
+    tableId,
+    recordId,
+    fields: (b.fields ?? {}) as Record<string, unknown>,
+    ...(b.previous !== undefined ? { previous: b.previous as Record<string, unknown> } : {}),
+  };
+}
+
+/** Queue `change` on the webhook's payload feed, as Airtable builds a payload
+ *  (cell values keyed by field id; an update's previous values beside its
+ *  current ones, as a webhook asking `includePreviousCellValues` gets them).
+ *  A change kind or a table the webhook didn't subscribe to is dropped. */
+function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, change: RecordChange): Record<string, unknown> & { appended: boolean } {
+  if (!wh.changeTypes.includes(change.changeType)) {
+    return { appended: false, reason: 'change_type_not_subscribed', subscribedChangeTypes: wh.changeTypes };
+  }
+  if (wh.recordChangeScope && wh.recordChangeScope !== change.tableId) {
+    return { appended: false, reason: 'table_out_of_scope', recordChangeScope: wh.recordChangeScope };
+  }
+
+  // Translate field NAMES → field ids via the seeded table metadata so the
+  // payload keys cell values by id (as real Airtable does). Unknown names
+  // fall through as-is (the adapter then leaves them id-keyed).
+  const tableMeta = store.get(SVC, `table:${baseId}`, change.tableId)?.data as
+    | { fields?: { id: string; name: string }[] }
+    | undefined;
+  const idByName = new Map<string, string>();
+  for (const f of tableMeta?.fields ?? []) idByName.set(f.name, f.id);
+  const byFieldId = (cells: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(cells).map(([name, value]) => [idByName.get(name) ?? name, value]));
+  const cellValuesByFieldId = byFieldId(change.fields);
+
+  const tableChange: {
+    createdRecordsById?: Record<string, unknown>;
+    changedRecordsById?: Record<string, unknown>;
+    destroyedRecordIds?: string[];
+  } = {};
+  if (change.changeType === 'add') {
+    tableChange.createdRecordsById = { [change.recordId]: { cellValuesByFieldId } };
+  } else if (change.changeType === 'update') {
+    tableChange.changedRecordsById = {
+      [change.recordId]: {
+        current: { cellValuesByFieldId },
+        ...(change.previous !== undefined ? { previous: { cellValuesByFieldId: byFieldId(change.previous) } } : {}),
+      },
+    };
+  } else {
+    tableChange.destroyedRecordIds = [change.recordId];
+  }
+
+  const payload = {
+    timestamp: new Date().toISOString(),
+    baseTransactionNumber: store.nextId(SVC, `txn:${wh.id}`),
+    changedTablesById: { [change.tableId]: tableChange },
+  };
+  const seq = store.nextId(SVC, payloadFeedType(wh.id));
+  store.create(SVC, payloadFeedType(wh.id), payload, seq);
+  return { appended: true, seq: Number(seq), payload };
+}
 
 export function airtableRoutes(store: EntityStore): Router {
   const r = Router();
@@ -120,77 +197,49 @@ export function airtableRoutes(store: EntityStore): Router {
 
   // Dev-loop seed hook (NOT a real Airtable route): append a single record
   // change to a webhook's payload feed. `dev:inject airtable-webhook` posts a
-  // simplified `{ changeType, tableId, recordId, fields }` here; the fake builds
-  // the real `changedTablesById` payload (keying cell values by FIELD ID, mapped
-  // from the seeded table metadata — so `preprocessInbound`'s id→name pass is
-  // exercised) and HONORS the webhook's subscription: a change kind or a table
-  // the webhook didn't register for is dropped, never queued — modeling
-  // Airtable's "we only ping for what you subscribed to" credit guarantee.
+  // simplified `{ changeType, tableId, recordId, fields, previous? }` here; the
+  // fake builds the real `changedTablesById` payload (keying cell values by
+  // FIELD ID, mapped from the seeded table metadata — so `preprocessInbound`'s
+  // id→name pass is exercised) and HONORS the webhook's subscription: a change
+  // kind or a table the webhook didn't register for is dropped, never queued —
+  // modeling Airtable's "we only ping for what you subscribed to" credit
+  // guarantee.
   r.post('/v0/bases/:baseId/webhooks/:id/payloads', (req, res) => {
     const { baseId, id } = req.params;
     const webhook = store.get(SVC, 'webhook', id);
     if (!webhook) return res.status(404).json({ error: 'Webhook not found' });
-    const wh = webhook.data as unknown as FakeWebhook;
+    const change = changeOf(req.body);
+    if (change === undefined) return res.status(400).json({ error: 'Expected { changeType, tableId, recordId, fields?, previous? }' });
+    res.json(appendChange(store, baseId, webhook.data as unknown as FakeWebhook, change));
+  });
 
-    const changeType = req.body?.changeType as ChangeType | undefined;
-    const tableId = req.body?.tableId as string | undefined;
-    const recordId = req.body?.recordId as string | undefined;
-    const fields = (req.body?.fields ?? {}) as Record<string, unknown>;
-    if (!changeType || !tableId || !recordId) {
-      return res
-        .status(400)
-        .json({ error: 'Expected { changeType, tableId, recordId, fields? }' });
+  // What Airtable does when a record changes: queue the change on every
+  // webhook of the base whose subscription takes it, then ping each one's
+  // notification URL with `{ base, webhook, timestamp }`, signed as Airtable
+  // signs (`x-airtable-content-mac: hmac-sha256=<hex>`, keyed by the webhook's
+  // base64 MAC secret). The receiver then pulls the payload feed. Each ping's
+  // answer comes back.
+  //   POST /airtable/control/deliver { baseId, changeType, tableId, recordId, fields?, previous? }
+  r.post('/control/deliver', async (req, res) => {
+    const baseId = String(req.body?.baseId ?? '');
+    const change = changeOf(req.body);
+    if (baseId === '' || change === undefined) {
+      return res.status(400).json({ error: 'Expected { baseId, changeType, tableId, recordId, fields?, previous? }' });
     }
-
-    if (!wh.changeTypes.includes(changeType)) {
-      return res.json({
-        appended: false,
-        reason: 'change_type_not_subscribed',
-        subscribedChangeTypes: wh.changeTypes,
+    const deliveries: Array<{ webhookId: string; targetUrl: string; status: number; body: string }> = [];
+    for (const { data } of store.list(SVC, 'webhook')) {
+      const webhook = data as unknown as FakeWebhook;
+      if (webhook.baseId !== baseId || !appendChange(store, baseId, webhook, change).appended) continue;
+      const body = JSON.stringify({ base: { id: baseId }, webhook: { id: webhook.id }, timestamp: new Date().toISOString() });
+      const mac = createHmac('sha256', Buffer.from(webhook.macSecretBase64, 'base64')).update(body).digest('hex');
+      const answer = await fetch(webhook.notificationUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-airtable-content-mac': `hmac-sha256=${mac}` },
+        body,
       });
+      deliveries.push({ webhookId: webhook.id, targetUrl: webhook.notificationUrl, status: answer.status, body: await answer.text() });
     }
-    if (wh.recordChangeScope && wh.recordChangeScope !== tableId) {
-      return res.json({
-        appended: false,
-        reason: 'table_out_of_scope',
-        recordChangeScope: wh.recordChangeScope,
-      });
-    }
-
-    // Translate field NAMES → field ids via the seeded table metadata so the
-    // payload keys cell values by id (as real Airtable does). Unknown names
-    // fall through as-is (the adapter then leaves them id-keyed).
-    const tableMeta = store.get(SVC, `table:${baseId}`, tableId)?.data as
-      | { fields?: { id: string; name: string }[] }
-      | undefined;
-    const idByName = new Map<string, string>();
-    for (const f of tableMeta?.fields ?? []) idByName.set(f.name, f.id);
-    const cellValuesByFieldId: Record<string, unknown> = {};
-    for (const [name, value] of Object.entries(fields)) {
-      cellValuesByFieldId[idByName.get(name) ?? name] = value;
-    }
-
-    const tableChange: {
-      createdRecordsById?: Record<string, unknown>;
-      changedRecordsById?: Record<string, unknown>;
-      destroyedRecordIds?: string[];
-    } = {};
-    if (changeType === 'add') {
-      tableChange.createdRecordsById = { [recordId]: { cellValuesByFieldId } };
-    } else if (changeType === 'update') {
-      tableChange.changedRecordsById = { [recordId]: { current: { cellValuesByFieldId } } };
-    } else {
-      tableChange.destroyedRecordIds = [recordId];
-    }
-
-    const payload = {
-      timestamp: new Date().toISOString(),
-      baseTransactionNumber: store.nextId(SVC, `txn:${id}`),
-      changedTablesById: { [tableId]: tableChange },
-    };
-    const seq = store.nextId(SVC, payloadFeedType(id));
-    store.create(SVC, payloadFeedType(id), payload, seq);
-    res.json({ appended: true, seq: Number(seq), payload });
+    res.json({ deliveries });
   });
 
   // Create record

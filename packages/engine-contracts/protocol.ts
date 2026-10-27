@@ -1116,6 +1116,11 @@ export const WireManifestResult = z.object({
   positionArgs: z
     .array(z.object({ name: z.string().min(1), optionsFrom: z.string().min(1), label: z.string().optional() }))
     .optional(),
+  /** The listen config keys whose values scope an event subscription (an
+   *  Airtable webhook watches one `base` and `table`): a host keeps one
+   *  subscription per credential and scope, and sends the scope as
+   *  `ensureEventSubscription`'s and `removeEventSubscription`'s `scope`. */
+  subscriptionScopeKeys: z.array(z.string().min(1)).optional(),
 }).superRefine(refuseUnpairedDeclarations);
 export type WireManifestResultShape = z.infer<typeof WireManifestResult>;
 

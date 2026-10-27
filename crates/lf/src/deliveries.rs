@@ -93,7 +93,7 @@ fn replay(store: &dyn RunHostStore, original: &DeliveryRow) -> Result<(String, u
     let work: Vec<NewWork> = events
         .iter()
         .map(|kept| match (kept.get("external").and_then(Js::as_str), kept.get("event")) {
-            (Some(external), Some(event)) => Ok(fire_event_work(external, kept.get("credential").and_then(Js::as_str), event.clone(), &new_id)),
+            (Some(external), Some(event)) => Ok(fire_event_work(external, event.clone(), crate::runs::Delivered::of_row(kept, Some(&new_id)))),
             _ => Err(format!("delivery {} holds an event without an external or an event; it cannot be replayed", original.id)),
         })
         .collect::<Result<_, _>>()?;

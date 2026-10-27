@@ -315,6 +315,14 @@ impl RunningExternal {
             .collect()
     }
 
+    /// The listen config keys whose values scope a webhook subscription
+    /// (`subscriptionScopeKeys`: Airtable's base and table), in order: one
+    /// webhook per credential and scope. Empty for a module that declares none.
+    pub fn subscription_scope_keys(&self) -> Vec<String> {
+        let declared = self.manifest_answer.get("subscriptionScopeKeys").and_then(Js::as_array).unwrap_or_default();
+        declared.iter().filter_map(Js::as_str).filter(|k| !k.is_empty()).map(str::to_string).collect()
+    }
+
     /// The position a construction with `args` (source text, by name) puts a
     /// connection of this module in: each declared position arg it gives a
     /// value, as the `settings` a call in that position carries. None for a
