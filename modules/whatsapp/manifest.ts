@@ -24,14 +24,12 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
     website: 'https://www.whatsapp.com',
     category: 'Messaging',
     description:
-      `WhatsApp on the shared Listen-Fire number${
-        movementsNumber ? ` (${movementsNumber})` : ''
-      }. ` +
-      'Message it and a movement runs on each message — text and media ' +
-      'included (voice notes transcribe). Movements can reply (threaded), ' +
-      'react with an emoji, and show the typing indicator. Built in; no account ' +
-      "to connect — but the sender's phone must be linked to their Listen-Fire " +
-      'account first, or their messages are ignored.',
+      `WhatsApp: message the number${movementsNumber ? ` (${movementsNumber})` : ''} and a movement ` +
+      'runs on each message — text and media included (voice notes transcribe). ' +
+      'Movements can reply (threaded), react with an emoji, and show the typing ' +
+      "indicator. Where the number is the project's own (lf), every message sent to it " +
+      'reaches its movements; on the shared Listen-Fire number, the sender\'s phone ' +
+      'must first be linked to their Listen-Fire account, or their messages are ignored.',
     supportedTriggers: ['webhook'],
     // `listen to wa { events: [...] }` — no `events` subscribes to messages
     // only, so reactions/locations never fire a movement that didn't opt in.
@@ -46,17 +44,16 @@ export function whatsappManifest(movementsNumber: string | null): AdapterManifes
     ],
     triggerKinds: ['INBOUND_WHATSAPP', 'TWILIO'],
     triggerExpectation:
-      `Fires when a WhatsApp message arrives at the shared Listen-Fire number` +
-      `${movementsNumber ? ` (${movementsNumber})` : ''} — ` +
-      `each message (text and media; voice ` +
-      `notes transcribe) is one event. The number is common to every Listen-Fire user: ` +
-      `routing works by identifying the sender from their linked phone, so ONLY ` +
-      `messages the user sends from their own linked number reach their ` +
-      `movements. A message from anyone else — a founder, an LP, any unlinked ` +
-      `number — is unrecognized and dropped, and it never reads anyone's ` +
-      `WhatsApp chats or groups. So it is a channel the user messages ` +
-      `deliberately: always frame it first-person ("when I forward or send … to ` +
-      `the Listen-Fire number"), never as someone else messaging the number.`,
+      `Fires when a WhatsApp message arrives at the number` +
+      `${movementsNumber ? ` (${movementsNumber})` : ''} — each message (text and media; ` +
+      `voice notes transcribe) is one event. Who reaches the movements depends on whose ` +
+      `number it is. Where the number is the project's own (lf), every message sent to it ` +
+      `reaches the listen, from any sender. On the shared Listen-Fire number, common to ` +
+      `every Listen-Fire user, routing identifies the sender by their linked phone, so ONLY ` +
+      `messages the user sends from their own linked number reach their movements; a ` +
+      `message from anyone else is unrecognized and dropped, so frame it first-person ` +
+      `("when I forward or send … to the Listen-Fire number"). Either way it never reads ` +
+      `anyone's WhatsApp chats or groups.`,
     handbookSection: WHATSAPP_HANDBOOK_SECTION,
     vocabulary: {
       icon: {
