@@ -267,12 +267,19 @@ fn report_undescribed(typing: &mut Typing, position: &Position, schema: &Positio
     if schema.undescribed != Some(true) {
         return false;
     }
+    let hint = match position {
+        Position::Position(p) => crate::families::listens::event_types::subject_address_hint(&p.instance.schema, &p.instance.name, &p.position),
+        _ => None,
+    };
+    let remedy = match hint {
+        Some(address) => format!(
+            "If it is the record an event is about, name its table in the movement's signature (an event is narrowed only by the address the signature names): {address}"
+        ),
+        None => "Narrow the type that reaches it to a concrete one first.".to_string(),
+    };
     typing.report(
         codes::UNDESCRIBED_POSITION,
-        format!(
-            "nothing describes {}, so {what} can't be checked here — it would be null at run time. Narrow the type that reaches it to a concrete one first.",
-            describe_position(position)
-        ),
+        format!("nothing describes {}, so {what} can't be checked here — it would be null at run time. {remedy}", describe_position(position)),
     );
     true
 }

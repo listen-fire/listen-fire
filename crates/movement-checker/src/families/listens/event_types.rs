@@ -62,6 +62,13 @@ impl Address {
         address_source(instance, &self.event, &self.pins)
     }
 
+    /// `source`, pinning only the keys the instance narrows its events by
+    /// (an `action` the listen's `events` selected is the listen's own).
+    pub fn narrowing_source(&self, instance: &str, keys: &[String]) -> String {
+        let pins: Vec<(String, String)> = self.pins.iter().filter(|(k, _)| keys.contains(k)).cloned().collect();
+        address_source(instance, &self.event, &pins)
+    }
+
     fn is_narrowed(&self) -> bool {
         !self.pins.is_empty()
     }
@@ -186,6 +193,11 @@ pub fn param_position(schema: &InstanceSchema, declared: &TypeRef) -> Option<Eve
         None => Some(EventRef::plain(Kind::Meta, "")),
         Some(position) => position_ref_in(schema, position),
     }
+}
+
+/// Whether a parameter's hop pins anything: an addressed event.
+pub fn hops_pin_an_address(hops_raw: &str) -> bool {
+    address_of_hops(hops_raw).is_some_and(|a| a.is_narrowed())
 }
 
 /// `eventAddressOfHops`: one hop, and the pins its WHERE states.
@@ -330,6 +342,19 @@ pub fn record_signature_rewrite(
         return Some((address.source(instance), format!("{event_param}-[{param_name}:{edge}]-> {{ … }}"), event_param.to_string()));
     }
     None
+}
+
+/// The address that would describe `position` when it is the record an event
+/// is about: its event, every narrowing key left for the author to fill. An
+/// event is narrowed only by the address its movement's signature names, so
+/// an unaddressed event's subject is the unnarrowed collection.
+pub fn subject_address_hint(schema: &InstanceSchema, instance: &str, position: &str) -> Option<String> {
+    let keys = schema.event_narrowing_keys.as_ref().filter(|k| !k.is_empty())?;
+    let event = schema.event_positions.iter().flatten().map(|e| &e.position).find(|event| {
+        schema.positions.get(*event).is_some_and(|p| p.edges.values().any(|e| e.subject == Some(true) && e.target == position))
+    })?;
+    let pins: Vec<(String, String)> = keys.iter().map(|k| (k.clone(), "…".to_string())).collect();
+    Some(address_source(instance, event, &pins))
 }
 
 /// `eventTraversalExample`: reaching the record, from this instance's own

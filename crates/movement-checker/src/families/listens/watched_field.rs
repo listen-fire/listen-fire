@@ -2,10 +2,13 @@
 //! names one field of the record the listen watches (TypeScript's `keyof T`),
 //! and a `field-value`-format key is a value of that field (`T[K]`). Both are
 //! held against the record the listen's address lands on — the table the
-//! platform narrows the event's subject edge to — and say nothing where that
-//! record is undescribed.
+//! movement's signature narrows the event's subject edge to. Where nothing
+//! describes that record (the signature names no table: the event is narrowed
+//! only by the address the signature names), the key cannot be checked, so the
+//! listen is refused with the signature that would describe it.
 
 use indexmap::IndexMap;
+use movement_parser::ast::{ListenDeclaration, MovementParam, ParamTypeRef};
 use movement_parser::catalog::types::{AdapterSpec, FieldType, InstanceSchema, TriggerConfigFormat};
 use movement_parser::lowering::expression::{Expression, ListElement, StaticValue};
 
@@ -58,6 +61,47 @@ pub(super) fn literal_value(slot: &movement_parser::ast::ExprSlot) -> Option<Exp
 }
 
 impl Checker<'_> {
+    /// A watched field, or the value it becomes, where nothing describes the
+    /// record the listen's event is about: refused, since it would gate on a
+    /// field nobody checked. An unaddressed parameter is the usual cause; the
+    /// message shows it addressed.
+    pub(super) fn refuse_unchecked_field(
+        &mut self,
+        read: &ConfigRead,
+        spec: Option<&AdapterSpec>,
+        schema: &InstanceSchema,
+        fires: &[EventRef],
+        statement: &ListenDeclaration,
+        param: Option<&MovementParam>,
+    ) {
+        let field_key = spec
+            .and_then(|s| s.trigger_config_formats.as_ref())
+            .and_then(|f| f.0.iter().find(|(_, format)| **format == TriggerConfigFormat::Field).map(|(k, _)| k.clone()));
+        let (key, span) = match (&read.field, &read.field_value) {
+            (Some((_, span)), _) => (field_key.unwrap_or_else(|| "field".to_string()), *span),
+            (None, Some((key, _, span))) => (key.clone(), *span),
+            (None, None) => return,
+        };
+        let instance = &statement.instance;
+        let addressed = param.and_then(|p| p.type_.as_ref()).is_some_and(|t| matches!(t, ParamTypeRef::Name(t) if t.hops_raw.as_deref().is_some_and(event_types::hops_pin_an_address)));
+        let address = fires.iter().find_map(|t| t.address.as_ref());
+        let message = match (addressed, address) {
+            (false, Some(address)) => {
+                let movement = &statement.movement;
+                let param = param.map_or("change", |p| p.name.as_str());
+                format!(
+                    "'{key}' can't be checked: '{movement}''s parameter names no table, so nothing describes the record this listen's event is about (an event is narrowed only by the address its movement's signature names). Name the table in the signature — function {movement}({param}: {}) — and '{key}' is checked against its fields",
+                    address.narrowing_source(instance, schema.event_narrowing_keys.as_deref().unwrap_or_default())
+                )
+            }
+            _ => {
+                let what = fires.first().map_or_else(|| instance.clone(), |t| event_types::describe_event_type(schema, t, instance));
+                format!("'{key}' can't be checked: nothing describes the record {what} is about — check that the table this listen names exists")
+            }
+        };
+        self.report(codes::LISTEN_BAD_CONFIG, message, span);
+    }
+
     /// The watched field against the record's fields, then the value it
     /// becomes against that field's type.
     pub(super) fn check_watched_field(

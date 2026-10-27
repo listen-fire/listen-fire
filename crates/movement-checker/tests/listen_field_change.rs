@@ -83,12 +83,31 @@ fn a_value_is_a_literal() {
     assert!(found[0].message.contains("takes a literal value"), "{}", found[0].message);
 }
 
-#[test]
-fn an_unnarrowed_table_holds_nothing_against_the_field() {
+fn check_source_text(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
     let options = CheckOptions { upgrading_from: None, zones: &movement_checker::host::native::NativeZones };
-    let source = "import { sheet } from adapters\ns = connect sheet\nfunction moved(change: <s-[:Change]->>) {}\nlisten to s { table: \"tblOther\", field: \"Anything\", becomes: 3 } fire moved\n";
-    let found = check_source(source, &catalog, options).unwrap();
-    assert_eq!(codes(&found), Vec::<&str>::new());
+    check_source(source, &catalog, options).unwrap()
 }
 
+// The event is narrowed only by the address the movement's signature names
+// (the platform's rule), so a field nothing describes cannot be checked: the
+// listen is refused, showing the signature that names the table.
+#[test]
+fn a_field_on_a_table_nothing_describes_is_refused_showing_the_addressed_signature() {
+    let source = "import { sheet } from adapters\ns = connect sheet\nfunction moved(change: <s-[:Change]->>) {}\nlisten to s { table: \"tblOther\", field: \"Anything\", becomes: 3 } fire moved\n";
+    let found = check_source_text(source);
+    assert_eq!(codes(&found), ["MOV_LISTEN_BAD_CONFIG"]);
+    assert!(found[0].message.contains("'field' can't be checked"), "{}", found[0].message);
+    assert!(found[0].message.contains("function moved(change: <s-[e:`Change` WHERE e.table == \"tblOther\"]->>)"), "{}", found[0].message);
+    let found = check_source_text(&source.replace("field: \"Anything\", ", ""));
+    assert_eq!(codes(&found), ["MOV_LISTEN_BAD_CONFIG"]);
+}
+
+#[test]
+fn a_read_off_an_unaddressed_event_suggests_the_addressed_signature() {
+    let source = "import { sheet } from adapters\ns = connect sheet\nfunction moved(change: <s-[:Change]->>) {\n  return change-[:Record]->.Stage\n}\nlisten to s { table: \"tblC\" } fire moved\n";
+    let found = check_source_text(source);
+    let undescribed: Vec<&Diagnostic> = found.iter().filter(|d| d.code == "MOV_UNDESCRIBED_POSITION").collect();
+    assert_eq!(undescribed.len(), 1, "{found:?}");
+    assert!(undescribed[0].message.contains("<s-[e:`Change` WHERE e.table == \"…\"]->>"), "{}", undescribed[0].message);
+}

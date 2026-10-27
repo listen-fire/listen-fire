@@ -47,6 +47,10 @@ named in [`RELEASING.md`](RELEASING.md).
 - `lf` polls a listen on a positioned connection (`connect notes using X { space: "alpha" }`) in that position, under a checkpoint of its own, so two connections that differ only in position are two sources. A listen on a connection with no position keeps its checkpoint. Webhook registration does not carry the position yet.
 - The checker refuses an unknown value in two more places it already refused one elsewhere (`MOV_ENUM_UNKNOWN_VALUE`): each text literal of a list written into a list of enum (`Tags: ["Hot", "Cold"]` into an Airtable multiple select), and a comparison in a WHERE written inside a parameter's type (`<crm-[c:Companies WHERE c.Stage == "Lost"]->>`). A program that checks today and fails now was writing or matching a value the field cannot hold.
 
+### Changed
+
+- `lf check` refuses an Airtable listen's `field` or `becomes` when the fired movement's signature names no table, since nothing then describes the row and the field cannot be checked (`MOV_LISTEN_BAD_CONFIG`). The message shows the signature that names it: `function f(change: <hiring-[e:`Record Change` WHERE e.table == "tbl…"]->>)`. The event is narrowed only by the address the signature names, as on the platform; the listen's own `table` does not type it. A read of an unaddressed event's row (`MOV_UNDESCRIBED_POSITION`) now suggests the same form. Both keys are new in this unreleased cycle, so no released program changes.
+
 ## [0.12.9] - 2026-10-26
 
 A patch release of the 0.12 line: it reads the same pins as 0.12.0 (every `0.12.x`) and breaks no program an author wrote. Two behaviours change for an existing project under `lf`, both from routing inbound events by connection:

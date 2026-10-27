@@ -241,6 +241,45 @@ test('two tables of one connection each have a webhook of their own, and Stage b
   }
 });
 
+// The event is narrowed only by the address its movement's signature names
+// (the platform's rule): a listen's `field` and `becomes` are held to the table
+// the signature names, and refused where the signature names none.
+test('lf check holds a field-change listen to the table its movement\'s signature names', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    const movement = join(dir, 'movements/hiring.mvt');
+    const reading = HEAD.replace('Candidate: change.record', 'Candidate: change-[:Record]->.Name');
+    const check = (source: string) => (writeFileSync(movement, source), lfSync(dir, 'check'));
+
+    const clean = check(reading);
+    assert.equal(clean.code, 0, clean.out);
+
+    const notAChoice = check(reading.replace('becomes: "Interview"', 'becomes: "Interviewing"'));
+    assert.equal(notAChoice.code, 1, notAChoice.out);
+    assert.match(notAChoice.out, /MOV_ENUM_UNKNOWN_VALUE "Interviewing" isn't a value of enum \(Applied \| Interview \| Rejected\)/);
+
+    const notAField = check(reading.replace('field: "Stage"', 'field: "Stagez"'));
+    assert.equal(notAField.code, 1, notAField.out);
+    assert.match(notAField.out, /MOV_LISTEN_BAD_CONFIG 'Stagez' is not a field of what this listener watches — its fields: .*Name.*Stage.*did you mean 'Stage'/);
+
+    const misspelledRead = check(reading.replace('->.Name', '->.Nmae'));
+    assert.equal(misspelledRead.code, 1, misspelledRead.out);
+    assert.match(misspelledRead.out, /MOV_UNKNOWN_PROPERTY .*has no field 'Nmae'.*did you mean 'Name'/);
+
+    const unaddressed = check(reading.replace('<hiring-[:`Record Change` WHERE `table` == "tblCAND01"]->>', '<hiring-[:`Record Change`]->>'));
+    assert.equal(unaddressed.code, 1, unaddressed.out);
+    assert.ok(
+      unaddressed.out.includes("MOV_LISTEN_BAD_CONFIG 'field' can't be checked: 'schedule_interview''s parameter names no table") &&
+        unaddressed.out.includes('function schedule_interview(change: <hiring-[e:`Record Change` WHERE e.table == "tblCAND01"]->>)'),
+      unaddressed.out,
+    );
+    assert.ok(unaddressed.out.includes('MOV_UNDESCRIBED_POSITION') && unaddressed.out.includes('<hiring-[e:`Record Change` WHERE e.table == "…"]->>'), unaddressed.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 test('a quiet webhook is refreshed a day before it lapses, and one that lapsed is registered anew', async () => {
