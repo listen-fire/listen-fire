@@ -32,11 +32,17 @@ function textOf(bytes: Buffer): string | null {
   return Buffer.from(text, 'utf8').equals(bytes) ? text : null;
 }
 
+/** One part of a multipart body: its `Content-Type`, when it names one. */
+interface Part {
+  contentType?: string;
+  body: Buffer;
+}
+
 /** One multipart body split on its boundary as BYTES: a binary part decoded
  *  to a string and back is no longer the file that was sent. */
-function multipartBodies(raw: Buffer, boundary: string): Buffer[] {
+function multipartBodies(raw: Buffer, boundary: string): Part[] {
   const delimiter = Buffer.from(`--${boundary}`);
-  const bodies: Buffer[] = [];
+  const bodies: Part[] = [];
   let at = raw.indexOf(delimiter);
   while (at >= 0) {
     const start = at + delimiter.length;
@@ -46,8 +52,10 @@ function multipartBodies(raw: Buffer, boundary: string): Buffer[] {
     const headEnd = part.indexOf('\r\n\r\n');
     if (headEnd >= 0) {
       const body = part.subarray(headEnd + 4);
+      const contentType = /^content-type:\s*(.+)$/im.exec(part.subarray(0, headEnd).toString('utf8'))?.[1]?.trim();
       // The CRLF before the next delimiter belongs to the delimiter.
-      bodies.push(body.subarray(0, body.length - (body.subarray(-2).toString() === '\r\n' ? 2 : 0)));
+      const trimmed = body.subarray(0, body.length - (body.subarray(-2).toString() === '\r\n' ? 2 : 0));
+      bodies.push({ ...(contentType ? { contentType } : {}), body: trimmed });
     }
     at = next;
   }
@@ -115,11 +123,11 @@ export function gdriveRoutes(store: EntityStore): Router {
     if (parts.length < 2) return res.status(400).json({ error: 'expected two multipart parts' });
     let metadata: Record<string, unknown>;
     try {
-      metadata = JSON.parse(parts[0].toString('utf8'));
+      metadata = JSON.parse(parts[0].body.toString('utf8'));
     } catch {
       return res.status(400).json({ error: 'part 1 is not JSON metadata' });
     }
-    const bytes = parts[1];
+    const { body: bytes, contentType: mediaType } = parts[1];
     const id = store.nextId(SVC, 'file');
     const entity = store.create(
       SVC,
@@ -127,7 +135,8 @@ export function gdriveRoutes(store: EntityStore): Router {
       {
         id,
         name: (metadata.name as string) ?? 'Untitled',
-        mimeType: (metadata.mimeType as string) ?? 'application/octet-stream',
+        // As real Drive: the metadata's type, else the media part's.
+        mimeType: (metadata.mimeType as string | undefined) ?? mediaType ?? 'application/octet-stream',
         parents: (metadata.parents as string[]) ?? ['root'],
         webViewLink: `https://drive.google.com/file/d/${id}`,
         content: textOf(bytes),

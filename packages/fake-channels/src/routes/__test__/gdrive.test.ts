@@ -81,3 +81,26 @@ test('gdrive copy: the copy holds the source\'s bytes and checksums', async () =
     await close();
   }
 });
+
+test('gdrive upload: with no type in the metadata, the file takes the media part\'s', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const boundary = 'b0undary';
+    const upload = (mediaHead: string) =>
+      Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Type: application/json\r\n\r\n`),
+        Buffer.from(JSON.stringify({ name: 'invoice.pdf' })),
+        Buffer.from(`\r\n--${boundary}\r\n${mediaHead}\r\n`),
+        Buffer.from('%PDF-1.7'),
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+    const created = async (mediaHead: string) =>
+      (await (
+        await fetch(`${baseUrl}/upload/drive/v3/files?uploadType=multipart`, { method: 'POST', headers: { 'content-type': `multipart/related; boundary=${boundary}` }, body: upload(mediaHead) })
+      ).json()) as { mimeType: string };
+    assert.equal((await created('Content-Type: application/pdf\r\n')).mimeType, 'application/pdf');
+    assert.equal((await created('')).mimeType, 'application/octet-stream');
+  } finally {
+    await close();
+  }
+});
