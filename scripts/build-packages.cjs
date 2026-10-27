@@ -46,6 +46,8 @@ const PACKAGES = [
   { dir: 'packages/module-kit' },
   // The embedded host: the engine's public entries and the module kit.
   { dir: 'packages/embed' },
+  // The authoring tools over MCP: the handbook and the engine's public entries.
+  { dir: 'packages/authoring-mcp' },
   { dir: 'modules/google-sheets' },
   // packages/handbook joins here once it exists (PLAN-01 Task 4).
   ...fs

@@ -10,7 +10,7 @@ Two kinds of release exist, because two kinds of version exist.
 | --- | --- | --- |
 | The parser, checker, language or engine crate; `lf` (the `listen-fire` crate); `movement-lang`, `engine` or `engine-contracts` | the core: those 5 crates and 3 packages, together, to the language's one version | core release |
 | `module-runtime` (the engine depends on it) | the package, and a patch of the core | core release |
-| Any other package (a module, `module-kit`, `embed`, `handbook`, `fake-channels`, `file-text`, `files-s3`, `model-providers`, `ocr-google`) | that package alone, on its own version | packages-only release |
+| Any other package (a module, `module-kit`, `embed`, `authoring-mcp`, `handbook`, `fake-channels`, `file-text`, `files-s3`, `model-providers`, `ocr-google`) | that package alone, on its own version | packages-only release |
 | The `module-wire` or `module-kit` crate | that crate alone, on its own version (edit its `Cargo.toml`) | packages-only release |
 
 - The language version is `packages/movement-lang/package.json`'s `version`. `scripts/release/sync-core-version.mjs` copies it everywhere else the core carries it, and CI runs `--check` on every push.
