@@ -4,7 +4,7 @@
 import { emptyOcrSlot, loadedModule, moduleManifest, refusingFiles, refusingIdentities, refusingKv, refusingModels } from 'module-kit';
 import { emptyBrowserSlot } from 'movement-engine/public/browser';
 
-import { GMAIL_SCOPES, GMAIL_SEND_SCOPE } from '../api_client';
+import { GMAIL_COMPOSE_SCOPE, GMAIL_DRAFTS_SCOPES, GMAIL_SCOPES, GMAIL_SEND_SCOPE } from '../api_client';
 import { gmailClientFromFields } from '../credential';
 import { gmailModule } from '../index';
 import { silentLog } from './host';
@@ -32,6 +32,11 @@ describe('the declarations', () => {
     expect(manifest.methods).toContain('poll');
     expect(manifest.inbound).toBeUndefined();
     expect(manifest.credentials?.[0]).toMatchObject({ name: 'gmail', kind: 'oauth2', oauth2: { scopes: [...GMAIL_SCOPES], clientAuth: 'body', pkce: true } });
+    // Drafts are opted into by signing in with the second declaration, the
+    // only one that asks for the compose scope.
+    expect(manifest.credentials?.[1]).toMatchObject({ name: 'gmail_drafts', kind: 'oauth2', oauth2: { scopes: [...GMAIL_DRAFTS_SCOPES] } });
+    expect(GMAIL_SCOPES).not.toContain(GMAIL_COMPOSE_SCOPE);
+    expect(GMAIL_DRAFTS_SCOPES).toContain(GMAIL_COMPOSE_SCOPE);
   });
 });
 
@@ -42,6 +47,19 @@ describe('fields to a client', () => {
     expect(gmailClientFromFields(base, { fetch }).canSend()).toBe(true);
     expect(gmailClientFromFields({ ...base, granted_scopes: 'https://www.googleapis.com/auth/gmail.readonly' }, { fetch }).canSend()).toBe(false);
     expect(gmailClientFromFields({ ...base, granted_scopes: GMAIL_SCOPES.join(' ') }, { fetch }).credentials.grantedScopes).toContain(GMAIL_SEND_SCOPE);
+  });
+
+  it('may draft only where the sign-in holds the compose scope', async () => {
+    expect(gmailClientFromFields(base, { fetch }).canDraft()).toBe(false);
+    expect(gmailClientFromFields(base, { fetch, declared: 'gmail_drafts' }).canDraft()).toBe(true);
+    expect(gmailClientFromFields({ ...base, granted_scopes: GMAIL_DRAFTS_SCOPES.join(' ') }, { fetch }).canDraft()).toBe(true);
+    expect(gmailClientFromFields({ ...base, granted_scopes: GMAIL_SCOPES.join(' ') }, { fetch, declared: 'gmail_drafts' }).canDraft()).toBe(false);
+    await expect(gmailClientFromFields(base, { fetch }).createDraft({ raw: 'cmF3' })).rejects.toMatchObject({ failure: 'missing_compose_scope' });
+  });
+
+  it('refuses a delegated draft the host holds no compose token for, naming why', async () => {
+    const client = gmailClientFromFields({ ...base, method: 'delegated', compose_refusal: 'unauthorized_client' }, { fetch, declared: 'gmail_drafts' });
+    await expect(client.createDraft({ raw: 'cmF3' })).rejects.toMatchObject({ failure: 'missing_compose_scope', message: expect.stringMatching(/unauthorized_client/) });
   });
 
   it('refuses fields that name no mailbox or hold no token, and a method it does not know', () => {

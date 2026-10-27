@@ -226,3 +226,79 @@ test("gmail list: an unsupported search is refused with a 400 naming it, not mat
     await close();
   }
 });
+
+async function post(baseUrl: string, route: string, body: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(`${baseUrl}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal(res.status, 200);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+async function history(baseUrl: string, query: string): Promise<{ history: Array<Record<string, unknown>> }> {
+  return (await (await fetch(`${baseUrl}/gmail/v1/users/me/history?${query}`)).json()) as { history: Array<Record<string, unknown>> };
+}
+
+test('gmail drafts: a draft is kept unsent, in its thread, and listed', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const made = await post(baseUrl, '/gmail/v1/users/me/drafts', {
+      message: { raw: raw(['To: rita@acme.example', 'Subject: Re: Q3', 'In-Reply-To: <q3@acme.example>', '', 'Looking now.']), threadId: 't-q3' },
+    });
+    assert.match(String(made.id), /^draft-/);
+    assert.deepEqual(made.message, { id: (made.message as { id: string }).id, threadId: 't-q3', labelIds: ['DRAFT'] });
+    const state = (await (await fetch(`${baseUrl}/fake-gmail/state`)).json()) as Record<string, Array<Record<string, unknown>>>;
+    assert.deepEqual(state.outbox, []);
+    assert.deepEqual(state.messages, []);
+    assert.equal(state.drafts?.length, 1);
+    assert.equal(state.drafts?.[0]?.draftId, made.id);
+    assert.equal(state.drafts?.[0]?.subject, 'Re: Q3');
+    assert.equal(state.drafts?.[0]?.inReplyTo, '<q3@acme.example>');
+    const listed = (await (await fetch(`${baseUrl}/gmail/v1/users/me/drafts`)).json()) as { drafts: unknown[] };
+    assert.equal(listed.drafts.length, 1);
+  } finally {
+    await close();
+  }
+});
+
+test('gmail history: a label added later is a labelsAdded record, and the arrival stays where it was', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const arrived = await post(baseUrl, '/fake-gmail/messages', { id: 'm1', subject: 'Acme' });
+    const start = Number(arrived.historyId) - 1;
+    await post(baseUrl, '/gmail/v1/users/me/messages/m1/modify', { addLabelIds: ['Label_deals'] });
+    // Adding a label it already carries records nothing.
+    await post(baseUrl, '/gmail/v1/users/me/messages/m1/modify', { addLabelIds: ['Label_deals'] });
+
+    const all = await history(baseUrl, `startHistoryId=${start}`);
+    assert.deepEqual(
+      all.history.map((r) => Object.keys(r).filter((k) => k !== 'id')),
+      [['messagesAdded'], ['labelsAdded']],
+    );
+    const onlyArrivals = await history(baseUrl, `startHistoryId=${start}&historyTypes=messageAdded`);
+    assert.equal(onlyArrivals.history.length, 1);
+    const onlyLabels = await history(baseUrl, `startHistoryId=${start}&historyTypes=labelAdded&labelId=Label_deals`);
+    assert.deepEqual(onlyLabels.history[0]?.labelsAdded, [
+      { message: { id: 'm1', threadId: 'm1', labelIds: ['INBOX', 'UNREAD', 'Label_deals'] }, labelIds: ['Label_deals'] },
+    ]);
+    // After the label, the arrival is behind the mark: only the label remains.
+    const after = await history(baseUrl, `startHistoryId=${arrived.historyId}`);
+    assert.deepEqual(after.history.map((r) => Object.keys(r).filter((k) => k !== 'id')), [['labelsAdded']]);
+  } finally {
+    await close();
+  }
+});
+
+test('gmail labels: a user label made by name gets an id, is listed beside the system ones, and a search takes its name', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const made = await post(baseUrl, '/gmail/v1/users/me/labels', { name: 'Deals' });
+    assert.match(String(made.id), /^Label_\d+$/);
+    const listed = (await (await fetch(`${baseUrl}/gmail/v1/users/me/labels`)).json()) as { labels: Array<{ id: string; name: string }> };
+    assert.ok(listed.labels.some((l) => l.id === 'INBOX'));
+    assert.ok(listed.labels.some((l) => l.id === made.id && l.name === 'Deals'));
+    await post(baseUrl, '/fake-gmail/messages', { id: 'm1', subject: 'Acme', labelIds: ['INBOX', made.id] });
+    const found = (await (await fetch(`${baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent('label:deals')}`)).json()) as { messages: Array<{ id: string }> };
+    assert.deepEqual(found.messages.map((m) => m.id), ['m1']);
+  } finally {
+    await close();
+  }
+});

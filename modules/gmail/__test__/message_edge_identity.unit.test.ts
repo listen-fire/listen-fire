@@ -79,7 +79,7 @@ function errors(source: string): Diagnostic[] {
 
 describe('the real Gmail projection: one position for two entries', () => {
   it('mints exactly one position for the message type, keyed by displayName ("Message"), no note', () => {
-    expect(Object.keys(gmailSchema.positions).sort()).toEqual(['Attachment', 'Message']);
+    expect(Object.keys(gmailSchema.positions).sort()).toEqual(['Attachment', 'Draft', 'Message']);
     expect(notes).toEqual([]);
   });
 

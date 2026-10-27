@@ -25,17 +25,20 @@
 import { google, type gmail_v1 } from 'googleapis';
 import { z } from 'zod';
 
-/** The two scopes a mailbox is reached through: read and send, nothing else. */
+/** The scopes a mailbox is reached through: read and send, and compose only
+ *  where the sign-in opted into drafts (`GMAIL_DRAFTS_SCOPES`). */
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const GMAIL_SCOPES = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE] as const;
+export const GMAIL_DRAFTS_SCOPES = [...GMAIL_SCOPES, GMAIL_COMPOSE_SCOPE] as const;
 
 /** How a mailbox was connected. */
 export const GMAIL_CONNECT_METHODS = ['oauth', 'delegated'] as const;
 export type GmailConnectMethod = (typeof GMAIL_CONNECT_METHODS)[number];
 
-/** Which of the two scopes a call needs. */
-export type GmailScope = 'read' | 'send';
+/** Which scope a call needs. */
+export type GmailScope = 'read' | 'send' | 'compose';
 
 /** The mailbox's own address in Gmail's paths: "the authenticated user", which
  *  under delegation IS the impersonated mailbox. */
@@ -107,6 +110,12 @@ export type GmailMessageRef = z.infer<typeof messageRefSchema>;
  *  added it — the point a reader that stops part way through resumes from. */
 export type GmailHistoryAddition = GmailMessageRef & { historyId?: string };
 
+/** One label history reports as added to a message, one entry per label. */
+export type GmailLabelAddition = GmailHistoryAddition & { label: string };
+
+/** The kinds of change a history read asks for. */
+export type GmailHistoryType = 'messageAdded' | 'labelAdded';
+
 const messageListSchema = z.object({
   messages: z.array(messageRefSchema).nullish(),
   nextPageToken: z.string().nullish(),
@@ -126,6 +135,9 @@ const historyRecordSchema = z.object({
   messagesAdded: z
     .array(z.object({ message: messageRefSchema.nullish() }))
     .nullish(),
+  labelsAdded: z
+    .array(z.object({ message: messageRefSchema.nullish(), labelIds: z.array(z.string()).nullish() }))
+    .nullish(),
 });
 
 const historyListSchema = z.object({
@@ -133,6 +145,16 @@ const historyListSchema = z.object({
   nextPageToken: z.string().nullish(),
   historyId: z.string().nullish(),
 });
+
+const labelListSchema = z.object({
+  labels: z.array(z.object({ id: z.string(), name: z.string(), type: z.string().nullish() })).nullish(),
+});
+/** A label the mailbox has: its id (what history and a message carry) and
+ *  its name (what a person sees, and what Gmail's search takes). */
+export interface GmailLabel {
+  id: string;
+  name: string;
+}
 
 const attachmentSchema = z.object({
   size: z.number().nullish(),
@@ -148,6 +170,14 @@ const sentMessageSchema = z.object({
 });
 export type GmailSentMessage = z.infer<typeof sentMessageSchema>;
 
+/** What `users.drafts.create` hands back: the draft's own id, and the message
+ *  it holds. */
+const draftSchema = z.object({
+  id: z.string(),
+  message: z.object({ id: z.string(), threadId: z.string().nullish() }).nullish(),
+});
+export type GmailDraft = z.infer<typeof draftSchema>;
+
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 /** Why a Gmail call failed, in the terms the callers actually branch on. */
@@ -157,6 +187,8 @@ export type GmailFailure =
   /** The token request for `gmail.send` was refused — reads still work, only
    *  the send scope is missing from the grant. */
   | 'missing_send_scope'
+  /** The mailbox may not keep drafts: the compose scope was never granted. */
+  | 'missing_compose_scope'
   /** Google accepted the impersonation but the address is not a mailbox. */
   | 'no_such_mailbox'
   /** `history.list` was given a marker Gmail has since dropped. */
@@ -231,9 +263,14 @@ export function classifyGmailError(err: unknown, operation: string): GmailApiErr
     status === 401 ||
     status === 403;
   if (tokenRefused) {
-    return operation === 'users.messages.send'
-      ? new GmailApiError('missing_send_scope', status, operation, detail)
-      : new GmailApiError('delegation', status, operation, detail);
+    switch (operation) {
+      case 'users.messages.send':
+        return new GmailApiError('missing_send_scope', status, operation, detail);
+      case 'users.drafts.create':
+        return new GmailApiError('missing_compose_scope', status, operation, detail);
+      default:
+        return new GmailApiError('delegation', status, operation, detail);
+    }
   }
   if (operation === 'history.list' && status === 404) {
     return new GmailApiError('history_expired', status, operation, detail);
@@ -269,6 +306,36 @@ export function gmailMissingSendScopeMessage(
         head +
         "ask a Workspace admin to add the send scope alongside the read one on " +
         "this deployment's domain wide delegation."
+      );
+    default:
+      return head + String(unreachable(method));
+  }
+}
+
+/** What a deployment reads when a draft fails because the mailbox does not
+ *  hold `gmail.compose`. Drafts are opted into at sign-in, so the remedy is
+ *  signing in again with drafts enabled; reads (and sends) are unaffected. */
+export function gmailMissingComposeScopeMessage(
+  mailbox: string,
+  method: GmailConnectMethod = 'delegated',
+): string {
+  const head =
+    `${mailbox} does not hold ${GMAIL_COMPOSE_SCOPE}, so this mailbox cannot keep ` +
+    'drafts. Reads still work — ';
+  switch (method) {
+    case 'oauth':
+      return (
+        head +
+        'drafts are opted into at sign-in, and this one did not. Sign the mailbox ' +
+        'in again with drafts enabled, under the `gmail_drafts` credential (with ' +
+        'lf: `lf credential delete <name>`, then `lf credential add --module ' +
+        'gmail <name> --credential gmail_drafts`).'
+      );
+    case 'delegated':
+      return (
+        head +
+        "ask a Workspace admin to add the compose scope to this deployment's " +
+        'domain wide delegation.'
       );
     default:
       return head + String(unreachable(method));
@@ -321,7 +388,7 @@ export class GmailApiClient {
       });
       return { api, auth };
     };
-    this.apis = { read: build(), send: build() };
+    this.apis = { read: build(), send: build(), compose: build() };
   }
 
   /** The api for one scope, holding that scope's current token. */
@@ -355,10 +422,24 @@ export class GmailApiClient {
       : true;
   }
 
+  /** Whether this mailbox may keep drafts: the sign-in's granted scopes say
+   *  so; under delegation only Google knows, so the draft asks. */
+  canDraft(): boolean {
+    return this.credentials.method === 'oauth'
+      ? (this.credentials.grantedScopes ?? []).includes(GMAIL_COMPOSE_SCOPE)
+      : true;
+  }
+
   /** The mailbox's own profile — the connect-time proof that the connection
    *  works AND the source of the first poll's change marker. */
   async getProfile(): Promise<GmailProfile> {
     return this.call('users.getProfile', 'read', gmailProfileSchema, (api) => api.users.getProfile({ userId: SELF }));
+  }
+
+  /** Every label the mailbox has, system and user alike. */
+  async listLabels(): Promise<GmailLabel[]> {
+    const page = await this.call('users.labels.list', 'read', labelListSchema, (api) => api.users.labels.list({ userId: SELF }));
+    return (page.labels ?? []).map(({ id, name }) => ({ id, name }));
   }
 
   /** One page of message ids matching a Gmail search query. */
@@ -404,7 +485,8 @@ export class GmailApiClient {
   }
 
   /**
-   * The messages added to a label since a change marker.
+   * The messages added to a label, and the labels added to its messages, since
+   * a change marker — one read, since both are records in the one history.
    *
    * Throws `history_expired` when Gmail has dropped the marker — about a week
    * of inactivity is enough — which the poll answers by resyncing from the last
@@ -414,25 +496,42 @@ export class GmailApiClient {
     startHistoryId: string;
     labelId?: string;
     pageToken?: string;
-  }): Promise<{ added: GmailHistoryAddition[]; nextPageToken?: string; historyId?: string }> {
+    /** Default: arrivals only. */
+    types?: readonly GmailHistoryType[];
+  }): Promise<{
+    added: GmailHistoryAddition[];
+    labelled: GmailLabelAddition[];
+    nextPageToken?: string;
+    historyId?: string;
+  }> {
     const page = await this.call('history.list', 'read', historyListSchema, (api) =>
       api.users.history.list({
         userId: SELF,
         startHistoryId: input.startHistoryId,
-        historyTypes: ['messageAdded'],
+        historyTypes: [...(input.types ?? ['messageAdded'])],
         ...(input.labelId !== undefined ? { labelId: input.labelId } : {}),
         ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}),
       }),
     );
     const added: GmailHistoryAddition[] = [];
+    const labelled: GmailLabelAddition[] = [];
     for (const record of page.history ?? []) {
+      const at = record.id ? { historyId: record.id } : {};
       for (const entry of record.messagesAdded ?? []) {
         if (!entry.message) continue;
-        added.push({ ...entry.message, ...(record.id ? { historyId: record.id } : {}) });
+        added.push({ ...entry.message, ...at });
+      }
+      for (const entry of record.labelsAdded ?? []) {
+        if (!entry.message) continue;
+        const { id, threadId } = entry.message;
+        for (const label of entry.labelIds ?? []) {
+          labelled.push({ id, ...(threadId != null ? { threadId } : {}), ...at, label });
+        }
       }
     }
     return {
       added,
+      labelled,
       ...(page.nextPageToken ? { nextPageToken: page.nextPageToken } : {}),
       ...(page.historyId ? { historyId: page.historyId } : {}),
     };
@@ -467,6 +566,36 @@ export class GmailApiClient {
         requestBody: {
           raw: input.raw,
           ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+        },
+      }),
+    );
+  }
+
+  /**
+   * Keep a message in the mailbox unsent, as a draft a person finishes and
+   * sends. The same one blob a send takes; `threadId` files a reply draft in
+   * its conversation.
+   */
+  async createDraft(input: { raw: string; threadId?: string }): Promise<GmailDraft> {
+    // As with a send: a sign-in that never opted into drafts is refused here,
+    // where the reason is known; Google's own refusal stays the backstop.
+    if (this.credentials.method === 'oauth' && !this.canDraft()) {
+      throw new GmailApiError(
+        'missing_compose_scope',
+        undefined,
+        'users.drafts.create',
+        `the sign-in for ${this.credentials.mailbox} granted ` +
+          `${(this.credentials.grantedScopes ?? []).join(', ') || 'no scopes'}`,
+      );
+    }
+    return this.call('users.drafts.create', 'compose', draftSchema, (api) =>
+      api.users.drafts.create({
+        userId: SELF,
+        requestBody: {
+          message: {
+            raw: input.raw,
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+          },
         },
       }),
     );

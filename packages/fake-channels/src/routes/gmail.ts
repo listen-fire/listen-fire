@@ -4,10 +4,13 @@
 // reason Drive is: googleapis resolves request paths against the rootUrl
 // ORIGIN and drops any path prefix.
 //
-// Two entity types: one 'message' per message, holding the Gmail WIRE shape
-// (id, threadId, labelIds, snippet, internalDate, historyId, payload), and a
-// single 'mailbox' row holding the change marker and how far back history
-// still reaches. The second is what makes the expired-marker path testable:
+// Entity types: one 'message' per message, holding the Gmail WIRE shape
+// (id, threadId, labelIds, snippet, internalDate, historyId, payload), one
+// 'draft' per draft (its id and the message it holds, a message labelled
+// DRAFT), one 'label_history' row per label added to a message after it
+// arrived (what `history.list` reports as `labelsAdded`), and a single
+// 'mailbox' row holding the change marker and how far back history still
+// reaches. The second is what makes the expired-marker path testable:
 // `POST /fake-gmail/expire-history` walks the floor forward, and every
 // `history.list` below it then 404s exactly as Gmail's does after a quiet week.
 //
@@ -180,19 +183,24 @@ function rawOf(message: Record<string, unknown>): string {
 }
 
 function wireMessage(data: Record<string, unknown>): Record<string, unknown> {
-  const { bodyText: _bodyText, attachmentContent: _content, ...rest } = data;
+  const { bodyText: _bodyText, attachmentContent: _content, addedHistoryId: _added, ...rest } = data;
   return rest;
 }
 
-/** Bare words are matched against the subject, the snippet and the body. */
-function queryTargetOf(data: Record<string, unknown>): QueryTarget {
+/** Bare words are matched against the subject, the snippet and the body. A
+ *  `label:` term matches a label's id or, for a user label, its name — as
+ *  Gmail's search takes names. */
+function queryTargetOf(data: Record<string, unknown>, labelNames: ReadonlyMap<string, string> = new Map()): QueryTarget {
   const headers = new Map<string, string>();
   for (const entry of headersOf(data.payload)) {
     headers.set((entry.name ?? '').toLowerCase(), entry.value ?? '');
   }
   return {
     headers,
-    labels: stringsOf(data.labelIds),
+    labels: stringsOf(data.labelIds).flatMap((id) => {
+      const name = labelNames.get(id);
+      return name === undefined ? [id] : [id, name];
+    }),
     filenames: filenamesOf(data.payload),
     freeText: [
       headers.get('subject') ?? '',
@@ -290,8 +298,35 @@ function parseRfc2822(raw: string): ParsedMessage {
   return parsed;
 }
 
+/** The labels every mailbox has. */
+const SYSTEM_LABELS = ['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT'];
+
 export function gmailRoutes(store: EntityStore): Router {
   const r = Router();
+
+  const userLabelNames = (): Map<string, string> =>
+    new Map(store.list(SVC, 'label').map((row) => [String(row.data.id), String(row.data.name)]));
+
+  r.get('/gmail/v1/users/:userId/labels', (_req, res) => {
+    res.json({
+      labels: [
+        ...SYSTEM_LABELS.map((id) => ({ id, name: id, type: 'system' })),
+        ...[...userLabelNames()].map(([id, name]) => ({ id, name, type: 'user' })),
+      ],
+    });
+  });
+
+  /** Make a user label: Gmail gives it an id (`Label_<n>`) beside its name. */
+  r.post('/gmail/v1/users/:userId/labels', (req, res) => {
+    const name = String(req.body?.name ?? '').trim();
+    if (name === '') return res.status(400).json({ error: { code: 400, message: 'Missing label name' } });
+    if ([...userLabelNames().values()].some((known) => known.toLowerCase() === name.toLowerCase())) {
+      return res.status(409).json({ error: { code: 409, message: 'Label name exists or conflicts' } });
+    }
+    const id = `Label_${store.nextId(SVC, 'label')}`;
+    store.create(SVC, 'label', { id, name }, id);
+    res.json({ id, name, type: 'user' });
+  });
 
   r.get('/gmail/v1/users/:userId/profile', (_req, res) => {
     const mailbox = readMailbox(store);
@@ -323,7 +358,7 @@ export function gmailRoutes(store: EntityStore): Router {
     const messages = store
       .list(SVC, 'message')
       .map((m) => m.data)
-      .filter((data) => evaluateGmailQuery(parsed, queryTargetOf(data), now))
+      .filter((data) => evaluateGmailQuery(parsed, queryTargetOf(data, userLabelNames()), now))
       .filter((data) => wanted.every((label) => stringsOf(data.labelIds).includes(label)))
       .sort((a, b) => Number(b.internalDate ?? 0) - Number(a.internalDate ?? 0))
       .slice(0, Number.isFinite(max) ? max : 100)
@@ -355,15 +390,14 @@ export function gmailRoutes(store: EntityStore): Router {
    * id exactly as the write's handle promises, and the INBOX-scoped poll never
    * delivers the mailbox its own outgoing mail.
    */
-  r.post('/gmail/v1/users/:userId/messages/send', (req, res) => {
+  /** Store a message handed over as one base64url blob, as Gmail does for a
+   *  send and for a draft: parsed, given an id and a history id, filed in the
+   *  conversation named or a new one. */
+  function storeRaw(input: { raw: string; threadId?: string; idPrefix: string; label: string }): { id: string; threadId: string } {
     const mailbox = readMailbox(store);
-    const raw = String(req.body?.raw ?? '');
-    if (raw === '') {
-      return res.status(400).json({ error: { code: 400, message: 'Missing raw message' } });
-    }
-    const parsed = parseRfc2822(Buffer.from(raw, 'base64url').toString('utf8'));
-    const id = `sent-${store.nextId(SVC, 'message')}`;
-    const threadId = req.body?.threadId ? String(req.body.threadId) : id;
+    const parsed = parseRfc2822(Buffer.from(input.raw, 'base64url').toString('utf8'));
+    const id = `${input.idPrefix}-${store.nextId(SVC, 'message')}`;
+    const threadId = input.threadId ?? id;
     const historyId = mailbox.historyId + 1;
     const date = new Date();
 
@@ -397,11 +431,11 @@ export function gmailRoutes(store: EntityStore): Router {
       {
         id,
         threadId,
-        labelIds: ['SENT'],
+        labelIds: [input.label],
         snippet: (parsed.text ?? parsed.html ?? '').slice(0, 120),
         historyId: String(historyId),
         internalDate: String(date.getTime()),
-        sizeEstimate: raw.length,
+        sizeEstimate: input.raw.length,
         payload,
         bodyText: parsed.text ?? '',
         attachmentContent,
@@ -409,7 +443,78 @@ export function gmailRoutes(store: EntityStore): Router {
       id,
     );
     writeMailbox(store, { ...mailbox, historyId });
+    return { id, threadId };
+  }
+
+  /**
+   * Send. Gmail takes the whole message as one base64url blob and decides two
+   * things: the id, and — given a `threadId` — which conversation it joins. The
+   * sent message is stored like any other, labelled SENT, so it reads back by
+   * id exactly as the write's handle promises, and the INBOX-scoped poll never
+   * delivers the mailbox its own outgoing mail.
+   */
+  r.post('/gmail/v1/users/:userId/messages/send', (req, res) => {
+    const raw = String(req.body?.raw ?? '');
+    if (raw === '') {
+      return res.status(400).json({ error: { code: 400, message: 'Missing raw message' } });
+    }
+    const { id, threadId } = storeRaw({ raw, ...(req.body?.threadId ? { threadId: String(req.body.threadId) } : {}), idPrefix: 'sent', label: 'SENT' });
     res.json({ id, threadId, labelIds: ['SENT'] });
+  });
+
+  /**
+   * Keep a message unsent: `{ message: { raw, threadId? } }`, answered with
+   * the draft's own id and the message it holds (labelled DRAFT, so it is in
+   * neither the outbox nor the inbox).
+   */
+  r.post('/gmail/v1/users/:userId/drafts', (req, res) => {
+    const message: unknown = req.body?.message;
+    const raw = typeof message === 'object' && message !== null ? Reflect.get(message, 'raw') : undefined;
+    if (typeof raw !== 'string' || raw === '') {
+      return res.status(400).json({ error: { code: 400, message: 'Missing draft message raw' } });
+    }
+    const asked = typeof message === 'object' && message !== null ? Reflect.get(message, 'threadId') : undefined;
+    const stored = storeRaw({ raw, ...(typeof asked === 'string' && asked !== '' ? { threadId: asked } : {}), idPrefix: 'draftmsg', label: 'DRAFT' });
+    const id = `draft-${store.nextId(SVC, 'draft')}`;
+    store.create(SVC, 'draft', { id, messageId: stored.id }, id);
+    res.json({ id, message: { id: stored.id, threadId: stored.threadId, labelIds: ['DRAFT'] } });
+  });
+
+  r.get('/gmail/v1/users/:userId/drafts', (_req, res) => {
+    const drafts = store.list(SVC, 'draft').map((row) => {
+      const message = store.get(SVC, 'message', String(row.data.messageId));
+      return { id: row.data.id, message: { id: row.data.messageId, threadId: message?.data.threadId } };
+    });
+    res.json({ drafts, resultSizeEstimate: drafts.length });
+  });
+
+  /**
+   * Label a message (`addLabelIds`, `removeLabelIds`), as a mail client or a
+   * filter does. Each label it did not already carry is a `labelsAdded`
+   * history record at a new history id; the message's own history id moves
+   * too, while the record of its ARRIVAL stays where it was.
+   */
+  r.post('/gmail/v1/users/:userId/messages/:id/modify', (req, res) => {
+    const row = store.get(SVC, 'message', req.params.id);
+    if (!row) return res.status(404).json({ error: { code: 404, message: 'Not Found' } });
+    const before = stringsOf(row.data.labelIds);
+    const adding = stringsOf(req.body?.addLabelIds).filter((label) => !before.includes(label));
+    const removing = stringsOf(req.body?.removeLabelIds);
+    const labelIds = [...before.filter((label) => !removing.includes(label)), ...adding];
+    let mailbox = readMailbox(store);
+    if (adding.length > 0) {
+      const historyId = mailbox.historyId + 1;
+      store.create(SVC, 'label_history', { historyId, messageId: row.data.id, labelIds: adding }, String(historyId));
+      mailbox = { ...mailbox, historyId };
+      writeMailbox(store, mailbox);
+    }
+    store.update(SVC, 'message', req.params.id, {
+      ...row.data,
+      labelIds,
+      addedHistoryId: row.data.addedHistoryId ?? row.data.historyId,
+      historyId: String(mailbox.historyId),
+    });
+    res.json({ id: row.data.id, threadId: row.data.threadId, labelIds });
   });
 
   r.get('/gmail/v1/users/:userId/messages/:messageId/attachments/:id', (req, res) => {
@@ -436,18 +541,36 @@ export function gmailRoutes(store: EntityStore): Router {
       });
     }
     const labelId = req.query.labelId === undefined ? null : String(req.query.labelId);
-    const history = store
-      .list(SVC, 'message')
-      .map((m) => m.data)
-      .filter((data) => Number(data.historyId ?? 0) > start)
-      .filter((data) => labelId === null || stringsOf(data.labelIds).includes(labelId))
-      .sort((a, b) => Number(a.historyId ?? 0) - Number(b.historyId ?? 0))
-      .map((data) => ({
-        id: String(data.historyId),
-        messagesAdded: [
-          { message: { id: String(data.id), threadId: String(data.threadId ?? data.id) } },
-        ],
-      }));
+    // Absent means every kind, as at Gmail.
+    const types = req.query.historyTypes === undefined ? null : stringsOf([req.query.historyTypes].flat());
+    const wants = (type: string) => types === null || types.includes(type);
+    // A label filter keeps the records of messages carrying the label now.
+    const carries = (data: Record<string, unknown> | undefined) =>
+      data !== undefined && (labelId === null || stringsOf(data.labelIds).includes(labelId));
+    const ref = (data: Record<string, unknown>) => ({ id: String(data.id), threadId: String(data.threadId ?? data.id) });
+
+    const arrivals = wants('messageAdded')
+      ? store
+          .list(SVC, 'message')
+          .map((m) => m.data)
+          .filter((data) => Number(data.addedHistoryId ?? data.historyId ?? 0) > start)
+          .filter(carries)
+          .map((data) => ({ id: Number(data.addedHistoryId ?? data.historyId), messagesAdded: [{ message: ref(data) }] }))
+      : [];
+    const labelled = wants('labelAdded')
+      ? store
+          .list(SVC, 'label_history')
+          .map((h) => h.data)
+          .filter((entry) => Number(entry.historyId) > start)
+          .flatMap((entry) => {
+            const message = store.get(SVC, 'message', String(entry.messageId))?.data;
+            if (message === undefined || !carries(message)) return [];
+            return [{ id: Number(entry.historyId), labelsAdded: [{ message: { ...ref(message), labelIds: stringsOf(message.labelIds) }, labelIds: stringsOf(entry.labelIds) }] }];
+          })
+      : [];
+    const history = [...arrivals, ...labelled]
+      .sort((a, b) => a.id - b.id)
+      .map((record) => ({ ...record, id: String(record.id) }));
     res.json({ history, historyId: String(mailbox.historyId) });
   });
 
@@ -610,10 +733,12 @@ export function gmailRoutes(store: EntityStore): Router {
   r.get('/fake-gmail/state', (_req, res) => {
     const rows = store.list(SVC, 'message').map((m) => m.data);
     const isSent = (data: Record<string, unknown>) => stringsOf(data.labelIds).includes('SENT');
+    const isDraft = (data: Record<string, unknown>) => stringsOf(data.labelIds).includes('DRAFT');
+    const draftOf = new Map(store.list(SVC, 'draft').map((row) => [String(row.data.messageId), String(row.data.id)]));
     res.json({
       mailbox: readMailbox(store),
       messages: rows
-        .filter((data) => !isSent(data))
+        .filter((data) => !isSent(data) && !isDraft(data))
         .map((data) => ({
           id: data.id,
           historyId: data.historyId,
@@ -621,31 +746,33 @@ export function gmailRoutes(store: EntityStore): Router {
           labelIds: data.labelIds,
           snippet: data.snippet,
         })),
-      outbox: rows.filter(isSent).map((data) => {
-        const headers = new Map<string, string>();
-        for (const entry of headersOf(data.payload)) {
-          headers.set((entry.name ?? '').toLowerCase(), entry.value ?? '');
-        }
-        return {
-          id: data.id,
-          threadId: data.threadId,
-          internalDate: data.internalDate,
-          to: headers.get('to') ?? '',
-          cc: headers.get('cc') ?? '',
-          from: headers.get('from') ?? '',
-          subject: headers.get('subject') ?? '',
-          inReplyTo: headers.get('in-reply-to') ?? null,
-          references: headers.get('references') ?? null,
-          body: typeof data.bodyText === 'string' ? data.bodyText : '',
-          attachments: Object.keys(
-            typeof data.attachmentContent === 'object' && data.attachmentContent !== null
-              ? data.attachmentContent
-              : {},
-          ),
-        };
-      }),
+      outbox: rows.filter(isSent).map(spelledOut),
+      drafts: rows.filter(isDraft).map((data) => ({ draftId: draftOf.get(String(data.id)) ?? null, ...spelledOut(data) })),
     });
   });
 
   return r;
+}
+
+/** A message the mailbox wrote (sent or drafted), its headers spelled out. */
+function spelledOut(data: Record<string, unknown>): Record<string, unknown> {
+  const headers = new Map<string, string>();
+  for (const entry of headersOf(data.payload)) {
+    headers.set((entry.name ?? '').toLowerCase(), entry.value ?? '');
+  }
+  return {
+    id: data.id,
+    threadId: data.threadId,
+    internalDate: data.internalDate,
+    to: headers.get('to') ?? '',
+    cc: headers.get('cc') ?? '',
+    from: headers.get('from') ?? '',
+    subject: headers.get('subject') ?? '',
+    inReplyTo: headers.get('in-reply-to') ?? null,
+    references: headers.get('references') ?? null,
+    body: typeof data.bodyText === 'string' ? data.bodyText : '',
+    attachments: Object.keys(
+      typeof data.attachmentContent === 'object' && data.attachmentContent !== null ? data.attachmentContent : {},
+    ),
+  };
 }

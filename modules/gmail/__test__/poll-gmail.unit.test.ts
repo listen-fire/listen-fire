@@ -8,6 +8,7 @@ import type { GmailApiClient } from '../api_client';
 import {
   GmailApiError,
   type GmailHistoryAddition,
+  type GmailLabelAddition,
   type GmailMessage,
   type GmailMessageRef,
   type GmailProfile,
@@ -36,13 +37,15 @@ function wireMessage(id: string, labelIds: string[] = ['INBOX']): GmailMessage {
 
 interface HistoryPage {
   added: GmailHistoryAddition[];
+  labelled?: GmailLabelAddition[];
   historyId?: string;
 }
 
 interface Calls {
-  history: { startHistoryId: string; labelId?: string; pageToken?: string }[];
+  history: { startHistoryId: string; labelId?: string; pageToken?: string; types?: readonly string[] }[];
   list: { query?: string; maxResults?: number; includeSpamTrash?: boolean; pageToken?: string }[];
   get: string[];
+  labels: number;
 }
 
 /** A fake whose history is PAGED per label: page n's token is `"<label>:<n>"`. */
@@ -55,23 +58,33 @@ function fakeClient(setup: {
   /** A PAGED search instead: page n's token is `"search:<n>"`. */
   searchPages?: GmailMessageRef[][];
 }) {
-  const calls: Calls = { history: [], list: [], get: [] };
+  const calls: Calls = { history: [], list: [], get: [], labels: 0 };
   const byId = new Map(setup.messages.map((m) => [m.id, m]));
   const client = {
+    credentials: { mailbox: 'nemo@example.com', method: 'oauth' },
+    async listLabels() {
+      calls.labels += 1;
+      return [
+        { id: 'INBOX', name: 'INBOX' },
+        { id: 'Label_deals', name: 'Deals' },
+        { id: 'Label_other', name: 'Other' },
+      ];
+    },
     async getProfile(): Promise<GmailProfile> {
       return { emailAddress: 'nemo@example.com', historyId: '9000' };
     },
-    async listHistory(input: { startHistoryId: string; labelId?: string; pageToken?: string }) {
+    async listHistory(input: { startHistoryId: string; labelId?: string; pageToken?: string; types?: readonly string[] }) {
       calls.history.push(input);
       if (setup.historyExpired) {
         throw new GmailApiError('history_expired', 404, 'history.list', 'Not Found');
       }
-      const pages = setup.history?.[input.labelId ?? ''] ?? [{ added: [], historyId: '5000' }];
+      const pages = setup.history?.[input.labelId ?? '*'] ?? [{ added: [], historyId: '5000' }];
       const index = input.pageToken === undefined ? 0 : Number(input.pageToken.split(':')[1]);
       const page = pages[index];
       const next = index + 1 < pages.length ? `${input.labelId}:${index + 1}` : undefined;
       return {
         added: page.added,
+        labelled: page.labelled ?? [],
         ...(next !== undefined ? { nextPageToken: next } : {}),
         ...(page.historyId !== undefined ? { historyId: page.historyId } : {}),
       };
@@ -211,7 +224,7 @@ describe('which labels a listener watches', () => {
   it('fails the tick on a malformed labels value before touching the mailbox', async () => {
     const { source, calls } = pollWith({ messages: [] });
     await expect(source.getEvents({ config: { labels: [] }, checkpoint: MARK })).rejects.toThrow(
-      /non-empty list of Gmail label ids/,
+      /non-empty list of Gmail labels/,
     );
     expect(calls.history).toHaveLength(0);
   });
@@ -402,5 +415,180 @@ describe('an arrival the search has not caught up on', () => {
       },
     });
     expect(odd.checkpoint).toMatchObject({ pending: [{ id: 'ok' }] });
+  });
+});
+
+describe('a label added to a message already in the mailbox', () => {
+  const labelled = (id: string, label: string, historyId: string): GmailLabelAddition => ({
+    id,
+    threadId: `thread-${id}`,
+    historyId,
+    label,
+  });
+  const LISTEN = { events: ['label_added'], labels: ['Label_deals'] };
+
+  it('fires once per message and label, carrying the message and the label added', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1', ['INBOX', 'Label_deals'])],
+      history: {
+        Label_deals: [
+          {
+            added: [],
+            labelled: [labelled('m1', 'Label_deals', '4001'), labelled('m1', 'Label_deals', '4003')],
+            historyId: '5000',
+          },
+        ],
+      },
+    });
+    const result = await source.getEvents({ config: LISTEN, checkpoint: MARK });
+
+    expect(calls.history).toEqual([{ startHistoryId: '4000', labelId: 'Label_deals', types: ['labelAdded'] }]);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      externalId: 'm1',
+      eventType: 'label_added',
+      tag: 'gmail:label_added',
+      idempotencyKey: 'gmail:label:m1:Label_deals',
+      payload: { id: 'm1', subject: 'About m1', addedLabel: 'Label_deals' },
+    });
+    expect(result.checkpoint).toMatchObject({ historyId: '5000' });
+  });
+
+  it('counts only the labels the listen names', async () => {
+    const { source } = pollWith({
+      messages: [wireMessage('m1', ['Label_deals', 'Label_other'])],
+      history: {
+        // Gmail's label filter returns the records of messages CARRYING the
+        // label, which can be another label being added to them.
+        Label_deals: [{ added: [], labelled: [labelled('m1', 'Label_other', '4001')], historyId: '5000' }],
+      },
+    });
+    const result = await source.getEvents({ config: LISTEN, checkpoint: MARK });
+    expect(result.events).toEqual([]);
+  });
+
+  it('is not read by a listen that did not ask for it, and an arrival is not a label added', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1')],
+      history: { INBOX: [{ added: [added('m1', '4001')], labelled: [labelled('m1', 'INBOX', '4002')], historyId: '5000' }] },
+    });
+    const result = await source.getEvents({ config: {}, checkpoint: MARK });
+    expect(calls.history.map((c) => c.types)).toEqual([['messageAdded']]);
+    expect(result.events.map((e) => e.eventType)).toEqual(['message_received']);
+  });
+
+  it('reads arrivals and label additions in one history read, under one mark, when a listen asks for both', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('new'), wireMessage('old', ['INBOX', 'Label_deals'])],
+      history: {
+        Label_deals: [{ added: [added('new', '4001')], labelled: [labelled('old', 'Label_deals', '4002')], historyId: '5000' }],
+      },
+    });
+    const result = await source.getEvents({
+      config: { events: ['message_received', 'label_added'], labels: ['Label_deals'] },
+      checkpoint: MARK,
+    });
+    expect(calls.history.map((c) => c.types)).toEqual([['messageAdded', 'labelAdded']]);
+    expect(result.events.map((e) => [e.externalId, e.eventType])).toEqual([
+      ['new', 'message_received'],
+      ['old', 'label_added'],
+    ]);
+    expect(result.checkpoint).toMatchObject({ historyId: '5000' });
+  });
+
+  it('caps a tick across both kinds and resumes before the first change not taken', async () => {
+    const arrivals = Array.from({ length: 60 }, (_, i) => added(`a${i}`, String(4001 + 2 * i)));
+    const labels = Array.from({ length: 60 }, (_, i) => labelled(`l${i}`, 'Label_deals', String(4002 + 2 * i)));
+    const { source } = pollWith({
+      messages: [...arrivals, ...labels].map((ref) => wireMessage(ref.id)),
+      history: { Label_deals: [{ added: arrivals, labelled: labels, historyId: '5000' }] },
+    });
+    const result = await source.getEvents({
+      config: { events: ['message_received', 'label_added'], labels: ['Label_deals'] },
+      checkpoint: MARK,
+    });
+    expect(result.events).toHaveLength(100);
+    expect(result.checkpoint).toMatchObject({ historyId: '4100' });
+  });
+
+  it('narrows by the listen’s query, and drops a message the query does not admit', async () => {
+    const { source } = pollWith({
+      messages: [wireMessage('m1', ['Label_deals']), wireMessage('m2', ['Label_deals'])],
+      history: {
+        Label_deals: [
+          { added: [], labelled: [labelled('m1', 'Label_deals', '4001'), labelled('m2', 'Label_deals', '4002')], historyId: '5000' },
+        ],
+      },
+      search: [{ id: 'm1', threadId: 't' }],
+    });
+    const result = await source.getEvents({ config: { ...LISTEN, query: 'from:acme.com' }, checkpoint: MARK });
+    expect(result.events.map((e) => e.externalId)).toEqual(['m1']);
+    expect(result.checkpoint).not.toHaveProperty('pending');
+  });
+
+  it('never replays label additions after an expired marker: the resync skips them and marks from now', async () => {
+    const { source } = pollWith({
+      messages: [wireMessage('old', ['Label_deals'])],
+      historyExpired: true,
+      search: [{ id: 'old', threadId: 't' }],
+    });
+    const result = await source.getEvents({ config: LISTEN, checkpoint: MARK });
+    expect(result.events).toEqual([]);
+    expect(result.checkpoint).toMatchObject({ historyId: '9000' });
+  });
+});
+
+describe('which labels a label_added listen counts', () => {
+  const labelled = (id: string, label: string, historyId: string): GmailLabelAddition => ({ id, threadId: `thread-${id}`, historyId, label });
+
+  it('with no labels, reads the whole mailbox and counts user labels only', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1', ['INBOX', 'Label_deals'])],
+      history: {
+        '*': [
+          {
+            added: [],
+            labelled: [labelled('m1', 'INBOX', '4001'), labelled('m1', 'STARRED', '4002'), labelled('m1', 'CATEGORY_UPDATES', '4003'), labelled('m1', 'Label_deals', '4004')],
+            historyId: '5000',
+          },
+        ],
+      },
+    });
+    const result = await source.getEvents({ config: { events: ['label_added'] }, checkpoint: MARK });
+    expect(calls.history).toEqual([{ startHistoryId: '4000', types: ['labelAdded'] }]);
+    expect(calls.labels).toBe(0);
+    expect(result.events.map((e) => e.idempotencyKey)).toEqual(['gmail:label:m1:Label_deals']);
+  });
+
+  it('keeps the inbox default for arrivals beside it', async () => {
+    const { source, calls } = pollWith({ messages: [] });
+    await source.getEvents({ config: { events: ['message_received', 'label_added'] }, checkpoint: MARK });
+    expect(calls.history).toEqual([
+      { startHistoryId: '4000', labelId: 'INBOX', types: ['messageAdded'] },
+      { startHistoryId: '4000', types: ['labelAdded'] },
+    ]);
+  });
+
+  it('takes a user label by its name, looked up once, reading history by its id and searching by its name', async () => {
+    const { source, calls } = pollWith({
+      messages: [wireMessage('m1', ['Label_deals'])],
+      history: { Label_deals: [{ added: [], labelled: [labelled('m1', 'Label_deals', '4001')], historyId: '5000' }] },
+      search: [{ id: 'm1', threadId: 't' }],
+    });
+    const result = await source.getEvents({
+      config: { events: ['label_added'], labels: ['Deals', 'INBOX'], query: 'from:acme.com' },
+      checkpoint: MARK,
+    });
+    expect(calls.labels).toBe(1);
+    expect(calls.history.map((c) => c.labelId)).toEqual(['Label_deals', 'INBOX']);
+    expect(calls.list[0]?.query).toBe('{label:Deals label:INBOX} from:acme.com');
+    expect(result.events.map((e) => e.payload)).toMatchObject([{ addedLabel: 'Label_deals' }]);
+  });
+
+  it('fails the poll on a label the mailbox does not have, naming the ones it does', async () => {
+    const { source } = pollWith({ messages: [] });
+    await expect(source.getEvents({ config: { labels: ['Dealz'] }, checkpoint: MARK })).rejects.toThrow(
+      /'Dealz', which nemo@example.com does not have — its labels are Deals, Other/,
+    );
   });
 });

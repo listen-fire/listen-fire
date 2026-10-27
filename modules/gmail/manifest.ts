@@ -4,7 +4,7 @@
 
 import type { AdapterManifest } from 'movement-engine/public/adapter';
 
-import { GMAIL_SEARCH_CEILING, GMAIL_WRITE_RULE } from './schema';
+import { GMAIL_DRAFT_RULE, GMAIL_SEARCH_CEILING, GMAIL_WRITE_RULE } from './schema';
 import { GMAIL_ADAPTER_TYPE, GMAIL_MESSAGE_RECEIVED_EVENT, GMAIL_SUBSCRIBABLE_EVENTS } from './types';
 
 const GMAIL_HANDBOOK_CONTENT = `Gmail is ONE connected mailbox — a real Google Workspace address the connection is signed in as. It is not the forwarding address: that one only ever sees mail somebody sent to it, while this reads the inbox itself.
@@ -17,6 +17,18 @@ listen to gmail { query: "from:@acme.com" } fire triage
 
 A listener fires once per message that has arrived since the last look, a minute or so behind. \`query\` is a Gmail search written exactly as you would type it into Gmail's own search box, and it narrows what is delivered; \`every\` (for example \`every: 5m\`) overrides the one-minute default. \`labels\` says which arrivals count — mail landing in the inbox unless you say otherwise. Write \`labels: ["INBOX", "SPAM"]\` when mail you must not miss can land in Spam, such as cold inbound. The FIRST look sets the mark and delivers nothing, so going live never replays the back catalogue — walk \`Messages\` when you want history.
 
+### running when a message is labelled
+
+\`\`\`
+listen to gmail { events: ["label_added"], labels: ["Deals"] } fire file_deal
+
+function file_deal(msg: <gmail-[:Message]->>) {
+  which = msg.\`Added Label\`
+}
+\`\`\`
+
+\`label_added\` fires once per message and label when one of the listen's \`labels\` is added to a message already in the mailbox — a person filing mail, or a filter doing it later. It delivers the message, with \`Added Label\` set to the id of the label added. Name a user label as you see it in Gmail (\`"Deals"\`) or by its id; a label the mailbox does not have fails the listener, naming the ones it has. With NO \`labels\`, \`label_added\` fires for any of the mailbox's own labels and never for Gmail's (inbox, unread, starred, important, sent, draft, spam, trash, chat, the category tabs) — those change as mail is read and filed. \`query\` narrows these too. A message ARRIVING with the label is \`message_received\`, not this; ask for both with \`events: ["message_received", "label_added"]\`. Removing a label and adding it again does not fire twice. After a long quiet spell (Gmail forgets the mark after about a week) the labels added in the gap are skipped, never delivered late as new.
+
 ### reading the message
 
 \`\`\`
@@ -26,7 +38,7 @@ function triage(msg: <gmail-[:Message]->>) {
 }
 \`\`\`
 
-\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are Gmail's label ids — \`INBOX\`, \`UNREAD\` and the rest in capitals, a user label by its own name.
+\`Body\` is the one to reach for: it is the plain text, derived from the HTML when the message carried only HTML. \`Plain Body\` and \`HTML Body\` are there when you need the alternative that actually arrived. \`From\` is the whole header, display name included; \`To\` and \`Cc\` are lists of addresses. \`Labels\` are Gmail's label ids — \`INBOX\`, \`UNREAD\` and the rest in capitals, a user label by the id Gmail gave it (\`Label_12\`). A listener's \`labels\` also take a user label by its name.
 
 ### searching the mailbox
 
@@ -63,14 +75,26 @@ ${GMAIL_WRITE_RULE} So a reply names only what it says: it answers whoever sent 
 
 Mail always leaves as the connected mailbox — \`From\` is not writable, because that address is the only one this deployment is allowed to be.
 
+### drafts
+
+\`\`\`
+draft = write mail-[:Drafts]-> { To: ["rita@acme.com"], Subject: "Your Q3 figures", Body: "For Henry to check." }
+\`\`\`
+
+\`\`\`
+reply = write msg-[:Drafts]-> { Body: "Looking now." }
+\`\`\`
+
+${GMAIL_DRAFT_RULE} A draft takes the fields a send does, \`Files\` included, and needs none of them. The write hands back \`Id\`, \`Message Id\` and \`Thread Id\`. A mailbox signed in without drafts refuses the write and says how to sign in again with them.
+
 ### what this connection cannot do
 
-It reads mail and sends mail. It can NEVER label, archive, delete, mark as read, or touch a draft — the two scopes it holds are read and send, so those are not features waiting to be built but things the mailbox has not granted. Say so rather than working around it. A message that is edited or re-labelled afterwards does not fire again: arrival is the only event here, and nothing fires on mail this mailbox sends. Reading always works; SENDING works only where the installation enabled it, and a mailbox without it refuses a send saying so, with reads unaffected — so a send failing never means the mailbox is disconnected. An installation may also limit which addresses can be connected at all.`;
+It reads mail, sends mail and keeps drafts. It can NEVER label, archive, delete or mark as read — the scopes it holds are read, send and (where enabled) compose, so those are not features waiting to be built but things the mailbox has not granted. Say so rather than working around it. Arrival and a label being added are the only events; nothing fires on an edit, on a label removed, or on mail this mailbox sends. Reading always works; SENDING works only where the installation enabled it, and DRAFTS only where the mailbox was signed in with drafts enabled; a mailbox without either refuses that write saying so, with reads unaffected — so a write failing never means the mailbox is disconnected. An installation may also limit which addresses can be connected at all.`;
 
 /**
  * Static manifest. A polled source AND a target: `createRecord` sends as the
  * mailbox, along the root's `Messages` edge for new mail and along a message's
- * `Replies` edge for a reply.
+ * `Replies` edge for a reply, and keeps a Draft along either's `Drafts` edge.
  */
 export const GMAIL_MANIFEST: AdapterManifest = {
   adapterType: GMAIL_ADAPTER_TYPE,
@@ -79,15 +103,17 @@ export const GMAIL_MANIFEST: AdapterManifest = {
   category: 'Email',
   description:
     'One Google Workspace mailbox, read and written by automations. Run when ' +
-    'mail arrives, search the inbox, read a message with its attachments, and ' +
-    'send or reply as the mailbox. Connected by signing in as that mailbox, so ' +
-    'the connection reaches it and no other address; sending is available only ' +
-    'where the installation enabled it.',
+    'mail arrives or a message is labelled, search the inbox, read a message ' +
+    'with its attachments, send or reply as the mailbox, and leave drafts. ' +
+    'Connected by signing in as that mailbox, so the connection reaches it and ' +
+    'no other address; sending is available only where the installation ' +
+    'enabled it, and drafts only where the sign-in enabled them.',
   authoringHints:
-    'Gmail reads and sends, and does nothing else: no labelling, archiving, ' +
-    'deleting or drafts at all — those scopes were never granted. Reading ' +
+    'Gmail reads, sends and keeps drafts, and does nothing else: no labelling, ' +
+    'archiving or deleting at all — those scopes were never granted. Reading ' +
     'always works; a mailbox whose installation did not enable sending refuses ' +
     'a send outright and says so, and that never means reads are broken too. ' +
+    `${GMAIL_DRAFT_RULE} ` +
     'Read `Body` ' +
     'for what a message says; `Plain Body` and `HTML Body` are the alternatives ' +
     `as they arrived. ${GMAIL_WRITE_RULE} A send sets \`To\`, \`Subject\` and ` +
@@ -95,23 +121,31 @@ export const GMAIL_MANIFEST: AdapterManifest = {
     'Body reach Gmail’s own search; a walk with no WHERE stops at ' +
     `${GMAIL_SEARCH_CEILING} messages, since each one costs a request. A ` +
     'listener’s `query` option is a Gmail search string written exactly as ' +
-    'in Gmail’s search box; its `labels` option (Gmail label ids, default ' +
+    'in Gmail’s search box; its `labels` option (Gmail labels by name or id, default ' +
     '`["INBOX"]`) says which arrivals count, so add `"SPAM"` when mail that ' +
-    'must not be missed can land in Spam. The first poll delivers nothing.',
+    'must not be missed can land in Spam. `events: ["label_added"]` fires ' +
+    'instead when one of those labels is added to a message already there, ' +
+    'once per message and label, with `Added Label` set; with no `labels` it ' +
+    'counts the mailbox’s own labels only, never Gmail’s system ones. The first poll ' +
+    'delivers nothing.',
   handbookSection: {
     title: 'Gmail: one connected mailbox',
     content: GMAIL_HANDBOOK_CONTENT,
   },
   triggerExpectation:
-    'One kind: `message_received`. It fires once per message that has ARRIVED ' +
-    'in the mailbox since the last poll, about a minute behind, narrowed by the ' +
-    '`query` listen option (a Gmail search string). The first poll sets the ' +
-    'mark and emits nothing, so going live never replays the back catalogue. It ' +
-    'reads mail arriving in the INBOX by default — widen with the `labels` ' +
-    'listen option (e.g. `labels: ["INBOX", "SPAM"]` to include Spam), and ' +
-    'narrow with `query`. A message that is later edited, ' +
-    're-labelled or replied to does NOT fire again: arrival is the only event ' +
-    'Gmail offers here. Nothing fires on mail this mailbox SENDS.',
+    'Two kinds. `message_received` (the default) fires once per message that ' +
+    'has ARRIVED in the mailbox since the last poll, about a minute behind, ' +
+    'narrowed by the `query` listen option (a Gmail search string). It reads ' +
+    'mail arriving in the INBOX by default — widen with the `labels` listen ' +
+    'option (e.g. `labels: ["INBOX", "SPAM"]` to include Spam). `label_added` ' +
+    '(`events: ["label_added"]`) fires once per message and label when one of ' +
+    'the `labels` is added to a message already in the mailbox, delivering the ' +
+    'message with `Added Label` set; with no `labels` it counts any user ' +
+    'label, never a Gmail system one. The first poll sets the mark and emits ' +
+    'nothing, so going live never replays the back catalogue; after Gmail ' +
+    'forgets the mark (about a quiet week) label additions in the gap are ' +
+    'skipped, never delivered late. Nothing fires on an edit, a label removed, ' +
+    'or mail this mailbox SENDS.',
   supportedTriggers: ['poll'],
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'getFieldValue', 'getRelated',
@@ -143,6 +177,7 @@ export const GMAIL_MANIFEST: AdapterManifest = {
         { template: 'When a message arrives matching `{query}`' },
         { template: 'When a message arrives in the mailbox' },
       ],
+      label_added: [{ template: 'When a message is labelled' }],
     },
   },
 };
