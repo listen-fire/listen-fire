@@ -30,7 +30,7 @@ async function handle(embedding: Embedding, req: IncomingMessage): Promise<[numb
   if (req.method === 'POST' && path.length === 1 && path[0] === 'customers') {
     const { tenant, apiKey, fields } = json(body);
     if (typeof tenant !== 'string' || typeof apiKey !== 'string') return [400, { error: 'expected { tenant, apiKey, fields? }' }];
-    embedding.addCustomer(tenant, apiKey, fieldDefinitions(fields));
+    await embedding.addCustomer(tenant, apiKey, fieldDefinitions(fields));
     return [201, { tenant }];
   }
   if (req.method === 'POST' && path.length === 1 && path[0] === 'tick') return [200, { runs: await embedding.tick() }];

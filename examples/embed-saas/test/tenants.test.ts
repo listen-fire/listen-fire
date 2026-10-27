@@ -35,10 +35,10 @@ listen to app { events: ["company.created"] } fire file_under
 const ACME_FIELDS = [{ name: 'Stage', options: ['Lead', 'Customer'] }, { name: 'Note' }];
 const GLOBEX_FIELDS = [{ name: 'Stage', options: ['Prospect', 'Partner'] }, { name: 'Region' }];
 
-function embedding(): Embedding {
+async function embedding(): Promise<Embedding> {
   const e = new Embedding({ models: fakeModels() });
-  e.addCustomer('acme', 'acme-key', ACME_FIELDS);
-  e.addCustomer('globex', 'globex-key', GLOBEX_FIELDS);
+  await e.addCustomer('acme', 'acme-key', ACME_FIELDS);
+  await e.addCustomer('globex', 'globex-key', GLOBEX_FIELDS);
   return e;
 }
 
@@ -70,7 +70,7 @@ test('each tenant describes its own fields, a select with its own options', asyn
 });
 
 test("an option valid for one tenant is refused for the other, on save; each tenant's own passes", async () => {
-  const saas = embedding();
+  const saas = await embedding();
   assert.deepEqual(await saas.save('acme', 'file', stageAs('Lead')), { saved: true, listens: 1 });
   assert.deepEqual(await saas.save('globex', 'file', stageAs('Partner')), { saved: true, listens: 1 });
 
@@ -141,10 +141,10 @@ after(async () => {
 });
 
 test("a post through the ready-made Slack module lands in that tenant's workspace only", async () => {
-  const saas = embedding();
+  const saas = await embedding();
   // Each customer's own bot token, and its own workspace (the fake's base URL).
-  saas.connectSlack('acme', { accessToken: 'xoxb-acme', baseUrl: `${acmeSlack.url}/slack/` });
-  saas.connectSlack('globex', { accessToken: 'xoxb-globex', baseUrl: `${globexSlack.url}/slack/` });
+  await saas.connectSlack('acme', { accessToken: 'xoxb-acme', baseUrl: `${acmeSlack.url}/slack/` });
+  await saas.connectSlack('globex', { accessToken: 'xoxb-globex', baseUrl: `${globexSlack.url}/slack/` });
   assert.deepEqual(await saas.save('acme', 'announce', ANNOUNCE), { saved: true, listens: 1 });
 
   const before = await messagesIn(globexSlack);
@@ -156,7 +156,7 @@ test("a post through the ready-made Slack module lands in that tenant's workspac
 });
 
 test('a customer that has not connected Slack cannot save a movement that imports it', async () => {
-  const saas = embedding();
+  const saas = await embedding();
   const refused = await saas.save('globex', 'announce', ANNOUNCE);
   assert.equal(refused.saved, false);
   assert.match(refused.saved ? '' : refused.problems.join('\n'), /MOV_IMPORT_UNKNOWN.*'slack'/);

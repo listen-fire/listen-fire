@@ -78,7 +78,7 @@ test('a movement that does not check is refused on save, saying why', async () =
 
 test('a run past its step limit is stopped', async () => {
   const embedding = new Embedding({ models: fakeModels(), limits: { ...DEFAULT_LIMITS, maxSteps: 2 } });
-  embedding.addCustomer('acme', 'acme-key', NOTE);
+  await embedding.addCustomer('acme', 'acme-key', NOTE);
   assert.equal((await embedding.save('acme', 'welcome', WELCOME)).saved, true);
   const [run] = await embedding.fire('acme', { payload: { id: 'company-1', Name: 'Vireo' }, externalId: 'company-1', eventType: 'company.created', tag: 'company.created', recordType: 'Company' });
   assert.equal(run.outcome.ok, false);
@@ -96,7 +96,7 @@ function twice(company: <app-[:Company]->>) {
 listen to app { events: ["company.created"] } fire twice
 `;
   const embedding = new Embedding({ models: fakeModels(), limits: { ...DEFAULT_LIMITS, costCapMicrodollars: FAKE_CALL_MICRODOLLARS / 2 } });
-  embedding.addCustomer('acme', 'acme-key', NOTE);
+  await embedding.addCustomer('acme', 'acme-key', NOTE);
   assert.equal((await embedding.save('acme', 'twice', spend)).saved, true);
   const [run] = await embedding.fire('acme', { payload: { id: 'company-1', Name: 'Vireo' }, externalId: 'company-1', eventType: 'company.created', tag: 'company.created', recordType: 'Company' });
   // One call spent past the cap: the second is never made. On a host that can
@@ -110,7 +110,7 @@ listen to app { events: ["company.created"] } fire twice
 test('a run that sleeps parks, and the next tick past its wake steps it on to its write', async () => {
   let now = new Date('2026-10-17T09:00:00.000Z');
   const embedding = new Embedding({ models: fakeModels(), now: () => now });
-  embedding.addCustomer('acme', 'acme-key', NOTE);
+  await embedding.addCustomer('acme', 'acme-key', NOTE);
   const followUp = `${PRELUDE}
 function follow_up(company: <app-[:Company]->>) {
   await sleep(1h)

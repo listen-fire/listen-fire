@@ -16,7 +16,6 @@
   "dependencies": {
     "@listen-fire/anthropic": "workspace:*",
     "@listen-fire/engine": "workspace:*",
-    "@listen-fire/engine-contracts": "workspace:*",
     "@listen-fire/module-kit": "workspace:*",
     "@listen-fire/slack": "workspace:*",
     "tsx": "4.21.0"
