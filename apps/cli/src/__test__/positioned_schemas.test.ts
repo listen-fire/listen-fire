@@ -66,3 +66,37 @@ test('a field only another position has is refused at check', () => {
   assert.equal(check.code, 1, check.out);
   assert.match(check.out, /MOV_WRITE_UNKNOWN_FIELD/);
 });
+
+// A listen is polled as its connection: in the position its construction
+// names, under a checkpoint of its own, so two connections that differ only in
+// position are two sources.
+test('a listen on a positioned connection polls in its own position, with a checkpoint of its own', () => {
+  const dir = notesProject('  write alpha-[:Note]-> { Title: company.Name }');
+  writeFileSync(
+    join(dir, 'movements/seen.mvt'),
+    `import { notes } from adapters
+import { team_notes } from credentials
+
+alpha = connect notes using team_notes { space: "alpha" }
+beta = connect notes using team_notes { space: "beta" }
+
+function seen_alpha(n: <alpha-[:Note]->>) {
+  fail("alpha saw \${n.Title}")
+}
+
+function seen_beta(n: <beta-[:Note]->>) {
+  fail("beta saw \${n.Heading}")
+}
+
+listen to alpha fire seen_alpha
+listen to beta fire seen_beta
+`,
+  );
+  const check = lf(dir, 'check');
+  assert.equal(check.code, 0, check.out);
+  const polled = () => calls(dir).filter((c) => c.method === 'poll').map((c) => `${c.space} ${JSON.stringify((c as { checkpoint?: unknown }).checkpoint)}`);
+  assert.match(lf(dir, 'run', '--poll', 'seen_alpha').out, /alpha saw alpha-1/);
+  assert.match(lf(dir, 'run', '--poll', 'seen_beta').out, /beta saw beta-1/);
+  assert.match(lf(dir, 'run', '--poll', 'seen_alpha').out, /alpha saw alpha-2/);
+  assert.deepEqual(polled(), ['alpha null', 'beta null', 'alpha 1']);
+});

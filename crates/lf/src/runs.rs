@@ -17,7 +17,7 @@ use crate::catalog::{ConnectionSchemas, catalog_of};
 use crate::check::{LOCAL_TENANT, check_parsed, describe_external, missing_line};
 use crate::documents::Documents;
 use crate::loop_guard::{Answer, Asked, Current, LoopGuard, Wrote};
-use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_as, scan_externals, start_externals};
+use crate::externals::{External, Reach, RunningExternal, needed_externals, rpc, rpc_in, scan_externals, start_externals};
 use crate::module_hosts::{Hold, Keep, ModuleProcess};
 use movement_engine::executor::join_all;
 use crate::json::{Js, Obj};
@@ -108,7 +108,15 @@ impl FileSet {
             let running = self.running.iter().find(|r| !r.is_plugin() && r.external.manifest.name == listen.adapter && r.poll_interval_seconds.is_some())?;
             let file = self.file(&listen.file);
             let config = Js::Obj(listen.config.clone()).to_json();
-            Some((listen, &**running, format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name)))
+            let subscription = format!("poll:{}:{}:{}:{config}", listen.adapter, file.name, listen.movement_name);
+            // A positioned connection's listen is polled under a key of its
+            // own; one in no position keeps the key it always had, and with
+            // it the checkpoint an earlier lf kept.
+            let subscription = match running.position_settings(&listen.args) {
+                Some(position) => format!("{subscription}:{position}"),
+                None => subscription,
+            };
+            Some((listen, &**running, subscription))
         })
     }
 }
@@ -668,7 +676,7 @@ impl Session {
             Some(name) => Some(credentials.iter().find(|c| c.name == *name).ok_or_else(|| format!("no credential \"{name}\" in the secrets file"))?),
             None => credential_for(credentials, &listen.adapter),
         };
-        let raw = rpc_as(running, credentials, credential, LOCAL_TENANT, "poll", params).await?;
+        let raw = rpc_in(running, credentials, credential, LOCAL_TENANT, "poll", params, running.position_settings(&listen.args)).await?;
         let answer = wire_results::check("poll", &listen.adapter, &raw)?;
         let mut fired = Fired::default();
         for event in answer.get("events").and_then(Js::as_array).unwrap_or(&[]) {
@@ -1968,7 +1976,7 @@ mod tests {
     }
 
     fn polled(config: Obj) -> Listen {
-        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None }
+        Listen { file: "alerts".into(), adapter: "system".into(), config, movement_name: "alerts".into(), credential: None, args: Vec::new() }
     }
 
     #[test]

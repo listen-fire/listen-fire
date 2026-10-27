@@ -28,6 +28,10 @@ pub struct Listen {
     /// name in the secrets (an import alias resolved); None when the
     /// construction names none, and for a host unit.
     pub credential: Option<String>,
+    /// Its construction's other arguments (`{ base: "CRM" }`), by name, as
+    /// their source text: those the module declares as position args say
+    /// which position the connection is in (RunningExternal::position_settings).
+    pub args: Vec<(String, String)>,
 }
 
 impl Listen {
@@ -106,8 +110,8 @@ const CREDENTIAL_ARG: &str = "credentials";
 pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Listen> {
     let mut listens = Vec::new();
     let mut originals: HashMap<String, String> = HashMap::new();
-    // Each instance's adapter and credential, by the instance's name.
-    let mut constructions: HashMap<String, (String, Option<String>)> = HashMap::new();
+    // Each instance's adapter, credential and other arguments, by the instance's name.
+    let mut constructions: HashMap<String, (String, Option<String>, Vec<(String, String)>)> = HashMap::new();
     let mut declared = Vec::new();
     for statement in &program.statements {
         match statement {
@@ -126,7 +130,10 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
                         .iter()
                         .find(|a| a.name == CREDENTIAL_ARG)
                         .and_then(|a| movement_parser::catalog::helpers::unwrap_credential_arg(&a.value.raw));
-                    constructions.insert(assign.name.clone(), (adapter, credential));
+                    let mut args: Vec<(String, String)> =
+                        construct.args.iter().filter(|a| a.name != CREDENTIAL_ARG).map(|a| (a.name.clone(), a.value.raw.clone())).collect();
+                    args.sort();
+                    constructions.insert(assign.name.clone(), (adapter, credential, args));
                 }
             }
             Statement::Listen(listen) => declared.push(listen),
@@ -136,7 +143,7 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
     for listen in declared {
         // A unit the file does not bind itself is the host's own.
         let unit = movement_parser::version::RUN_HOST_UNITS.iter().find(|u| **u == listen.instance).map(|u| u.to_string());
-        let Some((adapter, credential)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None))) else { continue };
+        let Some((adapter, credential, args)) = constructions.get(&listen.instance).cloned().or(unit.map(|u| (u, None, Vec::new()))) else { continue };
         let credential = credential.map(|local| originals.get(&local).cloned().unwrap_or(local));
         let mut config = Obj::new();
         for arg in &listen.config {
@@ -148,6 +155,7 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
             config,
             movement_name: listen.movement.clone(),
             credential,
+            args,
         });
     }
     listens

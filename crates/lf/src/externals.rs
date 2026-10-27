@@ -315,6 +315,23 @@ impl RunningExternal {
             .collect()
     }
 
+    /// The position a construction with `args` (source text, by name) puts a
+    /// connection of this module in: each declared position arg it gives a
+    /// value, as the `settings` a call in that position carries. None for a
+    /// construction in no position.
+    pub fn position_settings(&self, args: &[(String, String)]) -> Option<serde_json::Value> {
+        let declared = self.position_args();
+        let settings: serde_json::Map<String, serde_json::Value> = declared
+            .iter()
+            .filter_map(|d| {
+                let (_, raw) = args.iter().find(|(name, _)| *name == d.name)?;
+                let value = unquoted(raw);
+                (!value.is_empty()).then(|| (d.name.clone(), serde_json::Value::String(value)))
+            })
+            .collect();
+        (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
+    }
+
     /// The package tag its plugins are imported from.
     pub fn plugin_package(&self) -> Option<&str> {
         self.plugins.as_ref()?.get("package")?.as_str()
@@ -368,6 +385,15 @@ pub fn plugin_target<'r>(running: &'r [std::rc::Rc<RunningExternal>], plugin: &s
 /// One call to a running external, under the credential its secrets name.
 pub async fn rpc(running: &RunningExternal, credentials: &Credentials, tenant: &str, method: &str, params: serde_json::Value) -> Result<Js, String> {
     rpc_as(running, credentials, credential_for(credentials, &running.external.manifest.name), tenant, method, params).await
+}
+
+/// A position arg's source text as its value: a quoted string loses its quotes.
+fn unquoted(raw: &str) -> String {
+    let trimmed = raw.trim();
+    match trimmed.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
+        None => trimmed.to_string(),
+    }
 }
 
 /// One call made as `credential` (one connection's), or as none.

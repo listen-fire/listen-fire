@@ -194,28 +194,10 @@ fn positions_of<'a>(running: &RunningExternal, imported: &'a Imported) -> Vec<(&
     for construction in imported.constructions.iter().filter(|c| manifest.name == c.adapter || manifest.module.as_deref() == Some(c.adapter.as_str())) {
         let args: Args = JsMap(construction.args.iter().cloned().collect());
         let key = position_key(&construction_args, Some(&args));
-        if key.is_empty() {
-            continue;
-        }
-        let settings = declared
-            .iter()
-            .filter_map(|d| {
-                let value = unquoted(args.get(&d.name)?);
-                (!value.is_empty()).then(|| (d.name.clone(), json!(value)))
-            })
-            .collect();
-        positions.push((construction, Position { key, settings: serde_json::Value::Object(settings) }));
+        let Some(settings) = running.position_settings(&construction.args).filter(|_| !key.is_empty()) else { continue };
+        positions.push((construction, Position { key, settings }));
     }
     positions
-}
-
-/// A position arg's source text as its value: a quoted string loses its quotes.
-fn unquoted(raw: &str) -> String {
-    let trimmed = raw.trim();
-    match trimmed.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
-        Some(inner) => inner.replace("\\\"", "\"").replace("\\\\", "\\"),
-        None => trimmed.to_string(),
-    }
 }
 
 /// `describeExternal`: its entry points and one `describe` per entry point,

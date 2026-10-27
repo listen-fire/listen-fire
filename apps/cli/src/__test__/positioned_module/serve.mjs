@@ -2,7 +2,8 @@
 // `Note` with a field of its own (`Title` in "alpha", `Heading` in "beta"); one
 // that names none has no types. Every describe and every create is logged to
 // calls.jsonl in its working folder with the space it was asked in, as the
-// request's `settings` carry it.
+// request's `settings` carry it. It is a polled source too: each poll of a
+// space logs the checkpoint it was handed and returns one note of that space.
 // Listens where lf says (`MODULE_SOCKET`, else `PORT`).
 
 import { createServer } from 'node:http';
@@ -13,9 +14,12 @@ const FIELD = { alpha: 'Title', beta: 'Heading' };
 const manifest = {
   protocolVersion: 2,
   adapterType: 'notes',
-  supportedTriggers: [],
+  supportedTriggers: ['poll'],
   runtimeCapabilities: { traversal: { incoming: false, edgeProperties: false }, resources: false },
-  methods: ['manifest', 'listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'deleteRecord'],
+  methods: ['manifest', 'listEntryPoints', 'describe', 'resolveEntity', 'getFieldValue', 'getRelated', 'createRecord', 'updateRecord', 'deleteRecord', 'poll'],
+  poll: { intervalSeconds: 60 },
+  webhookEventTypeId: 'Note',
+  subscribableEvents: ['note.added'],
   credentials: [{ name: 'workspace', kind: 'static', fields: [{ name: 'workspace', secret: false }] }],
   positionArgs: [{ name: 'space', optionsFrom: 'Space', label: 'Space' }],
 };
@@ -27,7 +31,7 @@ function answer(method, params, space) {
       return manifest;
     case 'listEntryPoints':
       if (space === undefined) return [];
-      return [{ typeId: 'Note', displayName: 'Note', writable: true, readable: false }];
+      return [{ typeId: 'Note', displayName: 'Note', writable: true, readable: false, fires: true }];
     case 'describe': {
       log({});
       const field = FIELD[space];
@@ -39,8 +43,14 @@ function answer(method, params, space) {
     case 'createRecord':
       log({ fields: params.fields });
       return { adapterType: 'notes', externalId: `${space}-1`, recordType: 'Note', data: params.fields };
+    case 'poll': {
+      log({ checkpoint: params.checkpoint ?? null });
+      const at = typeof params.checkpoint === 'number' ? params.checkpoint + 1 : 1;
+      const id = `${space}-${at}`;
+      return { events: [{ payload: { id, [FIELD[space]]: id }, externalId: id, idempotencyKey: id, eventType: 'note.added' }], checkpoint: at };
+    }
     case 'getFieldValue':
-      return null;
+      return params.position?.identity?.data?.[params.fieldId] ?? null;
     case 'getRelated':
       return [];
     default:

@@ -21,6 +21,7 @@ named in [`RELEASING.md`](RELEASING.md).
 <!-- add merged PRs here -->
 
 - `lf` types a connection that names a position (`connect airtable using acme { base: "CRM" }`): the module's `positionArgs` reach the catalog and every call, so an Airtable base's tables are checked (unknown fields, and with `@listen-fire/airtable`, select choices) under `lf` as they are on the platform. A module declares them in its manifest (`positionArgs`).
+- `lf` polls a listen on a positioned connection (`connect notes using X { space: "alpha" }`) in that position, under a checkpoint of its own, so two connections that differ only in position are two sources. A listen on a connection with no position keeps its checkpoint. Webhook registration does not carry the position yet.
 - The checker refuses an unknown value in two more places it already refused one elsewhere (`MOV_ENUM_UNKNOWN_VALUE`): each text literal of a list written into a list of enum (`Tags: ["Hot", "Cold"]` into an Airtable multiple select), and a comparison in a WHERE written inside a parameter's type (`<crm-[c:Companies WHERE c.Stage == "Lost"]->>`). A program that checks today and fails now was writing or matching a value the field cannot hold.
 
 ## [0.12.9] - 2026-10-26
