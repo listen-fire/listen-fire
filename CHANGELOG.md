@@ -19,6 +19,7 @@ named in [`RELEASING.md`](RELEASING.md).
 ## [Unreleased]
 
 <!-- add merged PRs here -->
+- The checker holds every value handed to a plugin to the type the plugin declares for it: `fetchUrl(5)` or a text where a list is taken is refused with `MOV_CALL_ARG_TYPE`, where it used to pass and fail at run. A text written in place against a plugin's option set is judged as that option.
 
 ## [0.12.9] - 2026-10-26
 

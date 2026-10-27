@@ -323,6 +323,7 @@ impl Checker<'_> {
                 value: typed.ty.as_ref(),
                 held: typed.held,
                 may_hold: typed.may_hold.as_ref(),
+                literal: crate::families::arg_fit::string_literal_of(typed.expr.as_ref()),
                 span: arg.value.span,
             });
         }

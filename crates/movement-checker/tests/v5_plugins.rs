@@ -11,10 +11,11 @@ const CATALOG: &str = r#"{"adapters":{},"credentials":{},"plugins":{
   "fetch_url":{"args":["url","email"],"priced":false,"requiredArgs":["url"],"argTypes":{"url":"text","email":"text"},"effects":{},"output":{"kind":"value","type":"text"}},
   "research":{"args":["name","context","questions"],"priced":false,"requiredArgs":["name"],"argTypes":{"name":"text","context":"text","questions":"text"},"effects":{},"output":{"kind":"record","fields":{"summary":"text"}}},
   "vc_url_retrieval":{"args":["email"],"priced":false,"fedArgs":[{"name":"text","required":true}],"argTypes":{"text":"text","email":"text"},"effects":{},"output":{"kind":"value","type":"text"}},
+  "scorer":{"args":["subject","threshold","labels","size"],"priced":false,"requiredArgs":["subject","threshold","labels"],"argTypes":{"subject":"text","threshold":"number","labels":{"kind":"list","of":"text"},"size":{"kind":"enum","options":["a4","letter"]}},"effects":{},"output":{"kind":"value","type":"number"}},
   "linkedin_enrichment":{"args":["depth"],"priced":false,"fedArgs":[{"name":"text","required":true}],"requiredArgs":["depth"],"argTypes":{"depth":"number"}}
 }}"#;
 
-const HEAD5: &str = "import { fetchUrl, research, vcUrlRetrieval } from plugins\n\n";
+const HEAD5: &str = "import { fetchUrl, research, scorer, vcUrlRetrieval } from plugins\n\n";
 
 fn check(source: &str) -> Vec<Diagnostic> {
     let catalog = CatalogSnapshot::load(CATALOG).unwrap();
@@ -146,8 +147,9 @@ fn a_through_stage_takes_its_arguments_by_position_too() {
     assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment(2)"))), Vec::<Diagnostic>::new());
     assert_eq!(stage_diagnostics(check(&stage("research(n, { context: s })"))), Vec::<Diagnostic>::new());
     assert_eq!(stage_diagnostics(check(&stage("linkedinEnrichment"))).iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), vec!["MOV_THROUGH_ARG_MISSING"]);
-    // A stage is never fed by its author: the fed input is no positional parameter.
-    assert_eq!(stage_codes(&stage("linkedinEnrichment(u, 2)")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
+    // A stage is never fed by its author: the fed input is no positional
+    // parameter, so the text binds the number 'depth' and is refused too.
+    assert_eq!(stage_codes(&stage("linkedinEnrichment(u, 2)")), vec!["MOV_THROUGH_BAD_ARG".to_string(), "MOV_CALL_ARG_TYPE".to_string()]);
     assert_eq!(stage_codes(&stage("research(n, { name: s })")), vec!["MOV_THROUGH_BAD_ARG".to_string()]);
 }
 
@@ -180,4 +182,22 @@ fn a_record_value_handed_to_a_text_input_is_refused() {
     let may = codes(&current_form("  r = research(n, { context: s == \"\" ? { a: 1 } : s })"));
     assert_eq!(may, vec!["MOV_CALL_ARG_MAYBE_RECORD".to_string()]);
     assert_eq!(codes(&current_form("  r = research(n, { context: s })")), Vec::<String>::new());
+}
+
+#[test]
+fn a_plain_value_is_held_to_the_type_the_plugin_declares_for_its_place() {
+    // A number, a text, a list and a record literal, each against a
+    // parameter declaring another type: refused as a named argument is.
+    assert_eq!(codes(&current_form("  p = fetchUrl(5)")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&current_form("  x = scorer(s, \"high\", [s])")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&current_form("  x = scorer(s, 0.5, s)")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&current_form("  x = scorer([s], 0.5, [s])")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    assert_eq!(codes(&current_form("  r = research(n, { context: 5 })")), vec!["MOV_CALL_ARG_TYPE".to_string()]);
+    let refused = all(&current_form("  x = scorer(s, \"high\", [s])"));
+    assert!(refused[0].2.contains("'scorer' takes number for 'threshold'"), "{}", refused[0].2);
+    // A text written in place against an option set is that option.
+    assert_eq!(codes(&current_form("  x = scorer(s, 0.5, [s], { size: \"letter\" })")), Vec::<String>::new());
+    assert_eq!(codes(&current_form("  x = scorer(s, 0.5, [s], { size: \"legal\" })")), vec!["MOV_ENUM_UNKNOWN_VALUE".to_string()]);
+    // The types it declares are taken, a value read off another call included.
+    assert_eq!(codes(&current_form("  x = scorer(s, 0.5, [s, \"other\"])\n  y = scorer(fetchUrl(u), x, [])")), Vec::<String>::new());
 }

@@ -15,7 +15,7 @@ use movement_parser::catalog::types::{FieldType as SchemaFieldType, PluginOutput
 use crate::checker::Checker;
 use crate::codes;
 use crate::scope::SymbolId;
-use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, describe_field_type, holds_records, list_of, spell_held_steps, strip_absent};
+use crate::types::field::{CollectionOrder, HandleKinds, HeldHandle, HeldStep, Ty, describe_field_type, field_assignable, holds_records, list_of, spell_held_steps, strip_absent};
 use crate::types::position::{LocalNode, PlaneType, Position, ReturnShape, describe_position};
 
 /// What a plugin call's arguments are held to: the types it declares, by name.
@@ -188,7 +188,7 @@ impl Checker<'_> {
                         }
                         let record = shape.plane.pos.as_deref().cloned().or_else(|| crate::types::field::record_in(shape.plane.field.as_ref()).flatten());
                         let value = shape.plane.field.clone().or_else(|| shape.plane.pos.as_deref().map(|p| Ty::record(Some(p.clone()))));
-                        self.check_plugin_arg_value(PluginArg { callee, declared, name, record: record.as_ref(), value: value.as_ref(), held: None, may_hold: None, span: call.span });
+                        self.check_plugin_arg_value(PluginArg { callee, declared, name, record: record.as_ref(), value: value.as_ref(), held: None, may_hold: None, literal: None, span: call.span });
                     }
                 }
             }
@@ -196,7 +196,7 @@ impl Checker<'_> {
                 if is_structured_or_open(declared) {
                     let synthesised = self.check_node_literal(node, scope);
                     let value = synthesised.clone().map(|p| Ty::record(Some(p)));
-                    self.check_plugin_arg_value(PluginArg { callee, declared, name, record: synthesised.as_ref(), value: value.as_ref(), held: None, may_hold: None, span: node.span });
+                    self.check_plugin_arg_value(PluginArg { callee, declared, name, record: synthesised.as_ref(), value: value.as_ref(), held: None, may_hold: None, literal: None, span: node.span });
                     return;
                 }
                 self.refuse_plugin_record_in_place(callee, declared, arg);
@@ -207,7 +207,7 @@ impl Checker<'_> {
 
     /// `checkPluginArgValue`: a plugin argument's value against its declared type.
     pub fn check_plugin_arg_value(&mut self, arg: PluginArg) {
-        let PluginArg { callee, declared, name, record, value, held, may_hold, span } = arg;
+        let PluginArg { callee, declared, name, record, value, held, may_hold, literal, span } = arg;
         // Where a plugin takes a record at all (structured data, or no
         // declared type), it takes it as the WHOLE argument and is handed its
         // fields. A record anywhere inside that value reaches the plugin as
@@ -264,8 +264,27 @@ impl Checker<'_> {
             return;
         }
         let misplaced = held.or_else(|| if matches!(strip_absent(&declared_ty), Ty::File) { file_below_whole(may_hold.or(value)) } else { None });
-        let Some(misplaced) = misplaced else { return };
-        self.report(codes::CALL_ARG_TYPE, handle_in_typed_plugin_arg_message(callee, name, &declared_ty, &misplaced), span);
+        if let Some(misplaced) = misplaced {
+            self.report(codes::CALL_ARG_TYPE, handle_in_typed_plugin_arg_message(callee, name, &declared_ty, &misplaced), span);
+            return;
+        }
+        // The value itself against the declared type, as TypeScript holds an
+        // argument to its parameter; a text written in place against an
+        // option set is judged as that option.
+        if let Some(literal) = literal
+            && self.report_enum_literal(literal, strip_absent(&declared_ty), span)
+        {
+            return;
+        }
+        if let Some(value) = value
+            && !field_assignable(value, &declared_ty)
+        {
+            self.report(
+                codes::CALL_ARG_TYPE,
+                format!("'{callee}' takes {} for '{name}', and this is {}", describe_field_type(&declared_ty), describe_field_type(strip_absent(value))),
+                span,
+            );
+        }
     }
 
     /// `refuseRecordValueForText`: a record value (`{ … }`) that is, or may
@@ -341,6 +360,8 @@ pub struct PluginArg<'a> {
     pub held: Option<HeldHandle>,
     /// What the value may turn out to be, arm by arm.
     pub may_hold: Option<&'a Ty>,
+    /// The text written in place, which is its own type against an option set.
+    pub literal: Option<&'a str>,
     pub span: Span,
 }
 
