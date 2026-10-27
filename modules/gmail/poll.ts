@@ -10,6 +10,11 @@
 // so the checkpoint carries a second mark, the last seen time, and an expired
 // marker resyncs from that rather than leaving the listener dead forever.
 //
+// A listen that asks for `label_added` reads the labels added to messages
+// already in the mailbox from the SAME history read, under the same mark:
+// history ids are one sequence for every kind of change, so one checkpoint
+// covers both.
+//
 // History is exact but Gmail's SEARCH, which applies the listen's query, only
 // catches up eventually. An arrival the search does not admit yet rides the
 // checkpoint as pending and is re-checked on later ticks, so a slow index
@@ -23,14 +28,21 @@ import {
   GmailApiError,
   type GmailApiClient,
   type GmailHistoryAddition,
+  type GmailHistoryType,
+  type GmailLabelAddition,
   type GmailMessageRef,
 } from './api_client';
 import { decodeGmailMessage, type GmailMessageRecord } from './mime';
 import { anyGmailLabel, combineGmailQueries } from './filter';
 import {
+  GMAIL_ADDED_LABEL_FIELD,
+  GMAIL_LABEL_ADDED_EVENT,
+  GMAIL_LABEL_EVENT_TAG,
   GMAIL_MESSAGE_EVENT_TAG,
   GMAIL_MESSAGE_RECEIVED_EVENT,
+  GMAIL_SUBSCRIBABLE_EVENTS,
   type GmailCheckpoint,
+  type GmailEventKind,
   type GmailPendingArrival,
 } from './types';
 
@@ -127,6 +139,27 @@ export function listenLabels(config: unknown): string[] {
   return labels;
 }
 
+/**
+ * The kinds of event a listen asked for: its `events`, else arrivals alone
+ * (the declared default), so a listen written before label events existed
+ * neither reads nor receives them.
+ */
+export function listenKinds(config: unknown): ReadonlySet<GmailEventKind> {
+  const raw = typeof config === 'object' && config !== null ? Reflect.get(config, 'events') : undefined;
+  const named = (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []).filter(
+    (kind): kind is GmailEventKind => GMAIL_SUBSCRIBABLE_EVENTS.some((known) => known === kind),
+  );
+  return new Set(named.length > 0 ? named : [GMAIL_MESSAGE_RECEIVED_EVENT]);
+}
+
+/** The history kinds a listen's events need read. */
+function historyTypesOf(kinds: ReadonlySet<GmailEventKind>): GmailHistoryType[] {
+  return [
+    ...(kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT) ? (['messageAdded'] as const) : []),
+    ...(kinds.has(GMAIL_LABEL_ADDED_EVENT) ? (['labelAdded'] as const) : []),
+  ];
+}
+
 /** Gmail's `after:` takes whole epoch SECONDS, and is inclusive — so a resync
  *  asks from the last seen second and the caller drops what it already
  *  delivered. */
@@ -172,11 +205,13 @@ export class GmailPollSource {
       };
     }
 
-    const { refs, historyId, resynced } = await this.arrivals({
+    const kinds = listenKinds(input.config);
+    const { refs, labelled, historyId, resynced } = await this.changes({
       client,
       historyId: mark.historyId,
       lastSeenAt: mark.lastSeenAt,
       labels,
+      kinds,
       query,
       now,
     });
@@ -184,7 +219,8 @@ export class GmailPollSource {
     // Arrivals carried over from earlier ticks go through the same narrowing as
     // this tick's: one the search now admits is delivered now.
     const fresh = new Set(refs.map((ref) => ref.id));
-    const carried = (mark.pending ?? []).filter((entry) => !fresh.has(entry.id));
+    const watchesArrivals = kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT);
+    const carried = watchesArrivals ? (mark.pending ?? []).filter((entry) => !fresh.has(entry.id)) : [];
     const candidates = [...refs, ...carried.map((entry) => ({ id: entry.id }))];
 
     const { messages, unadmitted } = await this.fetchMessages({
@@ -213,8 +249,10 @@ export class GmailPollSource {
       ...(message.date !== null ? { occurredAt: message.date } : {}),
     }));
 
-    // Oldest first — a run processes the mail in the order it arrived.
+    // Oldest first — a run processes the mail in the order it arrived. Label
+    // additions follow, in the order history recorded them.
     events.sort((a, b) => (a.occurredAt ?? '').localeCompare(b.occurredAt ?? ''));
+    events.push(...(await this.labelEvents({ client, labelled, labels, query })));
 
     // `lastSeenAt` is the moment this poll LOOKED, not the newest message's own
     // date: a resync from it asks Gmail for everything since the last look,
@@ -229,41 +267,88 @@ export class GmailPollSource {
   }
 
   /**
-   * What has arrived since the mark.
+   * What has arrived, and which watched labels were added, since the mark.
    *
    * The normal path is Gmail's own history, which is cheap and exact. When
    * Gmail has DROPPED the marker — the 404 it gives after about a week of
-   * inactivity — the answer is a search from the last seen time instead, and
-   * every message it yields is flagged `resynced` so a run can tell that the
-   * "since" was approximate rather than exact.
+   * inactivity — arrivals come from a search from the last seen time instead,
+   * each flagged `resynced` so a run can tell that the "since" was approximate
+   * rather than exact. Label additions have no such search (a message's labels
+   * say what it carries, not when each was added), so a resync delivers NONE:
+   * the additions in the lost stretch are skipped, never replayed as new, and
+   * the mark restarts from the mailbox's current one.
    */
-  private async arrivals(input: {
+  private async changes(input: {
     client: GmailApiClient;
     historyId: string;
     lastSeenAt: string | undefined;
     labels: readonly string[];
+    kinds: ReadonlySet<GmailEventKind>;
     query: string | undefined;
     now: number;
-  }): Promise<{ refs: GmailMessageRef[]; historyId?: string; resynced: boolean }> {
+  }): Promise<{ refs: GmailMessageRef[]; labelled: GmailLabelAddition[]; historyId?: string; resynced: boolean }> {
     const { client } = input;
+    const types = historyTypesOf(input.kinds);
     try {
       const reads: LabelHistory[] = [];
       for (const labelId of input.labels) {
-        reads.push(await readLabelHistory({ client, startHistoryId: input.historyId, labelId }));
+        reads.push(await readLabelHistory({ client, startHistoryId: input.historyId, labelId, types }));
       }
-      return { ...takeArrivals(reads), resynced: false };
+      return {
+        ...takeChanges(reads, {
+          arrivals: input.kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT),
+          labels: input.kinds.has(GMAIL_LABEL_ADDED_EVENT) ? input.labels : [],
+        }),
+        resynced: false,
+      };
     } catch (error) {
       if (!(error instanceof GmailApiError) || error.failure !== 'history_expired') throw error;
     }
 
+    const profile = await client.getProfile();
+    if (!input.kinds.has(GMAIL_MESSAGE_RECEIVED_EVENT)) {
+      return { refs: [], labelled: [], historyId: profile.historyId, resynced: true };
+    }
     const sinceMs = input.lastSeenAt ? Date.parse(input.lastSeenAt) : NaN;
     const since = Number.isNaN(sinceMs) ? input.now - RESYNC_FALLBACK_MS : sinceMs;
-    const profile = await client.getProfile();
     const { messages } = await client.listMessages({
       ...searchOf({ labels: input.labels, terms: [afterTerm(since), input.query] }),
       maxResults: MAX_PER_TICK,
     });
-    return { refs: dedupe(messages), historyId: profile.historyId, resynced: true };
+    return { refs: dedupe(messages), labelled: [], historyId: profile.historyId, resynced: true };
+  }
+
+  /**
+   * One event per watched label added to a message, narrowed by the listen's
+   * query. The message existed before it was labelled, so the search has long
+   * caught up on it: one the query does not admit is excluded, not pending. A
+   * message deleted since it was labelled is skipped.
+   */
+  private async labelEvents(input: {
+    client: GmailApiClient;
+    labelled: GmailLabelAddition[];
+    labels: readonly string[];
+    query: string | undefined;
+  }): Promise<DiscriminableEvent[]> {
+    if (input.labelled.length === 0) return [];
+    const allowed = await this.narrow({ ...input, refs: input.labelled });
+    const fetched = new Map<string, GmailMessageRecord | null>();
+    const events: DiscriminableEvent[] = [];
+    for (const change of input.labelled) {
+      if (!allowed.has(change.id)) continue;
+      if (!fetched.has(change.id)) fetched.set(change.id, await messageOrGone(input.client, change.id));
+      const message = fetched.get(change.id);
+      if (message === undefined || message === null) continue;
+      events.push({
+        payload: { ...message, [GMAIL_ADDED_LABEL_FIELD]: change.label },
+        externalId: message.id,
+        // Once per message and label, whatever later ticks re-read.
+        idempotencyKey: `gmail:label:${message.id}:${change.label}`,
+        tag: GMAIL_LABEL_EVENT_TAG,
+        eventType: GMAIL_LABEL_ADDED_EVENT,
+      });
+    }
+    return events;
   }
 
   /**
@@ -328,6 +413,7 @@ export class GmailPollSource {
 /** One label's history since the mark, read page by page. */
 interface LabelHistory {
   added: GmailHistoryAddition[];
+  labelled: GmailLabelAddition[];
   /** The mailbox's marker as this read finished — only meaningful when it
    *  read to the end. */
   historyId?: string;
@@ -344,25 +430,30 @@ async function readLabelHistory(input: {
   client: GmailApiClient;
   startHistoryId: string;
   labelId: string;
+  types: readonly GmailHistoryType[];
 }): Promise<LabelHistory> {
   const added: GmailHistoryAddition[] = [];
+  const labelled: GmailLabelAddition[] = [];
   let pageToken: string | undefined;
   for (;;) {
     const page = await input.client.listHistory({
       startHistoryId: input.startHistoryId,
       labelId: input.labelId,
+      types: input.types,
       ...(pageToken !== undefined ? { pageToken } : {}),
     });
     added.push(...page.added);
+    labelled.push(...page.labelled);
     pageToken = page.nextPageToken;
     if (pageToken === undefined) {
       return {
         added,
+        labelled,
         ...(page.historyId !== undefined ? { historyId: page.historyId } : {}),
         complete: true,
       };
     }
-    if (added.length >= MAX_PER_TICK) return { added, complete: false };
+    if (added.length + labelled.length >= MAX_PER_TICK) return { added, labelled, complete: false };
   }
 }
 
@@ -380,50 +471,121 @@ function minOrder(values: (bigint | undefined)[]): bigint | undefined {
   return min;
 }
 
+/** One change history recorded: a message arriving, or a label being added
+ *  to one. */
+type HistoryChange =
+  | { kind: 'arrived'; ref: GmailHistoryAddition }
+  | { kind: 'labelled'; ref: GmailLabelAddition };
+
+function changeKey(change: HistoryChange): string {
+  switch (change.kind) {
+    case 'arrived':
+      return `arrived:${change.ref.id}`;
+    case 'labelled':
+      return `labelled:${change.ref.id}:${change.ref.label}`;
+    default:
+      return unreachable(change);
+  }
+}
+
+function unreachable(value: never): never {
+  throw new Error(`GmailPollSource: an unknown history change ${JSON.stringify(value)}`);
+}
+
+/** The newest history id a read holds, of any kind. */
+function lastOrder(read: LabelHistory): bigint | undefined {
+  let max: bigint | undefined;
+  for (const ref of [...read.added, ...read.labelled]) {
+    const at = historyOrder(ref.historyId);
+    if (at !== undefined && (max === undefined || at > max)) max = at;
+  }
+  return max;
+}
+
 /**
- * The union of every label's arrivals, and the mark the next tick reads from.
+ * The union of every label's changes the listen asked for, and the mark the
+ * next tick reads from. A label addition counts only for a label in `labels`:
+ * Gmail's label filter returns every change to a message CARRYING the label,
+ * which includes other labels being added to it.
  *
  * When everything was read and taken, the mark is the mailbox's marker — the
  * LOWEST the reads reported, since a message landing on one label between two
  * labels' reads is only covered from the earlier one. When the tick stopped
- * short, the mark sits just before the first arrival it did not take, so the
+ * short, the mark sits just before the first change it did not take, so the
  * next tick starts there; whatever it re-reads was already delivered and is
  * dropped on its idempotency key.
  */
-function takeArrivals(reads: LabelHistory[]): { refs: GmailMessageRef[]; historyId?: string } {
-  const all = dedupe(reads.flatMap((read) => read.added));
+function takeChanges(
+  reads: LabelHistory[],
+  wanted: { arrivals: boolean; labels: readonly string[] },
+): { refs: GmailMessageRef[]; labelled: GmailLabelAddition[]; historyId?: string } {
+  const seen = new Set<string>();
+  const all: HistoryChange[] = [];
+  for (const read of reads) {
+    const changes: HistoryChange[] = [
+      ...(wanted.arrivals ? read.added : []).map((ref) => ({ kind: 'arrived' as const, ref })),
+      ...read.labelled.filter((ref) => wanted.labels.includes(ref.label)).map((ref) => ({ kind: 'labelled' as const, ref })),
+    ];
+    for (const change of changes) {
+      const key = changeKey(change);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(change);
+    }
+  }
   const ordered = [...all].sort((a, b) => {
-    const x = historyOrder(a.historyId);
-    const y = historyOrder(b.historyId);
+    const x = historyOrder(a.ref.historyId);
+    const y = historyOrder(b.ref.historyId);
     if (x === undefined || y === undefined) return x === y ? 0 : x === undefined ? 1 : -1;
     return x < y ? -1 : x > y ? 1 : 0;
   });
 
   // An unfinished label vouches only for what it read — past its last
-  // arrival, the other labels' arrivals are not yet comparable with its own.
-  const frontier = minOrder(
-    reads
-      .filter((read) => !read.complete)
-      .map((read) => historyOrder(read.added[read.added.length - 1]?.historyId)),
-  );
+  // change, the other labels' changes are not yet comparable with its own.
+  const frontier = minOrder(reads.filter((read) => !read.complete).map(lastOrder));
   const eligible =
     frontier === undefined
       ? ordered
-      : ordered.filter((ref) => {
-          const at = historyOrder(ref.historyId);
+      : ordered.filter((change) => {
+          const at = historyOrder(change.ref.historyId);
           return at !== undefined && at <= frontier;
         });
   const taken = eligible.slice(0, MAX_PER_TICK);
-  const refs = taken.map(({ id, threadId }) => ({ id, ...(threadId != null ? { threadId } : {}) }));
+  const refs: GmailMessageRef[] = [];
+  const labelled: GmailLabelAddition[] = [];
+  for (const change of taken) {
+    switch (change.kind) {
+      case 'arrived': {
+        const { id, threadId } = change.ref;
+        refs.push({ id, ...(threadId != null ? { threadId } : {}) });
+        break;
+      }
+      case 'labelled':
+        labelled.push(change.ref);
+        break;
+      default:
+        unreachable(change);
+    }
+  }
 
   const everything = frontier === undefined && taken.length === ordered.length;
   if (everything) {
     const marker = minOrder(reads.map((read) => historyOrder(read.historyId)));
-    return { refs, ...(marker !== undefined ? { historyId: String(marker) } : {}) };
+    return { refs, labelled, ...(marker !== undefined ? { historyId: String(marker) } : {}) };
   }
-  const next = historyOrder(eligible[taken.length]?.historyId);
+  const next = historyOrder(eligible[taken.length]?.ref.historyId);
   const resume = next !== undefined ? next - 1n : frontier;
-  return { refs, ...(resume !== undefined ? { historyId: String(resume) } : {}) };
+  return { refs, labelled, ...(resume !== undefined ? { historyId: String(resume) } : {}) };
+}
+
+/** A message by id, or null when it has been deleted since history saw it. */
+async function messageOrGone(client: GmailApiClient, id: string): Promise<GmailMessageRecord | null> {
+  try {
+    return decodeGmailMessage(await client.getMessage(id));
+  } catch (error) {
+    if (error instanceof GmailApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /** One event per message per tick. Gmail's history records a message once per

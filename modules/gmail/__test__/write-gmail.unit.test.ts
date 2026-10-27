@@ -11,7 +11,7 @@ import type { GmailApiClient } from '../api_client';
 import { GmailApiError } from '../api_client';
 import { decodeGmailMessage } from '../mime';
 import { adapterOver } from './host';
-import { GMAIL_MESSAGE_DISPLAY_NAME } from '../types';
+import { GMAIL_DRAFT_DISPLAY_NAME, GMAIL_MESSAGE_DISPLAY_NAME } from '../types';
 
 const MAILBOX = 'deals@example.com';
 
@@ -23,17 +23,23 @@ interface SentCall {
   threadId?: string;
 }
 
-function fakeClient(over: { fail?: GmailApiError } = {}) {
+function fakeClient(over: { fail?: GmailApiError; method?: 'oauth' | 'delegated' } = {}) {
   const sent: SentCall[] = [];
+  const drafted: SentCall[] = [];
   const client = {
-    credentials: { mailbox: MAILBOX, method: 'delegated' },
+    credentials: { mailbox: MAILBOX, method: over.method ?? 'delegated' },
     async sendMessage(input: { raw: string; threadId?: string }) {
       sent.push(input);
       if (over.fail) throw over.fail;
       return { id: 'sent-1', threadId: input.threadId ?? 'thread-new', labelIds: ['SENT'] };
     },
+    async createDraft(input: { raw: string; threadId?: string }) {
+      drafted.push(input);
+      if (over.fail) throw over.fail;
+      return { id: 'draft-1', message: { id: 'dm-1', threadId: input.threadId ?? 'thread-new' } };
+    },
   } as unknown as GmailApiClient;
-  return { client, sent };
+  return { client, sent, drafted };
 }
 
 /** The RFC 2822 text the adapter handed Gmail. */
@@ -83,9 +89,10 @@ function replyParent(over: Partial<Record<string, unknown>> = {}): ParentLink {
 function write(input: {
   fields: Record<string, unknown>;
   parentLinks?: ParentLink[];
+  recordType?: string;
 }): WriteInput {
   return {
-    recordType: GMAIL_MESSAGE_DISPLAY_NAME,
+    recordType: input.recordType ?? GMAIL_MESSAGE_DISPLAY_NAME,
     fields: input.fields,
     mutationContext: MUTATION,
     ...(input.parentLinks !== undefined ? { parentLinks: input.parentLinks } : {}),
@@ -262,5 +269,68 @@ describe('replying inside a thread', () => {
         }),
       ),
     ).rejects.toThrow('cannot be created along');
+  });
+});
+
+describe('a draft, left unsent in the mailbox', () => {
+  const draft = (fields: Record<string, unknown>, parentLinks?: ParentLink[]) =>
+    write({ recordType: GMAIL_DRAFT_DISPLAY_NAME, fields, ...(parentLinks !== undefined ? { parentLinks } : {}) });
+
+  it('is created, not sent, and its handle carries the catalog’s field names', async () => {
+    const { client, sent, drafted } = fakeClient();
+    const adapter = adapterOver(client);
+    const file: FileRef & { content: string } = { __brand: 'FileRef', name: 'figures.csv', contentType: 'text/csv', content: 'Q3,120' };
+    const result = await adapter.createRecord(
+      draft({ To: ['rita@northwind.example'], Subject: 'Your figures', Body: 'For Henry to check.', Files: [file] }),
+    );
+    expect(sent).toHaveLength(0);
+    expect(drafted).toHaveLength(1);
+    expect(drafted[0].threadId).toBeUndefined();
+    expect(header(drafted[0], 'To')).toBe('rita@northwind.example');
+    expect(header(drafted[0], 'Subject')).toBe('Your figures');
+    expect(raw(drafted[0])).toContain('Content-Disposition: attachment; filename="figures.csv"');
+    expect(result).toMatchObject({
+      adapterType: 'gmail',
+      externalId: 'draft-1',
+      recordType: GMAIL_DRAFT_DISPLAY_NAME,
+      data: { Id: 'draft-1', 'Message Id': 'dm-1', 'Thread Id': 'thread-new', To: ['rita@northwind.example'], Subject: 'Your figures' },
+    });
+  });
+
+  it('may be left without recipients or words: a person finishes it', async () => {
+    const { client, drafted } = fakeClient();
+    await adapterOver(client).createRecord(draft({ Subject: 'To finish' }));
+    expect(header(drafted[0], 'Subject')).toBe('To finish');
+  });
+
+  it('as a reply, joins the parent’s conversation the way a reply does', async () => {
+    const { client, drafted } = fakeClient();
+    const result = await adapterOver(client).createRecord(
+      draft({ Body: 'Looking now.' }, [{ ...replyParent(), edgeName: 'Drafts' }]),
+    );
+    expect(drafted[0].threadId).toBe('thread-7');
+    expect(header(drafted[0], 'In-Reply-To')).toBe('<parent@northwind.example>');
+    expect(header(drafted[0], 'Subject')).toBe('Re: Quarterly figures');
+    expect(header(drafted[0], 'To')).toBe('Rita Okoye <rita@northwind.example>');
+    expect(result.data).toMatchObject({ 'Thread Id': 'thread-7', Subject: 'Re: Quarterly figures' });
+  });
+
+  it('is refused along any other edge', async () => {
+    const { client } = fakeClient();
+    await expect(
+      adapterOver(client).createRecord(draft({ Body: 'x' }, [{ ...replyParent(), edgeName: 'Replies' }])),
+    ).rejects.toThrow('cannot be created along');
+  });
+
+  it('names the compose scope, the mailbox and how to sign in with drafts when the scope is missing', async () => {
+    const { client } = fakeClient({
+      method: 'oauth',
+      fail: new GmailApiError('missing_compose_scope', undefined, 'users.drafts.create', 'not granted'),
+    });
+    const made = adapterOver(client).createRecord(draft({ Body: 'x' }));
+    await expect(made).rejects.toThrow(MAILBOX);
+    await expect(made).rejects.toThrow('gmail.compose');
+    await expect(made).rejects.toThrow('--credential gmail_drafts');
+    await expect(made).rejects.toThrow('Reads still work');
   });
 });

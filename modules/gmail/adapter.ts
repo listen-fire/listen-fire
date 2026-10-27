@@ -57,17 +57,20 @@ import {
 import {
   GMAIL_ADAPTER_TYPE,
   GMAIL_ATTACHMENT_DISPLAY_NAME,
+  GMAIL_DRAFT_TYPE_ID,
+  GMAIL_LABEL_EVENT_TAG,
   GMAIL_MAILBOX_TYPE_ID,
   GMAIL_MESSAGES_COLLECTION,
   GMAIL_MESSAGE_ATTACHMENTS_EDGE,
   GMAIL_MESSAGE_DISPLAY_NAME,
+  GMAIL_MESSAGE_DRAFTS_EDGE_NAME,
   GMAIL_MESSAGE_EVENT_TAG,
   GMAIL_MESSAGE_REPLIES_EDGE_NAME,
   GMAIL_MESSAGE_TYPE_ID,
   decodeAttachmentId,
   encodeAttachmentId,
 } from './types';
-import { replyTargetFromParent, sendGmailMessage } from './write';
+import { draftGmailMessage, replyTargetFromParent, sendGmailMessage } from './write';
 
 import { isNaturalOrder } from 'engine-contracts/expression/expression';
 
@@ -265,7 +268,7 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     });
   }
 
-  // ── 6. Writes — send and reply ─────────────────────────────────────────
+  // ── 6. Writes — send, reply, and drafts of either ──────────────────────
   // Dispatch is on the ANCHOR — where the write was written — never on a field
   // and never on a sentinel record type. `updateRecord` / `deleteRecord` stay
   // inherited throws: mail that has been sent cannot be edited or recalled, and
@@ -274,10 +277,10 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
   async createRecord(input: WriteInput): Promise<WriteResult> {
     const client = await this.client();
     const typeId = await this.resolveTypeRef(input.recordType);
-    if (typeId !== GMAIL_MESSAGE_TYPE_ID) {
+    if (typeId !== GMAIL_MESSAGE_TYPE_ID && typeId !== GMAIL_DRAFT_TYPE_ID) {
       throw new Error(
         `GmailAdapter.createRecord: '${input.recordType}' is not something this ` +
-          'mailbox can create — a Gmail write is a Message, sent or replied.',
+          'mailbox can create — a Gmail write is a Message, sent or replied, or a Draft.',
       );
     }
     // Natural currency in: the field keys are display names, so resolve them to
@@ -291,26 +294,33 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     );
 
     const parent = singleParentLink(input);
-    return sendGmailMessage({
+    const draft = typeId === GMAIL_DRAFT_TYPE_ID;
+    const outbound = {
       client,
       readFile: this.host.readFile,
       log: this.host.log,
       fields,
-      ...(parent !== undefined ? { replyTo: await this.replyTarget(parent) } : {}),
-    });
+      ...(parent !== undefined ? { replyTo: await this.replyTarget(parent, draft) } : {}),
+    };
+    return draft ? draftGmailMessage(outbound) : sendGmailMessage(outbound);
   }
 
-  /** The conversation a reply joins, read off the parent the write was anchored
-   *  on. Any other parent is an anchor this adapter has no meaning for, and
-   *  saying so beats sending mail somewhere nobody asked. */
-  private async replyTarget(parent: ParentLink): Promise<ReturnType<typeof replyTargetFromParent>> {
+  /** The conversation a reply (or a reply draft) joins, read off the parent
+   *  the write was anchored on. Any other parent is an anchor this adapter has
+   *  no meaning for, and saying so beats sending mail somewhere nobody asked. */
+  private async replyTarget(parent: ParentLink, draft: boolean): Promise<ReturnType<typeof replyTargetFromParent>> {
     const parentTypeId = await this.resolveTypeRef(parent.recordType);
     const edge = naturalName(parent.edgeName);
-    if (parentTypeId !== GMAIL_MESSAGE_TYPE_ID || edge !== naturalName(GMAIL_MESSAGE_REPLIES_EDGE_NAME)) {
+    const expected = draft ? GMAIL_MESSAGE_DRAFTS_EDGE_NAME : GMAIL_MESSAGE_REPLIES_EDGE_NAME;
+    if (parentTypeId !== GMAIL_MESSAGE_TYPE_ID || edge !== naturalName(expected)) {
       throw new Error(
-        `GmailAdapter.createRecord: a Gmail Message cannot be created along ` +
-          `'${parent.recordType}'-[:${parent.edgeName}]->. Send along the ` +
-          'mailbox’s `Messages` edge, or reply along a message’s `Replies` edge.',
+        draft
+          ? `GmailAdapter.createRecord: a Gmail Draft cannot be created along ` +
+              `'${parent.recordType}'-[:${parent.edgeName}]->. Draft along the ` +
+              'mailbox’s `Drafts` edge, or a reply draft along a message’s `Drafts` edge.'
+          : `GmailAdapter.createRecord: a Gmail Message cannot be created along ` +
+              `'${parent.recordType}'-[:${parent.edgeName}]->. Send along the ` +
+              'mailbox’s `Messages` edge, or reply along a message’s `Replies` edge.',
       );
     }
     return replyTargetFromParent(parent);
@@ -324,6 +334,11 @@ export class GmailAdapter extends BaseAdapter implements Adapter {
     return [
       {
         tag: GMAIL_MESSAGE_EVENT_TAG,
+        positionType: GMAIL_MESSAGE_TYPE_ID,
+        match: { path: 'id', equals: [] },
+      },
+      {
+        tag: GMAIL_LABEL_EVENT_TAG,
         positionType: GMAIL_MESSAGE_TYPE_ID,
         match: { path: 'id', equals: [] },
       },

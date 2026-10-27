@@ -1,7 +1,7 @@
-// Gmail adapter — the send side.
+// Gmail adapter — the send side, and drafts.
 //
-// One operation underneath, `users.messages.send`, and two things an author can
-// mean by it. Which one is decided by WHERE the write is anchored, never by a
+// One operation underneath a send, `users.messages.send`, and two things an
+// author can mean by it. Which one is decided by WHERE the write is anchored, never by a
 // field: a Message written along the mailbox's `Messages` edge is new mail, and
 // a Message written along another message's `Replies` edge is a reply. That is
 // the same shape as a Slack post versus a Slack thread reply, and it is what
@@ -13,6 +13,11 @@
 // address to answer, the `In-Reply-To` chain — is READ OFF THE PARENT. None of
 // it is authorable, because none of it is a decision: getting any of it wrong
 // produces a message that lands outside the thread it was meant for.
+//
+// A DRAFT is the same message kept unsent (`users.drafts.create`): a Draft
+// written along the mailbox's `Drafts` edge is a new one, and along a message's
+// `Drafts` edge a reply, threaded exactly as a sent reply is. A person finishes
+// it, so it may be written without recipients or words.
 
 import type { FileRef, ParentLink, WriteResult } from 'movement-engine/public/adapter';
 import type { ModuleLog } from 'module-kit';
@@ -20,6 +25,7 @@ import type { ModuleLog } from 'module-kit';
 import { hasFileSource } from 'movement-engine/public/files';
 import {
   GmailApiError,
+  gmailMissingComposeScopeMessage,
   gmailMissingSendScopeMessage,
   type GmailApiClient,
   type GmailConnectMethod,
@@ -31,7 +37,7 @@ import {
   type GmailOutboundAttachment,
 } from './compose';
 import { splitAddressHeader } from './mime';
-import { GMAIL_ADAPTER_TYPE, GMAIL_MESSAGE_DISPLAY_NAME } from './types';
+import { GMAIL_ADAPTER_TYPE, GMAIL_DRAFT_DISPLAY_NAME, GMAIL_MESSAGE_DISPLAY_NAME } from './types';
 
 /** The parent of a reply, as the write path reads it off the position that was
  *  handed over. Every value is optional because a parent is data that travelled
@@ -79,14 +85,10 @@ export function replySubject(parentSubject: string | undefined): string {
   return /^re:/i.test(subject.trim()) ? subject.trim() : `Re: ${subject}`.trim();
 }
 
-/**
- * Send as the connected mailbox.
- *
- * `fields` is in the adapter's INTERNAL currency (the caller resolved the
- * author's natural names first), and `replyTo` is present exactly when the
- * write was anchored on another message.
- */
-export async function sendGmailMessage(input: {
+/** What a send or a draft is handed: `fields` in the adapter's INTERNAL
+ *  currency (the caller resolved the author's natural names first), and
+ *  `replyTo` present exactly when the write was anchored on another message. */
+export interface GmailOutboundInput {
   client: GmailApiClient;
   /** The bytes of a file the write was handed (at its url, else through the
    *  host's files). */
@@ -97,17 +99,33 @@ export async function sendGmailMessage(input: {
   /** Injectable so a test can assert a whole message rather than one with a
    *  random boundary cut out of it. */
   compose?: ComposeOptions;
-}): Promise<WriteResult> {
-  const { client, fields, replyTo } = input;
-  const mailbox = client.credentials.mailbox;
+}
 
+/** The message a send or a draft hands Gmail, with the headers it carries. */
+interface ComposedMessage {
+  raw: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+}
+
+/**
+ * Build the message. A send must be addressed and say something; a draft is
+ * finished by a person, so it may be neither yet. A reply of either kind needs
+ * the conversation it joins.
+ */
+async function composeOutbound(
+  input: GmailOutboundInput,
+  purpose: 'send' | 'draft',
+): Promise<ComposedMessage> {
+  const { fields, replyTo } = input;
   const to = pickRecipients({ field: fields['to'], replyTo });
   const cc = strings(fields['cc']);
   const bodyText = str(fields['body']);
   const bodyHtml = str(fields['bodyHtml']);
-  const attachments = await resolveAttachments(fields['files'], input.readFile);
+  const subject = str(fields['subject']) ?? (replyTo ? replySubject(replyTo.subject) : '');
 
-  if (to.length === 0) {
+  if (purpose === 'send' && to.length === 0) {
     throw new Error(
       replyTo === undefined
         ? 'GmailAdapter.createRecord: a new message needs at least one `To` address.'
@@ -115,7 +133,7 @@ export async function sendGmailMessage(input: {
           'message it replies to carries no `From`, so set `To` on the reply.',
     );
   }
-  if (bodyText === undefined && bodyHtml === undefined) {
+  if (purpose === 'send' && bodyText === undefined && bodyHtml === undefined) {
     throw new Error(
       'GmailAdapter.createRecord: a message needs a `Body` (plain text) or an ' +
         '`HTML Body` — Gmail will not send an empty one.',
@@ -128,13 +146,14 @@ export async function sendGmailMessage(input: {
         'Reply along a message a listener delivered or a `Messages` walk read.',
     );
   }
+  const attachments = await resolveAttachments(fields['files'], input.readFile);
 
   const raw = buildRfc2822(
     {
-      from: mailbox,
+      from: input.client.credentials.mailbox,
       to,
       ...(cc.length > 0 ? { cc } : {}),
-      subject: str(fields['subject']) ?? (replyTo ? replySubject(replyTo.subject) : ''),
+      subject,
       ...(bodyText !== undefined ? { bodyText } : {}),
       ...(bodyHtml !== undefined ? { bodyHtml } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
@@ -143,11 +162,19 @@ export async function sendGmailMessage(input: {
     },
     input.compose ?? {},
   );
+  return { raw: toGmailRaw(raw), to, cc, subject };
+}
+
+/** Send as the connected mailbox. */
+export async function sendGmailMessage(input: GmailOutboundInput): Promise<WriteResult> {
+  const { client, replyTo } = input;
+  const mailbox = client.credentials.mailbox;
+  const message = await composeOutbound(input, 'send');
 
   let sent;
   try {
     sent = await client.sendMessage({
-      raw: toGmailRaw(raw),
+      raw: message.raw,
       ...(replyTo?.threadId !== undefined ? { threadId: replyTo.threadId } : {}),
     });
   } catch (error) {
@@ -170,9 +197,50 @@ export async function sendGmailMessage(input: {
       id: sent.id,
       ...(sent.threadId ? { threadId: sent.threadId } : {}),
       from: mailbox,
-      to,
-      ...(cc.length > 0 ? { cc } : {}),
-      subject: str(fields['subject']) ?? (replyTo ? replySubject(replyTo.subject) : ''),
+      to: message.to,
+      ...(message.cc.length > 0 ? { cc: message.cc } : {}),
+      subject: message.subject,
+    },
+  };
+}
+
+/** Keep a message in the mailbox unsent. The handle carries the Draft's
+ *  catalog field names, which is what a program reads off it. */
+export async function draftGmailMessage(input: GmailOutboundInput): Promise<WriteResult> {
+  const { client, replyTo } = input;
+  const mailbox = client.credentials.mailbox;
+  const message = await composeOutbound(input, 'draft');
+
+  let draft;
+  try {
+    draft = await client.createDraft({
+      raw: message.raw,
+      ...(replyTo?.threadId !== undefined ? { threadId: replyTo.threadId } : {}),
+    });
+  } catch (error) {
+    if (error instanceof GmailApiError && error.failure === 'missing_compose_scope') {
+      throw new Error(gmailMissingComposeScopeMessage(mailbox, client.credentials.method));
+    }
+    throw error;
+  }
+
+  input.log.info(
+    `[GmailAdapter.write] drafted ${draft.id} in ${mailbox}` +
+      `${replyTo ? ` (reply in thread ${replyTo.threadId})` : ''}`,
+  );
+
+  const threadId = draft.message?.threadId ?? replyTo?.threadId;
+  return {
+    adapterType: GMAIL_ADAPTER_TYPE,
+    externalId: draft.id,
+    recordType: GMAIL_DRAFT_DISPLAY_NAME,
+    data: {
+      Id: draft.id,
+      ...(draft.message ? { 'Message Id': draft.message.id } : {}),
+      ...(threadId ? { 'Thread Id': threadId } : {}),
+      To: message.to,
+      ...(message.cc.length > 0 ? { Cc: message.cc } : {}),
+      Subject: message.subject,
     },
   };
 }

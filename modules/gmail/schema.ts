@@ -5,7 +5,9 @@
 // of it. Gmail's threads are not a node here: a thread carries no facts of its
 // own beyond its messages, and the thread id on the message is everything a
 // reply needs (rule 1). Labels are a field on the message rather than a type,
-// because this connector can read them and can never set one.
+// because this connector can read them and can never set one. A DRAFT is its
+// own type, written and never read: it has an id of its own beside its
+// message's, and it exists for a person to finish.
 //
 // Everything here is STATIC — no credential, no network — so `describe` is free
 // and the walk hydrates every target rather than stubbing.
@@ -15,14 +17,21 @@ import type { SchemaEntryPoint, SchemaTypeDescriptor } from 'movement-engine/pub
 
 import { META_RECORD_TYPE } from 'movement-engine/public/catalog';
 import {
+  GMAIL_ADDED_LABEL_FIELD,
   GMAIL_ATTACHMENT_DISPLAY_NAME,
   GMAIL_ATTACHMENT_TYPE_ID,
   GMAIL_MAILBOX_DISPLAY_NAME,
+  GMAIL_DRAFTS_COLLECTION,
+  GMAIL_DRAFT_DISPLAY_NAME,
+  GMAIL_DRAFT_TYPE_ID,
+  GMAIL_LABEL_ADDED_EVENT,
   GMAIL_MAILBOX_TYPE_ID,
   GMAIL_MESSAGES_COLLECTION,
   GMAIL_MESSAGE_ATTACHMENTS_EDGE,
   GMAIL_MESSAGE_ATTACHMENTS_EDGE_NAME,
   GMAIL_MESSAGE_DISPLAY_NAME,
+  GMAIL_MESSAGE_DRAFTS_EDGE,
+  GMAIL_MESSAGE_DRAFTS_EDGE_NAME,
   GMAIL_MESSAGE_FILES_FIELD,
   GMAIL_MESSAGE_FILES_FIELD_NAME,
   GMAIL_MESSAGE_RECEIVED_EVENT,
@@ -43,6 +52,16 @@ export const GMAIL_WRITE_RULE =
   'Message written along another message’s `Replies` edge is a reply, and its ' +
   'thread, its `Re:` subject and its reply headers all come from that parent ' +
   'rather than from fields.';
+
+/** Drafts, in one sentence, wherever an author meets them. */
+export const GMAIL_DRAFT_RULE =
+  'A Draft written along the mailbox’s `Drafts` edge is kept unsent for a ' +
+  'person to finish; along a message’s `Drafts` edge it is a reply kept ' +
+  'unsent, threaded as a reply is. Drafts work only where the mailbox was ' +
+  'signed in with drafts enabled (the `gmail_drafts` credential).';
+
+/** Every event a listen on the mailbox can ask for, as the fires edges say. */
+const FIRES_ON = [GMAIL_MESSAGE_RECEIVED_EVENT, GMAIL_LABEL_ADDED_EVENT];
 
 /** How many messages one unbounded `Messages` walk will fetch. Every message
  *  costs its own request, so the ceiling is low on purpose — an author who
@@ -104,10 +123,20 @@ export function gmailEntryPoints(): SchemaEntryPoint[] {
       writable: false,
       readable: false,
       fires: true,
-      firesOn: [GMAIL_MESSAGE_RECEIVED_EVENT],
+      firesOn: FIRES_ON,
       description:
         'Delivered when a message arrives in the mailbox that was not there at ' +
-        'the last look. Read its fields straight off, or walk `Attachments`.',
+        'the last look (`message_received`), or when a label is added to a ' +
+        'message already there (`label_added`, with `Added Label` set). Read ' +
+        'its fields straight off, or walk `Attachments`.',
+    },
+    {
+      typeId: GMAIL_DRAFT_TYPE_ID,
+      displayName: GMAIL_DRAFT_DISPLAY_NAME,
+      writable: true,
+      readable: false,
+      collectionName: GMAIL_DRAFTS_COLLECTION,
+      description: GMAIL_DRAFT_RULE,
     },
     {
       typeId: GMAIL_ATTACHMENT_TYPE_ID,
@@ -126,10 +155,12 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
   description:
     'One Google Workspace mailbox. Walk `Messages` to search it, write along ' +
     '`Messages` to send as the mailbox, or listen on `Message` to run when ' +
-    'mail arrives. ' +
+    'mail arrives or is labelled. ' +
     GMAIL_WRITE_RULE +
-    ' Reading and sending are the whole of what this connection can do: no ' +
-    'labelling, no archiving, no deleting, no drafts.',
+    ' ' +
+    GMAIL_DRAFT_RULE +
+    ' Reading, sending and drafting are the whole of what this connection can ' +
+    'do: no labelling, no archiving, no deleting.',
   fields: [],
   references: [
     {
@@ -148,15 +179,28 @@ export const GMAIL_ROOT: SchemaTypeDescriptor = {
       capability: GMAIL_MAILBOX_SEARCH,
     },
     {
+      fieldId: GMAIL_DRAFTS_COLLECTION,
+      targetTypeId: GMAIL_DRAFT_TYPE_ID,
+      cardinality: 'many',
+      direction: 'outgoing',
+      name: GMAIL_DRAFTS_COLLECTION,
+      writable: true,
+      // Write-only: this connection keeps drafts for a person, it does not
+      // read them back.
+      readable: false,
+      linkable: false,
+      description: `Write here to keep a new message unsent. ${GMAIL_DRAFT_RULE}`,
+    },
+    {
       fieldId: `fires:${GMAIL_MESSAGE_TYPE_ID}`,
       targetTypeId: GMAIL_MESSAGE_TYPE_ID,
       cardinality: 'one',
       direction: 'outgoing',
       name: GMAIL_MESSAGE_DISPLAY_NAME,
       fires: true,
-      firesOn: [GMAIL_MESSAGE_RECEIVED_EVENT],
+      firesOn: FIRES_ON,
       readable: false,
-      description: 'A message that has just arrived — what a listen delivers.',
+      description: 'A message that has just arrived, or just been labelled — what a listen delivers.',
     },
   ],
 };
@@ -185,6 +229,7 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
     { fieldId: GMAIL_MESSAGE_FILES_FIELD, displayName: GMAIL_MESSAGE_FILES_FIELD_NAME, kind: 'file', cardinality: 'many', writable: true, readable: false, required: false, description: 'Files to attach to a message being sent — a list of file values the run already holds (an attachment read off another message, a document a movement produced). Send-side only: the files on a RECEIVED message are on its `Attachments` edge.' },
     { fieldId: 'labels', displayName: 'Labels', kind: 'string', cardinality: 'many', writable: false, required: false, description: 'Gmail label ids — the system ones (INBOX, UNREAD, IMPORTANT) in capitals, and a user label by its own name. A WHERE reaches the search as `label:`. This connection can read them and can never set one.', capability: { filterOperators: ['eq', 'in', 'contains'] } },
     { fieldId: 'hasAttachments', displayName: 'Has Attachments', kind: 'boolean', writable: false, required: false, description: 'Whether walking `Attachments` would find anything — true without fetching a single byte.' },
+    { fieldId: GMAIL_ADDED_LABEL_FIELD, displayName: 'Added Label', kind: 'string', writable: false, required: false, description: 'On a message a `label_added` listen delivered: the label id that was just added. Empty on any other message.' },
   ],
   references: [
     {
@@ -224,7 +269,41 @@ const MESSAGE_DESCRIPTOR: SchemaTypeDescriptor = {
         '(`Body`), and may override `Subject`, `To` or `Cc`. Not readable: ' +
         'this connection sends into a conversation, it does not read one back.',
     },
+    {
+      fieldId: GMAIL_MESSAGE_DRAFTS_EDGE,
+      targetTypeId: GMAIL_DRAFT_TYPE_ID,
+      cardinality: 'many',
+      direction: 'outgoing',
+      name: GMAIL_MESSAGE_DRAFTS_EDGE_NAME,
+      writable: true,
+      readable: false,
+      linkable: false,
+      description:
+        'Write here to keep a reply to this message unsent, for a person to ' +
+        'finish. Threaded exactly as a reply along `Replies` is.',
+    },
   ],
+};
+
+const DRAFT_DESCRIPTOR: SchemaTypeDescriptor = {
+  typeId: GMAIL_DRAFT_TYPE_ID,
+  displayName: GMAIL_DRAFT_DISPLAY_NAME,
+  description:
+    `A message kept unsent in the mailbox. ${GMAIL_DRAFT_RULE} Every field ` +
+    'is optional: a person finishes the draft. The write hands back its `Id`, ' +
+    '`Message Id` and `Thread Id`.',
+  fields: [
+    { fieldId: 'id', displayName: 'Id', kind: 'string', writable: false, required: false, description: "Gmail's id for the draft (not its message's)." },
+    { fieldId: 'messageId', displayName: 'Message Id', kind: 'string', writable: false, required: false, description: 'The id of the message the draft holds.' },
+    { fieldId: 'threadId', displayName: 'Thread Id', kind: 'string', writable: false, required: false, description: 'The conversation the draft belongs to: its parent’s, on a reply draft.' },
+    { fieldId: 'to', displayName: 'To', kind: 'string', cardinality: 'many', writable: true, required: false, description: 'The addresses on the "To" header. A reply draft that leaves it unset answers whoever sent the parent.' },
+    { fieldId: 'cc', displayName: 'Cc', kind: 'string', cardinality: 'many', writable: true, required: false, description: 'The addresses on the "Cc" header.' },
+    { fieldId: 'subject', displayName: 'Subject', kind: 'string', writable: true, required: false, description: 'The subject line; a reply draft that leaves it unset gets the parent’s with `Re:` in front.' },
+    { fieldId: 'body', displayName: 'Body', kind: 'string', writable: true, uiHint: 'textarea', required: false, description: 'The plain-text body.' },
+    { fieldId: 'bodyHtml', displayName: 'HTML Body', kind: 'string', writable: true, required: false, description: 'The HTML alternative, set alongside `Body`.' },
+    { fieldId: GMAIL_MESSAGE_FILES_FIELD, displayName: GMAIL_MESSAGE_FILES_FIELD_NAME, kind: 'file', cardinality: 'many', writable: true, readable: false, required: false, description: 'Files to attach — a list of file values the run already holds.' },
+  ],
+  references: [],
 };
 
 const ATTACHMENT_DESCRIPTOR: SchemaTypeDescriptor = {
@@ -244,6 +323,7 @@ const ATTACHMENT_DESCRIPTOR: SchemaTypeDescriptor = {
 
 const DESCRIPTORS: Record<string, SchemaTypeDescriptor> = {
   [GMAIL_MESSAGE_TYPE_ID]: MESSAGE_DESCRIPTOR,
+  [GMAIL_DRAFT_TYPE_ID]: DRAFT_DESCRIPTOR,
   [GMAIL_ATTACHMENT_TYPE_ID]: ATTACHMENT_DESCRIPTOR,
 };
 

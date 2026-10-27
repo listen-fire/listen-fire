@@ -9,7 +9,7 @@
 import { defineModule, readHandedFile } from 'module-kit';
 
 import { GmailAdapter } from './adapter';
-import { GMAIL_CREDENTIAL, gmailClientFrom } from './credential';
+import { GMAIL_CREDENTIAL, GMAIL_DRAFTS_CREDENTIAL, gmailClientFrom } from './credential';
 import { GMAIL_MANIFEST } from './manifest';
 import { GMAIL_POLL_INTERVAL_SECONDS, GmailPollSource } from './poll';
 
@@ -17,7 +17,7 @@ export const gmailModule = defineModule({
   kind: 'adapter',
   name: '@lf/gmail',
   manifest: GMAIL_MANIFEST,
-  credentials: [GMAIL_CREDENTIAL],
+  credentials: [GMAIL_CREDENTIAL, GMAIL_DRAFTS_CREDENTIAL],
   poll: { intervalSeconds: GMAIL_POLL_INTERVAL_SECONDS },
   create: (ctx) => {
     const client = gmailClientFrom(ctx);

@@ -13,11 +13,20 @@ export const GMAIL_MAILBOX_DISPLAY_NAME = 'Gmail';
 export const GMAIL_MESSAGE_TYPE_ID = 'gmail:message';
 export const GMAIL_MESSAGE_DISPLAY_NAME = 'Message';
 
+/** A message the mailbox holds unsent, for a person to finish and send. Its
+ *  own type, because a draft has its own id beside its message's. */
+export const GMAIL_DRAFT_TYPE_ID = 'gmail:draft';
+export const GMAIL_DRAFT_DISPLAY_NAME = 'Draft';
+
 export const GMAIL_ATTACHMENT_TYPE_ID = 'gmail:attachment';
 export const GMAIL_ATTACHMENT_DISPLAY_NAME = 'Attachment';
 
 /** The root collection an author searches the mailbox through. */
 export const GMAIL_MESSAGES_COLLECTION = 'Messages';
+
+/** The root edge a new draft is written along. Write-only: drafts are made
+ *  here for a person to send, never read back. */
+export const GMAIL_DRAFTS_COLLECTION = 'Drafts';
 
 // Rule 5: an edge never carries the system name — the instance already says
 // which system you are in.
@@ -33,6 +42,11 @@ export const GMAIL_MESSAGE_ATTACHMENTS_EDGE_NAME = 'Attachments';
 export const GMAIL_MESSAGE_REPLIES_EDGE = 'message_replies';
 export const GMAIL_MESSAGE_REPLIES_EDGE_NAME = 'Replies';
 
+/** The reply-draft edge: a Draft written along a message's `Drafts` is a
+ *  reply to it left unsent, threaded exactly as a reply along `Replies` is. */
+export const GMAIL_MESSAGE_DRAFTS_EDGE = 'message_drafts';
+export const GMAIL_MESSAGE_DRAFTS_EDGE_NAME = 'Drafts';
+
 /** The send-side file field. It cannot be called `Attachments`: that name
  *  already belongs to the READ edge on the same type, and one name for two
  *  things on one node is a collision waiting to be discovered by an author. */
@@ -40,17 +54,23 @@ export const GMAIL_MESSAGE_FILES_FIELD = 'files';
 export const GMAIL_MESSAGE_FILES_FIELD_NAME = 'Files';
 
 // ── The `events:` vocabulary ────────────────────────────────────────────────
-// One kind: a message that has arrived since the last look. Gmail's history
-// offers more (labels added and removed, messages deleted), and none of it is
-// something anybody asked to run on — a label change is a fact to read off a
-// message, not an event.
+// Two kinds: a message that has arrived since the last look, and a label added
+// to a message already in the mailbox (a person filing mail is how a mailbox
+// hands work on). Gmail's history offers more (labels removed, messages
+// deleted), and nobody has asked to run on those.
 
 export const GMAIL_MESSAGE_RECEIVED_EVENT = 'message_received';
+export const GMAIL_LABEL_ADDED_EVENT = 'label_added';
 
-export const GMAIL_SUBSCRIBABLE_EVENTS = [GMAIL_MESSAGE_RECEIVED_EVENT] as const;
+export const GMAIL_SUBSCRIBABLE_EVENTS = [GMAIL_MESSAGE_RECEIVED_EVENT, GMAIL_LABEL_ADDED_EVENT] as const;
+export type GmailEventKind = (typeof GMAIL_SUBSCRIBABLE_EVENTS)[number];
 
-/** The discriminator a polled message event carries. */
+/** The discriminators the polled events carry. */
 export const GMAIL_MESSAGE_EVENT_TAG = 'gmail:message_received';
+export const GMAIL_LABEL_EVENT_TAG = 'gmail:label_added';
+
+/** The Message field a `label_added` event fills: the label that was added. */
+export const GMAIL_ADDED_LABEL_FIELD = 'addedLabel';
 
 /**
  * The opaque checkpoint the PollSource persists.
@@ -63,6 +83,8 @@ export const GMAIL_MESSAGE_EVENT_TAG = 'gmail:message_received';
  * delivers nothing.
  */
 export interface GmailCheckpoint {
+  /** Covers arrivals and label additions alike: Gmail's history ids are one
+   *  sequence for every kind of change. */
   historyId?: string;
   /** ISO instant — the newest message already delivered, or the moment the
    *  listener went live. */
