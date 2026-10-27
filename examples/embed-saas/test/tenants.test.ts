@@ -138,9 +138,6 @@ before(async () => {
 
 after(async () => {
   await Promise.all([acmeSlack.stop(), globexSlack.stop()]);
-  // The Slack module's response cache evicts on a 60 second timer nothing
-  // unrefs, which would hold this process open that long after the last test.
-  setTimeout(() => process.exit(process.exitCode ?? 0), 200).unref();
 });
 
 test("a post through the ready-made Slack module lands in that tenant's workspace only", async () => {
