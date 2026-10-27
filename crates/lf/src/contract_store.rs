@@ -25,7 +25,7 @@ use crate::backend::{MintCallback, RunHostStore, StoreSpec, open_store};
 use crate::json::Js;
 use crate::obj;
 use crate::slot_server::{Listen, Refusal};
-use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, RunStart, StoreError, iso};
+use crate::store::{ClaimDue, DeliveryQuery, NewWork, Park, Release, Rerun, RunStart, StoreError, iso};
 use crate::store_wire::{Wire, new_delivery, num, opt, park_kind, rows, to_rows};
 
 /// The store slot's methods (docs/contracts/store-slot.md), as its manifest lists them.
@@ -40,6 +40,7 @@ pub const STORE_METHODS: &[&str] = &[
     "work.complete", "work.release", "sources.put", "sources.get", "inbound.checkpoint", "inbound.saveCheckpoint", "processes.list",
     "processes.swap", "events.claim", "events.startRun", "runs.lapsed", "parks.commit", "work.bury", "inbound.keepDelivery",
     "inbound.deliveries", "inbound.delivery", "inbound.sweepDeliveries", "inbound.forgetDeliveryId", "work.enqueueIfAbsent",
+    "runs.rerun",
 ];
 
 pub async fn serve(spec: &StoreSpec, listen: Listen) -> Result<(), String> {
@@ -180,6 +181,13 @@ fn dispatch(store: &dyn RunHostStore, method: &str, p: &Params) -> Result<Js, Fa
         "runs.settle" => {
             store.settle_run(p.str("runId")?, p.str("status")?, &p.value("outcome"), p.str("at")?)?;
             none
+        }
+        "runs.rerun" => {
+            let rerun = Rerun { input: p.str("input")?, at: p.str("at")?, fence: p.str("fence")? };
+            Ok(match store.rerun_run(p.str("runId")?, &rerun)? {
+                Some(attempt) => Js::from(obj! { "attempt" => Js::Num(attempt.into()) }),
+                None => Js::Null,
+            })
         }
         "runs.markParked" => {
             store.mark_parked(p.str("runId")?)?;

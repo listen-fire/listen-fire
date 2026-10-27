@@ -16,7 +16,7 @@ use crate::obj;
 use crate::slot_client::SlotClient;
 use module_wire::envelope::METHOD_NOT_IMPLEMENTED_CODE;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Result, RunRow, RunStart, StoreError,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, StoreError,
 };
 use crate::store_wire::{Wire, delivery_params, event_run_params, int, num, opt, park_params, rows, run_start_params, to_rows};
 
@@ -118,6 +118,13 @@ impl RunHostStore for ProcessStore {
     }
     fn mark_failed(&self, id: &str, message: &str) -> Result<()> {
         self.unit("records.markFailed", obj! { "runId" => s(id), "message" => s(message) })
+    }
+    fn rerun_run(&self, run_id: &str, rerun: &Rerun<'_>) -> Result<Option<i64>> {
+        let params = obj! { "runId" => s(run_id), "input" => s(rerun.input), "at" => s(rerun.at), "fence" => s(rerun.fence) };
+        match self.call("runs.rerun", params)? {
+            Js::Null => Ok(None),
+            answer => answer.get("attempt").and_then(int).map(Some).ok_or_else(|| self.malformed("runs.rerun", &answer)),
+        }
     }
     fn cancel_request(&self, id: &str) -> Result<Option<Option<String>>> {
         match self.call("records.cancelRequest", obj! { "runId" => s(id) })? {

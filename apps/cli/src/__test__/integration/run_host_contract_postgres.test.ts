@@ -13,8 +13,10 @@ import {
   callbackContractCases,
   cancelContractCases,
   deliveryContractCases,
+  rerunContractCases,
   runHostContractCases,
   type DeliveryContractBackend,
+  type RerunContractBackend,
   type RecordsContractBackend,
 } from 'movement-engine/services/run_host/contract';
 import { RpcStoreBackend } from 'movement-engine/services/run_host/rpc_store';
@@ -66,6 +68,27 @@ for (const contractCase of deliveryContractCases) {
     };
     try {
       await contractCase.run(deliveries);
+    } finally {
+      await backend.close();
+      clear();
+    }
+  });
+}
+
+for (const contractCase of rerunContractCases) {
+  test(contractCase.name, async () => {
+    const { team, clear } = freshTeam();
+    const backend = new RpcStoreBackend(lfBinary(), ['--contract-store', POSTGRES_URL, '--team', team]);
+    try {
+      await contractCase.run({
+        startRun: (input) => backend.startRun(input),
+        runGet: (input) => backend.runGet(input),
+        runSettle: (input) => backend.runSettle(input),
+        runRerun: (input) => backend.runRerun(input),
+        markFailed: (input) => backend.runs.markFailed(input),
+        claimLease: (input) => backend.store.leases.claim(input),
+        releaseLease: (input) => backend.store.leases.release(input),
+      } satisfies RerunContractBackend);
     } finally {
       await backend.close();
       clear();

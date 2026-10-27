@@ -24,7 +24,7 @@ use crate::pg_store::PgStore;
 use crate::core;
 use crate::project::Project;
 use crate::store::{
-    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Result, RunRow, RunStart, Store,
+    BranchExport, ClaimDue, ClaimedWork, CorrelatedAwait, DeliveryQuery, DeliveryRow, LeafRow, NewDelivery, NewWork, Park, Release, Rerun, Result, RunRow, RunStart, Store,
 };
 
 /// The tenant a SQLite state file's rows belong to (`LOCAL_TENANT`).
@@ -174,7 +174,15 @@ pub trait RunHostStore {
     /// `completed`, `parked`, `running` or `failed`; an ending revokes the run's live callbacks.
     fn settle_run(&self, id: &str, status: &str, outcome: &Js, at: &str) -> Result<()>;
     fn mark_parked(&self, id: &str) -> Result<()>;
+    /// The run is over without completing; the writes it settled with stay in its outcome.
     fn mark_failed(&self, id: &str, message: &str) -> Result<()>;
+    /// A failed run's next attempt, as one write under `rerun.fence`: the
+    /// latest attempt kept beside the run (`RunRow::attempts`), and the run
+    /// `running` again on `rerun.input`, its cancel request and its spend
+    /// against the cost cap cleared. The new attempt's number; None, and
+    /// nothing written, when the run is not failed. A lost fence is
+    /// `LeaseLost`.
+    fn rerun_run(&self, run_id: &str, rerun: &Rerun<'_>) -> Result<Option<i64>>;
     /// The operator's cancel request on the run (its reason), or None.
     fn cancel_request(&self, id: &str) -> Result<Option<Option<String>>>;
     /// An operator asks to cancel the run.
@@ -321,6 +329,9 @@ impl RunHostStore for Store {
     }
     fn mark_failed(&self, id: &str, message: &str) -> Result<()> {
         Store::mark_failed(self, id, message)
+    }
+    fn rerun_run(&self, run_id: &str, rerun: &Rerun<'_>) -> Result<Option<i64>> {
+        Store::rerun_run(self, run_id, rerun)
     }
     fn cancel_request(&self, id: &str) -> Result<Option<Option<String>>> {
         Store::cancel_request(self, id)
