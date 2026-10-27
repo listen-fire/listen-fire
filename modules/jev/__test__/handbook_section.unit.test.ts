@@ -35,7 +35,7 @@ describe('the @lf/jev handbook section', () => {
       return () => admitProbe({ ...claim, probe: claim.probe.replace(from, to) }, catalog);
     };
     expect(refused(', "Is this email asking us to meet or to buy something?")', ')')).toThrow(/MOV_THROUGH_ARG_MISSING.*'question'/);
-    expect(refused('wanted.probability >= 0.7', 'Text.length(wanted.probability) >= 0.7')).toThrow(/MOV_BUILTIN_ARG_TYPE/);
+    expect(refused('wanted >= 0.7', 'Text.length(wanted) >= 0.7')).toThrow(/MOV_BUILTIN_ARG_TYPE/);
     expect(refused('jev.classify({ subject: m.Subject, body: m.Body }', 'jev.classify(m')).toThrow(/MOV_CALL_ARG_TYPE.*'subject'/);
   });
 });

@@ -9,11 +9,9 @@ wanted = jev.score(m.Body, "Is this email asking us to meet or to buy something?
 kind   = jev.classify({ subject: m.Subject, body: m.Body }, ["introduction", "sales pitch", "support request", "other"], "What kind of email is this?")
 ```
 
-- `jev.score(subject, question)` answers `{ probability }`, from 0 to 1 (a Jev `noul` question).
+- `jev.score(subject, question)` answers a number from 0 to 1, how likely the statement is true (a Jev `noul` question): `if (wanted >= 0.7) { … }`.
 - `jev.classify(subject, labels, question)` answers `{ label, confidence }`: one of the labels given, and how likely it is right (a Jev `choice` question; each label is an option's description).
 - `subject` is a text, or a record of the fields that matter, sent with its empty fields left out (as the platform's entity judge sends a record).
-
-Both answer a record, not a bare number: a plugin's plain value reaches the program as text, so a record is what keeps `probability` a number.
 
 ## Setting it up
 

@@ -1,9 +1,7 @@
 // The two plugins: what each declares to the checker, and its body.
 //
-// Both answer a record rather than a bare value. The engine hands a plain
-// call's `value` output back as the text the plugin fetched (a file aside), so
-// a number declared as a value would reach the movement as text; a record's
-// fields keep their types.
+// `score` answers a bare number (its value, under `data.value`), so a
+// movement compares it directly; `classify` answers a record of two fields.
 
 import type { PluginDeclaration } from 'engine-contracts';
 import type { PluginAnswer } from 'module-kit';
@@ -36,10 +34,7 @@ export const SCORE_PLUGIN: PluginDeclaration = {
     dataDependency: 'none',
     additions: {},
     effects: { ai: true },
-    output: {
-      kind: 'record',
-      fields: { probability: { type: { kind: 'number' }, description: 'How likely the statement is true, from 0 to 1.' } },
-    },
+    output: { kind: 'value', type: { kind: 'number' }, description: 'How likely the statement is true, from 0 to 1.' },
   },
 };
 
@@ -128,7 +123,7 @@ export async function score(config: Record<string, unknown>, call: JevCall): Pro
   const reply = await askJev({ state, questions: { [ANSWER]: { type: 'noul', instructions } }, caller }, call);
   const answer = answerOf(caller, reply.answers);
   if (answer.type !== 'noul') throw new Error(`${caller}: Jev answered a ${answer.type}, not a probability`);
-  return { data: { probability: answer.noul }, costMicrodollars: reply.costMicrodollars };
+  return { data: { value: answer.noul }, costMicrodollars: reply.costMicrodollars };
 }
 
 /**

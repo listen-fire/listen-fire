@@ -21,7 +21,7 @@ crm = connect acme_crm using acme
 function triage(company: <crm-[:Company]->>) {
   robots = jev.score(company.Name, "Is this company about robotics?")
   kind   = jev.classify({ name: company.Name }, ["software", "robotics", "other"], "What does this company make?")
-  write crm-[:Company]-> { Name: "\${kind.label} \${kind.confidence} \${robots.probability}" }
+  write crm-[:Company]-> { Name: "\${kind.label} \${kind.confidence} \${robots}" }
 }
 
 listen to crm { events: ["company.created"] } fire triage
@@ -61,7 +61,7 @@ test('lf check types jev.score and jev.classify: their answers, a missing argume
     const check = await lfAsync(dir, 'check');
     assert.equal(check.code, 0, check.out);
 
-    const probabilityAsText = await checkWith(dir, '${robots.probability}"', '${Text.length(robots.probability)}"');
+    const probabilityAsText = await checkWith(dir, '${robots}"', '${Text.length(robots)}"');
     assert.equal(probabilityAsText.code, 1, probabilityAsText.out);
     assert.match(probabilityAsText.out, /MOV_BUILTIN_ARG_TYPE Text\.length's 'value' takes text or a list, and this is number/);
 
@@ -82,19 +82,17 @@ test('lf check types jev.score and jev.classify: their answers, a missing argume
   }
 });
 
-// The checker holds a plugin's positional arguments to their declared types
-// only where they are records: a scalar of the wrong type (a number for a
-// text, a text for a list) is admitted for every plugin, `pdf.render(5)` and
-// `fetchUrl(5)` included. A checker change (crates/movement-checker), out of
-// this module's reach; this turns green when it lands.
-test('lf check refuses a scalar argument of the wrong type', { todo: 'the checker does not type a plugin\'s positional scalar arguments' }, async () => {
+test('lf check refuses a plain argument of the wrong type: a number for the question, a text for the labels', async () => {
   const fake = await startFakeJev({ key: 'jev-key' });
   try {
     const dir = await jevProject(fake);
-    const labelsAsText = await checkWith(dir, '["software", "robotics", "other"]', '"robotics"');
-    assert.equal(labelsAsText.code, 1, labelsAsText.out);
     const questionAsNumber = await checkWith(dir, '"Is this company about robotics?"', '5');
     assert.equal(questionAsNumber.code, 1, questionAsNumber.out);
+    assert.match(questionAsNumber.out, /MOV_CALL_ARG_TYPE 'jev\.score' takes text for 'question', and this is number/);
+    const labelsAsText = await checkWith(dir, '["software", "robotics", "other"]', '"robotics"');
+    assert.equal(labelsAsText.code, 1, labelsAsText.out);
+    assert.match(labelsAsText.out, /MOV_CALL_ARG_TYPE 'jev\.classify' takes list of text for 'labels', and this is text/);
+    console.log([questionAsNumber, labelsAsText].map((c) => c.out.trim()).join('\n'));
   } finally {
     await fake.close();
   }

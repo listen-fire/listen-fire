@@ -16,7 +16,7 @@ crm   = connect attio using acme
 
 function \`Sort Inbound\`(m: <inbox-[:Email]->>) {
   wanted = jev.score(m.Body, "Is this email asking us to meet or to buy something?")
-  if (wanted.probability >= 0.7) {
+  if (wanted >= 0.7) {
     kind = jev.classify({ subject: m.Subject, body: m.Body }, ["introduction", "sales pitch", "support request", "other"], "What kind of email is this?")
     write crm-[:Companies]-> {
       Name:        m.Subject
@@ -36,7 +36,7 @@ export const JEV_HANDBOOK_SECTION: HandbookSection = {
 
 \`\`\`${INTAKE}\`\`\`
 
-- \`jev.score(subject, question)\` answers \`{ probability }\`: how likely the statement is true, from 0 to 1.
+- \`jev.score(subject, question)\` answers a number: how likely the statement is true, from 0 to 1.
 - \`jev.classify(subject, labels, question)\` answers \`{ label, confidence }\`: the one label that fits best, and how likely it is right.
 
 ### jev-or-ai — which one to reach for
@@ -44,7 +44,7 @@ export const JEV_HANDBOOK_SECTION: HandbookSection = {
 - **Jev** for a yes-or-no decision, or a pick from a few labels, over a text or a record: routing, filtering, a gate before an expensive step. Jev charges about $0.04 per million tokens it reads, so a short email costs a few hundred-thousandths of a dollar, and it answers in about half a second.
 - **\`ai(…, { tier: "quick" })\`** when the answer has to be written: a name, a summary, a reason, a label nobody listed in advance.
 - **\`extract\`** when the answer is fields pulled out of content.
-- Pick the threshold for \`probability\` per question, from a handful of real examples. A gate that must not let a wrong item through wants a high bar.
+- Pick the threshold for a score per question, from a handful of real examples. A gate that must not let a wrong item through wants a high bar.
 
 ### what-jev-reads
 

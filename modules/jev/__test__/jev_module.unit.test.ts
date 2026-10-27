@@ -38,7 +38,7 @@ describe('@lf/jev', () => {
   const call = (name: string, config: Record<string, unknown>, fields: Record<string, string> = { apiKey: 'jev-key', baseUrl: fake.url }) =>
     loaded(fields).invoke({ name, config, extractedContext: {} });
 
-  it('declares score and classify, both priced, taking a subject of any shape and answering a record', () => {
+  it('declares score and classify, both priced, taking a subject of any shape: score a number, classify a record', () => {
     expect(jevModule.name).toBe('@lf/jev');
     const specs = pluginSpecsOf(jevModule.plugins);
     expect(Object.keys(specs)).toEqual(['score', 'classify']);
@@ -47,7 +47,7 @@ describe('@lf/jev', () => {
       requiredArgs: ['subject', 'question'],
       priced: true,
       argTypes: { subject: 'json', question: 'text' },
-      output: { kind: 'record', fields: { probability: 'number' } },
+      output: { kind: 'value', type: 'number' },
     });
     expect(specs.classify).toMatchObject({
       args: ['subject', 'labels', 'question'],
@@ -58,9 +58,9 @@ describe('@lf/jev', () => {
     });
   });
 
-  it('score asks one noul question over the text, and answers its probability and what it cost', async () => {
+  it('score asks one noul question over the text, and answers its probability, a number, and what it cost', async () => {
     const answer = await call('score', { subject: 'We are raising a seed round', question: 'Is this an inbound fundraising pitch about a round?' });
-    expect(answer.data).toEqual({ probability: 0.83 });
+    expect(answer.data).toEqual({ value: 0.83 });
     const [request] = fake.requests;
     expect(request?.authorization).toBe('Bearer jev-key');
     expect(request?.body).toEqual({
@@ -75,7 +75,7 @@ describe('@lf/jev', () => {
 
   it('score reads a record as its fields, leaving out the empty ones', async () => {
     const answer = await call('score', { subject: { Subject: 'Seed round', Body: 'We are raising', Cc: '', Notes: null }, question: 'Mentions a round?' });
-    expect(answer.data).toEqual({ probability: 0.83 });
+    expect(answer.data).toEqual({ value: 0.83 });
     expect(fake.requests[0]?.body.state).toEqual({ Subject: 'Seed round', Body: 'We are raising' });
   });
 
@@ -110,7 +110,7 @@ describe('@lf/jev', () => {
 
   it('retries a rate-limited or overloaded Jev, and fails naming the status after three tries', async () => {
     fake.failNext(429, 529);
-    expect((await call('score', { subject: 'a round', question: 'round?' })).data).toEqual({ probability: 0.83 });
+    expect((await call('score', { subject: 'a round', question: 'round?' })).data).toEqual({ value: 0.83 });
     expect(fake.requests).toHaveLength(3);
     fake.failNext(529, 529, 529);
     await expect(call('score', { subject: 'a round', question: 'round?' })).rejects.toThrow('Jev is overloaded or rate-limiting (529) after 3 tries');
