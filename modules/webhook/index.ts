@@ -30,6 +30,7 @@ export const webhookModule = defineModule({
         { name: 'secret', label: 'The signing secret (Stripe: the endpoint’s whsec_…; empty for none)', optional: true },
         { name: 'header', label: 'hmac-sha256 only: the header the signature is sent in (e.g. x-signature)', secret: false, optional: true },
         { name: 'encoding', label: 'hmac-sha256 only: hex or base64 (default hex)', secret: false, optional: true },
+        { name: 'idField', label: 'hmac-sha256 and none: the body field holding the sender’s id for a delivery, so a retry runs once (empty: no dedupe; stripe uses id)', secret: false, optional: true },
       ],
     },
   ],

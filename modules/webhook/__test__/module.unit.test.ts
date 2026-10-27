@@ -4,7 +4,7 @@
 import type { CredentialFields, ModuleCredential } from 'module-kit';
 import type { InboundCheckInput } from 'movement-engine/public/adapter';
 
-import { adapterInProcess, refusingFiles, refusingKv } from 'module-kit';
+import { adapterInProcess, hmacSha256Hex, refusingFiles, refusingKv } from 'module-kit';
 
 import { webhookModule } from '../index';
 import { stripeSignature } from '../signing';
@@ -38,7 +38,29 @@ describe('checkInbound', () => {
 
   it('accepts a signed delivery as one event, its body the payload', async () => {
     const answer = await stripe.checkInbound!(post(BODY, { 'stripe-signature': stripeSignature('whsec_test', BODY, now()) }));
-    expect(answer).toEqual({ outcome: 'accepted', events: [{ payload: { id: 'pay_1', amount: 1200 }, tag: 'delivery' }] });
+    expect(answer).toEqual({ outcome: 'accepted', events: [{ payload: { id: 'pay_1', amount: 1200 }, tag: 'delivery' }], deliveryId: 'pay_1' });
+  });
+
+  it('names a Stripe delivery by the body’s id, so a retry is the same delivery', async () => {
+    const sign = (body: string) => ({ 'stripe-signature': stripeSignature('whsec_test', body, now()) });
+    const first = await stripe.checkInbound!(post(BODY, sign(BODY)));
+    const retry = await stripe.checkInbound!(post(BODY, sign(BODY)));
+    expect(first).toMatchObject({ deliveryId: 'pay_1' });
+    expect(retry).toMatchObject({ deliveryId: 'pay_1' });
+    const noId = '{"amount":1}';
+    expect(await stripe.checkInbound!(post(noId, sign(noId)))).not.toHaveProperty('deliveryId');
+  });
+
+  it('names a delivery by the credential’s idField on the other schemes, and by nothing when it names none', async () => {
+    const body = '{"ref":"r-9","amount":1}';
+    const keyed = load({ scheme: 'none', idField: 'ref' });
+    expect(await keyed.checkInbound!(post(body))).toMatchObject({ deliveryId: 'r-9' });
+    const signature = hmacSha256Hex('s3', body);
+    const signed = load({ scheme: 'hmac-sha256', secret: 's3', header: 'x-sig', idField: 'ref' });
+    expect(await signed.checkInbound!(post(body, { 'x-sig': signature }))).toMatchObject({ deliveryId: 'r-9' });
+    const unkeyed = load({ scheme: 'none' });
+    expect(await unkeyed.checkInbound!(post(body))).not.toHaveProperty('deliveryId');
+    expect(await keyed.checkInbound!(post('{"amount":1}'))).not.toHaveProperty('deliveryId');
   });
 
   it('refuses (401) an unsigned, mis-signed or stale delivery', async () => {

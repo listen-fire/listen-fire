@@ -44,9 +44,9 @@ async function webhookProject(): Promise<string> {
   const connected = await ok(lf(dir, ['connect', '@lf/webhook', '--yes'], { answers: [] }));
   assert.match(connected, /installed @lf\/webhook as externals\/webhook/);
   assert.doesNotMatch(connected, /webhooks are signed with/, 'the sender issues the secret: lf connect generates none');
-  // Asked as a person answers: scheme, secret, header, encoding.
-  assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'StripeHook'], { answers: ['stripe', SECRET, '', ''] })), /added StripeHook/);
-  assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'FormsHook'], { answers: ['none', '', '', ''] })), /added FormsHook/);
+  // Asked as a person answers: scheme, secret, header, encoding, idField.
+  assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'StripeHook'], { answers: ['stripe', SECRET, '', '', ''] })), /added StripeHook/);
+  assert.match(await ok(lf(dir, ['credential', 'add', '--module', 'webhook', 'FormsHook'], { answers: ['none', '', '', '', ''] })), /added FormsHook/);
   return dir;
 }
 
@@ -106,6 +106,52 @@ test('lf serve prints each connection’s URL, runs a signed delivery, and refus
     const unsignedOpen = await post(formsUrl, open);
     assert.equal(unsignedOpen.status, 202, unsignedOpen.body);
     assert.deepEqual(companies(dir), ['pay_1 failed: 1200', 'pay_6 failed: 7']);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('the same signed Stripe delivery posted twice runs once; the repeat is answered 2xx as a duplicate', async () => {
+  const dir = await webhookProject();
+  const serving = await served(dir);
+  try {
+    const url = (await serving.waitFor(/^webhook StripeHook: /)).replace(/^webhook StripeHook: /, '');
+    const body = '{"id":"evt_1","amount":1200}';
+    const sign = () => ({ 'stripe-signature': stripeSignature(SECRET, body, now()) });
+    const first = await post(url, body, sign());
+    assert.equal(first.status, 202, first.body);
+    const again = await post(url, body, sign());
+    assert.ok(again.status >= 200 && again.status < 300, again.body);
+    assert.match(again.body, /"duplicate":\s*true/);
+    assert.deepEqual(companies(dir), ['evt_1 failed: 1200'], 'the retry ran nothing');
+    const other = '{"id":"evt_2","amount":5}';
+    assert.equal((await post(url, other, { 'stripe-signature': stripeSignature(SECRET, other, now()) })).status, 202);
+    assert.deepEqual(companies(dir), ['evt_1 failed: 1200', 'evt_2 failed: 5']);
+    const receipts = JSON.parse(await ok(lf(dir, ['deliveries', '--json']))) as { deliveries: { externalId: string }[] };
+    assert.deepEqual(receipts.deliveries.map((d) => d.externalId).sort(), ['evt_1', 'evt_2'], 'the retry kept no second receipt');
+    console.log(again.body);
+  } finally {
+    await serving.stop();
+  }
+});
+
+test('a payload node imported from another file gates deliveries like one declared in the file', async () => {
+  const dir = await webhookProject();
+  const types = 'export node Payment {\n  id: <text>\n  amount: <number>\n  note: <text | null>\n}\n';
+  writeFileSync(join(dir, 'movements/types.mvt'), types);
+  const [, rest] = PAYMENTS.split(/node Payment \{[^}]*\}\n\n/);
+  const imports = PAYMENTS.split('\ncrm = connect')[0] + '\nimport { Payment } from "types"\n\ncrm = connect' + PAYMENTS.split('\ncrm = connect')[1].split('\nnode Payment')[0];
+  writeFileSync(join(dir, 'movements/payments.mvt'), `${imports}\n${rest}`);
+  const check = await lf(dir, ['check']).done;
+  assert.equal(check.code, 0, check.out);
+  const serving = await served(dir);
+  try {
+    const url = (await serving.waitFor(/^webhook StripeHook: /)).replace(/^webhook StripeHook: /, '');
+    const misfit = '{"id":"pay_9","amount":"twelve"}';
+    const refused = await post(url, misfit, { 'stripe-signature': stripeSignature(SECRET, misfit, now()) });
+    assert.equal(refused.status, 400, refused.body);
+    assert.match(refused.body, /`amount` is text, not a number/);
+    assert.deepEqual(companies(dir), [], 'the misfit ran nothing');
   } finally {
     await serving.stop();
   }

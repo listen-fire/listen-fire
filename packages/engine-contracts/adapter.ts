@@ -1845,7 +1845,15 @@ export type InboundCheckInput = WireCheckInboundInputShape;
 
 /** What a module decided about one inbound request (`checkInbound`). */
 export type InboundCheck =
-  | { outcome: 'accepted'; events: DiscriminableEvent[]; wakeKeys?: string[]; checkpoint?: unknown }
+  | {
+      outcome: 'accepted';
+      events: DiscriminableEvent[];
+      wakeKeys?: string[];
+      checkpoint?: unknown;
+      /** The provider's id for this delivery: a redelivery under an id the
+       *  host kept before is acked and runs nothing. */
+      deliveryId?: string;
+    }
   /** The host answers `status` (401 when absent) with `signature_invalid`. */
   | { outcome: 'refused'; status?: number }
   /** Sent as it is, nothing run: `text` as text/plain, `json` as JSON. */

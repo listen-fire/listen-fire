@@ -75,7 +75,7 @@ export function inboundRequest(input: WireCheckInboundInputShape): InboundReques
   };
 }
 
-export function accepted(events: DiscriminableEvent[], more: { wakeKeys?: string[]; checkpoint?: unknown } = {}): InboundCheck {
+export function accepted(events: DiscriminableEvent[], more: { wakeKeys?: string[]; checkpoint?: unknown; deliveryId?: string } = {}): InboundCheck {
   return { outcome: 'accepted', events, ...more };
 }
 

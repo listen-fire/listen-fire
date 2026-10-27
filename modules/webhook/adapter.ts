@@ -50,7 +50,8 @@ export class WebhookAdapter extends BaseAdapter {
   async checkInbound(input: InboundCheckInput): Promise<InboundCheck> {
     const request = inboundRequest(input);
     if (request.method !== 'POST') return reply(405, { json: { error: 'method_not_allowed', message: 'a webhook is a POST' } });
-    const verdict = verify(await this.sources.signing(), request, this.sources.now());
+    const signing = await this.sources.signing();
+    const verdict = verify(signing, request, this.sources.now());
     if (!verdict.ok) {
       this.sources.log.warn(`webhook delivery refused: ${verdict.reason}`);
       return refused(401);
@@ -59,6 +60,8 @@ export class WebhookAdapter extends BaseAdapter {
     if (!isObject(body)) {
       return reply(400, { json: { error: 'body_not_object', message: 'the body is not a JSON object: a webhook delivers one JSON object per POST' } });
     }
-    return accepted([{ payload: body, tag: DELIVERY_TAG }]);
+    const id = signing.idField === undefined ? undefined : body[signing.idField];
+    const deliveryId = typeof id === 'string' && id !== '' ? id : typeof id === 'number' ? String(id) : undefined;
+    return accepted([{ payload: body, tag: DELIVERY_TAG }], deliveryId === undefined ? {} : { deliveryId });
   }
 }

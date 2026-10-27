@@ -29,6 +29,9 @@ named in [`RELEASING.md`](RELEASING.md).
 - New module `@lf/webhook`: incoming webhooks from any sender (Stripe, a form service, your own app).
   - Each connection is one URL at `/hooks/webhook/<credential>`. `lf serve` now prints each webhook connection's URL when it starts.
   - The connection's credential holds the signing scheme and secret: `stripe`, `hmac-sha256` or `none`. An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.
+  - A retried delivery runs once. `stripe` uses the body's `id`; the other schemes use the credential's optional `idField` (a top-level body field), and without it nothing is deduplicated. The repeat is answered 200 `duplicate: true`.
+- A module's `checkInbound` answer in TypeScript can carry `deliveryId` (`InboundCheck`, and `accepted(events, { deliveryId })` in module-kit). The wire and lf already took it.
+- Under `lf`, a listen's `payload:` node imported from another movement file now gates deliveries, as the checker already typed it. Before, such a listen took any body.
 
 ## [0.12.9] - 2026-10-26
 

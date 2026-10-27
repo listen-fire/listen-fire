@@ -41,7 +41,8 @@ listen to stripe { payload: <Payment> } fire \`Payment Failed\`
   - \`stripe\`: the endpoint's signing secret (\`whsec_…\`). The \`Stripe-Signature\` header is checked, and a signature older than 5 minutes is refused.
   - \`hmac-sha256\`: the secret, the header the sender signs in (e.g. \`x-signature\`), and \`hex\` or \`base64\`. The header holds the HMAC-SHA256 of the exact body.
   - \`none\`: unsigned. Any POST to the URL runs. Choose it only for a sender that cannot sign.
-- An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.`;
+- An unsigned, mis-signed or stale delivery is answered 401 and runs nothing.
+- A sender retries a delivery, and the same event runs once. \`stripe\` uses the body's \`id\`. The other schemes use the credential's optional \`idField\`, a top-level body field; without it nothing is deduplicated.`;
 
 export const WEBHOOK_MANIFEST: AdapterManifest = {
   adapterType: WEBHOOK_ADAPTER_TYPE,

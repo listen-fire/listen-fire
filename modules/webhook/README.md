@@ -17,6 +17,7 @@ The credential asks for:
   - `none`: unsigned. Any POST runs. This is a choice written down, never a default.
 - `secret`: the signing secret (for Stripe, the endpoint's `whsec_…`). Empty for `none`.
 - `header` and `encoding` (`hex` or `base64`, default `hex`): for `hmac-sha256` only.
+- `idField` (optional): a top-level body field holding the sender's id for a delivery, for `hmac-sha256` and `none`. A retry of a delivery with the same id runs once: the repeat is answered 200 `duplicate: true` and runs nothing. Without `idField` nothing is deduplicated. `stripe` always uses the body's `id` (the Stripe event id).
 
 `lf serve` prints each connection's URL when it starts: `/hooks/webhook/<credential>`, under `publicUrl` when `lf.yaml` names one. Give that URL to the sender.
 
