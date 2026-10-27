@@ -518,6 +518,8 @@ export function instanceSchemaFromDescriptors(input: {
     const writeOnlyProperties: string[] = [];
     /** Display names carried by more than one of the source's fields. */
     const ambiguousProperties: string[] = [];
+    /** Fields a read must pin in its WHERE (the descriptor's `pinned`). */
+    const pinnedProperties: string[] = [];
     const requiredFields: string[] = [];
     const fieldDocs: Record<string, string> = {};
     /** Every described field's words, readable or write-only: the position's. */
@@ -552,6 +554,7 @@ export function instanceSchemaFromDescriptors(input: {
       }
       const description = describedBy(field);
       if (description !== undefined) positionFieldDocs[fieldName] = description;
+      if (field.pinned === true) pinnedProperties.push(fieldName);
       if (field.readable === false) {
         // A WRITE-ONLY field (WhatsApp's send-side `File`): it stays on the
         // write shape below, but is DELIBERATELY absent from the readable
@@ -737,6 +740,7 @@ export function instanceSchemaFromDescriptors(input: {
         ...(droppedField ? { openProperties: true } : {}),
         ...(writeOnlyProperties.length > 0 ? { writeOnlyProperties } : {}),
         ...(ambiguousProperties.length > 0 ? { ambiguousProperties } : {}),
+        ...(pinnedProperties.length > 0 ? { pinnedProperties } : {}),
         // The system removes a record of this type (its `deleteRecord`) — the
         // promise `delete x` is checked against.
         ...(descriptor.deletable === true ? { deletable: true } : {}),

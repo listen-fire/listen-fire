@@ -131,7 +131,7 @@ test('lf check refuses a wrong argument type, a value the tool does not take, an
   }
 });
 
-test('a call the server refuses fails the run with the server’s text; a read missing an argument fails naming it', async () => {
+test('a call the server refuses fails the run with the server’s text', async () => {
   const { issues, dir, close } = await twoServers();
   try {
     writeFileSync(join(dir, 'movements/triage.mvt'), TRIAGE.replace('title: "Follow up ${company.Name}"', 'title: "fail"'));
@@ -142,12 +142,33 @@ test('a call the server refuses fails the run with the server’s text; a read m
     console.log(refused.out.trim());
     assert.deepEqual(issues.calls.map((c) => c.tool), ['create_issue']);
 
-    const unpinned = await checkWith(dir, 'r.query == company.Name', 'r.count == 1');
-    assert.equal(unpinned.code, 0, unpinned.out);
-    const missing = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
-    assert.equal(missing.code, 1, missing.out);
-    assert.match(missing.out, /search_issues needs "query": pin it in the read's WHERE with ==/);
-    console.log(missing.out.trim());
+  } finally {
+    await close();
+  }
+});
+
+test('lf check refuses a read that does not pin a required argument in its WHERE, and accepts the pinned form', async () => {
+  const { issues, dir, close } = await twoServers();
+  try {
+    const bare = await checkWith(dir, 'tracker-[r:search_issues WHERE r.query == company.Name]->', 'tracker-[r:search_issues]->');
+    assert.equal(bare.code, 1, bare.out);
+    assert.match(bare.out, /MOV_HOP_PIN_REQUIRED 'search_issues' takes `query` as an argument of the read, so its WHERE must pin it with ==/);
+    assert.match(bare.out, /Write `-\[r:search_issues WHERE r\.query == …\]->`/);
+
+    const otherField = await checkWith(dir, 'r.query == company.Name', 'r.count == 1');
+    assert.equal(otherField.code, 1, otherField.out);
+    assert.match(otherField.out, /MOV_HOP_PIN_REQUIRED 'search_issues' takes `query`/);
+
+    const either = await checkWith(dir, 'r.query == company.Name', '(r.query == company.Name OR r.query == "x")');
+    assert.equal(either.code, 1, either.out);
+    assert.match(either.out, /MOV_HOP_PIN_REQUIRED/);
+    console.log([bare, otherField, either].map((c) => c.out.trim()).join('\n'));
+
+    const pinned = await checkWith(dir, 'r.query == company.Name', 'r.count >= 0 AND company.Name == r.query');
+    assert.equal(pinned.code, 0, pinned.out);
+    const run = await lfAsync(dir, 'run', '--event', 'events/company_created.json');
+    assert.equal(run.code, 0, run.out);
+    assert.deepEqual(issues.calls.find((c) => c.tool === 'search_issues'), { tool: 'search_issues', args: { query: 'Vireo Robotics' } });
   } finally {
     await close();
   }

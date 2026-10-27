@@ -315,6 +315,18 @@ reads every declaration from it, the listen declarations included.
   removes a record of this type. Absent means no. A `delete` of a type that does not say `"deletable": true`
   is refused before the automation is saved (`MOV_DELETE_NOT_DECLARED`);
   automations pinned to an earlier version are unaffected.
+- `pinned` (optional, on a field): `true` says a read of this type must pin
+  the field in its `WHERE` with `==`, because your `getRelated` takes it as
+  an argument of the read rather than filtering records it could list (an
+  MCP tool's required input). Each pinned field must be stated as
+  `r.<field> == <value>` among the `WHERE`'s `AND`-joined conditions, where
+  the value is a literal or a name in scope, and the `WHERE` must be one
+  Listen-Fire sends you: one that calls no function and tests no `EXISTS`.
+  A read that does not do this is refused before the automation is saved
+  (`MOV_HOP_PIN_REQUIRED`), naming the fields and the form to write. Writes
+  of the type are unaffected. Read the values out of the `where` you are
+  sent, and return them on each record: Listen-Fire applies the `WHERE`
+  again to what comes back.
 - `listEntryPoints` and `describe` are asked once per connection the
   automations make, carrying that connection's credential: two connections
   of your module (two workspaces, two servers) may answer different types,

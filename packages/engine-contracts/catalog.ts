@@ -778,6 +778,14 @@ const schemaFieldDescriptorSchema = z.object({
   readable: z.boolean().optional(),
   required: z.boolean(),
   /**
+   * A read of this type must pin this field in its WHERE with `==`
+   * (`-[r:search_issues WHERE r.query == …]->`): the source takes it as an
+   * argument of the read, not as a filter over records it could list. The
+   * checker refuses a read that does not (MOV_HOP_PIN_REQUIRED). Absent ⇒
+   * false. Writes are unaffected (`required` is the write's own rule).
+   */
+  pinned: z.boolean().optional(),
+  /**
    * Where this writable field lands at the adapter's write boundary.
    * Optional; omitted means node-anchored (the universal case for
    * external adapters and most KG fields).
