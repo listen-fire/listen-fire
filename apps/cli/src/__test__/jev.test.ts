@@ -1,7 +1,7 @@
 // `@lf/jev` in lf, end to end, against the fake Jev (modules/jev/__test__
 // /fake_jev.ts): `lf connect @lf/jev` installs the bundled module, a
 // credential names the key and the fake's address, `lf check` types both
-// plugins (and refuses a wrong argument), `lf run` writes what Jev answered,
+// plugins (and warns of a wrong argument), `lf run` writes what Jev answered,
 // and the run's record carries what each call cost.
 
 import { test } from 'node:test';
@@ -82,16 +82,18 @@ test('lf check types jev.score and jev.classify: their answers, a missing argume
   }
 });
 
-test('lf check refuses a plain argument of the wrong type: a number for the question, a text for the labels', async () => {
+// A 0.12 release warns rather than refuses: those releases admitted the
+// value, so a saved movement still runs as written.
+test('lf check warns of a plain argument of the wrong type: a number for the question, a text for the labels', async () => {
   const fake = await startFakeJev({ key: 'jev-key' });
   try {
     const dir = await jevProject(fake);
     const questionAsNumber = await checkWith(dir, '"Is this company about robotics?"', '5');
-    assert.equal(questionAsNumber.code, 1, questionAsNumber.out);
-    assert.match(questionAsNumber.out, /MOV_CALL_ARG_TYPE 'jev\.score' takes text for 'question', and this is number/);
+    assert.equal(questionAsNumber.code, 0, questionAsNumber.out);
+    assert.match(questionAsNumber.out, /warning MOV_CALL_ARG_TYPE 'jev\.score' takes text for 'question', and this is number/);
     const labelsAsText = await checkWith(dir, '["software", "robotics", "other"]', '"robotics"');
-    assert.equal(labelsAsText.code, 1, labelsAsText.out);
-    assert.match(labelsAsText.out, /MOV_CALL_ARG_TYPE 'jev\.classify' takes list of text for 'labels', and this is text/);
+    assert.equal(labelsAsText.code, 0, labelsAsText.out);
+    assert.match(labelsAsText.out, /warning MOV_CALL_ARG_TYPE 'jev\.classify' takes list of text for 'labels', and this is text/);
     console.log([questionAsNumber, labelsAsText].map((c) => c.out.trim()).join('\n'));
   } finally {
     await fake.close();

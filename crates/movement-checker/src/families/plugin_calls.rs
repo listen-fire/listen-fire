@@ -276,14 +276,17 @@ impl Checker<'_> {
         {
             return;
         }
+        // A warning while the 0.12 pins read: those releases admitted the
+        // value, and a plugin may have coerced it, so a saved movement still
+        // runs as written. Refusing it is a tightened rule, for a release of
+        // the next compatibility key.
         if let Some(value) = value
             && !field_assignable(value, &declared_ty)
         {
-            self.report(
-                codes::CALL_ARG_TYPE,
-                format!("'{callee}' takes {} for '{name}', and this is {}", describe_field_type(&declared_ty), describe_field_type(strip_absent(value))),
-                span,
-            );
+            let message = format!("'{callee}' takes {} for '{name}', and this is {}", describe_field_type(&declared_ty), describe_field_type(strip_absent(value)));
+            let mut warning = crate::diagnostic::Diagnostic::error(codes::CALL_ARG_TYPE, message, span);
+            warning.severity = Some(crate::diagnostic::Severity::Warning);
+            self.push(warning);
         }
     }
 
