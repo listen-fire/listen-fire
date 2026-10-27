@@ -330,7 +330,7 @@ pub async fn open_session(project: Project, opening: &Opening<'_>) -> Result<Ses
     let files = scan_movements(&project)?;
     let parsed = Parsed::each(&files, &parsed);
     let catalog = catalog_of(&running, &schemas, credentials, &files);
-    let listens = parsed.iter().flat_map(|p| p.listens.iter().cloned()).collect();
+    let listens = crate::routing::listens_across(&parsed);
     let user = local_identity(&project.user, |k| std::env::var(k).ok());
     let public_url = project
         .public_url
@@ -1589,7 +1589,7 @@ impl Session {
             return self.refuse(log, pairs, rose);
         }
 
-        let listens = parsed.iter().flat_map(|p| p.listens.iter().cloned()).collect();
+        let listens = crate::routing::listens_across(&parsed);
         let _holds = hold_all(&running, self.role.keep());
         let taken = Rc::new(FileSet { files, parsed, catalog, listens, running, schemas, errors: OnceCell::from(counts), _holds });
         self.file_set.replace(taken.clone());

@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 
-use movement_parser::ast::{NamedArg, RValue, ShapeDeclaration, ShapeNode, Statement};
+use std::rc::Rc;
+
+use movement_parser::ast::{ImportSource, NamedArg, RValue, ShapeDeclaration, ShapeNode, Statement};
 use movement_parser::util::form::external_text;
 use serde_json::Value as Json;
 
@@ -176,18 +178,62 @@ impl PayloadNode {
     }
 }
 
+/// What one file declares for reading a payload node: its nodes, its enums,
+/// and the names it imports from other files (local name to file and exported
+/// name), as the checker's linker resolves them.
+struct FileScope<'a> {
+    shapes: HashMap<String, &'a ShapeDeclaration>,
+    enums: HashMap<String, Vec<String>>,
+    imports: HashMap<String, (String, String)>,
+}
+
+impl<'a> FileScope<'a> {
+    fn of(program: &'a movement_parser::ast::Program) -> FileScope<'a> {
+        let mut scope = FileScope { shapes: HashMap::new(), enums: HashMap::new(), imports: HashMap::new() };
+        for statement in &program.statements {
+            match statement {
+                Statement::Shape(shape) => {
+                    scope.shapes.insert(shape.name.clone(), shape);
+                }
+                Statement::Type(declaration) => {
+                    scope.enums.insert(declaration.name.clone(), declaration.options.clone());
+                }
+                Statement::Import(import) => {
+                    if let ImportSource::File { path } = &import.source {
+                        for name in &import.names {
+                            scope.imports.insert(name.alias.clone().unwrap_or_else(|| name.name.clone()), (path.clone(), name.name.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        scope
+    }
+
+    /// The node `name` as this file means it, and the file that declares it:
+    /// its own, or the one it imports it from (through any chain of imports).
+    fn shape<'s>(&'s self, name: &str, scopes: &'s HashMap<String, FileScope<'a>>, hops: usize) -> Option<(&'a ShapeDeclaration, &'s FileScope<'a>)> {
+        if let Some(shape) = self.shapes.get(name) {
+            return Some((shape, self));
+        }
+        let (path, exported) = self.imports.get(name).filter(|_| hops < 16)?;
+        scopes.get(path)?.shape(exported, scopes, hops + 1)
+    }
+}
+
 impl DeclaredPayload {
-    /// The node `name` as the program declares it, a base it extends folded
-    /// in. None when the program declares no such node (the checker refuses
-    /// that listen).
-    fn of(name: &str, shapes: &HashMap<String, &ShapeDeclaration>, enums: &HashMap<String, Vec<String>>) -> Option<DeclaredPayload> {
-        fn node(name: &str, shapes: &HashMap<String, &ShapeDeclaration>, enums: &HashMap<String, Vec<String>>, depth: usize) -> Option<PayloadNode> {
-            let shape = shapes.get(name)?;
-            let base = shape.extends.as_ref().filter(|_| depth < 16).and_then(|b| node(&b.name, shapes, enums, depth + 1));
-            Some(PayloadNode::of(&shape.root, base, enums))
+    /// The node `name` as `scope` means it, a base it extends folded in. None
+    /// when no such node is declared or imported (the checker refuses that
+    /// listen).
+    fn of(name: &str, scope: &FileScope<'_>, scopes: &HashMap<String, FileScope<'_>>) -> Option<DeclaredPayload> {
+        fn node(name: &str, scope: &FileScope<'_>, scopes: &HashMap<String, FileScope<'_>>, depth: usize) -> Option<PayloadNode> {
+            let (shape, owner) = scope.shape(name, scopes, 0)?;
+            let base = shape.extends.as_ref().filter(|_| depth < 16).and_then(|b| node(&b.name, owner, scopes, depth + 1));
+            Some(PayloadNode::of(&shape.root, base, &owner.enums))
         }
         let name = name.trim().trim_matches('`');
-        Some(DeclaredPayload { name: name.to_string(), node: node(name, shapes, enums, 0)? })
+        Some(DeclaredPayload { name: name.to_string(), node: node(name, scope, scopes, 0)? })
     }
 
     /// What of `payload` does not fit the node, one line each; empty when it fits.
@@ -248,24 +294,25 @@ fn external_js(value: &Json) -> Js {
 /// The construction argument `connect … using X` writes the credential to.
 const CREDENTIAL_ARG: &str = "credentials";
 
-/// `collectListens` for one file: the listens of `file`, whose program is
-/// `program` (crate::sources::Parsed reads them with its parse).
-pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Listen> {
+/// `collectListens`: the listens of every file that parses. A payload node
+/// the listen's file imports from another file is read from that file, the
+/// way the checker links it, so the listens of a set depend on the whole set
+/// and not on one file's text.
+pub fn listens_across(parsed: &[Rc<crate::sources::Parsed>]) -> Vec<Listen> {
+    let programs: Vec<(&str, &movement_parser::ast::Program)> = parsed.iter().filter_map(|p| p.program.as_ref().ok().map(|program| (p.name.as_str(), program))).collect();
+    let scopes: HashMap<String, FileScope<'_>> = programs.iter().map(|(name, program)| (name.to_string(), FileScope::of(program))).collect();
+    programs.iter().flat_map(|(name, program)| listens_of(name, program, &scopes)).collect()
+}
+
+fn listens_of(file: &str, program: &movement_parser::ast::Program, scopes: &HashMap<String, FileScope<'_>>) -> Vec<Listen> {
     let mut listens = Vec::new();
     let mut originals: HashMap<String, String> = HashMap::new();
     // Each instance's adapter and credential, by the instance's name.
     let mut constructions: HashMap<String, (String, Option<String>)> = HashMap::new();
     let mut declared = Vec::new();
-    let mut shapes: HashMap<String, &ShapeDeclaration> = HashMap::new();
-    let mut enums: HashMap<String, Vec<String>> = HashMap::new();
+    let scope = &scopes[file];
     for statement in &program.statements {
         match statement {
-            Statement::Shape(shape) => {
-                shapes.insert(shape.name.clone(), shape);
-            }
-            Statement::Type(type_declaration) => {
-                enums.insert(type_declaration.name.clone(), type_declaration.options.clone());
-            }
             Statement::Import(import) => {
                 for name in &import.names {
                     if let Some(alias) = &name.alias {
@@ -299,7 +346,7 @@ pub fn listens_of(file: &str, program: &movement_parser::ast::Program) -> Vec<Li
         }
         // The checker takes a type only for a key of the `type` format: a
         // node the program declares.
-        let payload = listen.config.iter().filter(|a| a.is_type == Some(true)).find_map(|a| DeclaredPayload::of(&a.value.raw, &shapes, &enums));
+        let payload = listen.config.iter().filter(|a| a.is_type == Some(true)).find_map(|a| DeclaredPayload::of(&a.value.raw, scope, scopes));
         listens.push(Listen {
             file: file.to_string(),
             adapter,
@@ -464,7 +511,7 @@ mod tests {
 
     /// Every listen across the files.
     fn collect_listens(files: &[MovementFile]) -> Vec<Listen> {
-        files.iter().flat_map(|file| Parsed::of(file).listens).collect()
+        listens_across(&Parsed::each(files, &[]))
     }
 
     fn js(text: &str) -> Js {
@@ -562,6 +609,24 @@ mod tests {
         );
         assert_eq!(misfits(r#"[1]"#), ["the body is a list, not an object"]);
         assert!(!paid.takes(&event(r#"{"id":"pay_1"}"#)) && any.takes(&event(r#"{"id":"pay_1"}"#)));
+    }
+
+    #[test]
+    fn a_payload_node_imported_from_another_file_gates_like_one_declared_in_the_file() {
+        let types = "type Currency = <\"usd\" | \"eur\">\nexport node Charge {\n  id: <text>\n}\nexport node Payment extends Charge {\n  amount: <number>\n  currency: <Currency>\n}\n";
+        let hooks = "import { webhook } from adapters\nimport { StripeHook } from credentials\nimport { Payment as Paid } from \"types\"\nstripe = connect webhook using StripeHook\nfunction paid(e: <Paid>) {\n}\nlisten to stripe { payload: <Paid> } fire paid\n";
+        let file = |name: &str, source: &str| MovementFile { name: name.into(), path: PathBuf::from(format!("{name}.mvt")), source: source.into(), version: None };
+        let listens = collect_listens(&[file("hooks", hooks), file("types", types)]);
+        let paid = &listens[0];
+        assert_eq!(paid.payload.as_ref().map(|p| p.name.as_str()), Some("Paid"));
+        let event = |payload: &str| js(&format!(r#"{{"payload":{payload}}}"#));
+        assert!(paid.takes(&event(r#"{"id":"p","amount":1,"currency":"usd"}"#)));
+        assert_eq!(
+            paid.payload.as_ref().unwrap().misfits(&js(r#"{"amount":"1","currency":"gbp"}"#)),
+            ["`id` is missing (text)", "`amount` is text, not a number", "`currency` is text, not one of \"usd\", \"eur\""],
+            "the imported node's base and enum come from its own file"
+        );
+        assert!(!paid.takes(&event(r#"{"id":"p"}"#)));
     }
 
     #[test]
