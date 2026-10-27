@@ -15,6 +15,7 @@ import type {
   DiscriminableEvent,
   EdgesFromResult,
   EnsureEventSubscriptionInput,
+  EventSubscriptionRefresh,
   EventSubscriptionRegistration,
   EventType,
   GetFieldValueInput,
@@ -22,6 +23,7 @@ import type {
   ParentLink,
   RelatedResult,
   ReadInput,
+  RefreshEventSubscriptionInput,
   RemoveEventSubscriptionInput,
   ResolveEntityInput,
   ResolveEntityResult,
@@ -863,7 +865,13 @@ export class AirtableAdapter extends BaseAdapter {
       changeTypes,
     });
     // macSecretBase64 is issued ONLY here — persist it as the inbound HMAC key.
-    return { externalId: created.webhookId, secret: created.macSecretBase64 };
+    // A webhook lapses 7 days on unless refreshed: the host refreshes it
+    // before `expiresAt`.
+    return {
+      externalId: created.webhookId,
+      secret: created.macSecretBase64,
+      ...(created.expirationTime !== undefined ? { expiresAt: created.expirationTime } : {}),
+    };
   }
 
   async removeEventSubscription(input: RemoveEventSubscriptionInput): Promise<void> {
@@ -878,17 +886,16 @@ export class AirtableAdapter extends BaseAdapter {
    * Extend a registered webhook's 7-day expiry. Airtable disables inactive
    * webhooks after 7 days; an inbound delivery (which pulls payloads) already
    * extends the window, so only quiet webhooks need this — driven by the
-   * airtable_webhook_refresh worker. Not on the `Adapter` interface (Airtable
-   * is the only source that expires); the worker calls it on the concrete type.
+   * platform's airtable_webhook_refresh worker, and by `lf` before the
+   * `expiresAt` the registration returned (adapter protocol 2.4). Answers
+   * when it now expires.
    */
-  async refreshEventSubscription(input: {
-    externalId: string;
-    scope: Record<string, string>;
-  }): Promise<void> {
+  async refreshEventSubscription(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined> {
     const scope = airtableScope(input.scope);
-    if (!scope) return;
+    if (!scope) return undefined;
     const client = await this.getApiClient();
-    await client.refreshWebhook({ baseId: scope.base, webhookId: input.externalId });
+    const refreshed = await client.refreshWebhook({ baseId: scope.base, webhookId: input.externalId });
+    return refreshed.expirationTime !== undefined ? { expiresAt: refreshed.expirationTime } : {};
   }
 
   // ── Internal: lazy API client construction ──────────────────────────────

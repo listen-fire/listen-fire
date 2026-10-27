@@ -1,7 +1,7 @@
 # The adapter protocol
 
 Version: 2
-Minor: 3
+Minor: 4
 
 A remote adapter connects a system you run to Listen-Fire. It is an HTTP
 server you host, in any language. Listen-Fire calls it to learn your data
@@ -113,7 +113,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
   - The minor is computed, not the kit's latest: the highest minor among the features your manifest lists ([Minors of version 2](#minors-of-version-2)). The reference kits stamp it. An author may raise it for a host feature the manifest cannot show (`protocolMinor` on the module's definition), never lower it.
   - So rebuilding a module with a newer kit never makes an older host refuse it.
   - An absent `protocolMinor` is unstated, read as 2.0. Every module published up to 0.12.5 states none.
-- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.3. They refuse a manifest that states another major (newer or older), or a minor above 3. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
+- **What a host refuses, by name.** `lf` and the engine speak 2.0 to 2.4. They refuse a manifest that states another major (newer or older), or a minor above 4. `lf` reads a core module's manifest before any other method it asks of it: as `lf drain` opens, for the modules it starts then, and at the first call otherwise. The text names the module, its package and version when the host finds them, what it speaks and what the host speaks, and what to upgrade. Installing probes your server the same way: Listen-Fire calls `manifest` with the secret and refuses it outside that range.
 - **The floor stays 2.0 within the major.** A host reads every minor from 2.0 up, so a module that predates a feature still loads. A feature a module must have is checked by name where it is needed, and the refusal names its minor: `lf serve` refuses a movements module that does not answer `movements.watch` (adapter protocol 2.1), and arming a polled listen fails on a store module that does not answer `work.enqueueIfAbsent` (adapter protocol 2.2).
 - **An addition that names nothing in the manifest keeps the minor.** A new optional field or declaration is learned from the manifest, never from the version: a method is called only when it is listed in `methods`, and a declaration (`credentials`, `inbound`, `poll`, `periodic`) is acted on only when it is present. An older server sends neither and is unchanged; an older host ignores both.
 - An install made before its secret is supplied stores the version the manifest file claims. The probe runs when the secret is linked.
@@ -127,6 +127,7 @@ The protocol's version is 2.N: a major, 2, and a minor, N, counted within it.
 | 2.1 | a `<slot>.watch` method ([Watching for changes](#watching-for-changes-slotwatch)) | lf 0.12.2 |
 | 2.2 | `work.enqueueIfAbsent` ([the store slot](store-slot.md)) | lf 0.12.5 |
 | 2.3 | nothing. A rule for sources and a host behaviour, not a feature a module states: a polled source labels each poll event with its kind, `eventType`, and a host delivers an unlabelled one to the listen that polled it, with a notice ([Polled sources](#polled-sources-and-periodic-tasks)). An older host routes a labelled event correctly, so no module needs to state 2.3 | lf 0.12.8 |
+| 2.4 | `refreshEventSubscription` ([Event subscriptions that expire](#event-subscriptions-that-expire)) | lf 0.12.10 |
 
 The first `lf` that reads `protocolMinor` is 0.12.6. An `lf` up to 0.12.5 ignores the field and loads the module as before.
 
@@ -460,8 +461,9 @@ an automation cannot delete any other.
 | `wakeKeys` | `{ raw }` | `string[]` ([awaits](#waiting-on-your-system-awaits)) |
 | `preprocessInbound` | `{ raw, checkpoint? }` | `{ events, checkpoint? }` — **required** to receive webhooks through the [host door](#inbound-through-the-host-door) |
 | `listEventTypes` | `{}` | `[{ tag, positionType, match? }]` |
-| `ensureEventSubscription` | `{ events, callbackUrl, current?, scope? }` | `{ externalId?, secret }` |
+| `ensureEventSubscription` | `{ events, callbackUrl, current?, scope? }` | `{ externalId?, secret, expiresAt? }` |
 | `removeEventSubscription` | `{ callbackUrl, externalId?, scope? }` | `null` |
+| `refreshEventSubscription` | `{ externalId, scope? }` | `{ expiresAt? }` or `null` ([Event subscriptions that expire](#event-subscriptions-that-expire)); adapter protocol 2.4 |
 | `readRecord` | `{ recordType, externalId, fieldIds? }` | the record's fields, or `null` (lets an update with no changes be skipped) |
 | `linkRecords` / `unlinkRecords` | `{ from: { recordType, externalId }, edgeName, to: { … }, mutationContext }` | `{ created }` / `{ removed }` |
 | `resolveFileRef` | `{ ref }` | `{ url, contentType? }` ([Files](#files)) |
@@ -476,6 +478,25 @@ an automation cannot delete any other.
 | `refreshCredential` | `{}` | `{ fields }` ([Modules](#credentials)); needs `credentials` declared |
 | `runPeriodic` | `{ name }` | `null` ([Modules](#polled-sources-and-periodic-tasks)); needs `periodic` declared |
 | `checkInbound` | `{ request, secret?, checkpoint? }` | `accepted` / `refused` / `reply` ([Modules](#a-module-that-checks-its-own-inbound)); needs `inbound.scheme: module` |
+
+### Event subscriptions that expire
+
+Some sources let a subscription lapse unless it is renewed (Airtable's
+webhooks expire 7 days after their last refresh). Such a module says when:
+
+- `ensureEventSubscription` answers `expiresAt` (an ISO time) beside
+  `externalId` and `secret`.
+- It lists `refreshEventSubscription`, which extends the subscription named by
+  `externalId` (and `scope`) and answers its new `expiresAt`.
+
+`lf` keeps each subscription's `expiresAt` and refreshes it a day before then,
+or halfway there when less than two days remain. The refresh is a work row
+(`refresh_subscription`), so `lf serve` runs it on its tick, and `lf drain`
+takes it in a scale-from-zero deployment, whose wake slot is told when it is
+due. A refresh that fails is said once and tried again 15 minutes on. A
+subscription whose `expiresAt` has passed has lapsed: `lf` registers it anew
+(`ensureEventSubscription` with no `current`) and keeps the new id and secret.
+A module that answers no `expiresAt` is never refreshed.
 
 `listEventTypes` example — the CRM's one event, delivered as a `Company`:
 
@@ -1486,6 +1507,7 @@ from `apps/cli`.
 
 ## Changes
 
+- **Adapter protocol 2.4: subscriptions that expire** (within version 2; 2026-10-27; lf 0.12.10). `ensureEventSubscription` may answer `expiresAt`, and a new optional method, `refreshEventSubscription`, extends a subscription before it lapses ([Event subscriptions that expire](#event-subscriptions-that-expire)). A manifest listing the method states 2.4, which an `lf` up to 0.12.9 refuses by name; a module that does not list it is unchanged. `@lf/airtable` lists it.
 - **`narrows` on a listen config key** (within version 2, no bump; 2026-10-27; additive). A `listenConfig` entry may say which hop of an event's address it is ([The manifest and installing](#the-manifest-and-installing)). `lf` narrows a signature's event to the node the address walks to, as the hosted product does. An older host ignores the field; a module that declares none is unchanged.
 - **Adapter protocol 2.3: labelled poll events** (within version 2; 2026-10-26; lf 0.12.8). A polled source labels each event it returns with its kind (`eventType`), as a pushed event is labelled, and the host narrows a listen's `events` by it either way ([Polled sources](#polled-sources-and-periodic-tasks)). It is a rule for sources and a host behaviour, not a feature a module states: an older host routes a labelled event correctly, so a module labelling its events states no higher minor for it. An unlabelled poll event still reaches the listen that polled it, with a notice. The bundled polled modules (Gmail, Evertrace, Dealroom, Granola) label theirs.
 - **`poll`'s `movementId`** (within version 2, no bump; 2026-10-26). `lf` sends the listen's pipeline, `listen:<file>:<movement>`, rather than the movement's bare name, so a source can tell two same-named movements in different files apart.

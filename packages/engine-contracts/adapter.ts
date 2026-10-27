@@ -552,6 +552,22 @@ export interface EventSubscriptionRegistration {
   externalId?: string;
   /** HMAC secret for inbound signature verification, when issued. */
   secret?: string;
+  /** When the source lets the subscription lapse unless it is refreshed
+   *  ({@link Adapter.refreshEventSubscription}), as an ISO time. Absent for
+   *  one that never expires. */
+  expiresAt?: string;
+}
+
+export interface RefreshEventSubscriptionInput {
+  /** The source-issued id of the subscription to extend. */
+  externalId: string;
+  /** The channel's scope (mirrors {@link EnsureEventSubscriptionInput.scope}). */
+  scope?: Record<string, string>;
+}
+
+/** A refreshed subscription: when it now expires, when the source says. */
+export interface EventSubscriptionRefresh {
+  expiresAt?: string;
 }
 
 export interface RemoveEventSubscriptionInput {
@@ -750,6 +766,12 @@ export interface Adapter {
   /** Tear down the registration `ensureEventSubscription` created — called
    *  when the last listen on the (adapter, credential) channel retires. */
   removeEventSubscription?(input: RemoveEventSubscriptionInput): Promise<void>;
+
+  /** Extend a subscription the source lets lapse (Airtable's webhooks expire
+   *  7 days after their last refresh): the host calls it before the
+   *  `expiresAt` the registration or the last refresh returned. Adapter
+   *  protocol 2.4. */
+  refreshEventSubscription?(input: RefreshEventSubscriptionInput): Promise<EventSubscriptionRefresh | undefined>;
 
   // ── 2. Entity resolution ──────────────────────────────────────────────
   /**

@@ -31,11 +31,21 @@
 //! credential and scope (crate::routing::Listen::hears_through). A module
 //! that declares none keeps the one webhook per credential above, in the
 //! credential's own fields, at the door it always had.
+//!
+//! A source that lets a webhook lapse (Airtable's expire 7 days after their
+//! last refresh) answers its `expiresAt`, kept with the registration, and
+//! lists `refreshEventSubscription` (adapter protocol 2.4). Each such webhook
+//! has a `refresh_subscription` work row, due a day before it expires, so
+//! `lf serve` refreshes it on its tick and `lf drain` does in a deployment
+//! that scales to zero (its wake slot told when the row is due). A refresh
+//! that fails is said once and tried again; a webhook found lapsed is
+//! registered anew, and its pull cursor starts again with the new webhook.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::connect::spread;
+use crate::units::{iso_of, ms_of};
 use crate::doors::inbound_of;
 use crate::externals::{RunningExternal, rpc_as};
 use crate::check::LOCAL_TENANT;
@@ -51,10 +61,12 @@ const WEBHOOK_ID_FIELD: &str = "webhook_id";
 const WEBHOOK_EVENTS_FIELD: &str = "webhook_events";
 /// Where it delivers.
 const WEBHOOK_URL_FIELD: &str = "webhook_url";
+/// When the unscoped webhook lapses unless refreshed (an ISO time).
+const WEBHOOK_EXPIRES_FIELD: &str = "webhook_expires";
 /// A credential's scoped webhooks (a module that declares
 /// `subscriptionScopeKeys`): one JSON object, by subscription key, of each
-/// one's `scope`, `id`, `events`, `url` and `secret`. The unscoped webhook
-/// keeps the fields above, as it always has.
+/// one's `scope`, `id`, `events`, `url`, `secret` and `expires`. The
+/// unscoped webhook keeps the fields above, as it always has.
 const WEBHOOK_SUBSCRIPTIONS_FIELD: &str = "webhook_subscriptions";
 
 /// What one credential's entry holds of one registration.
@@ -64,6 +76,8 @@ struct Registered {
     events: Vec<String>,
     url: Option<String>,
     secret: Option<String>,
+    /// When the source lets it lapse unless refreshed.
+    expires: Option<String>,
 }
 
 /// Whether `external` has a webhook registered under any of its
@@ -107,6 +121,7 @@ impl Registered {
                 events: field(WEBHOOK_EVENTS_FIELD).map(|e| e.split(',').map(str::to_string).collect()).unwrap_or_default(),
                 url: field(WEBHOOK_URL_FIELD),
                 secret: field(secret_field),
+                expires: field(WEBHOOK_EXPIRES_FIELD),
             };
         }
         let scoped = scoped_of(field);
@@ -117,6 +132,7 @@ impl Registered {
             events: record.get("events").and_then(Js::as_array).unwrap_or_default().iter().filter_map(Js::as_str).map(str::to_string).collect(),
             url: text("url"),
             secret: text("secret"),
+            expires: text("expires"),
         }
     }
 }
@@ -214,17 +230,24 @@ fn webhooks_of(external: &str, wanted: BTreeMap<Channel, Want>) -> Vec<Webhook> 
     wanted
         .into_iter()
         .map(|((credential, key), want)| {
-            let mut label = match (&credential, several) {
-                (Some(credential), true) => format!("{external} as {credential}"),
-                _ => external.to_string(),
-            };
-            if !want.scope.is_empty() {
-                let scope: Vec<String> = want.scope.iter().map(|(k, v)| format!("{k} {v}")).collect();
-                label.push_str(&format!(" ({})", scope.join(", ")));
-            }
+            let label = label_of(external, credential.as_deref().filter(|_| several), &want.scope);
             Webhook { external: external.to_string(), credential, key, scope: want.scope, events: want.events.into_iter().collect(), label }
         })
         .collect()
+}
+
+/// How a webhook's lines name it: the external, the credential when it is
+/// one of several the external's webhooks are kept under, and the scope.
+fn label_of(external: &str, credential: Option<&str>, scope: &Scope) -> String {
+    let mut label = match credential {
+        Some(credential) => format!("{external} as {credential}"),
+        None => external.to_string(),
+    };
+    if !scope.is_empty() {
+        let scope: Vec<String> = scope.iter().map(|(k, v)| format!("{k} {v}")).collect();
+        label.push_str(&format!(" ({})", scope.join(", ")));
+    }
+    label
 }
 
 /// The externals in `set` whose webhook lf registers.
@@ -269,6 +292,7 @@ pub async fn reconcile(session: &Session) -> Vec<String> {
         webhooks.extend(webhooks_of(&running.external.manifest.name, wanted));
     }
     lines.extend(register(session, webhooks).await);
+    lines.extend(arm_refreshes(session));
     lines
 }
 
@@ -292,6 +316,7 @@ pub async fn follow_refresh(session: &Session, before: &FileSet, after: &FileSet
         webhooks.extend(changed);
     }
     lines.extend(register(session, webhooks).await);
+    lines.extend(arm_refreshes(session));
     lines
 }
 
@@ -402,8 +427,197 @@ async fn reconcile_one(session: &Session, webhook: &Webhook) -> Result<Option<(S
         return Ok(Some((format!("registering its webhook returned no secret, and {name} issues the secret deliveries are signed with: withdrawn, as none could be verified"), false)));
     }
     let secret = issued.map(str::to_string).or(registered.secret);
-    kept.keep(Registration { scope: &webhook.scope, id: &id, events: wanted, url: &callback, secret: secret.as_deref() }).await?;
+    let expires = answer.get("expiresAt").and_then(Js::as_str);
+    kept.keep(Registration { scope: &webhook.scope, id: &id, events: wanted, url: &callback, secret: secret.as_deref(), expires }).await?;
+    if let Some(expires) = expires.and_then(ms_of) {
+        schedule_refresh(session, running, &Refreshing { credential: &credential.name, key: &webhook.key }, Some(refresh_due_ms(session.now_ms(), expires)))?;
+    }
     Ok(Some((format!("registered webhook {id} for {events} at {callback}"), true)))
+}
+
+// ── Refreshing a webhook the source lets lapse ──────────────────────────────
+
+/// A webhook's refresh in the work queue (crate::store::WORK_KINDS).
+pub const REFRESH_WORK_KIND: &str = "refresh_subscription";
+const DAY_MS: i64 = 86_400_000;
+/// How long after a failed refresh it is tried again.
+const REFRESH_RETRY_MS: i64 = 15 * 60_000;
+
+/// When a webhook that lapses at `expires_ms` is next refreshed: a day
+/// before, or halfway there when less than two days are left (a shorter
+/// lifetime is refreshed well inside it, never in a loop); now once lapsed.
+pub fn refresh_due_ms(now_ms: i64, expires_ms: i64) -> i64 {
+    let left = expires_ms - now_ms;
+    if left <= 0 {
+        return now_ms;
+    }
+    expires_ms - DAY_MS.min(left / 2)
+}
+
+/// Whether a webhook that lapses at `expires_ms` is refreshed now: a day or
+/// less is left. A row that comes due earlier (another webhook's expiry was
+/// kept since) waits for its time.
+fn refresh_needed(now_ms: i64, expires_ms: i64) -> bool {
+    expires_ms - now_ms <= DAY_MS
+}
+
+/// The webhook a refresh row names: its credential and subscription key
+/// ("" for a module that declares no scope keys).
+struct Refreshing<'a> {
+    credential: &'a str,
+    key: &'a str,
+}
+
+fn lists(running: &RunningExternal, method: &str) -> bool {
+    running.methods.iter().any(|m| m == method)
+}
+
+/// Queue the webhook's refresh row due at `due_ms` (now for None), moving
+/// one already queued.
+fn schedule_refresh(session: &Session, running: &RunningExternal, webhook: &Refreshing<'_>, due_ms: Option<i64>) -> Result<(), String> {
+    if !lists(running, "refreshEventSubscription") {
+        return Ok(());
+    }
+    let (key, payload) = refresh_row_of(&running.external.manifest.name, webhook);
+    let due = due_ms.map(iso_of);
+    session.store.enqueue(REFRESH_WORK_KIND, &key, &payload, due.as_deref(), None).map_err(|e| e.to_string())?;
+    crate::wake::queued(REFRESH_WORK_KIND, due.as_deref());
+    Ok(())
+}
+
+fn refresh_row_of(external: &str, webhook: &Refreshing<'_>) -> (String, Js) {
+    let key = format!("{REFRESH_WORK_KIND}:{external}:{}/{}", webhook.credential, webhook.key);
+    let payload = Js::Obj(crate::obj! { "external" => Js::str(external), "credential" => Js::str(webhook.credential), "key" => Js::str(webhook.key) });
+    (key, payload)
+}
+
+/// Give each webhook a source lets lapse its refresh row, where none is: due
+/// a day before the expiry kept with it, or now for one kept with none (one
+/// registered before expiries were kept), so the refresh learns it.
+pub fn arm_refreshes(session: &Session) -> Vec<String> {
+    let set = session.file_set();
+    let secrets = session.secrets();
+    let now = session.now_ms();
+    let mut lines = Vec::new();
+    for running in registering(&set).filter(|r| lists(r, "refreshEventSubscription")) {
+        let Some(setup) = inbound_of(running) else { continue };
+        let name = &running.external.manifest.name;
+        for credential in secrets.credentials().iter().filter(|c| c.external == *name && c.binding != Binding::Install) {
+            for (key, _) in registered_channels(credential) {
+                let registered = Registered::of(credential, &key, &setup.secret_field);
+                let due = registered.expires.as_deref().and_then(ms_of).map(|expires| iso_of(refresh_due_ms(now, expires)));
+                let (row, payload) = refresh_row_of(name, &Refreshing { credential: &credential.name, key: &key });
+                match session.store.enqueue_if_absent(REFRESH_WORK_KIND, &row, &payload, due.as_deref(), None) {
+                    Ok(true) => crate::wake::queued(REFRESH_WORK_KIND, due.as_deref()),
+                    Ok(false) => {}
+                    Err(e) => lines.push(format!("{name}: the refresh of webhook {} was not queued — {e}", registered.id.unwrap_or_default())),
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// A `refresh_subscription` row: refresh the webhook it names once a day or
+/// less is left of it, or register it anew once it lapsed. When the row is
+/// next due; None once there is nothing to refresh (the webhook removed, or
+/// the source stating no expiry).
+pub async fn refresh_row(session: &Session, payload: &Js) -> Result<Option<String>, String> {
+    let text = |k: &str| payload.get(k).and_then(Js::as_str).map(str::to_string).ok_or_else(|| format!("a {REFRESH_WORK_KIND} row has no {k}"));
+    let (external, credential, key) = (text("external")?, text("credential")?, text("key")?);
+    let (line, next) = refresh_one(session, &external, &Refreshing { credential: &credential, key: &key }, session.now_ms()).await;
+    if let Some(line) = line {
+        eprintln!("lf: {line}");
+    }
+    Ok(next.map(iso_of))
+}
+
+/// One webhook's refresh at `now_ms`: the line to say, and when it is next due.
+async fn refresh_one(session: &Session, external: &str, webhook: &Refreshing<'_>, now_ms: i64) -> (Option<String>, Option<i64>) {
+    let set = session.file_set();
+    let secrets = session.secrets();
+    let credentials = secrets.credentials();
+    let Some(running) = set.running.iter().find(|r| r.external.manifest.name == external).filter(|r| lists(r, "refreshEventSubscription")) else { return (None, None) };
+    let Some(setup) = inbound_of(running) else { return (None, None) };
+    let Some(credential) = credentials.iter().find(|c| c.name == webhook.credential) else { return (None, None) };
+    let registered = Registered::of(credential, webhook.key, &setup.secret_field);
+    let Some(id) = registered.id.clone() else { return (None, None) };
+    let scope = registered_channels(credential).into_iter().find(|(k, _)| k == webhook.key).map(|(_, scope)| scope).unwrap_or_default();
+    let several = credentials.iter().filter(|c| c.external == external && c.binding != Binding::Install && !registered_channels(c).is_empty()).count() > 1;
+    let label = label_of(external, Some(webhook.credential).filter(|_| several), &scope);
+    // Its own key in the failures said, apart from its registration's.
+    let said_as = format!("{label} refresh");
+    let call = |method: &'static str, mut params: serde_json::Value| {
+        if !scope.is_empty() {
+            params["scope"] = crate::wire::json_of_js(&scope_js(&scope));
+        }
+        async move {
+            let raw = rpc_as(running, credentials, Some(credential), LOCAL_TENANT, method, params).await?;
+            module_wire::results::check(method, external, &raw)
+        }
+    };
+    let expires = registered.expires.as_deref().and_then(ms_of);
+    let retry = |message: String| (session.registrations.failure(&said_as, message), Some(now_ms + REFRESH_RETRY_MS));
+    match expires {
+        Some(expires) if expires <= now_ms => {
+            // Lapsed: the source no longer delivers to it. Registered anew,
+            // the lapsed one removed first where the source still holds it.
+            let url = registered.url.clone().unwrap_or_default();
+            let _ = call("removeEventSubscription", serde_json::json!({ "callbackUrl": url, "externalId": id })).await;
+            let answer = match call("ensureEventSubscription", serde_json::json!({ "events": registered.events, "callbackUrl": url })).await {
+                Ok(Js::Null) => return retry(format!("{label}: webhook {id} lapsed, and registering it anew registered nothing; trying again in 15 minutes")),
+                Ok(answer) => answer,
+                Err(message) => return retry(format!("{label}: webhook {id} lapsed, and registering it anew failed — {message}; trying again in 15 minutes")),
+            };
+            session.registrations.success(&said_as);
+            let new_id = answer.get("externalId").and_then(Js::as_str).unwrap_or_default().to_string();
+            let secret = answer.get("secret").and_then(Js::as_str).filter(|s| !s.is_empty()).map(str::to_string).or(registered.secret.clone());
+            let new_expires = answer.get("expiresAt").and_then(Js::as_str);
+            let kept = Kept { credential, key: webhook.key, secret_field: &setup.secret_field };
+            let registration = Registration { scope: &scope, id: &new_id, events: &registered.events, url: &url, secret: secret.as_deref(), expires: new_expires };
+            if let Err(message) = kept.keep(registration).await {
+                return retry(format!("{label}: webhook {id} lapsed and was registered anew as {new_id}, which could not be kept — {message}"));
+            }
+            // The new webhook's payload feed starts at its beginning.
+            let subscription = if webhook.key.is_empty() { webhook.credential.to_string() } else { format!("{}/{}", webhook.credential, webhook.key) };
+            let mut line = format!("{label}: webhook {id} lapsed at {}; registered webhook {new_id} for {} at {url}", iso_of(expires), registered.events.join(","));
+            if let Err(e) = session.store.save_inbound_checkpoint(&subscription, &Js::Null) {
+                line.push_str(&format!(" (its pull cursor was not reset: {e})"));
+            }
+            if let Err(message) = session.reload_secrets() {
+                line.push_str(&format!(" (the secrets could not be read again: {message})"));
+            }
+            (Some(line), new_expires.and_then(ms_of).map(|e| refresh_due_ms(now_ms, e)))
+        }
+        Some(expires) if !refresh_needed(now_ms, expires) => (None, Some(refresh_due_ms(now_ms, expires))),
+        _ => match call("refreshEventSubscription", serde_json::json!({ "externalId": id })).await {
+            Ok(answer) => {
+                session.registrations.success(&said_as);
+                let new_expires = answer.get("expiresAt").and_then(Js::as_str);
+                let kept = Kept { credential, key: webhook.key, secret_field: &setup.secret_field };
+                let registration = Registration {
+                    scope: &scope,
+                    id: &id,
+                    events: &registered.events,
+                    url: registered.url.as_deref().unwrap_or_default(),
+                    secret: registered.secret.as_deref(),
+                    expires: new_expires,
+                };
+                if let Err(message) = kept.keep(registration).await {
+                    return retry(format!("{label}: webhook {id} was refreshed, and its expiry could not be kept — {message}"));
+                }
+                let mut line = match new_expires {
+                    Some(at) => format!("{label}: refreshed webhook {id}; it expires at {at}"),
+                    None => format!("{label}: refreshed webhook {id}"),
+                };
+                if let Err(message) = session.reload_secrets() {
+                    line.push_str(&format!(" (the secrets could not be read again: {message})"));
+                }
+                (Some(line), new_expires.and_then(ms_of).map(|e| refresh_due_ms(now_ms, e)))
+            }
+            Err(message) => retry(format!("{label}: refreshing webhook {id} failed — {message}; trying again in 15 minutes")),
+        },
+    }
 }
 
 /// A registration as it is kept.
@@ -413,6 +627,7 @@ struct Registration<'a> {
     events: &'a [String],
     url: &'a str,
     secret: Option<&'a str>,
+    expires: Option<&'a str>,
 }
 
 /// Where one webhook's registration is kept: the credential's flat fields
@@ -434,7 +649,10 @@ impl Kept<'_> {
             if let Some(secret) = registration.secret {
                 fields.push((self.secret_field.to_string(), secret.to_string()));
             }
-            return replace(self.credential, &|stored| spread(stored, fields.clone())).await;
+            fields.extend(registration.expires.map(|e| (WEBHOOK_EXPIRES_FIELD.to_string(), e.to_string())));
+            // An expiry the source no longer states is not kept.
+            let unexpiring = |stored: Vec<(String, String)>| stored.into_iter().filter(|(k, _)| k != WEBHOOK_EXPIRES_FIELD).collect();
+            return replace(self.credential, &|stored| spread(unexpiring(stored), fields.clone())).await;
         }
         let mut record = crate::obj! {
             "scope" => scope_js(registration.scope),
@@ -445,13 +663,16 @@ impl Kept<'_> {
         if let Some(secret) = registration.secret {
             record.insert("secret".into(), Js::str(secret));
         }
+        if let Some(expires) = registration.expires {
+            record.insert("expires".into(), Js::str(expires));
+        }
         let record = Js::Obj(record);
         replace(self.credential, &|stored| with_scoped(stored, self.key, Some(record.clone()))).await
     }
 
     async fn forget(&self) -> Result<(), String> {
         if self.key.is_empty() {
-            let names = [WEBHOOK_ID_FIELD, WEBHOOK_EVENTS_FIELD, WEBHOOK_URL_FIELD, self.secret_field];
+            let names = [WEBHOOK_ID_FIELD, WEBHOOK_EVENTS_FIELD, WEBHOOK_URL_FIELD, WEBHOOK_EXPIRES_FIELD, self.secret_field];
             return replace(self.credential, &|stored| stored.into_iter().filter(|(k, _)| !names.contains(&k.as_str())).collect()).await;
         }
         replace(self.credential, &|stored| with_scoped(stored, self.key, None)).await
@@ -697,5 +918,101 @@ mod tests {
         registrations.success("attio");
         assert!(!registrations.failing("attio"));
         assert_eq!(registrations.failure("attio", "refused".into()).as_deref(), Some("refused"), "after a success it is news again");
+    }
+
+    #[test]
+    fn a_refresh_is_due_a_day_before_expiry_or_halfway_when_less_than_two_days_are_left() {
+        let now = 1_800_000_000_000;
+        assert_eq!(refresh_due_ms(now, now + 7 * DAY_MS), now + 6 * DAY_MS);
+        assert_eq!(refresh_due_ms(now, now + 2 * DAY_MS), now + DAY_MS);
+        assert_eq!(refresh_due_ms(now, now + DAY_MS), now + DAY_MS / 2);
+        assert_eq!(refresh_due_ms(now, now + 4_000), now + 2_000, "a short lifetime is refreshed inside it");
+        assert_eq!(refresh_due_ms(now, now), now, "lapsed: now");
+        assert_eq!(refresh_due_ms(now, now - 5), now);
+        for left in [7 * DAY_MS, 2 * DAY_MS, DAY_MS + 1, DAY_MS, 4_000] {
+            let due = refresh_due_ms(now, now + left);
+            assert!(refresh_needed(due, now + left), "at its due time a refresh is needed ({left})");
+            assert_eq!(refresh_needed(now, now + left), left <= DAY_MS, "and before it only within a day ({left})");
+        }
+    }
+
+    /// The refresh rows due by `at` (ms from now), claimed.
+    fn refresh_rows_due_by(session: &Session, at: i64) -> Vec<String> {
+        let kinds = [REFRESH_WORK_KIND.to_string()];
+        let due_by = crate::store::iso(at);
+        let claim = crate::store::ClaimDue { limit: 10, lease_ms: 1, due_by: Some(&due_by), kinds: Some(&kinds) };
+        session.store.claim_due(&claim).unwrap().into_iter().map(|w| w.key).collect()
+    }
+
+    #[test]
+    fn a_webhook_that_lapses_is_refreshed_before_it_does_and_registered_anew_once_it_has() {
+        let project = InboxProject::expiring(&on_shelves(&["red"]), SCOPED_SECRETS, "publicUrl: https://lf.example\n", 7 * DAY_MS);
+        let calls = || project.registrations.lock().unwrap().iter().map(Js::to_json).collect::<Vec<_>>();
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(reconcile(&session).await, ["inbox (shelf red): registered webhook wh-1 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
+            // Kept with when it lapses, and its refresh queued a day before.
+            let kept = |session: &Session| {
+                let credential = session.secrets().credentials().iter().find(|c| c.name == "inbox_a").cloned().unwrap();
+                Registered::of(&credential, "red", "webhook_secret")
+            };
+            let expires = ms_of(&kept(&session).expires.expect("its expiry is kept")).unwrap();
+            assert!((expires - crate::limiter::now_ms() - 7 * DAY_MS).abs() < 60_000);
+            assert_eq!(refresh_rows_due_by(&session, 6 * DAY_MS - 60_000), Vec::<String>::new());
+            assert_eq!(refresh_rows_due_by(&session, 6 * DAY_MS + 60_000), ["refresh_subscription:inbox:inbox_a/red"]);
+
+            let webhook = Refreshing { credential: "inbox_a", key: "red" };
+            // A row that comes early waits for its time, asking nothing.
+            let early = expires - 3 * DAY_MS;
+            assert_eq!(refresh_one(&session, "inbox", &webhook, early).await, (None, Some(expires - DAY_MS)));
+            assert_eq!(calls().len(), 1);
+
+            // Within a day: refreshed, its new expiry kept, the next refresh a day before it.
+            let now = expires - DAY_MS / 2;
+            let (line, next) = refresh_one(&session, "inbox", &webhook, now).await;
+            let refreshed = kept(&session).expires.unwrap();
+            assert_eq!(line, Some(format!("inbox (shelf red): refreshed webhook wh-1; it expires at {refreshed}")));
+            assert_eq!(next, Some(refresh_due_ms(now, ms_of(&refreshed).unwrap())));
+            assert_eq!(calls().last().map(String::as_str), Some(r#"{"token":"a","refreshed":"wh-1"}"#));
+
+            // A failing refresh is said once, and tried again in 15 minutes.
+            project.down.store(true, std::sync::atomic::Ordering::SeqCst);
+            let (said, again) = refresh_one(&session, "inbox", &webhook, now).await;
+            assert!(said.is_some_and(|l| l.starts_with("inbox (shelf red): refreshing webhook wh-1 failed — ") && l.ends_with("; trying again in 15 minutes")));
+            assert_eq!(again, Some(now + REFRESH_RETRY_MS));
+            assert_eq!(refresh_one(&session, "inbox", &webhook, now).await, (None, Some(now + REFRESH_RETRY_MS)), "the same failure is not said again");
+            project.down.store(false, std::sync::atomic::Ordering::SeqCst);
+
+            // Lapsed: removed and registered anew (the inbox numbers a webhook by its calls so far), its secret and expiry kept.
+            let lapsed = ms_of(&refreshed).unwrap() + 60_000;
+            let (line, _) = refresh_one(&session, "inbox", &webhook, lapsed).await;
+            assert_eq!(
+                line,
+                Some(format!("inbox (shelf red): webhook wh-1 lapsed at {}; registered webhook wh-4 for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red", iso_of(ms_of(&refreshed).unwrap())))
+            );
+            let now_kept = kept(&session);
+            assert_eq!((now_kept.id.as_deref(), now_kept.secret.as_deref()), (Some("wh-4"), Some("secret-red")));
+            assert!(now_kept.expires.is_some());
+            assert_eq!(
+                calls()[calls().len() - 2..],
+                [
+                    r#"{"token":"a","removed":"wh-1","scope":{"shelf":"red"}}"#.to_string(),
+                    r#"{"token":"a","callbackUrl":"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red","events":["note.created"],"scope":{"shelf":"red"}}"#.to_string(),
+                ]
+            );
+            // The new webhook's door takes its deliveries.
+            assert_eq!(delivered(&session, "inbox_a/red", "secret-red", "d-1").await, (200, vec!["noted_red".to_string()]));
+        });
+    }
+
+    #[test]
+    fn a_webhook_kept_with_no_expiry_is_refreshed_at_once_to_learn_it() {
+        let held = format!("{SCOPED_SECRETS}  webhook_subscriptions: '{{\"red\":{{\"scope\":{{\"shelf\":\"red\"}},\"id\":\"wh-0\",\"events\":[\"note.created\"],\"url\":\"https://lf.example/api/public/webhook-sync/inbox/inbox_a/red\",\"secret\":\"secret-red\"}}}}'\n");
+        let project = InboxProject::expiring(&on_shelves(&["red"]), &held, "publicUrl: https://lf.example\n", 7 * DAY_MS);
+        in_local(async {
+            let session = project.session().await;
+            assert_eq!(reconcile(&session).await, ["inbox (shelf red): webhook wh-0 is registered for note.created at https://lf.example/api/public/webhook-sync/inbox/inbox_a/red"]);
+            assert_eq!(refresh_rows_due_by(&session, 1_000), ["refresh_subscription:inbox:inbox_a/red"], "due now");
+        });
     }
 }

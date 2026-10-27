@@ -37,7 +37,7 @@ export const MANIFEST_PROTOCOL_VERSION = 2;
 
 /** The highest minor of version 2 this release speaks: a host reads 2.0 to
  *  2.`PROTOCOL_MINOR` (docs/contracts/adapter-protocol.md "Minors of version 2"). */
-export const PROTOCOL_MINOR = 3;
+export const PROTOCOL_MINOR = 4;
 
 /** What a manifest shows of a feature: a method it lists, by name or by its
  *  ending (`<slot>.watch`). Data, so the Rust twin
@@ -47,10 +47,11 @@ export type ProtocolMinorUse = { method: string } | { methodEndingWith: string }
 /** Each minor of version 2 and the feature that a manifest using it lists. A
  *  minor that is no feature a manifest shows has no row: 2.0, and 2.3 (a rule
  *  for sources, labelled poll events, and a host behaviour; no module states
- *  it). */
+ *  it). 2.4: an event subscription the module refreshes before it expires. */
 export const PROTOCOL_MINORS: readonly { minor: number; feature: string; uses: ProtocolMinorUse }[] = [
   { minor: 1, feature: 'a <slot>.watch method', uses: { methodEndingWith: '.watch' } },
   { minor: 2, feature: 'work.enqueueIfAbsent', uses: { method: 'work.enqueueIfAbsent' } },
+  { minor: 4, feature: 'refreshEventSubscription', uses: { method: 'refreshEventSubscription' } },
 ];
 
 function lists(methods: readonly string[], uses: ProtocolMinorUse): boolean {
@@ -1305,6 +1306,19 @@ export const WireEnsureEventSubscriptionInput = z.object({
 export const WireEventSubscriptionRegistration = z.object({
   externalId: z.string().optional(),
   secret: z.string().optional(),
+  /** When the source lets the subscription lapse unless it is refreshed (an
+   *  ISO time); absent for one that never expires. */
+  expiresAt: z.string().optional(),
+});
+
+export const WireRefreshEventSubscriptionInput = z.object({
+  externalId: z.string(),
+  scope: z.record(z.string(), z.string()).optional(),
+});
+
+/** A refreshed subscription: when it now expires. */
+export const WireEventSubscriptionRefresh = z.object({
+  expiresAt: z.string().optional(),
 });
 
 export const WireRemoveEventSubscriptionInput = z.object({
@@ -1464,6 +1478,11 @@ export const METHODS = {
   removeEventSubscription: {
     params: WireRemoveEventSubscriptionInput,
     result: z.null(),
+  },
+  // Adapter protocol 2.4: extend a subscription the source would let lapse.
+  refreshEventSubscription: {
+    params: WireRefreshEventSubscriptionInput,
+    result: WireEventSubscriptionRefresh.nullable(),
   },
   resolveAwait: {
     params: WireAwaitPoint,

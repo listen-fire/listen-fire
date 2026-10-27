@@ -7,7 +7,7 @@ use crate::json::Js;
 pub const PROTOCOL_VERSION: &str = "2";
 /// The highest minor of version 2 this kit knows (`PROTOCOL_MINOR`): a module
 /// states the minor its manifest uses, from 0 to this.
-pub const PROTOCOL_MINOR: u64 = 3;
+pub const PROTOCOL_MINOR: u64 = 4;
 
 /// What a manifest shows of a feature (`ProtocolMinorUse`): a method it lists,
 /// by name or by its ending.
@@ -31,6 +31,7 @@ pub struct ProtocolMinor {
 pub const PROTOCOL_MINORS: &[ProtocolMinor] = &[
     ProtocolMinor { minor: 1, feature: "a <slot>.watch method", uses: MinorUse::MethodEndingWith(".watch") },
     ProtocolMinor { minor: 2, feature: "work.enqueueIfAbsent", uses: MinorUse::Method("work.enqueueIfAbsent") },
+    ProtocolMinor { minor: 4, feature: "refreshEventSubscription", uses: MinorUse::Method("refreshEventSubscription") },
 ];
 
 /// The minor a manifest states (`protocolMinorOf`): the highest among the

@@ -570,6 +570,11 @@ impl Session {
         iso(self.due_offset_ms)
     }
 
+    /// Now, as this session judges what is due (`LF_CLOCK_AHEAD_MS` on).
+    pub fn now_ms(&self) -> i64 {
+        crate::limiter::now_ms() + self.due_offset_ms
+    }
+
     /// Route one event to every listen it matches, and run each (`fireEvent`).
     /// An event with an `idempotencyKey` runs a listen once: a redelivery
     /// runs nothing. A dry run notes no receipt, so the real delivery after
@@ -1249,6 +1254,13 @@ impl Session {
                 })
             }
             POLL_WORK_KIND => self.poll_row(set, &text("subscription")?).await,
+            crate::subscriptions::REFRESH_WORK_KIND => Ok((
+                match crate::subscriptions::refresh_row(self, payload).await? {
+                    Some(at) => Next::DueAt(at),
+                    None => Next::Done,
+                },
+                Vec::new(),
+            )),
             other => Err(format!("not a work kind: {other}")),
         }
     }

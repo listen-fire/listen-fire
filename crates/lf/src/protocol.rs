@@ -20,7 +20,7 @@ pub use module_wire::envelope::{ADAPTER_TEAM_HEADER, CREDENTIAL_REFUSED_CODE, PR
 
 /// The highest minor of adapter protocol 2 this lf speaks: it reads a module
 /// stating 2.0 to 2.`SPEAKS_MINOR` (`PROTOCOL_MINOR`).
-pub const SPEAKS_MINOR: u64 = 3;
+pub const SPEAKS_MINOR: u64 = 4;
 
 /// The module a refusal names: an external, or a core module of a slot, with
 /// its package and version when lf found its `package.json`.
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn an_unstated_minor_and_every_minor_up_to_this_lfs_pass() {
-        for raw in [r#"{"protocolVersion":2}"#, r#"{"protocolVersion":2,"protocolMinor":0}"#, r#"{"protocolVersion":2,"protocolMinor":1}"#, r#"{"protocolVersion":2,"protocolMinor":2}"#, r#"{"protocolVersion":2,"protocolMinor":3}"#] {
+        for raw in [r#"{"protocolVersion":2}"#, r#"{"protocolVersion":2,"protocolMinor":0}"#, r#"{"protocolVersion":2,"protocolMinor":1}"#, r#"{"protocolVersion":2,"protocolMinor":2}"#, r#"{"protocolVersion":2,"protocolMinor":3}"#, r#"{"protocolVersion":2,"protocolMinor":4}"#] {
             assert_eq!(protocol_standing(&manifest(raw), &slack(true)), Ok(()), "{raw}");
         }
     }
@@ -341,15 +341,15 @@ mod tests {
     #[test]
     fn a_newer_minor_is_refused_naming_the_package_and_the_range() {
         assert_eq!(
-            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":4}"#), &slack(true)).unwrap_err(),
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":5}"#), &slack(true)).unwrap_err(),
             format!(
-                "external \"slack\" (@listen-fire/slack 0.13.1) speaks adapter protocol 2.4; this lf ({LF}) speaks 2.0–2.3. Upgrade lf to a release that speaks 2.4 (the protocol's Changes list names it), or use a @listen-fire/slack that speaks 2.3 or lower."
+                "external \"slack\" (@listen-fire/slack 0.13.1) speaks adapter protocol 2.5; this lf ({LF}) speaks 2.0–2.4. Upgrade lf to a release that speaks 2.5 (the protocol's Changes list names it), or use a @listen-fire/slack that speaks 2.4 or lower."
             )
         );
         assert_eq!(
-            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":4}"#), &slack(false)).unwrap_err(),
+            protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":5}"#), &slack(false)).unwrap_err(),
             format!(
-                "external \"slack\" speaks adapter protocol 2.4; this lf ({LF}) speaks 2.0–2.3. Upgrade lf to a release that speaks 2.4 (the protocol's Changes list names it), or use a version of it that speaks 2.3 or lower."
+                "external \"slack\" speaks adapter protocol 2.5; this lf ({LF}) speaks 2.0–2.4. Upgrade lf to a release that speaks 2.5 (the protocol's Changes list names it), or use a version of it that speaks 2.4 or lower."
             )
         );
     }
@@ -358,7 +358,7 @@ mod tests {
     fn a_newer_major_is_refused() {
         assert_eq!(
             protocol_standing(&manifest(r#"{"protocolVersion":3}"#), &slack(false)).unwrap_err(),
-            format!("external \"slack\": speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.3. Upgrade lf.")
+            format!("external \"slack\": speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.4. Upgrade lf.")
         );
     }
 
@@ -385,11 +385,11 @@ mod tests {
         assert!(
             protocol_standing(&manifest(r#"{"protocolVersion":2,"protocolMinor":9}"#), &acme)
                 .unwrap_err()
-                .starts_with(&format!("core module \"acme_store\" (store slot) speaks adapter protocol 2.9; this lf ({LF}) speaks 2.0–2.3."))
+                .starts_with(&format!("core module \"acme_store\" (store slot) speaks adapter protocol 2.9; this lf ({LF}) speaks 2.0–2.4."))
         );
         assert_eq!(
             protocol_standing(&manifest(r#"{"protocolVersion":3}"#), &acme).unwrap_err(),
-            format!("core module \"acme_store\" (store slot): speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.3. Upgrade lf.")
+            format!("core module \"acme_store\" (store slot): speaks adapter protocol 3; this lf ({LF}) speaks 2.0–2.4. Upgrade lf.")
         );
         assert_eq!(
             protocol_standing(&manifest(r#"{"protocolVersion":1}"#), &acme).unwrap_err(),

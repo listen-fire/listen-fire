@@ -109,6 +109,10 @@ function appendChange(store: EntityStore, baseId: string, wh: FakeWebhook, chang
 
 export function airtableRoutes(store: EntityStore): Router {
   const r = Router();
+  // The fake's clock, moved on by `/control/advance-clock`.
+  let clockAheadMs = 0;
+  const now = () => Date.now() + clockAheadMs;
+  const lapsed = (webhook: FakeWebhook) => Date.parse(webhook.expirationTime) <= now();
 
   // List bases
   r.get('/v0/meta/bases', (_req, res) => {
@@ -145,7 +149,7 @@ export function airtableRoutes(store: EntityStore): Router {
       changeTypes: filters.changeTypes ?? ['add', 'update', 'remove'],
       ...(filters.recordChangeScope ? { recordChangeScope: filters.recordChangeScope } : {}),
       macSecretBase64: randomBytes(32).toString('base64'),
-      expirationTime: new Date(Date.now() + SEVEN_DAYS_MS).toISOString(),
+      expirationTime: new Date(now() + SEVEN_DAYS_MS).toISOString(),
     };
     store.create(SVC, 'webhook', { ...webhook }, id);
     res.json({
@@ -165,12 +169,16 @@ export function airtableRoutes(store: EntityStore): Router {
     res.json({ ok: true });
   });
 
-  // Extend a webhook's 7-day life. Driven by the refresh worker.
+  // Extend a webhook's 7-day life. Driven by the refresh worker. A lapsed
+  // webhook cannot be refreshed: it has to be registered anew.
   r.post('/v0/bases/:baseId/webhooks/:id/refresh', (req, res) => {
     const { id } = req.params;
     const existing = store.get(SVC, 'webhook', id);
     if (!existing) return res.status(404).json({ error: 'Webhook not found' });
-    const expirationTime = new Date(Date.now() + SEVEN_DAYS_MS).toISOString();
+    if (lapsed(existing.data as unknown as FakeWebhook)) {
+      return res.status(404).json({ error: { type: 'NOT_FOUND', message: 'The webhook has expired' } });
+    }
+    const expirationTime = new Date(now() + SEVEN_DAYS_MS).toISOString();
     store.update(SVC, 'webhook', id, { ...existing.data, expirationTime });
     res.json({ expirationTime });
   });
@@ -229,6 +237,8 @@ export function airtableRoutes(store: EntityStore): Router {
     const deliveries: Array<{ webhookId: string; targetUrl: string; status: number; body: string }> = [];
     for (const { data } of store.list(SVC, 'webhook')) {
       const webhook = data as unknown as FakeWebhook;
+      // A lapsed webhook is pinged no more.
+      if (lapsed(webhook)) continue;
       if (webhook.baseId !== baseId || !appendChange(store, baseId, webhook, change).appended) continue;
       const body = JSON.stringify({ base: { id: baseId }, webhook: { id: webhook.id }, timestamp: new Date().toISOString() });
       const mac = createHmac('sha256', Buffer.from(webhook.macSecretBase64, 'base64')).update(body).digest('hex');
@@ -240,6 +250,17 @@ export function airtableRoutes(store: EntityStore): Router {
       deliveries.push({ webhookId: webhook.id, targetUrl: webhook.notificationUrl, status: answer.status, body: await answer.text() });
     }
     res.json({ deliveries });
+  });
+
+  // Move the fake's clock on (NOT a real Airtable route): a webhook lapses
+  // once the clock passes its `expirationTime`, so a test can let a quiet
+  // webhook age without waiting 7 days.
+  //   POST /airtable/control/advance-clock { ms }
+  r.post('/control/advance-clock', (req, res) => {
+    const ms = Number(req.body?.ms);
+    if (!Number.isFinite(ms) || ms < 0) return res.status(400).json({ error: 'Expected { ms }, a non-negative number' });
+    clockAheadMs += ms;
+    res.json({ now: new Date(now()).toISOString() });
   });
 
   // Create record

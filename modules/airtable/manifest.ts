@@ -37,7 +37,7 @@ export const AIRTABLE_MANIFEST: AdapterManifest = {
   methods: [
     'listEntryPoints', 'describe', 'edgesFrom', 'resolveEntity', 'getFieldValue',
     'getRelated', 'createRecord', 'updateRecord', 'deleteRecord', 'readRecord',
-    'preprocessInbound', 'listEventTypes', 'ensureEventSubscription', 'removeEventSubscription',
+    'preprocessInbound', 'listEventTypes', 'ensureEventSubscription', 'removeEventSubscription', 'refreshEventSubscription',
   ],
   requiredCredentialType: 'AIRTABLE',
   triggerKinds: ['AIRTABLE'],

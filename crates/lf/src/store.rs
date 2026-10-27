@@ -149,7 +149,7 @@ pub const CORE_PARK_REASONS: &[&str] = &["timer", "await", "limit"];
 /// A polled listen's row in the work queue: its next poll.
 pub const POLL_WORK_KIND: &str = "poll_listen";
 /// The work kinds lf queues.
-pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen"];
+pub const WORK_KINDS: &[&str] = &["resume_timer", "wake_await", "fire_event", "fire_callback", "poll_listen", "refresh_subscription"];
 
 /// Columns a state file written by an earlier lf lacks, added on open.
 const ADDED_RUN_COLUMNS: &[&str] = &["cancel_requested_at", "cancel_reason", "delivery_id"];

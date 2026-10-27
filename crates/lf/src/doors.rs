@@ -683,6 +683,10 @@ pub(crate) mod tests {
             /// A webhook per shelf (`subscriptionScopeKeys: [shelf]`), each
             /// with a secret of its own, `secret-<shelf>`.
             pub scoped: bool,
+            /// Its webhooks lapse this long after they are registered or
+            /// refreshed (`expiresAt`, `refreshEventSubscription`); each
+            /// refresh noted in `registrations`, and refused while `down`.
+            pub expiring: Option<i64>,
         }
 
         impl Adapter for Inbox {
@@ -690,6 +694,7 @@ pub(crate) mod tests {
                 let credential = Js::parse(br#"[{"name":"inbox","kind":"static","fields":[{"name":"token","optional":true}]}]"#).unwrap();
                 let mut methods = vec!["listEventTypes", "preprocessInbound", "ensureEventSubscription", "removeEventSubscription"];
                 methods.extend(self.polled.then_some("poll"));
+                methods.extend(self.expiring.is_some().then_some("refreshEventSubscription"));
                 let manifest = AdapterManifest::new("inbox")
                     .triggers(["webhook"])
                     .optional(methods)
@@ -748,7 +753,15 @@ pub(crate) mod tests {
                             answer.insert("secret".into(), Js::str(format!("secret-{shelf}")));
                         }
                         registrations.push(Js::Obj(made));
+                        if let Some(lifetime) = self.expiring {
+                            answer.insert("expiresAt".into(), Js::str(crate::store::iso(lifetime)));
+                        }
                         Ok(Js::Obj(answer))
+                    }
+                    "refreshEventSubscription" if self.down.load(Ordering::SeqCst) => Err(ModuleError::bad_request("the inbox is down")),
+                    "refreshEventSubscription" => {
+                        self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "refreshed" => params.get("externalId").cloned().unwrap_or(Js::Null) }));
+                        Ok(Js::Obj(obj! { "expiresAt" => Js::str(crate::store::iso(self.expiring.unwrap_or_default())) }))
                     }
                     "poll" => {
                         self.registrations.lock().unwrap().push(Js::Obj(obj! { "token" => token, "polled" => Js::Bool(true) }));
@@ -807,7 +820,7 @@ pub(crate) mod tests {
     /// its notes; the inbox can be taken down.
     pub(crate) struct InboxProject {
         pub root: std::path::PathBuf,
-        down: Arc<AtomicBool>,
+        pub down: Arc<AtomicBool>,
         pub registrations: Arc<std::sync::Mutex<Vec<Js>>>,
     }
 
@@ -823,6 +836,7 @@ pub(crate) mod tests {
     struct Flavour {
         polled: bool,
         scoped: bool,
+        expiring: Option<i64>,
     }
 
     impl InboxProject {
@@ -842,18 +856,24 @@ pub(crate) mod tests {
 
         /// As `with`, the inbox polled as well.
         pub(crate) fn polled(movement: &str, secrets: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, "", Flavour { polled: true, scoped: false })
+            InboxProject::made(movement, secrets, "", Flavour { polled: true, ..Flavour::default() })
         }
 
         /// As `with`, the inbox's webhooks scoped by shelf.
         pub(crate) fn scoped(movement: &str, secrets: &str, lf_yaml: &str) -> InboxProject {
-            InboxProject::made(movement, secrets, lf_yaml, Flavour { polled: false, scoped: true })
+            InboxProject::made(movement, secrets, lf_yaml, Flavour { scoped: true, ..Flavour::default() })
+        }
+
+        /// As `scoped`, its webhooks lapsing `lifetime_ms` after each
+        /// registration or refresh.
+        pub(crate) fn expiring(movement: &str, secrets: &str, lf_yaml: &str, lifetime_ms: i64) -> InboxProject {
+            InboxProject::made(movement, secrets, lf_yaml, Flavour { scoped: true, expiring: Some(lifetime_ms), ..Flavour::default() })
         }
 
         fn made(movement: &str, secrets: &str, lf_yaml: &str, flavour: Flavour) -> InboxProject {
             let down = Arc::new(AtomicBool::new(false));
             let registrations = Arc::new(std::sync::Mutex::new(Vec::new()));
-            let port = inbox::serve(inbox::Inbox { down: down.clone(), registrations: registrations.clone(), polled: flavour.polled, scoped: flavour.scoped });
+            let port = inbox::serve(inbox::Inbox { down: down.clone(), registrations: registrations.clone(), polled: flavour.polled, scoped: flavour.scoped, expiring: flavour.expiring });
             let root = std::env::temp_dir().join(format!("lf-doors-inline-{}", uuid::Uuid::new_v4()));
             crate::init::run(&root, &mut Vec::new()).unwrap();
             std::fs::create_dir_all(root.join("externals/inbox")).unwrap();

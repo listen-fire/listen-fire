@@ -136,31 +136,39 @@ interface Webhook {
   baseId: string;
   notificationUrl: string;
   recordChangeScope?: string;
+  expirationTime: string;
 }
 
 interface Deliveries {
   deliveries: Array<{ webhookId: string; targetUrl: string; status: number }>;
 }
 
+/** A project connected to the fake Airtable as `henry_airtable`, seeded with
+ *  the Hiring base. */
+async function hiringProject(fake: Fake): Promise<string> {
+  await fake.json('/admin/airtable/seed', { entities: HIRING });
+  const dir = join(mkdtempSync(join(tmpdir(), 'lf-airtable-webhooks-')), 'hiring');
+  assert.equal(lfSync(join(dir, '..'), 'init', 'hiring').code, 0);
+  await ok(
+    lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${fake.url}/airtable`, '--oauth-authorize-url', `${fake.url}/oauth/authorize`, '--oauth-token-url', `${fake.url}/oauth/token`], {
+      answers: ['lf-airtable-app', 'lf-airtable-secret', '8978'],
+    }),
+  );
+  const adding = lf(dir, ['credential', 'add', '--module', '@lf/airtable', 'henry_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
+  const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
+  const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
+  assert.ok(location !== null);
+  await adding.line(/paste the URL your browser was sent back to/);
+  adding.answer(location);
+  await ok(adding);
+  mkdirSync(join(dir, 'movements'), { recursive: true });
+  return dir;
+}
+
 test('two tables of one connection each have a webhook of their own, and Stage becoming Interview runs its listen', async () => {
   const fake = await fakeChannels();
   try {
-    await fake.json('/admin/airtable/seed', { entities: HIRING });
-    const dir = join(mkdtempSync(join(tmpdir(), 'lf-airtable-webhooks-')), 'hiring');
-    assert.equal(lfSync(join(dir, '..'), 'init', 'hiring').code, 0);
-    await ok(
-      lf(dir, ['connect', '@lf/airtable', '--yes', '--base-url', `${fake.url}/airtable`, '--oauth-authorize-url', `${fake.url}/oauth/authorize`, '--oauth-token-url', `${fake.url}/oauth/token`], {
-        answers: ['lf-airtable-app', 'lf-airtable-secret', '8978'],
-      }),
-    );
-    const adding = lf(dir, ['credential', 'add', '--module', '@lf/airtable', 'henry_airtable', '--credential', 'airtable', '--headless'], { answers: ['', ''] });
-    const authorize = (await adding.line(/^\s+http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)).trim();
-    const location = (await fetch(authorize, { redirect: 'manual' })).headers.get('location');
-    assert.ok(location !== null);
-    await adding.line(/paste the URL your browser was sent back to/);
-    adding.answer(location);
-    await ok(adding);
-    mkdirSync(join(dir, 'movements'), { recursive: true });
+    const dir = await hiringProject(fake);
     const movement = join(dir, 'movements/hiring.mvt');
     writeFileSync(movement, HEAD + ROLES);
     const checked = lfSync(dir, 'check');
@@ -225,6 +233,61 @@ test('two tables of one connection each have a webhook of their own, and Stage b
       // And still delivers.
       await deliver({ changeType: 'update', tableId: 'tblCAND01', recordId: 'recCY', fields: { Stage: 'Interview' }, previous: { Stage: 'Rejected' } });
       await until(() => seen(interviews) === 2, serving.lines);
+    } finally {
+      await serving.stop();
+    }
+  } finally {
+    await fake.stop();
+  }
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('a quiet webhook is refreshed a day before it lapses, and one that lapsed is registered anew', async () => {
+  const fake = await fakeChannels();
+  try {
+    const dir = await hiringProject(fake);
+    writeFileSync(join(dir, 'movements/hiring.mvt'), HEAD);
+    const port = await freePort();
+    const publicUrl = `http://127.0.0.1:${port}`;
+    appendFileSync(join(dir, 'lf.yaml'), `publicUrl: ${publicUrl}\n`);
+    const webhooks = async () => (await fake.json('/admin/airtable/webhook/state')) as Webhook[];
+    // lf's clock and the fake's moved on together: `days` past the registration.
+    const serveAt = (days: number) => served(dir, ['--port', String(port)], days === 0 ? {} : { LF_CLOCK_AHEAD_MS: String(days * DAY_MS) });
+    const advance = (days: number) => fake.json('/airtable/control/advance-clock', { ms: days * DAY_MS });
+
+    // Registered, expiring in 7 days.
+    let serving = await serveAt(0);
+    await serving.waitFor(/^airtable \(base appHIRE01, table tblCAND01\): registered webhook ach\d+ for /);
+    await serving.stop();
+    const [registered] = await webhooks();
+    assert.ok(registered !== undefined);
+
+    // Six and a half days on, nothing delivered: refreshed, by the same webhook.
+    await advance(6.5);
+    serving = await serveAt(6.5);
+    try {
+      const refreshed = await serving.waitFor(/refreshed webhook ach\d+; it expires at /);
+      assert.match(refreshed, new RegExp(`airtable \\(base appHIRE01, table tblCAND01\\): refreshed webhook ${registered.id};`));
+    } finally {
+      await serving.stop();
+    }
+    const [kept] = await webhooks();
+    assert.equal(kept?.id, registered.id, 'no webhook registered anew');
+    assert.ok(Date.parse(kept.expirationTime) - Date.parse(registered.expirationTime) > 6 * DAY_MS, 'its expiry moved on');
+
+    // Eight days more with lf down: it lapsed, so it is registered anew, and the new one delivers.
+    await advance(8);
+    serving = await serveAt(14.5);
+    try {
+      const lapsed = await serving.waitFor(/lapsed at .*; registered webhook ach\d+ for record\.updated at /);
+      assert.match(lapsed, new RegExp(`webhook ${registered.id} lapsed at `));
+      const now = await webhooks();
+      assert.equal(now.length, 1, 'the lapsed webhook is removed');
+      assert.notEqual(now[0]?.id, registered.id);
+      const delivered = (await fake.json('/airtable/control/deliver', { baseId: 'appHIRE01', changeType: 'update', tableId: 'tblCAND01', recordId: 'recADA', fields: { Stage: 'Interview' }, previous: { Stage: 'Applied' } })) as Deliveries;
+      assert.deepEqual(delivered.deliveries.map((d) => [d.webhookId, d.status]), [[now[0]?.id, 200]]);
+      await serving.waitFor(/^run \S+ hiring:schedule_interview completed$/);
     } finally {
       await serving.stop();
     }
