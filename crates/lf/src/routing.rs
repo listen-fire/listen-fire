@@ -178,8 +178,9 @@ pub enum Arrival {
     Polled,
 }
 
-/// `eventMatchesTriggerScope`: the listen's chosen events, and an
-/// Airtable-style table scope. A source labels each event with its kind
+/// `eventMatchesTriggerScope`: the listen's chosen events, an
+/// Airtable-style table scope, and a changed field (`field`) with the value
+/// it became (`becomes`). A source labels each event with its kind
 /// (`eventType`), pushed or polled, and the chosen events narrow by it. A
 /// polled event with no label (a module older than adapter protocol 2.3)
 /// still reaches its listen: the poll was made for that listen with its
@@ -200,7 +201,37 @@ pub fn event_matches_trigger_scope(event: &Js, config: &Obj, arrival: Arrival) -
     {
         return false;
     }
+    if let Some(Js::Str(field)) = config.get("field")
+        && !field.is_empty()
+    {
+        let changed = event.get("changedFields").and_then(Js::as_array).unwrap_or(&[]);
+        if !changed.iter().any(|f| f.as_str() == Some(field.as_str())) {
+            return false;
+        }
+        if let Some(value) = config.get("becomes")
+            && !became_value(event.get("payload"), field, value)
+        {
+            return false;
+        }
+    }
     true
+}
+
+/// `becameValue`: the field's new value (`payload.fields`) is the value and
+/// its previous one (`payload.previous`, `FieldChangePayload`) was not; a
+/// field missing from `previous` had no value before.
+fn became_value(payload: Option<&Js>, field: &str, value: &Js) -> bool {
+    let cell = |key: &str| payload.and_then(|p| p.get(key)).and_then(|cells| cells.get(field));
+    same_value(cell("fields"), value) && !same_value(cell("previous"), value)
+}
+
+/// `sameValue`: equal as data, a list or an object by its contents.
+fn same_value(held: Option<&Js>, value: &Js) -> bool {
+    match (held, value) {
+        (None, _) => false,
+        (Some(Js::Num(a)), Js::Num(b)) => a.as_f64() == b.as_f64(),
+        (Some(held), value) => held.to_json() == value.to_json(),
+    }
 }
 
 /// The listen config key that routes inbound mail: a module that declares
@@ -373,6 +404,35 @@ mod tests {
         assert!(!event_matches_trigger_scope(&js(r#"{"eventType":"company.updated"}"#), &config, Arrival::Pushed));
         assert!(!event_matches_trigger_scope(&js(r#"{}"#), &config, Arrival::Pushed));
         assert!(event_matches_trigger_scope(&js(r#"{}"#), &Obj::new(), Arrival::Pushed));
+    }
+
+    /// The table of cases the engine's TypeScript is held to as well
+    /// (`eventMatchesTriggerScope`).
+    #[test]
+    fn the_field_and_becomes_gates_match_the_shared_table_of_cases() {
+        let table = js(include_str!("../../../packages/engine-contracts/conformance/listen-field-change.json"));
+        let cases = table.get("cases").and_then(Js::as_array).unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let Some(Js::Obj(config)) = case.get("config") else { panic!("a case has a config") };
+            let event = case.get("event").unwrap();
+            let expected = Js::is_true(case.get("matches"));
+            for arrival in [Arrival::Pushed, Arrival::Polled] {
+                assert_eq!(event_matches_trigger_scope(event, config, arrival), expected, "{:?}", case.get("case"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_becomes_gate_compares_numbers_as_numbers() {
+        let config = match js(r#"{"field":"Score","becomes":3}"#) {
+            Js::Obj(map) => map,
+            _ => unreachable!(),
+        };
+        let event = js(r#"{"changedFields":["Score"],"payload":{"fields":{"Score":3.0},"previous":{"Score":2}}}"#);
+        assert!(event_matches_trigger_scope(&event, &config, Arrival::Pushed));
+        let unchanged = js(r#"{"changedFields":["Score"],"payload":{"fields":{"Score":3.0},"previous":{"Score":3}}}"#);
+        assert!(!event_matches_trigger_scope(&unchanged, &config, Arrival::Pushed));
     }
 
     #[test]

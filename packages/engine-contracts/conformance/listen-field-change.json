@@ -1,0 +1,19 @@
+{
+  "about": "Whether an event clears a listen's `field` and `becomes` gates. `field` passes only an event whose `changedFields` names it; `becomes` (with `field`) passes only when the field's new value (`payload.fields`) equals it and its previous value (`payload.previous`) did not. Held by lf's Rust (crates/lf/src/routing.rs, event_matches_trigger_scope) and the engine's TypeScript (eventMatchesTriggerScope).",
+  "cases": [
+    { "case": "no field gate passes any change", "config": {}, "event": { "changedFields": ["Name"], "payload": { "fields": { "Name": "Ada" } } }, "matches": true },
+    { "case": "an empty field gates nothing", "config": { "field": "" }, "event": { "changedFields": ["Name"], "payload": { "fields": { "Name": "Ada" } } }, "matches": true },
+    { "case": "a change that touched the field passes", "config": { "field": "Stage" }, "event": { "changedFields": ["Name", "Stage"], "payload": { "fields": { "Name": "Ada", "Stage": "Rejected" } } }, "matches": true },
+    { "case": "a change that did not touch the field does not", "config": { "field": "Stage" }, "event": { "changedFields": ["Name"], "payload": { "fields": { "Name": "Ada" } } }, "matches": false },
+    { "case": "an event naming no changed fields does not", "config": { "field": "Stage" }, "event": { "payload": { "fields": { "Stage": "Interview" } } }, "matches": false },
+    { "case": "the field becoming the value passes", "config": { "field": "Stage", "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": { "Stage": "Interview" }, "previous": { "Stage": "Applied" } } }, "matches": true },
+    { "case": "the field becoming another value does not", "config": { "field": "Stage", "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": { "Stage": "Rejected" }, "previous": { "Stage": "Applied" } } }, "matches": false },
+    { "case": "the field already holding the value does not", "config": { "field": "Stage", "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": { "Stage": "Interview" }, "previous": { "Stage": "Interview" } } }, "matches": false },
+    { "case": "a field with no previous value had none before", "config": { "field": "Stage", "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": { "Stage": "Interview" } } }, "matches": true },
+    { "case": "a field emptied does not become the value", "config": { "field": "Stage", "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": {}, "previous": { "Stage": "Interview" } } }, "matches": false },
+    { "case": "a number becomes a number", "config": { "field": "Score", "becomes": 3 }, "event": { "changedFields": ["Score"], "payload": { "fields": { "Score": 3 }, "previous": { "Score": 2 } } }, "matches": true },
+    { "case": "a list becomes a list by its contents", "config": { "field": "Tags", "becomes": ["Remote", "Senior"] }, "event": { "changedFields": ["Tags"], "payload": { "fields": { "Tags": ["Remote", "Senior"] }, "previous": { "Tags": ["Remote"] } } }, "matches": true },
+    { "case": "a list in another order is another list", "config": { "field": "Tags", "becomes": ["Remote", "Senior"] }, "event": { "changedFields": ["Tags"], "payload": { "fields": { "Tags": ["Senior", "Remote"] }, "previous": { "Tags": ["Remote"] } } }, "matches": false },
+    { "case": "a value without its field gates nothing", "config": { "becomes": "Interview" }, "event": { "changedFields": ["Stage"], "payload": { "fields": { "Stage": "Rejected" } } }, "matches": true }
+  ]
+}
