@@ -349,7 +349,12 @@ pub async fn narrow_event_positions<W: Walk>(schema: Js, input: &Narrowing<'_, W
         {
             continue;
         }
-        if address.narrowing.is_empty() && action_enum.is_none() {
+        // An address that pins nothing is the wide type (`EventAddressRef`'s
+        // own word): nothing to graft. The platform's code unions it by
+        // action all the same, which under lf would refuse a 0.12.9 program
+        // that reads a live-record edge off an unnarrowed signature (the Attio
+        // walkthrough's `<crm-[e:`Webhook Event`]->>`).
+        if address.narrowing.is_empty() {
             continue;
         }
         let address_key = event_address_key(address);
@@ -678,6 +683,17 @@ mod tests {
         assert!(deleted.get("edges").and_then(|e| e.get("Record")).is_none());
         assert!(deleted.get("edges").and_then(|e| e.get("Old Record")).is_some());
         assert_eq!(schema.get("unionDisplayNames").and_then(|u| u.get(key)).and_then(Js::as_str), Some("Record Change where base=appA, table=tblC"));
+    }
+
+    #[test]
+    fn an_address_that_pins_nothing_is_the_wide_type_and_grafts_nothing() {
+        let (schema, asked) = block_on(narrowed(&hops(), &[address(&[])]));
+        assert_eq!(schema.get("positions").and_then(|p| match p {
+            Js::Obj(map) => Some(map.len()),
+            _ => None,
+        }), Some(2));
+        assert!(schema.get("unions").is_none(), "no union by action: the event node keeps its live-record edges");
+        assert!(!asked.iter().any(|a| a.starts_with("Table:")), "nothing walked to a table");
     }
 
     #[test]
