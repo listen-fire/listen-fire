@@ -18,9 +18,11 @@
     "@listen-fire/engine": "workspace:*",
     "@listen-fire/engine-contracts": "workspace:*",
     "@listen-fire/module-kit": "workspace:*",
+    "@listen-fire/slack": "workspace:*",
     "tsx": "4.21.0"
   },
   "devDependencies": {
+    "@listen-fire/fake-channels": "workspace:*",
     "@types/node": "22.19.15",
     "typescript": "5.5.4"
   }

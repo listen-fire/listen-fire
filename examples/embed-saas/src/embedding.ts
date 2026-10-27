@@ -1,6 +1,8 @@
 // The engine inside the SaaS's own process: each customer is a tenant with its
-// own saved movements, its own CRM records and its own API key; a customer's
-// movement is checked when saved and run when one of its events happens. A run
+// own saved movements, its own CRM records and fields, its own API key and,
+// when it connects one, its own Slack workspace (a ready-made module loaded
+// the same way as the SaaS's own); a customer's movement is checked when saved
+// and run when one of its events happens. A run
 // that waits (`await sleep(1h)`) parks in an in-memory run-host store and is
 // stepped on by `tick()` once its time comes. Everything here comes from the
 // engine's public entries and the module kit.
@@ -26,16 +28,35 @@ import { eventMatchesTriggerScope, triggerEventOf } from '@listen-fire/engine/pu
 import { createMemoryVault, createSecretsFamily, type MemoryVault } from '@listen-fire/engine/public/secrets';
 import type { Adapter, DiscriminableEvent } from '@listen-fire/engine/public/adapter';
 import type { EngineHost } from '@listen-fire/engine/public/host';
-import { adapterInProcess, memoryKv, refusingFiles, secretsCredential, type ModuleLog } from '@listen-fire/module-kit';
+import { adapterInProcess, memoryKv, refusingFiles, secretsCredential, type AdapterModuleDefinition, type ModuleLog } from '@listen-fire/module-kit';
+import { slackModule } from '@listen-fire/slack';
 
-import { CompanyStore, crmModule } from './crm';
+import { CompanyStore, crmModule, type FieldDefinition } from './crm';
 
 /** The language version every customer's movement is pinned to: the
  *  engine's release. */
 export const LANGUAGE_VERSION = ENGINE_VERSION;
 
-/** The one connection a customer's movement imports: its CRM workspace. */
+/** The connection a customer's movement imports for its CRM workspace, and,
+ *  once the customer connects Slack, for its Slack workspace. */
 export const CREDENTIAL = 'workspace';
+export const SLACK_CREDENTIAL = 'slack_workspace';
+
+/** A customer's Slack: the bot token, and the API it is reached at (the
+ *  workspace's own, unless a test points it elsewhere). */
+export interface SlackConnection {
+  accessToken: string;
+  baseUrl?: string;
+}
+
+/** A connection a movement imports by `name`: an adapter module, the
+ *  credential it declares, and where the customer's secret is kept. */
+interface Connection {
+  name: string;
+  module: AdapterModuleDefinition;
+  credential: string;
+  ref: string;
+}
 
 /** What a run may consume. A customer's movement is code the SaaS did not
  *  write: every limit is set, and every run has a cost cap. */
@@ -55,6 +76,11 @@ export const DEFAULT_LIMITS: Limits = {
   maxResultBytes: 4 * 1024 * 1024,
   costCapMicrodollars: 50_000,
 };
+
+interface Customer {
+  movements: Map<string, SavedMovement>;
+  slack: boolean;
+}
 
 interface SavedMovement {
   name: string;
@@ -89,7 +115,7 @@ export class Embedding {
   private readonly crm = crmModule(this.companies);
   private readonly vault: MemoryVault = createMemoryVault();
   private readonly secrets = createSecretsFamily({ backend: this.vault });
-  private readonly movements = new Map<string, Map<string, SavedMovement>>();
+  private readonly customers = new Map<string, Customer>();
   private readonly runs = new Map<string, RunRecord>();
   private readonly now: () => Date;
   /** Where parked runs wait: their leaves, joins, timers and pinned texts. */
@@ -111,10 +137,10 @@ export class Embedding {
    *  own park sink (a park names no run, so the sink is the run's). */
   private hostFor(runId: string, tenant: string): EngineHost {
     return inProcessHost({
-      adapters: { resolve: ({ adapterType, teamId, credentialsId }) => this.crmFor({ adapterType, tenant: teamId, credentialsId }) },
-      // A run reaches only its own tenant's connection: the host asks this
+      adapters: { resolve: ({ adapterType, teamId, credentialsId }) => this.adapterFor({ adapterType, tenant: teamId, credentialsId }) },
+      // A run reaches only its own tenant's connections: the host asks this
       // before it builds an instance for the credential a run names.
-      credentials: { belongsTo: ({ teamId, credentialsId }) => credentialsId === credentialRef(teamId) },
+      credentials: { belongsTo: ({ teamId, credentialsId }) => this.connectionsOf(teamId).some(({ ref }) => ref === credentialsId) },
       ...(this.options.models !== undefined ? { llm: pricedModels({ client: this.options.models }) } : {}),
       clock: { now: async () => ({ nowIso: this.now().toISOString() }) },
       park: {
@@ -133,16 +159,23 @@ export class Embedding {
     if (run !== undefined) run.status = status;
   }
 
-  /** A new customer: its own tenant, and the API key its CRM workspace is
-   *  reached with, kept in the SaaS's vault. */
-  addCustomer(tenant: string, apiKey: string): void {
-    this.vault.put(credentialRef(tenant), { api_key: apiKey });
-    this.movements.set(tenant, new Map());
+  /** A new customer: its own tenant, the fields it defines on `Company`, and
+   *  the API key its CRM workspace is reached with, kept in the SaaS's vault. */
+  addCustomer(tenant: string, apiKey: string, fields: FieldDefinition[] = []): void {
+    this.vault.put(crmRef(tenant), { api_key: apiKey });
+    this.companies.defineFields(tenant, fields);
+    this.customers.set(tenant, { movements: new Map(), slack: false });
+  }
+
+  /** The customer's own Slack workspace: its movements may now import it. */
+  connectSlack(tenant: string, slack: SlackConnection): void {
+    this.vault.put(slackRef(tenant), { ...slack });
+    this.customerOf(tenant).slack = true;
   }
 
   /** Check a customer's movement against its own catalog; save it if clean. */
   async save(tenant: string, name: string, source: string): Promise<SaveAnswer> {
-    const saved = this.savedOf(tenant);
+    const saved = this.customerOf(tenant).movements;
     const catalog = await this.catalogFor(tenant);
     try {
       checkPinnedInRust({ source, catalog, languageVersion: LANGUAGE_VERSION });
@@ -159,7 +192,7 @@ export class Embedding {
   async fire(tenant: string, event: DiscriminableEvent): Promise<FiredRun[]> {
     const catalog = await this.catalogFor(tenant);
     const runs: FiredRun[] = [];
-    for (const movement of this.savedOf(tenant).values()) {
+    for (const movement of this.customerOf(tenant).movements.values()) {
       for (const listener of movement.listeners) {
         if (listener.adapter !== 'crm' || !eventMatchesTriggerScope(event, listener.config)) continue;
         runs.push({ movement: movement.name, outcome: await this.run(tenant, movement, listener, event, catalog) });
@@ -175,7 +208,7 @@ export class Embedding {
       adapterType: 'crm',
       triggerType: 'webhook',
       event,
-      eventTypes: (await this.crmFor({ adapterType: 'crm', tenant, credentialsId: credentialRef(tenant) }).listEventTypes?.()) ?? [],
+      eventTypes: (await this.adapterFor({ adapterType: 'crm', tenant, credentialsId: crmRef(tenant) }).listEventTypes?.()) ?? [],
       now: this.now(),
     });
     const runId = randomUUID();
@@ -189,7 +222,7 @@ export class Embedding {
         event: triggerEvent,
         teamId: tenantIdOf(tenant),
         catalog,
-        credentialIds: { [CREDENTIAL]: credentialRef(tenant) },
+        credentialIds: Object.fromEntries(this.connectionsOf(tenant).map(({ name, ref }) => [name, ref])),
         costCapMicrodollars: limits.costCapMicrodollars,
         limits: {
           maxSteps: limits.maxSteps,
@@ -278,39 +311,58 @@ export class Embedding {
     };
   }
 
-  /** What a customer's movements are checked against: the CRM, introspected
-   *  for that customer, and the one connection it holds. */
+  /** What a customer's movements are checked against: each adapter it
+   *  holds a connection to, introspected for that customer. */
   private async catalogFor(tenant: string): Promise<CatalogSnapshot> {
-    const { schema } = await introspectAdapter(this.crmFor({ adapterType: 'crm', tenant, credentialsId: credentialRef(tenant) }), this.crm.manifest);
+    const connections = this.connectionsOf(tenant);
+    const adapters = await Promise.all(
+      connections.map(async ({ name, module, ref }) => {
+        const adapter = this.adapterFor({ adapterType: module.manifest.adapterType, tenant, credentialsId: ref });
+        const { schema } = await introspectAdapter(adapter, module.manifest);
+        return { manifest: module.manifest, schemas: { [name]: schema } };
+      }),
+    );
     return buildCatalogSnapshot({
-      adapters: [{ manifest: this.crm.manifest, schemas: { [CREDENTIAL]: schema } }],
-      credentials: { [CREDENTIAL]: { adapters: ['crm'], credential: 'crm' } },
+      adapters,
+      credentials: Object.fromEntries(connections.map(({ name, module, credential }) => [name, { adapters: [module.manifest.adapterType], credential }])),
       plugins: {},
     });
   }
 
-  /** The customer's CRM, loaded in process, over the connection named. */
-  private crmFor(input: { adapterType: string; tenant: string; credentialsId: string | undefined }): Adapter {
+  private connectionsOf(tenant: string): Connection[] {
+    return [
+      { name: CREDENTIAL, module: this.crm, credential: 'crm', ref: crmRef(tenant) },
+      ...(this.customers.get(tenant)?.slack === true ? [{ name: SLACK_CREDENTIAL, module: slackModule, credential: 'slack', ref: slackRef(tenant) }] : []),
+    ];
+  }
+
+  /** An adapter module loaded in process for one tenant, over the connection named. */
+  private adapterFor(input: { adapterType: string; tenant: string; credentialsId: string | undefined }): Adapter {
     const { adapterType, tenant, credentialsId } = input;
-    if (adapterType !== 'crm') throw new Error(`no adapter "${adapterType}" here`);
-    if (credentialsId === undefined) throw new Error(`the CRM needs a connection`);
-    return adapterInProcess(this.crm, {
+    const connection = this.connectionsOf(tenant).find(({ module }) => module.manifest.adapterType === adapterType);
+    if (connection === undefined) throw new Error(`no adapter "${adapterType}" for customer ${tenant}`);
+    if (credentialsId === undefined) throw new Error(`the ${adapterType} adapter needs a connection`);
+    return adapterInProcess(connection.module, {
       tenant,
-      credential: secretsCredential({ name: 'crm', ref: credentialsId, secrets: this.secrets }),
+      credential: secretsCredential({ name: connection.credential, ref: credentialsId, secrets: this.secrets }),
       log: quietLog,
-      files: refusingFiles('the CRM keeps no files'),
+      files: refusingFiles('the example keeps no files'),
       kv: memoryKv(),
       validateResults: true,
     }).adapter;
   }
 
-  private savedOf(tenant: string): Map<string, SavedMovement> {
-    const saved = this.movements.get(tenant);
-    if (saved === undefined) throw new Error(`no customer ${tenant}`);
-    return saved;
+  private customerOf(tenant: string): Customer {
+    const customer = this.customers.get(tenant);
+    if (customer === undefined) throw new Error(`no customer ${tenant}`);
+    return customer;
   }
 }
 
-function credentialRef(tenant: string): string {
+function crmRef(tenant: string): string {
   return `crm:${tenant}`;
+}
+
+function slackRef(tenant: string): string {
+  return `slack:${tenant}`;
 }

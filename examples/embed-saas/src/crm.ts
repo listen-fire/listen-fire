@@ -1,8 +1,11 @@
 // The SaaS's own product, as the module its customers' movements reach: a
-// tiny CRM with one record type, `Company { Name, Note }`, and one event a
-// listen may choose, `company.created`. The records live in the SaaS's own
-// store (`CompanyStore`), one tenant's apart from another's; the module only
-// answers the adapter protocol over them.
+// tiny CRM with one record type, `Company`, and one event a listen may
+// choose, `company.created`. Each customer defines its own fields on
+// `Company` (a text field, or a select with its own options), so the schema
+// the module describes is that customer's. The records and the field
+// definitions live in the SaaS's own store (`CompanyStore`), one tenant's
+// apart from another's; the module only answers the adapter protocol over
+// them.
 
 import type { Adapter, AdapterManifest, DiscriminableEvent } from '@listen-fire/engine/public/adapter';
 import { BASE_RUNTIME_CAPABILITIES, containerAssociation } from '@listen-fire/engine/public/adapter';
@@ -11,28 +14,44 @@ import { defineModule, type AdapterModuleMethods, type ModuleContext } from '@li
 export const COMPANY = 'Company';
 export const COMPANY_CREATED = 'company.created';
 
-export interface Company {
-  id: string;
-  Name: string;
-  Note?: string;
+/** A company: its id, and the values of the fields its customer defined. */
+export type Company = { id: string } & Record<string, string>;
+
+/** A field a customer defines on `Company`. With `options` it is a select:
+ *  only those values are valid. */
+export interface FieldDefinition {
+  name: string;
+  options?: string[];
 }
 
-/** The SaaS's own records, by tenant. */
+/** Every customer's companies have a name, whatever else they define. */
+const NAME_FIELD: FieldDefinition = { name: 'Name' };
+
+/** The SaaS's own records and field definitions, by tenant. */
 export class CompanyStore {
   private readonly byTenant = new Map<string, Company[]>();
+  private readonly fieldsByTenant = new Map<string, FieldDefinition[]>();
+
+  defineFields(tenant: string, fields: FieldDefinition[]): void {
+    this.fieldsByTenant.set(tenant, [NAME_FIELD, ...fields]);
+  }
+
+  fieldsOf(tenant: string): FieldDefinition[] {
+    return this.fieldsByTenant.get(tenant) ?? [NAME_FIELD];
+  }
 
   list(tenant: string): Company[] {
     return this.byTenant.get(tenant) ?? [];
   }
 
-  add(tenant: string, fields: Omit<Company, 'id'>): Company {
+  add(tenant: string, fields: Record<string, string>): Company {
     const companies = this.byTenant.get(tenant) ?? [];
     const company = { id: `company-${companies.length + 1}`, ...fields };
     this.byTenant.set(tenant, [...companies, company]);
     return company;
   }
 
-  update(tenant: string, id: string, fields: Partial<Omit<Company, 'id'>>): Company | undefined {
+  update(tenant: string, id: string, fields: Record<string, string>): Company | undefined {
     const company = this.list(tenant).find((c) => c.id === id);
     if (company !== undefined) Object.assign(company, fields);
     return company;
@@ -55,7 +74,10 @@ const MANIFEST: AdapterManifest = {
   introspectedSchema: true,
 };
 
-const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+/** The text values among `fields`, for the customer's defined fields only. */
+function definedTexts(defined: FieldDefinition[], fields: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(defined.flatMap(({ name }) => (typeof fields[name] === 'string' ? [[name, fields[name]]] : [])));
+}
 
 function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMethods {
   const tenant = ctx.config.tenant;
@@ -73,10 +95,14 @@ function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMetho
         ? {
             typeId: COMPANY,
             displayName: COMPANY,
-            fields: [
-              { fieldId: 'Name', displayName: 'Name', kind: 'string', writable: true, required: true },
-              { fieldId: 'Note', displayName: 'Note', kind: 'string', writable: true, required: false },
-            ],
+            fields: store.fieldsOf(tenant).map(({ name, options }) => ({
+              fieldId: name,
+              displayName: name,
+              kind: options === undefined ? 'string' : 'enum',
+              ...(options !== undefined ? { enumValues: options } : {}),
+              writable: true,
+              required: name === NAME_FIELD.name,
+            })),
             references: [],
           }
         : null,
@@ -88,16 +114,13 @@ function crmAdapter(ctx: ModuleContext, store: CompanyStore): AdapterModuleMetho
     getRelated: async () => [],
     createRecord: async ({ recordType, fields }) => {
       await authorised();
-      const company = store.add(tenant, { Name: text(fields.Name) ?? '', ...(text(fields.Note) !== undefined ? { Note: text(fields.Note) } : {}) });
+      const company = store.add(tenant, { Name: '', ...definedTexts(store.fieldsOf(tenant), fields) });
       return { adapterType: 'crm', externalId: company.id, recordType, data: { ...company } };
     },
     updateRecord: async (input) => {
       const { externalId, recordType, fields } = input;
       await authorised();
-      const company = store.update(tenant, externalId, {
-        ...(text(fields.Name) !== undefined ? { Name: text(fields.Name) } : {}),
-        ...(text(fields.Note) !== undefined ? { Note: text(fields.Note) } : {}),
-      });
+      const company = store.update(tenant, externalId, definedTexts(store.fieldsOf(tenant), fields));
       if (company === undefined) return { notFound: true };
       return { adapterType: 'crm', externalId, recordType, data: { ...company }, association: containerAssociation(input) };
     },

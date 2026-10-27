@@ -102,10 +102,16 @@ importers:
       '@listen-fire/module-kit':
         specifier: workspace:*
         version: link:../../packages/module-kit
+      '@listen-fire/slack':
+        specifier: workspace:*
+        version: link:../../modules/slack
       tsx:
         specifier: 4.21.0
         version: 4.21.0
     devDependencies:
+      '@listen-fire/fake-channels':
+        specifier: workspace:*
+        version: link:../../packages/fake-channels
       '@types/node':
         specifier: 22.19.15
         version: 22.19.15

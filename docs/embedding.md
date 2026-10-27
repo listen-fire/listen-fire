@@ -2,7 +2,7 @@
 
 Your product can let its customers write movements and run them inside it. The engine runs in your own Node process, as WebAssembly: no server of ours, no network of its own. You give it what it needs: your product as a module, a place for each customer's secrets, the models it may call, and the limits it must keep.
 
-A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and the app's own event runs it. Its test runs it end to end.
+A working example is in [`examples/embed-saas`](../examples/embed-saas): a small HTTP app where a customer saves a movement, the app checks it, and the app's own event runs it. Its tests run it end to end, with customers whose schemas differ and a ready-made module loaded for each.
 
 ## The packages
 
@@ -65,7 +65,7 @@ export const crm = defineModule({
 
 Load it in your process for one tenant with `adapterInProcess(crm, host)`. The `host` is the module's context: the tenant, its credential, a log, files, and a small store of its own (`kv`). `secretsCredential` reads the credential from your secrets; `memoryKv` keeps module state in memory. Set `validateResults: true` while you develop: every answer is checked against the protocol.
 
-The ready-made modules (`@lf/attio`, `@lf/slack`, …) load the same way. A module can also run as its own process (`serve-module`, in `@listen-fire/module-kit`), reached over the module protocol (`public/modules`); see [docs/contracts/adapter-protocol.md](contracts/adapter-protocol.md).
+The ready-made modules (`@lf/attio`, `@lf/slack`, …) load the same way, each for one tenant over that tenant's credential. The example loads `@lf/slack` next to its CRM (`connectSlack` in `examples/embed-saas/src/embedding.ts`), pointed at a fake Slack workspace per customer in `test/tenants.test.ts`. A module can also run as its own process (`serve-module`, in `@listen-fire/module-kit`), reached over the module protocol (`public/modules`); see [docs/contracts/adapter-protocol.md](contracts/adapter-protocol.md).
 
 ## 2. The catalog
 
@@ -81,6 +81,8 @@ const catalog = buildCatalogSnapshot({
 ```
 
 - `introspectAdapter` asks the adapter its entry points and describes each one.
+- The schema is the tenant's own. An adapter's `describe` answers for the tenant it was loaded for, so one customer's `Stage` can be a select of `Lead | Customer` and another's `Prospect | Partner`; a value outside the tenant's options is refused when its movement is saved (`MOV_ENUM_UNKNOWN_VALUE`). See `examples/embed-saas/src/crm.ts` and `test/tenants.test.ts`.
+- A tenant's catalog holds one connection per module it uses (the CRM, and Slack once the customer connects it), each under the name its movement imports.
 - A schema is keyed by the connection's name, here `workspace`: the name a movement imports (`import { workspace } from credentials`).
 - The connection fills the module's declared credential (`credential: 'crm'`).
 
