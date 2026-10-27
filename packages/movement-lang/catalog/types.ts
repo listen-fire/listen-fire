@@ -736,6 +736,13 @@ export interface PositionSchema {
    */
   ambiguousProperties?: string[];
   /**
+   * Fields a read of this type must pin in its WHERE with `==` (the adapter
+   * descriptor's `pinned: true`): the source takes them as the read's
+   * arguments, so a read that leaves one out has nothing to ask
+   * (MOV_HOP_PIN_REQUIRED).
+   */
+  pinnedProperties?: string[];
+  /**
    * A record of this type can be DELETED — the system's own promise, declared
    * per type in its describe (`deletable: true`) where its `deleteRecord`
    * removes one. Absent ⇒ it makes no such promise, and `delete x` of this type is MOV_DELETE_NOT_DECLARED (an

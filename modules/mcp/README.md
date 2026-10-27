@@ -42,7 +42,7 @@ A property of a tool's input or output schema is typed as:
 | an `array` of one of the above | a list of it |
 | anything else (an object, a union, a mixed list) | json |
 
-A property's `null` alternative (`["string", "null"]`) is dropped. `lf check` refuses a written argument of the wrong type, a value outside an enum, a field the tool does not have, and a `WHERE` comparing an argument to a value of another type.
+A property's `null` alternative (`["string", "null"]`) is dropped. `lf check` refuses a written argument of the wrong type, a value outside an enum, a field the tool does not have, and a `WHERE` comparing an argument to a value of another type. It also refuses a read that does not pin each required argument with `==` (`r.query == company.Name`, to a literal or a name in scope, joined to the rest of the `WHERE` by `AND`), and a read whose `WHERE` calls a function or tests `EXISTS`, since such a `WHERE` is not sent to the server (`MOV_HOP_PIN_REQUIRED`).
 
 ## Connecting
 
@@ -61,5 +61,4 @@ lf credential add --module @lf/mcp linear --credential mcp_token
 ## Not in this version
 
 - Resources, prompts, sampling and elicitation; listening to the server's notifications; stdio servers.
-- A read that leaves out a required argument passes `lf check` and fails the run, naming the argument. Nothing marks a field the `WHERE` must pin yet.
 - OAuth endpoints found from the server's protected-resource metadata, per-connection OAuth endpoints, and dynamic client registration.

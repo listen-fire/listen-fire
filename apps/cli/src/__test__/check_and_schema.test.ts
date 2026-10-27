@@ -113,7 +113,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
           writeUnion: { variants: [{ name: 'byName', fields: ['name', 'secret'] }, { name: 'byStage', fields: ['stage', 'name'] }] },
         },
       ],
-      ['pp', { typeId: 'pp', displayName: 'Person', fields: [field('email', 'string', { displayName: 'Email', writable: true })], references: [] }],
+      ['pp', { typeId: 'pp', displayName: 'Person', fields: [field('email', 'string', { displayName: 'Email', writable: true, pinned: true })], references: [] }],
       ['nt', { typeId: 'nt', displayName: 'Note', fields: [field('text', 'string', { displayName: 'Text' })], references: [] }],
       [
         'dl',
@@ -168,7 +168,7 @@ const INTROSPECTIONS: Record<string, unknown> = {
  *  an output that exercises nothing cannot pass for one. */
 const EXERCISES: Record<string, { members: string[]; notes: number }> = {
   'a wide adapter: kinds, clashes, unions, write unions, discriminated writes': {
-    members: ['unions', 'unionDisplayNames', 'createShapes', 'discriminated', 'writeOnlyProperties', 'ambiguousProperties', 'propertyCapabilities', 'nativeUniqueness', 'fuzzyResolution', 'writeUnion', 'requiredEdges', 'fieldDocs', 'resources', 'polymorphic', 'eventPositions'],
+    members: ['unions', 'unionDisplayNames', 'createShapes', 'discriminated', 'writeOnlyProperties', 'ambiguousProperties', 'pinnedProperties', 'propertyCapabilities', 'nativeUniqueness', 'fuzzyResolution', 'writeUnion', 'requiredEdges', 'fieldDocs', 'resources', 'polymorphic', 'eventPositions'],
     notes: 6,
   },
   'a walked instance: a root descriptor, reached types, a scoped describe': { members: ['capability', 'edgesCarryProperties', 'undescribed'], notes: 1 },

@@ -18,6 +18,7 @@
 //! - MOV_HOP_LIMIT_UNSUPPORTED
 //! - MOV_HOP_ORDER_ENGINE
 //! - MOV_HOP_ORDER_UNSUPPORTED
+//! - MOV_HOP_PIN_REQUIRED
 //! - MOV_LIMIT_NEEDS_ORDER
 //! - MOV_META_HOP_RETIRED
 //! - MOV_META_UNKNOWN_KEY
@@ -36,7 +37,7 @@
 
 use movement_parser::ast::{PathHead, PathRoot};
 use movement_parser::catalog::types::{EdgeCapability, EdgeSchema, PositionSchema, PushMode};
-use movement_parser::lowering::expression::{EdgeStep, Expression, FilterOperator, ListElement, OrderDirection, TraversalStep};
+use movement_parser::lowering::expression::{EdgeStep, Expression, FilterOperator, ListElement, OrderDirection, StaticValue, TraversalStep};
 
 use movement_parser::surface::phrase::spell_word;
 
@@ -45,6 +46,7 @@ use crate::diagnostic::Severity;
 use crate::scope::{Resolution, ScopeId};
 use crate::types::field::{CollectionOrder, Ty, describe_field_type, holds_records, record_head_position};
 use crate::types::scope_env::SymbolTypes;
+use crate::types::event_address::conjuncts;
 use crate::types::infer::Typing;
 use crate::types::position::{EdgeLanding, Position, describe_position, display_name_of, is_artificial_edge, position_schema_of_ref};
 
@@ -507,6 +509,7 @@ pub fn observe_hop_order(typing: &mut Typing, step: &EdgeStep, ordering: Collect
 /// (`gateHopCapability`): `from` is where the hop left, `target` where it landed.
 pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep, target: Option<&Position>) {
     let Some(from) = from else { return };
+    check_pins(typing, step, target);
     let edge = step.edge_type_id.as_str();
     let Some(capability) = edge_capability_for(from, edge) else { return };
     let target_schema = target.and_then(position_schema_of_ref).map(|s| s.into_owned());
@@ -520,6 +523,83 @@ pub fn observe_hop(typing: &mut Typing, from: Option<&Position>, step: &EdgeStep
     }
     if step.cardinality.as_ref().is_some_and(|c| c.limit.is_some()) && !capability.supports_limit {
         typing.report(codes::HOP_LIMIT_UNSUPPORTED, format!("'{edge}' can't be limited here — this source doesn't support LIMIT across that relationship."));
+    }
+}
+
+/// A hop landing on a type whose fields a read must pin (`pinnedProperties`:
+/// the source takes them as the read's arguments, as an MCP tool takes its
+/// inputs). Each must be stated `field == value` among the WHERE's top-level
+/// conjuncts, the value a literal or a name in scope, and the WHERE must be
+/// one the engine sends to the source (a pure one; order_limit.rs
+/// `hop_pushdown`): the source reads its arguments out of what it is sent.
+fn check_pins(typing: &mut Typing, step: &EdgeStep, target: Option<&Position>) {
+    let Some(schema) = target.and_then(position_schema_of_ref) else { return };
+    let Some(pinned) = schema.pinned_properties.as_ref().filter(|p| !p.is_empty()) else { return };
+    let filter = step.expression_filter.as_deref();
+    let sent = filter.is_none_or(is_pure_predicate);
+    let stated: Vec<String> = match filter {
+        Some(filter) if sent => conjuncts(filter).into_iter().filter_map(|c| pin_stated(typing, step, c)).collect(),
+        _ => Vec::new(),
+    };
+    let missing: Vec<&str> = pinned.iter().map(String::as_str).filter(|f| !stated.iter().any(|s| s == f)).collect();
+    if missing.is_empty() {
+        return;
+    }
+    let edge = &step.edge_type_id;
+    let named = and_list(&missing.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>());
+    let reads = |field: &str| step.alias.as_ref().map_or_else(|| field.to_string(), |alias| format!("{alias}.{field}"));
+    let pins: Vec<String> = pinned.iter().map(|f| format!("{} == …", reads(f))).collect();
+    let form = typing.code(&format!("-[{}:{edge} WHERE {}]->", step.alias.as_deref().unwrap_or(""), pins.join(" AND ")));
+    let (arguments, each) = if missing.len() == 1 { ("an argument", "it") } else { ("arguments", "each") };
+    let why = if sent {
+        format!(
+            "'{edge}' takes {named} as {arguments} of the read, so its WHERE must pin {each} with == (to a literal or a name in scope, joined to the rest by AND; an OR, a NOT or another comparison pins nothing)"
+        )
+    } else {
+        format!(
+            "the WHERE on '{edge}' calls a function or tests EXISTS, so it runs in the app and is not sent to the source, which takes {named} from it as {arguments} of the read"
+        )
+    };
+    typing.report(codes::HOP_PIN_REQUIRED, format!("{why}. Write `{form}`."));
+}
+
+/// The field a conjunct pins: `field == value` either way round, the field
+/// read off the record the hop lands on and the value one the engine writes
+/// into what it sends (a literal, or a name in scope; traverse.rs
+/// `closed_over`).
+fn pin_stated(typing: &Typing, step: &EdgeStep, conjunct: &Expression) -> Option<String> {
+    let Expression::Compare { op: FilterOperator::Eq, left, right } = conjunct else { return None };
+    let in_scope = |name: &str| step.alias.as_deref() != Some(name) && (typing.scalar_type(name).is_some() || typing.env.name_in_scope(name));
+    let field = |e: &Expression| match e {
+        Expression::Property { property_type_id, field_only } | Expression::EdgeProperty { property_type_id, field_only }
+            if *field_only || !in_scope(property_type_id) =>
+        {
+            Some(property_type_id.clone())
+        }
+        _ => None,
+    };
+    let value = |e: &Expression| match e {
+        Expression::Static { value } => !matches!(value, StaticValue::Null),
+        Expression::Property { property_type_id: name, field_only: false } | Expression::EdgeProperty { property_type_id: name, field_only: false } => {
+            in_scope(name)
+        }
+        Expression::AliasRef { name } => in_scope(name),
+        Expression::Traverse { alias_root: Some(root), steps, .. } => steps.is_empty() && step.alias.as_deref() != Some(root.as_str()),
+        _ => false,
+    };
+    match (field(left), field(right)) {
+        (Some(name), _) if value(right) => Some(name),
+        (_, Some(name)) if value(left) => Some(name),
+        _ => None,
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
     }
 }
 

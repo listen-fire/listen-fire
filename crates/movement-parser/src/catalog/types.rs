@@ -341,6 +341,12 @@ pub struct PositionSchema {
     pub write_only_properties: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ambiguous_properties: Option<Vec<String>>,
+    /// Fields a read of this type must pin in its WHERE with `==` (its
+    /// describe's `pinned: true`): the source takes them as the read's
+    /// arguments, so a read that leaves one out has nothing to ask
+    /// (MOV_HOP_PIN_REQUIRED).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_properties: Option<Vec<String>>,
     /// The system removes a record of this type (its describe's
     /// `deletable: true`); the checker refuses a
     /// `delete` of a type that does not say so.

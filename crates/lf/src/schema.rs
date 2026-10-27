@@ -340,6 +340,7 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
         let mut writable_fields = Obj::new();
         let mut write_only_properties: Vec<String> = Vec::new();
         let mut ambiguous_properties: Vec<String> = Vec::new();
+        let mut pinned_properties: Vec<String> = Vec::new();
         let mut required_fields: Vec<String> = Vec::new();
         let mut field_docs = Obj::new();
         let mut position_field_docs = Obj::new();
@@ -364,6 +365,9 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             let description = described(field);
             if let Some(description) = &description {
                 position_field_docs.insert(field_name.clone(), Js::str(description));
+            }
+            if Js::is_true(field.get("pinned")) {
+                pinned_properties.push(field_name.clone());
             }
             if Js::is_false(field.get("readable")) {
                 write_only_properties.push(field_name.clone());
@@ -441,6 +445,9 @@ pub fn instance_schema_from_descriptors(input: &ProjectionInput) -> Projection {
             }
             if !ambiguous_properties.is_empty() {
                 position.insert("ambiguousProperties".into(), Js::strings(&ambiguous_properties));
+            }
+            if !pinned_properties.is_empty() {
+                position.insert("pinnedProperties".into(), Js::strings(&pinned_properties));
             }
             if Js::is_true(descriptor.get("deletable")) {
                 position.insert("deletable".into(), Js::Bool(true));

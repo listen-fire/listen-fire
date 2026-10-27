@@ -55,7 +55,7 @@ pub fn conjunct_pins(filter: &Expression) -> Vec<(String, String)> {
 }
 
 /// A WHERE's top-level `AND`s, flattened.
-fn conjuncts(expr: &Expression) -> Vec<&Expression> {
+pub fn conjuncts(expr: &Expression) -> Vec<&Expression> {
     match expr {
         Expression::Logical { op: LogicalOp::And, operands } => operands.iter().flat_map(conjuncts).collect(),
         other => vec![other],

@@ -73,6 +73,12 @@ describe("a tool's type", () => {
       ['titles', 'string', false, false, 'many'],
     ]);
   });
+
+  it('a read: its required arguments are marked for the WHERE to pin; a write marks none', () => {
+    const optional = { ...SEARCH, inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } }, required: ['query'] } };
+    expect(descriptorOf(optional).fields.filter((f) => f.pinned === true).map((f) => f.fieldId)).toEqual(['query']);
+    expect(descriptorOf(CREATE).fields.some((f) => f.pinned !== undefined)).toBe(false);
+  });
 });
 
 describe("a call's answer", () => {

@@ -62,6 +62,9 @@ export function descriptorOf(tool: McpTool): SchemaTypeDescriptor {
     ...p.shape,
     writable: writes,
     required: writes && p.required,
+    // A read's required argument comes from the hop's WHERE: `lf check`
+    // refuses a read that does not pin it there.
+    ...(!writes && p.required ? { pinned: true } : {}),
     ...(p.description !== undefined ? { description: p.description } : {}),
   }));
   const taken = new Set(fields.map((f) => f.fieldId));
@@ -157,9 +160,10 @@ export function argumentsOf(where: Expression | undefined): Record<string, unkno
   return args;
 }
 
-/** The required arguments a read left unpinned, refused by name: a read
- *  missing one passes the check (nothing marks a field the WHERE must pin)
- *  and fails here. */
+/** The required arguments a read left unpinned, refused by name. `lf check`
+ *  already refuses a read that does not pin one (they are `pinned`); this
+ *  catches what it cannot see, such as a value in scope that is empty at
+ *  run time, which the engine does not write into the WHERE it sends. */
 export function missingArguments(tool: McpTool, args: Record<string, unknown>): string[] {
   return propertiesOf(tool.inputSchema)
     .filter((p) => p.required && !(p.name in args))
