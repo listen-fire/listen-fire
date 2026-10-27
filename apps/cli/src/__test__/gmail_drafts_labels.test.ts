@@ -21,6 +21,7 @@ interface Fake {
   url: string;
   message(input: Record<string, unknown>): Promise<string>;
   label(id: string, labels: string[]): Promise<void>;
+  makeLabel(name: string): Promise<string>;
   state(): Promise<{ drafts: Array<Record<string, unknown>>; outbox: unknown[] }>;
   stop(): Promise<void>;
 }
@@ -50,6 +51,7 @@ async function fakeChannels(): Promise<Fake> {
     message: async (input) => String((await post('/fake-gmail/messages', input)).id),
     // Gmail's own endpoint, as a person's mail client (or a filter) labels a message.
     label: async (id, labels) => void (await post(`/gmail/v1/users/me/messages/${id}/modify`, { addLabelIds: labels })),
+    makeLabel: async (name) => String((await post('/gmail/v1/users/me/labels', { name })).id),
     state: async () => (await (await fetch(`${url}/fake-gmail/state`)).json()) as { drafts: Array<Record<string, unknown>>; outbox: unknown[] },
     stop: async () => (child.kill('SIGTERM'), exited),
   };
@@ -153,7 +155,7 @@ test('a mailbox signed in without drafts refuses a draft, saying how to enable i
   }
 });
 
-const LABELLED = `import { gmail } from adapters
+const labelled = (listen: string) => `import { gmail } from adapters
 import { henry_mail } from credentials
 
 mail = connect gmail using henry_mail
@@ -162,16 +164,18 @@ function tagged(msg: <mail-[:Message]->>) {
   fail("tagged \${msg.Subject} with \${msg.\`Added Label\`}")
 }
 
-listen to mail { events: ["label_added"], labels: ["Label_deals"] } fire tagged
+${listen}
 `;
 
-test('labelling an existing message fires a listen on that label once; another label does not', async () => {
+test('labelling an existing message fires a listen on that label, named as a person sees it, once; another label does not', async () => {
   const fake = await fakeChannels();
   try {
     const { dir } = await gmailProject(fake, 'gmail');
+    const deals = await fake.makeLabel('Deals');
+    const newsletters = await fake.makeLabel('Newsletters');
     await fake.message({ id: 'm-old', subject: 'Acme intro' });
     await fake.message({ id: 'm-other', subject: 'Newsletter' });
-    writeFileSync(join(dir, 'movements/hello.mvt'), LABELLED);
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"], labels: ["Deals"] } fire tagged'));
     const checked = lfSync(dir, 'check');
     assert.equal(checked.code, 0, checked.out);
 
@@ -179,10 +183,10 @@ test('labelling an existing message fires a listen on that label once; another l
     const first = lfSync(dir, 'run', '--poll', 'tagged');
     assert.doesNotMatch(first.out, /MOVENG_ERROR: tagged/, first.out);
 
-    await fake.label('m-old', ['Label_deals']);
-    await fake.label('m-other', ['Label_newsletters']);
+    await fake.label('m-old', [deals]);
+    await fake.label('m-other', [newsletters]);
     const fired = lfSync(dir, 'run', '--poll', 'tagged');
-    assert.match(fired.out, /MOVENG_ERROR: tagged Acme intro with Label_deals/, fired.out);
+    assert.match(fired.out, new RegExp(`MOVENG_ERROR: tagged Acme intro with ${deals}`), fired.out);
     assert.doesNotMatch(fired.out, /tagged Newsletter/, fired.out);
     assert.equal(fired.out.split('MOVENG_ERROR: tagged').length - 1, 1, fired.out);
 
@@ -191,9 +195,75 @@ test('labelling an existing message fires a listen on that label once; another l
     assert.doesNotMatch(again.out, /MOVENG_ERROR: tagged/, again.out);
 
     // A new arrival is not a label being added.
-    await fake.message({ id: 'm-new', subject: 'Fresh deal', labelIds: ['INBOX', 'Label_deals'] });
+    await fake.message({ id: 'm-new', subject: 'Fresh deal', labelIds: ['INBOX', deals] });
     const arrival = lfSync(dir, 'run', '--poll', 'tagged');
     assert.doesNotMatch(arrival.out, /MOVENG_ERROR: tagged/, arrival.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('a label listen naming no labels fires for user labels only, never for Gmail’s own', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    const deals = await fake.makeLabel('Deals');
+    await fake.message({ id: 'm-old', subject: 'Acme intro', labelIds: ['UNREAD'] });
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"] } fire tagged'));
+    lfSync(dir, 'run', '--poll', 'tagged');
+
+    await fake.label('m-old', ['INBOX', 'STARRED']);
+    const system = lfSync(dir, 'run', '--poll', 'tagged');
+    assert.doesNotMatch(system.out, /MOVENG_ERROR: tagged/, system.out);
+
+    await fake.label('m-old', [deals]);
+    const user = lfSync(dir, 'run', '--poll', 'tagged');
+    assert.match(user.out, new RegExp(`MOVENG_ERROR: tagged Acme intro with ${deals}`), user.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('a label the mailbox does not have fails the poll, naming the labels it has', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    await fake.makeLabel('Deals');
+    writeFileSync(join(dir, 'movements/hello.mvt'), labelled('listen to mail { events: ["label_added"], labels: ["Dealz"] } fire tagged'));
+    const run = lfSync(dir, 'run', '--poll', 'tagged');
+    assert.match(run.out, /'Dealz', which dev-loop@listen-fire\.local does not have — its labels are Deals/, run.out);
+  } finally {
+    await fake.stop();
+  }
+});
+
+test('a sent message and a reply carry their ids under the catalog’s names on the handle', async () => {
+  const fake = await fakeChannels();
+  try {
+    const { dir } = await gmailProject(fake, 'gmail');
+    await fake.message({ id: 'm-q3', subject: 'Q3 question', from: 'rita@acme.example', threadId: 't-q3' });
+    writeFileSync(
+      join(dir, 'movements/hello.mvt'),
+      `import { gmail } from adapters
+import { henry_mail } from credentials
+
+mail = connect gmail using henry_mail
+
+function send(run: <manual-[:Invocation]->>) {
+  sent = write mail-[:Messages]-> { To: ["rita@acme.example"], Subject: "Figures", Body: "Attached." }
+  asked = only(mail-[m:Messages WHERE m.Subject == "Q3 question"]->)
+  if (asked == null) { fail("no Q3 question") }
+  reply = write asked-[:Replies]-> { Body: "Looking now." }
+  return "\${sent.\`Message Id\`} \${sent.\`Thread Id\`} \${sent.Subject} / \${reply.\`Message Id\`} \${reply.\`Thread Id\`} \${reply.Subject}"
+}
+
+listen to manual fire send
+`,
+    );
+    const run = lfSync(dir, 'run', 'send');
+    assert.equal(run.code, 0, run.out);
+    const returned = /returned "(.*)"/.exec(run.out)?.[1] ?? '';
+    assert.match(returned, /^(sent-\S+) \1 Figures \/ sent-\S+ t-q3 Re: Q3 question$/, run.out);
   } finally {
     await fake.stop();
   }

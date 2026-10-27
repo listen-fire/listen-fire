@@ -286,3 +286,19 @@ test('gmail history: a label added later is a labelsAdded record, and the arriva
     await close();
   }
 });
+
+test('gmail labels: a user label made by name gets an id, is listed beside the system ones, and a search takes its name', async () => {
+  const { baseUrl, close } = await bootApp();
+  try {
+    const made = await post(baseUrl, '/gmail/v1/users/me/labels', { name: 'Deals' });
+    assert.match(String(made.id), /^Label_\d+$/);
+    const listed = (await (await fetch(`${baseUrl}/gmail/v1/users/me/labels`)).json()) as { labels: Array<{ id: string; name: string }> };
+    assert.ok(listed.labels.some((l) => l.id === 'INBOX'));
+    assert.ok(listed.labels.some((l) => l.id === made.id && l.name === 'Deals'));
+    await post(baseUrl, '/fake-gmail/messages', { id: 'm1', subject: 'Acme', labelIds: ['INBOX', made.id] });
+    const found = (await (await fetch(`${baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent('label:deals')}`)).json()) as { messages: Array<{ id: string }> };
+    assert.deepEqual(found.messages.map((m) => m.id), ['m1']);
+  } finally {
+    await close();
+  }
+});

@@ -187,15 +187,20 @@ function wireMessage(data: Record<string, unknown>): Record<string, unknown> {
   return rest;
 }
 
-/** Bare words are matched against the subject, the snippet and the body. */
-function queryTargetOf(data: Record<string, unknown>): QueryTarget {
+/** Bare words are matched against the subject, the snippet and the body. A
+ *  `label:` term matches a label's id or, for a user label, its name — as
+ *  Gmail's search takes names. */
+function queryTargetOf(data: Record<string, unknown>, labelNames: ReadonlyMap<string, string> = new Map()): QueryTarget {
   const headers = new Map<string, string>();
   for (const entry of headersOf(data.payload)) {
     headers.set((entry.name ?? '').toLowerCase(), entry.value ?? '');
   }
   return {
     headers,
-    labels: stringsOf(data.labelIds),
+    labels: stringsOf(data.labelIds).flatMap((id) => {
+      const name = labelNames.get(id);
+      return name === undefined ? [id] : [id, name];
+    }),
     filenames: filenamesOf(data.payload),
     freeText: [
       headers.get('subject') ?? '',
@@ -293,8 +298,35 @@ function parseRfc2822(raw: string): ParsedMessage {
   return parsed;
 }
 
+/** The labels every mailbox has. */
+const SYSTEM_LABELS = ['INBOX', 'UNREAD', 'STARRED', 'IMPORTANT', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'CHAT'];
+
 export function gmailRoutes(store: EntityStore): Router {
   const r = Router();
+
+  const userLabelNames = (): Map<string, string> =>
+    new Map(store.list(SVC, 'label').map((row) => [String(row.data.id), String(row.data.name)]));
+
+  r.get('/gmail/v1/users/:userId/labels', (_req, res) => {
+    res.json({
+      labels: [
+        ...SYSTEM_LABELS.map((id) => ({ id, name: id, type: 'system' })),
+        ...[...userLabelNames()].map(([id, name]) => ({ id, name, type: 'user' })),
+      ],
+    });
+  });
+
+  /** Make a user label: Gmail gives it an id (`Label_<n>`) beside its name. */
+  r.post('/gmail/v1/users/:userId/labels', (req, res) => {
+    const name = String(req.body?.name ?? '').trim();
+    if (name === '') return res.status(400).json({ error: { code: 400, message: 'Missing label name' } });
+    if ([...userLabelNames().values()].some((known) => known.toLowerCase() === name.toLowerCase())) {
+      return res.status(409).json({ error: { code: 409, message: 'Label name exists or conflicts' } });
+    }
+    const id = `Label_${store.nextId(SVC, 'label')}`;
+    store.create(SVC, 'label', { id, name }, id);
+    res.json({ id, name, type: 'user' });
+  });
 
   r.get('/gmail/v1/users/:userId/profile', (_req, res) => {
     const mailbox = readMailbox(store);
@@ -326,7 +358,7 @@ export function gmailRoutes(store: EntityStore): Router {
     const messages = store
       .list(SVC, 'message')
       .map((m) => m.data)
-      .filter((data) => evaluateGmailQuery(parsed, queryTargetOf(data), now))
+      .filter((data) => evaluateGmailQuery(parsed, queryTargetOf(data, userLabelNames()), now))
       .filter((data) => wanted.every((label) => stringsOf(data.labelIds).includes(label)))
       .sort((a, b) => Number(b.internalDate ?? 0) - Number(a.internalDate ?? 0))
       .slice(0, Number.isFinite(max) ? max : 100)
